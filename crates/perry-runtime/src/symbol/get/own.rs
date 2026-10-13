@@ -6,9 +6,8 @@ use super::*;
 pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSymbolSlot> {
     let bits = obj_f64.to_bits();
     let addr = (bits & POINTER_MASK) as usize;
-    if bits >> 48 == 0x7FFD {
-        if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) {
-            let header = header.as_ref();
+    {
+        if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
             if header.obj_type == crate::gc::GC_TYPE_OBJECT
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {

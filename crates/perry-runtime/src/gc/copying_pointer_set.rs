@@ -209,8 +209,8 @@ impl CopyingPointerSet {
     pub(super) fn decode_bits(&self, bits: u64) -> Option<(usize, bool, u64)> {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-            let addr = crate::value::addr_class::tagged_heap_addr(bits);
-            return (addr != 0).then_some((addr, true, tag | (bits & 1)));
+            let addr = (bits & POINTER_MASK) as usize;
+            return (addr != 0).then_some((addr, true, tag));
         }
         if tag >= 0x7FF8_0000_0000_0000 {
             return None;
@@ -229,7 +229,7 @@ impl CopyingPointerSet {
     ) -> Result<Option<(usize, CopyingPointer)>, CopiedMinorFallbackReason> {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-            let addr = crate::value::addr_class::tagged_heap_addr(bits);
+            let addr = (bits & POINTER_MASK) as usize;
             if addr == 0 {
                 return Ok(None);
             }

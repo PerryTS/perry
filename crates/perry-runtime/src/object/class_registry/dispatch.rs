@@ -1,5 +1,4 @@
 use super::*;
-use crate::JSValue;
 
 // ============================================================================
 // Class-method calls through the vtable's function pointers (constructors,
@@ -139,7 +138,9 @@ pub(crate) unsafe fn call_vtable_method_with_private_brand(
 fn legacy_method_receiver(this: i64) -> f64 {
     let bits = this as u64;
     if bits != 0 && bits <= crate::value::POINTER_MASK {
-        f64::from_bits(JSValue::pointer(bits as *mut u8).bits())
+        // A raw receiver may be a native id: the unknown-word constructor
+        // boxes the id band under HANDLE_TAG.
+        crate::value::js_nanbox_pointer(bits as i64)
     } else {
         f64::from_bits(bits)
     }

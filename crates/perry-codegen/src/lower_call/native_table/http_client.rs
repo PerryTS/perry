@@ -718,7 +718,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_create_connection",
         args: &[],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -727,6 +727,6 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_create_socket",
         args: &[],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
 ];

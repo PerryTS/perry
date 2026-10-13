@@ -117,7 +117,7 @@ pub(crate) unsafe fn string_to_js(s: &str) -> *const StringHeader {
 /// slot of a `has_receiver: true` dispatch row — the lower 48 bits are
 /// masked off (`POINTER_MASK = 0x0000_FFFF_FFFF_FFFF`) and used as the
 /// handle id directly. Matches `perry_runtime::value::POINTER_TAG`.
-const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
+const POINTER_TAG_BITS: u64 = perry_runtime::value::HANDLE_TAG;
 
 /// Encode a u64 handle id as the f64 bits a Promise resolution slot expects.
 ///

@@ -176,7 +176,7 @@ fn file_last_modified_now() -> f64 {
 unsafe fn form_data_entry_from_js(value: f64, filename: f64) -> FormDataValue {
     let value_id = handle_id(value);
     let blob = JSValue::from_bits(value.to_bits())
-        .is_pointer()
+        .is_handle()
         .then(|| BLOB_REGISTRY.lock().unwrap().get(&value_id).cloned())
         .flatten();
     let Some(mut blob) = blob else {

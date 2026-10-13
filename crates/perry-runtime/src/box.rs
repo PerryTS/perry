@@ -124,11 +124,33 @@ pub(crate) fn has_cell_type(addr: usize, kind: u8, size: Option<usize>) -> bool 
 fn is_registered_box_ptr(ptr: *mut Box) -> bool {
     has_box_type(ptr as usize, crate::gc::GC_TYPE_BOX)
 }
+
+#[cfg(test)]
 fn is_registered_i32_box_ptr(ptr: *mut I32Box) -> bool {
     has_box_type(ptr as usize, crate::gc::GC_TYPE_I32_BOX)
 }
+#[cfg(test)]
 fn is_registered_bool_box_ptr(ptr: *mut BoolBox) -> bool {
     has_box_type(ptr as usize, crate::gc::GC_TYPE_BOOL_BOX)
+}
+
+/// The box argument of a compiled-code box entry. Codegen passes a box it
+/// allocated itself, or a slot's initialization sentinel (null or the
+/// `TAG_UNDEFINED` word) before the box exists: a representation the
+/// compiler created is honest, so the sentinels are rejected by range and a
+/// box answers from its header kind, without allocator admission.
+#[inline(always)]
+fn compiled_box_cell(addr: usize, kind: u8) -> bool {
+    crate::value::addr_class::is_above_handle_band(addr)
+        && addr as u64 <= crate::value::POINTER_MASK
+        && addr % std::mem::align_of::<crate::gc::GcHeader>() == 0
+        && {
+            // SAFETY: the compiled-code contract above.
+            let header = unsafe { crate::value::addr_class::honest_header(addr) };
+            header.obj_type == kind
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && header.size as usize == crate::gc::GC_HEADER_SIZE + 8
+        }
 }
 
 /// Thread serialization unwraps an explicitly captured mutable cell.
@@ -161,7 +183,7 @@ pub extern "C" fn js_box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
 #[inline]
 fn box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
     unsafe {
-        if !is_registered_box_ptr(ptr) {
+        if !compiled_box_cell(ptr as usize, crate::gc::GC_TYPE_BOX) {
             // perry#924: production services see these in tight bursts of
             // 3 synced with normal request handling and the operator can't
             // tell whether anything is wrong. The path is correctness-safe
@@ -307,7 +329,7 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_i32_box_get(ptr: *mut I32Box) -> i32 {
     unsafe {
-        if !is_registered_i32_box_ptr(ptr) {
+        if !compiled_box_cell(ptr as usize, crate::gc::GC_TYPE_I32_BOX) {
             if std::env::var_os("PERRY_DEBUG").is_some() {
                 let count = I32_BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
                 if count < 3 {
@@ -326,7 +348,7 @@ pub extern "C" fn js_i32_box_get(ptr: *mut I32Box) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_bool_box_get(ptr: *mut BoolBox) -> i32 {
     unsafe {
-        if !is_registered_bool_box_ptr(ptr) {
+        if !compiled_box_cell(ptr as usize, crate::gc::GC_TYPE_BOOL_BOX) {
             if std::env::var_os("PERRY_DEBUG").is_some() {
                 let count = BOOL_BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
                 if count < 3 {
@@ -356,7 +378,7 @@ pub extern "C" fn js_bool_box_get(ptr: *mut BoolBox) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_box_set_bits(ptr: *mut Box, value_bits: i64) {
     unsafe {
-        if !is_registered_box_ptr(ptr) {
+        if !compiled_box_cell(ptr as usize, crate::gc::GC_TYPE_BOX) {
             // perry#924: silent-skip is correctness-safe (caller's box
             // mutation is dropped, which is the same as no closure
             // capture having existed). Gate diagnostics behind
@@ -407,7 +429,7 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
 #[no_mangle]
 pub extern "C" fn js_i32_box_set(ptr: *mut I32Box, value: i32) {
     unsafe {
-        if !is_registered_i32_box_ptr(ptr) {
+        if !compiled_box_cell(ptr as usize, crate::gc::GC_TYPE_I32_BOX) {
             if std::env::var_os("PERRY_DEBUG").is_some() {
                 let count = I32_BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
                 if count < 3 {
@@ -426,7 +448,7 @@ pub extern "C" fn js_i32_box_set(ptr: *mut I32Box, value: i32) {
 #[no_mangle]
 pub extern "C" fn js_bool_box_set(ptr: *mut BoolBox, value: i32) {
     unsafe {
-        if !is_registered_bool_box_ptr(ptr) {
+        if !compiled_box_cell(ptr as usize, crate::gc::GC_TYPE_BOOL_BOX) {
             if std::env::var_os("PERRY_DEBUG").is_some() {
                 let count = BOOL_BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
                 if count < 3 {

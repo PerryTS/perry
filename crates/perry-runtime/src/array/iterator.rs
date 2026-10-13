@@ -156,7 +156,7 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
 
 pub(crate) fn entries_array_for_small_handle_value(value: f64) -> Option<*mut ArrayHeader> {
     let bits = value.to_bits();
-    if (bits >> 48) != 0x7FFD {
+    if (bits & crate::value::TAG_MASK) != crate::value::HANDLE_TAG {
         return None;
     }
     entries_array_for_small_handle_id((bits & crate::value::POINTER_MASK) as i64)
@@ -1313,16 +1313,11 @@ pub(crate) fn is_builtin_iterator_class_id(raw_ptr: usize) -> bool {
 }
 
 fn is_object_like_value(value: f64) -> bool {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        let bits = value.to_bits();
-        return bits != 0
-            && bits <= 0x0000_FFFF_FFFF_FFFF
-            && bits > 0x10000
-            && crate::closure::is_closure_ptr(bits as usize);
+    let bits = value.to_bits();
+    if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF {
+        return bits > 0x10000 && crate::closure::is_closure_ptr(bits as usize);
     }
-    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
-    raw >= 0x10000 && !crate::symbol::is_registered_symbol(raw)
+    crate::builtins::arithmetic::js_value_is_object(value)
 }
 
 /// #7562: the drain hit [`MAX_ITERATOR_DRAIN`] without the iterator finishing.

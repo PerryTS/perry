@@ -350,7 +350,7 @@ unsafe extern "C" fn invoke_callback1(
             3 => {
                 let mut n: f64 = 0.0;
                 let _ = napi_get_value_double(env, argv[1], &mut n);
-                n
+                crate::array::canonical_raw_f64(n)
             }
             // string — read into a stack buffer (4 KB cap), allocate a
             // Perry StringHeader, NaN-box with STRING_TAG. Larger inputs

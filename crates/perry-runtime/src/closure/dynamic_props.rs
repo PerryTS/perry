@@ -116,16 +116,25 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if !crate::object::shapes::is_exotic_shape_id(shape) {
         return false;
     }
-    let (obj_type, gc_flags) = if let Some(header) = tracked_header {
-        let header = unsafe { header.as_ref() };
-        (header.obj_type, header.gc_flags)
-    } else {
-        let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(ptr) }) else {
-            return false;
-        };
-        (header.obj_type, header.gc_flags)
+    let header = match tracked_header {
+        Some(header) => unsafe { header.as_ref() },
+        // The owned arena page above already proves the header readable.
+        None => unsafe { &*crate::gc::header_from_trusted_user_ptr(ptr as *const u8) },
     };
+    let (obj_type, gc_flags) = (header.obj_type, header.gc_flags);
     obj_type == crate::gc::GC_TYPE_CLOSURE && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+}
+
+/// [`is_closure_ptr`] for a NaN-boxed value. A `POINTER_TAG` word names a
+/// GC-headed object (honest pointers), so the header type byte decides; raw
+/// untagged words keep the allocator proof.
+#[inline]
+pub fn is_closure_bits(bits: u64) -> bool {
+    if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
+        return header.obj_type == crate::gc::GC_TYPE_CLOSURE
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0;
+    }
+    bits >> 48 == 0 && is_closure_ptr(bits as usize)
 }
 
 /// C-ABI predicate: returns 1 when `value_bits` (a NaN-boxed JSValue passed as
@@ -143,11 +152,7 @@ pub extern "C" fn js_value_is_closure(value_bits: i64) -> i32 {
     if (bits & !POINTER_MASK) != POINTER_TAG {
         return 0;
     }
-    if is_closure_ptr((bits & POINTER_MASK) as usize) {
-        1
-    } else {
-        0
-    }
+    i32::from(is_closure_bits(bits))
 }
 
 /// Get a dynamic property stored on a closure.

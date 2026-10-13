@@ -69,10 +69,10 @@ pub(super) fn prefetch_read(addr: usize) {
 /// that is not a tagged heap pointer.
 #[inline(always)]
 pub(super) fn prefetch_boxed_child(bits: u64) {
-    use crate::value::{BIGINT_TAG, POINTER_TAG, STRING_TAG, TAG_MASK};
+    use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        let addr = crate::value::addr_class::tagged_heap_addr(bits);
+        let addr = (bits & POINTER_MASK) as usize;
         // The classifier's first read is the GC header, which sits below the
         // user pointer — prefetch that line, not the payload's.
         prefetch_read(addr.saturating_sub(super::GC_HEADER_SIZE));

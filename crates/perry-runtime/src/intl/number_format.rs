@@ -1359,7 +1359,7 @@ pub(crate) fn intl_object_from_value(
 /// Proxy. Returns `None` when there is nothing to unwrap.
 fn unwrap_legacy_constructed(value: f64) -> Option<f64> {
     let js = JSValue::from_bits(value.to_bits());
-    if !js.is_pointer() {
+    if !js.is_pointer() && !js.is_handle() {
         return None;
     }
     // A Proxy is a small registered id, not a heap object — `object_ptr_from_value`

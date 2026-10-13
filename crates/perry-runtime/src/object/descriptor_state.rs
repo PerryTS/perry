@@ -140,10 +140,6 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
             if p == 0 {
                 return false;
             }
-            if crate::value::addr_class::is_small_handle(p) {
-                // Proxy / handle prototype — assume it may intercept the write.
-                return true;
-            }
             p
         } else if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
             bits as usize
@@ -173,7 +169,8 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
         // Charter step 3: an ordinary prototype's attributes live with its
         // keys, and its shape's summary proves most hops (methods are
         // non-enumerable, never non-writable) without a key lookup.
-        if super::key_attrs::attrs_live_in_keys(p) {
+        // The walk holds the prototype's word: a tagged one is honest.
+        if super::key_attrs::attrs_live_in_keys_of_bits(bits) {
             if super::key_attrs::object_key_blocks_plain_store(
                 p as *const ObjectHeader,
                 name.as_bytes(),
@@ -427,9 +424,6 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
             if p == 0 {
                 return false;
             }
-            if crate::value::addr_class::is_small_handle(p) {
-                return true;
-            }
             p
         } else if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
             bits as usize
@@ -469,7 +463,8 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
             return true;
         }
-        if super::key_attrs::attrs_live_in_keys(p) {
+        // The walk holds the prototype's word: a tagged one is honest.
+        if super::key_attrs::attrs_live_in_keys_of_bits(bits) {
             if super::key_attrs::object_key_blocks_plain_store(proto_obj, name.as_bytes()) {
                 return true;
             }

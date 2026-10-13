@@ -24,6 +24,8 @@ pub const TAG_HOLE: u64 = 0x7FFC_0000_0000_0010;
 /// reading it before the declaration runs throws a spec ReferenceError.
 pub const TAG_TDZ: u64 = 0x7FFC_0000_0000_0011;
 pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+#[allow(dead_code)] // Published ABI; producer lowering is migrated separately.
+pub const HANDLE_TAG: u64 = crate::runtime_abi::HANDLE_TAG;
 pub const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
@@ -48,6 +50,8 @@ pub const TAG_TRUE_I64: &str = "9222246136947933188";
 pub const TAG_HOLE_I64: &str = "9222246136947933200";
 pub const TAG_TDZ_I64: &str = "9222246136947933201";
 pub const POINTER_TAG_I64: &str = "9222527611924643840";
+#[allow(dead_code)] // Keep the compiler/runtime ABI mirror tested.
+pub const HANDLE_TAG_I64: &str = "-1970324836974592";
 pub const POINTER_MASK_I64: &str = "281474976710655";
 pub const INT32_TAG_I64: &str = "9222809086901354496";
 pub const STRING_TAG_I64: &str = "9223090561878065152";
@@ -119,6 +123,7 @@ mod tests {
         assert_eq!(i64_literal(TAG_TRUE), TAG_TRUE_I64);
         assert_eq!(i64_literal(TAG_HOLE), TAG_HOLE_I64);
         assert_eq!(i64_literal(POINTER_TAG), POINTER_TAG_I64);
+        assert_eq!(i64_literal(HANDLE_TAG), HANDLE_TAG_I64);
         assert_eq!(i64_literal(POINTER_MASK), POINTER_MASK_I64);
         assert_eq!(i64_literal(INT32_TAG), INT32_TAG_I64);
         assert_eq!(i64_literal(STRING_TAG), STRING_TAG_I64);
@@ -165,6 +170,7 @@ mod tests {
             INT32_TAG,
             SHORT_STRING_TAG,
             STATIC_DISPATCH_TAG,
+            HANDLE_TAG,
         ] {
             assert!(
                 !comparands.contains(&(tag >> 48)),

@@ -108,12 +108,19 @@ pub fn is_above_handle_band(addr: usize) -> bool {
     addr >= HANDLE_BAND_MAX
 }
 
-/// Cheap proxy receiver candidate test. Bit zero tags a nonmoving Proxy cell;
-/// callers prove its allocation kind through `proxy::js_proxy_is_proxy` before
-/// routing or dereferencing. The historical function name remains for callers.
+/// True when `addr` is a Proxy cell. A Proxy is an ordinary nonmoving GC
+/// allocation of kind `GC_TYPE_PROXY`, boxed under `POINTER_TAG` like every
+/// other object, so the header byte decides (honest pointers: a
+/// `POINTER_TAG` payload or a raw receiver derived from one names a
+/// GC-headed object). Id-band and misaligned words are never Proxy cells and
+/// are rejected before the header load.
 #[inline(always)]
-pub fn is_proxy_id_band(addr: usize) -> bool {
-    addr & 7 == 1 && !is_handle_band(addr)
+pub fn is_proxy_cell(addr: usize) -> bool {
+    is_above_handle_band(addr)
+        && addr % std::mem::align_of::<GcHeader>() == 0
+        && addr as u64 <= crate::value::POINTER_MASK
+        // SAFETY: the honest-pointer invariant above.
+        && crate::proxy::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
 }
 
 /// True when `id` is in the Web Streams sub-band of the handle band. Only a
@@ -286,6 +293,55 @@ pub(crate) unsafe fn try_read_gc_header_known_plausible(addr: usize) -> Option<&
         return None;
     }
     Some(&*((addr - GC_HEADER_SIZE) as *const GcHeader))
+}
+
+/// The GC header of a `POINTER_TAG` value, read without a provenance proof.
+///
+/// Honest-pointer invariant: every pointer constructor boxes an id-band
+/// payload under `HANDLE_TAG` (or null), so a `POINTER_TAG` word names a
+/// GC-headed object on this heap or in process-wide immortal space (image
+/// strings, leaked symbol cells). `PERRY_GC_VERIFY_MARK` checks every such
+/// word a collection scans. Raw untagged words keep [`try_read_tracked_gc_header`].
+///
+/// The tag test is the emitted receivers' fused compare (one subtract, one
+/// unsigned compare), so it also refuses a null `POINTER_TAG` word at no cost.
+#[inline(always)]
+pub(crate) fn pointer_value_header(bits: u64) -> Option<&'static GcHeader> {
+    const BIAS: u64 = crate::value::POINTER_TAG | HANDLE_BAND_MAX as u64;
+    const SPAN: u64 = (1u64 << 48) - HANDLE_BAND_MAX as u64;
+    if bits.wrapping_sub(BIAS) >= SPAN {
+        return None;
+    }
+    // SAFETY: the invariant above; the header precedes every GC allocation.
+    Some(unsafe { honest_header((bits & crate::value::POINTER_MASK) as usize) })
+}
+
+/// The GC header of an address that names a GC-headed object by
+/// construction: an honest `POINTER_TAG` payload, or a word a runtime
+/// structure or compiled code allocated itself (a shape's keys array, a
+/// compiled box cell). No admission: the construction is the proof.
+///
+/// # Safety
+/// `addr` must be the user address of a live GC allocation.
+#[inline(always)]
+pub(crate) unsafe fn honest_header(addr: usize) -> &'static GcHeader {
+    &*((addr - GC_HEADER_SIZE) as *const GcHeader)
+}
+
+/// [`try_read_tracked_gc_header`] for a receiver word that may be a JS value:
+/// a `POINTER_TAG` word answers from its header (honest pointers, no
+/// admission); a raw untagged word keeps the allocator proof; every other
+/// tag has no GC header here.
+#[inline(always)]
+pub(crate) fn tracked_header_of_bits(bits: u64) -> Option<std::ptr::NonNull<GcHeader>> {
+    if let Some(header) = pointer_value_header(bits) {
+        return Some(std::ptr::NonNull::from(header));
+    }
+    if bits >> 48 != 0 {
+        return None;
+    }
+    // SAFETY: the tracked reader admits the raw word before any load.
+    unsafe { try_read_tracked_gc_header(bits as usize) }
 }
 
 /// Candidate object address carried by a NaN-boxed JS value, decided by the
@@ -551,10 +607,9 @@ mod tests {
         assert!(is_handle_band(0x40000));
         assert!(is_small_handle(0x40000));
         // Proxy ids (#2846), zlib (#1843), common registry, null.
-        assert!(!is_proxy_id_band(0xF0000));
-        assert!(!is_proxy_id_band(0xF_FFF8));
-        assert!(is_proxy_id_band(0x10_00001));
-        assert!(!is_proxy_id_band(0x40000));
+        assert!(!is_proxy_cell(0xF0000));
+        assert!(!is_proxy_cell(0xF_FFF8));
+        assert!(!is_proxy_cell(0x40000));
         assert!(is_handle_band(0xE0000));
         assert!(is_handle_band(1));
         assert!(is_handle_band(0));
@@ -748,7 +803,7 @@ mod tests {
         assert!(!is_stream_id_band(PROXY_ID_BAND_END - 1));
         assert!(is_handle_band(STREAM_ID_BAND_START));
         assert!(is_small_handle(STREAM_ID_BAND_START));
-        assert!(!is_proxy_id_band(STREAM_ID_BAND_START));
+        assert!(!is_proxy_cell(STREAM_ID_BAND_START));
     }
 
     #[cfg(target_os = "macos")]
@@ -827,28 +882,6 @@ mod known_plausible_alignment_tests {
         assert!(!addr.is_multiple_of(align));
         // SAFETY: as above.
         assert!(unsafe { try_read_gc_header(addr) }.is_none());
-    }
-}
-
-/// Tagged proxy receivers use bit zero of an otherwise aligned pointer.
-/// An odd candidate is canonicalized only after the allocation proves kind
-/// Proxy; malformed ordinary pointers keep failing admission.
-#[inline]
-pub(crate) fn tagged_heap_addr(bits: u64) -> usize {
-    let payload = (bits & crate::value::POINTER_MASK) as usize;
-    if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG && is_proxy_id_band(payload) {
-        crate::proxy::canonical_address(f64::from_bits(bits)).unwrap_or(0)
-    } else {
-        payload
-    }
-}
-#[inline]
-pub(crate) fn canonical_raw_receiver(addr: usize) -> usize {
-    if is_proxy_id_band(addr) {
-        crate::proxy::canonical_address(f64::from_bits(crate::value::POINTER_TAG | addr as u64))
-            .unwrap_or(addr)
-    } else {
-        addr
     }
 }
 

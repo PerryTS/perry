@@ -41,7 +41,11 @@ pub(super) unsafe fn property(handle: i64, ptr: *const u8, len: usize, out: *mut
     let value = match name {
         "clients" => js_ws_server_clients(handle),
         "readyState" => js_ws_ready_state(handle),
-        _ => js_class_method_bind(f64::from_bits(POINTER_TAG | handle as u64), ptr, len),
+        _ => js_class_method_bind(
+            f64::from_bits(perry_ffi::JsValue::from_handle(handle as u64).bits()),
+            ptr,
+            len,
+        ),
     };
     if !out.is_null() {
         *out = value;
@@ -99,7 +103,7 @@ unsafe extern "C" fn method(
         "on" | "addListener" => {
             let event = string_arg(arg(0));
             js_ws_on(handle, event, (arg(1).to_bits() & POINTER_MASK) as i64);
-            f64::from_bits(POINTER_TAG | handle as u64)
+            f64::from_bits(perry_ffi::JsValue::from_handle(handle as u64).bits())
         }
         "send" => {
             js_ws_send_value(handle, arg(0), arg(1));

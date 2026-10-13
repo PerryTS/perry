@@ -134,7 +134,7 @@ pub(super) unsafe fn object_words_may_name_handles(header: *const super::GcHeade
         for i in 0..count {
             let bits = *slots.add(i);
             let proxy = bits & crate::value::TAG_MASK == crate::value::POINTER_TAG
-                && crate::value::addr_class::is_proxy_id_band(
+                && crate::value::addr_class::is_proxy_cell(
                     (bits & crate::value::POINTER_MASK) as usize,
                 );
             assert!(
@@ -152,7 +152,7 @@ pub(super) unsafe fn object_words_may_name_handles(header: *const super::GcHeade
 #[inline(always)]
 fn is_fetch_handle_word(bits: u64) -> bool {
     let id = match bits >> 48 {
-        0x7FFD => bits & crate::value::POINTER_MASK,
+        0xFFF9 | 0x7FFD => bits & crate::value::POINTER_MASK,
         0 => bits,
         _ => return false,
     };
@@ -163,7 +163,7 @@ fn is_fetch_handle_word(bits: u64) -> bool {
 #[inline(always)]
 fn is_pool_handle_word(bits: u64) -> bool {
     let id = match bits >> 48 {
-        0x7FFD => bits & crate::value::POINTER_MASK,
+        0xFFF9 | 0x7FFD => bits & crate::value::POINTER_MASK,
         0 => bits,
         _ => return false,
     };

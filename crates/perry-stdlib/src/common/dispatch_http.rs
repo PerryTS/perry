@@ -175,7 +175,7 @@ pub(super) unsafe fn dispatch_client_incoming_method(
         return None;
     }
 
-    let self_ref = f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & PTR_MASK));
+    let self_ref = perry_runtime::value::js_nanbox_pointer(handle as i64);
     // String arguments go through `js_ffi_arg_ptr`, not a bare mask: an inline
     // SSO event name or encoding (`"data"`, `"end"`, `"utf8"` built at
     // runtime) has no header behind its bits (#11519). The natives copy the

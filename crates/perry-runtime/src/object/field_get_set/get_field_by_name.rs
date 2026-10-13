@@ -31,18 +31,17 @@ fn handle_proto_inherited_field(
 /// Both accessors are pure address computations from LLVM's point of view —
 /// `readnone`, no observable side effect — so once this code was inlined into
 /// `js_object_get_field_by_name` the optimizer hoisted BOTH out of the
-/// `is_proxy_id_band` guard above them and ran them unconditionally on every
+/// `is_proxy_cell` guard above them and ran them unconditionally on every
 /// call, proxy receiver or not. Measured on an `o[k]` loop over a two-property
 /// plain object (never a Proxy): two `_tlv_get_addr` calls sitting directly in
 /// `js_object_get_field_by_name`'s prologue, 9.2% of the whole access.
 /// `#[inline(never)]` keeps the optimizer from seeing inside this function at
-/// the call site, so it cannot hoist anything out of it; `is_proxy_id_band`
+/// the call site, so it cannot hoist anything out of it; `is_proxy_cell`
 /// itself stays inline in the caller since it touches no thread-local.
 #[cold]
 #[inline(never)]
 fn proxy_receiver_get(raw_addr: u64, key: *const crate::StringHeader) -> Option<JSValue> {
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
+    let boxed = f64::from_bits(crate::value::POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
     if crate::proxy::js_proxy_is_proxy(boxed) == 0 {
         return None;
     }
@@ -668,7 +667,7 @@ fn get_field_by_name_past_data_probe(
         } else {
             addr
         };
-        if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
+        if crate::value::addr_class::is_proxy_cell(raw_addr as usize) && !key.is_null() {
             if let Some(value) = proxy_receiver_get(raw_addr, key) {
                 return value;
             }
@@ -735,9 +734,18 @@ fn get_field_by_name_past_data_probe(
         {
             let key_gc =
                 (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            // A POINTER_TAG receiver is honest, and its arena flag excludes
+            // the malloc-backed exotics; a raw word needs the page ownership
+            // proof before its header is read.
             if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0
-                && crate::arena::classify_heap_generation(raw)
-                    != crate::arena::HeapGeneration::Unknown
+                && if top16 == 0x7FFD {
+                    (*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).gc_flags
+                        & crate::gc::GC_FLAG_ARENA
+                        != 0
+                } else {
+                    crate::arena::classify_heap_generation(raw)
+                        != crate::arena::HeapGeneration::Unknown
+                }
             {
                 let gc_hdr =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -1438,8 +1446,7 @@ fn get_field_by_name_past_data_probe(
         // `0` — distinguishable from a raw heap pointer because real
         // ObjectHeader allocations live above 0x10000 and from null /
         // undefined because both are NaN-boxed with top16 == 0x7FFC.
-        let is_primitive_number =
-            (top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16)) || (top16 == 0 && bits == 0);
+        let is_primitive_number = JSValue::from_bits(bits).is_number() && (top16 != 0 || bits == 0);
         if is_primitive_number {
             // #2138: auto-box the primitive number for the inherited
             // `.constructor` read so `n.constructor === Number` (and the
@@ -1494,7 +1501,7 @@ fn get_field_by_name_past_data_probe(
         let top16 = bits >> 48;
         let raw = if top16 == 0 {
             bits as usize
-        } else if top16 == 0x7FFD {
+        } else if top16 == (crate::value::HANDLE_TAG >> 48) {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             0

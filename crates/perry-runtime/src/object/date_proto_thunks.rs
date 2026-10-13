@@ -238,12 +238,7 @@ pub(crate) fn test_date_to_json_with_this(this: f64) -> f64 {
 /// pointer band) and `BigInt`s (distinct tag). All the primitive tags
 /// (undefined/null/bool/number/int32/string/bigint/symbol) are NOT Objects.
 fn value_is_object(value: f64) -> bool {
-    let jsv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jsv.is_pointer() {
-        return false;
-    }
-    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
-    !crate::symbol::is_registered_symbol(raw)
+    crate::builtins::arithmetic::js_value_is_object(value)
 }
 
 /// `Date.prototype [ @@toPrimitive ] ( hint )` (ECMA-262 §21.4.4.45).

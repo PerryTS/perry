@@ -138,7 +138,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         // app-page-turbo: 0xf000f indexed inside a class `get`); only a
         // *registered* class-id takes the class-ref arm.
         match (obj_handle as u64) >> 48 {
-            0x7FFD | 0x7FFF => (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF,
+            0x7FFD | 0x7FFF | 0xFFF9 => (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF,
             // SHORT_STRING_TAG (0x7FF9): an SSO string IS a string receiver,
             // it just carries its characters inline instead of a heap address
             // (#6887/#8117). The question this match asks is "does the low 48
@@ -376,16 +376,15 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     } else {
         obj_handle as u64
     };
-    // A proxy is a small tagged handle, not a heap header. Rebuild the tag so
-    // unknown-typed computed stores use its [[Set]] path.
-    let boxed = f64::from_bits(crate::value::POINTER_TAG | raw);
-    if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-        crate::proxy::js_proxy_set(boxed, idx, value);
+    // Resolve ids only at this legacy raw-receiver boundary.
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(raw as *const crate::array::ArrayHeader) {
+        crate::proxy::js_proxy_set(proxy, idx, value);
         return;
     }
     if raw < 0x1000 {
         return;
     }
+    let boxed = crate::value::js_nanbox_pointer(raw as i64);
     // Ask the KEY-KIND question before either typed-array arm claims the
     // receiver. A Symbol is definitionally not a CanonicalNumericIndexString,
     // so ECMA-262 §10.4.5.5 requires OrdinarySet — the symbol side table, the

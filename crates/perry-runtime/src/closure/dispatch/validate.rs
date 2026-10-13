@@ -84,11 +84,28 @@ pub fn get_valid_info(closure: *const ClosureHeader) -> *const crate::closure::J
     let [obj_type, gc_flags] = unsafe {
         std::ptr::read_volatile(std::ptr::addr_of!((*header).obj_type) as *const [u8; 2])
     };
-    if obj_type != crate::gc::GC_TYPE_CLOSURE || gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+    let checked = crate::gc::GcHeader {
+        obj_type,
+        gc_flags,
+        _reserved: 0,
+        size: 0,
+    };
+    if !crate::entry_contracts::Kind::Closure.holds_header(&checked) {
         return std::ptr::null();
     }
     std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    closure_info_body(closure)
+}
+
+#[inline(always)]
+fn closure_info_body(closure: *const ClosureHeader) -> *const crate::closure::JsFunctionInfo {
     unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*closure).info)) }
+}
+
+crate::entry_contracts::kind_entry! {
+    Closure, fn js_closure_info__Closure(closure: *const ClosureHeader) -> *const crate::closure::JsFunctionInfo {
+        closure_info_body(closure)
+    }
 }
 
 /// Validate a closure pointer and return its body's code address — the
@@ -124,8 +141,8 @@ pub fn dispatch_proxy_callee_or_throw(
     this: crate::closure::JsThis,
     args: &[f64],
 ) -> f64 {
-    let boxed =
-        f64::from_bits(crate::value::POINTER_TAG | (closure as u64 & crate::value::POINTER_MASK));
+    // The pointer constructor boxes a raw Proxy id under HANDLE_TAG.
+    let boxed = crate::value::js_nanbox_pointer(closure as i64);
     if crate::proxy::js_proxy_is_proxy(boxed) == 1 {
         return crate::proxy::call_proxy_value_with_this(boxed, this.as_f64(), args);
     }

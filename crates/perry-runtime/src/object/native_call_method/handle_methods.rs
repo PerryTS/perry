@@ -72,9 +72,9 @@ pub(super) unsafe fn dispatch_handle(
     // Check if this is a handle-based object (small integer, not a real heap pointer)
     // Handles are used by Fastify and other native modules that store
     // objects in a registry and use integer IDs to reference them.
-    if jsval.is_pointer() {
-        let raw_ptr = jsval.as_pointer::<u8>() as usize;
-        if crate::value::addr_class::is_small_handle(raw_ptr) {
+    if jsval.is_handle() || jsval.is_pointer() {
+        let raw_ptr = (jsval.bits() & crate::value::POINTER_MASK) as usize;
+        if jsval.is_handle() {
             // This is a handle, not a real memory pointer - dispatch to stdlib
             if let Some(dispatch) = handle_method_dispatch() {
                 let r = dispatch(

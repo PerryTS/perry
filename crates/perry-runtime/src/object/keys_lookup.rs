@@ -26,7 +26,14 @@ pub(crate) unsafe fn string_header_payload(key: *const crate::StringHeader) -> *
 pub(crate) unsafe fn keys_array_dense_slots(
     keys: *const crate::array::ArrayHeader,
 ) -> (*const f64, usize) {
-    let arr = crate::array::clean_arr_ptr(keys);
+    // A shape's keys array is a GC array by construction: its header needs
+    // no address admission (only forwarding/laziness take the resolver).
+    let arr = if keys.is_null() || (keys as u64) >> 48 != 0 {
+        crate::array::clean_arr_ptr(keys)
+    } else {
+        let header = crate::value::addr_class::honest_header(keys as usize);
+        crate::array::clean_headed_arr_ptr(keys, header)
+    };
     if arr.is_null() {
         return (std::ptr::null(), 0);
     }

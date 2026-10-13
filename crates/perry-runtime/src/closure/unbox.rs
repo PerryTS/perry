@@ -29,7 +29,10 @@ use super::dispatch::throw_not_callable;
 #[no_mangle]
 pub extern "C-unwind" fn js_closure_unbox_callee_checked(callee: f64) -> i64 {
     let bits = callee.to_bits();
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+    if !matches!(
+        bits & crate::value::TAG_MASK,
+        crate::value::POINTER_TAG | crate::value::HANDLE_TAG
+    ) {
         throw_not_callable();
     }
     (bits & crate::value::POINTER_MASK) as i64
@@ -55,7 +58,10 @@ pub extern "C-unwind" fn js_closure_unbox_callee_checked(callee: f64) -> i64 {
 #[no_mangle]
 pub extern "C-unwind" fn js_closure_unbox_callee_checked_rebind(callee: f64, receiver: f64) -> i64 {
     let bits = callee.to_bits();
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+    if !matches!(
+        bits & crate::value::TAG_MASK,
+        crate::value::POINTER_TAG | crate::value::HANDLE_TAG
+    ) {
         throw_not_callable();
     }
     let rebound = crate::closure::clone_closure_rebind_this(bits, receiver);

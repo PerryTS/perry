@@ -282,7 +282,14 @@ pub unsafe extern "C" fn napi_create_double(
     value: f64,
     result: *mut NapiValue,
 ) -> NapiStatus {
-    write_handle(env, JSValue::number(value).bits(), result)
+    // Raw numeric ingress: an addon's double may carry any NaN payload, and
+    // `JSValue::number` boxes the bit pattern. A negative NaN with a payload
+    // would read as a HANDLE_TAG id, so canonicalize at the boundary.
+    write_handle(
+        env,
+        JSValue::number(crate::array::canonical_raw_f64(value)).bits(),
+        result,
+    )
 }
 
 #[no_mangle]
@@ -1331,7 +1338,7 @@ pub unsafe extern "C" fn napi_create_date(
 ) -> NapiStatus {
     write_handle(
         env,
-        crate::date::js_date_new_from_timestamp(time).to_bits(),
+        crate::date::js_date_new_from_timestamp(crate::array::canonical_raw_f64(time)).to_bits(),
         result,
     )
 }

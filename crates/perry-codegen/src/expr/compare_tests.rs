@@ -795,9 +795,13 @@ fn local_typeof_number_literal_is_decided_inline_for_plain_doubles() {
         calls, 1,
         "exactly one classifier call, on the slow arm:\n{ir}"
     );
+    // Honest pointers: the tag band is sign-closed, so the Number test is
+    // one mask of the sign bit and one unsigned compare against 0x7FF9<<48.
     assert!(
-        ir.contains("icmp ugt i64") && ir.contains(", 6\n") || ir.contains(", 6 "),
-        "the tag-range test must be the single unsigned range compare:\n{ir}"
+        ir.contains("and i64")
+            && ir.contains("icmp ult i64")
+            && ir.contains(", 9221401712017801216"),
+        "the tag-range test must be the single sign-closed unsigned range compare:\n{ir}"
     );
     assert!(
         !ir.contains("1048576.0") && !ir.contains("0x4130000000000000"),

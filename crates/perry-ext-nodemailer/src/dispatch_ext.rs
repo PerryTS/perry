@@ -24,7 +24,7 @@
 
 use std::sync::Once;
 
-use perry_ffi::{Handle, JsValue, Promise, get_handle};
+use perry_ffi::{get_handle, Handle, JsValue, Promise};
 
 use crate::SmtpTransportHandle;
 

@@ -198,9 +198,7 @@ pub(super) unsafe fn new_hash_state_or_throw(
 fn throw_plain_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = perry_runtime::error::js_error_new_with_message(msg);
-    perry_runtime::exception::js_throw(f64::from_bits(
-        0x7FFD_0000_0000_0000u64 | ((err as u64) & 0x0000_FFFF_FFFF_FFFF),
-    ))
+    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
 /// Validate and decode the `(data, inputEncoding?)` arguments of

@@ -18,7 +18,7 @@ use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK};
 
 fn upgrade_head_arg(head_data: &[u8]) -> f64 {
     let head = perry_ffi::alloc_buffer(head_data);
-    f64::from_bits(POINTER_TAG | (head as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(head as usize as *mut u8).bits())
 }
 
 /// Fire the `'upgrade'` event listeners with `(im, wsId, head)`.

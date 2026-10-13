@@ -5,7 +5,7 @@
 ))]
 #[inline]
 fn nanbox_small_handle(handle: i64) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
+    perry_runtime::value::js_nanbox_pointer(handle as i64)
 }
 
 #[cfg(all(

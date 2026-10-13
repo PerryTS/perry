@@ -128,6 +128,11 @@ pub const JS_BODY_FIXED_PARAMS: usize = 2;
 
 /// NaN-boxed `undefined` (`value::TAG_UNDEFINED` in the runtime, which
 /// asserts it equals this).
+/// Runtime registry ids have their own quiet-NaN tag. 0x7FFB belongs to
+/// perry-jsruntime's V8 handles; the negative qNaN word is distinct from
+/// every positive tag and the canonical numeric NaN (0x7FF8).
+pub const HANDLE_TAG: u64 = 0xFFF9_0000_0000_0000;
+
 pub const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 /// The receiver a JS body takes as its second native parameter

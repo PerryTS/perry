@@ -178,9 +178,13 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
     {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(&val_double);
-        let upper = blk.lshr(I64, &bits, "48");
-        let rel = blk.sub(I64, &upper, "32761"); // 0x7FF9
-        let is_boxed = blk.icmp_ult(I64, &rel, "7");
+        // Sign-closed tag-band test (includes HANDLE_TAG's mirror).
+        let magnitude = blk.and(I64, &bits, "9223372036854775807");
+        let is_boxed = blk.icmp_uge(
+            I64,
+            &magnitude,
+            &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+        );
         blk.cond_br(&is_boxed, &exit_label, &fast_label);
     }
 

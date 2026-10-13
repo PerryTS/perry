@@ -136,7 +136,9 @@ pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
     for callback in listeners {
         if callback.get() != 0 {
             let closure = JsClosure::from_raw(callback.get() as *const RawClosureHeader);
-            let value = f64::from_bits(POINTER_TAG | (socket.get() as u64 & PTR_MASK));
+            let value = f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(socket.get() as usize as *mut u8).bits(),
+            );
             let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, value);
         }
     }
@@ -300,7 +302,8 @@ pub(crate) unsafe fn handle_response_event(
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
     // callback. POINTER_TAG so the closure-arg unboxer extracts the i64.
-    let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
+    let arg =
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(incoming as usize as *mut u8).bits());
     let (response_callback, response_listeners) =
         get_handle_mut::<ClientRequestHandle>(request_handle)
             .map(|request| {
@@ -453,11 +456,13 @@ pub(crate) unsafe fn handle_upgrade_event(
     })
     .unwrap_or_default();
 
-    let res_arg = scope.root_nanbox(f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK)));
+    let res_arg = scope.root_nanbox(f64::from_bits(
+        perry_ffi::JsValue::from_object_ptr(incoming as usize as *mut u8).bits(),
+    ));
     let socket_arg = scope.root_nanbox(if socket.get() == 0 {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(POINTER_TAG | (socket.get() as u64 & PTR_MASK))
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(socket.get() as usize as *mut u8).bits())
     });
     let listeners = scope.root_addrs(&upgrade_listeners);
     // Node always hands the listener a Buffer here, even when the peer sent
@@ -465,7 +470,7 @@ pub(crate) unsafe fn handle_upgrade_event(
     // zero-length upgrade head) — never `undefined`.
     let head_arg = {
         let buf = perry_ffi::alloc_buffer(&head);
-        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits())
     };
 
     let head_arg = scope.root_nanbox(head_arg);
@@ -538,7 +543,8 @@ pub(crate) unsafe fn handle_response_head_event(
         })
         .unwrap_or_default();
 
-    let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
+    let arg =
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(incoming as usize as *mut u8).bits());
     let scope = perry_ffi::TransientRootScope::enter();
     let response_callback = scope.root_addr(response_callback);
     let response_listeners = scope.root_addrs(&response_listeners);

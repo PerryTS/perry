@@ -7,9 +7,8 @@ use super::*;
 use crate::common::{get_handle, register_handle, Handle};
 use perry_runtime::{
     buffer::{is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader},
-    js_array_alloc, js_array_push, js_get_string_pointer_unified, js_nanbox_pointer,
-    js_object_alloc_with_shape, js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue,
-    ObjectHeader, StringHeader,
+    js_array_alloc, js_array_push, js_get_string_pointer_unified, js_object_alloc_with_shape,
+    js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 use rusqlite::{ffi, Connection};
 use std::collections::HashSet;
@@ -45,7 +44,7 @@ pub(crate) unsafe fn register_bun_sqlite_database(
     let type_symbol =
         perry_runtime::symbol::js_symbol_for(f64_from_jsvalue(string_value("sqlite-type")));
     perry_runtime::symbol::js_object_set_symbol_property(
-        js_nanbox_pointer(handle),
+        perry_runtime::value::js_nanbox_handle(handle),
         type_symbol,
         f64_from_jsvalue(string_value(type_name)),
     );

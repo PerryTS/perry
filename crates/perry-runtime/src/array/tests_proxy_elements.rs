@@ -39,8 +39,8 @@ fn proxied_array_element_reads_answer_through_the_proxy() {
     let boxed_id = proxy.to_bits();
     let masked_id = boxed_id & crate::value::POINTER_MASK;
     assert!(
-        crate::value::addr_class::is_proxy_id_band(masked_id as usize),
-        "premise: the proxy is a handle-band id"
+        crate::value::addr_class::is_proxy_cell(masked_id as usize),
+        "premise: the masked payload is the Proxy cell"
     );
     for (index, want) in [(0u32, 7.0), (1u32, 8.0)] {
         assert_eq!(

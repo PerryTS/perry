@@ -736,7 +736,7 @@ pub(super) fn try_mark_conservative_word(
     // interior-pointer (`enclosing_object`) lookup.
     let tag = word & TAG_MASK;
     let target = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        let ptr_val = crate::value::addr_class::tagged_heap_addr(word);
+        let ptr_val = (word & POINTER_MASK) as usize;
         if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
             return false;
         }
@@ -1067,13 +1067,6 @@ impl<'a> RuntimeRootVisitor<'a> {
         if addr == 0 {
             return None;
         }
-        if crate::value::addr_class::canonical_raw_receiver(addr) != addr {
-            // A raw receiver slot preserves the proxy's address tag. The
-            // ordinary tagged visitor supplies its canonical GC address.
-            return self
-                .visit_nanbox_bits(POINTER_TAG | addr as u64)
-                .map(|bits| (bits & POINTER_MASK) as usize);
-        }
         match &mut self.mode {
             RuntimeRootVisitMode::Mark { valid_ptrs } => {
                 mark_precise_root(PreciseRoot::GcPointer(addr), valid_ptrs);
@@ -1399,9 +1392,9 @@ impl<'a> RuntimeRootVisitor<'a> {
         if !matches!(tag, POINTER_TAG | STRING_TAG | BIGINT_TAG) {
             return false;
         }
-        let addr = crate::value::addr_class::tagged_heap_addr(bits);
+        let addr = (bits & POINTER_MASK) as usize;
         if let Some(new_addr) = self.visit_metadata_raw_addr(addr) {
-            *slot = f64::from_bits(tag | (bits & 1) | (new_addr as u64 & POINTER_MASK));
+            *slot = f64::from_bits(tag | (new_addr as u64 & POINTER_MASK));
             true
         } else {
             false
@@ -1629,7 +1622,7 @@ pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
 #[inline]
 pub(super) fn mutable_slot_points_to_valid_root(bits: u64, valid_ptrs: &ValidPointerSet) -> bool {
     if shadow_slot_pointer_root(bits) {
-        let addr = crate::value::addr_class::tagged_heap_addr(bits);
+        let addr = (bits & POINTER_MASK) as usize;
         return valid_ptrs.contains(&addr);
     }
     let raw_ptr = bits as usize;

@@ -448,6 +448,14 @@ pub fn worker_entries() -> Vec<(String, String)> {
     WORKER_ENTRIES.lock().unwrap().clone()
 }
 
+/// The contract-check build: `PERRY_CHECK_CONTRACTS=1` while compiling. The
+/// same knob builds the runtime with its contract assertions
+/// (`perry-runtime` `entry_contracts`); codegen then emits the run-time
+/// witness of each inline proof it admits (`js_typed_element_contract`).
+pub(crate) fn check_contracts() -> bool {
+    std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1")
+}
+
 /// Gen-GC write-barrier emission gate. Default ON: emit a
 /// `js_write_barrier_slot(parent_bits, slot_addr, child_bits)` call, or
 /// the compatibility wrapper, after every heap-store site. Set

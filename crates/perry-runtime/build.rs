@@ -571,6 +571,11 @@ fn emit_instrument_cfgs() {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
+    println!("cargo:rustc-check-cfg=cfg(perry_check_contracts)");
+    if std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=perry_check_contracts");
+    }
     // Keep page backing outside the Rust CGU. Its unreferenced object is not
     // extracted by ordinary links, preserving their code and literal layout.
     println!("cargo:rerun-if-changed=src/hot_text.c");

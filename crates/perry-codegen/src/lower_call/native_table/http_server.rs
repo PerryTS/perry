@@ -405,7 +405,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         // yielding `undefined`/a raw number.
         runtime: "js_node_http_im_pause_self",
         args: &[],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -418,7 +418,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         // `(number|undefined).on`.
         runtime: "js_node_http_im_resume_self",
         args: &[],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -445,7 +445,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         class_filter: Some("IncomingMessage"),
         runtime: "js_http_incoming_message_set_encoding",
         args: &[NA_STR],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -454,7 +454,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         class_filter: Some("IncomingMessage"),
         runtime: "js_node_http_im_set_timeout",
         args: &[NA_F64, NA_PTR],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     // ServerResponse instance methods
     NativeModSig {
@@ -467,7 +467,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         // (e.g. Set-Cookie) are detected and emitted as one wire line per
         // element instead of a single comma-joined / JSON-stringified line.
         args: &[NA_STR, NA_F64],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -521,7 +521,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_append_header",
         args: &[NA_STR, NA_STR],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -530,7 +530,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_set_headers",
         args: &[NA_F64],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",
@@ -616,7 +616,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         class_filter: Some("ServerResponse"),
         runtime: "js_node_http_res_set_timeout",
         args: &[NA_F64, NA_PTR],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "http",

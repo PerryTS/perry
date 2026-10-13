@@ -1276,9 +1276,14 @@ pub(crate) fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> b
     // that LLVM lowers to a switch.
     let is_heap_ptr = tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG;
     if !is_heap_ptr {
+        // An id is not a heap address, but it owns traced native edges during
+        // a full collection. Observe it before the non-pointer rejection.
+        if tag == crate::value::HANDLE_TAG && super::full_trace::handle_trace_active() {
+            super::full_trace::observe_handle(value_bits, valid_ptrs);
+        }
         return false;
     }
-    let ptr_val = crate::value::addr_class::tagged_heap_addr(value_bits);
+    let ptr_val = (value_bits & POINTER_MASK) as usize;
     if ptr_val == 0 {
         return false;
     }

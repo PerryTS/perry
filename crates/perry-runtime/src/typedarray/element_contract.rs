@@ -1,5 +1,8 @@
-//! `PERRY_CHECK_CONTRACTS`: the run-time witness of the declared-kind element
-//! proof that codegen emits inline (`perry-codegen` `expr/typed_element.rs`).
+//! `PERRY_CHECK_CONTRACTS=1`: the run-time witness of the declared-kind
+//! element proof that codegen emits inline (`perry-codegen`
+//! `expr/typed_element.rs`). It is one of the contract witnesses of
+//! `crate::entry_contracts` and reports through the same
+//! `contract_violated`.
 //!
 //! Compiled with the knob set, every access the inline proof admits calls this
 //! first. It re-derives the admission from the runtime's own view of the cell
@@ -32,12 +35,11 @@ pub extern "C" fn js_typed_element_contract(value: f64, kind: i32, index: i64) -
 #[cold]
 #[inline(never)]
 fn contract_violated(bits: u64, kind: i32, index: i64) -> ! {
-    use std::io::Write;
-    let _ = writeln!(
-        std::io::stderr(),
-        "perry: PERRY_CHECK_CONTRACTS: the inline typed-element proof admitted \
-         value {bits:#018x} as an owner of kind {kind} at index {index}, which \
-         the runtime rejects"
-    );
-    std::process::abort()
+    crate::entry_contracts::contract_violated(
+        "typed_element",
+        &format!("TypedOwner({kind})"),
+        "declared-kind",
+        bits,
+        &format!(" index={index}"),
+    )
 }

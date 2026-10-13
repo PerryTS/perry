@@ -227,7 +227,7 @@
         }
 
         // Return as a NaN-boxed widget handle (POINTER tag).
-        let result = nanbox_pointer_inline(blk, &handle);
+        let result = crate::expr::nanbox_inline::nanbox_handle_inline(blk, &handle);
         web_roots.release(ctx);
         return Ok(result);
     }

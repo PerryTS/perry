@@ -1344,7 +1344,7 @@ pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
 pub(super) fn decode_heap_addr(bits: u64) -> usize {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        crate::value::addr_class::tagged_heap_addr(bits)
+        (bits & POINTER_MASK) as usize
     } else if tag < 0x7FF8_0000_0000_0000 {
         // Possible raw pointer. Cheap shape pre-filter first (#6011): a real
         // heap address is 48-bit, above the handle band, and 8-aligned — an

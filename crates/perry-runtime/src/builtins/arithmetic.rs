@@ -61,14 +61,7 @@ pub extern "C" fn js_eq(a: JSValue, b: JSValue) -> JSValue {
 /// `value::addr_class`) which must not be dereferenced as heap objects in a
 /// coercion path.
 fn eq_is_object(v: JSValue) -> bool {
-    if !v.is_pointer() {
-        return false;
-    }
-    let ptr = v.as_pointer::<u8>();
-    if crate::value::addr_class::is_handle_band(ptr as usize) {
-        return false;
-    }
-    unsafe { crate::symbol::js_is_symbol(f64::from_bits(v.bits())) == 0 }
+    js_value_is_object(f64::from_bits(v.bits()))
 }
 
 /// JS abstract equality (==). Implements the coercion rules:
@@ -690,6 +683,33 @@ pub(crate) enum ValueTypeofTag {
     Symbol = 7,
 }
 
+/// ECMA-262 `Type(value) is Object`, the one shared answer for runtime
+/// helpers. A `POINTER_TAG` word names a GC-headed object (honest pointers),
+/// so its header alone separates the symbol cells (primitives) from every
+/// object kind. `HANDLE_TAG` ids (Web Fetch, streams, native registry
+/// objects) and V8 handles are objects. Class refs share INT32's encoding, so
+/// callers that admit them say so themselves; raw untagged words are not
+/// values here.
+#[inline]
+pub(crate) fn js_value_is_object(value: f64) -> bool {
+    let bits = value.to_bits();
+    if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
+        return match header.obj_type {
+            crate::gc::GC_TYPE_SYMBOL => false,
+            // Fresh symbols keep the legacy string allocation kind; only a
+            // matching magic word needs the collision-safe symbol proof.
+            crate::gc::GC_TYPE_STRING => {
+                let addr = (bits & crate::value::POINTER_MASK) as usize;
+                !(unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
+                    && crate::symbol::is_registered_symbol(addr))
+            }
+            _ => true,
+        };
+    }
+    let jsval = JSValue::from_bits(bits);
+    jsval.is_handle() || crate::value::is_js_handle(value)
+}
+
 /// Classify a value once, independently of the string representation exposed
 /// by the `typeof` operator. Keeping every exceptional Perry representation in
 /// this one classifier makes the literal-comparison entry point below exactly
@@ -728,25 +748,13 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         } else {
             ValueTypeofTag::Object
         }
+    } else if jsval.is_handle() {
+        ValueTypeofTag::Object
     } else if jsval.is_pointer() {
         let addr = jsval.as_pointer::<u8>() as usize;
-        // Proxy ids alone need the proxy's callable-target fact. Ordinary
-        // heap values never enter a handle registry.
-        if crate::value::addr_class::is_proxy_id_band(addr) {
-            return if crate::proxy::proxy_wraps_callable(value) {
-                ValueTypeofTag::Function
-            } else {
-                ValueTypeofTag::Object
-            };
-        }
-        if crate::value::addr_class::is_handle_band(addr) {
-            return ValueTypeofTag::Object;
-        }
-        // One allocator admission and one kind read. Off-heap buffers have no
-        // GC prefix; the tracked reader rejects them before touching p-8.
-        if let Some(header) = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-        {
-            let header = unsafe { header.as_ref() };
+        // One kind read: a POINTER_TAG word names a GC-headed object (honest
+        // pointers), including leaked symbol cells in immortal space.
+        if let Some(header) = crate::value::addr_class::pointer_value_header(jsval.bits()) {
             return match header.obj_type {
                 crate::gc::GC_TYPE_CLOSURE => ValueTypeofTag::Function,
                 crate::gc::GC_TYPE_OBJECT
@@ -764,6 +772,9 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
                     ValueTypeofTag::Function
                 }
                 crate::gc::GC_TYPE_SYMBOL => ValueTypeofTag::Symbol,
+                crate::gc::GC_TYPE_PROXY if crate::proxy::proxy_wraps_callable(value) => {
+                    ValueTypeofTag::Function
+                }
                 // Fresh symbols retain the legacy string allocation kind. Only
                 // a matching magic word needs its collision-safe symbol proof.
                 crate::gc::GC_TYPE_STRING
@@ -775,14 +786,8 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
                 _ => ValueTypeofTag::Object,
             };
         }
-        // Persistent symbols live outside the GC allocator. Its rejection is
-        // not a readable-address proof: use their existing registry without
-        // dereferencing an unadmitted pointer. Ordinary heap values exited above.
-        if crate::symbol::is_registered_symbol(addr) {
-            ValueTypeofTag::Symbol
-        } else {
-            ValueTypeofTag::Object
-        }
+        // A null POINTER_TAG word is not produced by any constructor.
+        ValueTypeofTag::Object
     } else if jsval.is_bigint() {
         ValueTypeofTag::BigInt
     } else if jsval.is_int32() {

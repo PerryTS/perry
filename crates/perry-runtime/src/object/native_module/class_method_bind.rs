@@ -43,7 +43,7 @@ pub extern "C" fn js_class_method_bind(
                     | "values"
             ) {
                 let bits = instance.to_bits();
-                if (bits >> 48) == 0x7FFD {
+                if (bits & crate::value::TAG_MASK) == crate::value::HANDLE_TAG {
                     let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
                     if crate::value::addr_class::is_small_handle(id as usize) {
                         if let Some(dispatch) = handle_property_dispatch() {

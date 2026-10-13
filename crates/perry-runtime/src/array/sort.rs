@@ -691,8 +691,8 @@ pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
     // Callable closure or callable Proxy -> comparator path. Use the shared
     // validator rather than probing CLOSURE_MAGIC directly: Proxy values are
     // small registry ids, not dereferenceable ClosureHeader pointers.
-    if jv.is_pointer() {
-        let ptr = jv.as_pointer::<ClosureHeader>();
+    if jv.is_pointer() || jv.is_handle() {
+        let ptr = (jv.bits() & crate::value::POINTER_MASK) as *const ClosureHeader;
         if !crate::closure::get_valid_func_ptr(ptr).is_null() {
             return ptr as i64;
         }

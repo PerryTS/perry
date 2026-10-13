@@ -130,9 +130,9 @@ pub(crate) fn js_jsvalue_to_string_impl(
         // BigInt - convert to decimal string
         let ptr = jsval.as_bigint_ptr();
         crate::bigint::js_bigint_to_string(ptr)
-    } else if jsval.is_pointer() {
+    } else if jsval.is_handle() || jsval.is_pointer() {
         // Arrays stringify via join; other objects use their own conversion.
-        let ptr: *const u8 = jsval.as_pointer();
+        let ptr = (jsval.bits() & POINTER_MASK) as *const u8;
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
         // registry (a by-value lookup, no deref) before the gate.
         if crate::proxy::js_proxy_is_proxy(value) != 0 {
@@ -481,9 +481,9 @@ fn to_string_method_impl(value: f64, skip_to_primitive: bool) -> *mut crate::str
         let prop = b"toString";
         crate::error::js_throw_type_error_property_access(is_null, prop.as_ptr(), prop.len());
     }
-    if jsval.is_pointer() {
-        let handle = jsval.as_pointer::<u8>() as usize;
-        if crate::value::addr_class::is_small_handle(handle) {
+    if jsval.is_handle() {
+        let handle = jsval.as_handle();
+        {
             if let Some(dispatch) = crate::object::handle_method_dispatch() {
                 let result = unsafe {
                     dispatch(handle as i64, b"toString".as_ptr(), 8, std::ptr::null(), 0)

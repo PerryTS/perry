@@ -11,8 +11,8 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{
-    can_lower_proven_boolean_to_number, lower_expr, lower_expr_value, nanbox_pointer_inline,
-    nanbox_string_inline, unbox_to_i64, FnCtx,
+    can_lower_proven_boolean_to_number, lower_expr, lower_expr_value, nanbox_string_inline,
+    unbox_to_i64, FnCtx,
 };
 use crate::nanbox::double_literal;
 use crate::native_value::NativeRep;
@@ -572,7 +572,13 @@ pub fn lower_perry_ui_table_call(
                 }
             }
             let blk = ctx.block();
-            Ok(nanbox_pointer_inline(blk, &handle))
+            if sig.ret == UiReturnKind::Widget {
+                Ok(crate::expr::nanbox_inline::nanbox_handle_inline(
+                    blk, &handle,
+                ))
+            } else {
+                Ok(crate::expr::nanbox_pointer_inline(blk, &handle))
+            }
         }
         UiReturnKind::F64 => Ok(ctx.block().call(DOUBLE, sig.runtime, &arg_slices)),
         UiReturnKind::Void => {

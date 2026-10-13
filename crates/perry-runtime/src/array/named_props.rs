@@ -294,7 +294,8 @@ fn decode_header_word(bits: u64) -> Reserve {
     match bits & TAG_MASK {
         POINTER_TAG => {
             let owner = (bits & POINTER_MASK) as usize;
-            if unsafe { crate::value::addr_class::try_read_gc_header(owner) }
+            // The runtime writes this word; a POINTER_TAG word is honest.
+            if crate::value::addr_class::pointer_value_header(bits)
                 .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
             {
                 Reserve::Bag(owner as *mut crate::object::ObjectHeader)

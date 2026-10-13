@@ -98,7 +98,7 @@ pub use dynamic_props::{
     closure_dynamic_props_snapshot, closure_get_dynamic_prop, closure_get_own_dynamic_prop,
     closure_has_own_dynamic_prop, closure_is_key_deleted, closure_mark_key_deleted,
     closure_set_dynamic_prop, closure_set_static_prototype, closure_static_prototype,
-    is_closure_ptr,
+    is_closure_bits, is_closure_ptr,
 };
 #[cfg(feature = "wasm-host")]
 pub(crate) use wasm_funcref::register_wasm_funcref_external;

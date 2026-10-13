@@ -1191,11 +1191,16 @@ fn lower_typeof_number_inline(ctx: &mut FnCtx<'_>, value: &str, negate: bool) ->
     {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(value);
-        let top16 = blk.lshr(I64, &bits, "48");
-        // Outside the tag range `0x7FF9..=0x7FFF` in one unsigned compare.
-        let tag_offset = blk.sub(I64, &top16, "32761");
-        let untagged = blk.icmp_ugt(I64, &tag_offset, "6");
+        // Outside the tag band, sign-closed so HANDLE_TAG (0xFFF9) is
+        // excluded with the positive tags 0x7FF9..=0x7FFF.
+        let magnitude = blk.and(I64, &bits, "9223372036854775807");
+        let untagged = blk.icmp_ult(
+            I64,
+            &magnitude,
+            &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+        );
         // Not an untagged raw typed-array pointer.
+        let top16 = blk.lshr(I64, &bits, "48");
         let top_nonzero = blk.icmp_ne(I64, &top16, "0");
         let below_pointer_floor = blk.icmp_ult(I64, &bits, "65536");
         let not_raw_pointer = blk.or(I1, &top_nonzero, &below_pointer_floor);

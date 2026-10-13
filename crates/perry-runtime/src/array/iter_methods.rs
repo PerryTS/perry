@@ -1501,8 +1501,8 @@ fn typeof_owned_string(v: f64) -> String {
 fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
     use crate::value::JSValue;
     let jv = JSValue::from_bits(cb_boxed.to_bits());
-    if jv.is_pointer() {
-        let ptr = jv.as_pointer::<ClosureHeader>();
+    if jv.is_pointer() || jv.is_handle() {
+        let ptr = (jv.bits() & crate::value::POINTER_MASK) as *const ClosureHeader;
         // #9681: a callable Proxy is a small registry id, so the hardened
         // closure validator correctly rejects it as a ClosureHeader. Return
         // that bare id anyway: DirectCallN falls back to js_closure_callN,

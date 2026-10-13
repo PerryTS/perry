@@ -57,7 +57,7 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
 fn small_native_handle_id(value: f64) -> Option<i64> {
     use crate::value::addr_class;
     let bits = value.to_bits();
-    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+    if (bits & crate::value::TAG_MASK) == crate::value::HANDLE_TAG {
         let raw = (bits & crate::value::POINTER_MASK) as i64;
         if addr_class::is_small_handle(raw as usize) {
             return Some(raw);
@@ -935,7 +935,7 @@ mod primitive_lhs_native_brand_tests_11261 {
         }
         let not_primitive = [
             // A POINTER-tagged registry handle and a heap address.
-            f64::from_bits(crate::value::POINTER_TAG | PROBE_HANDLE as u64),
+            f64::from_bits(crate::value::HANDLE_TAG | PROBE_HANDLE as u64),
             f64::from_bits(crate::value::POINTER_TAG | 0x7F12_3456_7890),
             // The raw-bitcast band is left to the downstream decoders.
             f64::from_bits(PROBE_HANDLE as u64),
@@ -990,7 +990,7 @@ mod tagged_native_handle_tests {
                 None,
                 "subnormal bits {id}"
             );
-            let tagged = f64::from_bits(crate::value::POINTER_TAG | id);
+            let tagged = f64::from_bits(crate::value::HANDLE_TAG | id);
             let expected =
                 crate::value::addr_class::is_small_handle(id as usize).then_some(id as i64);
             assert_eq!(small_native_handle_id(tagged), expected);
@@ -1011,7 +1011,7 @@ mod tagged_native_handle_tests {
         }
         assert_eq!(
             js_instanceof(
-                f64::from_bits(crate::value::POINTER_TAG | 1),
+                f64::from_bits(crate::value::HANDLE_TAG | 1),
                 CLASS_ID_NET_SOCKET
             )
             .to_bits(),

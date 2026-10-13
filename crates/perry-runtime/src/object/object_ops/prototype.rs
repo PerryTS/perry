@@ -325,9 +325,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     }
     let bits = obj_value.to_bits();
     let top16 = bits >> 48;
-    if top16 == 0x7FFD {
+    if top16 == (crate::value::HANDLE_TAG >> 48) {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
-        if crate::value::addr_class::is_small_handle(raw_addr as usize) {
+        {
             // WHATWG fetch values are registry handles rather than heap
             // ObjectHeaders, but they still have the intrinsic prototype for
             // their interface.  Axios walks this chain to distinguish a

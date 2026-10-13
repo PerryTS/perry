@@ -41,6 +41,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // a different backend means different object bytes.
     "PERRY_LLVM_INPROCESS",
     "PERRY_WRITE_BARRIERS",
+    "PERRY_CHECK_CONTRACTS",
     // #9342 kill switch: `PERRY_U8_INLINE_READ=0` removes the inline u8-read
     // lane from the emitted code, so an object built with the lane must not be
     // served from cache to a build that turned it off (and vice versa).
@@ -190,11 +191,8 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // is inclusion; the deliberate exclusions are listed in
     // `codegen_env_vars_are_build_cache_inputs` below.
     "PERRY_GC_MOVING_LOOP_POLLS",
-    // Emits the run-time witness call of every declared-kind element proof.
-    "PERRY_CHECK_CONTRACTS",
     "PERRY_CANONICAL_I32_LOCALS",
     "PERRY_CANONICAL_STR_LOCALS",
-    "PERRY_NANBOX_CANON",
     "PERRY_CONCAT_SITE_CACHE",
     "PERRY_CODEGEN_UNITS",
     "PERRY_CODEGEN_UNIT_BYTES",

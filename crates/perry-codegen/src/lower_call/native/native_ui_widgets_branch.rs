@@ -26,7 +26,7 @@
             &[(I64, &text_ptr), (I64, &id_ptr)],
         );
         let blk = ctx.block();
-        let result = nanbox_pointer_inline(blk, &handle);
+        let result = crate::expr::nanbox_inline::nanbox_handle_inline(blk, &handle);
         arg_group.release(ctx);
         return Ok(result);
     }
@@ -66,7 +66,7 @@
         }
 
         let blk = ctx.block();
-        let result = nanbox_pointer_inline(blk, &handle);
+        let result = crate::expr::nanbox_inline::nanbox_handle_inline(blk, &handle);
         arg_group.release(ctx);
         return Ok(result);
     }
@@ -107,7 +107,7 @@
         let blk = ctx.block();
         let cb_handle = unbox_to_i64(blk, &cb_box);
         let id = blk.call(I64, "js_on_frame_callback", &[(I64, &cb_handle)]);
-        return Ok(nanbox_pointer_inline(ctx.block(), &id));
+        return Ok(crate::expr::nanbox_inline::nanbox_handle_inline(ctx.block(), &id));
     }
 
     // perry/ui.cancelFrame(id) — cancel a pending onFrame registration.

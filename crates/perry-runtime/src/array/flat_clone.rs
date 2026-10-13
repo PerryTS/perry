@@ -67,11 +67,9 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
 ///    accessor, so falling through to the slow path calls a user getter exactly
 ///    once, as the spec requires.
 pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
-    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
-    // Band/slab validation BEFORE any deref: rejects handle ids and the
-    // header-less small-buffer slab without touching memory.
-    unsafe { crate::value::addr_class::try_read_gc_header(raw)? };
-    // Only THEN follow the forwarding chain. `js_array_grow` (issue #233) leaves
+    // `clean_arr_ptr` admits a raw word before any deref (handle ids and the
+    // header-less small-buffer slab fail), and a POINTER_TAG word is honest.
+    // It also follows the forwarding chain. `js_array_grow` (issue #233) leaves
     // a `GC_FLAG_FORWARDED` header at the OLD address whose first eight bytes —
     // where `length`/`capacity` used to live — now hold the forwarding pointer.
     // Reading `length` off the stale header yields a garbage element count, and
@@ -79,7 +77,7 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     // after `sparse.length = 5`, and `[...beyond]` after `beyond[9] = 9`, both
     // took EXC_BAD_ACCESS in `_platform_memmove`. Every other array helper cleans
     // first, including `js_array_clone`'s own memcpy tail; this one must too.
-    let arr = crate::array::clean_arr_ptr(raw as *const ArrayHeader);
+    let arr = crate::array::clean_arr_ptr(super::honest_word::array_arg_of_value(value));
     if arr.is_null() {
         return None;
     }
@@ -127,8 +125,7 @@ pub(crate) fn plain_call_spread_source(value: f64) -> Option<*const ArrayHeader>
     if crate::array::array_iteration_not_pristine() {
         return None;
     }
-    let raw = crate::value::js_nanbox_get_pointer(value) as *const ArrayHeader;
-    let arr = crate::array::clean_arr_ptr(raw);
+    let arr = crate::array::clean_arr_ptr(super::honest_word::array_arg_of_value(value));
     if arr.is_null() {
         return None;
     }

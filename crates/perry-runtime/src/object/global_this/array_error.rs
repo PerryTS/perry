@@ -462,7 +462,8 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
         }
     }
     let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
-    if is_array.is_bool() && is_array.as_bool() {
+    // A Proxy of an array is an array-like read through its traps.
+    if is_array.is_bool() && is_array.as_bool() && !value.is_handle() {
         let arr = if value.is_pointer() {
             value.as_pointer::<crate::array::ArrayHeader>()
         } else if (args_array.to_bits() >> 48) == 0 {
@@ -490,7 +491,7 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
     // that isn't an Object must be a primitive. A `Symbol` is POINTER_TAG'd
     // like a real heap object, so `!value.is_pointer()` alone doesn't catch
     // it — check `js_is_symbol` explicitly.
-    if !value.is_pointer() || crate::symbol::js_is_symbol(args_array) != 0 {
+    if !crate::builtins::arithmetic::js_value_is_object(args_array) {
         throw_type_error_message(b"CreateListFromArrayLike called on non-object");
     }
     generic_array_like_to_vec(args_array)

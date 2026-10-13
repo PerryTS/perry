@@ -14,7 +14,7 @@ impl HolderEdit {
         if !crate::closure::is_closure_ptr(owner) {
             let _no_move = crate::gc::GcSuppressScope::new();
             let bag = unsafe {
-                if crate::value::addr_class::is_proxy_id_band(owner)
+                if crate::value::addr_class::is_proxy_cell(owner)
                     && crate::proxy::canonical_address(f64::from_bits(
                         crate::value::POINTER_TAG | owner as u64,
                     ))

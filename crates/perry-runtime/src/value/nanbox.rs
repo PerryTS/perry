@@ -100,18 +100,56 @@ fn f32_roundtrips_exact(number: f64) -> bool {
 /// it is preserved as-is to prevent tag corruption.
 #[no_mangle]
 pub extern "C" fn js_nanbox_pointer(ptr: i64) -> f64 {
-    // Guard: null pointer (ptr == 0) must NOT produce null POINTER_TAG (0x7FFD_0000_0000_0000).
-    // Null POINTER_TAG causes crashes when code tries to dereference it as a real object pointer.
-    if ptr == 0 {
+    // The common word, an address above the id band and below the NaN-box
+    // tag space, is admitted by ONE unsigned compare; inlined copies carry
+    // only that compare and the OR. Every other word takes the out-of-line
+    // arm.
+    const LOW: u64 = crate::value::addr_class::HANDLE_BAND_MAX as u64;
+    const TAGGED: u64 = 0x7FF0_0000_0000_0000;
+    let bits = ptr as u64;
+    if bits.wrapping_sub(LOW) < TAGGED - LOW {
+        return f64::from_bits(JSValue::pointer(ptr as *const u8).bits());
+    }
+    box_unusual_pointer_word(bits)
+}
+
+/// The words [`js_nanbox_pointer`] does not box as a `POINTER_TAG`:
+/// - a word that already carries a NaN-box tag (top bits in the NaN range:
+///   JS_HANDLE, STRING, POINTER, ...) is preserved as-is, so a tag is never
+///   corrupted;
+/// - zero boxes as null (a null `POINTER_TAG` crashes the first reader that
+///   dereferences it), and any other id-band payload as `HANDLE_TAG`, never
+///   as a `POINTER_TAG`: this is the constructor for words of unknown kind.
+#[cold]
+#[inline(never)]
+fn box_unusual_pointer_word(bits: u64) -> f64 {
+    if bits & 0xFFF0_0000_0000_0000 >= 0x7FF0_0000_0000_0000 {
+        f64::from_bits(bits)
+    } else if bits == 0 {
+        f64::from_bits(TAG_NULL)
+    } else {
+        f64::from_bits(JSValue::handle(bits as usize).bits())
+    }
+}
+
+/// Box a native registry id. Zero is the invalid-handle sentinel (null).
+#[no_mangle]
+pub extern "C" fn js_nanbox_handle(id: i64) -> f64 {
+    if id == 0 {
         return f64::from_bits(TAG_NULL);
     }
-    let bits = ptr as u64;
-    // If value already has a NaN-box tag (top bits in NaN range), preserve it
-    if bits & 0xFFF0_0000_0000_0000 >= 0x7FF0_0000_0000_0000 {
-        return f64::from_bits(bits);
+    f64::from_bits(JSValue::handle(id as usize).bits())
+}
+
+/// Decode only a native registry handle; a number or heap pointer is not an id.
+#[no_mangle]
+pub extern "C" fn js_nanbox_get_handle(value: f64) -> i64 {
+    let value = JSValue::from_bits(value.to_bits());
+    if value.is_handle() {
+        value.as_handle() as i64
+    } else {
+        0
     }
-    let jsval = JSValue::pointer(ptr as *const u8);
-    f64::from_bits(jsval.bits())
 }
 
 /// Create a NaN-boxed string pointer value from an i64 raw pointer.
@@ -218,38 +256,28 @@ pub extern "C" fn js_nanbox_is_pointer(value: f64) -> i32 {
 
 /// Extract a pointer from a NaN-boxed f64 value.
 /// Also handles raw pointer bits (bitcast from i64) for backward compatibility.
-/// Handles POINTER_TAG, STRING_TAG, BIGINT_TAG, and JS_HANDLE_TAG.
+/// Handles POINTER_TAG, STRING_TAG, BIGINT_TAG, JS_HANDLE_TAG and HANDLE_TAG.
 /// Returns the pointer as i64.
 #[no_mangle]
 pub extern "C" fn js_nanbox_get_pointer(value: f64) -> i64 {
     let bits = value.to_bits();
-    let jsval = JSValue::from_bits(bits);
-
-    if jsval.is_pointer() {
-        return jsval.as_pointer::<u8>() as i64;
-    }
-
-    if jsval.is_string() {
-        return jsval.as_string_ptr() as i64;
-    }
-
-    if jsval.is_bigint() {
-        return jsval.as_bigint_ptr() as i64;
-    }
-
-    // JS_HANDLE_TAG (0x7FFB): used for V8 handles and Perry UI widget handles
-    // when values pass through inline_nanbox_pointer's "already tagged" path.
-    if (bits & TAG_MASK) == JS_HANDLE_TAG {
+    // POINTER, STRING, BIGINT, JS_HANDLE (V8 / UI widget handles) and
+    // HANDLE_TAG (native registry ids) carry a 48-bit payload. Decided on
+    // the top 16 bits so every inlined copy compares small immediates
+    // rather than materializing each 64-bit tag.
+    const BIGINT: u64 = BIGINT_TAG >> 48;
+    const V8_HANDLE: u64 = JS_HANDLE_TAG >> 48;
+    const POINTER: u64 = POINTER_TAG >> 48;
+    const STRING: u64 = STRING_TAG >> 48;
+    const HANDLE: u64 = crate::value::HANDLE_TAG >> 48;
+    if matches!(bits >> 48, BIGINT | V8_HANDLE | POINTER | STRING | HANDLE) {
         return (bits & POINTER_MASK) as i64;
     }
-
-    if bits != 0 && bits <= POINTER_MASK {
-        let upper = bits >> 48;
-        if upper == 0 || (upper > 0 && upper < 0x7FF0) {
-            return bits as i64;
-        }
+    let top = bits >> 48;
+    // Raw pointer bits (bitcast from i64) for backward compatibility.
+    if top == 0 && bits != 0 {
+        return bits as i64;
     }
-
     0
 }
 

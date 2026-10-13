@@ -242,7 +242,6 @@ unsafe fn hop_admitted(addr: usize) -> bool {
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-        || crate::closure::is_closure_ptr(addr)
         || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
         || crate::object::dictionary::is_dictionary(obj)
         || crate::object::shapes::object_shape_stamp(obj) == 0

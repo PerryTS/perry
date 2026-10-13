@@ -11,9 +11,9 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
         value: f64::from_bits(TAG_UNDEFINED),
         done: true,
     };
-    if JSValue::from_bits(iter.to_bits()).is_pointer() {
-        let raw = js_nanbox_get_pointer(iter) as usize;
-        if let Some(header) = crate::value::addr_class::try_read_gc_header(raw) {
+    if let Some(header) = crate::value::addr_class::pointer_value_header(iter.to_bits()) {
+        let raw = (iter.to_bits() & crate::value::POINTER_MASK) as usize;
+        {
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
                 let obj = raw as *mut ObjectHeader;
                 if crate::object::iterator_step_method_is_builtin(obj, next) {
@@ -96,7 +96,7 @@ pub unsafe extern "C-unwind" fn js_iterator_next_method(iter: f64) -> f64 {
 /// or handle scope. Own properties and foreign edges keep ordinary [[Get]].
 pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle<'_>) -> f64 {
     let raw = js_nanbox_get_pointer(iter.get_nanbox_f64()) as usize;
-    if crate::value::addr_class::try_read_gc_header(raw)
+    if crate::value::addr_class::pointer_value_header(iter.get_nanbox_u64())
         .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
     {
         let obj = raw as *const ObjectHeader;

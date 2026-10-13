@@ -63,7 +63,7 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
     }
 
     // Check for JS handle (always truthy - they represent objects)
-    if (bits & TAG_MASK) == JS_HANDLE_TAG {
+    if (bits & TAG_MASK) == JS_HANDLE_TAG || (bits & TAG_MASK) == HANDLE_TAG {
         return 1;
     }
 

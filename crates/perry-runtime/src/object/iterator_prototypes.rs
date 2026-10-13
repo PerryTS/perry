@@ -1792,11 +1792,11 @@ pub(crate) unsafe fn iterator_step_method_is_builtin(
     if !iterator_step_is_builtin(obj) {
         return false;
     }
-    let method =
-        crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader;
-    if !crate::closure::is_closure_ptr(method as usize) {
+    if !crate::closure::is_closure_bits(method.to_bits()) {
         return false;
     }
+    let method =
+        crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader;
     let proto = crate::value::js_nanbox_get_pointer(f64::from_bits(
         super::shapes::object_prototype_word(obj),
     )) as *const ObjectHeader;

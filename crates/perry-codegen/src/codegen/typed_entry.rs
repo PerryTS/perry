@@ -33,10 +33,13 @@ pub(crate) struct EntryArgGuard {
     pub exact: Option<String>,
 }
 
-/// `bits <=s PLAIN_NUMBER_MAX` — `JSValue::is_number` for one value.
+/// The sign-closed numeric proof: magnitude below the tag band. Raw numeric
+/// ingress canonicalizes payload NaNs; the mirror excludes native HANDLE_TAG
+/// and prevents arithmetic from turning an admitted negative NaN into a tag.
 pub(crate) fn emit_plain_number_test(blk: &mut LlBlock, value: &str) -> String {
     let bits = blk.bitcast_double_to_i64(value);
-    blk.icmp_sle(I64, &bits, PLAIN_NUMBER_MAX_I64)
+    let magnitude = blk.and(I64, &bits, "9223372036854775807");
+    blk.icmp_ule(I64, &magnitude, PLAIN_NUMBER_MAX_I64)
 }
 
 /// `JSValue::is_int32` — the INT32 tag with any 32-bit payload.

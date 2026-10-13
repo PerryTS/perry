@@ -95,3 +95,74 @@ pub(crate) fn unbox_collection_receiver(
     ctx.current_block = ok_idx;
     ctx.block().and(I64, &bits, POINTER_MASK_I64)
 }
+
+/// A builtin collection kind the compiler proves by construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConstructedKind {
+    Map,
+    Set,
+}
+
+/// The kind of a receiver the compiler itself allocated: `new Map(...)` /
+/// `new Set(...)` lower to `js_map_alloc` / `js_set_alloc`, whose result is a
+/// `GC_TYPE_MAP` / `GC_TYPE_SET` object; an immutable local bound to one,
+/// never written again, keeps it. A declared `Map<K, V>` is NOT such a proof
+/// (a subclass instance or a plain object can carry it), and neither is a
+/// local the TDZ can expose before its initializer ran.
+pub(crate) fn constructed_kind(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> Option<ConstructedKind> {
+    use perry_hir::Expr;
+    match e {
+        Expr::MapNew | Expr::MapNewFromArray(_) => Some(ConstructedKind::Map),
+        Expr::SetNew | Expr::SetNewFromArray(_) => Some(ConstructedKind::Set),
+        Expr::LocalGet(id)
+            if !ctx.reassigned_locals.contains(id)
+                && !ctx.tdz_boxes.contains(id)
+                && !ctx.boxed_vars.contains(id) =>
+        {
+            ctx.constructed_kind_locals.get(id).copied()
+        }
+        _ => None,
+    }
+}
+
+/// Entry selection for a `Map` / `Set` operation (design 4.3
+/// `select_entry`): when the compiler created the receiver as `kind`, the
+/// kind-typed entry takes its payload with no receiver check at the site;
+/// every other receiver keeps [`unbox_collection_receiver`] and the generic
+/// entry. Returns the unboxed handle and whether the typed entry applies.
+/// The typed call replaces the generic one one for one (same arguments).
+pub(crate) fn select_collection_receiver(
+    ctx: &mut FnCtx<'_>,
+    recv_expr: &perry_hir::Expr,
+    recv_box: &str,
+    method: &str,
+    kind: ConstructedKind,
+) -> (String, bool) {
+    if constructed_kind(ctx, recv_expr) == Some(kind) {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        return (blk.and(I64, &bits, POINTER_MASK_I64), true);
+    }
+    (unbox_collection_receiver(ctx, recv_box, method), false)
+}
+
+/// `set.size` / `map.size` on a static `Set` / `Map` receiver: the kind-typed
+/// entry when the compiler constructed the receiver, the checked generic
+/// entry otherwise. Answers the size as a double.
+pub(crate) fn lower_collection_size(
+    ctx: &mut FnCtx<'_>,
+    object: &perry_hir::Expr,
+    kind: ConstructedKind,
+) -> anyhow::Result<String> {
+    let recv_box = crate::expr::lower_expr(ctx, object)?;
+    let (recv_handle, typed) = select_collection_receiver(ctx, object, &recv_box, "size", kind);
+    let entry = match (kind, typed) {
+        (ConstructedKind::Set, true) => "js_set_size__Set",
+        (ConstructedKind::Set, false) => "js_set_size",
+        (ConstructedKind::Map, true) => "js_map_size__Map",
+        (ConstructedKind::Map, false) => "js_map_size",
+    };
+    let blk = ctx.block();
+    let i32_v = blk.call(crate::types::I32, entry, &[(I64, &recv_handle)]);
+    Ok(blk.sitofp(crate::types::I32, &i32_v, DOUBLE))
+}

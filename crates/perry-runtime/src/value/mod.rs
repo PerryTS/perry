@@ -68,7 +68,7 @@ pub(crate) use tags::{
     TAG_UNDEFINED,
 };
 pub use tags::{
-    JS_HANDLE_CALL_METHOD, JS_HANDLE_TYPEOF, JS_NATIVE_ASYNC_HOOKS_CONSTRUCT,
+    HANDLE_TAG, JS_HANDLE_CALL_METHOD, JS_HANDLE_TYPEOF, JS_NATIVE_ASYNC_HOOKS_CONSTRUCT,
     JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT, JS_NATIVE_BUN_TCP_DISPATCH,
     JS_NATIVE_CRYPTO_DISPATCH, JS_NATIVE_DOMAIN_DISPATCH, JS_NATIVE_EVENTS_DISPATCH,
     JS_NATIVE_HTTP_DISPATCH, JS_NATIVE_MODULE_JS_LOADER, JS_NATIVE_NET_DISPATCH,
@@ -111,8 +111,9 @@ pub use handle::{
 pub(crate) use nanbox::nanbox_string_key;
 pub use nanbox::{
     js_checkpoint, js_debug_val, js_ffi_arg_ptr, js_get_string_pointer_unified, js_nanbox_bigint,
-    js_nanbox_get_bigint, js_nanbox_get_pointer, js_nanbox_get_string_pointer, js_nanbox_is_bigint,
-    js_nanbox_is_pointer, js_nanbox_is_string, js_nanbox_pointer, js_nanbox_string,
+    js_nanbox_get_bigint, js_nanbox_get_handle, js_nanbox_get_pointer,
+    js_nanbox_get_string_pointer, js_nanbox_handle, js_nanbox_is_bigint, js_nanbox_is_pointer,
+    js_nanbox_is_string, js_nanbox_pointer, js_nanbox_string,
 };
 
 // ----- Dynamic arithmetic dispatch (BigInt vs float) -----

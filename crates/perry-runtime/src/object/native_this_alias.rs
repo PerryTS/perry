@@ -155,7 +155,7 @@ fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
 /// `this_arg` is a real heap object (not a closure, not another handle).
 pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
     let result_jv = JSValue::from_bits(result.to_bits());
-    if !result_jv.is_pointer() {
+    if !result_jv.is_pointer() && !result_jv.is_handle() {
         return;
     }
     let Some(obj_addr) = plain_object_addr_of(this_arg) else {
@@ -529,10 +529,7 @@ extern "C" fn server_response_prototype_method_thunk(
     let receiver_root = response_scope.root_nanbox_f64(this.as_f64());
     let receiver = receiver_root.get_nanbox_f64();
     let receiver_jv = JSValue::from_bits(receiver.to_bits());
-    let receiver_is_handle = receiver_jv.is_pointer()
-        && crate::value::addr_class::is_small_handle(
-            (receiver.to_bits() & crate::value::POINTER_MASK) as usize,
-        );
+    let receiver_is_handle = receiver_jv.is_handle();
     let receiver_is_response = plain_object_addr_of(receiver).is_some_and(|a| unsafe {
         (*(a as *const super::ObjectHeader)).class_id
             == crate::native_class_ids::HTTP_SERVER_RESPONSE

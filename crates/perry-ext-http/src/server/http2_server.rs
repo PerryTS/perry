@@ -33,8 +33,7 @@ use crate::server::tls::{
     parse_private_key,
 };
 use crate::server::types::{
-    js_value_is_closure, jsvalue_to_owned_string, POINTER_TAG, PTR_MASK, STRING_TAG, TAG_NULL,
-    TAG_UNDEFINED,
+    js_value_is_closure, jsvalue_to_owned_string, PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 
 extern "C" {
@@ -369,7 +368,7 @@ pub(crate) fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
     if buf.is_null() {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits())
     }
 }
 

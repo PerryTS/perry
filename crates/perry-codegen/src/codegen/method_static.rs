@@ -335,6 +335,7 @@ pub(in crate::codegen) fn compile_static_method(
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
+        constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,

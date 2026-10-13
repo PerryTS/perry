@@ -159,32 +159,19 @@ fn to_length(v: f64) -> i64 {
 /// `normalize_array_receiver`).
 #[inline]
 pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
+    // One admission: a POINTER_TAG word names a GC-headed object (honest
+    // pointers; Proxy and stream ids are HANDLE_TAG), so the header byte
+    // decides. Lazy and forwarded arrays take the resolver.
     let b = recv.to_bits();
-    if top16(b) != 0x7FFD {
+    let Some(header) = crate::value::addr_class::pointer_value_header(b) else {
         return ptr::null_mut();
-    }
-    let raw = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return ptr::null_mut();
-    }
-    // Pointer-shaped non-heap handles (Proxy ids live at 0xF0000+, stream ids
-    // and friends in nearby bands) would be dereferenced as a GcHeader below —
-    // `Array.prototype.indexOf.call(proxy, …)` SIGSEGV'd. The Linux heap
-    // range check alone admits the id bands (they start at 0x1000), so gate
-    // on the handle-band classifier too.
-    if !crate::value::addr_class::is_above_handle_band(raw)
-        || !crate::object::is_valid_obj_ptr(raw as *const u8)
-    {
-        return ptr::null_mut();
-    }
-    let obj_type = unsafe {
-        let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-        return clean_arr_ptr_mut(raw as *mut ArrayHeader);
+    let raw = (b & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+    match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY => unsafe { super::clean_headed_arr_ptr(raw, header) as *mut _ },
+        crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_mut(raw as *mut ArrayHeader),
+        _ => ptr::null_mut(),
     }
-    ptr::null_mut()
 }
 
 #[inline]
@@ -233,6 +220,9 @@ fn proxy_named_key(name: &str) -> f64 {
 
 fn classify_pointer(recv: f64) -> Option<PtrKind> {
     let b = recv.to_bits();
+    if crate::proxy::js_proxy_is_proxy(recv) != 0 {
+        return Some(PtrKind::Proxy);
+    }
     if top16(b) != 0x7FFD {
         return None;
     }
@@ -1256,6 +1246,9 @@ static KEEP_ARRAYLIKE_SLICE: extern "C" fn(f64, f64, i32, f64, i32) -> f64 = js_
 /// x.sort()`, test262 sort/S15.4.4.11_A6_T2 #5, splice/S15.4.4.12_A4_T1 #7).
 /// Returns it NaN-boxed for the generic engine, or `None` for real arrays.
 pub(crate) fn non_array_object_receiver(arr: *const ArrayHeader) -> Option<f64> {
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        return Some(proxy);
+    }
     let raw = arr as usize;
     if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;

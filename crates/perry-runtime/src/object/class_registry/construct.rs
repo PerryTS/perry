@@ -1349,16 +1349,7 @@ fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
         }
         return Some(super::super::class_prototype_ref_value(class_id).to_bits());
     }
-    let bits = new_target.to_bits();
-    if (bits >> 48) != 0x7FFD {
-        return None;
-    }
-    let raw = (bits & crate::value::POINTER_MASK) as usize;
-    if raw == 0 {
-        return None;
-    }
-    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
-    let proto = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    let proto = new_target_prototype_get(new_target)?;
     if unsafe { super::super::value_is_object_like(proto) }
         || super::super::class_ref_id(proto).is_some()
     {
@@ -1368,17 +1359,32 @@ fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
     }
 }
 
-fn constructor_prototype_bits(new_target: f64) -> Option<u64> {
+/// `Get(newTarget, "prototype")` for an object or Proxy `newTarget`.
+fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let bits = new_target.to_bits();
-    if (bits >> 48) != 0x7FFD {
-        return global_object_prototype_bits();
+    let proxy = crate::proxy::js_proxy_is_proxy(new_target) != 0;
+    if !proxy && (bits >> 48) != 0x7FFD {
+        return None;
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if raw == 0 {
-        return global_object_prototype_bits();
+        return None;
     }
     let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
-    let proto = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    if proxy {
+        let key = crate::value::js_nanbox_string(key as i64);
+        return Some(crate::proxy::js_proxy_get(new_target, key));
+    }
+    Some(js_object_get_field_by_name_f64(
+        raw as *const ObjectHeader,
+        key,
+    ))
+}
+
+fn constructor_prototype_bits(new_target: f64) -> Option<u64> {
+    let Some(proto) = new_target_prototype_get(new_target) else {
+        return global_object_prototype_bits();
+    };
     if unsafe { super::super::value_is_object_like(proto) }
         || super::super::class_ref_id(proto).is_some()
     {

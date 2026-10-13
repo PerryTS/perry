@@ -175,7 +175,7 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
         return None;
     }
     let pair = (value & POINTER_MASK) as *const ArrayHeader;
-    let header = crate::value::addr_class::try_read_gc_header(pair as usize)?;
+    let header = crate::value::addr_class::pointer_value_header(value)?;
     if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
         return None;
     }
@@ -220,7 +220,7 @@ pub(crate) unsafe fn site_getter_word_of_value(value: u64) -> Option<usize> {
         return None;
     }
     let pair = (value & POINTER_MASK) as *const ArrayHeader;
-    let header = crate::value::addr_class::try_read_gc_header(pair as usize)?;
+    let header = crate::value::addr_class::pointer_value_header(value)?;
     if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
         return None;
     }
@@ -232,7 +232,7 @@ pub(crate) unsafe fn site_getter_word_of_value(value: u64) -> Option<usize> {
     let get = closure_of(*w.add(PAIR_GET));
     if get != 0 {
         let closure = (get & POINTER_MASK) as usize;
-        if !crate::closure::is_closure_ptr(closure)
+        if !crate::closure::is_closure_bits(get)
             || crate::closure::closure_reads_this_from_capture(
                 closure as *const crate::closure::ClosureHeader,
             )

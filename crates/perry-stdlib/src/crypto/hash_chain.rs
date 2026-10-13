@@ -214,9 +214,7 @@ impl DigestEncoding {
         let text = match self.kind {
             DigestKind::Buffer => {
                 let buf = alloc_buffer_from_slice(bytes);
-                return f64::from_bits(
-                    0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF),
-                );
+                return perry_runtime::value::js_nanbox_pointer(buf as i64);
             }
             DigestKind::Utf16le => {
                 let wtf8 = utf16le_to_wtf8(bytes);

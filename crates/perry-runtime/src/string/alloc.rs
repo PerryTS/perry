@@ -213,5 +213,16 @@ pub extern "C" fn js_string_length(s: *const StringHeader) -> u32 {
     if !is_valid_string_ptr(s) {
         return 0;
     }
+    string_length_body(s)
+}
+
+#[inline(always)]
+fn string_length_body(s: *const StringHeader) -> u32 {
     unsafe { (*s).utf16_len }
+}
+
+crate::entry_contracts::kind_entry! {
+    Str, fn js_string_length__Str(s: *const StringHeader) -> u32 {
+        string_length_body(s)
+    }
 }

@@ -626,18 +626,14 @@ unsafe fn prepare(slot: *mut MethodSiteSlot, recv: f64, method_id: i64, argc: us
     let direct = f64::from_bits(METHOD_SITE_BY_NAME_DIRECT);
     let bits = recv.to_bits();
     let nullish = bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL;
-    let is_pointer = bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG;
+    // A native id (Web Fetch) is an object receiver with no header, and a
+    // Proxy's header names no own storage: both take the full walk below.
+    let is_pointer = bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        || bits & crate::value::TAG_MASK == crate::value::HANDLE_TAG;
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     // One header read classifies a heap receiver; only an ordinary object
     // or a function object needs more than the accessor facts below.
-    let header = if is_pointer
-        && !crate::value::addr_class::is_proxy_id_band(addr)
-        && crate::value::addr_class::is_above_handle_band(addr)
-    {
-        crate::value::addr_class::try_read_gc_header(addr)
-    } else {
-        None
-    };
+    let header = crate::value::addr_class::pointer_value_header(bits);
     // A pre-growth alias the program still holds (an array's forwarding
     // stub) is answered from the live head: growth carried the descriptor
     // bit to its header and re-keyed the array's own properties to it.
@@ -664,7 +660,7 @@ unsafe fn prepare(slot: *mut MethodSiteSlot, recv: f64, method_id: i64, argc: us
         }
     });
     let cell = matches!(kind, Some(t) if t != crate::gc::GC_TYPE_OBJECT
-        && t != crate::gc::GC_TYPE_CLOSURE && t != u8::MAX);
+        && t != crate::gc::GC_TYPE_CLOSURE && t != crate::gc::GC_TYPE_PROXY && t != u8::MAX);
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
     else {
@@ -1228,7 +1224,8 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
         let b = cur.to_bits();
         if is_pointer(b) {
             let addr = (b & crate::value::POINTER_MASK) as usize;
-            if crate::value::addr_class::is_proxy_id_band(addr) {
+            // A Proxy's [[Get]] is a trap: always observable.
+            if crate::value::addr_class::is_proxy_cell(addr) {
                 return true;
             }
             // Every cell kind answers: an ordinary object from its shape's
@@ -1506,7 +1503,6 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
             None => {
                 let dict = crate::value::addr_class::try_read_gc_header(addr)
                     .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
-                    && !crate::closure::is_closure_ptr(addr)
                     && super::dictionary::is_dictionary(addr as *const ObjectHeader);
                 refuse(if dict { 2 } else { 1 });
                 return;
@@ -1642,8 +1638,8 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    // An OBJECT header is not a closure (closures carry GC_TYPE_CLOSURE).
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || crate::closure::is_closure_ptr(addr)
         || !address_is_prime_stable(addr)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
@@ -1684,8 +1680,8 @@ unsafe fn class_object_receiver(addr: usize) -> Option<*const ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    // An OBJECT header is not a closure (closures carry GC_TYPE_CLOSURE).
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || crate::closure::is_closure_ptr(addr)
         || !address_is_prime_stable(addr)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0

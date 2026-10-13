@@ -489,7 +489,7 @@ fn headers_init_json_ptr(headers: f64) -> *const crate::StringHeader {
         return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
     }
     let jsv = crate::value::JSValue::from_bits(headers.to_bits());
-    if jsv.is_pointer() {
+    if jsv.is_handle() {
         let addr = (headers.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
         if crate::value::addr_class::is_handle_band(addr) {
             let p = call_global_headers_object_json(headers);
@@ -530,7 +530,7 @@ pub extern "C" fn js_node_setheaders_entries_json(value: f64) -> *mut crate::Str
         return unsafe { crate::json::js_json_stringify(f64::from_bits(boxed.to_bits()), 0) };
     }
     let jsv = crate::value::JSValue::from_bits(bits);
-    if jsv.is_pointer() {
+    if jsv.is_handle() {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         if crate::value::addr_class::is_handle_band(addr) {
             return call_global_headers_entries_json(value);

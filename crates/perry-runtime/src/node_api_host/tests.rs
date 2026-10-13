@@ -1386,3 +1386,32 @@ fn external_buffer_arraybuffer_released_on_worker_retirement() {
     .unwrap();
     assert_eq!(releases.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn double_ingress_canonicalizes_negative_nan_payloads() {
+    let env = test_env();
+    for bits in [
+        0xfff9_0000_0000_0001_u64,
+        0xffff_0000_1234_5678,
+        0xfff1_0000_0000_0001,
+    ] {
+        let mut value = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { napi_create_double(env, f64::from_bits(bits), &mut value) },
+            NapiStatus::Ok
+        );
+        crate::gc::js_gc_collect();
+        let mut kind = NapiValueType::Undefined;
+        assert_eq!(
+            unsafe { napi_typeof(env, value, &mut kind) },
+            NapiStatus::Ok
+        );
+        assert_eq!(kind, NapiValueType::Number);
+        let mut number = 0.0;
+        assert_eq!(
+            unsafe { napi_get_value_double(env, value, &mut number) },
+            NapiStatus::Ok
+        );
+        assert_eq!(number.to_bits(), f64::NAN.to_bits());
+    }
+}

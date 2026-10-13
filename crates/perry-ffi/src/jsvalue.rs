@@ -77,12 +77,15 @@ impl JsValue {
         Self(if b { TAG_TRUE } else { TAG_FALSE })
     }
 
-    /// Construct from a Rust `f64`. NaN inputs are passed through;
-    /// callers that need a canonical NaN should convert to
-    /// `Self::UNDEFINED` themselves.
+    /// Construct a Number from a native `f64`, canonicalizing all NaN payloads
+    /// before they can collide with the NaN-box tag vocabulary.
     #[inline]
     pub fn from_number(n: f64) -> Self {
-        Self(n.to_bits())
+        Self(if n.is_nan() {
+            f64::NAN.to_bits()
+        } else {
+            n.to_bits()
+        })
     }
 
     /// Construct from a 32-bit integer. Encoded as `INT32_TAG` —
@@ -105,7 +108,29 @@ impl JsValue {
     /// as an object reference.
     #[inline]
     pub fn from_object_ptr<T>(p: *mut T) -> Self {
-        Self(POINTER_TAG | (p as u64 & POINTER_MASK))
+        // POINTER_TAG always names a GC-headed object: an id-band payload is
+        // a registry id (HANDLE_TAG) and zero is null.
+        let addr = p as u64 & POINTER_MASK;
+        if addr < crate::RECEIVER_HANDLE_FLOOR as u64 {
+            return if addr == 0 {
+                Self::NULL
+            } else {
+                Self::from_handle(addr)
+            };
+        }
+        Self(POINTER_TAG | addr)
+    }
+
+    /// A native registry id, distinct from heap addresses and V8 handles.
+    #[inline]
+    pub const fn from_handle(id: u64) -> Self {
+        Self(perry_abi::HANDLE_TAG | (id & POINTER_MASK))
+    }
+
+    /// True when the value carries a native registry id.
+    #[inline]
+    pub const fn is_handle(self) -> bool {
+        self.0 & TAG_MASK == perry_abi::HANDLE_TAG
     }
 
     /// The raw NaN-boxed bits. Used when round-tripping through a
@@ -237,13 +262,9 @@ impl JsValue {
     #[inline]
     pub fn is_number(self) -> bool {
         let bits = self.0;
-        // f64 values have either both top bits zero (positive
-        // doubles) or top bit one with the rest unrestricted. NaN
-        // sentinels live in 0x7FF8 / 0x7FFC..7FFF — anything in
-        // those tag bands is NOT a number.
         let high = bits & TAG_MASK;
-        let nan_band = (0x7FF8_0000_0000_0000..=0x7FFF_0000_0000_0000).contains(&high);
-        !nan_band || self.is_int32()
+        let tag_band = (0x7FF9_0000_0000_0000..=0x7FFF_0000_0000_0000).contains(&high);
+        (!tag_band && high != perry_abi::HANDLE_TAG) || self.is_int32()
     }
 
     // ── accessors ──────────────────────────────────────────────
@@ -730,5 +751,24 @@ mod tests {
     fn packed_keys_format() {
         let (packed, _) = build_object_shape(&["a", "bb", "ccc"]);
         assert_eq!(packed, b"a\0bb\0ccc");
+    }
+}
+
+#[cfg(test)]
+mod numeric_ingress_tests {
+    use super::*;
+    #[test]
+    fn payload_nans_are_numbers_and_never_handles() {
+        for bits in [
+            0xfff9_0000_0000_0001_u64,
+            0xffff_0000_1234_5678,
+            0x7fff_0000_1234_5678,
+        ] {
+            let value = JsValue::from_number(f64::from_bits(bits));
+            assert!(value.is_number());
+            assert_eq!(value.bits(), f64::NAN.to_bits());
+            assert!(value.to_number().is_nan());
+        }
+        assert!(!JsValue::from_bits(perry_abi::HANDLE_TAG | 1).is_number());
     }
 }

@@ -484,40 +484,16 @@ fn drain_body_stream(stream_id: usize) -> (Vec<u8>, Option<f64>) {
     (bytes, crate::streams::readable_stream_error(stream_id))
 }
 
-/// Extract the registry id from a Web Fetch handle f64 value.
-///
-/// Web Fetch handles (Request / Response / Headers / Blob) are returned by
-/// constructors as NaN-boxed POINTER_TAG values via `js_nanbox_pointer`, so
-/// they look like pointers to the runtime's dispatchers (`js_object_get_field_by_name`,
-/// `js_native_call_method`) and route through `HANDLE_PROPERTY/METHOD_DISPATCH`
-/// for untyped property access — fixing the hono `request.url` blocker (#421).
-///
-/// This helper is tolerant during the cross-subsystem migration: it accepts both
-/// the canonical NaN-boxed form (top16 ≥ 0x7FF8) AND the legacy raw-float form
-/// (`1.0` = id 1, denormal bits, etc.). Other handle subsystems (streams / ws /
-/// net / DB) still use the legacy form until Phase 2 of the unification migrates
-/// them to NaN-boxed too.
+/// Strict decode of a Web Fetch HANDLE_TAG value; numbers and heap addresses
+/// are never registry ids.
 #[inline]
 pub(crate) fn handle_id(value: f64) -> usize {
-    let bits = value.to_bits();
-    let top16 = bits >> 48;
-    if top16 >= 0x7FF8 {
-        // NaN-boxed (POINTER_TAG / STRING_TAG / etc.): extract lower 48 bits.
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0 && bits != 0 {
-        // Raw integer bits as f64 (denormal-encoded handle id): use bits directly.
-        bits as usize
-    } else {
-        // Legacy float form (1.0 → 1): float-to-int truncation.
-        value as usize
-    }
+    perry_runtime::value::js_nanbox_get_handle(value) as usize
 }
 
-/// NaN-box a Web Fetch handle id (registry index) into a POINTER_TAG f64
-/// for return across the FFI boundary. Pairs with `handle_id` on accessor entry.
 #[inline]
 pub(crate) fn handle_to_f64(id: usize) -> f64 {
-    perry_runtime::value::js_nanbox_pointer(id as i64)
+    perry_runtime::value::js_nanbox_handle(id as i64)
 }
 
 pub(crate) use crate::common::string_from_header;

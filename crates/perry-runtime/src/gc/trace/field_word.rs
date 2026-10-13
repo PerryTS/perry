@@ -14,7 +14,7 @@ impl FieldWord {
     pub(in crate::gc) fn decode(bits: u64) -> Option<Self> {
         let tag = bits & TAG_MASK;
         if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-            let addr = crate::value::addr_class::tagged_heap_addr(bits);
+            let addr = (bits & POINTER_MASK) as usize;
             return (addr != 0).then_some(Self { addr, raw: false });
         }
         // Preserve the marker's wider raw-word domain. The barrier consumer

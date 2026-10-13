@@ -55,7 +55,7 @@ pub(super) unsafe fn super_call_with_lookup(
     let value = read(key_handle.get_nanbox_f64(), this_handle.get_nanbox_f64());
     let callable = value.filter(|v| {
         let boxed = f64::from_bits(v.bits());
-        v.is_pointer()
+        (v.is_pointer() || v.is_handle())
             && ((crate::proxy::js_proxy_is_proxy(boxed) == 1
                 && crate::proxy::proxy_wraps_callable(boxed))
                 || crate::closure::is_closure_ptr(

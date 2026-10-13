@@ -331,6 +331,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_set_string_string", I64, &[I64, I64, I64]);
     module.declare_function("js_map_set_number_key", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
+    // Kind-typed twin (`perry-runtime` `entry_contracts`): a receiver the
+    // compiler constructed as a Map.
+    module.declare_function("js_map_get__Map", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_declared_map_get", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_map_get_string_key", DOUBLE, &[I64, I64]);
     module.declare_function("js_map_get_number_key", DOUBLE, &[I64, DOUBLE]);
@@ -639,6 +642,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_set_delete_f32", I32, &[I64, F32]);
     module.declare_function("js_set_delete_bool", I32, &[I64, I32]);
     module.declare_function("js_set_size", I32, &[I64]);
+    module.declare_function("js_set_size__Set", I32, &[I64]);
     // #2872: ES2024 Set composition methods.
     module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
     module.declare_function("js_set_intersection", I64, &[I64, DOUBLE]);
@@ -1321,6 +1325,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function("js_map_size", I32, &[I64]);
+    module.declare_function("js_map_size__Map", I32, &[I64]);
     module.declare_function("js_map_clear", VOID, &[I64]);
     module.declare_function("js_set_clear", VOID, &[I64]);
     // Map iteration: entries/keys/values all take a map pointer and return an array pointer.

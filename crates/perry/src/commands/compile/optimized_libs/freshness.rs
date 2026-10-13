@@ -130,7 +130,6 @@ pub(crate) const GC_INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_VERIFY_CLASSIFIER",
     "PERRY_STACK_SYMBOLS",
     "PERRY_FIELD_REPR_VERIFY",
-    "PERRY_CHECK_CONTRACTS",
 ];
 
 fn all_instruments_requested() -> bool {
@@ -208,7 +207,7 @@ pub(crate) fn auto_optimized_cache_key(
     cobuilt.sort_unstable();
     cobuilt.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|hotdiag={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|hotdiag={}|contracts={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -264,6 +263,7 @@ pub(crate) fn auto_optimized_cache_key(
         true,
         gc_instruments_requested(),
         hot_diag_requested(),
+        std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1"),
         env!("CARGO_PKG_VERSION"),
     )
 }

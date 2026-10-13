@@ -16,7 +16,7 @@ extern "C" {
     fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mut perry_ffi::ArrayHeader;
 }
 fn value(handle: i64) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 pub(crate) fn is_response(handle: i64) -> bool {
     if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {

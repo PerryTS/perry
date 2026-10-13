@@ -620,7 +620,7 @@ fn terminate_on(ws_id: usize) {
 
 #[inline]
 fn client_js_value(ws_id: usize) -> JsValue {
-    JsValue::from_bits(POINTER_TAG | ws_id as u64)
+    JsValue::from_handle(ws_id as u64)
 }
 
 /// Add a connection to a server's persistent JS-visible clients Set.
@@ -1127,7 +1127,7 @@ pub unsafe extern "C" fn js_ws_wait_for_message(handle: i64, timeout_ms: f64) ->
 #[no_mangle]
 pub extern "C" fn js_ws_handle_to_i64(val_f64: f64) -> i64 {
     let bits = val_f64.to_bits();
-    if (bits & TAG_MASK) == POINTER_TAG {
+    if (bits & TAG_MASK) == perry_ffi::JsValue::from_handle(0).bits() {
         (bits & POINTER_MASK) as i64
     } else {
         val_f64 as i64
@@ -1399,7 +1399,7 @@ pub unsafe extern "C" fn js_ws_handle_upgrade(
 /// A `Buffer` holding these bytes, for the JS side of a binary frame.
 fn buffer_value(bytes: &[u8]) -> f64 {
     let buffer = perry_ffi::alloc_buffer(bytes);
-    f64::from_bits(POINTER_TAG | (buffer as u64 & POINTER_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(buffer as usize as *mut u8).bits())
 }
 
 /// A message payload as JS sees it: a string for text, a `Buffer` for binary.

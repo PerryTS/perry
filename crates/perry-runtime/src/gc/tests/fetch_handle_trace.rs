@@ -8,9 +8,13 @@ thread_local! {
     static OBSERVED: Cell<bool> = const { Cell::new(false) };
 }
 
+fn handle_bits(id: usize) -> u64 {
+    crate::value::JSValue::handle(id).bits()
+}
+
 extern "C" fn phase(_: u32) {}
 extern "C" fn observe(bits: u64, mark: extern "C" fn(u64, *mut c_void), ctx: *mut c_void) -> bool {
-    if bits != ptr_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START) {
+    if bits != handle_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START) {
         return false;
     }
     if !OBSERVED.with(|seen| seen.replace(true)) {
@@ -32,7 +36,9 @@ fn publishing_a_fetch_root_during_incremental_marking_traces_its_edges() {
     begin_full_trace();
     let active = IncrementalMarkBarrierTestGuard::new(&valid);
     let scope = RuntimeHandleScope::new();
-    let _root = scope.root_nanbox_u64(ptr_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START));
+    let _root = scope.root_nanbox_u64(handle_bits(
+        crate::value::addr_class::FETCH_HANDLE_BAND_START,
+    ));
     assert!(
         OBSERVED.with(Cell::get),
         "the provider must see a newly published handle"
@@ -78,7 +84,7 @@ fn a_handle_stored_during_incremental_marking_reaches_the_provider() {
     let active = IncrementalMarkBarrierTestGuard::new(&valid);
     crate::gc::js_write_barrier(
         ptr_bits(parent as usize),
-        ptr_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START),
+        handle_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START),
     );
     assert!(
         OBSERVED.with(Cell::get),
@@ -255,7 +261,7 @@ fn provider_edges_obey_the_precise_jsvalue_contract() {
     let target = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid = build_valid_pointer_set();
     perry_ffi_gc_register_fetch_trace(phase, observe);
-    let handle = ptr_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START);
+    let handle = handle_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START);
     for (edge, should_mark) in [(target as u64, false), (ptr_bits(target as usize), true)] {
         EDGE.with(|slot| slot.set(edge));
         OBSERVED.with(|seen| seen.set(false));

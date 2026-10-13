@@ -116,10 +116,15 @@ pub(super) fn emit_array_store_kind_value(
     {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(val_double);
-        let top16 = blk.lshr(I64, &bits, "48");
-        // NaN-boxed iff the top 16 bits are in 0x7FF9..=0x7FFF.
-        let tag_offset = blk.sub(I64, &top16, "32761"); // 0x7FF9
-        let is_boxed = blk.icmp_ult(I64, &tag_offset, "7");
+        // NaN-boxed iff the sign-cleared word reaches the tag band: the
+        // positive tags 0x7FF9..=0x7FFF and HANDLE_TAG's mirror 0xFFF9.
+        // Numeric ingress canonicalizes every other NaN payload.
+        let magnitude = blk.and(I64, &bits, "9223372036854775807");
+        let is_boxed = blk.icmp_uge(
+            I64,
+            &magnitude,
+            &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+        );
         blk.cond_br(&is_boxed, &cold_label, &canon_label);
     }
     ctx.current_block = canon_idx;

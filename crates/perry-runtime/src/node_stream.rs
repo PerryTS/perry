@@ -1465,7 +1465,8 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
     if stream_handle == 0 {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(JSValue::pointer(stream_handle as *const u8).bits())
+        // A stream handle may be an id: the unknown-word constructor routes it.
+        crate::value::js_nanbox_pointer(stream_handle)
     }
 }
 

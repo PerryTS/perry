@@ -74,8 +74,8 @@ pub use reflect::{
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ProxyEntry {
-    // The low address tag shifts the visible payload by one byte. Both
-    // receiver words stay zero, including the apparent ShapeId at +4.
+    // Both receiver words stay zero, so an inline ShapeId guard (+4) or a
+    // receiver-word probe never matches a Proxy cell.
     _receiver_words: [u64; 2],
     pub target: f64,  // NaN-boxed target value; 0 bits once revoked
     pub handler: f64, // NaN-boxed handler object (raw f64 bits preserved); 0 bits once revoked
@@ -98,31 +98,24 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
-/// The aligned cell is never moved. Bit zero distinguishes its JS value
-/// without adding an allocator lookup to ordinary receiver checks. The
-/// positive path proves the allocation's GC kind before reading any fields.
+/// A Proxy is a nonmoving GC cell of kind `GC_TYPE_PROXY`, boxed under
+/// `POINTER_TAG` like any object (honest pointers), so its header byte is the
+/// whole proof. Returns the cell address.
 pub(crate) fn canonical_address(proxy_boxed: f64) -> Option<usize> {
     lookup(proxy_boxed).map(|addr| addr as usize)
 }
+#[inline]
 fn lookup(proxy_boxed: f64) -> Option<u64> {
     let bits = proxy_boxed.to_bits();
-    if bits & crate::value::TAG_MASK != POINTER_TAG {
-        return None;
-    }
-    let payload = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_proxy_id_band(payload) {
-        return None;
-    }
-    let addr = payload & !1;
-    unsafe {
-        let header = crate::value::addr_class::try_read_tracked_arena_header_of_type(
-            addr,
-            crate::gc::GC_TYPE_PROXY,
-        )?;
-        (header.as_ref().size as usize
-            == crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ProxyEntry>())
-        .then_some(addr as u64)
-    }
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    is_proxy_header(header).then_some(bits & POINTER_MASK)
+}
+/// The Proxy brand: kind and the cell's exact extent. The extent is only
+/// compared once the kind byte matches, so ordinary receivers pay one compare.
+#[inline(always)]
+pub(crate) fn is_proxy_header(header: &crate::gc::GcHeader) -> bool {
+    header.obj_type == crate::gc::GC_TYPE_PROXY
+        && header.size as usize == crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ProxyEntry>()
 }
 fn entry(id: u64) -> Option<ProxyEntry> {
     // `id` comes from lookup, and no allocation occurs in this leaf. The
@@ -161,6 +154,9 @@ fn pin_proxy_for_native_call(proxy_boxed: f64) -> crate::gc::RuntimeHandleScope 
 fn proxy_arg_is_object(value: f64) -> bool {
     let bits = value.to_bits();
     let top = bits >> 48;
+    if top == (crate::value::HANDLE_TAG >> 48) {
+        return true;
+    }
     // POINTER_TAG heap value (object / function / array).
     if top == 0x7FFD {
         let ptr = (bits & POINTER_MASK) as usize;
@@ -250,7 +246,7 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Proxy);
     }
-    f64::from_bits(POINTER_TAG | cell as u64 | 1)
+    f64::from_bits(POINTER_TAG | cell as u64)
 }
 
 /// Revoke a proxy. Subsequent operations will return TAG_UNDEFINED or fire an
@@ -483,17 +479,6 @@ pub(crate) fn value_display_string(value: f64) -> String {
     String::new()
 }
 
-fn reflect_value_is_symbol(value: f64) -> bool {
-    let bits = value.to_bits();
-    (bits >> 48) == (POINTER_TAG >> 48)
-        && if cfg!(target_pointer_width = "32") {
-            (bits & POINTER_MASK) >= crate::value::addr_class::HANDLE_BAND_MAX as u64
-        } else {
-            (bits & POINTER_MASK) >= 0x1_0000_0000
-        }
-        && unsafe { crate::symbol::js_is_symbol(value) != 0 }
-}
-
 /// #6828/#10482: Annex B §B.3.1 `set __proto__` semantics — shared by the
 /// real accessor descriptor installed on `Object.prototype`
 /// (`object/global_this/proto_methods.rs`'s setter closure, reached via
@@ -521,50 +506,17 @@ pub(crate) fn legacy_dunder_proto_set(receiver: f64, value: f64) {
 /// Is `value` a Reflect-acceptable object? Heap objects, class refs (callable
 /// constructors), and proxies all count. Primitives / null / undefined do not.
 pub(crate) fn reflect_value_is_object(value: f64) -> bool {
-    if lookup(value).is_some() {
+    // One shared Type(value) is Object answer: a POINTER_TAG word names a
+    // GC-headed object (honest pointers), so its header byte decides, and
+    // native ids are objects. Raw untagged words keep the allocator proof;
+    // class refs (INT32-tagged constructors) are callable objects.
+    if crate::builtins::arithmetic::js_value_is_object(value) {
         return true;
     }
-    let bits = value.to_bits();
-    // BufferHeader-backed values are objects even when they are not GC heap
-    // allocations. In particular, SharedArrayBuffer uses a process-global,
-    // never-moved backing from `alloc_zeroed`; depending on the surrounding
-    // allocation history its address can fail the generic heap-address test
-    // below. Consult the authoritative registries before that heuristic so
-    // receiver-aware Set reaches CreateDataProperty and records named
-    // expandos such as an own `constructor`.
-    let raw = extract_pointer(bits) as usize;
-    if raw != 0
-        && (crate::buffer::is_registered_buffer(raw)
-            || crate::typedarray::lookup_typed_array_kind(raw).is_some())
-    {
-        return true;
+    let top16 = value.to_bits() >> 48;
+    if top16 == 0 {
+        return crate::object::js_value_is_heap_object(value);
     }
-    let top16 = bits >> 48;
-    if top16 == (POINTER_TAG >> 48) {
-        let lower48 = bits & POINTER_MASK;
-        // A handle-backed native object — Request / Response / Headers, sockets,
-        // streams — is a POINTER_TAG'd small id, not a heap `ObjectHeader`. It is
-        // still an OBJECT to JS, so `Reflect.get(request, k)` must not be refused:
-        // the sub-4GB cutoff below classified every one of them as a non-object and
-        // threw `TypeError: Reflect.get called on non-object`. Next's app-route
-        // runtime wraps the request in a Proxy whose `get` trap forwards through
-        // `Reflect.get(target, …)`, so every authenticated route 500'd.
-        if crate::value::addr_class::is_handle_band(lower48 as usize) {
-            return lower48 != 0;
-        }
-        // The wasm32 heap is entirely below 4 GiB. Its handle-band guard
-        // above separates ids from addresses; the native cutoff cannot.
-        if cfg!(target_pointer_width = "64") && lower48 < 0x1_0000_0000 {
-            return false;
-        }
-        if reflect_value_is_symbol(value) {
-            return false;
-        }
-    }
-    if crate::object::js_value_is_heap_object(value) {
-        return true;
-    }
-    // Class refs (INT32-tagged constructors) are callable objects.
     top16 == 0x7FFE
 }
 
@@ -743,7 +695,8 @@ pub(crate) fn proxy_target_class_id(mut value: f64) -> Option<u32> {
 /// (module-level globals store Arrays/Objects as raw I64s, not NaN-boxed).
 fn extract_pointer(bits: u64) -> u64 {
     let top = bits >> 48;
-    if top == 0x7FFD || top == 0x7FFF {
+    // A native id reaches the by-name/handle dispatch as its raw id.
+    if top == 0x7FFD || top == 0x7FFF || top == (crate::value::HANDLE_TAG >> 48) {
         bits & POINTER_MASK
     } else if top == 0 {
         // Raw untagged pointer (module-level I64 global).
@@ -756,7 +709,7 @@ fn extract_pointer(bits: u64) -> u64 {
 fn small_handle_from_value(value: f64) -> Option<i64> {
     let bits = value.to_bits();
     let top = bits >> 48;
-    if top == (POINTER_TAG >> 48) {
+    if top == (crate::value::HANDLE_TAG >> 48) {
         let raw = (bits & POINTER_MASK) as i64;
         if raw > 0 && (raw as usize) < crate::value::addr_class::HANDLE_BAND_MAX {
             return Some(raw);
@@ -2281,7 +2234,16 @@ static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_appl
 
 #[cfg(test)]
 pub(crate) fn test_proxy_slot_is_live(proxy_boxed: f64) -> bool {
-    lookup(proxy_boxed).is_some()
+    // A collected cell is no longer an honest pointer: ask the allocator's
+    // object-start record, not the stale header bytes.
+    let addr = (proxy_boxed.to_bits() & POINTER_MASK) as usize;
+    unsafe {
+        crate::value::addr_class::try_read_tracked_arena_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_PROXY,
+        )
+    }
+    .is_some()
 }
 
 #[cfg(test)]
@@ -2873,7 +2835,7 @@ mod tests {
                 addr >= OLD_FLOOR,
                 "{addr:#x} must be at/above the old floor to prove the gap"
             );
-            let boxed = f64::from_bits(POINTER_TAG | (addr as u64));
+            let boxed = f64::from_bits(crate::value::HANDLE_TAG | (addr as u64));
             assert!(
                 create_list_from_array_like(boxed).is_empty(),
                 "{addr:#x} must not be misread as a live Array"
@@ -2920,7 +2882,7 @@ mod tests {
                 addr >= OLD_FLOOR,
                 "{addr:#x} must be at/above the old floor to prove the gap"
             );
-            let boxed = f64::from_bits(POINTER_TAG | (addr as u64));
+            let boxed = f64::from_bits(crate::value::HANDLE_TAG | (addr as u64));
             assert!(
                 array_ptr_from_value(boxed).is_none(),
                 "{addr:#x} must not resolve to an ArrayHeader"
@@ -2953,7 +2915,7 @@ mod tests {
                 addr >= OLD_FLOOR,
                 "{addr:#x} must be at/above the old floor to prove the gap"
             );
-            let boxed = f64::from_bits(POINTER_TAG | (addr as u64));
+            let boxed = f64::from_bits(crate::value::HANDLE_TAG | (addr as u64));
             // Reaching this assertion at all (no SIGSEGV) is half the test.
             let _ = prototype_of_for_set(boxed);
         }

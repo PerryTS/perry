@@ -454,7 +454,7 @@ pub fn stream_handle_probe() -> Option<StreamHandleProbeFn> {
 /// registry handle, Web Streams ids included, is a `POINTER_TAG` payload in
 /// the handle band, so the receiver re-boxes under `POINTER_TAG`.
 pub fn handle_receiver_value(handle: i64) -> f64 {
-    crate::value::js_nanbox_pointer(handle)
+    crate::value::js_nanbox_handle(handle)
 }
 
 /// The Web Streams registry id a JS value carries, if it carries one: a
@@ -464,7 +464,7 @@ pub fn handle_receiver_value(handle: i64) -> f64 {
 #[inline]
 pub fn stream_handle_id(value: f64) -> Option<usize> {
     let bits = value.to_bits();
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+    if bits & crate::value::TAG_MASK != crate::value::HANDLE_TAG {
         return None;
     }
     let id = (bits & crate::value::POINTER_MASK) as usize;

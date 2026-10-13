@@ -685,7 +685,7 @@ unsafe fn dispatch_array_iterator_method_inner(
             } else if backing_ptr == 0 {
                 0
             } else {
-                crate::array::js_array_length(backing_ptr as *const ArrayHeader)
+                crate::array::js_array_length(super::honest_word::array_arg_of_value(backing_f64))
             };
 
             if idx >= len {
@@ -717,7 +717,10 @@ unsafe fn dispatch_array_iterator_method_inner(
             } else if backing_ptr == 0 {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
-                crate::array::js_array_get_f64(backing_ptr as *const ArrayHeader, idx)
+                crate::array::js_array_get_f64(
+                    super::honest_word::array_arg_of_value(backing_f64),
+                    idx,
+                )
             };
             // A Proxy get trap can return a young heap value. Root it before
             // either pair or iterator-result construction allocates, then

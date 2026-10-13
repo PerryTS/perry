@@ -60,9 +60,8 @@ pub extern "C" fn js_object_delete_field(
     // `deleteProperty` trap. (#2846-family Proxy crash cluster.)
     {
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
-            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+        if crate::value::addr_class::is_proxy_cell(addr as usize) {
+            let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 let r = crate::proxy::js_proxy_delete(boxed, key_f64);
@@ -805,8 +804,11 @@ pub extern "C" fn js_object_delete_field(
 /// `ObjectHeader*` yields a garbage address that crashes when the GC/kind header
 /// at `[ptr-8]` is read.
 #[inline]
+/// An object receiver: a heap object (`POINTER_TAG`) or a native registry
+/// id (`HANDLE_TAG`, whose own properties are its expandos).
 fn delete_receiver_is_pointer(obj_value: f64) -> bool {
-    crate::value::JSValue::from_bits(obj_value.to_bits()).is_pointer()
+    let value = crate::value::JSValue::from_bits(obj_value.to_bits());
+    value.is_pointer() || value.is_handle()
 }
 
 /// `[[Delete]]` of class `class_id`'s own string key `name` (the class
@@ -1113,9 +1115,8 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     // `js_object_delete_field`, which has its own guard).
     {
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
-            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+        if crate::value::addr_class::is_proxy_cell(addr as usize) {
+            let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 let r = crate::proxy::js_proxy_delete(boxed, key);
                 return if crate::value::js_is_truthy(r) != 0 {

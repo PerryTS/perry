@@ -168,7 +168,7 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     };
     let no_server = field("noServer").to_bool();
     let attached = field("server");
-    let attached_server = if attached.is_pointer() {
+    let attached_server = if attached.is_handle() || attached.is_pointer() {
         Some((attached.bits() & POINTER_MASK) as i64)
     } else {
         None

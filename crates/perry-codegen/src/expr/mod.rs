@@ -100,7 +100,7 @@ mod buffer_views;
 mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
-mod collection_receiver;
+pub(crate) mod collection_receiver;
 #[cfg(test)]
 mod conforming_layout_note_tests;
 mod helpers;
@@ -146,7 +146,7 @@ pub(crate) use channel::{
     extract_array_of_object_shape, lower_channel_reduction, try_match_channel_reduction,
     variant_name,
 };
-pub(crate) use collection_receiver::unbox_collection_receiver;
+pub(crate) use collection_receiver::{select_collection_receiver, unbox_collection_receiver};
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
     class_field_store_needs_string_addref, emit_all_pointer_array_declaration,
@@ -803,6 +803,12 @@ pub(crate) struct FnCtx<'a> {
     /// structural provenance excludes factory return
     /// overrides and array-growth forwarding; it is not an erased type claim.
     pub object_literal_locals: std::collections::HashSet<u32>,
+    /// Immutable locals whose initializer is a builtin collection the
+    /// compiler itself allocates (`new Map(...)`, `new Set(...)`): a
+    /// representation fact by construction, the static kind proof that
+    /// selects a kind-typed runtime entry (`collection_receiver`).
+    pub constructed_kind_locals:
+        std::collections::HashMap<u32, crate::expr::collection_receiver::ConstructedKind>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).
@@ -3144,6 +3150,8 @@ pub(crate) mod region_read_run;
 pub(crate) use compare::lower_string_literal_strict_eq;
 #[cfg(test)]
 mod compare_tests;
+#[cfg(test)]
+mod kind_entry_selection_tests;
 mod conditional;
 mod dyn_extern_i18n;
 #[cfg(test)]

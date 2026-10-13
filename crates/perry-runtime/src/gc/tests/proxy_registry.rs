@@ -195,13 +195,24 @@ fn check_owned_proxy(erase: bool) {
     assert!(!crate::proxy::test_proxy_slot_is_live(proxy));
 }
 #[test]
-fn odd_ordinary_allocation_does_not_admit_a_proxy_brand() {
+fn ordinary_allocation_is_not_a_proxy_cell() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let object = crate::object::js_object_alloc(0, 0);
-    let fake = f64::from_bits(ptr_bits(object as usize) | 1);
-    assert!(crate::proxy::canonical_address(fake).is_none());
-    assert_eq!(
-        crate::value::addr_class::tagged_heap_addr(fake.to_bits()),
-        0
+    let ordinary = f64::from_bits(ptr_bits(object as usize));
+    assert!(crate::proxy::canonical_address(ordinary).is_none());
+    assert!(!crate::value::addr_class::is_proxy_cell(object as usize));
+    let target = crate::object::js_object_alloc(0, 0);
+    let handler = crate::object::js_object_alloc(0, 0);
+    let proxy = crate::proxy::js_proxy_new(
+        f64::from_bits(ptr_bits(target as usize)),
+        f64::from_bits(ptr_bits(handler as usize)),
     );
+    // A Proxy is boxed like every object; its header kind is the brand.
+    assert_eq!(
+        proxy.to_bits() & crate::value::TAG_MASK,
+        crate::value::POINTER_TAG
+    );
+    assert_eq!(proxy.to_bits() & 7, 0);
+    let cell = crate::proxy::canonical_address(proxy).unwrap();
+    assert!(crate::value::addr_class::is_proxy_cell(cell));
 }

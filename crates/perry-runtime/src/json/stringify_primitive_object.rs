@@ -11,6 +11,7 @@ use std::fmt::Write;
 pub(super) fn field_is_primitive(bits: u64) -> bool {
     bits != crate::value::TAG_HOLE
         && bits & crate::value::TAG_MASK != POINTER_TAG
+        && bits & crate::value::TAG_MASK != crate::value::HANDLE_TAG
         && bits & crate::value::TAG_MASK != BIGINT_TAG
         // Conservatively decline pointer-shaped subnormals too. The general
         // walker distinguishes them from tracked raw pointers; this leaf

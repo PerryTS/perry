@@ -80,7 +80,8 @@ unsafe fn try_data_lookup_key(
     let addr = object as usize;
     let mut first_shape = None;
     let mut own_absent = false;
-    if crate::value::addr_class::is_plausible_heap_addr(addr)
+    // A POINTER_TAG receiver names a GC-headed object (honest pointers).
+    if crate::value::addr_class::is_above_handle_band(addr)
         && addr.is_multiple_of(std::mem::align_of::<ObjectHeader>())
     {
         let shape_id = (*object).parent_class_id;
@@ -153,16 +154,15 @@ unsafe fn try_data_lookup_key(
                 shape.proto_id,
             )
         } else {
-            // An inherited hop or unproved cell still needs positive arena
-            // membership before inspecting a possibly headerless handle.
-            if !crate::value::addr_class::is_plausible_heap_addr(addr)
-                || crate::arena::classify_heap_generation(addr)
-                    == crate::arena::HeapGeneration::Unknown
-            {
+            // The receiver and every hop are POINTER_TAG words or the realm's
+            // resolved prototype: honest pointers, so the header needs no
+            // admission. The arena flag keeps the malloc-backed exotics out.
+            if !crate::value::addr_class::is_above_handle_band(addr) {
                 return None;
             }
-            let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
-            if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            let header = &*crate::gc::header_from_trusted_user_ptr(addr as *const u8);
+            if header.gc_flags & crate::gc::GC_FLAG_ARENA == 0
+                || header.obj_type != crate::gc::GC_TYPE_OBJECT
                 || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
                 || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
             {

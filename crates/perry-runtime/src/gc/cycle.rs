@@ -1359,6 +1359,10 @@ impl GcCycleState {
                         &mut self.ephemerons,
                     ) {}
                 }
+                #[cfg(any(test, perry_check_contracts))]
+                if crate::gc::gc_verify_mark_enabled() {
+                    super::verify_honest::verify_honest_pointers("full-sweep-start");
+                }
                 if let Some(state) = self.atomic_finalize.as_mut() {
                     state.subphase = AtomicFinalizeSubphase::Done;
                 }
@@ -1387,6 +1391,8 @@ impl GcCycleState {
         // is UNMARKED (about to be swept live = dropped remembered-set edge).
         if crate::gc::gc_verify_mark_enabled() {
             super::verify::verify_minor_unmarked_young_children_report("minor-prelude");
+            #[cfg(any(test, perry_check_contracts))]
+            super::verify_honest::verify_honest_pointers("minor-prelude");
         }
 
         let active_elapsed_us = self.active_elapsed_us();

@@ -70,9 +70,9 @@ impl TestSmallHandleOwner {
         SMALL_HANDLES.with(|s| s.borrow_mut().push((id, record)));
         Self { id, _owner: owner }
     }
-    /// The handle id NaN-boxed as a POINTER.
+    /// The handle id NaN-boxed under HANDLE_TAG.
     pub(crate) fn value(&self) -> f64 {
-        f64::from_bits(0x7FFD_0000_0000_0000 | self.id as u64)
+        f64::from_bits(crate::value::HANDLE_TAG | self.id as u64)
     }
 }
 impl Drop for TestSmallHandleOwner {

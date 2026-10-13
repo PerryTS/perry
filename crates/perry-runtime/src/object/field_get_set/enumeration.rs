@@ -321,7 +321,7 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     // Non-pointer primitives (number/boolean, boxed string) have only their own
     // enumerable keys; every prototype property they inherit is non-enumerable.
-    if !jv.is_pointer() {
+    if !jv.is_pointer() && !jv.is_handle() {
         if diag {
             crate::hot_diag::enum_with(|d| d.for_in_primitive += 1);
         }
@@ -386,7 +386,7 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     // Depth cap guards against pathological / cyclic prototype graphs.
     for _ in 0..1000 {
         let cv = JSValue::from_bits(current.get_nanbox_u64());
-        if cv.is_null() || cv.is_undefined() || !cv.is_pointer() {
+        if cv.is_null() || cv.is_undefined() || (!cv.is_pointer() && !cv.is_handle()) {
             break;
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),

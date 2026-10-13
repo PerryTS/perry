@@ -20,6 +20,7 @@ mod generic_mutators;
 mod generic_object;
 mod header;
 mod header_gc_slots;
+mod honest_word;
 mod immutable;
 mod indexing;
 /// Keys-array length-cap bounds tests, split out of `indexing.rs` for the
@@ -318,14 +319,15 @@ pub(crate) use self::header::{
     array_object_flags, array_object_flags_from_tag, array_object_flags_resolved,
     array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
     buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value_from_flags,
-    clean_arr_ptr, clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
-    finish_array_dense_move_layout, gc_element_slot_range, mark_array_layout_unknown,
-    mark_array_raw_f64_holes_fresh, normalize_array_receiver, note_array_own_non_index_key,
-    note_array_slot, note_array_slot_layout_only, note_array_slot_resolved_flags,
-    rebuild_array_layout, rebuild_array_layout_exact, reclassify_array_numeric_layout_from_slots,
-    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, store_array_slot_resolved, typed_array_receiver, value_bits_to_number,
-    NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    clean_arr_ptr, clean_arr_ptr_mut, clean_headed_arr_ptr, clear_array_numeric_layout,
+    clear_array_numeric_layout_ptr, finish_array_dense_move_layout, gc_element_slot_range,
+    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
+    note_array_own_non_index_key, note_array_slot, note_array_slot_layout_only,
+    note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
+    reclassify_array_numeric_layout_from_slots, refresh_array_numeric_layout,
+    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
+    store_array_slot_resolved, typed_array_receiver, value_bits_to_number, NumericArrayLayout,
+    MIN_ARRAY_CAPACITY,
 };
 pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,

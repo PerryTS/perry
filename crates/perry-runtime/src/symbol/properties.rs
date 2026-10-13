@@ -317,13 +317,10 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // Any OTHER symbol on a handle — including legitimately clearing it by
     // writing `undefined` — falls through to the normal store path below.
     {
-        let raw = (obj_f64.to_bits() & crate::value::POINTER_MASK) as usize;
         let meta_key = next_request_meta_sym_key();
         if meta_key != 0
             && sym_key == meta_key
-            && (obj_f64.to_bits() >> 48) == 0x7FFD
-            && crate::value::addr_class::is_small_handle(raw)
-            && !crate::object::is_valid_obj_ptr(raw as *const u8)
+            && crate::value::JSValue::from_bits(obj_f64.to_bits()).is_handle()
             && value_f64.to_bits() == TAG_UNDEFINED
         {
             if let Some(existing) = symbol_property_root_bits(obj_key, sym_key) {

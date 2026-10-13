@@ -165,9 +165,9 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         // `getOwnPropertyDescriptor(blob, "size")` is `undefined` in Node too.
         // Falling through to the ordinary path would deref the id as an
         // `ObjectHeader` and report `undefined` for a property that IS defined.
-        if obj_jv.is_pointer() {
-            let raw = obj_jv.as_pointer::<u8>() as usize;
-            if crate::value::addr_class::is_small_handle(raw) {
+        if obj_jv.is_handle() {
+            let raw = obj_jv.as_handle();
+            {
                 if crate::symbol::js_is_symbol(key_value) != 0 {
                     return OwnProperty::public(symbol_own_property_descriptor(
                         obj_value, key_value,
@@ -1052,9 +1052,9 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
             return crate::proxy::proxy_own_property_names(obj_value);
         }
-        if obj_jv.is_pointer() {
-            let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
-            if crate::value::addr_class::is_small_handle(raw) {
+        if obj_jv.is_handle() {
+            let raw = obj_jv.as_handle();
+            {
                 if let Some(dispatch) = super::class_registry::handle_own_property_names_dispatch()
                 {
                     let names = dispatch(raw as i64);

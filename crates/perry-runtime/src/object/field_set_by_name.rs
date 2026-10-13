@@ -141,14 +141,11 @@ pub extern "C" fn js_object_set_field_by_name(
         } else {
             addr
         };
-        if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
-            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                crate::proxy::js_proxy_set(boxed, key_f64, value);
-                return;
-            }
+        if crate::value::addr_class::is_proxy_cell(raw_addr as usize) && !key.is_null() {
+            let boxed = f64::from_bits(crate::value::POINTER_TAG | raw_addr);
+            let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+            crate::proxy::js_proxy_set(boxed, key_f64, value);
+            return;
         }
     }
     // FAST LANE (mirror of the read lane in `js_object_get_field_by_name`,
@@ -176,9 +173,18 @@ pub extern "C" fn js_object_set_field_by_name(
         {
             let key_gc =
                 (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            // A POINTER_TAG receiver is honest, and its arena flag excludes
+            // the malloc-backed exotics; a raw word needs the page ownership
+            // proof before its header is read.
             if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0
-                && crate::arena::classify_heap_generation(raw)
-                    != crate::arena::HeapGeneration::Unknown
+                && if top16 == 0x7FFD {
+                    (*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).gc_flags
+                        & crate::gc::GC_FLAG_ARENA
+                        != 0
+                } else {
+                    crate::arena::classify_heap_generation(raw)
+                        != crate::arena::HeapGeneration::Unknown
+                }
             {
                 let gc_hdr =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

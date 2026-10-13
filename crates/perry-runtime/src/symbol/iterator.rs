@@ -113,12 +113,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
 }
 
 fn is_object_value(value: f64) -> bool {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return false;
-    }
-    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
-    raw >= 0x10000 && !is_registered_symbol(raw)
+    crate::builtins::arithmetic::js_value_is_object(value)
 }
 
 #[cold]
@@ -367,7 +362,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     let mut is_registered_class_ref = false;
     {
         let jsv = crate::value::JSValue::from_bits(value().to_bits());
-        if !jsv.is_pointer() && !jsv.is_any_string() {
+        if !jsv.is_pointer() && !jsv.is_handle() && !jsv.is_any_string() {
             is_registered_class_ref = crate::object::class_ref_id(value()).is_some();
             if !is_registered_class_ref {
                 throw_value_not_iterable(value());
@@ -409,10 +404,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // `js_object_get_symbol_property` above and already returned — only a
     // corrupt/non-iterable handle reaches this point.
     {
-        let jsv = crate::value::JSValue::from_bits(value().to_bits());
-        if jsv.is_pointer()
-            && crate::value::addr_class::is_handle_band(jsv.as_pointer::<u8>() as usize)
-        {
+        if crate::value::JSValue::from_bits(value().to_bits()).is_handle() {
             throw_value_not_iterable(value());
         }
     }
@@ -515,7 +507,7 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // Method must be a closure pointer.
     let method_bits = method.to_bits();
     let method_tag = method_bits & 0xFFFF_0000_0000_0000;
-    if method_tag != POINTER_TAG {
+    if method_tag != POINTER_TAG && method_tag != crate::value::HANDLE_TAG {
         return value_handle.get_nanbox_f64();
     }
     let method_handle = scope.root_nanbox_f64(method);

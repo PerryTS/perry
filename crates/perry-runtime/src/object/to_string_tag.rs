@@ -18,11 +18,12 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
 /// event and text objects resolve their tags through their real prototypes.
 pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     let bits = value.to_bits();
-    if (bits >> 48) != 0x7FFD {
+    let top16 = bits >> 48;
+    if top16 != 0x7FFD && top16 != (crate::value::HANDLE_TAG >> 48) {
         return None;
     }
     let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if crate::value::addr_class::is_small_handle(addr) {
+    if top16 == (crate::value::HANDLE_TAG >> 48) {
         // Web Fetch handle family — one shared id counter, disjoint registries
         // (see `js_fetch_handle_kind`'s own doc comment).
         if let Some(probe) = crate::object::fetch_handle_kind_probe() {
@@ -190,9 +191,8 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     } else {
         0
     };
-    // Proxy receiver (§20.1.3.6). A revocable Proxy is a POINTER_TAG value
-    // whose payload is a small id in the proxy band, NOT a heap pointer, so it
-    // must be handled before the brand blocks below dereference `raw_addr`.
+    // Proxy receiver (§20.1.3.6). A Proxy cell has no object storage, so it
+    // must be handled before the brand blocks below read `raw_addr`.
     // Spec order: (1) IsArray(O) — recurses through the [[ProxyTarget]] chain
     // and throws a TypeError if any link is revoked (test262 proxy-revoked);
     // (2) builtinTag from arrayness/callability; (3) Get(O, @@toStringTag)
@@ -200,7 +200,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // (a proxy revoked DURING that Get returns undefined, so it does not throw —
     // test262 proxy-revoked-during-get-call).
     if jsv.is_pointer()
-        && crate::value::addr_class::is_proxy_id_band(raw_addr)
+        && crate::value::addr_class::is_proxy_cell(raw_addr)
         && crate::proxy::js_proxy_is_proxy(value) != 0
     {
         const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;

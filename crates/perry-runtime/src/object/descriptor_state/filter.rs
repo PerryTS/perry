@@ -61,7 +61,7 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
     if super::key_attrs::attrs_live_in_keys(owner) {
         return DescriptorRoute::keys(owner as *const ObjectHeader);
     }
-    let bag = if crate::value::addr_class::is_proxy_id_band(owner) {
+    let bag = if crate::value::addr_class::is_proxy_cell(owner) {
         crate::proxy::property_bag(owner)
     } else if crate::closure::is_closure_ptr(owner) {
         crate::closure::props::bag_of(owner)

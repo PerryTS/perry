@@ -352,17 +352,10 @@ unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> 
             as *const crate::object::ObjectHeader,
         kh as *const crate::StringHeader,
     );
-    let rbits = req.to_bits();
-    if (rbits >> 48) != 0x7FFD {
-        return None;
-    }
-    let rraw = (rbits & POINTER_MASK) as usize;
-    // The `_req` must be a small native handle, never another heap object — a
+    // The `_req` must be a native handle, never another heap object — a
     // heap `_req` would be served by its own normal symbol path, and recursing
     // into it risks loops.
-    if !crate::value::addr_class::is_small_handle(rraw)
-        || crate::object::is_valid_obj_ptr(rraw as *const u8)
-    {
+    if !crate::value::JSValue::from_bits(req.to_bits()).is_handle() {
         return None;
     }
     // Read only what the handle actually holds in the side table (no deref of
@@ -883,7 +876,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // Generic small-handle `Symbol.dispose` support. Subsystems that expose
     // a dispose method through HANDLE_PROPERTY_DISPATCH can bind it here
     // without adding a runtime-specific special case.
-    if (bits >> 48) == 0x7FFD {
+    if (bits >> 48) == (crate::value::HANDLE_TAG >> 48) {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if crate::value::addr_class::is_small_handle(id as usize) {
             let dispose = well_known_symbol("dispose");
@@ -905,7 +898,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // Generic small-handle `Symbol.asyncDispose` support. This must run before
     // pointer-backed symbol property lookup so small native handles are not
     // interpreted as heap pointers when the dispatcher owns the method.
-    if (bits >> 48) == 0x7FFD {
+    if (bits >> 48) == (crate::value::HANDLE_TAG >> 48) {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if crate::value::addr_class::is_small_handle(id as usize) {
             let async_dispose = well_known_symbol("asyncDispose");
@@ -932,7 +925,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // method (perry's http `IncomingMessage`) can expose it without a
     // runtime-specific special case. #6432 — `for await…of req` used to throw
     // `is not iterable`, so Next.js read an empty POST body → Auth.js MissingCSRF.
-    if (bits >> 48) == 0x7FFD {
+    if (bits >> 48) == (crate::value::HANDLE_TAG >> 48) {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if crate::value::addr_class::is_small_handle(id as usize) {
             let async_iterator = well_known_symbol("asyncIterator");
@@ -957,7 +950,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // symbol resolver directly, bypassing the normal string-key handle
     // property dispatcher. Map the well-known symbol back to the dispatcher so
     // `Headers` can expose its `entries` method as the iterator function.
-    if (bits >> 48) == 0x7FFD {
+    if (bits >> 48) == (crate::value::HANDLE_TAG >> 48) {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if crate::value::addr_class::is_small_handle(id as usize) {
             let iter_wk = well_known_symbol("iterator");
@@ -986,7 +979,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // @hono/node-server reads symbols off the IncomingMessage handle while
     // adapting it to a web Request. Proxies share the small-id band
     // (0xF0000..0x100000) but have real symbol semantics, so exclude them.
-    if (bits >> 48) == 0x7FFD {
+    if (bits >> 48) == (crate::value::HANDLE_TAG >> 48) {
         let id = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
         // Only short-circuit values that are NOT real heap objects. A genuine
         // ObjectHeader can live at a low address in a small program, so gate on

@@ -688,20 +688,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::PropertyGet {
             object, property, ..
         } if property == "size" && is_set_expr(ctx, object) => {
-            let recv_box = lower_expr(ctx, object)?;
-            let recv_handle = super::unbox_collection_receiver(ctx, &recv_box, "size");
-            let blk = ctx.block();
-            let i32_v = blk.call(I32, "js_set_size", &[(I64, &recv_handle)]);
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            super::collection_receiver::lower_collection_size(
+                ctx,
+                object,
+                super::collection_receiver::ConstructedKind::Set,
+            )
         }
         Expr::PropertyGet {
             object, property, ..
         } if property == "size" && is_map_expr(ctx, object) => {
-            let recv_box = lower_expr(ctx, object)?;
-            let recv_handle = super::unbox_collection_receiver(ctx, &recv_box, "size");
-            let blk = ctx.block();
-            let i32_v = blk.call(I32, "js_map_size", &[(I64, &recv_handle)]);
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            super::collection_receiver::lower_collection_size(
+                ctx,
+                object,
+                super::collection_receiver::ConstructedKind::Map,
+            )
         }
         // Issue #650: `urlSearchParams.size` property — runtime returns
         // i32 length of the internal _entries array. Pre-fix the access

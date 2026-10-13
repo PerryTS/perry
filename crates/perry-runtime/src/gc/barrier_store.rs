@@ -393,6 +393,11 @@ pub(super) fn barrier_child_prologue(child: u64) -> Option<usize> {
     let child_addr = decode_heap_addr(child);
     bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
     if child_addr == 0 {
+        // A native id names no heap object but owns traced provider edges: an
+        // in-progress incremental cycle must still see it stored.
+        if child & crate::value::TAG_MASK == crate::value::HANDLE_TAG {
+            incremental_mark_barrier_value(child);
+        }
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
         return None;
     }

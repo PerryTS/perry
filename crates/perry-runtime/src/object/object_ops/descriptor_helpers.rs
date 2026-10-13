@@ -52,6 +52,9 @@ pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
         return true;
     }
     let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if jv.is_handle() {
+        return true;
+    }
     if !jv.is_pointer() {
         // Module-level raw-I64 object pointers (top16 == 0) — accept if it
         // resolves to a real heap object.

@@ -914,7 +914,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // receiver would otherwise sit unrooted in an SSA register across it.
             let value = with_operands_rooted(ctx, &[map, key], |ctx, values| {
                 let (m_box, k_box) = (values[0].clone(), values[1].clone());
-                let m_handle = unbox_collection_receiver(ctx, &m_box, "get");
+                let (m_handle, map_constructed) = crate::expr::select_collection_receiver(
+                    ctx,
+                    map,
+                    &m_box,
+                    "get",
+                    crate::expr::collection_receiver::ConstructedKind::Map,
+                );
                 let value = if use_string_key_map {
                     let (k_handle, value) = {
                         let blk = ctx.block();
@@ -938,9 +944,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_number_key_map {
                     guarded_map_number_key_get(ctx, &m_handle, &k_box)
                 } else {
+                    let entry = if map_constructed {
+                        "js_map_get__Map"
+                    } else {
+                        "js_map_get"
+                    };
                     let value = {
                         let blk = ctx.block();
-                        blk.call(DOUBLE, "js_map_get", &[(I64, &m_handle), (DOUBLE, &k_box)])
+                        blk.call(DOUBLE, entry, &[(I64, &m_handle), (DOUBLE, &k_box)])
                     };
                     record_collection_string_key_fallback(
                         ctx,

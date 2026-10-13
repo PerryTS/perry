@@ -3,14 +3,12 @@
 
 use super::*;
 
-use perry_ffi::{
-    alloc_buffer, get_handle, get_handle_mut, JsClosure, RawClosureHeader,
-};
+use perry_ffi::{alloc_buffer, get_handle, get_handle_mut, JsClosure, RawClosureHeader};
 
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::response::ResponseShape;
 use crate::server::server::{finalize_or_park_request, HttpPendingRequest};
-use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
+use crate::server::types::{js_promise_run_microtasks, TAG_UNDEFINED};
 
 /// Non-blocking try_recv for HTTP/2 pending requests. Called by
 /// `js_node_http_server_process_pending` in `server.rs` each tick.
@@ -269,7 +267,10 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                             if buf.is_null() {
                                 f64::from_bits(TAG_UNDEFINED)
                             } else {
-                                f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+                                f64::from_bits(
+                                    perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8)
+                                        .bits(),
+                                )
                             }
                         }
                     };

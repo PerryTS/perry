@@ -339,7 +339,7 @@ unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
 }
 
 unsafe fn pointer_value(bits: u64) -> f64 {
-    f64::from_bits(POINTER_TAG | (bits & POINTER_MASK))
+    f64::from_bits(super::make_pointer_bits(bits as *const u8))
 }
 
 unsafe fn data_descriptor_value(value_handle: &crate::gc::RuntimeHandle<'_>) -> f64 {

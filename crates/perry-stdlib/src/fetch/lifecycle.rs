@@ -284,7 +284,7 @@ impl Drop for OwnedHandles {
 }
 
 extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
-    let id = if bits >> 48 == 0x7FFD {
+    let id = if matches!(bits >> 48, 0xfff9 | 0x7ffd) {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else if bits >> 48 == 0 {
         // Typed native-pointer slots can contain the unboxed integer id.

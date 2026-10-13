@@ -113,23 +113,20 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
 unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
     let bits = part.to_bits();
     let top16 = bits >> 48;
-    // POINTER_TAG ─ either a Blob handle or a Buffer/Uint8Array.
+    if top16 == (perry_runtime::value::HANDLE_TAG >> 48) {
+        let id = handle_id(part);
+        if let Some(body) = blob_bytes_clone(id) {
+            out.extend_from_slice(&body);
+        } else {
+            let ptr = perry_runtime::value::js_jsvalue_to_string(part);
+            if let Some(text) = string_from_header(ptr) {
+                out.extend_from_slice(text.as_bytes());
+            }
+        }
+        return;
+    }
     if top16 == 0x7FFD {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        // Handle-band id (a Blob handle or another synthetic fetch handle) —
-        // NOT a real pointer. #6231: this previously tested `addr < 0x10000`,
-        // but blob handle ids start at 0x40000 (FETCH_HANDLE_BAND_START), so a
-        // `Blob` used as a BlobPart never matched here and fell through to
-        // `js_jsvalue_to_string`, which dereferenced the id as a pointer and
-        // SIGSEGV'd. Recognize the whole handle band and copy the blob's bytes.
-        if perry_runtime::value::addr_class::is_handle_band(addr) {
-            if let Some(body) = blob_bytes_clone(addr) {
-                out.extend_from_slice(&body);
-            }
-            // A non-blob handle as a BlobPart: skip it rather than deref a
-            // synthetic id. (Spec would ToString it; skipping is crash-safe.)
-            return;
-        }
         // BufferHeader (Buffer / Uint8Array / ArrayBuffer)?
         if perry_runtime::buffer::is_registered_buffer(addr) {
             perry_runtime::buffer::bytes::no_gc(|scope| {

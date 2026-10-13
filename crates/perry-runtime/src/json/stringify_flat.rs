@@ -170,7 +170,7 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     }
     match bits & crate::value::TAG_MASK {
         STRING_TAG | crate::value::SHORT_STRING_TAG => return string_piece(bits),
-        POINTER_TAG | BIGINT_TAG => return None,
+        POINTER_TAG | BIGINT_TAG | crate::value::HANDLE_TAG => return None,
         INT32_TAG => {
             let mut digits = itoa::Buffer::new();
             return Some(Piece::inline(

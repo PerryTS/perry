@@ -1034,7 +1034,18 @@ pub extern "C" fn js_set_size(set: *const SetHeader) -> u32 {
     if set.is_null() {
         return 0;
     }
+    set_size_body(set)
+}
+
+#[inline(always)]
+fn set_size_body(set: *const SetHeader) -> u32 {
     unsafe { (*set).size }
+}
+
+crate::entry_contracts::kind_entry! {
+    Set, fn js_set_size__Set(set: *const SetHeader) -> u32 {
+        set_size_body(set)
+    }
 }
 
 /// Add a value to the set
@@ -1192,6 +1203,12 @@ pub extern "C" fn js_set_has(set: *const SetHeader, value: f64) -> i32 {
 fn set_has_resolved(set: *const SetHeader, value: f64) -> i32 {
     let value = normalize_zero(value);
     unsafe { i32::from(find_value_index(set, value) >= 0) }
+}
+
+crate::entry_contracts::kind_entry! {
+    Set, fn js_set_has__Set(set: *const SetHeader, value: f64) -> i32 {
+        set_has_resolved(set, value)
+    }
 }
 
 /// Fast `ReadonlySet.has` that preserves TypeScript's structural semantics.

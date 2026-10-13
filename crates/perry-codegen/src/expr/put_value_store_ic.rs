@@ -91,10 +91,6 @@ pub(crate) const PACKED_SET_EMPTY: i64 = 0xFFFF_FFFF;
 /// **Must equal `perry_runtime::proxy::PACKED_SET_INLINE_WAYS`**; pinned by the
 /// runtime's `packed_set_inline_ways_matches_codegen`.
 pub(crate) const PACKED_SET_INLINE_WAYS: usize = 4;
-/// Top-16 range of the NaN-boxed tags: `SHORT_STRING_TAG` (0x7FF9) through
-/// `STRING_TAG` (0x7FFF). Bits in this range are not raw f64s.
-const BOXED_TAG_FIRST_TOP16: &str = "32761";
-const BOXED_TAG_SPAN: &str = "7";
 
 /// Words of a site's record `@perry_ic_N_packed_set` (`[5 x i64]`): the
 /// existing-key word, the key-add memo's shapes and guard words, the
@@ -1048,10 +1044,14 @@ pub(crate) fn emit_static_store_ic_bookkeeping(
             // correctness — and keeps this test to the one `shr` both halves
             // share.
             let blk = ctx.block();
-            let top16 = blk.lshr(I64, value_bits, "48");
-            let rel = blk.sub(I64, &top16, BOXED_TAG_FIRST_TOP16);
-            let boxed_tag = blk.icmp_ult(I64, &rel, BOXED_TAG_SPAN);
-            let top_zero = blk.icmp_eq(I64, &top16, "0");
+            // Sign-closed tag band: includes HANDLE_TAG's mirror 0xFFF9.
+            let magnitude = blk.and(I64, value_bits, "9223372036854775807");
+            let boxed_tag = blk.icmp_uge(
+                I64,
+                &magnitude,
+                &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+            );
+            let top_zero = blk.icmp_ult(I64, value_bits, "281474976710656");
             let not_plain = blk.or(I1, &boxed_tag, &top_zero);
             blk.cond_br(&not_plain, &classify_label, &done_label);
         }

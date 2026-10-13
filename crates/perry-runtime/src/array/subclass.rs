@@ -675,7 +675,8 @@ pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader)
 pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     obj: *mut ObjectHeader,
 ) -> Option<u32> {
-    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    // `obj` is a live GC object by contract: its header needs no admission.
+    let header = &*crate::gc::header_from_trusted_user_ptr(obj as *const u8);
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || crate::object::shapes::shape_object_kind_by_id(
             crate::object::shapes::object_shape_stamp(obj),
@@ -749,9 +750,6 @@ unsafe fn publish_subclass_numeric_prefix(
 ) -> bool {
     let meta = (*obj).meta;
     if meta.is_null() || bound > 16_000_000 {
-        return false;
-    }
-    if crate::value::addr_class::try_read_gc_header(obj as usize).is_none() {
         return false;
     }
     let flags = (*meta).flags;

@@ -472,7 +472,7 @@ fn x509_info_access(cert: &x509_cert::Certificate) -> Option<String> {
 
 fn x509_handle_arg(value: f64) -> Option<i64> {
     let bits = value.to_bits();
-    if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
+    if (bits & 0xFFFF_0000_0000_0000) != perry_runtime::value::HANDLE_TAG {
         return None;
     }
     let handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
@@ -907,7 +907,7 @@ unsafe fn x509_check_private_key_value(handle: &X509Handle, args: &[f64]) -> f64
 }
 
 fn x509_handle_value(handle: Handle) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+    perry_runtime::value::js_nanbox_pointer(handle as i64)
 }
 
 fn throw_x509_parse_error(message: &str) -> ! {
@@ -1074,7 +1074,7 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         }
         "raw" => {
             let buf = alloc_buffer_from_slice(&h.der);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
+            perry_runtime::value::js_nanbox_pointer(buf as i64)
         }
         "publicKey" => x509_public_key_value(h),
         "issuerCertificate" => h
@@ -1164,8 +1164,7 @@ pub unsafe fn dispatch_x509_method_property(handle: i64, property: &str) -> f64 
         "checkIssued" => b"checkIssued",
         _ => return nanbox_undefined(),
     };
-    let this_f64 =
-        f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF));
+    let this_f64 = perry_runtime::value::js_nanbox_pointer(handle as i64);
     extern "C" {
         fn js_class_method_bind(
             instance: f64,
@@ -1260,7 +1259,7 @@ pub(super) fn dh_random_private_key(prime: &[u8]) -> Vec<u8> {
 }
 
 pub(super) fn nanbox_ptr<T>(ptr: *mut T) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((ptr as u64) & 0x0000_FFFF_FFFF_FFFF))
+    perry_runtime::value::js_nanbox_pointer(ptr as i64)
 }
 
 pub(super) fn arg_ptr(arg: f64) -> i64 {

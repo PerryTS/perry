@@ -467,9 +467,7 @@ pub(crate) unsafe fn dispatch_cheerio(handle: Handle, method: &str, args: &[f64]
     const TAG_UNDEFINED_F64: u64 = 0x7FFC_0000_0000_0001;
     const TAG_NULL_F64: u64 = 0x7FFC_0000_0000_0002;
 
-    let nanbox_pointer = |raw: i64| -> f64 {
-        f64::from_bits(0x7FFD_0000_0000_0000 | (raw as u64 & 0x0000_FFFF_FFFF_FFFF))
-    };
+    let nanbox_pointer = |raw: i64| -> f64 { perry_runtime::value::js_nanbox_pointer(raw as i64) };
     let nanbox_string = |ptr: *mut StringHeader| -> f64 {
         if ptr.is_null() {
             return f64::from_bits(TAG_NULL_F64);

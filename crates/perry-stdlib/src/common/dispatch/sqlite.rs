@@ -64,7 +64,7 @@ pub(crate) unsafe fn dispatch_sqlite_stmt(handle: i64, method: &str, args: &[f64
             // NaN-box as a pointer so subsequent dynamic dispatch sees
             // it as a heap-pointer-shaped value (the runtime detects
             // small-handle range and routes back here).
-            js_nanbox_pointer(new_handle)
+            perry_runtime::value::js_nanbox_handle(new_handle)
         }
         "all" => {
             let arr_ptr = js_sqlite_stmt_all(handle, arr_handle);
@@ -103,8 +103,6 @@ pub(crate) unsafe fn dispatch_sqlite_stmt(handle: i64, method: &str, args: &[f64
 /// crate registered the Database handle.
 #[cfg(feature = "database-sqlite")]
 pub(crate) unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64]) -> f64 {
-    use perry_runtime::js_nanbox_pointer;
-
     extern "C" {
         fn js_sqlite_prepare(db_handle: i64, sql_ptr: *const perry_runtime::StringHeader) -> i64;
         fn js_sqlite_exec(db_handle: i64, sql_ptr: *const perry_runtime::StringHeader) -> i32;
@@ -144,7 +142,7 @@ pub(crate) unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64])
             // NaN-box as POINTER so subsequent `.run(...)` / `.all(...)`
             // / `.get(...)` calls re-enter the small-handle dispatch
             // path and route to `dispatch_sqlite_stmt`.
-            js_nanbox_pointer(stmt_handle)
+            perry_runtime::value::js_nanbox_handle(stmt_handle)
         }
         "exec" => {
             let sql_ptr = arg_str_ptr(0);
@@ -154,7 +152,7 @@ pub(crate) unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64])
             let _ = js_sqlite_exec(handle, sql_ptr);
             // better-sqlite3 returns the Database for chaining; mirror
             // that so `db.exec("...").exec("...")` chains.
-            js_nanbox_pointer(handle)
+            perry_runtime::value::js_nanbox_handle(handle)
         }
         "close" => {
             let _ = js_sqlite_close(handle);

@@ -152,8 +152,9 @@ pub(crate) fn is_definitely_primitive(value: f64) -> bool {
     // Only POINTER_TAG-tagged values can be promises or thenable
     // objects. Strings (STRING_TAG), bigints (BIGINT_TAG), int32s
     // (INT32_TAG), bool/null/undefined (TAG_xxx), and raw f64
-    // numbers (no special tag) are all primitives in spec terms.
-    tag != POINTER_TAG
+    // numbers (no special tag) are all primitives in spec terms. Native ids
+    // (HANDLE_TAG: Proxy, Web Fetch, streams) are objects.
+    tag != POINTER_TAG && tag != crate::value::HANDLE_TAG
 }
 
 // Instrumentation counters (set PERRY_MT_PROFILE=1 to print at exit).

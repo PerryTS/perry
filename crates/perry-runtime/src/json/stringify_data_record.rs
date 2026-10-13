@@ -12,6 +12,7 @@ const MAX_FIELDS: usize = 32;
 unsafe fn primitive(bits: u64) -> bool {
     bits != crate::value::TAG_HOLE
         && bits & crate::value::TAG_MASK != POINTER_TAG
+        && bits & crate::value::TAG_MASK != crate::value::HANDLE_TAG
         && bits & crate::value::TAG_MASK != BIGINT_TAG
         && !is_raw_pointer(bits)
 }

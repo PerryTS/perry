@@ -198,7 +198,7 @@ unsafe fn string_decoder_constructor_value() -> f64 {
 unsafe fn this_string_decoder_handle(this: perry_runtime::closure::JsThis) -> i64 {
     let this_value = this.as_f64();
     let bits = this_value.to_bits();
-    let handle = if bits >> 48 == 0x7FFD {
+    let handle = if bits >> 48 == (perry_runtime::value::HANDLE_TAG >> 48) {
         (bits & 0x0000_FFFF_FFFF_FFFF) as i64
     } else {
         0
@@ -919,7 +919,7 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
                 _ => b"text",
             };
             let this_f64 = f64::from_bits(
-                0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF),
+                perry_runtime::value::HANDLE_TAG | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF),
             );
             extern "C" {
                 fn js_class_method_bind(

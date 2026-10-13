@@ -10,22 +10,6 @@ use crate::types::{DOUBLE, F32, I1, I32, I64};
 /// the payload away.
 const CANONICAL_QNAN_DOUBLE: &str = "0x7FF8000000000000";
 
-/// `PERRY_NANBOX_CANON` gate (#10779). Enabled by default; `=0`/`off`/`false`
-/// emits the pre-fix IR byte-for-byte, so the cost of the fix can be measured
-/// with ONE compiler binary and no cross-build confound. Keyed into the object
-/// cache alongside the other repsel gates; a measurement must still run with
-/// `PERRY_NO_CACHE=1`.
-pub(crate) fn nanbox_canon_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_NANBOX_CANON").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
-
 /// #10779: collapse any NaN in a raw native `f64` — an ArrayBuffer float lane,
 /// a POD record field, or a C function's `double` return — to the canonical
 /// quiet NaN, so it cannot alias a NaN-box tag.
@@ -46,9 +30,6 @@ pub(crate) fn nanbox_canon_enabled() -> bool {
 /// `vcmpunordsd`/`vblendvpd` pair on x86-64-v3 with the NaN constant hoisted
 /// out of any enclosing loop.
 pub(crate) fn canonicalize_lane_f64(blk: &mut LlBlock, value: &str) -> String {
-    if !nanbox_canon_enabled() {
-        return value.to_string();
-    }
     // `fcmp` emits no fast-math flags (see `block.rs`), so `uno` survives.
     let is_nan = blk.fcmp("uno", value, value);
     blk.select(I1, &is_nan, DOUBLE, CANONICAL_QNAN_DOUBLE, value)
@@ -62,14 +43,19 @@ pub(crate) fn canonicalize_lane_f64(blk: &mut LlBlock, value: &str) -> String {
 /// in hex using its DOUBLE bit pattern, so the canonical `f32` qNaN
 /// `0x7FC00000` is written `0x7FF8000000000000`.
 pub(crate) fn canonicalize_lane_f32(blk: &mut LlBlock, value: &str) -> String {
-    if !nanbox_canon_enabled() {
-        return value.to_string();
-    }
     // MUST be `fcmp uno float`, not the `double` default: the operand is an
     // f32 in the native lattice. Emitting `double` here made every program
     // calling `Buffer.readFloatLE` fail codegen.
     let is_nan = blk.fcmp_ty(F32, "uno", value, value);
     blk.select(I1, &is_nan, F32, CANONICAL_QNAN_DOUBLE, value)
+}
+
+/// Box a native registry id under its distinct representation tag.
+pub(crate) fn nanbox_handle_inline(blk: &mut LlBlock, id: &str) -> String {
+    let tagged = blk.or(I64, id, crate::nanbox::HANDLE_TAG_I64);
+    let is_null = blk.icmp_eq(I64, id, "0");
+    let boxed = blk.select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &tagged);
+    blk.bitcast_i64_to_double(&boxed)
 }
 
 /// Inline NaN-box of a raw heap pointer with `POINTER_TAG`.

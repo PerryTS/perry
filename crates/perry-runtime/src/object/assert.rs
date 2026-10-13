@@ -761,12 +761,11 @@ fn assert_same_value(actual: f64, expected: f64) -> bool {
         if value.is_int32() {
             Some(value.as_int32() as f64)
         } else {
-            let top16 = bits >> 48;
             // Plain IEEE-754 values, including the canonical raw NaN bucket
             // (0x7FF8) and all negative numbers, are numbers. Perry tagged
             // values use 0x7FF9..=0x7FFF, so do not classify them as NaN just
             // because f64::is_nan observes their NaN-box encoding.
-            if !(0x7FF9..=0x7FFF).contains(&top16) {
+            if value.is_number() {
                 Some(raw)
             } else {
                 None

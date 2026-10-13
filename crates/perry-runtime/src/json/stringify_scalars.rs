@@ -17,6 +17,13 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         serialize_bigint(value, buf);
         return;
     }
+    // A native id (Proxy, Web Fetch, stream) is a NaN pattern too, but an
+    // object: the numeric fallbacks of every walker funnel it to the value
+    // serializer, which owns Proxy semantics.
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == crate::value::HANDLE_TAG {
+        super::stringify::stringify_value_depth(value, TYPE_UNKNOWN, buf, 1);
+        return;
+    }
     // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN, so it
     // would otherwise fall into the `is_nan()` → "null" arm below and silently
     // drop the value. Decode and emit the signed integer. Integer columns from

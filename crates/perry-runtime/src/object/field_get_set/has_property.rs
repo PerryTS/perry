@@ -139,11 +139,8 @@ fn throw_in_operator_non_object(obj: f64, key: f64) -> ! {
 /// Everything else (number, boolean, string, BigInt, null, undefined, Symbol,
 /// and any unregistered INT32) is a primitive and makes `in` throw.
 pub(super) fn in_rhs_is_object(obj: f64) -> bool {
-    let jv = JSValue::from_bits(obj.to_bits());
-    if jv.is_pointer() {
-        return unsafe { crate::symbol::js_is_symbol(obj) } == 0;
-    }
-    crate::object::class_ref_id(obj).is_some()
+    crate::builtins::arithmetic::js_value_is_object(obj)
+        || crate::object::class_ref_id(obj).is_some()
 }
 
 /// Presence-only counterpart of the inherited static DATA-field read in
@@ -303,9 +300,9 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // lookup, together the dominant cost of `in` on plain objects — is
     // skipped wholesale. The three object-relevant arms are preserved in
     // `object_string_key_has_property`.
-    if key_val.is_any_string() && obj_val.is_pointer() {
+    if key_val.is_any_string() {
         let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
-        if let Some(h) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        if let Some(h) = crate::value::addr_class::pointer_value_header(obj_val.bits()) {
             // RegExp cells (unlike Date/Error/Map/Set/…, which carry their own
             // GC types) are OBJECT-typed allocations registered in the exotic
             // expando registry — they must keep routing through the exotic arm
@@ -362,11 +359,9 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // Common/small handles (below the fetch band) are intentionally NOT caught
     // here: they fall through to the registered small-handle property path later
     // in this function.
-    if obj_val.is_pointer() {
-        let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
-        if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
-            && crate::value::addr_class::is_handle_band(addr)
-        {
+    if obj_val.is_handle() {
+        let addr = obj_val.as_handle();
+        if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END {
             if key_val.is_any_string() {
                 if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
                     unsafe {

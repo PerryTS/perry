@@ -7,7 +7,7 @@ use perry_runtime::{
         ClosureHeader,
     },
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_nanbox_get_pointer,
-    js_nanbox_pointer, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
+    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 use rusqlite::ffi;
 use std::sync::atomic::Ordering;
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn js_bun_sqlite_statement_safe_integers(
     }
     stmt.read_bigints
         .store(enabled.to_bool(), Ordering::Relaxed);
-    js_nanbox_pointer(stmt_handle)
+    perry_runtime::value::js_nanbox_handle(stmt_handle)
 }
 
 #[no_mangle]

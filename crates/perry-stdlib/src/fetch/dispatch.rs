@@ -60,9 +60,9 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     // Response-constructor twin of the nested-Blob crash (#6231).
     {
         let jsval = JSValue::from_bits(value.to_bits());
-        if jsval.is_pointer() {
-            let addr = jsval.as_pointer::<u8>() as usize;
-            if perry_runtime::value::addr_class::is_handle_band(addr) {
+        if jsval.is_handle() {
+            let addr = jsval.as_handle();
+            {
                 if let Some(bytes) = crate::fetch::blob_bytes_clone(addr) {
                     return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
                 }
@@ -86,10 +86,8 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     // `Request`/`Response` body to the underlying `IncomingMessage`).
     {
         let jsval = JSValue::from_bits(value.to_bits());
-        if jsval.is_pointer() {
-            if let Some(bytes) =
-                unsafe { incoming_message_raw_body_bytes(jsval.as_pointer::<u8>() as usize) }
-            {
+        if jsval.is_handle() {
+            if let Some(bytes) = unsafe { incoming_message_raw_body_bytes(jsval.as_handle()) } {
                 return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
             }
         }

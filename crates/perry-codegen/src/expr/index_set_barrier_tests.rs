@@ -559,8 +559,8 @@ fn the_store_settles_the_f64_kind_before_the_value() {
     );
     let f64_arm = block_body(&ir, "idxset.recv_prop.kind.f64.").expect("kind.f64 block");
     assert!(
-        f64_arm.contains("lshr i64") && f64_arm.contains(", 32761"),
-        "the F64 arm tests the value for the NaN-box band 0x7FF9..=0x7FFF:\n{f64_arm}"
+        f64_arm.contains("and i64") && f64_arm.contains(", 9221401712017801216"),
+        "the F64 arm tests the value for the sign-closed NaN-box band |bits| >= 0x7FF9<<48:\n{f64_arm}"
     );
     let canon = block_body(&ir, "idxset.recv_prop.kind.canon.").expect("kind.canon block");
     assert!(

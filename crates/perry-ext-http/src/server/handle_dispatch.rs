@@ -277,7 +277,8 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
     let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
     // Server re-boxed as POINTER_TAG so chained calls (`server.on(...).on(...)`,
     // `server.listen(...).address()`) keep flowing through this same dispatcher.
-    let self_ref = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+    let self_ref =
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits());
 
     match method.as_str() {
         "listen" => {
@@ -672,7 +673,12 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
                 if server.alpn_callback == 0 {
                     undef
                 } else {
-                    f64::from_bits(POINTER_TAG | (server.alpn_callback as u64 & PTR_MASK))
+                    f64::from_bits(
+                        perry_ffi::JsValue::from_object_ptr(
+                            server.alpn_callback as usize as *mut u8,
+                        )
+                        .bits(),
+                    )
                 }
             })
             .unwrap_or(undef),
@@ -791,7 +797,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         "unref" => self_ref,
         "getSession" => {
             let buffer = perry_ffi::alloc_buffer(&[]);
-            f64::from_bits(POINTER_TAG | (buffer as u64 & PTR_MASK))
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(buffer as usize as *mut u8).bits())
         }
         "isSessionReused" => bool_value(false),
         "getPeerCertificate" => json_string_value(
@@ -1405,7 +1411,7 @@ unsafe fn args_slice<'a>(args_ptr: *const f64, args_len: usize) -> &'a [f64] {
 
 #[inline]
 fn handle_to_pointer_f64(handle: i64) -> f64 {
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
 #[inline]

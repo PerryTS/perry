@@ -46,7 +46,7 @@ fn handle_value(handle: i64) -> f64 {
     if handle == 0 {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(POINTER_TAG | (handle as u64 & POINTER_MASK))
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
     }
 }
 

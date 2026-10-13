@@ -190,11 +190,8 @@ fn observe_pointer(addr: usize) {
         mark_old(ReceiverReprFamily::Fetch);
     }
 
-    if crate::value::addr_class::is_proxy_id_band(addr) {
-        let boxed = f64::from_bits(POINTER_TAG | addr as u64);
-        if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-            mark_old(ReceiverReprFamily::Proxy);
-        }
+    if crate::value::addr_class::is_proxy_cell(addr) {
+        mark_old(ReceiverReprFamily::Proxy);
     }
     // #340/#341 GATE A: `timer` has migrated to ordinary objects, so no timer
     // receiver can be a small band id any more and this family can never be

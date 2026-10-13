@@ -97,7 +97,7 @@ fn js_bool(value: bool) -> f64 {
 }
 
 fn boxed_handle(handle: i64) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
 fn handle_from_value(value: f64) -> Option<i64> {

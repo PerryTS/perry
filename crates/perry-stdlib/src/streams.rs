@@ -582,7 +582,7 @@ pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class:
 /// `typeof 1048576` cannot depend on whether stream 0x100000 is live.
 #[inline]
 pub(crate) fn stream_value(id: usize) -> f64 {
-    perry_runtime::value::js_nanbox_pointer(id as i64)
+    perry_runtime::value::js_nanbox_handle(id as i64)
 }
 
 /// True for a JS object (a heap `POINTER_TAG` value), false for a stream

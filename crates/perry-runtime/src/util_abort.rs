@@ -61,7 +61,7 @@ fn resolved_promise(value: f64) -> f64 {
 }
 
 fn is_object_resource(value: f64) -> bool {
-    JSValue::from_bits(value.to_bits()).is_pointer()
+    crate::builtins::arithmetic::js_value_is_object(value)
 }
 
 fn abort_event(signal: f64) -> f64 {

@@ -44,12 +44,16 @@ pub(crate) fn create_client_once_wrapper(
         perry_ffi::set_closure_capture_f64(
             wrapper_ptr,
             2,
-            f64::from_bits(POINTER_TAG | (callback.get() as u64 & PTR_MASK)),
+            f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(callback.get() as usize as *mut u8).bits(),
+            ),
         );
         perry_ffi::set_closure_capture_f64(
             wrapper_ptr,
             3,
-            f64::from_bits(POINTER_TAG | (wrapper.get() as u64 & PTR_MASK)),
+            f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(wrapper.get() as usize as *mut u8).bits(),
+            ),
         );
         perry_ffi::set_closure_capture_f64(wrapper_ptr, 4, bool_value(factory_callback));
     }
@@ -60,7 +64,9 @@ pub(crate) fn create_client_once_wrapper(
         js_object_set_field_by_name(
             wrapper.get() as *mut ObjectHeader,
             (key.get().to_bits() & PTR_MASK) as *const StringHeader,
-            f64::from_bits(POINTER_TAG | (callback.get() as u64 & PTR_MASK)),
+            f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(callback.get() as usize as *mut u8).bits(),
+            ),
         );
     }
     wrapper.get()
@@ -167,7 +173,7 @@ fn string_value(value: &str) -> f64 {
 }
 
 fn handle_value(handle: Handle) -> f64 {
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_handle(handle as u64).bits())
 }
 
 fn is_client_request_handle(handle: Handle) -> bool {

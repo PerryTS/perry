@@ -66,7 +66,7 @@ unsafe fn receiver_facts(bits: u64) -> Option<(u64, u64)> {
         return None;
     }
     let mut addr = (bits & crate::value::POINTER_MASK) as usize;
-    let mut h = crate::value::addr_class::try_read_gc_header(addr)?;
+    let mut h = crate::value::addr_class::pointer_value_header(bits)?;
     if (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         if (*h).obj_type != crate::gc::GC_TYPE_ARRAY {
             return None;

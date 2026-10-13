@@ -33,11 +33,7 @@ pub(crate) fn is_callable_function(value: f64) -> bool {
         return true;
     }
     // A POINTER_TAG value is callable only if it points at a closure.
-    if (bits & !POINTER_MASK) == POINTER_TAG {
-        let raw = (bits & POINTER_MASK) as usize;
-        return crate::closure::is_closure_ptr(raw);
-    }
-    false
+    (bits & !POINTER_MASK) == POINTER_TAG && crate::closure::is_closure_bits(bits)
 }
 
 pub(crate) fn is_constructor_function(value: f64) -> bool {

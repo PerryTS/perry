@@ -1224,7 +1224,18 @@ pub extern "C" fn js_map_size(map: *const MapHeader) -> u32 {
     if map.is_null() {
         return 0;
     }
+    map_size_body(map)
+}
+
+#[inline(always)]
+fn map_size_body(map: *const MapHeader) -> u32 {
     unsafe { (*map).size }
+}
+
+crate::entry_contracts::kind_entry! {
+    Map, fn js_map_size__Map(map: *const MapHeader) -> u32 {
+        map_size_body(map)
+    }
 }
 
 /// Find the index of a key in the map, or -1 if not found.
@@ -2015,6 +2026,12 @@ fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
         }
 
         f64::from_bits(TAG_UNDEFINED)
+    }
+}
+
+crate::entry_contracts::kind_entry! {
+    Map, fn js_map_get__Map(map: *const MapHeader, key: f64) -> f64 {
+        map_get_resolved(map, key)
     }
 }
 

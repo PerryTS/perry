@@ -63,7 +63,11 @@
                     blk.call_void(sig.runtime, &ref_args);
                     Ok(double_literal(0.0))
                 }
-                UiReturnKind::Widget | UiReturnKind::Promise => {
+                UiReturnKind::Widget => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(crate::expr::nanbox_inline::nanbox_handle_inline(blk, &raw))
+                }
+                UiReturnKind::Promise => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
                 }
@@ -143,7 +147,11 @@
                     blk.call_void(sig.runtime, &ref_args);
                     Ok(double_literal(0.0))
                 }
-                UiReturnKind::Widget | UiReturnKind::Promise => {
+                UiReturnKind::Widget => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(crate::expr::nanbox_inline::nanbox_handle_inline(blk, &raw))
+                }
+                UiReturnKind::Promise => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
                 }

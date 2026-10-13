@@ -439,10 +439,20 @@ impl Writer<'_> {
             }
             return SerializedValue::BigInt(crate::bigint::BigIntHeader::all_limbs(ptr).to_vec());
         }
+        if tag == crate::value::HANDLE_TAG {
+            return SerializedValue::Unsupported("native handle");
+        }
         if tag == POINTER_TAG {
             return self.pointer(bits);
         }
-        // Numbers, and short strings stored inside the NaN box.
+        // Numeric transfer ingress preserves the NaN-box representation contract.
+        // Short strings and other tagged values retain their representation.
+        let value = crate::value::JSValue::from_bits(bits);
+        let bits = if value.is_number() {
+            crate::value::JSValue::number(f64::from_bits(bits)).bits()
+        } else {
+            bits
+        };
         SerializedValue::Inline(bits)
     }
 

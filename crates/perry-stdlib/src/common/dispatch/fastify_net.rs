@@ -23,7 +23,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
     }
     fn nanbox_handle(h: i64) -> f64 {
-        f64::from_bits(0x7FFD_0000_0000_0000u64 | (h as u64 & 0x0000_FFFF_FFFF_FFFF))
+        perry_runtime::value::js_nanbox_handle(h)
     }
     extern "C" {
         // #5021 — route write/end/destroy through perry-ext-net's DISTINCT
@@ -141,7 +141,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             let servername_ptr = str_arg(args[0]);
             let verify = if args.len() >= 2 { args[1] } else { 1.0 };
             let promise = js_net_socket_upgrade_tls(handle, servername_ptr, verify);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF))
+            perry_runtime::value::js_nanbox_pointer(promise as i64)
         }
         // Issue #2131 — EventEmitter surface on any-typed receivers
         // (the accepted-socket arg of `server.on('connection', s => …)`
@@ -188,12 +188,12 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         "listeners" if !args.is_empty() => {
             let event_ptr = str_arg(args[0]);
             let arr = js_ext_net_socket_listeners(handle, event_ptr);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
+            perry_runtime::value::js_nanbox_pointer(arr as i64)
         }
         "rawListeners" if !args.is_empty() => {
             let event_ptr = str_arg(args[0]);
             let arr = js_net_socket_raw_listeners(handle, event_ptr);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
+            perry_runtime::value::js_nanbox_pointer(arr as i64)
         }
         "address" => json_str_to_value(js_net_socket_address(handle)),
         "getTypeOfService" => js_net_socket_get_type_of_service(handle),

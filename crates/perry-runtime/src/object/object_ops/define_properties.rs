@@ -392,7 +392,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // canonical path below.
     {
         let top = obj_bits >> 48;
-        let handle_id = if top == 0x7FFD {
+        let handle_id = if top == (crate::value::HANDLE_TAG >> 48) {
             (obj_bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             0
@@ -413,6 +413,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // proto's own properties, so the Tag is recognized as a valid Effect.
     if (obj_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
         && ((proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+            || (proto_bits & 0xFFFF_0000_0000_0000) == crate::value::HANDLE_TAG
             || proto_bits == crate::value::TAG_NULL)
     {
         let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as usize;

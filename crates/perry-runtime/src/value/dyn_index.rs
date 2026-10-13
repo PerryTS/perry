@@ -257,7 +257,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // address is *in range*, so it was dereferenced as an `ObjectHeader` →
     // garbage/crash. Drop the heuristic: a non-pointer receiver is a number and
     // its indexed read is `undefined` on every platform (#63/#321 denormal-safe).
-    let raw_ptr = if jsval.is_pointer() {
+    let raw_ptr = if jsval.is_pointer() || jsval.is_handle() {
         (bits & POINTER_MASK) as usize
     } else {
         return f64::from_bits(TAG_UNDEFINED);
@@ -705,10 +705,13 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         // A lazy JSON array must become its ordinary array before [[Set]].
         // Use the tracked probe here: buffer/view receivers have not yet been
         // dispatched and do not necessarily have a GC header before their data.
-        let is_lazy = unsafe {
-            crate::value::addr_class::try_read_tracked_gc_header(raw_ptr)
-                .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+        let receiver_bits = if jsval.is_pointer() {
+            bits
+        } else {
+            raw_ptr as u64
         };
+        let is_lazy = crate::value::addr_class::tracked_header_of_bits(receiver_bits)
+            .is_some_and(|h| unsafe { h.as_ref() }.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY);
         if is_lazy {
             return unsafe {
                 crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)

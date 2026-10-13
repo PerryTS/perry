@@ -1149,7 +1149,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
     // is what makes data properties such as `TLSSocket.authorized` and
     // `alpnProtocol` observable, and also recovers bound method values such as
     // `setKeyCert` when they are read before being called.
-    if args_len == 0 && !method_name_ptr.is_null() && v.is_pointer() {
+    // Native registry ids travel under HANDLE_TAG (honest pointers): a
+    // POINTER_TAG word is never a handle.
+    if args_len == 0 && !method_name_ptr.is_null() && v.is_handle() {
         let handle = crate::value::js_nanbox_get_pointer(object);
         if crate::value::addr_class::is_handle_band(handle as usize) {
             if let Some(dispatch) = crate::object::handle_property_dispatch() {

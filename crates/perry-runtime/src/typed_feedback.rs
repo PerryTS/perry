@@ -2267,6 +2267,9 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
             return crate::proxy::js_proxy_get(proxy, index);
         }
     }
+    if receiver_value.is_handle() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
 
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {

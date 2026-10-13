@@ -16,7 +16,11 @@ unsafe fn bind_static_handle_method(handle: Handle, method: &'static [u8]) -> f6
             method_name_len: usize,
         ) -> f64;
     }
-    js_class_method_bind(js_nanbox_pointer(handle), method.as_ptr(), method.len())
+    js_class_method_bind(
+        perry_runtime::value::js_nanbox_handle(handle),
+        method.as_ptr(),
+        method.len(),
+    )
 }
 
 fn database_method_name_static(property: &str) -> Option<&'static [u8]> {

@@ -306,11 +306,12 @@ fn emit_index(
     (wide, ok)
 }
 
-/// `PERRY_CHECK_CONTRACTS` set while compiling: every admitted access first
-/// asks the runtime (`js_typed_element_contract`, gc-instruments) whether it
-/// agrees, and aborts when it does not. Reads only, never collects.
+/// `PERRY_CHECK_CONTRACTS=1` while compiling (the contract-check build, see
+/// `perry-runtime` `entry_contracts`): every admitted access first asks the
+/// runtime (`js_typed_element_contract`) whether it agrees, and aborts when it
+/// does not. Reads only, never collects.
 fn emit_contract_witness(ctx: &mut FnCtx<'_>, boxed: &str, kind: u8, index: &str) {
-    if std::env::var_os("PERRY_CHECK_CONTRACTS").is_some_and(|v| !v.is_empty()) {
+    if crate::codegen::helpers::check_contracts() {
         ctx.block().call_gc_leaf(
             I32,
             "js_typed_element_contract",

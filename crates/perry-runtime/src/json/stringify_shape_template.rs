@@ -504,7 +504,8 @@ pub(crate) unsafe fn try_emit_shape_element(
                 } else {
                     buf.push_str("null");
                 }
-            } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
+            } else if vtag == POINTER_TAG || vtag == crate::value::HANDLE_TAG || is_raw_pointer(fb)
+            {
                 set_to_json_key_for_template_field(cur_keys(), f);
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
                 called_out = true;
@@ -584,7 +585,7 @@ pub(crate) unsafe fn try_emit_shape_element(
             } else {
                 buf.push_str("null");
             }
-        } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
+        } else if vtag == POINTER_TAG || vtag == crate::value::HANDLE_TAG || is_raw_pointer(fb) {
             set_to_json_key_for_template_field(cur_keys(), f);
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
         } else {

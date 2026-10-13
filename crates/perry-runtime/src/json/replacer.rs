@@ -55,7 +55,7 @@ pub(crate) unsafe fn call_replacer(
 /// NaN-box a heap object/array pointer as the holder `this` for `call_replacer`.
 #[inline]
 unsafe fn holder_value(ptr: *const u8) -> f64 {
-    f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
+    f64::from_bits(super::make_pointer_bits(ptr))
 }
 
 /// Build the spec root holder `{ "": value }` (ECMA-262 `JSON.stringify` step:

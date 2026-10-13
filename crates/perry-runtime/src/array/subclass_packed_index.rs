@@ -41,9 +41,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
         let js = JSValue::from_bits(receiver.to_bits());
         if js.is_pointer() {
             let raw = js.as_pointer::<u8>();
-            if let Some(header) =
-                unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }
-            {
+            if let Some(header) = crate::value::addr_class::pointer_value_header(js.bits()) {
                 // #10114's lazy-JSON-array tier. It used to be three emitted
                 // blocks and a direct `js_lazy_array_index_probe` call at
                 // EVERY indexed read site; it lives here now, so a site pays
@@ -88,6 +86,21 @@ pub extern "C" fn js_packed_arraylike_index_get(
                 if crate::gc::is_buffer_family_type(header.obj_type) {
                     if let Some(byte) = cached_u8_packed_get(raw as usize, index_u32) {
                         return byte;
+                    }
+                }
+                if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                {
+                    let arr = raw as *const crate::array::ArrayHeader;
+                    if unsafe { (*arr).length <= (*arr).capacity } {
+                        // SAFETY: the header proved a live dense array.
+                        return unsafe {
+                            crate::array::indexing::array_get_resolved(
+                                arr,
+                                index_u32,
+                                header._reserved,
+                            )
+                        };
                     }
                 }
                 if matches!(

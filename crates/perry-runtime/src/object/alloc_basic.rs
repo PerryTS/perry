@@ -35,7 +35,7 @@ pub extern "C" fn js_object_coerce(value: f64) -> f64 {
     if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
         return crate::builtins::js_boxed_symbol_new(value);
     }
-    if jsval.is_pointer() {
+    if jsval.is_pointer() || jsval.is_handle() {
         // Already an object/array/function — pass through unchanged.
         return value;
     }

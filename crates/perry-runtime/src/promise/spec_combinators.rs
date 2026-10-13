@@ -1031,16 +1031,9 @@ pub extern "C" fn js_promise_any_spec(this_ctor: f64, iterable: f64) -> f64 {
 /// Accept any constructor value here so `Promise.resolve.call(Subclass, …)` and
 /// inherited-static `Subclass.resolve(…)` reach `NewPromiseCapability(C)`.
 fn is_object_value(value: f64) -> bool {
-    let bits = value.to_bits();
-    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
-        let raw = (bits & crate::value::POINTER_MASK) as usize;
-        if crate::value::addr_class::is_handle_band(raw) {
-            return crate::object::js_value_is_constructor(value);
-        }
-        return !crate::symbol::is_registered_symbol(raw);
-    }
     // Non-pointer-tagged constructors (user-class ClassRefs) are still Objects.
-    crate::object::js_value_is_constructor(value)
+    crate::builtins::arithmetic::js_value_is_object(value)
+        || crate::object::js_value_is_constructor(value)
 }
 
 /// `Promise.reject(r)` (ECMA-262 27.2.4.6) with `this` = C: build the result

@@ -667,7 +667,9 @@ pub unsafe extern "C" fn js_is_symbol(value: f64) -> i32 {
 pub(crate) unsafe fn obj_key_from_f64(obj_f64: f64) -> usize {
     let bits = obj_f64.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
-    if tag != POINTER_TAG {
+    // A native id keys its own symbol entries by id; ids never collide with
+    // heap addresses (they sit below the id-band ceiling).
+    if tag != POINTER_TAG && tag != crate::value::HANDLE_TAG {
         return 0;
     }
     (bits & POINTER_MASK) as usize

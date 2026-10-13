@@ -689,7 +689,9 @@ pub(super) fn lower_builtin_new<'a>(
             // (#11519); a masked SSO value was read as a header address.
             let enc_handle = blk.bitcast_double_to_i64(&enc_box);
             let handle = blk.call(I64, "js_string_decoder_new", &[(I64, &enc_handle)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                blk, &handle,
+            )))
         }
         // node:stream — `new Readable(opts)` / `new Writable(opts)` /
         // `new Duplex(opts)` / `new Transform(opts)` / `new PassThrough(opts)`.
@@ -1475,7 +1477,9 @@ pub(super) fn lower_builtin_new<'a>(
                 .push(("js_ws_server_new".to_string(), I64, vec![DOUBLE]));
             let blk = ctx.block();
             let handle = blk.call(I64, "js_ws_server_new", &[(DOUBLE, &opts)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                blk, &handle,
+            )))
         }
         // Issue #606 — `new WebSocket(url)` from `import { WebSocket } from
         // "ws"`. npm ws's API is sync-ctor: returns the client handle
@@ -1505,7 +1509,9 @@ pub(super) fn lower_builtin_new<'a>(
             // site (`client.on(...)`, `.send(...)`, `.close()`).
             let raw_f64 = blk.call(DOUBLE, "js_ws_connect_start", &[(DOUBLE, &url_box)]);
             let raw_i64 = blk.fptosi(DOUBLE, &raw_f64, I64);
-            Ok(Some(nanbox_pointer_inline(blk, &raw_i64)))
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                blk, &raw_i64,
+            )))
         }
 
         _ => Ok(None),

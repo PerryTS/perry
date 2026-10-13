@@ -713,7 +713,9 @@ pub(crate) fn with_shape_cache_frame<R>(f: impl FnOnce(&mut Vec<Box<ShapeTemplat
 
 #[inline]
 pub(crate) fn make_pointer_bits(ptr: *const u8) -> u64 {
-    POINTER_TAG | (ptr as u64 & POINTER_MASK)
+    // The canonical constructor: an id (a Proxy the walk extracted) keeps
+    // HANDLE_TAG.
+    JSValue::pointer((ptr as u64 & POINTER_MASK) as *const u8).bits()
 }
 
 // ─── GC root scanners ────────────────────────────────────────────────────────
@@ -957,7 +959,9 @@ pub(crate) unsafe fn is_raw_pointer(bits: u64) -> bool {
 #[inline]
 pub(crate) unsafe fn extract_pointer(bits: u64) -> Option<*const u8> {
     let tag = bits & 0xFFFF_0000_0000_0000;
-    if tag == POINTER_TAG {
+    // A native id (HANDLE_TAG) is extracted too: the serializers route
+    // Proxies through their traps and render other ids by the id band.
+    if tag == POINTER_TAG || tag == crate::value::HANDLE_TAG {
         Some((bits & POINTER_MASK) as *const u8)
     } else if is_raw_pointer(bits) {
         Some(bits as *const u8)
@@ -1001,7 +1005,7 @@ pub(crate) fn nanbox_string_f64(ptr: *const StringHeader) -> f64 {
 // #854: NaN-boxing pointer helper retained for the JSON subsystem (see CLAUDE.md)
 #[allow(dead_code)]
 pub(crate) fn nanbox_pointer_f64(ptr: *const u8) -> f64 {
-    f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
+    f64::from_bits(make_pointer_bits(ptr))
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

@@ -511,7 +511,7 @@ pub struct CipherState {
 
 #[inline]
 pub(super) fn nanbox_pointer_f64(ptr: usize) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((ptr as u64) & 0x0000_FFFF_FFFF_FFFF))
+    perry_runtime::value::js_nanbox_pointer(ptr as i64)
 }
 
 #[inline]

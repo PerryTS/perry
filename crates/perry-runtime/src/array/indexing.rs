@@ -233,16 +233,18 @@ static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_le
 #[inline(always)]
 fn array_length_fast_lane(arr: *const ArrayHeader) -> Option<u32> {
     let bits = arr as u64;
-    let top16 = bits >> 48;
-    let raw = if top16 >= 0x7FF8 {
-        if top16 == (crate::value::POINTER_TAG >> 48) {
-            (bits & crate::value::POINTER_MASK) as usize
-        } else {
-            0
+    // A POINTER_TAG word names a GC-headed object (honest pointers): the
+    // header byte is the whole Arr proof.
+    if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
+        let raw = (bits & crate::value::POINTER_MASK) as *const ArrayHeader;
+        if crate::entry_contracts::Kind::Arr.holds_header(header)
+            && unsafe { (*raw).length <= (*raw).capacity }
+        {
+            return Some(js_array_length__Arr(raw));
         }
-    } else {
-        bits as usize
-    };
+        return None;
+    }
+    let raw = if bits >> 48 == 0 { bits as usize } else { 0 };
     if raw >= crate::gc::GC_HEADER_SIZE
         && raw % std::mem::align_of::<crate::gc::GcHeader>() == 0
         && crate::value::addr_class::is_plausible_heap_addr(raw)
@@ -254,18 +256,23 @@ fn array_length_fast_lane(arr: *const ArrayHeader) -> Option<u32> {
         // SAFETY: owned arena page, header-aligned; the header word
         // precedes every arena block.
         let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
-        if obj_type == crate::gc::GC_TYPE_ARRAY
-            && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        let gc_flags = unsafe { (*header).gc_flags };
+        if crate::entry_contracts::Kind::Arr.holds_header(unsafe { &*header })
             && gc_flags & crate::gc::GC_FLAG_ARENA != 0
         {
             let hdr = unsafe { &*(raw as *const ArrayHeader) };
             if hdr.length <= hdr.capacity {
-                return Some(hdr.length);
+                return Some(js_array_length__Arr(raw as *const ArrayHeader));
             }
         }
     }
     None
+}
+
+crate::entry_contracts::kind_entry! {
+    Arr, fn js_array_length__Arr(arr: *const ArrayHeader) -> u32 {
+        unsafe { (*arr).length }
+    }
 }
 
 /// Perry-GC leaf half of `.length` (#11522): the plain-array fast lane, or
@@ -521,6 +528,20 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
 pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     #[cfg(test)]
     ELEMENT_ACCESSOR_CALLS.with(|c| c.set(c.get().wrapping_add(1)));
+
+    // A POINTER_TAG receiver names a GC-headed object (honest pointers): a
+    // live dense array answers from its one header read, which the full
+    // path below would otherwise re-derive three times.
+    if let Some(header) = crate::value::addr_class::pointer_value_header(arr as u64) {
+        let raw = ((arr as u64) & crate::value::POINTER_MASK) as *const ArrayHeader;
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && unsafe { (*raw).length <= (*raw).capacity }
+        {
+            // SAFETY: a live, unforwarded dense array; nothing intervened.
+            return unsafe { array_get_resolved(raw, index, header._reserved) };
+        }
+    }
 
     // Issue #179 Phase 5: lazy fast path — must run BEFORE
     // `clean_arr_ptr` because that helper force-materializes a lazy
@@ -1040,7 +1061,6 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     index: u32,
     value: f64,
 ) -> Option<*mut ArrayHeader> {
-    const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let value_bits = value.to_bits();
     // A plain double or an INT32 box (`value_bits_to_number` already refuses
     // the class-reference values that share that tag). NaN keeps the general
@@ -1051,28 +1071,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     if number.is_nan() {
         return None;
     }
-    let bits = arr as u64;
-    let top16 = bits >> 48;
-    let raw = if top16 >= 0x7FF8 {
-        if top16 == 0x7FFC || bits & PAYLOAD_MASK == 0 {
-            return None;
-        }
-        (bits & PAYLOAD_MASK) as usize
-    } else {
-        bits as usize
-    };
-    if raw < crate::gc::GC_HEADER_SIZE
-        || raw % std::mem::align_of::<crate::gc::GcHeader>() != 0
-        || !crate::value::addr_class::is_plausible_heap_addr(raw)
-    {
-        return None;
-    }
-    if matches!(
-        crate::arena::classify_heap_generation(raw),
-        crate::arena::HeapGeneration::Unknown
-    ) {
-        return None;
-    }
+    let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let mut raw = raw;
     let mut header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
@@ -1198,33 +1197,11 @@ pub(crate) unsafe fn try_strict_dense_pointer_overwrite(
     index: u32,
     value: f64,
 ) -> Option<*mut ArrayHeader> {
-    const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let value_bits = value.to_bits();
     if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         return None;
     }
-    let bits = arr as u64;
-    let top16 = bits >> 48;
-    let raw = if top16 >= 0x7FF8 {
-        if top16 == 0x7FFC || bits & PAYLOAD_MASK == 0 {
-            return None;
-        }
-        (bits & PAYLOAD_MASK) as usize
-    } else {
-        bits as usize
-    };
-    if raw < crate::gc::GC_HEADER_SIZE
-        || raw % std::mem::align_of::<crate::gc::GcHeader>() != 0
-        || !crate::value::addr_class::is_plausible_heap_addr(raw)
-    {
-        return None;
-    }
-    if matches!(
-        crate::arena::classify_heap_generation(raw),
-        crate::arena::HeapGeneration::Unknown
-    ) {
-        return None;
-    }
+    let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0

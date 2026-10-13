@@ -617,7 +617,10 @@ unsafe fn stringify_object_walk(
         // its own property name; the synthetic `field{f}` fallback name is
         // unreadable, so pass "" as it did before.
         let mut member_probed = false;
-        if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG || is_raw_pointer(field_bits) {
+        if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+            || (field_bits & 0xFFFF_0000_0000_0000) == crate::value::HANDLE_TAG
+            || is_raw_pointer(field_bits)
+        {
             // Everything from here to the member's dispatch can run user code.
             *global_proof = false;
             let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -680,7 +683,10 @@ unsafe fn stringify_object_walk(
             } else {
                 buf.push_str("null");
             }
-        } else if val_tag == POINTER_TAG || is_raw_pointer(field_bits) {
+        } else if val_tag == POINTER_TAG
+            || val_tag == crate::value::HANDLE_TAG
+            || is_raw_pointer(field_bits)
+        {
             // Nested object/array (or the object/array `toJSON` returned). The
             // `toJSON` key was recorded above; `member_probed` armed the guard.
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);

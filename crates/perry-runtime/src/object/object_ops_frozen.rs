@@ -752,9 +752,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
 /// extensible, and therefore neither sealed nor frozen. Callers test for a
 /// Proxy first (proxies share the band).
 fn is_native_handle_object(obj_value: f64) -> bool {
-    let value = crate::JSValue::from_bits(obj_value.to_bits());
-    value.is_pointer()
-        && crate::value::addr_class::is_small_handle(value.as_pointer::<u8>() as usize)
+    crate::JSValue::from_bits(obj_value.to_bits()).is_handle()
 }
 
 /// Object.isFrozen(obj) — returns NaN-boxed boolean.

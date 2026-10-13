@@ -325,15 +325,10 @@ pub fn prototype(family: &NativePayloadFamily) -> f64 {
 #[inline]
 pub(crate) fn any_object(value: f64) -> Option<*mut ObjectHeader> {
     let bits = value.to_bits();
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
-        return None;
-    }
-    let addr = (bits & crate::value::POINTER_MASK) as usize;
-    unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_type(
-            addr,
-            crate::gc::GC_TYPE_OBJECT,
-        )?;
-    }
-    Some(addr as *mut ObjectHeader)
+    // A POINTER_TAG word names a GC-headed object (honest pointers): the
+    // header kind is the whole proof.
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
+        .then_some((bits & crate::value::POINTER_MASK) as *mut ObjectHeader)
 }

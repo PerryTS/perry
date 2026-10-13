@@ -117,7 +117,7 @@ unsafe fn raw_closure_field(options: f64, field: &str) -> i64 {
     let value = perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), field);
     crate::client_outgoing::callback_from_bits(value.bits() as i64)
 }
-use crate::server::types::{js_promise_run_microtasks, read_string_header, POINTER_TAG, PTR_MASK};
+use crate::server::types::{js_promise_run_microtasks, read_string_header, PTR_MASK};
 
 /// `https.createServer(opts, handler)` — opts carries `{ key, cert }`
 /// (PEM strings) plus optional `passphrase`/`ca`. `handler` is the
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn js_node_https_server_on(
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
         s.base.listeners.entry(event).or_default().push(callback);
     }
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
 /// `httpsServer.closeAllConnections()` — destroy every tracked

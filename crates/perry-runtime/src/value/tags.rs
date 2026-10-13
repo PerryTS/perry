@@ -48,6 +48,7 @@ pub(crate) const TAG_TDZ: u64 = 0x7FFC_0000_0000_0011;
 
 /// Pointer tag: 0x7FFD_XXXX_XXXX_XXXX (48 bits for pointer) - objects/arrays
 pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+pub const HANDLE_TAG: u64 = crate::codegen_abi::HANDLE_TAG;
 pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 /// Int32 tag: 0x7FFE_0000_XXXX_XXXX (32 bits for i32)

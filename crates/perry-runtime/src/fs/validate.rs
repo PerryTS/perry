@@ -223,7 +223,7 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         let name = scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "name"));
         return received_name("function ", name.get_nanbox_f64());
     }
-    if jv.is_pointer() {
+    if jv.is_pointer() || jv.is_handle() {
         let constructor =
             scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
         if crate::value::js_is_truthy(constructor.get_nanbox_f64()) != 0 {

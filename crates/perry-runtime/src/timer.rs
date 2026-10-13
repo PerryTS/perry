@@ -437,7 +437,8 @@ fn leave_timer_callback_dispatch() {
 }
 
 fn timer_handle_value(id: i64) -> f64 {
-    f64::from_bits(crate::value::JSValue::pointer(id as *mut u8).bits())
+    // A timer id is a word of unknown kind: the id band boxes as HANDLE_TAG.
+    crate::value::js_nanbox_pointer(id)
 }
 
 fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {

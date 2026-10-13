@@ -528,7 +528,9 @@ unsafe fn apply_argument_list(
     // legacy RAW i64 pointer bit-cast to f64 (a function's
     // synthetic `arguments` array local) — top 16 bits zero.
     let args_arr_bits = args_arr_val.to_bits();
-    let arr_raw: usize = if args_arr_jsval.is_pointer() {
+    let arr_raw: usize = if args_arr_jsval.is_handle() {
+        args_arr_jsval.as_handle()
+    } else if args_arr_jsval.is_pointer() {
         // A Symbol is POINTER_TAG'd but is a primitive, not an
         // Object — Type(argArray) is not Object, so reject it
         // below rather than treating its payload as an array

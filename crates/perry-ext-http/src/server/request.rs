@@ -25,9 +25,7 @@ use perry_ffi::{
     RawClosureHeader, StringHeader,
 };
 
-use crate::server::types::{
-    jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK, STRING_TAG,
-};
+use crate::server::types::{jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG};
 
 /// Per-request handle backing `IncomingMessage` JS-side. Stored in
 /// the perry-ffi handle registry; both Rust (request dispatch path)
@@ -484,7 +482,7 @@ pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
     if buf.is_null() {
         f64::from_bits(crate::server::types::TAG_UNDEFINED)
     } else {
-        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits())
     }
 }
 
@@ -654,7 +652,9 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 let _ = js_http_on(handle, event_name_ptr, callback);
                 // Node's `.on()` returns the receiver — re-NaN-box
                 // the handle so chained calls still work.
-                return f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+                return f64::from_bits(
+                    perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
+                );
             }
         };
         im.listeners
@@ -708,7 +708,7 @@ pub unsafe extern "C" fn js_node_http_im_on(
     }
     // Node's `req.on` returns the IncomingMessage itself for chaining.
     // Return the same handle re-NaN-boxed so `req.on().on()` works.
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
 /// `IncomingMessage#once` for both server requests and client responses.
@@ -723,11 +723,15 @@ pub unsafe extern "C" fn js_node_http_im_once(
             fn js_http_once(handle: i64, event_ptr: *const StringHeader, callback: i64) -> i64;
         }
         let _ = js_http_once(handle, event_name_ptr, callback);
-        return f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+        return f64::from_bits(
+            perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
+        );
     }
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     if event.is_empty() || callback == 0 {
-        return f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+        return f64::from_bits(
+            perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
+        );
     }
     let wrapper =
         crate::client_request_surface::create_client_once_wrapper(handle, &event, callback, false);
@@ -790,7 +794,7 @@ pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
             if buf.is_null() {
                 return f64::from_bits(crate::server::types::TAG_NULL);
             }
-            f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits())
         }
     }
 }
@@ -823,7 +827,9 @@ pub(crate) fn emit_data_to_listeners(listeners: &[i64], body: &[u8], encoding: O
             if buf.is_null() {
                 return;
             }
-            scope.root_nanbox(f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK)))
+            scope.root_nanbox(f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits(),
+            ))
         }
     };
     for cb in &rooted {
@@ -910,11 +916,10 @@ pub(crate) fn incoming_peer_certificate_json(handle: i64) -> *mut StringHeader {
     alloc_string(&value.to_string()).as_raw()
 }
 
-/// Re-NaN-box a handle id with `POINTER_TAG` so JS-side method dispatch
-/// (codegen treats it as an object pointer, calls accessors via the
-/// vtable) Just Works.
+/// Re-NaN-box a handle through the canonical pointer constructor: a heap
+/// payload object keeps `POINTER_TAG`, a registry id takes `HANDLE_TAG`.
 pub(crate) fn handle_to_pointer_f64(handle: i64) -> f64 {
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
 // ============================================================================

@@ -9,8 +9,7 @@ use std::collections::HashMap;
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::response::ResponseShape;
 use crate::server::types::{
-    jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
-    TAG_UNDEFINED,
+    jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, TAG_UNDEFINED,
 };
 
 #[no_mangle]
@@ -415,5 +414,5 @@ pub unsafe extern "C" fn js_node_http2_server_on(
     if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
         s.base.listeners.entry(event).or_default().push(callback);
     }
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }

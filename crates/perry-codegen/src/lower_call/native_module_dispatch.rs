@@ -284,10 +284,31 @@ pub fn lower_native_module_dispatch(
             llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
 
         match sig.ret {
-            NativeRetKind::GcPtr
-            | NativeRetKind::NullableGcPtr
-            | NativeRetKind::HandleId
-            | NativeRetKind::JsValue => {
+            NativeRetKind::HandleId => {
+                let blk = ctx.block();
+                let raw = blk.call(I64, sig.runtime, &arg_slices);
+                Ok(crate::expr::nanbox_inline::nanbox_handle_inline(blk, &raw))
+            }
+
+            NativeRetKind::JsValue => {
+                let blk = ctx.block();
+                let bits = blk.call(I64, sig.runtime, &arg_slices);
+                Ok(blk.bitcast_i64_to_double(&bits))
+            }
+            NativeRetKind::NullableGcPtr => {
+                let blk = ctx.block();
+                let raw = blk.call(I64, sig.runtime, &arg_slices);
+                let boxed = crate::expr::nanbox_pointer_inline(blk, &raw);
+                let is_null = blk.icmp_eq(I64, &raw, "0");
+                Ok(blk.select(
+                    crate::types::I1,
+                    &is_null,
+                    DOUBLE,
+                    &crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_NULL)),
+                    &boxed,
+                ))
+            }
+            NativeRetKind::GcPtr => {
                 let blk = ctx.block();
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
                 let lowered = LoweredValue::native_handle(raw.clone());

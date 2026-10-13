@@ -25,12 +25,7 @@ pub(crate) enum SpeciesChoice {
 
 /// `Type(value) is Object` — a heap pointer that is not a Symbol.
 fn is_object_value(value: f64) -> bool {
-    let jv = JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return false;
-    }
-    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
-    raw >= 0x10000 && !crate::symbol::is_registered_symbol(raw)
+    crate::builtins::arithmetic::js_value_is_object(value)
 }
 
 /// `IsConstructor(value)` — a user `class` ref, or a callable that is not a

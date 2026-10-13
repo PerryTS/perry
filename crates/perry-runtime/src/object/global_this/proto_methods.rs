@@ -12,13 +12,12 @@ fn fetch_prototype_getter(this: crate::closure::JsThis, name: &'static str) -> f
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(this.as_f64());
     let value = crate::JSValue::from_bits(receiver.get_nanbox_f64().to_bits());
-    let handle = if value.is_pointer() {
+    let handle = if value.is_handle() {
+        let addr = value.as_handle();
+        crate::value::addr_class::is_fetch_handle_band(addr).then_some(addr as i64)
+    } else if value.is_pointer() {
         let addr = value.as_pointer::<ObjectHeader>() as usize;
-        if crate::value::addr_class::is_fetch_handle_band(addr) {
-            Some(addr as i64)
-        } else {
-            unsafe { crate::object::field_get_set::fetch_subclass_handle_id(addr) }
-        }
+        unsafe { crate::object::field_get_set::fetch_subclass_handle_id(addr) }
     } else {
         None
     };

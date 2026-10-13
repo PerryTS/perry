@@ -214,11 +214,7 @@ pub(crate) unsafe fn definition_target_is_object(value: f64) -> bool {
     value_is_object_like(value)
         || super::super::class_ref_id(value).is_some()
         || crate::proxy::js_proxy_is_proxy(value) != 0
-        || {
-            let value = crate::JSValue::from_bits(value.to_bits());
-            value.is_pointer()
-                && crate::value::addr_class::is_small_handle(value.as_pointer::<u8>() as usize)
-        }
+        || crate::JSValue::from_bits(value.to_bits()).is_handle()
 }
 
 /// One decoded [[DefineOwnProperty]] boundary for public entries and forwarding.
@@ -325,13 +321,11 @@ pub(crate) unsafe fn apply_property_descriptor(
         let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
         let key_handle = scope.root_nanbox_f64(key_value);
         let target = crate::JSValue::from_bits(obj_value.to_bits());
-        if target.is_pointer()
-            && crate::value::addr_class::is_small_handle(target.as_pointer::<u8>() as usize)
-        {
+        if target.is_handle() {
             return define_property_on_handle(
                 scope,
                 obj_value,
-                target.as_pointer::<u8>() as i64,
+                target.as_handle() as i64,
                 key_value,
                 descriptor,
             );

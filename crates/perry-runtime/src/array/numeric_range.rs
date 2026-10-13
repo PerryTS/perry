@@ -88,10 +88,9 @@ fn array_numeric_range_add_impl(receiver: f64, start: f64, end: Option<f64>, del
         for index in start..end {
             let slot = elements.add(index as usize);
             let bits = ptr::read(slot);
-            let tag = bits >> 48;
             // Genuine boxed double: anything outside the NaN-box tag band.
             // This is `value_bits_to_number`'s double arm, fused inline.
-            let number = if !(0x7FF9..=0x7FFF).contains(&tag) {
+            let number = if crate::value::JSValue::from_bits(bits).is_number() {
                 super::header::canonical_raw_f64(f64::from_bits(bits))
             } else if let Some(number) = value_bits_to_number(bits) {
                 // Int-tagged (minus registered class ids) via the shared

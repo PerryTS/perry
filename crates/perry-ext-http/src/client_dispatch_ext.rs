@@ -192,7 +192,8 @@ unsafe fn incoming_message_method(handle: i64, name: &str, args: &[f64]) -> Opti
     {
         return None;
     }
-    let self_ref = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+    let self_ref =
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits());
     // `string_arg_ptr`, not a bare mask: an inline SSO event name or encoding
     // has no header behind its bits (#11519). The natives copy it out.
     let arg_ptr = |n: usize| perry_ffi::string_arg_ptr(args[n]);

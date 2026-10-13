@@ -72,11 +72,8 @@ pub(super) fn decode_root_word(bits: u64) -> Option<RootWord> {
         if payload > 0xFFFF_FFFF {
             return None;
         }
-        let addr = crate::value::addr_class::tagged_heap_addr(bits);
-        return (addr != 0).then_some(RootWord::Nanboxed {
-            addr,
-            tag: tag | (bits & 1),
-        });
+        let addr = payload as usize;
+        return (addr != 0).then_some(RootWord::Nanboxed { addr, tag });
     }
     // Not a heap tag. Everything else in the NaN-tag space is an immediate.
     if tag >= NAN_TAG_FLOOR {
@@ -93,7 +90,7 @@ pub(super) fn decode_root_word(bits: u64) -> Option<RootWord> {
         return None;
     }
     Some(RootWord::Bare {
-        addr: crate::value::addr_class::canonical_raw_receiver(bits as usize),
+        addr: bits as usize,
     })
 }
 
@@ -126,9 +123,7 @@ impl PreciseRoot {
     fn address(self) -> Option<usize> {
         match self {
             Self::JSValue(bits) => decode_tagged_root_word(bits).map(RootWord::addr),
-            Self::GcPointer(addr) => {
-                (addr != 0).then_some(crate::value::addr_class::canonical_raw_receiver(addr))
-            }
+            Self::GcPointer(addr) => (addr != 0).then_some(addr),
         }
     }
 
@@ -281,6 +276,9 @@ pub(super) fn mark_precise_root_in_scope(
 ) -> bool {
     let Some(addr) = root.address() else {
         if let PreciseRoot::JSValue(bits) = root {
+            if bits & TAG_MASK == crate::value::HANDLE_TAG {
+                observe_handle_root(bits, valid_ptrs);
+            }
             verify_jsvalue_root_word(bits, "scanned");
         }
         return false;
@@ -288,6 +286,12 @@ pub(super) fn mark_precise_root_in_scope(
     // A tagged handle is a root of its provider's JSValue edges, not a GC
     // allocation. Decode the source first so numeric bits cannot observe ids.
     if crate::value::addr_class::is_handle_band(addr) {
+        #[cfg(any(test, perry_check_contracts))]
+        if let PreciseRoot::JSValue(bits) = root {
+            if precise_root_verification() {
+                super::verify_honest::verify_honest_root_word(bits);
+            }
+        }
         if super::full_trace::handle_trace_active() {
             super::full_trace::observe_handle(root.bits(), valid_ptrs);
         }
@@ -302,6 +306,16 @@ pub(super) fn mark_precise_root_in_scope(
         return false;
     };
     unsafe { mark_admitted_root_header(header, write_scope.is_some()) }
+}
+
+/// A `HANDLE_TAG` root names its provider's JSValue edges, not a GC
+/// allocation. Out of line: every inlined root marker shares one copy.
+#[cold]
+#[inline(never)]
+fn observe_handle_root(bits: u64, valid_ptrs: &ValidPointerSet) {
+    if super::full_trace::handle_trace_active() {
+        super::full_trace::observe_handle(bits, valid_ptrs);
+    }
 }
 
 /// Shade an admitted header. A root write never re-shades a forwarding alias.
@@ -337,10 +351,10 @@ fn decode_tagged_root_word(bits: u64) -> Option<RootWord> {
             if payload > usize::MAX as u64 {
                 return None;
             }
-            let addr = crate::value::addr_class::tagged_heap_addr(bits);
+            let addr = payload as usize;
             (addr != 0).then_some(RootWord::Nanboxed {
                 addr,
-                tag: (bits & TAG_MASK) | (bits & 1),
+                tag: bits & TAG_MASK,
             })
         }
         _ => None,

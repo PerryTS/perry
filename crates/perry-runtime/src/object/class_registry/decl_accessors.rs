@@ -111,7 +111,7 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
     // The live shape alone decides whether the key is an accessor. A
     // declaration cannot resurrect a deleted or replaced property.
     let holds = unsafe {
-        crate::object::key_attrs::attrs_live_in_keys(obj as usize)
+        crate::object::key_attrs::attrs_live_in_keys_of_bits(proto.to_bits())
             && crate::object::key_attrs::object_key_is_accessor(obj, name.as_bytes())
     };
     holds.then_some(proto)
@@ -185,7 +185,7 @@ fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
             return None;
         }
         let obj = js.as_pointer::<ObjectHeader>();
-        if !unsafe { ka::attrs_live_in_keys(obj as usize) } {
+        if !ka::attrs_live_in_keys_of_bits(value.to_bits()) {
             return None;
         }
         // The holder shape owns the logical key count, slot and attributes.

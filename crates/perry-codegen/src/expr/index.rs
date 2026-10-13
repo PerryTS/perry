@@ -249,9 +249,13 @@ pub(crate) fn lower_index_set_fast(
                 // both sides: a real double's top 16 bits are either below
                 // 0x7FF9 (subtraction wraps high) or >= 0x8000 (negative).
                 let val_bits = blk.bitcast_double_to_i64(val_double);
-                let val_tag = blk.lshr(I64, &val_bits, "48");
-                let tag_offset = blk.sub(I64, &val_tag, "32761"); // 0x7FF9
-                let value_numeric = blk.icmp_ugt(I64, &tag_offset, "6"); // span of 0x7FF9..=0x7FFF
+                // Sign-closed: HANDLE_TAG (0xFFF9) mirrors the positive band.
+                let magnitude = blk.and(I64, &val_bits, "9223372036854775807");
+                let value_numeric = blk.icmp_ult(
+                    I64,
+                    &magnitude,
+                    &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+                );
                 guard_ok = blk.and(I1, &guard_ok, &value_numeric);
             }
             blk.cond_br(&guard_ok, &guarded_label, &cold_label);

@@ -95,16 +95,12 @@ pub(crate) unsafe fn interned_key_for_store(key: f64) -> Option<*const crate::St
 #[inline]
 pub(crate) unsafe fn pre_store_shape(target: f64) -> u32 {
     let bits = target.to_bits();
-    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return 0;
-    }
-    let obj = (bits & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
-    if !crate::value::addr_class::is_above_handle_band(obj as usize) {
-        return 0;
-    }
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
+    // Honest pointers: a POINTER_TAG word names a GC-headed object.
+    match crate::value::addr_class::pointer_value_header(bits) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
-            crate::object::shapes::object_shape_stamp(obj)
+            crate::object::shapes::object_shape_stamp(
+                (bits & crate::value::POINTER_MASK) as *const crate::ObjectHeader,
+            )
         }
         _ => 0,
     }
@@ -126,16 +122,13 @@ pub(crate) unsafe fn mark_chain_hops(scope: &crate::gc::RuntimeHandleScope, rece
         if bits == crate::value::TAG_NULL {
             return true;
         }
-        if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-            return false;
-        }
-        let addr = (bits & crate::value::POINTER_MASK) as usize;
-        if !crate::value::addr_class::is_above_handle_band(addr)
-            || !crate::value::addr_class::try_read_gc_header(addr)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        // Honest pointers: a POINTER_TAG word names a GC-headed object.
+        if !crate::value::addr_class::pointer_value_header(bits)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
         {
             return false;
         }
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
         if !crate::object::proto_validity::object_is_marked_prototype(addr) {
             let _ = crate::object::proto_validity::mark_object_as_prototype(addr);
         }

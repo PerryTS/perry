@@ -36,7 +36,9 @@ impl JSValue {
     /// Create an f64 number value
     #[inline]
     pub fn number(value: f64) -> Self {
-        // Just reinterpret the bits - f64 values are stored directly
+        // Raw-byte ingress (typed arrays, DataView, Buffer, clone, FFI)
+        // canonicalizes NaN payloads, so a computed number never carries a
+        // tag pattern; boxing is the bit pattern itself.
         Self {
             bits: value.to_bits(),
         }
@@ -53,6 +55,13 @@ impl JSValue {
     /// Create a pointer value (for heap-allocated objects)
     #[inline]
     pub fn pointer(ptr: *const u8) -> Self {
+        // Honest pointers: the argument is a GC-headed object. A native
+        // registry id is boxed by `handle`; the out-of-line, unknown-word
+        // constructor `js_nanbox_pointer` routes the id band itself. Contract
+        // builds abort on an id-band payload here; release builds pay
+        // nothing at the hundreds of inlined boxing sites.
+        #[cfg(perry_check_contracts)]
+        crate::entry_contracts::assert_heap_payload(ptr as usize, "JSValue::pointer");
         debug_assert!(
             (ptr as u64) <= POINTER_MASK,
             "Pointer too large for NaN-boxing"
@@ -62,15 +71,35 @@ impl JSValue {
         }
     }
 
+    /// A native registry id, never a heap address or V8 handle.
+    #[inline]
+    pub fn handle(id: usize) -> Self {
+        debug_assert!(crate::value::addr_class::is_small_handle(id));
+        Self {
+            bits: HANDLE_TAG | id as u64,
+        }
+    }
+
+    #[inline]
+    pub fn is_handle(&self) -> bool {
+        // On the top 16 bits: a 16-bit immediate rather than a 64-bit tag.
+        self.bits >> 48 == HANDLE_TAG >> 48
+    }
+
+    #[inline]
+    pub fn as_handle(&self) -> usize {
+        debug_assert!(self.is_handle(), "Value is not a native handle");
+        (self.bits & POINTER_MASK) as usize
+    }
+
     /// Check if this is a number (not a tagged value)
     #[inline]
     pub fn is_number(&self) -> bool {
-        // Perry-owned tags occupy the positive qNaN band 0x7FF9..=0x7FFF.
-        // Keep IEEE f64 values, including canonical qNaN 0x7FF8 and negative
-        // NaN payloads, classified as numbers.
-        // The tag band occupies this whole bit interval, including payloads.
-        // Comparing the original word removes the per-check tag mask.
-        !(SHORT_STRING_TAG..0x8000_0000_0000_0000).contains(&self.bits)
+        // Perry-owned tags occupy the positive qNaN band 0x7FF9..=0x7FFF and
+        // HANDLE_TAG's mirror 0xFFF9. Numeric ingress canonicalizes every
+        // other NaN payload, so the sign-closed band is one mask and compare,
+        // the same test emitted code uses.
+        self.bits & !(1u64 << 63) < SHORT_STRING_TAG
     }
 
     /// Check if this is undefined
@@ -388,8 +417,15 @@ mod number_tag_interval_tests {
         for tag in 0..=u16::MAX {
             for payload in [0, 1, 0x1234_5678_9abc, 0xffff_ffff_fffe, 0xffff_ffff_ffff] {
                 let bits = (u64::from(tag) << 48) | payload;
-                let expected = !(0x7ff9..=0x7fff).contains(&tag);
-                assert_eq!(JSValue::from_bits(bits).is_number(), expected, "{bits:016x}");
+                // Sign-closed: HANDLE_TAG (0xFFF9) mirrors the positive band;
+                // the other negative mirrors are non-canonical NaNs that
+                // numeric ingress never produces.
+                let expected = !(0x7ff9..=0x7fff).contains(&(tag & 0x7fff));
+                assert_eq!(
+                    JSValue::from_bits(bits).is_number(),
+                    expected,
+                    "{bits:016x}"
+                );
             }
         }
     }

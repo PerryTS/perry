@@ -129,6 +129,7 @@ pub(crate) mod eh_lsda;
 #[cfg(not(windows))]
 pub(crate) mod eh_walker;
 pub mod embedded;
+pub mod entry_contracts;
 pub mod error;
 pub mod event_pump;
 pub mod event_target;

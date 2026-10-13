@@ -34,6 +34,16 @@ static KEEP_JS_BUILTIN_SUBCLASS_CONSTRUCT: unsafe extern "C" fn(
 fn constructor_return_overrides_this(value: f64) -> bool {
     use crate::value::JSValue;
     let jv = JSValue::from_bits(value.to_bits());
+    // A POINTER_TAG word names a GC-headed object (honest pointers): its
+    // header kind answers `Type(value) is Object` (Proxy cells, closures,
+    // arrays, collections and exotic cells are objects; symbols are not).
+    if jv.is_pointer() {
+        return crate::builtins::arithmetic::js_value_is_object(value);
+    }
+    // Native ids (Web Fetch, streams) are objects.
+    if jv.is_handle() {
+        return true;
+    }
     // Typed arrays and buffer-backed exotic objects may be represented by a
     // raw registered owner pointer rather than a NaN-boxed heap object. They
     // are still ECMAScript Objects and a base constructor returning one must
@@ -42,71 +52,9 @@ fn constructor_return_overrides_this(value: f64) -> bool {
         return true;
     }
     let bits = value.to_bits();
-    let raw_addr = if jv.is_pointer() {
-        (bits & crate::value::POINTER_MASK) as usize
-    } else if (bits >> 48) == 0 {
-        bits as usize
-    } else {
-        0
-    };
-    // `raw_addr` may be arbitrary bits (a top-16-clear number), so the
+    // A raw word may be arbitrary bits (a top-16-clear number), so the
     // allocator must vouch for it before its header is read.
-    if raw_addr != 0 && crate::buffer::buffer_family_type_owned(raw_addr).is_some() {
-        return true;
-    }
-    if !jv.is_pointer() {
-        return false;
-    }
-    // A Proxy is represented by a registered handle rather than a directly
-    // dereferenceable heap pointer. It is nevertheless an Object and therefore
-    // overrides the default receiver when returned from a constructor. Detect
-    // it before ANY probe that reads the pointer payload as a heap address,
-    // including the callable probe below: that one reads the GC header at
-    // `payload - 8`, which for a proxy id is unmapped memory once the id is
-    // large enough (the 8th Proxy of a process faulted here).
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        return true;
-    }
-    if is_callable_function_value(value) {
-        return true;
-    }
-    let raw = jv.as_pointer::<u8>();
-    if raw.is_null() {
-        return false;
-    }
-    if super::super::is_arguments_object(raw as *const ObjectHeader) {
-        return true;
-    }
-    unsafe {
-        let arr = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
-        if !arr.is_null() {
-            return true;
-        }
-        let Some(gc_header) = crate::value::addr_class::try_read_tracked_gc_header(raw as usize)
-        else {
-            return false;
-        };
-        matches!(
-            (*gc_header.as_ptr()).obj_type,
-            // Per spec, a constructor returning ANY Object overrides the
-            // implicit `this`. Promises are objects — a user constructor like
-            // `function P(exec){ return new Promise(...) }` (the
-            // `NewPromiseCapability` shape exercised by the Promise-combinator
-            // test262 cases) must yield that Promise, not the empty default.
-            // GC_TYPE_TEMPORAL: `new Temporal.Duration(...)` (and every other
-            // Temporal constructor) is dispatched through this generic path —
-            // the constructor thunk allocates a Temporal cell and returns it, so
-            // that cell must override the empty default `this` (#4687).
-            crate::gc::GC_TYPE_OBJECT
-                | crate::gc::GC_TYPE_ERROR
-                | crate::gc::GC_TYPE_PROMISE
-                | crate::gc::GC_TYPE_TEMPORAL
-                | crate::gc::GC_TYPE_MAP
-                | crate::gc::GC_TYPE_SET
-                | crate::gc::GC_TYPE_DATE_CELL
-                | crate::gc::GC_TYPE_LAZY_ARRAY
-        )
-    }
+    (bits >> 48) == 0 && bits != 0 && crate::buffer::buffer_family_type_owned(bits as usize).is_some()
 }
 
 /// Apply ECMAScript constructor return-override semantics for an inlined

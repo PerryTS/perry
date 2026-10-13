@@ -425,6 +425,54 @@ pub(crate) fn test_template_raw_roots() -> (usize, usize) {
 #[inline(always)]
 pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     let bits = arr as u64;
+    // A POINTER_TAG word names a GC-headed object (honest pointers): its
+    // header answers without address admission.
+    if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
+        let cleaned = (bits & crate::value::POINTER_MASK) as *const ArrayHeader;
+        return unsafe { clean_headed_arr_ptr(cleaned, header) };
+    }
+    // Fast lane for the overwhelmingly common raw receiver: a live plain
+    // array on a page the arena owns. A raw word carries no tag, so page
+    // ownership is its admission; the header's type, forwarding and arena
+    // bits then settle the ordinary case. Every other input (forwarded
+    // stubs, lazy arrays, malloc-backed objects, registered buffers/typed
+    // arrays, inconsistent headers, other tags) takes the one out-of-line
+    // resolver, so the inlined part stays a few instructions per caller.
+    {
+        let addr = bits as usize;
+        if bits >> 48 == 0
+            && crate::value::addr_class::is_above_handle_band(addr)
+            && addr % std::mem::align_of::<crate::gc::GcHeader>() == 0
+            && !matches!(
+                crate::arena::classify_heap_generation(addr),
+                crate::arena::HeapGeneration::Unknown
+            )
+        {
+            // SAFETY: the address is on an arena page this process owns and
+            // is header-aligned; the header word precedes every arena block.
+            let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
+            if obj_type == crate::gc::GC_TYPE_ARRAY
+                && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && gc_flags & crate::gc::GC_FLAG_ARENA != 0
+            {
+                let hdr = unsafe { &*arr };
+                if hdr.length <= hdr.capacity {
+                    return arr;
+                }
+            }
+        }
+    }
+    clean_arr_ptr_resolve(arr)
+}
+
+/// The full [`clean_arr_ptr`] resolver: tag stripping, allocator admission
+/// of raw words, forwarding chains, lazy arrays and the sparse/buffer
+/// exceptions. One out-of-line copy shared by every caller.
+#[cold]
+#[inline(never)]
+fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
+    let bits = arr as u64;
     let top16 = bits >> 48;
     let cleaned = if top16 >= 0x7FF8 {
         if top16 == 0x7FFC || (bits & 0x0000_FFFF_FFFF_FFFF) == 0 {
@@ -440,41 +488,6 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     // header reads below require allocator ownership as well.
     if !crate::value::addr_class::is_plausible_heap_addr(cleaned as usize) {
         return std::ptr::null();
-    }
-    // Fast lane for the overwhelmingly common receiver: a live plain array on
-    // a page the arena owns. The tracked-header classifier below re-derives
-    // page ownership, type-table membership, size and storage consistency on
-    // every call, and every runtime array entry point (push, pop, length,
-    // some, length assignment, …) funnels through here — it was the largest
-    // runtime leaf on the ECS command path. The cached generation classifier
-    // is the same page-ownership answer the write barrier relies on; with an
-    // in-band, aligned address on an owned page, the header's type, forwarding
-    // and arena bits settle the ordinary case. Forwarded stubs, lazy arrays,
-    // malloc-backed objects, registered buffers/typed arrays and any
-    // inconsistent header keep the full resolver.
-    {
-        let addr = cleaned as usize;
-        if addr >= crate::gc::GC_HEADER_SIZE
-            && addr % std::mem::align_of::<crate::gc::GcHeader>() == 0
-            && !matches!(
-                crate::arena::classify_heap_generation(addr),
-                crate::arena::HeapGeneration::Unknown
-            )
-        {
-            // SAFETY: the address is on an arena page this process owns and
-            // is header-aligned; the header word precedes every arena block.
-            let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
-            if obj_type == crate::gc::GC_TYPE_ARRAY
-                && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && gc_flags & crate::gc::GC_FLAG_ARENA != 0
-            {
-                let hdr = unsafe { &*cleaned };
-                if hdr.length <= hdr.capacity && hdr.length <= 100_000_000 {
-                    return cleaned;
-                }
-            }
-        }
     }
     // Issue #233: follow GC_FLAG_FORWARDED forwarding chains. When
     // an array grows (js_array_grow) we install a forwarding pointer
@@ -615,6 +628,33 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     cleaned
 }
 
+/// [`clean_arr_ptr`] for an address whose GC header the caller already holds:
+/// a `POINTER_TAG` payload, or an array a runtime structure owns (a shape's
+/// keys array). A live, unforwarded dense array answers from its header;
+/// forwarded, lazy and sparse arrays take the full resolver, and any other
+/// kind is not an array.
+///
+/// # Safety
+/// `header` must be `arr`'s GC header.
+#[inline(always)]
+pub(crate) unsafe fn clean_headed_arr_ptr(
+    arr: *const ArrayHeader,
+    header: &crate::gc::GcHeader,
+) -> *const ArrayHeader {
+    match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY
+            if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && (*arr).length <= (*arr).capacity =>
+        {
+            arr
+        }
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_resolve(arr),
+        // The resolver rejects every tracked non-array; the header is that
+        // proof already.
+        _ => std::ptr::null(),
+    }
+}
+
 #[inline(always)]
 pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
@@ -737,12 +777,8 @@ pub(crate) fn array_ptr_as_proxy(arr: *const ArrayHeader) -> Option<f64> {
     } else {
         bits
     };
-    if crate::value::addr_class::is_proxy_id_band(raw as usize) {
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        let boxed = f64::from_bits(POINTER_TAG | raw);
-        if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-            return Some(boxed);
-        }
+    if crate::value::addr_class::is_proxy_cell(raw as usize) {
+        return Some(f64::from_bits(crate::value::POINTER_TAG | raw));
     }
     None
 }
@@ -901,7 +937,7 @@ pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
         return Some((lower as i32) as f64);
     }
     let upper = value_bits >> 48;
-    if (0x7FF9..=0x7FFF).contains(&upper) {
+    if (0x7FF9..=0x7FFF).contains(&upper) || upper == (crate::value::HANDLE_TAG >> 48) {
         return None;
     }
     Some(canonical_raw_f64(f64::from_bits(value_bits)))

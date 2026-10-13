@@ -720,35 +720,64 @@ pub(crate) unsafe fn copy_entries(
 // Object-level readers: what a receiver's own key's attributes are.
 // ---------------------------------------------------------------------------
 
-/// Is `addr` an ordinary property holder whose attributes live in its keys?
-/// Every receiver kind normalizes its descriptor storage to such a holder.
-/// The address may belong to native code, so prove allocator ownership before
-/// decoding the preceding bytes as a GC header.
+/// Is the descriptor owner named by `bits` an ordinary property holder whose
+/// attributes live in its keys? Every receiver kind normalizes its
+/// descriptor storage to such a holder.
 ///
-/// # Safety
-/// `addr` is a descriptor owner.
+/// A header is decoded only for a word proven GC-headed, through the one
+/// canonical classifier (`addr_class::tracked_header_of_bits`): a
+/// `POINTER_TAG` word is honest and answers from its header; a raw untagged
+/// word needs the allocator's proof first; anything else has no header.
+/// Descriptor owners can be arbitrary native addresses — a native `Box`
+/// backing (an `AsyncResource`'s, #11258) is heap-plausible and the bytes
+/// before it may decode as an object header (#12513) — so a raw word is
+/// never read on faith, on lookups and installs alike. A caller holding the
+/// owner's JS value passes its tagged bits and pays one header load.
 #[inline]
-pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
-    attrs_live_in_keys_for_install(addr)
+pub(crate) fn attrs_live_in_keys_of_bits(bits: u64) -> bool {
+    let Some(header) = crate::value::addr_class::tracked_header_of_bits(bits) else {
+        return false;
+    };
+    // SAFETY: the classifier proved a live GC header.
+    let header = unsafe { header.as_ref() };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && crate::typedarray::lookup_typed_array_kind((bits & crate::value::POINTER_MASK) as usize)
+            .is_none()
 }
 
-/// [`attrs_live_in_keys`] for a site that WRITES the owner (its keys, slots or
-/// header). Descriptor owners are arbitrary addresses — a native `Box`
-/// backing (an `AsyncResource`'s, #11258) is heap-plausible and the bytes
-/// before it may decode as an object header — so ownership is proved by
-/// allocator metadata (`try_read_tracked_gc_header`) before its preceding
-/// bytes are decoded.
+/// [`attrs_live_in_keys_of_bits`] for a raw owner address of unknown
+/// provenance: the allocator proves the header before an OBJECT answer.
+///
+/// Most raw owners that reach here are arrays, closures and other kinds
+/// whose own bytes already deny being an OBJECT, so the bounded, alignment-
+/// and slab-checked read (`try_read_gc_header`) rejects them first. Those
+/// bytes can only make the answer `false`, which is also the answer for a
+/// word with no header; a positive claim is never trusted without the
+/// allocator's proof (#12513).
+///
+/// # Safety
+/// None beyond the classifiers'; `addr` may be any word. Kept `unsafe` for
+/// the descriptor-owner call sites' contracts.
+#[inline]
+pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
+    match crate::value::addr_class::try_read_gc_header(addr) {
+        Some(claim) if claim.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            attrs_live_in_keys_of_bits(addr as u64)
+        }
+        _ => false,
+    }
+}
+
+/// [`attrs_live_in_keys`] at a site that WRITES the owner (its keys, slots or
+/// header). Lookups and installs now share the same allocator proof for a raw
+/// address; the name stays to mark the write sites.
 ///
 /// # Safety
 /// `addr` is any address.
+#[inline]
 pub(crate) unsafe fn attrs_live_in_keys_for_install(addr: usize) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
-        return false;
-    };
-    let header = header.as_ptr();
-    (*header).obj_type == crate::gc::GC_TYPE_OBJECT
-        && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+    attrs_live_in_keys(addr)
 }
 
 /// The attribute summary of `obj`'s shape (0 when unshaped). One load.

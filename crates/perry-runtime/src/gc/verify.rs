@@ -7,7 +7,7 @@ use super::*;
 /// `MALLOC_STATE` borrow across that validation would make the diagnostic
 /// verifier re-enter the same `RefCell` and panic instead of checking the heap.
 #[inline]
-fn malloc_headers_for_verification() -> Vec<*mut GcHeader> {
+pub(super) fn malloc_headers_for_verification() -> Vec<*mut GcHeader> {
     MALLOC_STATE.with(|state| state.borrow().objects.clone())
 }
 

@@ -262,3 +262,21 @@ fn attributed_rekey_keeps_reserved_inline_capacity() {
         );
     }
 }
+
+/// #12513: the owner's tagged word answers from its honest header, its raw
+/// address through the allocator proof, and both agree on a real object
+/// (the spoofed native prefix is pinned by
+/// `descriptor_holder_probe_rejects_a_spoofed_native_box_header`).
+#[test]
+fn an_object_owner_answers_as_its_tagged_word_and_its_raw_address() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let obj = crate::object::js_object_alloc(0, 2);
+    let value = crate::value::js_nanbox_pointer(obj as i64);
+    assert!(attrs_live_in_keys_of_bits(value.to_bits()));
+    assert!(unsafe { attrs_live_in_keys(obj as usize) });
+    let array = crate::array::js_array_alloc(2);
+    assert!(!attrs_live_in_keys_of_bits(
+        crate::value::js_nanbox_pointer(array as i64).to_bits()
+    ));
+    assert!(!unsafe { attrs_live_in_keys(array as usize) });
+}

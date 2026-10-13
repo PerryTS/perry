@@ -1537,6 +1537,8 @@ pub(super) fn run_copied_minor_attempt(
     // being swept. Non-fatal; logs parent/child obj_types.
     if crate::gc::gc_verify_mark_enabled() {
         super::verify::verify_marked_heap_report_nonfatal("copying-minor");
+        #[cfg(any(test, perry_check_contracts))]
+        super::verify_honest::verify_honest_pointers("copying-minor");
         // #9261: the copied minor is the OPERATIVE cycle on every workload that
         // reaches this path, and it was the one collector with no sweep-live-
         // child probe — `verify_minor_unmarked_young_children_report` was wired

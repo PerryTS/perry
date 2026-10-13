@@ -46,8 +46,9 @@ pub(crate) unsafe fn attach_request_signal(request_handle: Handle, options: f64)
         return;
     }
     perry_ffi::set_closure_capture_f64(listener, 0, request_handle as f64);
-    let listener_value =
-        scope.root_nanbox(f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK)));
+    let listener_value = scope.root_nanbox(f64::from_bits(
+        perry_ffi::JsValue::from_object_ptr(listener as usize as *mut u8).bits(),
+    ));
     let event_value = scope.root_nanbox(abort_event_value());
     let signal = js_abort_signal_resolve_ptr(signal_value.get());
     js_abort_signal_add_listener(signal, event_value.get(), listener_value.get());

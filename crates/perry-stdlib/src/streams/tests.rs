@@ -32,7 +32,7 @@ fn stream_ids_live_outside_pointer_tag_small_handle_band() {
     );
     assert!(
         perry_runtime::value::addr_class::is_stream_id_band(id)
-            && !perry_runtime::value::addr_class::is_proxy_id_band(id)
+            && !perry_runtime::value::addr_class::is_proxy_cell(id)
             && !perry_runtime::value::addr_class::is_fetch_handle_band(id),
         "stream id {id:#x} must not overlap the other handle sub-bands"
     );

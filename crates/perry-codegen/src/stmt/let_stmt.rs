@@ -89,6 +89,9 @@ pub(crate) fn lower_let(
             if crate::expr::ordinary_object_allocation(ctx, init_expr) {
                 ctx.object_literal_locals.insert(id);
             }
+            if let Some(kind) = crate::expr::collection_receiver::constructed_kind(ctx, init_expr) {
+                ctx.constructed_kind_locals.insert(id, kind);
+            }
         }
     }
     if let Some(init_expr) = init {

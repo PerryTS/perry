@@ -11,9 +11,9 @@
 //! cannot get a loop now REJECTS rather than quietly taking a second,
 //! never-exercised transport.
 
-use perry_runtime::{JSValue, ObjectHeader, Promise, js_promise_new_cross_thread};
+use perry_runtime::{js_promise_new_cross_thread, JSValue, ObjectHeader, Promise};
 
-use crate::common::{Handle, register_handle};
+use crate::common::{register_handle, Handle};
 
 mod turnloop_bridge;
 
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
     // A transporter is a JS object-like handle. Tag the id as POINTER_TAG so
     // method lowering reaches the generic handle dispatcher instead of
     // treating the receiver as a numeric primitive.
-    perry_runtime::js_nanbox_pointer(handle)
+    perry_runtime::value::js_nanbox_handle(handle)
 }
 
 /// Email message options
@@ -283,7 +283,7 @@ mod tests {
         let config = JSValue::from_bits(crate::common::dispatch::TAG_UNDEFINED_F64.to_bits());
         let boxed = unsafe { js_nodemailer_create_transport(f64::from_bits(config.bits())) };
         let value = JSValue::from_bits(boxed.to_bits());
-        assert!(value.is_pointer());
+        assert!(value.is_handle());
 
         let handle = (boxed.to_bits() & 0x0000_FFFF_FFFF_FFFF) as Handle;
         let stored = crate::common::get_handle::<SmtpTransportHandle>(handle)

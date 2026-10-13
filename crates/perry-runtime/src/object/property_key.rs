@@ -256,11 +256,11 @@ unsafe fn get_property_key_resolved(obj_value: f64, key: f64) -> f64 {
     // applying that guard here silently lost Request.signal (and any dictionary
     // members supplied by a native Request used as init).
     let receiver = crate::value::JSValue::from_bits(obj_value.to_bits());
-    if receiver.is_pointer() {
-        let handle = receiver.as_pointer::<ObjectHeader>();
-        if !handle.is_null() && crate::value::addr_class::is_handle_band(handle as usize) {
-            return f64::from_bits(js_object_get_field_by_name(handle, key_str).bits());
-        }
+    if receiver.is_handle() {
+        // The by-name read admits a raw id: Proxy ids reach their [[Get]],
+        // every other id its native dispatcher.
+        let handle = receiver.as_handle() as *const ObjectHeader;
+        return f64::from_bits(js_object_get_field_by_name(handle, key_str).bits());
     }
     let obj = extract_obj_ptr(obj_value);
     if obj.is_null() {

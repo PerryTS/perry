@@ -131,7 +131,7 @@ pub(crate) unsafe fn stamp_header_promoted_in_place(header: *mut GcHeader) {
 #[inline]
 pub(super) fn strip_nanbox_user_ptr(bits: u64) -> usize {
     if (bits >> 48) >= 0x7FF8 {
-        crate::value::addr_class::tagged_heap_addr(bits)
+        (bits & POINTER_MASK) as usize
     } else {
         bits as usize
     }

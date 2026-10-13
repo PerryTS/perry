@@ -76,7 +76,7 @@ fn bind_agent_method(handle: Handle, name: &'static [u8]) -> i64 {
 }
 
 fn handle_value(handle: Handle) -> f64 {
-    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+    f64::from_bits(perry_ffi::JsValue::from_handle(handle as u64).bits())
 }
 
 fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
@@ -322,8 +322,9 @@ extern "C" fn agent_connection_abort_listener(
         }
         let scope = perry_ffi::TransientRootScope::enter();
         let signal_value = scope.root_nanbox(signal_value);
-        let listener_value =
-            scope.root_nanbox(f64::from_bits(POINTER_TAG | (closure as u64 & PTR_MASK)));
+        let listener_value = scope.root_nanbox(f64::from_bits(
+            perry_ffi::JsValue::from_object_ptr(closure as usize as *mut u8).bits(),
+        ));
         let event = scope.root_nanbox(f64::from_bits(
             JsValue::from_string_ptr(alloc_string("abort").as_raw()).bits(),
         ));
@@ -372,8 +373,9 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
     if listener.is_null() {
         return;
     }
-    let listener_value =
-        scope.root_nanbox(f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK)));
+    let listener_value = scope.root_nanbox(f64::from_bits(
+        perry_ffi::JsValue::from_object_ptr(listener as usize as *mut u8).bits(),
+    ));
     perry_ffi::set_closure_capture_f64(listener, 0, handle_value(socket.get()));
     perry_ffi::set_closure_capture_f64(listener, 1, signal_value.get());
     let event = scope.root_nanbox(f64::from_bits(
@@ -865,11 +867,11 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
     match property.as_ref() {
         "createConnection" => {
             let raw = js_http_agent_create_connection(handle);
-            f64::from_bits(POINTER_TAG | (raw as u64 & PTR_MASK))
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(raw as usize as *mut u8).bits())
         }
         "createSocket" => {
             let raw = js_http_agent_create_socket(handle);
-            f64::from_bits(POINTER_TAG | (raw as u64 & PTR_MASK))
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(raw as usize as *mut u8).bits())
         }
         "keepSocketAlive" => bind_agent_method_value(handle, b"keepSocketAlive"),
         "reuseSocket" => bind_agent_method_value(handle, b"reuseSocket"),

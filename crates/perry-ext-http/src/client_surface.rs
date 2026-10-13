@@ -218,7 +218,10 @@ pub extern "C" fn js_http_incoming_message_socket(handle: Handle) -> f64 {
         if response.socket_handle == 0 {
             f64::from_bits(TAG_UNDEFINED)
         } else {
-            f64::from_bits(POINTER_TAG | (response.socket_handle as u64 & PTR_MASK))
+            f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(response.socket_handle as usize as *mut u8)
+                    .bits(),
+            )
         }
     })
     .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
@@ -318,7 +321,10 @@ pub extern "C" fn js_http_incoming_message_req(handle: Handle) -> f64 {
         if response.request_handle == 0 {
             f64::from_bits(TAG_UNDEFINED)
         } else {
-            f64::from_bits(POINTER_TAG | (response.request_handle as u64 & PTR_MASK))
+            f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(response.request_handle as usize as *mut u8)
+                    .bits(),
+            )
         }
     })
     .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
@@ -378,7 +384,7 @@ pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
             if buf.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
-                f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+                f64::from_bits(perry_ffi::JsValue::from_object_ptr(buf as usize as *mut u8).bits())
             }
         }
     }

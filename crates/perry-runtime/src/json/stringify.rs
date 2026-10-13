@@ -501,6 +501,20 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         return;
     }
 
+    if tag == crate::value::HANDLE_TAG {
+        if !super::stringify_proxy::try_stringify(
+            value,
+            buf,
+            "",
+            0,
+            super::stringify_proxy::Replacer::None,
+            false,
+        ) {
+            buf.push_str("null");
+        }
+        return;
+    }
+
     if let Some(ptr) = extract_pointer(bits) {
         if super::stringify_proxy::try_stringify(
             value,
@@ -780,6 +794,20 @@ pub(crate) unsafe fn stringify_value_depth(
 
     if tag == BIGINT_TAG {
         serialize_bigint(value, buf);
+        return;
+    }
+
+    if tag == crate::value::HANDLE_TAG {
+        if !super::stringify_proxy::try_stringify(
+            value,
+            buf,
+            "",
+            depth as usize,
+            super::stringify_proxy::Replacer::None,
+            false,
+        ) {
+            buf.push_str("null");
+        }
         return;
     }
 
@@ -1176,6 +1204,10 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // A BigInt element's `toJSON` key is its stringified index (#5909).
             set_to_json_key_index(i as usize);
             serialize_bigint(elem, buf);
+        } else if elem_tag == crate::value::HANDLE_TAG {
+            // An element's `toJSON` key is its stringified index (#5909).
+            set_to_json_key_index(i as usize);
+            stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth + 1);
         } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
             // An element's `toJSON` key is its stringified index (#5909) — set
             // before the object/array `toJSON` probes and the recursion below.

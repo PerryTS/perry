@@ -244,6 +244,8 @@ pub(crate) use cycle_malloc_trim::{
 };
 mod verify;
 mod verify_diag;
+#[cfg(any(test, perry_check_contracts))]
+mod verify_honest;
 use verify_diag::*;
 
 /// #7035: whole-heap from-space scan — verification that does NOT depend on
@@ -1039,6 +1041,7 @@ pub fn gc_init() {
     crate::perf_hooks::init_time_origin();
     #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
+    crate::entry_contracts::require_check_build_if_requested();
     #[cfg(not(perry_hot_diag))]
     crate::hot_diag::refuse_knobs_without_hot_diag();
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2

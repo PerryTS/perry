@@ -706,10 +706,10 @@ fn ic_diag_note(
     crate::hot_diag::ic_note(site, bytes, reason);
 }
 
-#[path = "ic_miss/class_field_define_fast.rs"]
-mod class_field_define_fast;
 #[path = "ic_miss/class_field_chain.rs"]
 mod class_field_chain;
+#[path = "ic_miss/class_field_define_fast.rs"]
+mod class_field_define_fast;
 #[path = "ic_miss/packed_get.rs"]
 mod packed_get;
 pub use packed_get::{js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed};
@@ -756,9 +756,8 @@ pub(super) fn get_field_ic_miss_impl(
     // a real heap object whose address happens to be small isn't misrouted.
     {
         let addr = obj as u64;
-        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
-            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+        if crate::value::addr_class::is_proxy_cell(addr as usize) {
+            let boxed = f64::from_bits(crate::value::POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
                 if diag {
                     ic_diag_note(cache_slot, key, R::Proxy);
