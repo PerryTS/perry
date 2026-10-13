@@ -1,42 +1,12 @@
-//! Per-(class_id, interned-key) property STORE-PLAN cache.
+//! Existing property store verdicts keyed by (receiver ShapeId, interned key).
 //!
-//! `js_object_set_field_by_name` pays a long interception vet on every store
-//! to a class instance (`class_id != 0`): a class-metadata RwLock +
-//! per-level string-hash setter walk, then
-//! `plain_data_write_may_intercept` → `class_instance_set_may_intercept`,
-//! which allocates a Rust `String` for the key and probes the address-keyed
-//! descriptor tables (each probe re-allocating a `(usize, String)` map key)
-//! for every prototype level. Profiled on a fiber-shaped workload this vet is
-//! the dominant per-store cost — and its verdict is a pure function of
-//! (class chain, key) plus per-object bits the caller checks separately.
-//!
-//! This cache memoizes the FAST verdict only: "a store of `key` to an
-//! instance of `class_id` whose per-object flags are clear cannot be
-//! intercepted" — no vtable setter in the chain, no class-prototype
-//! accessor/non-writable descriptor, no `Object.prototype` own-key trap.
-//! Misses simply take today's slow path; a recorded verdict lets the next
-//! store of the same (class, key) skip straight to the shape-transition
-//! cache.
-//!
-//! ## Invalidation
-//! A verdict goes stale only when one of its inputs changes:
-//!   * class registration adds members to a class before any instance of
-//!     it exists (a per-evaluation class's later evaluations stand on their
-//!     own prototype, so their instances' recorded prototype differs), and
-//!     parent linking bumps the epoch below;
-//!   * descriptor installs/clears anywhere (a class prototype object may be
-//!     the target), `setPrototypeOf` recording, `Object.prototype` index
-//!     notes — these call [`prop_plan_epoch_bump`];
-//!   * GC — interned key pointers can move or die across a collection, so
-//!     the epoch is also bumped from the intern-table root scan and the
-//!     dead-owner prune fan-out (both run in every collection flavor).
-//!     Between collections an interned string cannot be freed or relocated,
-//!     so pointer identity holds for the lifetime of an epoch window.
-//!
-//! Per-OBJECT conditions (frozen/sealed/no-extend, own descriptors,
-//! per-instance `setPrototypeOf` override, null-proto) are NOT part of the
-//! verdict — the caller checks header flags plus the ObjectMeta prototype-
-//! override bit before honoring a hit.
+//! A shape names the receiver kind, layout, class facts and actual prototype
+//! edge. A recorded negative interception vet can therefore serve another
+//! eligible receiver of that shape without requiring a synthetic class id.
+//! Own descriptors and immutable/reserved receiver conditions stay at the
+//! callers. Descriptor/prototype/class mutations bump the existing epoch;
+//! every collection also bumps it, preventing moved key or recycled ShapeId
+//! identities from meeting an old verdict. No heap edge is owned here.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -117,27 +87,8 @@ struct PlanEntry {
     key_ptr: usize,
     /// [`PROP_PLAN_EPOCH`] at record time.
     epoch: u64,
-    /// The receiver's recorded `[[Prototype]]` (`ObjectMeta.prototype`, 0
-    /// when its class implies it) the verdict was computed for. A class id
-    /// alone does NOT name the chain: `F.prototype = other` re-points a
-    /// function's prototype without minting a new synthetic class id, so
-    /// instances built before and after carry the same class id and the same
-    /// shape over DIFFERENT chains. Compare-only: an epoch window has no
-    /// collection in it (`PROP_PLAN_EPOCH` is bumped by every one), so the
-    /// address cannot be reused under an entry.
-    proto_bits: u64,
-    /// Receiver class id the verdict was computed for.
-    class_id: u32,
-}
-
-/// The receiver's recorded prototype bits, the chain half of a plan's
-/// identity: `ObjectMeta.prototype`, or 0 with no meta record.
-///
-/// # Safety
-/// `obj` is a live ordinary object.
-#[inline]
-pub(crate) unsafe fn receiver_proto_bits(obj: *const super::ObjectHeader) -> u64 {
-    super::shapes::object_prototype_word(obj)
+    /// Receiver shape whose full interception vet returned negative.
+    shape_id: u32,
 }
 
 // SAFETY: integer fields only; `key_ptr == 0` never matches an interned key,
@@ -148,17 +99,17 @@ const PLAN_CACHE_SIZE: usize = 4096;
 const PLAN_CACHE_MASK: usize = PLAN_CACHE_SIZE - 1;
 
 crate::perry_thread_local! {
-    // Heap-allocate the table (~112KB) — oversized inline TLS overflows the
+    // Heap-allocate the table (~96KB) — oversized inline TLS overflows the
     // ILP32 TLS layout on arm64_32 (same fix as string/intern.rs).
     static STORE_PLAN_CACHE: std::cell::UnsafeCell<Box<[PlanEntry]>> =
         std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(PLAN_CACHE_SIZE));
 }
 
 #[inline(always)]
-fn plan_slot(class_id: u32, key_ptr: usize) -> usize {
+fn plan_slot(shape_id: u32, key_ptr: usize) -> usize {
     // Fibonacci mix of the two identities; low bits of interned pointers are
     // alignment zeros, so fold the middle bits down first.
-    let h = ((key_ptr >> 4) as u64 ^ ((class_id as u64) << 17)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let h = ((key_ptr >> 4) as u64 ^ ((shape_id as u64) << 17)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> 40) as usize & PLAN_CACHE_MASK
 }
 
@@ -167,20 +118,17 @@ fn plan_diag_enabled() -> bool {
     *crate::once_init::get_or_init(&ON, || std::env::var_os("PERRY_PLAN_DIAG").is_some())
 }
 
-/// Does a valid fast-store verdict exist for (class_id, interned key) on a
-/// receiver whose recorded prototype is `proto_bits`
-/// ([`receiver_proto_bits`])?
+/// A valid negative interception verdict for this shape and interned key.
 #[inline]
-pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize, proto_bits: u64) -> bool {
-    if class_id == 0 || key_ptr == 0 {
+pub(crate) fn store_plan_check(shape_id: u32, key_ptr: usize) -> bool {
+    if shape_id == 0 || key_ptr == 0 {
         return false;
     }
-    let slot = plan_slot(class_id, key_ptr);
+    let slot = plan_slot(shape_id, key_ptr);
     let hit = STORE_PLAN_CACHE.with(|c| unsafe {
         let e = (*c.get())[slot];
         e.key_ptr == key_ptr
-            && e.class_id == class_id
-            && e.proto_bits == proto_bits
+            && e.shape_id == shape_id
             && e.epoch == PROP_PLAN_EPOCH.load(Ordering::Relaxed)
     });
     if plan_diag_enabled() {
@@ -200,20 +148,19 @@ pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize, proto_bits: u64) -
     hit
 }
 
-/// Record a fast-store verdict for (class_id, interned key). Caller has just
+/// Record a fast-store verdict for (shape_id, interned key). Caller has just
 /// completed the full interception vet with a negative result.
 #[inline]
-pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize, proto_bits: u64) {
-    if class_id == 0 || key_ptr == 0 {
+pub(crate) fn store_plan_record(shape_id: u32, key_ptr: usize) {
+    if shape_id == 0 || key_ptr == 0 {
         return;
     }
-    let slot = plan_slot(class_id, key_ptr);
+    let slot = plan_slot(shape_id, key_ptr);
     STORE_PLAN_CACHE.with(|c| unsafe {
         (*c.get())[slot] = PlanEntry {
             key_ptr,
             epoch: PROP_PLAN_EPOCH.load(Ordering::Relaxed),
-            proto_bits,
-            class_id,
+            shape_id,
         };
     });
     if plan_diag_enabled() {
@@ -221,8 +168,8 @@ pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize, proto_bits: u64) 
         let r = RECORDS.fetch_add(1, Ordering::Relaxed) + 1;
         if r <= 8 || r % 1_000_000 == 0 {
             eprintln!(
-                "PLAN-DIAG record #{} class={} key={:#x} slot={}",
-                r, class_id, key_ptr, slot
+                "PLAN-DIAG record #{} shape={} key={:#x} slot={}",
+                r, shape_id, key_ptr, slot
             );
         }
     }
@@ -324,10 +271,10 @@ mod tests {
     /// costs one. The caches themselves are thread-local, so nothing a
     /// parallel thread does can turn a MISS assertion into a spurious hit —
     /// only the positive direction needs this.
-    fn store_plan_records_and_hits(class_id: u32, key_ptr: usize) -> bool {
+    fn store_plan_records_and_hits(shape_id: u32, key_ptr: usize) -> bool {
         (0..64).any(|_| {
-            store_plan_record(class_id, key_ptr, 0);
-            store_plan_check(class_id, key_ptr, 0)
+            store_plan_record(shape_id, key_ptr);
+            store_plan_check(shape_id, key_ptr)
         })
     }
 
@@ -335,29 +282,22 @@ mod tests {
     fn record_then_check_hits_and_epoch_bump_invalidates() {
         let key = 0xDEAD_BEE0usize;
         assert!(store_plan_records_and_hits(7, key));
-        // Different class or key misses.
-        assert!(!store_plan_check(8, key, 0));
-        assert!(!store_plan_check(7, key + 16, 0));
+        // Different shape or key misses.
+        assert!(!store_plan_check(8, key));
+        assert!(!store_plan_check(7, key + 16));
         // Epoch bump invalidates.
         prop_plan_epoch_bump();
-        assert!(!store_plan_check(7, key, 0));
+        assert!(!store_plan_check(7, key));
         // Re-record under the new epoch works again.
         assert!(store_plan_records_and_hits(7, key));
     }
 
-    /// A class id does not name a chain: after `F.prototype = other`, old and
-    /// new instances of `F` share their class id over different prototypes,
-    /// so a verdict recorded for one prototype must not serve the other.
     #[test]
-    fn a_verdict_for_one_prototype_does_not_serve_another() {
+    fn a_verdict_for_one_prototype_shape_does_not_serve_another() {
         let key = 0xFACE_0100usize;
-        let (old_proto, new_proto) = (0x7FFD_0000_1234_5000u64, 0x7FFD_0000_1234_6000u64);
-        assert!((0..64).any(|_| {
-            store_plan_record(11, key, old_proto);
-            store_plan_check(11, key, old_proto)
-        }));
-        assert!(!store_plan_check(11, key, new_proto));
-        assert!(!store_plan_check(11, key, 0));
+        assert!(store_plan_records_and_hits(11, key));
+        assert!(!store_plan_check(12, key));
+        assert!(!store_plan_check(0, key));
     }
 
     #[test]
@@ -382,11 +322,11 @@ mod tests {
     }
 
     #[test]
-    fn class_zero_and_null_key_never_cache() {
-        store_plan_record(0, 0x1000, 0);
-        assert!(!store_plan_check(0, 0x1000, 0));
-        store_plan_record(3, 0, 0);
-        assert!(!store_plan_check(3, 0, 0));
+    fn shape_zero_and_null_key_never_cache() {
+        store_plan_record(0, 0x1000);
+        assert!(!store_plan_check(0, 0x1000));
+        store_plan_record(3, 0);
+        assert!(!store_plan_check(3, 0));
     }
 }
 
@@ -403,7 +343,7 @@ mod zeroed_cache_tests {
                 let cache = unsafe { &*c.get() };
                 assert_eq!(cache.len(), PLAN_CACHE_SIZE);
                 for e in cache.iter() {
-                    assert_eq!((e.key_ptr, e.epoch, e.proto_bits, e.class_id), (0, 0, 0, 0));
+                    assert_eq!((e.key_ptr, e.epoch, e.shape_id), (0, 0, 0));
                 }
             });
             READ_PLAN_CACHE.with(|c| {

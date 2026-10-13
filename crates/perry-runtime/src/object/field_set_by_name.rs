@@ -202,14 +202,10 @@ pub extern "C" fn js_object_set_field_by_name(
                     && (*gc_hdr)._reserved & LANE_BLOCKING == 0
                 {
                     let class_id = (*o).class_id;
-                    // #6595: a per-evaluation CLASS OBJECT must never take
-                    // this lane — it skips the #6530
-                    // `mirror_class_object_static_write` hook every in-body
-                    // completion runs, and (template cid, key) plans recorded
-                    // by instances sharing the cid would falsely certify it.
-                    // See the matching gates at the plan record sites.
+                    // Class objects must reach the static-write mirror.
+                    // The receiver ShapeId kind supplies that distinction;
+                    // ordinary function instances need no class identity.
                     if crate::object::object_is_regular(o)
-                        && class_id != 0
                         && class_id != NATIVE_MODULE_CLASS_ID
                         // #9019: reserved-layout iterator receivers must
                         // reach the tail so their floor seed runs before
@@ -220,9 +216,8 @@ pub extern "C" fn js_object_set_field_by_name(
                         // index below the floor.
                         && crate::object::reserved_slot_floor_for_class_id(class_id) == 0
                         && super::prop_plan::store_plan_check(
-                            class_id,
+                            super::shapes::object_shape_stamp(o),
                             key as usize,
-                            super::prop_plan::receiver_proto_bits(o),
                         )
                     {
                         let prev_shape_id = super::shapes::object_shape_stamp(o);

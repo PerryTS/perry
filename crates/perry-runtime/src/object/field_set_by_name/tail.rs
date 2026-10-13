@@ -256,27 +256,13 @@ pub(crate) fn set_field_by_name_object_tail(
         let interned_key_handle = scope.root_string_ptr(interned_key);
         interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
 
-        // Store-plan fast gate (`object::prop_plan`): a recorded verdict means
-        // the full interception vet below (class vtable setter walk, URL-shape
-        // probe, `plain_data_write_may_intercept`) proved a store of this key
-        // to this class cannot be intercepted, and no invalidation (vtable /
-        // descriptor / prototype mutation, GC) happened since. Per-OBJECT
-        // conditions stay outside the verdict: frozen/sealed/own-descriptor
-        // flags are checked below as always, and an instance whose chain
-        // diverges from its class chain (per-instance `setPrototypeOf`
-        // override, null-proto) never records or honors a plan.
-        // Flags that make an object ineligible for class-keyed plans: a
-        // diverging chain (per-instance proto override / null proto).
-        //
-        // Own descriptors used to be a wholesale disqualifier here for a real
-        // reason — an own accessor must dispatch through the short-circuit
-        // below, which a plan hit skips. But that is a per-KEY fact, not a
-        // per-receiver one (#10287). zod puts `_zod` on every schema object,
-        // so the object-level flag denied a plan to every one of them and made
-        // each store re-run the whole interception vet: the chain walk, the
-        // class-registry lookups and the `Object.prototype` probe. The plan is
-        // now denied only for the keys an own descriptor can actually cover,
-        // which `own_descriptors_skip_key` decides exactly.
+        // A shape-keyed store verdict proves that the full interception vet
+        // (class setters, native probes, actual prototype chain) found no
+        // interceptor for this key. Kind and per-key descriptor checks stay
+        // outside the verdict, as do immutable/null-prototype receiver flags.
+        // Own descriptors are per-key: a descriptor on another key does not
+        // disqualify this store, but an accessor on this key must reach the
+        // short-circuit below.
         const PLAN_BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_NULL_PROTO;
         let obj_class_id = (*obj).class_id;
         // #6595: class objects are excluded by their authoritative ShapeId
@@ -285,7 +271,6 @@ pub(crate) fn set_field_by_name_object_tail(
         // completions, and their cid is shared with their instances so a
         // plan keyed on it conflates two different prototype chains.
         let plan_eligible = !key.is_null()
-            && obj_class_id != 0
             && obj_class_id != NATIVE_MODULE_CLASS_ID
             && crate::object::object_is_regular(obj)
             && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0
@@ -298,13 +283,12 @@ pub(crate) fn set_field_by_name_object_tail(
                     f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
                 ));
         // No per-receiver prototype gate: the plan key carries the receiver's
-        // prototype (`receiver_proto_bits`, a fact of its shape), so a
+        // shape, including its actual prototype edge, so a
         // receiver on another chain can only meet another plan.
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(
-                obj_class_id,
+                super::shapes::object_shape_stamp(obj),
                 interned_key as usize,
-                super::prop_plan::receiver_proto_bits(obj),
             );
 
         // A per-evaluation class object carries dynamically installed static
@@ -557,13 +541,12 @@ pub(crate) fn set_field_by_name_object_tail(
                 ))
         {
             // The full interception vet just returned negative for this
-            // (class, key) — the vtable setter walk above found nothing, the
+            // (shape, key) — the vtable setter walk above found nothing, the
             // URL-shape probe fell through, and `plain_data_write_may_intercept`
             // cleared the chain. Record the verdict so the next store skips
             // the vet (`plan_fast` above). Eligibility is re-derived from the
             // freshly read `obj_flags`, not the pre-vet read.
-            let record_plan_eligible = obj_class_id != 0
-                && obj_class_id != NATIVE_MODULE_CLASS_ID
+            let record_plan_eligible = obj_class_id != NATIVE_MODULE_CLASS_ID
                 && crate::object::object_is_regular(obj)
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
                 // `desc_gate_ok` above already proved this key is uncovered on
@@ -571,9 +554,8 @@ pub(crate) fn set_field_by_name_object_tail(
                 && desc_gate_ok;
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(
-                    obj_class_id,
+                    super::shapes::object_shape_stamp(obj),
                     interned_key as usize,
-                    super::prop_plan::receiver_proto_bits(obj),
                 );
             }
             let lane_probe = transition_cache_lookup(prev_shape_id, interned_key).and_then(|hit| {

@@ -280,3 +280,56 @@ fn construct_site_uses_a_spilled_prototype_from_the_current_bag() {
         );
     }
 }
+
+#[test]
+fn classless_function_births_learn_width_from_the_actual_prototype() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let func = compiled_function();
+    unsafe {
+        for _ in 0..8 {
+            let instance = construct(func);
+            assert_eq!((*instance).class_id, 0);
+            assert_eq!(crate::object::object_live_slot_count(instance), 8);
+        }
+        let narrow = construct(func);
+        assert_eq!(crate::object::object_live_slot_count(narrow), 0);
+        for i in 0..12 {
+            let name = format!("function_width_{i}");
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_set_field_by_name(narrow, key, i as f64);
+        }
+        assert!(!(*narrow).meta.is_null() && (*(*narrow).meta).spill != 0);
+        let wide = construct(func);
+        assert_eq!(crate::object::object_live_slot_count(wide), 12);
+        assert_eq!(prototype_of(wide), own_prototype(func));
+        let other = crate::object::js_object_alloc(0, 0);
+        crate::object::js_set_function_prototype(
+            func,
+            crate::value::js_nanbox_pointer(other as i64),
+        );
+        assert_eq!(crate::object::object_live_slot_count(construct(func)), 8);
+    }
+}
+
+#[test]
+fn classless_function_store_records_a_shape_plan() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let instance = construct(compiled_function());
+    let key = crate::string::intern_ascii_literal(b"shape_plan_field");
+    unsafe {
+        let shape = crate::object::shapes::object_shape_stamp(instance);
+        assert_eq!((*instance).class_id, 0);
+        crate::object::js_object_set_field_by_name(instance, key, 7.0);
+        assert!(
+            crate::object::prop_plan::store_plan_check(shape, key as usize),
+            "a full negative vet records the classless predecessor shape"
+        );
+        crate::object::prop_plan::prop_plan_epoch_bump();
+        assert!(!crate::object::prop_plan::store_plan_check(
+            shape,
+            key as usize
+        ));
+    }
+}
