@@ -411,6 +411,7 @@ pub(crate) fn try_lower_instance_method_call(
                     &method_id,
                     args.len(),
                     &claimed,
+                    true,
                 );
                 let value = lookup.value.clone();
                 let any_arg_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
@@ -680,35 +681,6 @@ pub(crate) fn try_lower_instance_method_call(
                 || (can_collapse_virtual
                     && ctx.strings.call_location_for(call_byte_offset).is_some());
 
-            // #9417, same defect as the dynamic-dispatch site above and for the
-            // same reason: the receiver is lowered first (JS evaluation order)
-            // and consumed by the override probe, the guarded direct calls and
-            // every arm of the class-id tower — all of it below the lowering of
-            // the argument expressions, any of which can drive an evacuating
-            // young-gen minor. `build_direct_method_args` additionally allocates
-            // a rest array between the re-read and the call.
-            //
-            // One `RootedGroup` over [receiver, ...args], re-read below the
-            // group. #9480 protects each operand only when a later argument or
-            // an audited post-argument step can collect; `root_reload`
-            // re-derives rooted values after any remaining collection point.
-            // Rest/synthetic bundles, debug bookkeeping, and specialized
-            // guards retain the conservative post-argument window.
-            let mut roots = crate::rooting::open_rooted_group(1 + args.len());
-            let recv_collects =
-                post_args_may_collect || crate::rooting::any_operand_may_collect(ctx, args.iter());
-            let recv_idx = roots.lower(ctx, object, recv_collects)?;
-            let mut arg_idxs: Vec<usize> = Vec::with_capacity(args.len());
-            for (index, a) in args.iter().enumerate() {
-                let collects = post_args_may_collect
-                    || crate::rooting::any_operand_may_collect(ctx, args[index + 1..].iter());
-                arg_idxs.push(roots.lower(ctx, a, collects)?);
-            }
-            let recv_box = roots.reread(ctx, recv_idx)?;
-            let mut fallback_user_args: Vec<String> = Vec::with_capacity(args.len());
-            for &idx in &arg_idxs {
-                fallback_user_args.push(roots.reread(ctx, idx)?);
-            }
             // Keep the maximum declared arity only for selecting safe
             // shape-guarded/typed fast-path arms below. Direct calls no longer
             // share an ABI vector: the fallback and each virtual override are
@@ -751,39 +723,6 @@ pub(crate) fn try_lower_instance_method_call(
                     }
                 }
             }
-            // Collapse a rest-bearing virtual dispatch HERE, before the rest
-            // arrays are materialized below — the method site takes the raw
-            // `fallback_user_args` (its miss does the rest-bundling), so the
-            // bundle would be dead. (The non-rest collapse happens at the vdispatch
-            // site below, where there is no array to skip.)
-            if (fallback_has_rest || override_meta.iter().any(|meta| meta.0))
-                && can_collapse_virtual
-            {
-                let collapsed = crate::lower_call::console_promise::emit_native_method_str_dispatch(
-                    ctx,
-                    property,
-                    call_byte_offset,
-                    &recv_box,
-                    &fallback_user_args,
-                );
-                roots.release(ctx);
-                return Ok(Some(collapsed));
-            }
-            let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let direct_args = build_direct_method_args(
-                ctx,
-                &recv_box,
-                &fallback_user_args,
-                fallback_has_rest,
-                fallback_has_synthetic_arguments,
-                fallback_has_user_rest,
-                fallback_arguments_length_only,
-                fallback_decl_count,
-                &undefined_lit,
-            );
-            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
-
             // Arms for the shape-guarded direct call: every class in
             // `class_name`'s subclass closure, paired with the body `property`
             // resolves to from THAT class. Includes subclasses that do NOT
@@ -868,6 +807,177 @@ pub(crate) fn try_lower_instance_method_call(
                 subclass_arms.clear();
             }
 
+            let typed_method_key = (class_name.clone(), property.to_string());
+            let typed_formal_count = ctx
+                .method_param_counts
+                .get(&typed_method_key)
+                .copied()
+                .unwrap_or(max_explicit_arity);
+            let typed_receiver_info = ctx.classes.get(&class_name).and_then(|class| {
+                let class = *class;
+                class
+                    .methods
+                    .iter()
+                    .find(|method| method.name.as_str() == property)
+                    .and_then(|method| {
+                        crate::codegen::typed_f64_receiver_method_info(class, method, ctx.classes)
+                    })
+            });
+            // Charter step 5, P4: the clone reads its receiver fields as
+            // bare doubles behind the exact (class id, ShapeId) compare,
+            // which pins lanes, not values. So every field it reads must
+            // be an `F64` lane of the class's birth rep; an `Any` lane can
+            // hold any value under the same ShapeId (#10937).
+            let typed_receiver_direct_name = if typed_receiver_info.as_ref().is_some_and(|info| {
+                info.fields.iter().all(|field| {
+                    crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+                        ctx,
+                        &class_name,
+                        field.index,
+                    )
+                })
+            }) && ctx
+                .methods
+                .get(&typed_method_key)
+                .is_some_and(|name| name == &fallback_fn)
+                && args.len() == typed_formal_count
+                && args.iter().all(|arg| {
+                    crate::codegen::typed_arg_is_guard_candidate(
+                        ctx,
+                        crate::codegen::TypedParamRep::F64,
+                        arg,
+                    )
+                }) {
+                Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
+            } else {
+                None
+            };
+            let shape_only_guard = typed_receiver_direct_name.is_none()
+                && !class_chain_has_field_named(ctx, &class_name, property);
+            let certified_static = shape_only_guard
+                && !fallback_fn.starts_with("perry_static_")
+                && !fallback_has_rest
+                && !fallback_has_synthetic_arguments
+                && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+                && ctx.ptr_shape_receiver_fact(object).is_none();
+            let static_split =
+                certified_static && crate::expr::method_site::args_may_observe_lookup(ctx, args);
+
+            // #9417, same defect as the dynamic-dispatch site above and for the
+            // same reason: the receiver is lowered first (JS evaluation order)
+            // and consumed by the override probe, the guarded direct calls and
+            // every arm of the class-id tower — all of it below the lowering of
+            // the argument expressions, any of which can drive an evacuating
+            // young-gen minor. `build_direct_method_args` additionally allocates
+            // a rest array between the re-read and the call.
+            //
+            // One `RootedGroup` over [receiver, ...args], re-read below the
+            // group. #9480 protects each operand only when a later argument or
+            // an audited post-argument step can collect; `root_reload`
+            // re-derives rooted values after any remaining collection point.
+            // Rest/synthetic bundles, debug bookkeeping, and specialized
+            // guards retain the conservative post-argument window.
+            let mut roots =
+                crate::rooting::open_rooted_group(1 + args.len() + usize::from(static_split));
+            let recv_collects = static_split
+                || post_args_may_collect
+                || crate::rooting::any_operand_may_collect(ctx, args.iter());
+            let recv_idx = roots.lower(ctx, object, recv_collects)?;
+            let selection = if certified_static {
+                let recv = roots.reread(ctx, recv_idx)?;
+                let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(
+                    ctx, &recv,
+                );
+                let mut candidates = vec![(
+                    *ctx.class_ids.get(&class_name).unwrap_or(&0),
+                    fallback_fn.clone(),
+                )];
+                candidates.extend(
+                    subclass_arms
+                        .iter()
+                        .map(|a| (a.class_id, a.target_fn.clone())),
+                );
+                let key = ctx.strings.intern(property);
+                let dispatch = ctx.strings.static_dispatch_global(key);
+                let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
+                let selected = cert::select_with_word(
+                    ctx,
+                    &recv,
+                    &method_id,
+                    &candidates,
+                    &vec![true; candidates.len()],
+                    &word,
+                );
+                let lookup = if static_split {
+                    let claimed = ctx.block().icmp_ne(I32, &selected, "0");
+                    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+                    let lookup = crate::expr::method_site::emit_method_site_lookup_unless(
+                        ctx,
+                        &recv,
+                        &method_id,
+                        args.len(),
+                        &claimed,
+                        false,
+                    );
+                    let value = lookup.value.clone();
+                    let value_root = roots.adopt_emitted(
+                        ctx,
+                        crate::rooting::Repr::Boxed,
+                        &value,
+                        crate::rooting::any_operand_may_collect(ctx, args.iter()),
+                    );
+                    Some((lookup, value_root))
+                } else {
+                    None
+                };
+                Some((selected, word, lookup))
+            } else {
+                None
+            };
+            let mut arg_idxs: Vec<usize> = Vec::with_capacity(args.len());
+            for (index, a) in args.iter().enumerate() {
+                let collects = post_args_may_collect
+                    || crate::rooting::any_operand_may_collect(ctx, args[index + 1..].iter());
+                arg_idxs.push(roots.lower(ctx, a, collects)?);
+            }
+            let recv_box = roots.reread(ctx, recv_idx)?;
+            let mut fallback_user_args: Vec<String> = Vec::with_capacity(args.len());
+            for &idx in &arg_idxs {
+                fallback_user_args.push(roots.reread(ctx, idx)?);
+            }
+            // Collapse a rest-bearing virtual dispatch HERE, before the rest
+            // arrays are materialized below — the method site takes the raw
+            // `fallback_user_args` (its miss does the rest-bundling), so the
+            // bundle would be dead. (The non-rest collapse happens at the vdispatch
+            // site below, where there is no array to skip.)
+            if (fallback_has_rest || override_meta.iter().any(|meta| meta.0))
+                && can_collapse_virtual
+            {
+                let collapsed = crate::lower_call::console_promise::emit_native_method_str_dispatch(
+                    ctx,
+                    property,
+                    call_byte_offset,
+                    &recv_box,
+                    &fallback_user_args,
+                );
+                roots.release(ctx);
+                return Ok(Some(collapsed));
+            }
+            let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let direct_args = build_direct_method_args(
+                ctx,
+                &recv_box,
+                &fallback_user_args,
+                fallback_has_rest,
+                fallback_has_synthetic_arguments,
+                fallback_has_user_rest,
+                fallback_arguments_length_only,
+                fallback_decl_count,
+                &undefined_lit,
+            );
+            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+
             // A synthesized `arguments` slot is rest-shaped in the HIR, but
             // it does not prevent a same-class guarded direct call.  The
             // concrete ABI vector above already contains the correctly marked
@@ -880,59 +990,6 @@ pub(crate) fn try_lower_instance_method_call(
             // separate ABI problem.
             let synth_arguments_only = fallback_has_synthetic_arguments && !fallback_has_user_rest;
             if !fallback_has_rest || synth_arguments_only {
-                let typed_method_key = (class_name.clone(), property.to_string());
-                let typed_formal_count = ctx
-                    .method_param_counts
-                    .get(&typed_method_key)
-                    .copied()
-                    .unwrap_or(max_explicit_arity);
-                let typed_receiver_info = ctx.classes.get(&class_name).and_then(|class| {
-                    let class = *class;
-                    class
-                        .methods
-                        .iter()
-                        .find(|method| method.name.as_str() == property)
-                        .and_then(|method| {
-                            crate::codegen::typed_f64_receiver_method_info(
-                                class,
-                                method,
-                                ctx.classes,
-                            )
-                        })
-                });
-                // Charter step 5, P4: the clone reads its receiver fields as
-                // bare doubles behind the exact (class id, ShapeId) compare,
-                // which pins lanes, not values. So every field it reads must
-                // be an `F64` lane of the class's birth rep; an `Any` lane can
-                // hold any value under the same ShapeId (#10937).
-                let typed_receiver_direct_name =
-                    if typed_receiver_info.as_ref().is_some_and(|info| {
-                        info.fields.iter().all(|field| {
-                            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
-                                ctx,
-                                &class_name,
-                                field.index,
-                            )
-                        })
-                    }) && ctx
-                        .methods
-                        .get(&typed_method_key)
-                        .is_some_and(|name| name == &fallback_fn)
-                        && args.len() == typed_formal_count
-                        && args.iter().all(|arg| {
-                            crate::codegen::typed_arg_is_guard_candidate(
-                                ctx,
-                                crate::codegen::TypedParamRep::F64,
-                                arg,
-                            )
-                        })
-                    {
-                        Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
-                    } else {
-                        None
-                    };
-                let shape_only_guard = typed_receiver_direct_name.is_none()
-                    && !class_chain_has_field_named(ctx, &class_name, property);
                 let typed_direct_name = if ctx.typed_f64_methods.contains(&typed_method_key)
                     && ctx
                         .methods
@@ -1334,6 +1391,21 @@ pub(crate) fn try_lower_instance_method_call(
                 }
                 let arguments_length_direct_fn = fallback_arguments_length_only
                     .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
+                let selected_value = selection
+                    .as_ref()
+                    .and_then(|(_, _, lookup)| lookup.as_ref())
+                    .map(|(_, root)| roots.reread_emitted(ctx, *root));
+                let certificate = selection.as_ref().map(|(selected, word, lookup)| {
+                    crate::lower_call::method_override::CertifiedMethodSelection {
+                        selected,
+                        receiver_word: (!static_split).then_some(word.as_str()),
+                        lookup: lookup
+                            .as_ref()
+                            .zip(selected_value.as_ref())
+                            .map(|((lookup, _), value)| (lookup, value.as_str())),
+                        call_byte_offset,
+                    }
+                });
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
@@ -1376,6 +1448,7 @@ pub(crate) fn try_lower_instance_method_call(
                     },
                     shape_only_guard,
                     &subclass_arms,
+                    certificate.as_ref(),
                 ) {
                     roots.release(ctx);
                     return Ok(Some(guarded));

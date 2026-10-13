@@ -47,8 +47,21 @@ pub(super) fn select(
     implementors: &[(u32, String)],
     cased: &[bool],
 ) -> String {
-    use crate::runtime_abi as abi;
     let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(ctx, recv);
+    select_with_word(ctx, recv, method_id, implementors, cased, &word)
+}
+
+/// Consume an already admitted receiver word. Static and dynamic sites share
+/// this record, fact emitter and single miss entry.
+pub(super) fn select_with_word(
+    ctx: &mut FnCtx<'_>,
+    recv: &str,
+    method_id: &str,
+    implementors: &[(u32, String)],
+    cased: &[bool],
+    word: &str,
+) -> String {
+    use crate::runtime_abi as abi;
     let cid = ctx.block().trunc(I64, &word, I32);
     let no = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
@@ -132,7 +145,7 @@ pub(super) fn select(
     let receiver_word = if sabotage().as_deref() == Some("word") {
         proof_word.clone()
     } else {
-        word.clone()
+        word.to_string()
     };
     let holds = emit_pristine_receiver(
         ctx.block(),

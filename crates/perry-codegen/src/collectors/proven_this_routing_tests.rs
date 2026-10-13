@@ -1119,7 +1119,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
 }
 
 /// The single-pair shape-only arm is small enough to inline at the call site.
-/// Pin the complete safety gate: compare the live holder ShapeId, accept
+/// Pin the shared certificate and canonical layout gate; accept
 /// both the boxed-pointer and
 /// internal raw-pointer ABIs, reject addresses outside the target heap range
 /// before dereference, reject own descriptors, then compare the exact
@@ -1129,8 +1129,10 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
     let ir = emit_static(&guarded_site_module(), false);
     let probe = function_body(&ir, "__probe(");
     assert!(
-        probe.contains("holder.shape") && probe.contains("icmp eq i32"),
-        "the live holder P must be compared before the direct arm:\n{probe}"
+        probe.contains("mcert.way")
+            && probe.contains("@PERRY_PROTO_VALIDITY")
+            && !probe.contains("holder."),
+        "the saved Shape certificate must replace the live holder walk:\n{probe}"
     );
     assert!(
         !ir.contains("PERRY_CLASS_PROTOTYPE_FAST_GUARDS"),
@@ -1150,14 +1152,14 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
     let heap_floor = crate::target_layout::heap_addr_lower_bound_inclusive(&target);
     let heap_ceiling = crate::target_layout::heap_addr_upper_bound_exclusive(&target);
     assert!(
-        probe.contains("icmp uge i64")
+        probe.contains("sub i64")
             && probe.contains(&format!(", {heap_floor}"))
             && probe.contains("icmp ult i64")
-            && probe.contains(&format!(", {heap_ceiling}")),
+            && probe.contains(&format!(", {}", heap_ceiling - heap_floor)),
         "the dereference gate must reject candidates outside the target heap range:\n{probe}"
     );
     assert!(
-        probe.contains("method_direct.inline_deref")
+        probe.contains("method_probe.deref")
             && probe.contains("getelementptr i8, ptr")
             && probe.contains("i64 -8")
             && probe.contains("and i32")
@@ -1170,11 +1172,9 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             && probe.contains(", 32")
             && probe.contains("or i64")
             && probe.contains("icmp eq i64")
-            && probe.contains("add i32")
-            && probe.contains(", -2147483648")
-            && probe.contains("icmp ult i32")
-            && probe.contains(", 1073741824"),
-        "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact class/ShapeId pair, and ShapeId domain:\n{probe}"
+            && probe.contains("method_direct.layout")
+            && probe.contains("mcert.selected"),
+        "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact canonical class/ShapeId pair and selected body:\n{probe}"
     );
 }
 
@@ -1750,7 +1750,8 @@ fn polymorphic_array_site_module() -> Module {
 fn class_array_dispatch_consumes_own_subclass_shape_without_a_second_tower() {
     let ir = emit_static(&polymorphic_array_site_module(), false);
     let caller = function_body(&ir, "__probe(");
-    assert!(caller.contains("method_direct.subtest0") && caller.contains("holder.shape"));
+    assert!(caller.contains("method_direct.layout") && caller.contains("mcert.hit"));
+    assert!(caller.contains("@PERRY_PROTO_VALIDITY") && !caller.contains("holder."));
     assert!(!caller.contains("idispatch.") && !caller.contains("msite."));
     let subclass = blocks(&caller)
         .into_iter()
@@ -1773,7 +1774,8 @@ fn class_array_dispatch_consumes_own_subclass_shape_without_a_second_tower() {
         .iter()
         .any(|line| line.contains("__Counter__bump(")));
     assert!(!inherited.1.iter().any(|line| line.contains("$pshape(")));
-    assert!(caller.contains("@js_native_call_method_by_id_learn("));
+    assert!(caller.contains("@js_native_call_method_by_id("));
+    assert!(!caller.contains("@js_native_call_method_by_id_learn("));
 }
 
 #[test]
@@ -1782,9 +1784,9 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
     let caller = function_body(&ir, "__probe(");
     let tests: Vec<_> = blocks(&caller)
         .into_iter()
-        .filter(|(label, _)| label.starts_with("method_direct.subtest"))
+        .filter(|(label, _)| label.starts_with("method_direct.layout."))
         .collect();
-    assert_eq!(tests.len(), 2);
+    assert_eq!(tests.len(), 3);
     for (_, body) in tests {
         assert!(body.iter().any(|l| l.contains("icmp eq i64")));
         assert!(!body.iter().any(|l| l.contains("icmp eq i32")));

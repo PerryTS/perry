@@ -862,6 +862,14 @@ fn class_chain_may_declare_method_field(ctx: &FnCtx<'_>, class_name: &str, prope
 /// has no own-property method replacement, and still resolves the method name
 /// to the direct function pointer in the runtime vtable. Failures branch to the
 /// existing dynamic method dispatcher and record a fallback once.
+pub(super) struct CertifiedMethodSelection<'a> {
+    pub selected: &'a str,
+    /// Reuse the lookup word only across order-free argument evaluation.
+    pub receiver_word: Option<&'a str>,
+    pub lookup: Option<(&'a crate::expr::method_site::SiteLookup, &'a str)>,
+    pub call_byte_offset: u32,
+}
+
 pub(super) fn emit_guarded_direct_method_call(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
@@ -880,6 +888,7 @@ pub(super) fn emit_guarded_direct_method_call(
     typed_string_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     shape_only_guard: bool,
     subclass_arms: &[SubclassDispatchArm],
+    certificate: Option<&CertifiedMethodSelection<'_>>,
 ) -> Option<String> {
     // `class C { m = fn; m() {} }` and an inherited field with the same name
     // both require ordinary own-property lookup. Falling back here reaches
@@ -899,25 +908,15 @@ pub(super) fn emit_guarded_direct_method_call(
     // multi-class site would feed it a stream of "different class" observations
     // and it would (correctly) mark the site polymorphic. That form keeps its
     // single-arm shape.
-    let subclass_arms: &[SubclassDispatchArm] = if shape_only_guard { subclass_arms } else { &[] };
+    let subclass_arms: &[SubclassDispatchArm] = if shape_only_guard && certificate.is_some() {
+        subclass_arms
+    } else {
+        &[]
+    };
 
-    // Representation-selection Phase 5a: the proven-`this` clone for this
-    // (class, method), when the emission loop produced one.
-    //
-    // Computed ONCE here rather than per-arm because the justification is the
-    // same for every block this helper emits below: they are all dominated by
-    // the `js_method_direct_shape_guard` /
-    // `js_typed_feedback_method_direct_call_guard` branch, which matched the
-    // exact class id AND the keys token. A `pshape_methods` hit additionally
-    // proves `receiver_class_name` DECLARES `property` (locally by analysis or
-    // across modules by a producer-authored capability), so the clone's `this`
-    // is exactly the class it was compiled for and can never be a subclass
-    // instance.
-    //
-    // The `perry_static_` exclusion is carried forward from the guard-free
-    // site (the #1787 static-receiver bug): those targets need
-    // `js_class_static_method_call`, not a plain `call double`, and no
-    // proven-`this` clone is ever emitted for them.
+    // A certificate selects method identity; the exact canonical word
+    // separately licenses the existing declaring-class layout clone.
+    // Static methods use the class operation and have no such clone.
     let pshape_fn: Option<String> = (direct_call_fn.is_none()
         && !direct_fn.starts_with("perry_static_")
         && ctx
@@ -973,12 +972,6 @@ pub(super) fn emit_guarded_direct_method_call(
 
     let guard_idx = ctx.new_block("method_direct.guard");
     let fast_idx = ctx.new_block("method_direct.fast");
-    // One test block and one case block per subclass arm. The declared class's
-    // own test lives in the guard block, so arm 0's test block is the guard's
-    // false edge.
-    let sub_test_idxs: Vec<usize> = (0..subclass_arms.len())
-        .map(|i| ctx.new_block(&format!("method_direct.subtest{i}")))
-        .collect();
     let sub_case_idxs: Vec<usize> = (0..subclass_arms.len())
         .map(|i| ctx.new_block(&format!("method_direct.sub{i}")))
         .collect();
@@ -988,57 +981,29 @@ pub(super) fn emit_guarded_direct_method_call(
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let sub_test_labels: Vec<String> = sub_test_idxs.iter().map(|&i| ctx.block_label(i)).collect();
     let sub_case_labels: Vec<String> = sub_case_idxs.iter().map(|&i| ctx.block_label(i)).collect();
     ctx.block().br(&guard_label);
 
     ctx.current_block = guard_idx;
-    // Multi-arm form: ONE probe resolves the receiver's class id and keys
-    // token (every precondition `js_method_direct_shape_guard` checks except
-    // the comparison itself), then an inline compare chain picks the arm. A
-    // shape-only single-arm site emits the equivalent guard inline; other
-    // single-arm sites retain the runtime helper.
+    // The certificate chooses the body; the canonical word admits its layout.
     let multi_arm = !subclass_arms.is_empty();
     let inline_single_arm = shape_only_guard && !multi_arm;
-    // #9105's dispensation, applied to METHOD sites: normal builds do not
-    // collect typed feedback, so the runtime guard's observation half is
-    // inert — yet every monomorphic hit still paid its full contract check
-    // (an RwLock read plus TWO SipHash HashMap probes in
-    // `vtable_method_matches`, ~180-390 ns/call on a typed-param receiver).
-    // Decide the monomorphic case with the SAME inline probe the shape-only
-    // sites emit, with the same complete holder proof, and keep the
-    // out-of-line guard (which records the observation
-    // and handles forwarding/exotic receivers) as the probe-MISS edge, so
-    // nothing is lost. Emission-enabled builds keep the guard first so the
-    // feedback stream still sees every call.
+    // Feedback builds retain their observation guard.
     let probe_before_runtime_guard = !shape_only_guard
         && !multi_arm
         && !crate::expr::typed_feedback_emission_enabled()
         && method_inline_probe_enabled();
-    // Every site whose guard is emitted inline also compares the site's
-    // learned word: a receiver of the DECLARED class whose exact pair is not
-    // the birth pair (a field added on one constructor path, a private brand,
-    // a native base's own method surface) is proved once by the runtime and
-    // then called directly. The learned arm calls the declared class's
-    // ordinary body, never a clone that assumes the birth layout; a multi-arm
-    // site compares it after every subclass arm.
-    //
-    // When the declared-class arm is an argument-typed dispatch (typed f64,
-    // i32, i1 or string parameters) and no proven-`this` clone is in play,
-    // that arm assumes nothing about the receiver: it guards only the
-    // arguments, then calls the parameter-typed clone or the internal generic
-    // body. The public wrapper is exactly that dispatch behind one more call,
-    // and the vtable reaches it for every receiver of the class. So the learned
-    // arm joins the declared-class arm instead of re-entering the method
-    // through its public wrapper.
+    // Legacy feedback sites keep their learned arm. Certified sites use
+    // only MethodCertSite and never allocate this separate memo.
     let learned_joins_fast_arm = typed_f64_receiver_direct_fn.is_none()
         && pshape_fn.is_none()
         && (typed_direct_fn.is_some()
             || typed_i32_direct_fn.is_some()
             || typed_i1_direct_fn.is_some()
             || typed_string_direct_fn.is_some());
-    let learned_site: Option<(String, usize)> =
-        (inline_single_arm || probe_before_runtime_guard || multi_arm).then(|| {
+    let learned_site: Option<(String, usize)> = (certificate.is_none()
+        && (inline_single_arm || probe_before_runtime_guard || multi_arm))
+        .then(|| {
             let word = emit_direct_method_site_word_with_memo(ctx);
             (word, ctx.new_block("method_direct.learned"))
         });
@@ -1047,86 +1012,76 @@ pub(super) fn emit_guarded_direct_method_call(
         .as_ref()
         .zip(learned_label.as_ref())
         .map(|((word, _), label)| (word.as_str(), label.as_str()));
-    let holder_ok = if multi_arm {
+    let mut layout_misses = Vec::new();
+    let holder_ok = if multi_arm || certificate.is_some() {
         "true".to_string()
     } else {
         super::holder_shape_guard::method_guard(ctx, receiver_class_name, property)
     };
-    if multi_arm {
-        let receiver_word = emit_inline_direct_method_word_probe(ctx, recv_box);
-        let cid = ctx.block().trunc(I64, &receiver_word, I32);
-        let mut holder_candidates = vec![(expected_class_id, receiver_class_name.to_string())];
-        holder_candidates.extend(subclass_arms.iter().filter_map(|arm| {
-            ctx.class_ids
-                .iter()
-                .find(|(_, id)| **id == arm.class_id)
-                .map(|(name, _)| (arm.class_id, name.clone()))
+    if let Some(cert) = certificate {
+        // Method identity was selected before the arguments. The exact
+        // canonical word admits the existing layout clone after them.
+        let word = cert
+            .receiver_word
+            .map(str::to_string)
+            .unwrap_or_else(|| emit_inline_direct_method_word_probe(ctx, recv_box));
+        let mut targets = vec![(
+            expected_class_id_str.clone(),
+            expected_shape_id.clone(),
+            fast_label.clone(),
+            direct_fn.to_string(),
+        )];
+        targets.extend(subclass_arms.iter().enumerate().map(|(i, a)| {
+            (
+                a.class_id.to_string(),
+                subclass_shape_ids[i].clone(),
+                sub_case_labels[i].clone(),
+                a.target_fn.clone(),
+            )
         }));
-        let cid = super::holder_shape_guard::gate_class(ctx, &cid, property, &holder_candidates);
-        let holder_ok = ctx.block().icmp_ne(I32, &cid, "0");
-        let receiver_word = ctx.block().select(I1, &holder_ok, I64, &receiver_word, "0");
-        {
-            let next = sub_test_labels[0].clone();
+        let tests: Vec<_> = (0..targets.len())
+            .map(|_| ctx.new_block("method_direct.layout"))
+            .collect();
+        let mut switch = format!("switch i32 {}, label %{fallback_label} [", cert.selected);
+        for (i, &test) in tests.iter().enumerate() {
+            switch.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(test)));
+        }
+        switch.push_str(" ]");
+        ctx.block().emit_raw(switch);
+        ctx.block().mark_terminated();
+        for (i, (cid, shape, fast, public)) in targets.iter().enumerate() {
+            ctx.current_block = tests[i];
+            let ordinary = ctx.new_block("method_direct.layout_miss");
+            let ordinary_l = ctx.block_label(ordinary);
             let blk = ctx.block();
-            let high = blk.zext(I32, &expected_shape_id, I64);
+            let high = blk.zext(I32, shape, I64);
             let high = blk.shl(I64, &high, "32");
-            let expected_word = blk.or(I64, &high, &expected_class_id_str);
+            let expected = blk.or(I64, &high, cid);
             let pass = crate::typed_shape::emit_compatible_class_shape_eq(
                 blk,
-                &receiver_word,
-                &expected_class_id_str,
-                &expected_shape_id,
-                &expected_word,
+                &word,
+                cid,
+                shape,
+                &expected,
                 &[],
             );
-            blk.cond_br(&pass, &fast_label, &next);
-        }
-        // The probe's `(0, 0)` decline never equals the word: it starts
-        // all-ones and the runtime only stores real receiver words, whose
-        // class id and ShapeId are both non-zero.
-        let multi_learned_idx = learned_site
-            .as_ref()
-            .map(|_| ctx.new_block("method_direct.learned_check"));
-        let after_arms = multi_learned_idx
-            .map(|idx| ctx.block_label(idx))
-            .unwrap_or_else(|| fallback_label.clone());
-        for (i, arm) in subclass_arms.iter().enumerate() {
-            ctx.current_block = sub_test_idxs[i];
-            let next = sub_test_labels
-                .get(i + 1)
-                .cloned()
-                .unwrap_or_else(|| after_arms.clone());
-            let case_label = sub_case_labels[i].clone();
-            let class_id_str = arm.class_id.to_string();
-            let arm_shape_id = subclass_shape_ids[i].clone();
-            let blk = ctx.block();
-            let high = blk.zext(I32, &arm_shape_id, I64);
-            let high = blk.shl(I64, &high, "32");
-            let expected_word = blk.or(I64, &high, &class_id_str);
-            let pass = crate::typed_shape::emit_compatible_class_shape_eq(
-                blk,
-                &receiver_word,
-                &class_id_str,
-                &arm_shape_id,
-                &expected_word,
-                &[],
-            );
-            blk.cond_br(&pass, &case_label, &next);
-        }
-        if let (Some(idx), Some((word, _)), Some(label)) = (
-            multi_learned_idx,
-            learned_site.as_ref(),
-            learned_label.as_ref(),
-        ) {
-            ctx.current_block = idx;
-            let blk = ctx.block();
-            let learned = blk.load_atomic_monotonic(I64, word, 8);
-            let hit = blk.icmp_eq(I64, &receiver_word, &learned);
-            blk.cond_br(&hit, label, &fallback_label);
+            blk.cond_br(&pass, fast, &ordinary_l);
+            ctx.current_block = ordinary;
+            if i == 0 && learned_joins_fast_arm {
+                // This existing argument-only clone assumes no receiver layout.
+                ctx.block().br(&fast_label);
+                continue;
+            }
+            // Layout failure cannot re-read the method after arguments.
+            let value = ctx.block().call(DOUBLE, public, direct_arg_slices);
+            let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
+            let end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            layout_misses.push((value, truthy, end));
         }
         ctx.current_block = guard_idx;
     }
-    if inline_single_arm {
+    if inline_single_arm && certificate.is_none() {
         emit_inline_direct_method_shape_guard(
             ctx,
             recv_box,
@@ -1155,7 +1110,7 @@ pub(super) fn emit_guarded_direct_method_call(
         );
         ctx.current_block = runtime_guard_idx;
     }
-    let guard_ok = if multi_arm || inline_single_arm {
+    let guard_ok = if certificate.is_some() || multi_arm || inline_single_arm {
         // The chain above already terminated the guard block and every test
         // block, or the inline single-arm guard terminated both its pointer
         // gate and header block; `fast_idx` / `fallback_idx` are entered from
@@ -1189,7 +1144,7 @@ pub(super) fn emit_guarded_direct_method_call(
             ],
         )
     };
-    if !multi_arm && !inline_single_arm {
+    if certificate.is_none() && !multi_arm && !inline_single_arm {
         let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
         let guard_pass = ctx.block().and(I1, &guard_pass, &holder_ok);
         ctx.block()
@@ -1924,43 +1879,68 @@ pub(super) fn emit_guarded_direct_method_call(
         );
     }
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-    let fallback_value = match learned_site.as_ref() {
-        Some((word, _)) => {
-            // The learned word is consulted only behind the holder shape
-            // proof. After a holder changes, nothing the runtime could learn
-            // would be read: the miss edge then
-            // passes the site's address tagged with bit 0, and the runtime
-            // learns nothing. Either way the word is followed by the site's
-            // chain memo slot, from which a receiver the arms decline repeats
-            // its by-name answer instead of walking the prototype chain.
-            let prototype_ok =
-                super::holder_shape_guard::method_guard(ctx, receiver_class_name, property);
-            let blk = ctx.block();
-            let no_learn = blk.gep(I8, word, &[(I64, "1")]);
-            let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, &no_learn);
-            ctx.block().call(
+    let fallback_value = if let Some(cert) = certificate {
+        match cert.lookup {
+            Some((lookup, value)) => super::console_promise::emit_split_call_half(
+                ctx,
+                lookup,
+                recv_box,
+                value,
+                fallback_user_args,
+                property,
+                cert.call_byte_offset,
+                &method_id,
+            ),
+            None => ctx.block().call(
                 DOUBLE,
-                "js_native_call_method_by_id_learn",
+                "js_native_call_method_by_id",
                 &[
                     (DOUBLE, recv_box),
                     (I64, &method_id),
                     (crate::types::PTR, &args_ptr),
                     (I64, &args_len),
-                    (crate::types::PTR, &site),
-                    (I32, &expected_class_id_str),
                 ],
-            )
+            ),
         }
-        None => ctx.block().call(
-            DOUBLE,
-            "js_native_call_method_by_id",
-            &[
-                (DOUBLE, recv_box),
-                (I64, &method_id),
-                (crate::types::PTR, &args_ptr),
-                (I64, &args_len),
-            ],
-        ),
+    } else {
+        match learned_site.as_ref() {
+            Some((word, _)) => {
+                // The learned word is consulted only behind the holder shape
+                // proof. After a holder changes, nothing the runtime could learn
+                // would be read: the miss edge then
+                // passes the site's address tagged with bit 0, and the runtime
+                // learns nothing. Either way the word is followed by the site's
+                // chain memo slot, from which a receiver the arms decline repeats
+                // its by-name answer instead of walking the prototype chain.
+                let prototype_ok =
+                    super::holder_shape_guard::method_guard(ctx, receiver_class_name, property);
+                let blk = ctx.block();
+                let no_learn = blk.gep(I8, word, &[(I64, "1")]);
+                let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, &no_learn);
+                ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method_by_id_learn",
+                    &[
+                        (DOUBLE, recv_box),
+                        (I64, &method_id),
+                        (crate::types::PTR, &args_ptr),
+                        (I64, &args_len),
+                        (crate::types::PTR, &site),
+                        (I32, &expected_class_id_str),
+                    ],
+                )
+            }
+            None => ctx.block().call(
+                DOUBLE,
+                "js_native_call_method_by_id",
+                &[
+                    (DOUBLE, recv_box),
+                    (I64, &method_id),
+                    (crate::types::PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ),
+        }
     };
     let fallback_truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &fallback_value));
     let after_fallback = ctx.block().label.clone();
@@ -1976,6 +1956,9 @@ pub(super) fn emit_guarded_direct_method_call(
     }
     if let Some((value, _, label)) = learned_value.as_ref() {
         phi_inputs.push((value.as_str(), label.as_str()));
+    }
+    for (value, _, end) in &layout_misses {
+        phi_inputs.push((value.as_str(), end.as_str()));
     }
     phi_inputs.push((fallback_value.as_str(), after_fallback.as_str()));
     let boxed = ctx.block().phi(DOUBLE, &phi_inputs);
@@ -2004,6 +1987,12 @@ pub(super) fn emit_guarded_direct_method_call(
                 .expect("truthy mode constructs a fallback truthiness value"),
             after_fallback.as_str(),
         ));
+        for (_, truthy, end) in &layout_misses {
+            truthy_inputs.push((
+                truthy.as_deref().expect("layout miss truthiness"),
+                end.as_str(),
+            ));
+        }
         let truthy = ctx.block().phi(I1, &truthy_inputs);
         ctx.pending_truthy_call_result = Some((boxed.clone(), truthy));
     }

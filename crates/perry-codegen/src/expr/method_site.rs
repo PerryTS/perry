@@ -187,8 +187,8 @@ pub(crate) fn emit_method_site(
     // Deferring multiple argument stores increases register preservation
     // and caller text even though the miss call itself gets smaller.
     let register_miss = lowered_args.len() <= 1 && lanes.is_empty();
-    let shared_buffer = (!register_miss)
-        .then(|| crate::lower_call::emit_method_args_buffer(ctx, lowered_args));
+    let shared_buffer =
+        (!register_miss).then(|| crate::lower_call::emit_method_args_buffer(ctx, lowered_args));
     let abi_word = crate::runtime_abi::METHOD_SITE_WORD_OFFSET.to_string();
     let abi_slot = crate::runtime_abi::METHOD_SITE_SLOT_OFFSET.to_string();
     // An entry memoizes a body as its `JsFunctionInfo` (the identity a
@@ -1054,6 +1054,7 @@ pub(crate) fn emit_method_site_lookup_unless(
     method_id: &str,
     argc: usize,
     skip: &str,
+    memoize: bool,
 ) -> SiteLookup {
     let lookup_idx = ctx.new_block("msite.lookup");
     let join_idx = ctx.new_block("msite.lookup_join");
@@ -1062,7 +1063,29 @@ pub(crate) fn emit_method_site_lookup_unless(
     let skip_end = ctx.block().label.clone();
     ctx.block().cond_br(skip, &join_l, &lookup_l);
     ctx.current_block = lookup_idx;
-    let looked = emit_method_site_lookup(ctx, recv_box, method_id, argc, &[]);
+    let looked = if memoize {
+        emit_method_site_lookup(ctx, recv_box, method_id, argc, &[])
+    } else {
+        // A certified static site already owns its one MethodCertSite.
+        // Its generic read uses the existing no-slot operation, rather than
+        // allocating a second selector record beside the certificate.
+        let value = ctx.block().call(
+            DOUBLE,
+            "js_method_site_prepare",
+            &[
+                (PTR, "null"),
+                (DOUBLE, recv_box),
+                (I64, method_id),
+                (I64, &argc.to_string()),
+            ],
+        );
+        SiteLookup {
+            value,
+            code: "0".into(),
+            slot_ref: "null".into(),
+            lanes: Vec::new(),
+        }
+    };
     let looked_end = ctx.block().label.clone();
     ctx.block().br(&join_l);
     ctx.current_block = join_idx;
@@ -1292,7 +1315,11 @@ mod tests {
     fn argument_list_method_sites_reuse_one_argument_buffer() {
         for arity in [2, 3, 4] {
             let ir = function_native_argument_method_site_ir(arity);
-            assert_eq!(ir.matches(&format!("alloca [{arity} x double]")).count(), 1, "{ir}");
+            assert_eq!(
+                ir.matches(&format!("alloca [{arity} x double]")).count(),
+                1,
+                "{ir}"
+            );
             assert!(native_hit_is_reachable(&ir));
             assert!(ir.contains("@js_method_site_miss("));
         }

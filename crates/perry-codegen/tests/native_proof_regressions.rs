@@ -16558,3 +16558,52 @@ fn packed_clone_reads_a_foreign_counter_without_the_feedback_call() {
         "the foreign-counter read should take the bounds-checked clone load:\n{ir}"
     );
 }
+#[test]
+fn static_method_certificate_retains_canonical_layout_clone() {
+    let mut fixture = typed_i32_method_clone_module("eligible");
+    fixture.name = "static_certificate.ts".to_string();
+    // Receiver-reading body: its exact layout clone must remain reachable.
+    fixture.classes[0].fields.push(ClassField {
+        name: "scale".to_string(),
+        ty: Type::Any,
+        init: None,
+        origin: perry_hir::ClassFieldOrigin::Definition,
+        key_expr: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    });
+    fixture.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::This),
+            property: "scale".to_string(),
+        }),
+        right: Box::new(local(21)),
+    }))];
+    fixture.classes[0].methods[0].return_type = Type::Number;
+    let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
+    assert!(caller.contains("@js_method_site_certify"), "{caller}");
+    assert!(
+        caller.contains("@PERRY_PROTO_VALIDITY") && caller.contains("mcert.hit"),
+        "{caller}"
+    );
+    assert!(
+        caller.contains("method_direct.layout") && caller.contains("$pshape"),
+        "{caller}"
+    );
+    assert!(
+        caller.contains("icmp eq i64"),
+        "canonical receiver-word compare missing: {caller}"
+    );
+    assert!(
+        !caller.contains("holder.") && !caller.contains("perry_class_value_dir_cell"),
+        "live holder walk returned: {caller}"
+    );
+    assert!(
+        !caller.contains("js_native_call_method_by_id_learn"),
+        "second learned memo returned: {caller}"
+    );
+}
