@@ -67,8 +67,8 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 ///
 /// The receiver must be a `GlobalGet` — that is what `try_lower_console_call`
 /// dispatches on — and it is never lowered by these arms, so any id serves.
-fn console_call(method: &str, args: Vec<Expr>) -> Vec<Stmt> {
-    vec![Stmt::Expr(Expr::Call {
+fn console_call_expr(method: &str, args: Vec<Expr>) -> Expr {
+    Expr::Call {
         callee: Box::new(Expr::PropertyGet {
             object: Box::new(Expr::GlobalGet(0)),
             property: method.to_string(),
@@ -77,7 +77,11 @@ fn console_call(method: &str, args: Vec<Expr>) -> Vec<Stmt> {
         args,
         type_args: Vec::new(),
         byte_offset: 0,
-    })]
+    }
+}
+
+fn console_call(method: &str, args: Vec<Expr>) -> Vec<Stmt> {
+    vec![Stmt::Expr(console_call_expr(method, args))]
 }
 
 /// A heap value whose lowering allocates, so the window it sits in collects.
@@ -275,4 +279,83 @@ fn console_time_evaluates_its_surplus_arguments() {
          which means the surplus argument was never lowered and its side effect never \
          happened.\n{with_surplus}"
     );
+}
+
+/// #9202: `console.dirxml` is admitted by the global-console lowering and
+/// shares log's output path, including its varargs path.
+#[test]
+fn console_dirxml_routes_through_log_output() {
+    let ir = compile_body(
+        "dirxml_alias",
+        console_call(
+            "dirxml",
+            vec![
+                Expr::String("xml alias".into()),
+                Expr::String("second arg".into()),
+            ],
+        ),
+    );
+    require_call_line(&ir, "js_console_log_spread");
+    assert!(call_line(&ir, "js_console_error_spread").is_none(), "{ir}");
+    assert!(call_line(&ir, "js_console_warn_spread").is_none(), "{ir}");
+}
+
+/// Inspector methods suppress their own output and return undefined. Nested
+/// console calls make their argument side effects visible in emitted call order.
+#[test]
+fn console_inspector_noops_evaluate_arguments_in_order_and_return_undefined() {
+    let ir = compile_body(
+        "inspector_noop_order",
+        vec![Stmt::Return(Some(console_call_expr(
+            "profile",
+            vec![
+                console_call_expr("log", vec![Expr::String("first side effect".into())]),
+                console_call_expr("error", vec![Expr::String("second side effect".into())]),
+            ],
+        )))],
+    );
+    let log = require_call_line(&ir, "js_console_log_spread");
+    let error = require_call_line(&ir, "js_console_error_spread");
+    let noop = require_call_line(&ir, "js_console_noop");
+    assert!(
+        log < error && error < noop,
+        "arguments must run left to right before the no-op call\n{ir}"
+    );
+    assert!(
+        ir.contains("ret double 0x7FFC000000000001"),
+        "inspector methods return undefined\n{ir}"
+    );
+    assert!(call_line(&ir, "js_console_warn_spread").is_none(), "{ir}");
+}
+
+#[test]
+fn console_inspector_noops_do_not_print_argument_values() {
+    for method in ["profile", "profileEnd", "timeStamp"] {
+        let ir = compile_body(
+            method,
+            console_call(method, vec![Expr::String("suppressed".into())]),
+        );
+        require_call_line(&ir, "js_console_noop");
+        assert!(
+            call_line(&ir, "js_console_log_spread").is_none(),
+            "{method} printed through log\n{ir}"
+        );
+        assert!(
+            call_line(&ir, "js_console_log_dynamic").is_none(),
+            "{method} printed dynamically\n{ir}"
+        );
+        for output in [
+            "js_console_info_spread",
+            "js_console_debug_spread",
+            "js_console_warn_spread",
+            "js_console_error_spread",
+            "js_console_trace",
+            "js_console_trace_spread",
+        ] {
+            assert!(
+                call_line(&ir, output).is_none(),
+                "{method} emitted via {output}\n{ir}"
+            );
+        }
+    }
 }

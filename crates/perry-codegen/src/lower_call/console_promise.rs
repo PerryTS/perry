@@ -10,18 +10,18 @@
 //! normalizes them to the `util/types` / `util.types` module keys.
 
 use anyhow::Result;
-use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
+use perry_hir::types::Type as HirType;
 
 use crate::rooting::{
     any_operand_may_collect, operand_may_collect, with_operands_rooted, with_rooted_group,
 };
 
 use crate::expr::{
-    emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, FnCtx,
-    TypedFeedbackContract, TypedFeedbackKind,
+    FnCtx, TypedFeedbackContract, TypedFeedbackKind, emit_typed_feedback_register_site, lower_expr,
+    nanbox_pointer_inline,
 };
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::{POINTER_MASK_I64, double_literal};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I64, PTR};
 
@@ -195,6 +195,10 @@ pub fn try_lower_console_call(
                     | "error"
                     | "debug"
                     | "dir"
+                    | "dirxml"
+                    | "profile"
+                    | "profileEnd"
+                    | "timeStamp"
                     | "table"
                     | "trace"
                     | "group"
@@ -215,6 +219,18 @@ pub fn try_lower_console_call(
             // values, then return undefined-as-double. Spec-compliant
             // dispatch (separate stderr for warn/error, dir's depth
             // option, table's tabular layout) is a future improvement.
+            // Inspector console methods are no-ops, but JavaScript still
+            // evaluates every argument before invoking them. Keep arguments
+            // in source order and suppress output from the methods themselves.
+            if matches!(property.as_str(), "profile" | "profileEnd" | "timeStamp") {
+                for arg in args {
+                    let _ = lower_expr(ctx, arg)?;
+                }
+                ctx.block().call_void("js_console_noop", &[]);
+                return Ok(Some(double_literal(f64::from_bits(
+                    crate::nanbox::TAG_UNDEFINED,
+                ))));
+            }
             // Zero-arg console.* calls — handle the truly nullary
             // methods (groupEnd, clear) and the dataless variants of
             // log/info/warn/error/debug (which print nothing). Methods
@@ -246,7 +262,7 @@ pub fn try_lower_console_call(
                         // which calls the runtime with the implicit
                         // "default" label.
                     }
-                    "log" | "info" | "debug" => {
+                    "log" | "info" | "debug" | "dirxml" => {
                         // Issue #557: zero-arg console.log()/info()/debug()
                         // emits a newline to stdout (matches Node/bun). The
                         // *_spread runtime fns already print just `\n` when
