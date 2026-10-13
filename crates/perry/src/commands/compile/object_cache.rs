@@ -239,13 +239,9 @@ fn stable_type_key(ty: &perry_hir::types::Type) -> String {
 /// same final HIR reuse the cached `.o`. Behavior changes still produce
 /// a different HIR and miss the cache as before.
 ///
-/// We also mix in environment variables that `perry-codegen` reads
-/// at compile time but that aren't part of `CompileOptions`:
-/// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_FUNCTION_SOURCE`, `PERRY_LLVM_CLANG`,
-/// `PERRY_WRITE_BARRIERS`, `PERRY_SHADOW_STACK`,
-/// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`,
-/// and `PERRY_TARGET_CPU`. See the env-var
-/// block at the bottom of this function for the rationale.
+/// We also mix in environment inputs read at compile time that are not part
+/// of `CompileOptions`. The env-var block below is the serialization authority
+/// for those inputs, including contract witnesses and proof negative controls.
 ///
 /// NOT captured in the key: the host CPU. By default (`PERRY_TARGET_CPU`
 /// unset) `compile_ll_to_object` passes `-mcpu=native`/`-march=native` to
@@ -268,8 +264,22 @@ pub fn compute_object_cache_key(
     hir_hash: u64,
     perry_version: &str,
 ) -> u64 {
-    compute_object_cache_key_with_env(opts, hir_hash, perry_version, |name| {
-        std::env::var(name).ok()
+    compute_object_cache_key_with_env(opts, hir_hash, perry_version, object_cache_env_value)
+}
+
+/// Preserve OS values accepted by codegen's var_os gates without aliasing a
+/// non-Unicode value to a Unicode replacement character. The same encoding
+/// feeds every environment field in the existing key mechanism.
+fn object_cache_env_value(name: &str) -> Option<String> {
+    use std::fmt::Write;
+
+    std::env::var_os(name).map(|value| {
+        let bytes = value.as_encoded_bytes();
+        let mut encoded = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            write!(&mut encoded, "{byte:02x}").expect("write environment value");
+        }
+        encoded
     })
 }
 
@@ -290,7 +300,7 @@ pub(super) fn typed_feedback_lowering_key(
         ) {
             None
         } else {
-            std::env::var(name).ok()
+            object_cache_env_value(name)
         }
     })
 }
@@ -1151,6 +1161,29 @@ fn compute_object_cache_key_with_env(
     h.field(
         "env_llvm_inprocess",
         env_var("PERRY_LLVM_INPROCESS").as_deref().unwrap_or(""),
+    );
+    // #12577: contract witnesses and negative controls change emitted calls
+    // and proof edges. Hash raw values: the builtin and general contract gates
+    // accept different spellings, and sabotage selectors distinguish modes.
+    h.field(
+        "env_check_contracts",
+        env_var("PERRY_CHECK_CONTRACTS").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_method_cert_sabotage",
+        env_var("PERRY_METHOD_CERT_SABOTAGE")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_b4_sabotage",
+        env_var("PERRY_B4_SABOTAGE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_assert_capture_cells",
+        env_var("PERRY_ASSERT_CAPTURE_CELLS")
+            .as_deref()
+            .unwrap_or(""),
     );
     h.field(
         "env_write_barriers",

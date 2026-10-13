@@ -1315,3 +1315,87 @@ fn agent_ownership_options_partition_object_cache_keys() {
     }
     assert_eq!(keys.len(), 4);
 }
+
+#[test]
+fn key_changes_with_contract_mode() {
+    let opts = empty_opts();
+    let key = |value: Option<&str>| {
+        compute_object_cache_key_with_env(&opts, 1, "test", |name| {
+            (name == "PERRY_CHECK_CONTRACTS")
+                .then(|| value.map(str::to_owned))
+                .flatten()
+        })
+    };
+    for off in [None, Some(""), Some("0")] {
+        for on in [Some("1"), Some("true")] {
+            assert_ne!(key(off), key(on), "contract mode {off:?} vs {on:?}");
+        }
+    }
+}
+
+#[test]
+fn key_changes_with_contract_sabotage_selectors() {
+    let opts = empty_opts();
+    for (var, first, second) in [
+        ("PERRY_METHOD_CERT_SABOTAGE", "epoch", "word"),
+        ("PERRY_B4_SABOTAGE", "spec_owner", "spec_extent"),
+        ("PERRY_ASSERT_CAPTURE_CELLS", "0", "1"),
+    ] {
+        let key = |value: Option<&str>| {
+            compute_object_cache_key_with_env(&opts, 1, "test", |name| {
+                if name == "PERRY_CHECK_CONTRACTS" {
+                    Some("1".to_owned())
+                } else if name == var {
+                    value.map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+        };
+        assert_ne!(key(None), key(Some(first)), "setting {var}");
+        assert_ne!(key(Some(first)), key(Some(second)), "changing {var}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn key_changes_with_non_unicode_contract_mode() {
+    use std::os::unix::ffi::OsStringExt;
+
+    const CHILD: &str = "PERRY_CACHE_CONTRACT_NON_UNICODE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        assert!(std::env::var("PERRY_CHECK_CONTRACTS").is_err());
+        let opts = empty_opts();
+        let without = compute_object_cache_key_with_env(&opts, 1, "test", |name| {
+            if name == "PERRY_CHECK_CONTRACTS" {
+                None
+            } else {
+                object_cache_env_value(name)
+            }
+        });
+        assert_ne!(without, compute_object_cache_key(&opts, 1, "test"));
+        return;
+    }
+    // Isolate the process environment; the rest of the suite can run in
+    // parallel and codegen's builtin gate accepts this nonempty OS value.
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!(
+                "{}::key_changes_with_non_unicode_contract_mode",
+                module_path!().split_once("::").unwrap().1
+            ),
+        ])
+        .env(CHILD, "1")
+        .env(
+            "PERRY_CHECK_CONTRACTS",
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "child failed: {out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+        "child test did not run: {out:?}"
+    );
+}

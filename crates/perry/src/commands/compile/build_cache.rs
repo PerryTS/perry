@@ -41,7 +41,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // a different backend means different object bytes.
     "PERRY_LLVM_INPROCESS",
     "PERRY_WRITE_BARRIERS",
-    "PERRY_CHECK_CONTRACTS",
     // #9342 kill switch: `PERRY_U8_INLINE_READ=0` removes the inline u8-read
     // lane from the emitted code, so an object built with the lane must not be
     // served from cache to a build that turned it off (and vice versa).
@@ -240,6 +239,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // literal from the const-descriptor path to procedural construction —
     // different emitted IR for the same source.
     "PERRY_CONST_ARRAY_DESCRIPTOR",
+    // #12577: certified-method negative controls change the emitted proof;
+    // capture-cell assertions emit checks at closure birth.
+    "PERRY_METHOD_CERT_SABOTAGE",
+    "PERRY_ASSERT_CAPTURE_CELLS",
     // #11915: contract mode emits `js_builtin_proto_contract_check` at every
     // direct arm a `Pristine` proof admitted (`perry-codegen` builtin_proto).
     "PERRY_CHECK_CONTRACTS",
@@ -254,6 +257,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
 /// that, so a new compile-time gate cannot repeat #7161's omission silently.
 #[cfg(test)]
 const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
+    // Only compiled in perry-codegen's unit tests (#[cfg(test)]), never in
+    // the CLI's codegen dependency, so it cannot change a cached object.
+    "PERRY_TYPED_ELEMENT_SABOTAGE",
     // Diagnostics: emit an extra file / extra stderr, same object bytes.
     "PERRY_SAVE_LL",
     "PERRY_LLVM_DIFF_DIR",
