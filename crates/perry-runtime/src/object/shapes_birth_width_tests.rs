@@ -327,3 +327,50 @@ fn prototype_relationship_reads_live_width_and_tracking_count() {
         );
     }
 }
+
+#[test]
+fn resolved_floor_birth_declines_a_foreign_prototype_and_a_retired_shape() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let first = prototype();
+        for _ in 0..TRACKING_BIRTHS {
+            create(first);
+        }
+        let first_id =
+            crate::object::proto_validity::mark_object_as_prototype(first as usize).unwrap();
+        let birth = super::keyless_birth_width(first_id, super::super::object_shape_stamp(first));
+        assert_eq!(birth.width(), 0, "the resolved floor proof must be live");
+        let second = prototype();
+        let second_id =
+            crate::object::proto_validity::mark_object_as_prototype(second as usize).unwrap();
+        assert_ne!(first_id, second_id);
+        let foreign = super::created_birth_shape(second_id, boxed(second).to_bits(), &birth);
+        assert_ne!(
+            foreign, birth.shape,
+            "a layout proof cannot change prototype identity"
+        );
+        assert!(super::super::shape_is_keyless_birth_of(
+            foreign,
+            second_id,
+            0,
+            super::ShapeObjectKind::Ordinary
+        ));
+        let table = &crate::state::state().shapes;
+        super::super::remove_descriptor_and_reverse_indices(
+            &mut table.inner.borrow_mut(),
+            birth.shape,
+        );
+        assert!(super::shapes_store::ShapeSlab::agent_record_present(birth.shape).is_none());
+        let renewed = super::created_birth_shape(first_id, boxed(first).to_bits(), &birth);
+        assert_ne!(
+            renewed, birth.shape,
+            "a retired proof must remint through the interner"
+        );
+        assert!(super::super::shape_is_keyless_birth_of(
+            renewed,
+            first_id,
+            0,
+            super::ShapeObjectKind::Ordinary
+        ));
+    }
+}

@@ -255,6 +255,13 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         return None;
     }
     let object = obj as *mut crate::object::ObjectHeader;
+    // Marking is idempotent. The existing owner record already carries a
+    // completed mark, so no allocation or semantic transition remains. Do
+    // not reopen handles and enter object_meta_ensure for that same record.
+    let meta = (*object).meta;
+    if !meta.is_null() && (*meta).flags & flag != 0 {
+        return Some(meta);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
     let (meta, object) = handle

@@ -115,13 +115,18 @@ pub(super) fn note_descendant_width(
 pub(crate) struct KeylessBirth {
     shape: u32,
     width: u32,
+    proto_id: u64,
 }
 
 impl KeylessBirth {
     /// Prototype kinds without a tracked ordinary birth resolve their shape
     /// through the same final-birth interner, without a prior shape proof.
     pub(crate) fn untracked() -> Self {
-        Self { shape: 0, width: 0 }
+        Self {
+            shape: 0,
+            width: 0,
+            proto_id: 0,
+        }
     }
 
     pub(crate) fn width(&self) -> u32 {
@@ -172,7 +177,11 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
             unsafe { (*prototype).note_created_birth_shape(id) };
         }
     }
-    KeylessBirth { shape: id, width }
+    KeylessBirth {
+        shape: id,
+        width,
+        proto_id,
+    }
 }
 
 /// Validate the prototype shape's weak birth relationship now. Width and
@@ -227,10 +236,13 @@ pub(crate) fn created_birth_shape(proto_id: u64, proto_bits: u64, birth: &Keyles
     }
     // A floor birth already resolved these exact facts while selecting its
     // allocation width. Tracking/wider births require a different live bound.
-    // The proof is scalar, so revalidate presence before reusing it: a full
-    // collection can retire an uncarried shape between resolution and use.
+    // The proof was resolved from the complete immutable facts above. Shape
+    // ids are never reused: only its presence and the requested prototype
+    // identity need checking here, rather than comparing that tuple again.
+    // A full collection can retire an uncarried shape between uses.
     if birth.width == 0
-        && super::shape_is_keyless_birth_of(birth.shape, proto_id, 0, ShapeObjectKind::Ordinary)
+        && birth.proto_id == proto_id
+        && shapes_store::ShapeSlab::agent_record_present(birth.shape).is_some()
     {
         return birth.shape;
     }
