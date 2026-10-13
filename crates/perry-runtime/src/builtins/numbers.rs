@@ -83,11 +83,7 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
                 return f64::NAN;
             }
 
-            if is_negative {
-                -value
-            } else {
-                value
-            }
+            if is_negative { -value } else { value }
         } else {
             f64::NAN
         }
@@ -425,11 +421,7 @@ mod parse_float_tests {
 /// swallowed by a downstream `is_nan()` shortcut.
 pub extern "C" fn js_to_integer_or_infinity(value: f64) -> f64 {
     let n = js_number_coerce(value);
-    if n.is_nan() {
-        0.0
-    } else {
-        n.trunc()
-    }
+    if n.is_nan() { 0.0 } else { n.trunc() }
 }
 
 #[no_mangle]
@@ -453,11 +445,7 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     } else if jsval.is_null() {
         0.0
     } else if jsval.is_bool() {
-        if jsval.as_bool() {
-            1.0
-        } else {
-            0.0
-        }
+        if jsval.as_bool() { 1.0 } else { 0.0 }
     } else if jsval.is_any_string() {
         // Parse string as number. Accepts both STRING_TAG heap
         // pointers and SHORT_STRING_TAG inline SSO values
@@ -537,6 +525,26 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // BigInt → number conversion
         let ptr = jsval.as_bigint_ptr();
         crate::bigint::js_bigint_to_f64(ptr)
+    } else if jsval.is_handle() {
+        // HANDLE_TAG carries a native registry id, not a heap pointer. It is
+        // still a JavaScript object and follows ToPrimitive/ToNumber, but
+        // must never enter the pointer-only object-header paths below.
+        match unsafe { crate::value::to_string_primitive::to_primitive_number(value) } {
+            crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::Primitive(p) => {
+                js_number_coerce(p)
+            }
+            crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::DefaultString => {
+                let str_ptr = crate::value::js_jsvalue_to_string(value);
+                if str_ptr.is_null() {
+                    f64::NAN
+                } else {
+                    js_number_coerce(crate::value::js_nanbox_string(str_ptr as i64))
+                }
+            }
+            crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::TypeError => {
+                crate::value::to_string_primitive::throw_cannot_convert_to_primitive()
+            }
+        }
     } else if jsval.is_pointer() {
         // ECMA-262 ToNumber(Symbol) is a TypeError (§7.1.4). Symbols are
         // NaN-boxed with POINTER_TAG, so they would otherwise fall through to

@@ -111,7 +111,7 @@ unsafe fn to_numeric(value: f64) -> f64 {
     }
     // Non-object primitives (number/int32/string/bool/null/undefined) never
     // become a BigInt; defer to the existing ToNumber coercion.
-    if !jsval.is_pointer() {
+    if !jsval.is_pointer() && !jsval.is_handle() {
         return crate::builtins::js_number_coerce(value);
     }
     // Symbols are pointers but ToNumber(Symbol) throws — let js_number_coerce
@@ -130,7 +130,15 @@ unsafe fn to_numeric(value: f64) -> f64 {
             }
         }
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::DefaultString => {
-            crate::builtins::js_number_coerce(value)
+            if jsval.is_handle() {
+                // The handle already completed ToPrimitive above. Convert its
+                // default string directly so user getters aren't consulted a
+                // second time by js_number_coerce's handle arm.
+                let string = crate::value::js_jsvalue_to_string(value);
+                crate::builtins::js_number_coerce(crate::value::js_nanbox_string(string as i64))
+            } else {
+                crate::builtins::js_number_coerce(value)
+            }
         }
         crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::TypeError => {
             throw_add_type_error(b"Cannot convert object to primitive value")
@@ -170,6 +178,11 @@ unsafe fn is_symbol_value(value: f64) -> bool {
 #[inline]
 unsafe fn is_nonprimitive_object_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
+    // Native handles are JavaScript objects too, even though their payload is
+    // an id rather than a dereferenceable heap pointer.
+    if jsval.is_handle() {
+        return true;
+    }
     if !jsval.is_pointer() {
         return false;
     }
@@ -1060,6 +1073,22 @@ mod tests {
             assert_eq!(js_dynamic_mul(int32(42), 2.0), 84.0);
             assert_eq!(js_dynamic_div(int32(84), 2.0), 42.0);
             assert_eq!(js_dynamic_mod(int32(43), 10.0), 3.0);
+        }
+    }
+
+    #[test]
+    fn dynamic_arith_treats_native_handles_as_objects_for_to_numeric() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let handle = f64::from_bits(
+                JSValue::handle(crate::value::addr_class::FETCH_HANDLE_BAND_START).bits(),
+            );
+            let coerced = crate::builtins::js_number_coerce(handle);
+            assert!(JSValue::from_bits(coerced.to_bits()).is_number());
+            assert!(coerced.is_nan());
+            let result = js_dynamic_div(1.0, handle);
+            assert!(JSValue::from_bits(result.to_bits()).is_number());
+            assert!(result.is_nan());
         }
     }
 

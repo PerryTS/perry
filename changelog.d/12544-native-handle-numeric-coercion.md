@@ -1,0 +1,1 @@
+Numeric arithmetic now treats native handles as JavaScript objects during ToNumeric and safely applies their primitive conversion methods. A native handle that cannot produce a primitive converts through its default object string instead of leaking its NaN-box tag into arithmetic. This covers the arithmetic coercion slice of #12540; the broader representation audit remains open.

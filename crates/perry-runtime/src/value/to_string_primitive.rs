@@ -6,7 +6,7 @@
 //! `js_jsvalue_to_string` (kept in `to_string.rs`) and other coercion sites
 //! (`+`, `String()`, template literals) dispatch through.
 
-use super::to_string_class_ref::{custom_to_primitive, CustomToPrimitiveOutcome};
+use super::to_string_class_ref::{CustomToPrimitiveOutcome, custom_to_primitive};
 use super::*;
 use std::cell::Cell;
 
@@ -573,8 +573,13 @@ unsafe fn call_method_for_primitive(
     method_name: &[u8],
 ) -> MethodOutcome {
     let recv = value_handle.get_nanbox_f64();
+    let receiver_jsval = JSValue::from_bits(recv.to_bits());
+    let receiver_is_handle = receiver_jsval.is_handle();
     let obj_ptr = (recv.to_bits() & POINTER_MASK) as *const crate::object::ObjectHeader;
-    if obj_ptr.is_null() || (obj_ptr as usize) < 0x10000 {
+    // `js_object_get_field_by_name` accepts the small id encoded in this
+    // pointer-shaped argument and dispatches handles before any object-header
+    // dereference. Do not apply the heap-pointer floor to HANDLE_TAG values.
+    if !receiver_is_handle && (obj_ptr.is_null() || (obj_ptr as usize) < 0x10000) {
         return MethodOutcome::Absent;
     }
     let key = crate::string::canonical_key(method_name);

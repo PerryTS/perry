@@ -3,7 +3,7 @@
 //! `ToPrimitive` (`[Symbol.toPrimitive]`) dispatch.
 
 use super::*;
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::{StringHeader, js_string_from_bytes};
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object, in property creation order.
@@ -96,11 +96,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     }
     crate::cold_sort::sort_by_key(&mut entries[data_len..], |(sym_ptr_usize, _)| {
         let ptr = *sym_ptr_usize as *const SymbolHeader;
-        if ptr.is_null() {
-            u64::MAX
-        } else {
-            (*ptr).id
-        }
+        if ptr.is_null() { u64::MAX } else { (*ptr).id }
     });
     let mut arr = crate::array::js_array_alloc(entries.len() as u32);
     for (sym_ptr_usize, _val_bits) in entries.iter() {
@@ -606,6 +602,48 @@ mod not_iterable_message_tests {
             assert!(!not_iterable_label(f64::from_bits(bits)).is_empty());
         }
         assert!(!not_iterable_label(0.0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod native_handle_to_primitive_tests {
+    use super::*;
+
+    extern "C" fn returns_native_handle(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _hint: f64,
+    ) -> f64 {
+        f64::from_bits(
+            crate::value::JSValue::handle(crate::value::addr_class::FETCH_HANDLE_BAND_START).bits(),
+        )
+    }
+
+    #[test]
+    fn symbol_to_primitive_cannot_return_a_native_handle() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_ptr = crate::object::js_object_alloc(0, 0);
+            let obj = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj_ptr as i64));
+            let to_primitive = well_known_symbol("toPrimitive");
+            let symbol =
+                f64::from_bits(crate::value::JSValue::pointer(to_primitive as *const u8).bits());
+            let closure = crate::closure::js_closure_alloc(
+                crate::fn_info!(returns_native_handle, 1; with_declared(1)),
+                0,
+            );
+            let method = crate::value::js_nanbox_pointer(closure as i64);
+            crate::symbol::js_object_set_symbol_property(obj.get_nanbox_f64(), symbol, method);
+
+            let result = crate::exception::catch_js_throw(|| {
+                crate::value::js_dynamic_string_or_number_add(obj.get_nanbox_f64(), 1.0)
+            });
+            assert!(
+                result.is_err(),
+                "a handle result is an object and must throw"
+            );
+        }
     }
 }
 
