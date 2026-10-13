@@ -2252,6 +2252,7 @@ js_object_keys	Reenters
 js_object_keys_value	Reenters
 js_object_literal_define	Reenters
 js_object_literal_infer_computed_function_name	Reenters
+js_object_literal_prototype_birth	Reenters
 js_object_literal_set_computed	Reenters
 js_object_literal_set_prototype	Reenters
 js_object_literal_spread	Reenters
