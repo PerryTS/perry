@@ -1182,6 +1182,7 @@ impl LlBlock {
                 args: vec![("double", val.to_string())],
                 cconv: None,
                 gc_leaf: false,
+                no_inline: false,
             });
             return r;
         }
@@ -1565,7 +1566,7 @@ impl LlBlock {
     }
 
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {
-        self.call_with_gc_leaf(ret_ty, func_name, args, false)
+        self.call_with_gc_leaf(ret_ty, func_name, args, false, false)
     }
 
     /// Direct-call counterpart of [`Self::call_indirect_gc_leaf`].
@@ -1575,7 +1576,17 @@ impl LlBlock {
         func_name: &str,
         args: &[(LlvmType, &str)],
     ) -> String {
-        self.call_with_gc_leaf(ret_ty, func_name, args, true)
+        self.call_with_gc_leaf(ret_ty, func_name, args, true, false)
+    }
+
+    /// Call an already selected cold body without copying it into this site.
+    pub fn call_noinline(
+        &mut self,
+        ret_ty: LlvmType,
+        func_name: &str,
+        args: &[(LlvmType, &str)],
+    ) -> String {
+        self.call_with_gc_leaf(ret_ty, func_name, args, false, true)
     }
 
     fn call_with_gc_leaf(
@@ -1584,6 +1595,7 @@ impl LlBlock {
         func_name: &str,
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
+        no_inline: bool,
     ) -> String {
         self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: record this emission against the FFI provenance
@@ -1607,10 +1619,11 @@ impl LlBlock {
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
             let arg_str = format_args(args);
             let cc = cconv.map(|c| format!("{c} ")).unwrap_or_default();
+            let inline_attr = if no_inline { " noinline" } else { "" };
             let leaf_attr = if gc_leaf { " \"gc-leaf-function\"" } else { "" };
             self.emit(format!(
-                "{} = invoke {}{} @{}({}){} to label %{} unwind label %{}",
-                r, cc, ret_ty, func_name, arg_str, leaf_attr, cont, lpad
+                "{} = invoke {}{} @{}({}){}{} to label %{} unwind label %{}",
+                r, cc, ret_ty, func_name, arg_str, inline_attr, leaf_attr, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
@@ -1621,6 +1634,7 @@ impl LlBlock {
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
                 cconv,
                 gc_leaf,
+                no_inline,
             });
         }
         self.keep_byte_owners_after_call(Some(func_name));
@@ -1654,6 +1668,7 @@ impl LlBlock {
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
                 cconv,
                 gc_leaf: false,
+                no_inline: false,
             });
         }
         self.keep_byte_owners_after_call(Some(func_name));

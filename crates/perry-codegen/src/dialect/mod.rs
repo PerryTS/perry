@@ -917,7 +917,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 .split_once(char::is_whitespace)
                 .unwrap_or((trailing_attr, ""));
             let (kind, value) = match attr {
-                "nounwind" | "willreturn" => (attr, 0),
+                "nounwind" | "willreturn" | "noinline" => (attr, 0),
                 "memory(none)" => ("memory", 0),
                 _ => break,
             };
@@ -1721,6 +1721,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 args,
                 cconv,
                 gc_leaf,
+                no_inline,
             } => {
                 let mut argv: Vec<BasicMetadataValueEnum> = Vec::with_capacity(args.len());
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
@@ -1758,6 +1759,13 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     // Closed dialect: an unknown token is a construction bug,
                     // not something to normalize away silently.
                     Some(cc) => bail!("unknown calling-convention token `{cc}`"),
+                }
+                if *no_inline {
+                    let id = inkwell::attributes::Attribute::get_named_enum_kind_id("noinline");
+                    site.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        self.ctx.create_enum_attribute(id, 0),
+                    );
                 }
                 if *gc_leaf {
                     site.add_attribute(

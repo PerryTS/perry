@@ -1082,7 +1082,8 @@ pub(super) fn emit_guarded_direct_method_call(
                 continue;
             }
             // Layout failure cannot re-read the method after arguments.
-            let value = ctx.block().call(DOUBLE, public, direct_arg_slices);
+            // Keep the selected ordinary body shared on this cold edge.
+            let value = ctx.block().call_noinline(DOUBLE, public, direct_arg_slices);
             let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
             let end = ctx.block().label.clone();
             ctx.block().br(&merge_label);

@@ -16594,6 +16594,10 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
     assert!(caller.contains("@js_method_site_certify"), "{caller}");
     assert!(
+        caller.contains(") noinline"),
+        "cold selected bodies must stay shared: {caller}"
+    );
+    assert!(
         caller.contains("@PERRY_PROTO_VALIDITY") && caller.contains("mcert.hit"),
         "{caller}"
     );

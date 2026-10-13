@@ -143,6 +143,8 @@ pub enum LlInst {
         /// transitive effect analysis; this flag only controls caller-side
         /// root relocation and the emitted RS4GC attribute.
         gc_leaf: bool,
+        /// Keep a cold selected-body call out of the caller.
+        no_inline: bool,
     },
     /// Opaque-pointer indirect call. The callee operand itself is a `ptr`;
     /// argument types remain explicit at the call site.
@@ -318,6 +320,7 @@ impl LlInst {
                 args,
                 cconv,
                 gc_leaf,
+                no_inline,
             } => {
                 out.push_str("  ");
                 if let Some(d) = dst {
@@ -333,6 +336,9 @@ impl LlInst {
                 }
                 push_args(out, args);
                 out.push(')');
+                if *no_inline {
+                    out.push_str(" noinline");
+                }
                 if *gc_leaf {
                     out.push_str(" \"gc-leaf-function\"");
                 }
