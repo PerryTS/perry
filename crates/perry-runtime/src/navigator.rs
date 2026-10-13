@@ -14,7 +14,7 @@
 use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes;
-use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
+use crate::value::{JSValue, js_nanbox_pointer, js_nanbox_string};
 
 pub const NAVIGATOR_CLASS_ID: u32 = 0x7FFF_FF22;
 
@@ -100,6 +100,23 @@ pub extern "C" fn js_navigator_object() -> f64 {
 }
 
 pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor);
+    let prototype_key = scope.root_nanbox_f64(f64::from_bits(
+        crate::value::js_nanbox_string(js_string_from_bytes(b"prototype".as_ptr(), 9) as i64)
+            .to_bits(),
+    ));
+    let prototype = f64::from_bits(
+        crate::object::js_object_get_field_by_name(
+            JSValue::from_bits(constructor.get_nanbox_u64())
+                .as_pointer::<crate::closure::ClosureHeader>()
+                as *const crate::object::ObjectHeader,
+            JSValue::from_bits(prototype_key.get_nanbox_u64()).as_string_ptr(),
+        )
+        .bits(),
+    );
+    let prototype = scope.root_nanbox_f64(prototype);
+
     // Packed null-separated keys; slot order must match the set_field calls.
     let packed = b"userAgent\0language\0languages\0hardwareConcurrency\0platform\0locks\0";
     let field_count: u32 = 6;
@@ -109,51 +126,64 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
         packed.as_ptr(),
         packed.len() as u32,
     );
-    unsafe {
+    let obj = scope.root_raw_mut_ptr(obj);
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
         (*obj).class_id = NAVIGATOR_CLASS_ID;
         // Charter step 3: `class_id` is a store-kind input.
         crate::object::shapes::store_kind::restamp_object_store_kind(obj);
-    }
+    });
+    // The passed constructor is authoritative. Avoid fetching `Navigator` from
+    // globalThis here: globalThis construction itself calls this helper.
+    crate::object::js_object_set_prototype_of(
+        js_nanbox_pointer(obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| obj as i64)),
+        prototype.get_nanbox_f64(),
+    );
 
     // userAgent: "Node.js/<major>"
     let ua = format!("Node.js/{NODE_MAJOR}");
-    js_object_set_field(obj, 0, nb_str(&ua));
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 0, nb_str(&ua)));
 
     // language / languages
     let language = navigator_language();
-    js_object_set_field(obj, 1, nb_str(&language));
-    let mut langs = js_array_alloc(1);
-    langs = js_array_push_f64(langs, f64::from_bits(nb_str(&language).bits()));
-    js_object_set_field(
-        obj,
-        2,
-        JSValue::from_bits(js_nanbox_pointer(langs as i64).to_bits()),
-    );
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 1, nb_str(&language)));
+    let langs = scope.root_raw_mut_ptr(js_array_alloc(1));
+    let lang = nb_str(&language);
+    let pushed = langs.with_mut_ptr(|arr| js_array_push_f64(arr, f64::from_bits(lang.bits())));
+    langs.set_raw_mut_ptr(pushed);
+    obj.with_mut_ptr(|obj| {
+        js_object_set_field(
+            obj,
+            2,
+            JSValue::from_bits(
+                js_nanbox_pointer(
+                    langs.with_mut_ptr::<crate::array::ArrayHeader, _>(|arr| arr as i64),
+                )
+                .to_bits(),
+            ),
+        )
+    });
 
     // hardwareConcurrency: recommended parallelism (>= 1).
     let cores = std::thread::available_parallelism()
         .map(|n| n.get() as f64)
         .unwrap_or(1.0);
-    js_object_set_field(obj, 3, JSValue::number(cores));
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 3, JSValue::number(cores)));
 
     // platform: browser-style token.
-    js_object_set_field(obj, 4, nb_str(navigator_platform()));
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 4, nb_str(navigator_platform())));
 
     // locks: a plain object stub (typeof === "object"). Web Locks API is not
     // implemented; the property exists so feature-detection sees the shape.
     let locks = crate::object::js_object_alloc(0, 0);
-    js_object_set_field(
-        obj,
-        5,
-        JSValue::from_bits(js_nanbox_pointer(locks as i64).to_bits()),
-    );
+    obj.with_mut_ptr(|obj| {
+        js_object_set_field(
+            obj,
+            5,
+            JSValue::from_bits(js_nanbox_pointer(locks as i64).to_bits()),
+        )
+    });
 
-    // constructor: the singleton should identify as an instance of the
-    // global `Navigator` constructor.
-    let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    crate::object::js_object_set_field_by_name(obj, ctor_key, constructor);
-
-    js_nanbox_pointer(obj as i64)
+    js_nanbox_pointer(obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| obj as i64))
 }
 
 #[cfg(test)]

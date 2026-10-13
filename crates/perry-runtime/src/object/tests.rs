@@ -1007,28 +1007,134 @@ fn navigator_global_constructor_identity_shape() {
         // side-table lock across the populate-then-assert.
         let _global = crate::gc::global_side_table_test_lock();
         let ctor_raw = test_global_this_builtin_constructor_value("Navigator");
-        let ctor = JSValue::from_bits(ctor_raw.to_bits());
-        assert!(ctor.is_pointer());
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_nanbox_f64(ctor_raw);
+        assert!(JSValue::from_bits(ctor.get_nanbox_u64()).is_pointer());
 
-        let navigator_raw = crate::navigator::test_navigator_object_with_constructor(ctor_raw);
-        let navigator = JSValue::from_bits(navigator_raw.to_bits());
-        assert!(navigator.is_pointer());
-        let navigator_ptr = navigator.as_pointer::<ObjectHeader>();
+        let prototype_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"prototype".as_ptr(),
+            9,
+        ));
+        let original_prototype = JSValue::from_bits(prototype_key.with_const_ptr(|key| {
+            js_object_get_field_by_name(
+                JSValue::from_bits(ctor.get_nanbox_u64())
+                    .as_pointer::<crate::closure::ClosureHeader>()
+                    as *const ObjectHeader,
+                key,
+            )
+            .bits()
+        }));
+        assert!(original_prototype.is_pointer());
+        let original_prototype = scope.root_nanbox_f64(f64::from_bits(original_prototype.bits()));
+
+        // Use a custom prototype to prove the builder follows the constructor
+        // passed to it instead of only relying on Navigator's class-id fallback.
+        let custom_prototype = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        let constructor_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"constructor".as_ptr(),
+            11,
+        ));
+        let marker_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"navigatorMarker".as_ptr(),
+            15,
+        ));
+        let marker = crate::value::JSValue::number(1234.0);
+        custom_prototype.with_mut_ptr::<ObjectHeader, _>(|prototype_ptr| {
+            constructor_key.with_const_ptr(|key| {
+                crate::object::js_object_set_field_by_name(
+                    prototype_ptr,
+                    key,
+                    ctor.get_nanbox_f64(),
+                );
+            });
+            marker_key.with_const_ptr(|key| {
+                crate::object::js_object_set_field_by_name(
+                    prototype_ptr,
+                    key,
+                    f64::from_bits(marker.bits()),
+                );
+            });
+        });
+        prototype_key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(
+                JSValue::from_bits(ctor.get_nanbox_u64())
+                    .as_pointer::<crate::closure::ClosureHeader>()
+                    .cast_mut()
+                    .cast::<ObjectHeader>(),
+                key,
+                crate::value::js_nanbox_pointer(
+                    custom_prototype.with_mut_ptr::<ObjectHeader, _>(|ptr| ptr as i64),
+                ),
+            );
+        });
+
+        let navigator_raw =
+            crate::navigator::test_navigator_object_with_constructor(ctor.get_nanbox_f64());
+        let navigator = scope.root_nanbox_f64(navigator_raw);
+        // Restore the process-global constructor after constructing the object.
+        prototype_key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(
+                JSValue::from_bits(ctor.get_nanbox_u64())
+                    .as_pointer::<crate::closure::ClosureHeader>()
+                    .cast_mut()
+                    .cast::<ObjectHeader>(),
+                key,
+                original_prototype.get_nanbox_f64(),
+            );
+        });
+
+        let navigator_value = JSValue::from_bits(navigator.get_nanbox_u64());
+        assert!(navigator_value.is_pointer());
+        let navigator_ptr = navigator_value.as_pointer::<ObjectHeader>();
         assert_eq!(
             js_object_get_class_id(navigator_ptr),
             crate::navigator::NAVIGATOR_CLASS_ID
         );
 
-        let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-        let actual = js_object_get_field_by_name(navigator_ptr, constructor_key);
-        assert_eq!(actual.bits(), ctor.bits());
-
-        let prototype_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-        let prototype = js_object_get_field_by_name(
-            ctor.as_pointer::<crate::closure::ClosureHeader>() as *const ObjectHeader,
-            prototype_key,
+        let navigator_f64 = navigator.get_nanbox_f64();
+        let prototype_f64 = crate::value::js_nanbox_pointer(
+            custom_prototype.with_mut_ptr::<ObjectHeader, _>(|ptr| ptr as i64),
         );
-        assert!(prototype.is_pointer());
+        let navigator_prototype = crate::object::js_object_get_prototype_of(navigator_f64);
+        assert_eq!(
+            navigator_prototype.to_bits(),
+            prototype_f64.to_bits(),
+            "navigator should inherit from Navigator.prototype"
+        );
+        assert_eq!(
+            constructor_key.with_const_ptr(|key| {
+                js_object_get_field_by_name(
+                    custom_prototype.with_const_ptr::<ObjectHeader, _>(|ptr| ptr),
+                    key,
+                )
+                .bits()
+            }),
+            ctor.get_nanbox_u64(),
+            "Navigator.prototype should point back to its constructor"
+        );
+        assert_eq!(
+            constructor_key
+                .with_const_ptr(|key| { js_object_get_field_by_name(navigator_ptr, key).bits() }),
+            ctor.get_nanbox_u64(),
+            "navigator should inherit its constructor"
+        );
+        assert_eq!(
+            crate::value::js_is_truthy(crate::object::js_object_has_own(
+                navigator_f64,
+                f64::from_bits(
+                    crate::value::js_nanbox_string(
+                        constructor_key
+                            .with_const_ptr::<crate::string::StringHeader, _>(|key| key as i64),
+                    )
+                    .to_bits()
+                ),
+            )),
+            0,
+            "navigator constructor should not be an own property"
+        );
+        let inherited_marker =
+            marker_key.with_const_ptr(|key| js_object_get_field_by_name(navigator_ptr, key));
+        assert_eq!(inherited_marker.as_number(), marker.as_number());
     }
 }
 

@@ -1,0 +1,1 @@
+Navigator objects now inherit from the prototype of the constructor used to create them, so `constructor` is inherited from `Navigator.prototype` instead of being an own property. This is a partial fix for #9202.
