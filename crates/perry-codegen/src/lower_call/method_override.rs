@@ -1067,8 +1067,17 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             blk.cond_br(&pass, fast, &ordinary_l);
             ctx.current_block = ordinary;
-            if i == 0 && learned_joins_fast_arm {
-                // This existing argument-only clone assumes no receiver layout.
+            if i == 0
+                && (learned_joins_fast_arm
+                    || (pshape_fn.is_none()
+                        && typed_f64_receiver_direct_fn.is_none()
+                        && !ctx.pshape_arg_methods.contains_key(&(
+                            receiver_class_name.to_string(),
+                            property.to_string(),
+                        ))))
+            {
+                // With no receiver-layout capability, both edges share the
+                // already selected ordinary/argument-only body.
                 ctx.block().br(&fast_label);
                 continue;
             }
