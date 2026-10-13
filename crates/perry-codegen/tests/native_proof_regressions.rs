@@ -16583,6 +16583,13 @@ fn static_method_certificate_retains_canonical_layout_clone() {
         right: Box::new(local(21)),
     }))];
     fixture.classes[0].methods[0].return_type = Type::Number;
+    let mut derived = fixture.classes[0].clone();
+    derived.id = 206;
+    derived.name = "DerivedBits".to_string();
+    derived.extends_name = Some("Bits".to_string());
+    derived.fields.clear();
+    derived.methods[0].id = 231;
+    fixture.classes.push(derived);
     let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
     let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
     assert!(caller.contains("@js_method_site_certify"), "{caller}");

@@ -855,6 +855,7 @@ pub(crate) fn try_lower_instance_method_call(
             let shape_only_guard = typed_receiver_direct_name.is_none()
                 && !class_chain_has_field_named(ctx, &class_name, property);
             let certified_static = shape_only_guard
+                && !subclass_arms.is_empty()
                 && !fallback_fn.starts_with("perry_static_")
                 && !fallback_has_rest
                 && !fallback_has_synthetic_arguments

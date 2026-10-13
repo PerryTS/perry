@@ -1119,7 +1119,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
 }
 
 /// The single-pair shape-only arm is small enough to inline at the call site.
-/// Pin the shared certificate and canonical layout gate; accept
+/// Pin the complete safety gate: compare the live holder ShapeId, accept
 /// both the boxed-pointer and
 /// internal raw-pointer ABIs, reject addresses outside the target heap range
 /// before dereference, reject own descriptors, then compare the exact
@@ -1129,10 +1129,8 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
     let ir = emit_static(&guarded_site_module(), false);
     let probe = function_body(&ir, "__probe(");
     assert!(
-        probe.contains("mcert.way")
-            && probe.contains("@PERRY_PROTO_VALIDITY")
-            && !probe.contains("holder."),
-        "the saved Shape certificate must replace the live holder walk:\n{probe}"
+        probe.contains("holder.shape") && probe.contains("icmp eq i32"),
+        "the live holder P must be compared before the direct arm:\n{probe}"
     );
     assert!(
         !ir.contains("PERRY_CLASS_PROTOTYPE_FAST_GUARDS"),
@@ -1152,14 +1150,14 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
     let heap_floor = crate::target_layout::heap_addr_lower_bound_inclusive(&target);
     let heap_ceiling = crate::target_layout::heap_addr_upper_bound_exclusive(&target);
     assert!(
-        probe.contains("sub i64")
+        probe.contains("icmp uge i64")
             && probe.contains(&format!(", {heap_floor}"))
             && probe.contains("icmp ult i64")
-            && probe.contains(&format!(", {}", heap_ceiling - heap_floor)),
+            && probe.contains(&format!(", {heap_ceiling}")),
         "the dereference gate must reject candidates outside the target heap range:\n{probe}"
     );
     assert!(
-        probe.contains("method_probe.deref")
+        probe.contains("method_direct.inline_deref")
             && probe.contains("getelementptr i8, ptr")
             && probe.contains("i64 -8")
             && probe.contains("and i32")
@@ -1172,9 +1170,11 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             && probe.contains(", 32")
             && probe.contains("or i64")
             && probe.contains("icmp eq i64")
-            && probe.contains("method_direct.layout")
-            && probe.contains("mcert.selected"),
-        "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact canonical class/ShapeId pair and selected body:\n{probe}"
+            && probe.contains("add i32")
+            && probe.contains(", -2147483648")
+            && probe.contains("icmp ult i32")
+            && probe.contains(", 1073741824"),
+        "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact class/ShapeId pair, and ShapeId domain:\n{probe}"
     );
 }
 
