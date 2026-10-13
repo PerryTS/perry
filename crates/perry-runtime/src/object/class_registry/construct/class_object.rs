@@ -170,9 +170,7 @@ fn construct_class_object_instance(
         )
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
-        crate::object::shapes::stamp_evaluation_holder(
-            instance, class.get_nanbox_f64().to_bits(),
-        );
+        crate::object::shapes::stamp_evaluation_holder(instance, class.get_nanbox_f64().to_bits());
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         super::super::field_get_set::record_instance_link(
@@ -202,8 +200,7 @@ fn allocate_class_instance(class_cid: u32) -> (*mut ObjectHeader, u32) {
 unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let new_target = scope.root_nanbox_f64(new_target);
-    let instance_cid = new_target_class_id(new_target.get_nanbox_f64())
-        .unwrap_or_else(|| synthetic_class_id_for_function(new_target.get_nanbox_f64()));
+    let instance_cid = new_target_class_id(new_target.get_nanbox_f64()).unwrap_or(0);
     let instance = allocate_class_instance(instance_cid).0;
     let instance = scope.root_raw_mut_ptr(instance);
     let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())

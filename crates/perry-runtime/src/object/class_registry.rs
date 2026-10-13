@@ -113,14 +113,13 @@ pub use state::{
     AccessorDecl, CLASS_DYNAMIC_PARENT_VALUE, CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES,
     CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS,
     CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS,
-    CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
+    CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
     class_holder_prototype, class_holder_word, class_holder_word_selected, class_prototype_object,
-    ensure_function_prototype_object, function_class_id, function_value_for_class_id,
-    object_proto_chain_symbol_slot, resolve_proto_chain_field,
+    ensure_function_prototype_object, object_proto_chain_symbol_slot, resolve_proto_chain_field,
     resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
     resolve_proto_chain_symbol, synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
@@ -151,7 +150,7 @@ pub use class_meta::{
     CLASS_NAMES,
 };
 // ── prototype_methods.rs ────────────────────────────────────────────────────
-pub(crate) use prototype_methods::{class_prototype_set, synthetic_class_id_for_function};
+pub(crate) use prototype_methods::class_prototype_set;
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,
     js_register_function_prototype_method, js_register_prototype_method,
@@ -177,8 +176,7 @@ pub(crate) use vm_brand::brand_vm_script_instance;
 
 // ── gc_roots.rs ─────────────────────────────────────────────────────────────
 pub(crate) use gc_roots::{
-    new_class_side_table_root_scan_state, prune_dead_function_class_id_keys,
-    scan_class_side_table_roots_mut_step,
+    new_class_side_table_root_scan_state, scan_class_side_table_roots_mut_step,
 };
 pub use gc_roots::{scan_class_side_table_roots, scan_class_side_table_roots_mut};
 #[cfg(test)]
@@ -186,10 +184,8 @@ pub(crate) use gc_roots::{
     test_class_decl_prototype_object_root_addr, test_class_dynamic_prop_root_bits,
     test_class_parent_closure_root_addr, test_class_prototype_method_value_root_bits,
     test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
-    test_function_class_id_key_count, test_function_class_id_key_for_class,
     test_seed_class_decl_prototype_object_root, test_seed_class_dynamic_prop_root,
     test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
-    test_seed_function_class_id_key,
 };
 
 // ── registration.rs ─────────────────────────────────────────────────────────

@@ -24,9 +24,6 @@ enum ClassSideTableRootSlot {
         sym_key: usize,
         is_static: bool,
     },
-    FunctionClassIdKey {
-        bits: u64,
-    },
 }
 
 pub(crate) struct ClassSideTableRootScanState {
@@ -122,7 +119,6 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     super::evaluation_heritage::scan_active_class_evaluations_mut(visitor);
 
     scan_class_symbol_member_keys_mut(visitor);
-    scan_function_class_id_keys_mut(visitor);
 }
 
 fn scan_class_symbol_member_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -244,16 +240,6 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     });
 
-    FUNCTION_CLASS_IDS.with(|table| {
-        if let Ok(guard) = table.read() {
-            if let Some(map) = guard.as_ref() {
-                for &bits in map.keys() {
-                    slots.push(ClassSideTableRootSlot::FunctionClassIdKey { bits });
-                }
-            }
-        }
-    });
-
     slots
 }
 
@@ -317,9 +303,6 @@ fn scan_class_side_table_root_slot(
                 visitor, *class_id, *sym_key, *is_static,
             );
         }
-        ClassSideTableRootSlot::FunctionClassIdKey { bits } => {
-            rewrite_function_class_id_key_if_forwarded(visitor, *bits);
-        }
     }
 }
 
@@ -365,127 +348,9 @@ fn rewrite_class_symbol_accessor_key_if_forwarded(
     });
 }
 
-fn scan_function_class_id_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if !visitor.is_metadata_rewrite_phase() {
-        return;
-    }
-    let mut rewrites = Vec::new();
-    FUNCTION_CLASS_IDS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            let Some(map) = guard.as_mut() else {
-                return;
-            };
-            for old_bits in map.keys().copied().collect::<Vec<_>>() {
-                let mut new_bits = old_bits;
-                if visit_metadata_nanbox_key(visitor, &mut new_bits) && new_bits != old_bits {
-                    rewrites.push((old_bits, new_bits));
-                }
-            }
-            for (old_bits, new_bits) in rewrites {
-                if let Some(class_id) = map.remove(&old_bits) {
-                    map.insert(new_bits, class_id);
-                }
-            }
-        }
-    });
-}
-
-fn rewrite_function_class_id_key_if_forwarded(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    old_bits: u64,
-) {
-    if !visitor.is_metadata_rewrite_phase() {
-        return;
-    }
-    let mut new_bits = old_bits;
-    if !visit_metadata_nanbox_key(visitor, &mut new_bits) || new_bits == old_bits {
-        return;
-    }
-    FUNCTION_CLASS_IDS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                if let Some(class_id) = map.remove(&old_bits) {
-                    map.insert(new_bits, class_id);
-                }
-            }
-        }
-    });
-}
-
-/// #8040: death pruning for `FUNCTION_CLASS_IDS`.
-///
-/// The table maps a synthetic-class function value's NaN-boxed **bits** to a
-/// class id, so its key is the raw heap address of a closure. Both writers
-/// (`js_set_function_prototype`, `synthetic_class_id_for_function`) require a
-/// `POINTER_TAG`'d value that passes `is_callable_function_value`, i.e. a key
-/// can only ever have been a live `GC_TYPE_CLOSURE`.
-///
-/// Nothing told the table when that closure died, and this table — unlike the
-/// other address-keyed side tables — is *rekeyed* rather than re-derived when
-/// its key object moves (`scan_function_class_id_keys_mut`). So a dead key
-/// does not merely leak: the arena recycles the address, the recycled bytes
-/// are read as a `GcHeader`, and if the byte at the `gc_flags` offset happens
-/// to carry `GC_FLAG_FORWARDED` the rekey walk follows the "forwarding
-/// pointer" out of dead memory and binds the class id to whatever that word
-/// names. See `gc::dead_owner`'s module doc for the general ABA hazard; this
-/// table was simply never wired into its fan-out.
-pub(crate) fn prune_dead_function_class_id_keys(is_dead_closure: &dyn Fn(usize) -> bool) {
-    FUNCTION_CLASS_IDS.with(|table| {
-        let Ok(mut guard) = table.write() else {
-            return;
-        };
-        let Some(map) = guard.as_mut() else {
-            return;
-        };
-        map.retain(|&bits, _| {
-            if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
-                return true;
-            }
-            let addr = (bits & crate::value::POINTER_MASK) as usize;
-            addr == 0 || !is_dead_closure(addr)
-        });
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_function_class_id_key_count() -> usize {
-    FUNCTION_CLASS_IDS.with(|table| {
-        table
-            .read()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|map| map.len()))
-            .unwrap_or(0)
-    })
-}
-
-fn visit_metadata_nanbox_key(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    bits: &mut u64,
-) -> bool {
-    let tag = *bits & crate::value::TAG_MASK;
-    if tag != crate::value::POINTER_TAG
-        && tag != crate::value::STRING_TAG
-        && tag != crate::value::BIGINT_TAG
-    {
-        return false;
-    }
-    let mut addr = (*bits & crate::value::POINTER_MASK) as usize;
-    if visitor.visit_metadata_usize_slot(&mut addr) {
-        *bits = tag | (addr as u64 & crate::value::POINTER_MASK);
-        true
-    } else {
-        false
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn test_clear_class_side_table_roots() {
     super::state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|m| m.borrow_mut().clear());
-    FUNCTION_CLASS_IDS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
     CLASS_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
@@ -610,33 +475,6 @@ pub(crate) fn test_class_parent_closure_root_addr(class_id: u32) -> usize {
             .read()
             .ok()
             .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
-            .unwrap_or(0)
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_function_class_id_key(func_bits: u64, class_id: u32) {
-    FUNCTION_CLASS_IDS.with(|table| {
-        let mut guard = table.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(std::collections::HashMap::new());
-        }
-        guard.as_mut().unwrap().insert(func_bits, class_id);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_function_class_id_key_for_class(class_id: u32) -> u64 {
-    FUNCTION_CLASS_IDS.with(|table| {
-        table
-            .read()
-            .ok()
-            .and_then(|guard| {
-                guard.as_ref().and_then(|map| {
-                    map.iter()
-                        .find_map(|(&bits, &cid)| (cid == class_id).then_some(bits))
-                })
-            })
             .unwrap_or(0)
     })
 }

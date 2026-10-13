@@ -75,12 +75,9 @@ fn ensure_function_prototype(value: f64) -> f64 {
     }
     let cptr = closure_ptr(value);
     if cptr != 0 {
-        let class_id = crate::object::synthetic_class_id_for_function(value);
-        if class_id != 0 {
-            let proto = crate::object::ensure_function_prototype_object(value, class_id);
-            if !proto.is_null() {
-                return crate::value::js_nanbox_pointer(proto as i64);
-            }
+        let proto = crate::object::ensure_function_prototype_object(value);
+        if !proto.is_null() {
+            return crate::value::js_nanbox_pointer(proto as i64);
         }
     }
     // A constructor with no `.prototype` used as a `util.inherits` base — most
@@ -147,17 +144,6 @@ fn set_super_property(ctor: f64, super_ctor: f64) {
     crate::object::set_property_attrs(obj as usize, "super_".to_string(), attrs);
 }
 
-fn register_function_parent(ctor: f64, super_ctor: f64) {
-    if closure_ptr(ctor) == 0 || closure_ptr(super_ctor) == 0 {
-        return;
-    }
-    let ctor_class = crate::object::synthetic_class_id_for_function(ctor);
-    let super_class = crate::object::synthetic_class_id_for_function(super_ctor);
-    if ctor_class != 0 && super_class != 0 && ctor_class != super_class {
-        crate::object::register_class(ctor_class, super_class);
-    }
-}
-
 /// `util.inherits(constructor, superConstructor)` -> undefined.
 #[no_mangle]
 pub extern "C" fn js_util_inherits(ctor: f64, super_ctor: f64) -> f64 {
@@ -176,7 +162,6 @@ pub extern "C" fn js_util_inherits(ctor: f64, super_ctor: f64) -> f64 {
     let ctor_proto = ensure_function_prototype(ctor);
     set_super_property(ctor, super_ctor);
     crate::object::js_object_set_prototype_of(ctor_proto, super_proto);
-    register_function_parent(ctor, super_ctor);
 
     TAG_UNDEFINED_F64
 }

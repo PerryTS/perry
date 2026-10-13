@@ -6,7 +6,7 @@ use super::super::*;
 use super::support::*;
 
 #[test]
-fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
+fn test_copying_minor_rewrites_class_side_table_values() {
     let _guard = CopyingNurseryTestGuard::new(1);
     crate::object::test_clear_class_side_table_roots();
     gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
@@ -36,7 +36,6 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     crate::object::test_seed_class_prototype_object_root(0x5401, prototype_object);
     crate::object::test_seed_class_decl_prototype_object_root(0x5401, decl_prototype_object);
     crate::object::test_seed_class_parent_closure_root(0x5401, parent_closure);
-    crate::object::test_seed_function_class_id_key(ptr_bits(key), 0x8200_5401);
 
     let _ = gc_collect_minor();
 
@@ -69,28 +68,10 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     assert_ne!(parent_closure_after, parent_closure);
     assert!(crate::arena::pointer_in_nursery(parent_closure_after));
     assert_ne!(key_after_bits, ptr_bits(key));
-    assert_eq!(
-        crate::object::test_function_class_id_key_for_class(0x8200_5401),
-        key_after_bits
-    );
-    assert_eq!(
-        crate::object::function_class_id(f64::from_bits(key_after_bits)),
-        0x8200_5401
-    );
 }
 
-/// #11635: the synthetic class id a `Func.prototype.x = fn` registration
-/// allocates is keyed by the function's NaN-boxed bits in
-/// `FUNCTION_CLASS_IDS`. When the function moves in a copying minor, the key
-/// must follow it: a second registration and a `new Func()` made through the
-/// POST-move address must land on the SAME id, or `F.prototype` methods
-/// registered before the move are split from instances created after it.
-///
-/// Driven through the real entry point (`js_register_function_prototype_method`)
-/// rather than a seeded key, and asserts the subject moved, so a green run
-/// cannot be one where nothing was relocated.
 #[test]
-fn test_function_prototype_registration_class_id_survives_a_move() {
+fn test_function_owned_prototype_registration_survives_a_move() {
     let _guard = CopyingNurseryTestGuard::new(1);
     crate::object::test_clear_class_side_table_roots();
     gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
@@ -104,7 +85,7 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
     unsafe { init_test_closure(func as *mut u8) };
     js_shadow_slot_set(0, ptr_bits(func));
     let before = young_leaf();
-    let before_cid = unsafe {
+    let _ = unsafe {
         crate::object::js_register_function_prototype_method(
             f64::from_bits(ptr_bits(func)),
             b"before".as_ptr(),
@@ -112,10 +93,6 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
             f64::from_bits(string_bits(before)),
         )
     };
-    assert_ne!(
-        before_cid, 0,
-        "a verified closure must get a synthetic class id"
-    );
 
     let _ = gc_collect_minor();
 
@@ -130,7 +107,7 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
     ));
 
     let after = young_leaf();
-    let after_cid = unsafe {
+    let _ = unsafe {
         crate::object::js_register_function_prototype_method(
             f64::from_bits(func_after_bits),
             b"after".as_ptr(),
@@ -138,15 +115,6 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
             f64::from_bits(string_bits(after)),
         )
     };
-    assert_eq!(
-        after_cid, before_cid,
-        "a registration through the moved function must reuse its class id"
-    );
-    assert_eq!(
-        crate::object::synthetic_class_id_for_function(f64::from_bits(func_after_bits)),
-        before_cid,
-        "`new F()` through the moved function must stamp the same class id"
-    );
 
     let stored = unsafe {
         crate::object::js_get_function_prototype_method(
@@ -301,8 +269,7 @@ fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borro
     assert!(crate::arena::pointer_in_nursery(child_after));
     assert!(trace.copying_nursery.copied_objects >= 1);
     assert_eq!(
-        trace.remembered_set.dirty_objects_scanned,
-        4,
+        trace.remembered_set.dirty_objects_scanned, 4,
         "the owner plus three old key-list backings have young child edges"
     );
     assert!(

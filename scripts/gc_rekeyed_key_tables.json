@@ -26,12 +26,6 @@
       "why": "The Symbol arm's bits are marked as state.name by visit_nanbox_f64_slot (node_submodules/mod.rs:1509); every DIAG_CHANNEL_BY_KEY insert is paired with a DIAG_CHANNELS insert and eviction removes both (diagnostics.rs:924-996)."
     },
     {
-      "site": "crates/perry-runtime/src/object/class_registry/gc_roots.rs::visit_metadata_nanbox_key",
-      "table": "FUNCTION_CLASS_IDS",
-      "death": "dead_owner:prune_dead_function_class_id_keys",
-      "why": "The #8168 fix: retains on the GC_TYPE_CLOSURE-narrowed predicate over the POINTER_TAG'd closure address (class_registry/gc_roots.rs:530). This helper is the rekey path for both scan_function_class_id_keys_mut and its budgeted twin."
-    },
-    {
       "site": "crates/perry-runtime/src/object/side_table_roots.rs::scan_transition_cache_slot",
       "table": "TRANSITION_CACHE_GLOBAL",
       "death": "dead_owner:prune_dead_transition_cache_entries",

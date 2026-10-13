@@ -9,7 +9,7 @@
 //! paths skip every built-in, bound, proxy and native-module probe.
 //!
 //! The object a construction creates is described by `F.prototype`: its
-//! class id and birth ShapeId are the prototype object's birth record
+//! birth ShapeId is the prototype object's birth record
 //! (`ObjectMeta::instance_birth`), minted on the first construction by the
 //! ordinary allocate-then-link sequence and replayed afterwards — the same
 //! class id and the same ShapeId (its `proto_id` is the prototype's serial,
@@ -202,23 +202,21 @@ unsafe fn birth_record(proto: *const ObjectHeader) -> Option<(u32, u32, u32)> {
 }
 
 /// Mint `proto`'s birth record from the first construction, which takes the
-/// ordinary sequence: an object of `F`'s synthetic class, linked to `proto`
+/// ordinary sequence: a classless object linked to `proto`
 /// as its class-default prototype. The record is that class id and the
 /// ShapeId the link left; [`birth_record`] re-validates the id's facts on
 /// every replay, so a retired id is never replayed and a dead function's
 /// prototype is not kept alive by a pinned shape. Returns the constructed
 /// object.
 ///
-/// The class is the minting function's; a class whose registered prototype is
-/// later moved off `proto` clears the record
-/// ([`forget_birth_record_of_class`]), so a record never outlives the pairing
-/// it was minted from.
+/// The record belongs to the prototype itself. Reassigning a function's
+/// property leaves that prototype's birth shape valid for another owner.
 #[cold]
 #[inline(never)]
-unsafe fn mint_birth_record(func_value: f64, proto: *mut ObjectHeader) -> f64 {
+unsafe fn mint_birth_record(proto: *mut ObjectHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_handle = scope.root_raw_mut_ptr(proto);
-    let class_id = synthetic_class_id_for_function(func_value);
+    let class_id = 0;
     let slots = crate::object::learned_inline_field_count(class_id);
     let obj = scope.root_raw_mut_ptr(js_object_alloc(class_id, slots));
     let proto_bits = proto_handle
@@ -291,8 +289,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
         // Never read: materialize the default prototype the general path
         // would, then read it back off the (possibly moved) function.
         None if own_prototype_value(closure).is_none() => {
-            let class_id = synthetic_class_id_for_function(func_value);
-            ensure_function_prototype_object(func_value, class_id);
+            ensure_function_prototype_object(func_handle.get_nanbox_f64());
             let closure = (func_handle.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
             own_prototype_object(closure)?
         }
@@ -309,7 +306,7 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
         Some((class_id, shape_id, slots)) => {
             crate::value::js_nanbox_pointer(born_from_record(class_id, shape_id, slots) as i64)
         }
-        None => mint_birth_record(func_handle.get_nanbox_f64(), proto),
+        None => mint_birth_record(proto),
     };
     Some(run_constructor_body(
         func_handle.get_nanbox_f64(),

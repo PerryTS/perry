@@ -770,9 +770,7 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
     }
 
     let event_emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
-    let event_emitter_id = crate::object::function_class_id(event_emitter);
-    let event_emitter_proto =
-        crate::object::ensure_function_prototype_object(event_emitter, event_emitter_id);
+    let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
             proto as usize,

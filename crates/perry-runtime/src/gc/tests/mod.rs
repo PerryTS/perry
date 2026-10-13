@@ -46,6 +46,7 @@ mod fromspace_protect;
 mod fromspace_scan;
 mod full_mark_remembered;
 mod full_mark_word;
+mod function_prototype_ownership;
 mod global_bootstrap;
 mod global_sink_isolation;
 mod handle_bound_method_name;

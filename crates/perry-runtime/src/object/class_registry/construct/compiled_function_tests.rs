@@ -58,8 +58,8 @@ fn construction_is_born_from_the_prototype_birth_record() {
         );
         assert_eq!(
             (*second).class_id,
-            synthetic_class_id_for_function(func),
-            "a construction carries its function's class"
+            0,
+            "ordinary function instances use their actual prototype identity"
         );
         // The birth shape names the prototype; a replayed construction
         // carries no per-instance record.
@@ -96,6 +96,7 @@ fn a_reassigned_prototype_leaves_earlier_constructions_alone() {
     let func = compiled_function();
     let before = construct(func);
     let old_proto = own_prototype(func);
+    let old_birth = unsafe { (*(*old_proto).meta).instance_birth };
     let new_proto = crate::object::js_object_alloc(0, 0);
     crate::object::js_set_function_prototype(
         func,
@@ -107,8 +108,8 @@ fn a_reassigned_prototype_leaves_earlier_constructions_alone() {
     unsafe {
         assert_eq!(
             (*(*old_proto).meta).instance_birth,
-            0,
-            "moving the class's prototype retires the old prototype's record"
+            old_birth,
+            "the old prototype retains its valid birth shape for later reuse"
         );
         assert_ne!(
             crate::object::shapes::object_shape_stamp(before),

@@ -251,7 +251,6 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
     // young-logged tables prune from their logs instead of walking.
     fan_out(
         &|addr| probe.owner_is_dead(addr, None),
-        &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_CLOSURE)),
         /* young_only = */ !full_trace,
         None,
     );
@@ -278,7 +277,6 @@ pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
     }
     fan_out(
         &|addr| owner_is_dead_copied_minor_from_space(addr, None),
-        &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_CLOSURE)),
         /* young_only = */ true,
         diag.then_some(&mut detail),
     );
@@ -288,17 +286,12 @@ pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
     detail
 }
 
-/// Which of the pass's three deadness predicates a registered prune is handed.
-///
-/// Narrowing is not cosmetic: `Closure` and `Symbol` additionally require the
-/// header's `obj_type` to match, which is what stops a prune from adjudicating
-/// an address that has already been recycled as some other kind of object.
+/// Owner domain recorded by the remaining address-keyed prune inventory.
+/// Function-class metadata and its closure-specific predicate are gone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeadKeyOwner {
     /// Any registered GC type.
     Any,
-    /// `GC_TYPE_CLOSURE` only.
-    Closure,
 }
 
 /// One address-keyed side table whose dead keys this pass drops.
@@ -405,17 +398,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         full_only: true,
         young_prune: None,
     },
-    // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
-    // value's closure address, and is REKEYED (not re-derived) when that
-    // closure moves — so a dead key does not merely leak, the rekey walk
-    // follows whatever the recycled bytes at that address look like.
-    DeadKeyPrune {
-        table: "FUNCTION_CLASS_IDS",
-        owner: DeadKeyOwner::Closure,
-        prune: crate::object::prune_dead_function_class_id_keys,
-        full_only: false,
-        young_prune: None,
-    },
     DeadKeyPrune {
         table: "UTF16_INDEX_CACHE",
         owner: DeadKeyOwner::Any,
@@ -436,12 +418,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
     },
 ];
 
-fn fan_out(
-    is_dead_owner: &dyn Fn(usize) -> bool,
-    is_dead_closure: &dyn Fn(usize) -> bool,
-    young_only: bool,
-    mut diag: Option<&mut String>,
-) {
+fn fan_out(is_dead_owner: &dyn Fn(usize) -> bool, young_only: bool, mut diag: Option<&mut String>) {
     // Interned key pointers cached in the store-plan cache may die in this
     // collection — flush every cached verdict. Pointer identity only: the
     // entries pruned below all belong to objects that are DEAD, so no live
@@ -457,7 +434,6 @@ fn fan_out(
         }
         let is_dead: &dyn Fn(usize) -> bool = match entry.owner {
             DeadKeyOwner::Any => is_dead_owner,
-            DeadKeyOwner::Closure => is_dead_closure,
         };
         let start = diag.as_ref().map(|_| std::time::Instant::now());
         match entry.young_prune {

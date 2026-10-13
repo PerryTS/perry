@@ -31,7 +31,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
 
     crate::object::test_seed_class_prototype_object_root(0x5201, prototype_object);
     crate::object::test_seed_class_parent_closure_root(0x5201, parent_closure);
-    crate::object::test_seed_function_class_id_key(ptr_bits(function_key), 0x8200_5201);
 
     let valid_ptrs = build_valid_pointer_set();
     crate::object::scan_class_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
@@ -82,7 +81,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
 
     crate::object::test_seed_class_prototype_object_root(0x5202, value_user as usize);
     crate::object::test_seed_class_parent_closure_root(0x5202, key_user as usize);
-    crate::object::test_seed_function_class_id_key(key_bits, 0x8200_5202);
 
     rewrite_mutable_registered_roots(&valid_ptrs);
 
@@ -93,18 +91,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
     assert_eq!(
         crate::object::test_class_parent_closure_root_addr(0x5202),
         key_old as usize
-    );
-    assert_eq!(
-        crate::object::function_class_id(f64::from_bits(key_old_bits)),
-        0x8200_5202
-    );
-    assert_eq!(
-        crate::object::test_function_class_id_key_for_class(0x8200_5202),
-        key_old_bits
-    );
-    assert_eq!(
-        crate::object::function_class_id(f64::from_bits(key_bits)),
-        0
     );
 
     crate::object::test_clear_class_side_table_roots();

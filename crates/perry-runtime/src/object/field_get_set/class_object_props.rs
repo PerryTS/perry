@@ -653,12 +653,9 @@ pub(super) unsafe fn instance_constructor_value(
     if class_id != 0 && is_anon_shape_class_id(class_id) {
         return None;
     }
-    if let Some(func_value) = super::super::class_registry::function_value_for_class_id(class_id) {
-        return Some(JSValue::from_bits(func_value.to_bits()));
-    }
     // #10478: an `Object.create(proto)` result is stamped with a synthetic
     // class id that only indexes its prototype object
-    // (`CLASS_PROTOTYPE_OBJECTS`); unlike the function ids above it names no
+    // (`CLASS_PROTOTYPE_OBJECTS`); it names no
     // class VALUE. Its `constructor` is the inherited `proto.constructor`, so
     // read it off that chain. The INT32 synthesis below minted a ClassRef for
     // the synthetic id itself (`0x7FFE_0000_8000_0000`): unequal to `Object` /

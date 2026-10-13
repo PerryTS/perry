@@ -48,26 +48,15 @@ pub(crate) use rooted_arguments::construct_rooted_arguments;
 #[cfg(feature = "regex-engine")]
 pub(crate) use rooted_arguments::construct_two_rooted;
 
-/// Issue #838 followup (b): construct an instance from a function value.
-/// Pairs with `js_register_function_prototype_method` — both arms route
-/// through `synthetic_class_id_for_function` so the instance's
-/// `class_id` matches the bucket prototype methods were registered
-/// against. Allocates a fresh object stamped with the synthetic id,
-/// then invokes the function as the constructor with the new object
-/// as `this` so any `this.foo = …` writes in the
-/// function body land on the instance. Returns the NaN-boxed new
-/// instance pointer.
-///
-/// `func_value` must be a POINTER_TAG'd closure. `args_ptr` is a flat
-/// f64 array of length `args_len`. Falls back to a class_id=0
-/// empty-object allocation when the function value isn't a closure
-/// (preserves the pre-fix baseline for misuse).
 mod nm_ctors;
 pub(crate) use nm_ctors::{
     nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs, nm_ctor_readline,
     nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
 };
 
+/// Issue #838 followup (b): construct an instance from a function value.
+/// Function prototype methods live on the function's actual prototype,
+/// which is also the fresh instance's recorded prototype.
 #[no_mangle]
 // This is a generated-code boundary whose TypeError paths unwind to the
 // caller's JavaScript catch landing pad. A plain `extern "C"` installs an
@@ -854,82 +843,23 @@ unsafe fn construct_function_impl(
     if !is_callable_function_value(func_value) || extends_target_must_throw(func_value) {
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
-    let cid = synthetic_class_id_for_function(func_value);
-    // Allocate the instance with the synthetic class id (or 0 if the
-    // value isn't callable). The object starts with no own props; the
-    // constructor body fills `this.<field>` writes through
-    // PropertySet, and method dispatch reads its recorded prototype.
-    // Learned inline sizing: a class that overflowed once pre-sizes every
-    // later instance so all its fields land inline (object/mod.rs).
-    // #7341: `func_value` is a heap pointer (the closure) and every use of it
-    // below happens AFTER this allocation. `js_object_alloc` can drive an
-    // evacuating minor, which moves the closure; the decode at `let fp = ...`
-    // then names from-space and `is_closure_ptr` reads `CLOSURE_MAGIC` off it
-    // -- `ldr w8, [x23, #0xc]` at `js_new_function_construct + 5304`, the fault
-    // in `test_gap_learned_inline_sizing` under from-space quarantine.
-    //
-    // A stale read here is quiet rather than fatal without the quarantine: the
-    // magic check simply fails, the user-prototype link is skipped, and the
-    // instance silently gets the wrong [[Prototype]].
+    // Both owner and instance cross a collecting Get of function.prototype.
+    // Ordinary functions have no class-table identity.
     let func_scope = crate::gc::RuntimeHandleScope::new();
     let func_handle = func_scope.root_nanbox_f64(func_value);
-    let obj_ptr = js_object_alloc(cid, crate::object::learned_inline_field_count(cid));
-    // Republish IMMEDIATELY: `fp` below is derived from this value, and the
-    // derivation is what must see the post-collection address.
-    let func_value = func_handle.get_nanbox_f64();
-    let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
-    // A user-assigned `foo.prototype = <obj/array>` lives as the closure's
-    // "prototype" dynamic prop; the instance's [[Prototype]] must be THAT
-    // value — notably a real array (`foo.prototype = new Array(1,2,3)`),
-    // which `ensure_function_prototype_object` would shadow with a fresh
-    // empty object (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*).
-    let mut linked_user_proto = false;
-    {
-        let fp = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
-        if fp != 0 && crate::closure::is_closure_ptr(fp) {
-            let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
-            let dp = JSValue::from_bits(dyn_proto.to_bits());
-            if dp.is_pointer() {
-                let raw = dp.as_pointer::<u8>() as usize;
-                // Function objects (closures) are identified by CLOSURE_MAGIC,
-                // not a GC type tag — check them first.
-                let is_fn = crate::closure::is_closure_ptr(raw);
-                let has_user_proto = is_fn
-                    || (raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
-                        let hdr = unsafe {
-                            &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
-                        };
-                        // Arrays: test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*.
-                        // Objects: Intl/Temporal constructors install .prototype via
-                        // closure_set_dynamic_prop (bypassing js_set_function_prototype),
-                        // so CLASS_PROTOTYPE_OBJECTS has no entry; ensure_function_prototype_object
-                        // would otherwise create a fresh empty proto and overwrite .prototype.
-                        matches!(
-                            hdr.obj_type,
-                            crate::gc::GC_TYPE_ARRAY
-                                | crate::gc::GC_TYPE_LAZY_ARRAY
-                                | crate::gc::GC_TYPE_OBJECT
-                        )
-                    });
-                if has_user_proto {
-                    super::super::prototype_chain::object_link_class_default_prototype(
-                        obj_ptr as usize,
-                        dyn_proto.to_bits(),
-                    );
-                    linked_user_proto = true;
-                }
-            }
-        }
-    }
-    if !linked_user_proto {
-        let proto = ensure_function_prototype_object(func_value, cid);
-        if !proto.is_null() {
+    let obj = func_scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    let proto_bits = constructor_prototype_bits(func_handle.get_nanbox_f64());
+    if let Some(proto_bits) = proto_bits {
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
             super::super::prototype_chain::object_link_class_default_prototype(
-                obj_ptr as usize,
-                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-            );
-        }
+                obj as usize,
+                proto_bits,
+            )
+        });
     }
+    let func_value = func_handle.get_nanbox_f64();
+    let nan_boxed =
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64));
     // Only run the constructor body when the callee is recognised as
     // a closure shape. The codegen LocalGet path widens the route to
     // any local-resolved callee, so we have to gate the
@@ -1580,35 +1510,29 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         );
     }
 
-    // Stamp the instance with the class id of `newTarget` (not the invoked
-    // `target`). Per `OrdinaryCreateFromConstructor`, the instance's
-    // `[[Prototype]]` is `newTarget.prototype`, so `obj instanceof newTarget`
-    // must be true and `obj instanceof target` false. Perry models the
-    // prototype chain via class ids, so allocating with `0` left
-    // `Reflect.construct(Target, …, NewTarget)` instances matching neither.
-    // A `newTarget` may be a *declared class* (an `Expr::ClassRef`, e.g.
-    // `Reflect.construct(plainFn, [], class C {})`) — resolve its registered
-    // class id first so `instanceof C` holds — or a *plain function*, for which
-    // the synthetic per-function id applies. (The real `[[Prototype]]` link is
-    // still set below from `newTarget.prototype`.)
-    let cid = new_target_class_id(nt).unwrap_or_else(|| synthetic_class_id_for_function(nt));
-    // Learned inline sizing: a class that overflowed once pre-sizes every
-    // later instance so all its fields land inline (object/mod.rs).
-    // #7341: same shape as the sibling below -- `nt` is a heap pointer and
-    // `constructor_prototype_bits(nt)` on the next line runs AFTER this
-    // allocation, which can evacuate it. Not independently reproduced (the
-    // measured fault is in the plain-`new` entry point), fixed because it is
-    // the identical defect one call away.
+    // Declared newTargets retain their class identity; ordinary functions
+    // select the actual prototype through GetPrototypeFromConstructor.
+    let cid = new_target_class_id(nt).unwrap_or(0);
     let nt_scope = crate::gc::RuntimeHandleScope::new();
     let nt_handle = nt_scope.root_nanbox_f64(nt);
-    let obj_ptr = js_object_alloc(cid, crate::object::learned_inline_field_count(cid));
-    // Republish IMMEDIATELY -- `constructor_prototype_bits(nt)` on the next
-    // line is the use that must see the post-collection address.
-    let nt = nt_handle.get_nanbox_f64();
-    let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
-    if let Some(proto_bits) = constructor_prototype_bits(nt) {
-        super::super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
+    let func_handle = nt_scope.root_nanbox_f64(func_value);
+    let args = nt_scope.root_nanbox_f64_slice(if args_len == 0 || args_ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    });
+    let obj = nt_scope.root_raw_mut_ptr(js_object_alloc(
+        cid,
+        crate::object::learned_inline_field_count(cid),
+    ));
+    if let Some(proto_bits) = constructor_prototype_bits(nt_handle.get_nanbox_f64()) {
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            super::super::prototype_chain::object_set_static_prototype(obj as usize, proto_bits)
+        });
     }
+    let nt = nt_handle.get_nanbox_f64();
+    let nan_boxed =
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64));
 
     // #7280: same unrooted-receiver shape as the plain-`new` tail above —
     // `nan_boxed` and the two displaced new.target values cross a user
@@ -1622,11 +1546,12 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     crate::object::js_new_target_set(nt);
     let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
     let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     let result = crate::closure::native_call_value_this(
-        func_value,
+        func_handle.get_nanbox_f64(),
         crate::closure::JsThis::from_f64(inst_handle.get_nanbox_f64()),
-        args_ptr,
-        args_len,
+        args.as_ptr(),
+        args.len(),
     );
     CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
     crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());

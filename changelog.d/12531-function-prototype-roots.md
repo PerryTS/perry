@@ -1,0 +1,3 @@
+Function default prototypes now belong only to their function's normal property storage. Remove the function-to-synthetic-class registry, its prototype roots, and its GC rekey/prune machinery. Construction, instanceof, inheritance, prototype methods and constructor identity follow the actual function/instance prototype edges. Dead function/prototype cycles are reclaimed instead of retained for the process.
+
+Add GC ownership/relocation tests and Node parity coverage for retention, reassignment, construction, function kinds and classes. Root construction receivers across prototype materialization and GetPrototypeFromConstructor.

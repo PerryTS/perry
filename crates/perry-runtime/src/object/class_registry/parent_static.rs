@@ -96,19 +96,9 @@ pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
     } else if tag == POINTER_TAG {
         // Object instance: read class_id from the ObjectHeader.
         let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
-        let from_obj = js_object_get_class_id(ptr);
-        if from_obj != 0 {
-            from_obj
-        } else {
-            // Issue #711 part 2: the value might be a closure whose
-            // `.prototype` was assigned to an object via the
-            // `function Base() {}; Base.prototype = X` pattern. Look
-            // up the synthetic class id assigned at
-            // `js_set_function_prototype` time. Returns 0 if the
-            // closure has no registered prototype object — falls
-            // through to the parentless baseline.
-            function_class_id(value)
-        }
+        // Ordinary functions carry no class identity. Their evaluated
+        // heritage and actual prototype edges already preserve inheritance.
+        js_object_get_class_id(ptr)
     } else {
         0
     }

@@ -21,7 +21,7 @@ pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
             return false;
         }
     }
-    synthetic_class_id_for_function(func_value) != 0
+    true
 }
 
 pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Option<f64> {
@@ -33,7 +33,7 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
         return None;
     }
     // Bound native class exports are constructors; ordinary bound methods are
-    // not. A stable synthetic class gives constructor exports a prototype.
+    // not. Constructor exports own their prototype in the same property bag.
     let jv = crate::value::JSValue::from_bits(func_value.to_bits());
     if jv.is_pointer() {
         let cptr = jv.as_pointer::<crate::closure::ClosureHeader>();
@@ -54,11 +54,7 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     if super::super::native_module::builtin_closure_is_non_constructable_value(func_value) {
         return None;
     }
-    let cid = synthetic_class_id_for_function(func_value);
-    if cid == 0 {
-        return None;
-    }
-    let proto = ensure_function_prototype_object(func_value, cid);
+    let proto = ensure_function_prototype_object(func_value);
     (!proto.is_null()).then(|| crate::value::js_nanbox_pointer(proto as i64))
 }
 

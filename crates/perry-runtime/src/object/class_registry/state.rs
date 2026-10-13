@@ -602,26 +602,6 @@ crate::perry_thread_local! {
 pub static REGISTERED_CLASS_IDS: ImageTable<RwLock<Option<crate::fast_hash::PtrHashSet<u32>>>> =
     ImageTable::new(|image| &image.registered_class_ids);
 
-crate::perry_thread_local! {
-    /// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.
-    /// Effect's `internal/effectable.ts` declares classes via prototype
-    /// assignment on a plain function, not via `class` syntax. To make
-    /// `class Derived extends Base {}` walk into `obj`'s methods at dispatch
-    /// time, we model this as a synthetic class:
-    ///   - `js_set_function_prototype(func, obj)` allocates a synthetic
-    ///     class_id (high-bit-set to avoid collision with codegen-assigned
-    ///     ids), stores `func_bits → synthetic_cid` in `FUNCTION_CLASS_IDS`,
-    ///     and `synthetic_cid → obj_ptr` in `CLASS_PROTOTYPE_OBJECTS`.
-    ///   - `js_register_class_parent_dynamic` extends to detect closure
-    ///     parent values, looks up the synthetic class_id, and registers
-    ///     the (child, synthetic) edge in CLASS_REGISTRY.
-    ///   - The method-dispatch chain walk in `js_native_call_method`
-    ///     consults `CLASS_PROTOTYPE_OBJECTS` when it reaches a synthetic
-    ///     class_id: it resolves the method as a regular field lookup on
-    ///     the prototype object and calls it with `this` bound to the
-    ///     receiver.
-    pub static FUNCTION_CLASS_IDS: RwLock<Option<HashMap<u64, u32>>> = RwLock::new(None);
-}
 // Stored as `usize` (raw address) so the map is Send + Sync. The
 // pointer is always converted back to `*mut ObjectHeader` at call sites
 // (`class_prototype_object` / the dispatch walk) where single-threaded

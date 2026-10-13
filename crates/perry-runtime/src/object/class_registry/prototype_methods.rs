@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashMap;
 
 const CLASS_LEXICAL_BINDING_KEY: &str = "#<perry:private-class-lexical-binding>";
 
@@ -200,46 +199,5 @@ pub unsafe extern "C" fn js_register_function_prototype_method(
             1,
         );
     }
-    function_class_id(func.get_nanbox_f64())
-}
-
-/// Get-or-allocate a synthetic class id keyed by a function value's
-/// NaN-boxed bits. Used by `js_register_function_prototype_method` (HIR
-/// "Func.prototype.x = fn" recogniser) and `js_new_function_construct`
-/// (HIR "new Func(args)" allocator) so both sides agree on the same id
-/// — the instance's `(*obj).class_id` lands in the same bucket the
-/// method registration stored against. Returns 0 if `func_value` isn't a
-/// POINTER_TAG'd value (callable shape requirement).
-pub(crate) fn synthetic_class_id_for_function(func_value: f64) -> u32 {
-    let func_bits = func_value.to_bits();
-    // Require a verified closure shape so we don't store arbitrary
-    // POINTER_TAG'd pointers (arrays, objects, etc. all share the tag)
-    // in `FUNCTION_CLASS_IDS`. The bits-as-key invariant only makes
-    // sense for callable values that produced a stable singleton
-    // closure pointer.
-    if !is_callable_function_value(func_value) {
-        return 0;
-    }
-    let existing = FUNCTION_CLASS_IDS.with(|table| {
-        let read = table.read().unwrap();
-        if let Some(map) = read.as_ref() {
-            if let Some(&existing) = map.get(&func_bits) {
-                return Some(existing);
-            }
-        }
-        None
-    });
-    if let Some(existing) = existing {
-        return existing;
-    }
-    let new_cid = super::prototype_objects::alloc_synthetic_class_id();
-    FUNCTION_CLASS_IDS.with(|table| {
-        let mut write = table.write().unwrap();
-        if write.is_none() {
-            *write = Some(HashMap::new());
-        }
-        write.as_mut().unwrap().insert(func_bits, new_cid);
-    });
-    unsafe { js_register_class_id(new_cid) };
-    new_cid
+    0
 }

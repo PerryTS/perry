@@ -3746,10 +3746,6 @@
       "name": "CLASS_SYMBOL_METHODS"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "FUNCTION_CLASS_IDS"
-    },
-    {
       "file": "crates/perry-runtime/src/object/delete_rest.rs",
       "name": "TOMBSTONE_TEST_OVERRIDE"
     },

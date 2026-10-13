@@ -211,7 +211,7 @@ pub(crate) unsafe fn nm_ctor_stream(
         let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
             "stream", "Stream",
         ));
-        let cid = synthetic_class_id_for_function(ctor.get_nanbox_f64());
+        let cid = 0;
         let instance = scope.root_raw_mut_ptr(js_object_alloc(cid, 0));
         let proto = crate::closure::closure_get_dynamic_prop(
             (ctor.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,

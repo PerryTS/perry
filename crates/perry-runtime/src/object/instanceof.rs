@@ -268,31 +268,12 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
-    // ES5 function constructors: `x instanceof Foo` where `Foo` is a plain
-    // function used with `new`. `js_new_function_construct` stamps each
-    // instance with `synthetic_class_id_for_function(Foo)`; derive the same
-    // id from the function value here and walk the candidate's class chain
-    // against it. Mirrors the construct site so the common
-    // `if (!(this instanceof Foo)) return new Foo()` guard resolves to true
-    // inside a `new`-invoked body instead of recursing forever (#838 followup).
-    let synthetic_cid = synthetic_class_id_for_function(type_ref);
-    if synthetic_cid != 0 {
-        let r = js_instanceof(value, synthetic_cid);
-        if r.to_bits() == crate::value::TAG_TRUE {
-            return r;
-        }
-        // #5989: the synthetic class-id chain is stamped at construction and does
-        // NOT reflect a prototype installed later via
-        // `Fn.prototype = Object.create(Base.prototype)` — the classic ES5
-        // inheritance idiom react-server-dom's flight Chunk uses to inherit
-        // `Promise.prototype` (so `chunk instanceof Promise` wrongly returned
-        // false). Fall back to the spec `OrdinaryHasInstance` prototype-chain
-        // walk: Perry already walks the real chain for method lookup and
-        // `getPrototypeOf`, so only this id-based shortcut missed it.
-        if ordinary_has_instance_prototype_walk(value, type_ref) {
-            return f64::from_bits(crate::value::TAG_TRUE);
-        }
-        return f64::from_bits(TAG_FALSE);
+    if is_callable_function_value(type_ref) {
+        return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+            crate::value::TAG_TRUE
+        } else {
+            TAG_FALSE
+        });
     }
     // #2909: nothing recognized the RHS as a constructor/class. Per the
     // ECMAScript `InstanceofOperator`, the right operand must be an object
