@@ -1344,6 +1344,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx, object, property, &function, &keys, contained,
                 );
             }
+            // wpfacts slice 2: a receiver the whole-program facts prove
+            // (prefix-stable classes, a definite data birth field at one
+            // slot) reads the slot with no guard (`wpfacts_access.rs`).
+            if let Some(v) =
+                super::wpfacts_access::try_lower_get(ctx, object, property, *byte_offset)?
+            {
+                return Ok(v);
+            }
             // Class metadata nominates specialized property paths below.
             // Public accessors still require live receiver/prototype lookup.
             let proven_receiver_class = receiver_class_name(ctx, object);

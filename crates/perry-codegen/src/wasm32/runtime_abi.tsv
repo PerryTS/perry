@@ -4836,4 +4836,5 @@ perry_updater_get_config	ptr
 perry_updater_record_response	i64	f64
 perry_updater_refresh_due	i64	
 perry_watchos_classes_registered	void	
+perry_wpfacts_check_field	i32s	f64,f64,i64,i64,i64,i32s,i32s,i32s,i64
 setInterval	i64	i64,f64

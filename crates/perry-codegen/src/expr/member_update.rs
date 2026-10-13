@@ -205,6 +205,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // performs the layout downgrade the GC scan relies on).
             // (Phase 5a's proven `this` never claims numeric fields, so this
             // site remains Phase-3b-local-only in practice.)
+            // wpfacts slice 2: the same bare update for a receiver the
+            // whole-program facts prove (non-null, a field that only ever
+            // holds Numbers in an `F64` birth lane).
+            if let Some(w) = super::wpfacts_access::prove_store(
+                ctx,
+                object,
+                property,
+                super::wpfacts_access::Access::Update,
+            )
+            .filter(|w| w.proof.raw_f64)
+            {
+                let slot = w.proof.slot;
+                return emit_numeric_slot_update(
+                    ctx,
+                    object,
+                    property,
+                    slot,
+                    *op,
+                    *prefix,
+                    Some(&w),
+                );
+            }
             {
                 let fact = ctx.ptr_shape_store_fact(object.as_ref()).cloned();
                 {
@@ -218,70 +240,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 )
                             {
                                 ctx.note_ptr_shape_consumed(object.as_ref(), "ptr_shape_update");
-                                let recv_box = lower_expr(ctx, object)?;
-                                let field_idx_str = field_index.to_string();
-                                let header_skip = crate::target_layout::object_header_size_bytes(
-                                    ctx.target_triple,
-                                )
-                                .to_string();
-                                let (obj_handle, field_ptr, old, new) = {
-                                    let blk = ctx.block();
-                                    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                                    let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                                    let field_ptr =
-                                        blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                                    let old = blk.load(DOUBLE, &field_ptr);
-                                    let new = match op {
-                                        BinaryOp::Sub => blk.fsub(&old, "1.0"),
-                                        _ => blk.fadd(&old, "1.0"),
-                                    };
-                                    (obj_handle, field_ptr, old, new)
-                                };
-                                let store_idx = ctx.new_block("ptr_shape_update.raw_store");
-                                let cold_idx = ctx.new_block("ptr_shape_update.downgrade");
-                                let merge_idx = ctx.new_block("ptr_shape_update.merge");
-                                let store_label = ctx.block_label(store_idx);
-                                let cold_label = ctx.block_label(cold_idx);
-                                let merge_label = ctx.block_label(merge_idx);
-                                {
-                                    let blk = ctx.block();
-                                    let new_bits = blk.bitcast_double_to_i64(&new);
-                                    let finite = crate::expr::class_field_inline_guard::
-                                        emit_plain_finite_number_check(blk, &new_bits);
-                                    blk.cond_br(&finite, &store_label, &cold_label);
-                                }
-                                ctx.current_block = store_idx;
-                                {
-                                    // Reached only when the finite check above
-                                    // proved `new`'s exponent is NOT all-ones;
-                                    // every NaN-box tag (INT32/STRING/POINTER/
-                                    // BIGINT) has an all-ones exponent.
-                                    let blk = ctx.block();
-                                    // GC_STORE_AUDIT(POINTER_FREE): a genuine
-                                    // unboxed double by the proof above, never
-                                    // a GC pointer — no edge, so no barrier.
-                                    blk.store(DOUBLE, &new, &field_ptr);
-                                    blk.br(&merge_label);
-                                }
-                                ctx.current_block = cold_idx;
-                                {
-                                    let key_idx = ctx.strings.intern(property);
-                                    let key_handle_global =
-                                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                                    let blk = ctx.block();
-                                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                    blk.call_void(
-                                        "js_object_set_field_by_name",
-                                        &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
-                                    );
-                                    blk.br(&merge_label);
-                                }
-                                ctx.current_block = merge_idx;
-                                return Ok(if *prefix { new } else { old });
+                                return emit_numeric_slot_update(
+                                    ctx,
+                                    object,
+                                    property,
+                                    field_index,
+                                    *op,
+                                    *prefix,
+                                    None,
+                                );
                             }
                         }
                     }
@@ -565,4 +532,89 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         _ => unreachable!("expr/instance_misc1.rs dispatched a non-update variant here"),
     }
+}
+
+/// `o.f++` / `o.f--` on a receiver whose layout is proven and whose field
+/// slot always holds a canonical double (a `Ptr<Shape>` numeric field, or a
+/// wpfacts number-only field in an `F64` lane): bare load/fadd/store at the
+/// fixed offset. The store keeps the raw-slot plain-finite discipline (an
+/// Inf-crossing update side-exits to the by-name setter, which performs the
+/// layout downgrade the GC scan relies on).
+fn emit_numeric_slot_update(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    field_index: u32,
+    op: BinaryOp,
+    prefix: bool,
+    wpf: Option<&super::wpfacts_access::StoreProof>,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    // Addressed from the biased receiver (`wpfacts_access::emit_slot_ptr`);
+    // the handle is derived only on the cold arm that needs it.
+    let field_ptr = super::wpfacts_access::emit_slot_ptr(ctx, &recv_box, field_index);
+    let (old, new) = {
+        let blk = ctx.block();
+        let old = blk.load(DOUBLE, &field_ptr);
+        let new = match op {
+            BinaryOp::Sub => blk.fsub(&old, "1.0"),
+            _ => blk.fadd(&old, "1.0"),
+        };
+        (old, new)
+    };
+    let store_idx = ctx.new_block("ptr_shape_update.raw_store");
+    let cold_idx = ctx.new_block("ptr_shape_update.downgrade");
+    let merge_idx = ctx.new_block("ptr_shape_update.merge");
+    let store_label = ctx.block_label(store_idx);
+    let cold_label = ctx.block_label(cold_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    {
+        let blk = ctx.block();
+        let new_bits = blk.bitcast_double_to_i64(&new);
+        let finite =
+            crate::expr::class_field_inline_guard::emit_plain_finite_number_check(blk, &new_bits);
+        blk.cond_br(&finite, &store_label, &cold_label);
+    }
+    ctx.current_block = store_idx;
+    {
+        // Reached only when the finite check above
+        // proved `new`'s exponent is NOT all-ones;
+        // every NaN-box tag (INT32/STRING/POINTER/
+        // BIGINT) has an all-ones exponent.
+        let blk = ctx.block();
+        // GC_STORE_AUDIT(POINTER_FREE): a genuine
+        // unboxed double by the proof above, never
+        // a GC pointer — no edge, so no barrier.
+        blk.store(DOUBLE, &new, &field_ptr);
+        blk.br(&merge_label);
+    }
+    ctx.current_block = cold_idx;
+    {
+        let key_idx = ctx.strings.intern(property);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let key_bits = blk.bitcast_double_to_i64(&key_box);
+        let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+        blk.call_void(
+            "js_object_set_field_by_name",
+            &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
+        );
+        blk.br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
+    if let Some(w) = wpf {
+        super::wpfacts_access::emit_witness(
+            ctx,
+            &recv_box,
+            &new,
+            property,
+            &w.proof,
+            super::wpfacts_access::WPF_STORE,
+            w.site,
+        );
+    }
+    Ok(if prefix { new } else { old })
 }

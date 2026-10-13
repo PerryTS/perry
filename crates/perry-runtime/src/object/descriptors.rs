@@ -1796,6 +1796,8 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
 /// `TypeError: Object prototype may only be an Object or null`.
 #[no_mangle]
 pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64) -> f64 {
+    #[cfg(feature = "contract-checks")]
+    crate::contracts::object_create(proto_value);
     // #2816: apply the descriptor bag, if one was supplied.
     let props_jv = crate::value::JSValue::from_bits(props_value.to_bits());
     if props_jv.is_undefined() {

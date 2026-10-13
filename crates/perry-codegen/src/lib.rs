@@ -100,9 +100,10 @@ pub use codegen::{
     namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
     short_spread_method_capabilities, take_module_static_seeds, target_os_of, user_function_symbol,
     AppMetadata, BirthProto, BirthShape, ClassAccessorNames, CompileOptions, ConstFnBirth,
-    ConstructorContracts, CtorAbi, DefinedClassShape, ExportedObjectLiteralCapability,
-    FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth,
-    NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
+    ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
+    ExportedObjectLiteralCapability, FactsClass, FactsField, FactsRecv, FpContractMode,
+    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
+    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
     TARGET_NAMES,
 };

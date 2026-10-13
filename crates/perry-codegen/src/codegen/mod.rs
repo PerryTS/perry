@@ -246,6 +246,8 @@ mod native_namespace_exports;
 #[cfg(test)]
 mod number_exactness_tests;
 mod opts;
+mod program_facts_view;
+pub use program_facts_view::{ElisionFacts, FactsClass, FactsField, FactsRecv, ProgramFactsView};
 #[cfg(test)]
 mod ordinary_param_guard_tests;
 mod param_guard;
@@ -574,6 +576,12 @@ fn compile_module_impl(
     // and their per-module counter would otherwise collide across modules
     // at the final link (GNU ld: `multiple definition of .str.N`).
     llmod.set_symbol_prefix(&module_prefix);
+    // wpfacts slice 1: contract builds only (empty otherwise).
+    program_facts_view::emit_contract_section(
+        &mut llmod,
+        &module_prefix,
+        &opts.program_facts.contract_section,
+    );
     // Null guard global: a zeroed i32 used as a safe dereference target
     // when a NaN-unboxed pointer is null/invalid. Prevents segfaults from
     // uninitialized locals or unhandled expressions producing 0.0/TAG_UNDEFINED.
@@ -2690,6 +2698,7 @@ fn compile_module_impl(
             .filter(|id| !funcs_reading_dynamic_this.contains(id))
             .collect();
     let mut cross_module = CrossModuleCtx {
+        wpfacts: opts.program_facts.elision.clone(),
         program_has_worker: opts.program_has_worker,
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),

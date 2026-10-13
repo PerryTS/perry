@@ -722,6 +722,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // PERRY_CHECK_CONTRACTS: the witness of the declared-kind element proof.
     module.declare_function("js_typed_element_contract", I32, &[DOUBLE, I32, I64]);
+    // wpfacts slice 2: the contract witness of an elided field access.
+    module.declare_function(
+        "perry_wpfacts_check_field",
+        I32,
+        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I64],
+    );
     module.declare_function("js_dyn_index_get_site", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
     module.declare_function(
         "js_region_holder_read",

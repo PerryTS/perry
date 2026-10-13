@@ -819,6 +819,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     return Ok(val_double);
                 }
             }
+            // wpfacts slice 2: a receiver the whole-program facts prove
+            // (prefix-stable classes, a definite data birth field at one
+            // slot, non-null) stores into the slot with no guard.
+            if let Some(w) = super::wpfacts_access::prove_store(
+                ctx,
+                object,
+                property,
+                super::wpfacts_access::Access::Set,
+            ) {
+                let class_name = w.proof.class_names[0].clone();
+                let slot = w.proof.slot;
+                let raw = w.proof.any_f64_lane;
+                return emit_proven_class_field_store(
+                    ctx,
+                    object,
+                    property,
+                    value,
+                    &class_name,
+                    slot,
+                    raw,
+                    Some(&w),
+                );
+            }
             // Setter dispatch: if the receiver is a known class and the
             // property is registered as a setter, call the synthesized
             // __set_<property> method instead of doing a raw field
@@ -933,227 +956,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         field_index,
                                     ));
                             if ptr_shape_proven {
-                                return with_class_store_operands(
+                                return emit_proven_class_field_store(
                                     ctx,
                                     object,
+                                    property,
                                     value,
-                                    |ctx, recv_box, val_double| {
-                                        let key_idx = ctx.strings.intern(property);
-                                        let key_handle_global = format!(
-                                            "@{}",
-                                            ctx.strings.entry(key_idx).handle_global
-                                        );
-                                        let site_id = emit_typed_feedback_register_site(
-                                            ctx,
-                                            TypedFeedbackKind::PropertySet,
-                                            property,
-                                            TypedFeedbackContract::class_field_set(),
-                                        );
-                                        let field_idx_str = field_index.to_string();
-                                        // Representation-selection Phase 3b: shape-proven
-                                        // Ptr<Shape> receiver (collectors/ptr_shape.rs) — no
-                                        // guard, no shape diamond. Raw-f64 slots keep the
-                                        // inline plain-finite value check with a cold
-                                        // `js_class_field_set_fallback` arm (a NaN/Inf/boxed
-                                        // value must never be stored raw into a scalar-masked
-                                        // slot — the runtime setter performs the layout
-                                        // downgrade the GC scan relies on). Boxed slots store
-                                        // inline with the existing generational write barrier
-                                        // for possibly-pointer values. Phase 5a routes `this`
-                                        // here too: the freeze-family module-wide kill
-                                        // (collectors/proven_this.rs) is what makes a
-                                        // guard-free STORE through a proven `this` sound.
-                                        ctx.note_ptr_shape_consumed(
-                                            object.as_ref(),
-                                            "ptr_shape_set",
-                                        );
-                                        super::store_census::bump(
-                                            ctx,
-                                            super::store_census::CFIELD_SHAPE_PROVEN,
-                                        );
-                                        let header_skip =
-                                            crate::target_layout::object_header_size_bytes(
-                                                ctx.target_triple,
-                                            )
-                                            .to_string();
-                                        let field_set_barrier_needed =
-                                            !expr_produces_non_pointer_bits_by_construction(
-                                                ctx, value,
-                                            );
-                                        let (obj_bits, obj_handle, field_ptr, val_bits) = {
-                                            let blk = ctx.block();
-                                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                                            let obj_handle =
-                                                blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                                            let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                                            let fields_base =
-                                                blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                                            let field_ptr = blk.gep(
-                                                DOUBLE,
-                                                &fields_base,
-                                                &[(I64, &field_idx_str)],
-                                            );
-                                            let val_bits = blk.bitcast_double_to_i64(&val_double);
-                                            (obj_bits, obj_handle, field_ptr, val_bits)
-                                        };
-                                        if requires_raw_f64 {
-                                            // A bounded canonical numeric producer cannot downgrade
-                                            // an F64 lane. Bitwise results with a Number operand
-                                            // are canonical finite doubles on both inline/helper arms.
-                                            let plain = (super::is_known_i32_range(ctx, value)
-                                            || matches!(value.as_ref(), Expr::LocalGet(id) if ctx.i32_counter_slots.contains_key(id)))
-                                            && (crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
-                                                || matches!(value.as_ref(), Expr::Binary { op: perry_hir::BinaryOp::BitAnd | perry_hir::BinaryOp::BitOr | perry_hir::BinaryOp::BitXor | perry_hir::BinaryOp::Shl | perry_hir::BinaryOp::Shr, .. }));
-                                            let plain = plain
-                                                || ctx
-                                                    .block()
-                                                    .widened_i32_source(&val_double)
-                                                    .is_some();
-                                            let store_idx =
-                                                ctx.new_block("ptr_shape_set.raw_store");
-                                            let cold_idx = ctx.new_block("ptr_shape_set.downgrade");
-                                            let merge_idx = ctx.new_block("ptr_shape_set.merge");
-                                            let store_label = ctx.block_label(store_idx);
-                                            let cold_label = ctx.block_label(cold_idx);
-                                            let merge_label = ctx.block_label(merge_idx);
-                                            {
-                                                let blk = ctx.block();
-                                                if plain {
-                                                    blk.br(&store_label);
-                                                } else {
-                                                    let finite = crate::expr::class_field_inline_guard::emit_plain_finite_number_check(blk, &val_bits);
-                                                    blk.cond_br(&finite, &store_label, &cold_label);
-                                                }
-                                            }
-                                            ctx.current_block = store_idx;
-                                            {
-                                                // The finite check proved a genuine unboxed
-                                                // double (INT32-boxed and every NaN-box tag
-                                                // share the all-ones exponent), so no
-                                                // canonicalization call is needed.
-                                                let blk = ctx.block();
-                                                // GC_STORE_AUDIT(POINTER_FREE): pointer-free
-                                                // by that proof — no GC pointer reaches the
-                                                // slot, so no write barrier.
-                                                blk.store(DOUBLE, &val_double, &field_ptr);
-                                                blk.br(&merge_label);
-                                            }
-                                            ctx.current_block = cold_idx;
-                                            {
-                                                let blk = ctx.block();
-                                                let key_box = blk.load(DOUBLE, &key_handle_global);
-                                                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                                let key_raw =
-                                                    blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                                blk.call_void(
-                                                    "js_class_field_set_fallback",
-                                                    &[
-                                                        (I64, &site_id),
-                                                        (I64, &obj_bits),
-                                                        (I64, &key_raw),
-                                                        (DOUBLE, &val_double),
-                                                    ],
-                                                );
-                                                blk.br(&merge_label);
-                                            }
-                                            ctx.current_block = merge_idx;
-                                        } else {
-                                            // Repsel Phase 4b.1: retire the two bookkeeping
-                                            // calls that are provably dead here.
-                                            //
-                                            // The receiver being `Ptr<Shape>`-proven is
-                                            // what licenses the layout-note elision. Three
-                                            // facts close it:
-                                            //
-                                            // Both are decided from the VALUE expression,
-                                            // and gated independently because they are dead
-                                            // under different conditions: the note needs
-                                            // "not a pointer", the addref only "not a heap
-                                            // string". Neither is keyed on the declared
-                                            // field type — Perry does not enforce declared
-                                            // types at runtime, so a `boolean` field can
-                                            // legitimately receive a string through an
-                                            // `any`, and a wrong addref elision there
-                                            // silently corrupts it on the next in-place
-                                            // append.
-                                            //
-                                            // `requires_raw_f64` is false on this arm, so
-                                            // the raw-f64-mask arm of `layout_note_slot` —
-                                            // the one that *must* downgrade — is
-                                            // unreachable from here. The full per-layout-
-                                            // state argument, including why a pointer store
-                                            // into a pointer-masked slot is deliberately
-                                            // NOT elided, is on
-                                            // `class_field_store_needs_layout_note`.
-                                            let string_addref_needed =
-                                                class_field_store_needs_string_addref(ctx, value);
-                                            let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
-                                            // #7511: whatever these three flags could not
-                                            // be proved away statically is decided by ONE
-                                            // live test of the stored bits — see
-                                            // `emit_jsvalue_slot_store_pointer_tested`.
-                                            emit_jsvalue_slot_store_pointer_tested(
-                                                ctx,
-                                                &field_ptr,
-                                                &val_double,
-                                                &obj_handle,
-                                                string_addref_needed,
-                                                &obj_bits,
-                                                &field_addr,
-                                                field_set_barrier_needed,
-                                                "class_field_set",
-                                            );
-                                        }
-                                        let (semantic, rep) = if requires_raw_f64 {
-                                            (SemanticKind::JsNumber, NativeRep::F64)
-                                        } else {
-                                            (SemanticKind::JsValue, NativeRep::JsValue)
-                                        };
-                                        let stored = LoweredValue {
-                                            semantic,
-                                            rep,
-                                            llvm_ty: DOUBLE,
-                                            value: val_double.clone(),
-                                        };
-                                        ctx.record_lowered_value_with_access_mode_and_facts(
-                                            "ClassFieldSet",
-                                            None,
-                                            "class_field_set.shape_proven_store",
-                                            &stored,
-                                            Some(BoundsState::Guarded {
-                                                guard_id: "ptr_shape_static_proof".to_string(),
-                                            }),
-                                            None,
-                                            Some(BufferAccessMode::CheckedNative),
-                                            None,
-                                            None,
-                                            None,
-                                            if requires_raw_f64 {
-                                                vec![raw_f64_layout_fact(
-                                                    None,
-                                                    "consumed",
-                                                    "ptr_shape_static_proof",
-                                                    None,
-                                                )]
-                                            } else {
-                                                Vec::new()
-                                            },
-                                            Vec::new(),
-                                            false,
-                                            false,
-                                            vec![
-                                                format!("class={}", class_name),
-                                                format!("field={}", property),
-                                                format!("field_index={}", field_idx_str),
-                                                "receiver_proof=ptr_shape_local".to_string(),
-                                                format!(
-                                                    "field_layout_raw_f64={}",
-                                                    requires_raw_f64
-                                                ),
-                                            ],
-                                        );
-                                        Ok(val_double)
-                                    },
+                                    &class_name,
+                                    field_index,
+                                    requires_raw_f64,
+                                    None,
                                 );
                             }
                         }
@@ -1213,6 +1024,254 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
         // pattern, runtime callers re-interpret based on context).
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// The guard-free class-field store of a receiver whose layout is proven:
+/// a `Ptr<Shape>` local (`wpf == None`) or a wpfacts zero-guard binding
+/// (`wpf`, whose kinds also decide the barrier and the string addref, and
+/// whose contract witness runs after the store in a contract build).
+#[allow(clippy::too_many_arguments)]
+fn emit_proven_class_field_store(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    class_name: &str,
+    field_index: u32,
+    requires_raw_f64: bool,
+    wpf: Option<&super::wpfacts_access::StoreProof>,
+) -> Result<String> {
+    with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
+        let key_idx = ctx.strings.intern(property);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let site_id = emit_typed_feedback_register_site(
+            ctx,
+            TypedFeedbackKind::PropertySet,
+            property,
+            TypedFeedbackContract::class_field_set(),
+        );
+        let field_idx_str = field_index.to_string();
+        // Representation-selection Phase 3b: shape-proven
+        // Ptr<Shape> receiver (collectors/ptr_shape.rs) — no
+        // guard, no shape diamond. Raw-f64 slots keep the
+        // inline plain-finite value check with a cold
+        // `js_class_field_set_fallback` arm (a NaN/Inf/boxed
+        // value must never be stored raw into a scalar-masked
+        // slot — the runtime setter performs the layout
+        // downgrade the GC scan relies on). Boxed slots store
+        // inline with the existing generational write barrier
+        // for possibly-pointer values. Phase 5a routes `this`
+        // here too: the freeze-family module-wide kill
+        // (collectors/proven_this.rs) is what makes a
+        // guard-free STORE through a proven `this` sound.
+        if wpf.is_none() {
+            ctx.note_ptr_shape_consumed(object, "ptr_shape_set");
+        }
+        super::store_census::bump(ctx, super::store_census::CFIELD_SHAPE_PROVEN);
+        let header_skip =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        // wpfacts F2: a field that never holds a pointer-bearing kind needs
+        // no barrier (the contract build checks every stored kind).
+        let field_set_barrier_needed = !expr_produces_non_pointer_bits_by_construction(ctx, value)
+            && wpf.is_none_or(|w| w.proof.may_hold_pointer());
+        let (obj_bits, obj_handle, field_ptr, val_bits) = {
+            let blk = ctx.block();
+            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+            // Biased addressing (`wpfacts_access::emit_slot_ptr`).
+            let biased = blk.sub(
+                I64,
+                &obj_bits,
+                &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+            );
+            let field_ptr = super::receiver_range::emit_field_ptr(
+                blk,
+                &biased,
+                header_skip.parse::<i64>().unwrap_or(0) + i64::from(field_index) * 8,
+            );
+            let val_bits = blk.bitcast_double_to_i64(&val_double);
+            (obj_bits, obj_handle, field_ptr, val_bits)
+        };
+        if requires_raw_f64 {
+            // A bounded canonical numeric producer cannot downgrade
+            // an F64 lane. Bitwise results with a Number operand
+            // are canonical finite doubles on both inline/helper arms.
+            let plain = (super::is_known_i32_range(ctx, value)
+                || matches!(value, Expr::LocalGet(id) if ctx.i32_counter_slots.contains_key(id)))
+                && (crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
+                    || matches!(
+                        value,
+                        Expr::Binary {
+                            op: perry_hir::BinaryOp::BitAnd
+                                | perry_hir::BinaryOp::BitOr
+                                | perry_hir::BinaryOp::BitXor
+                                | perry_hir::BinaryOp::Shl
+                                | perry_hir::BinaryOp::Shr,
+                            ..
+                        }
+                    ));
+            let plain = plain || ctx.block().widened_i32_source(&val_double).is_some();
+            let store_idx = ctx.new_block("ptr_shape_set.raw_store");
+            let cold_idx = ctx.new_block("ptr_shape_set.downgrade");
+            let merge_idx = ctx.new_block("ptr_shape_set.merge");
+            let store_label = ctx.block_label(store_idx);
+            let cold_label = ctx.block_label(cold_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            {
+                let blk = ctx.block();
+                if plain {
+                    blk.br(&store_label);
+                } else {
+                    let finite =
+                        crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+                            blk, &val_bits,
+                        );
+                    blk.cond_br(&finite, &store_label, &cold_label);
+                }
+            }
+            ctx.current_block = store_idx;
+            {
+                // The finite check proved a genuine unboxed
+                // double (INT32-boxed and every NaN-box tag
+                // share the all-ones exponent), so no
+                // canonicalization call is needed.
+                let blk = ctx.block();
+                // GC_STORE_AUDIT(POINTER_FREE): pointer-free
+                // by that proof — no GC pointer reaches the
+                // slot, so no write barrier.
+                blk.store(DOUBLE, &val_double, &field_ptr);
+                blk.br(&merge_label);
+            }
+            ctx.current_block = cold_idx;
+            {
+                let blk = ctx.block();
+                let key_box = blk.load(DOUBLE, &key_handle_global);
+                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                blk.call_void(
+                    "js_class_field_set_fallback",
+                    &[
+                        (I64, &site_id),
+                        (I64, &obj_bits),
+                        (I64, &key_raw),
+                        (DOUBLE, &val_double),
+                    ],
+                );
+                blk.br(&merge_label);
+            }
+            ctx.current_block = merge_idx;
+        } else {
+            // Repsel Phase 4b.1: retire the two bookkeeping
+            // calls that are provably dead here.
+            //
+            // The receiver being `Ptr<Shape>`-proven is
+            // what licenses the layout-note elision. Three
+            // facts close it:
+            //
+            // Both are decided from the VALUE expression,
+            // and gated independently because they are dead
+            // under different conditions: the note needs
+            // "not a pointer", the addref only "not a heap
+            // string". Neither is keyed on the declared
+            // field type — Perry does not enforce declared
+            // types at runtime, so a `boolean` field can
+            // legitimately receive a string through an
+            // `any`, and a wrong addref elision there
+            // silently corrupts it on the next in-place
+            // append.
+            //
+            // `requires_raw_f64` is false on this arm, so
+            // the raw-f64-mask arm of `layout_note_slot` —
+            // the one that *must* downgrade — is
+            // unreachable from here. The full per-layout-
+            // state argument, including why a pointer store
+            // into a pointer-masked slot is deliberately
+            // NOT elided, is on
+            // `class_field_store_needs_layout_note`.
+            let string_addref_needed = class_field_store_needs_string_addref(ctx, value)
+                && wpf.is_none_or(|w| w.proof.may_hold_string());
+            let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
+            // #7511: whatever these three flags could not
+            // be proved away statically is decided by ONE
+            // live test of the stored bits — see
+            // `emit_jsvalue_slot_store_pointer_tested`.
+            emit_jsvalue_slot_store_pointer_tested(
+                ctx,
+                &field_ptr,
+                &val_double,
+                &obj_handle,
+                string_addref_needed,
+                &obj_bits,
+                &field_addr,
+                field_set_barrier_needed,
+                "class_field_set",
+            );
+        }
+        let (semantic, rep) = if requires_raw_f64 {
+            (SemanticKind::JsNumber, NativeRep::F64)
+        } else {
+            (SemanticKind::JsValue, NativeRep::JsValue)
+        };
+        let stored = LoweredValue {
+            semantic,
+            rep,
+            llvm_ty: DOUBLE,
+            value: val_double.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "ClassFieldSet",
+            None,
+            if wpf.is_some() {
+                "class_field_set.wpfacts_t0"
+            } else {
+                "class_field_set.shape_proven_store"
+            },
+            &stored,
+            Some(BoundsState::Guarded {
+                guard_id: "ptr_shape_static_proof".to_string(),
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            None,
+            None,
+            if requires_raw_f64 {
+                vec![raw_f64_layout_fact(
+                    None,
+                    "consumed",
+                    "ptr_shape_static_proof",
+                    None,
+                )]
+            } else {
+                Vec::new()
+            },
+            Vec::new(),
+            false,
+            false,
+            vec![
+                format!("class={}", class_name),
+                format!("field={}", property),
+                format!("field_index={}", field_idx_str),
+                match wpf {
+                    Some(w) => format!("receiver_proof=wpfacts:{}", w.proof.binding),
+                    None => "receiver_proof=ptr_shape_local".to_string(),
+                },
+                format!("field_layout_raw_f64={}", requires_raw_f64),
+            ],
+        );
+        if let Some(w) = wpf {
+            super::wpfacts_access::emit_witness(
+                ctx,
+                &recv_box,
+                &val_double,
+                property,
+                &w.proof,
+                super::wpfacts_access::WPF_STORE,
+                w.site,
+            );
+        }
+        Ok(val_double)
+    })
 }
 
 #[cfg(test)]

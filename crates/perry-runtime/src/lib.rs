@@ -111,6 +111,8 @@ pub mod collection_iter;
 pub mod collection_iter_object;
 pub mod collection_receiver;
 pub mod color_parse;
+#[cfg(feature = "contract-checks")]
+pub(crate) mod contracts;
 pub mod date;
 #[cfg(feature = "mod-dgram")]
 pub mod dgram;
@@ -167,6 +169,8 @@ pub mod node_api_host;
 mod param_type_guard;
 pub(crate) mod runtime_state_key;
 mod startup_memory_profile;
+/// wpfacts slice 2: run-time witness of each elided field access.
+pub mod wpfacts_check;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace, so a program that never imports `node:http2`
 // links none of them. The auto-optimizer enables `mod-http2-constants` on an

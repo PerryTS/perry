@@ -1,0 +1,632 @@
+//! Constraint generation, part 3: calls, closures, `new`, `super`, class
+//! environments and runtime externs (`ExternFuncRef js_*`).
+
+use crate::gen::{Fx, Gen, ReadSite};
+use crate::model::*;
+use perry_hir::{Expr, Stmt};
+
+impl<'a> Gen<'a> {
+    pub(crate) fn fn_by_id(&mut self, mi: u32, id: u32) -> FnIdx {
+        if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
+            return f;
+        }
+        // A FuncRef to a body we have not registered (should not happen):
+        // a fresh function whose behaviour is unknown.
+        let f = self.synthetic_fn(mi, &format!("<unknown fn {id}>"));
+        let ret = self.m.funcs[f as usize].ret;
+        self.m.add_top(ret, |_| "unregistered function id".into());
+        let t = self.m.funcs[f as usize].token;
+        let r = self.m.reason("unregistered function id");
+        self.m.escape(t, r);
+        self.mods[mi as usize].funcs.insert(id, f);
+        f
+    }
+
+    pub(crate) fn call_expr(
+        &mut self,
+        fx: &Fx,
+        callee: &Expr,
+        args: &[Expr],
+        _extra: &[NodeId],
+        byte_offset: u32,
+    ) -> NodeId {
+        // The object-literal IIFE: `(o => { js_object_literal_define(o, …);
+        // …; return o })({})`. Its defines are the literal's birth.
+        if let (Expr::Closure { params, .. }, [Expr::Object(props)]) = (callee, args) {
+            if props.is_empty() && params.len() == 1 && params[0].name == "__perry_obj_iife" {
+                let lit = self.expr(fx, &args[0]);
+                let tm = self.m.nodes[lit as usize]
+                    .pts
+                    .to_sorted()
+                    .into_iter()
+                    .find_map(|t| self.m.tmpl_of(t));
+                if let Some(tm) = tm {
+                    let pn = self.local(fx.module, params[0].id);
+                    self.iife_birth.insert(pn, tm);
+                }
+                let c = self.expr(fx, callee);
+                return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
+            }
+        }
+        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        if let Expr::ExternFuncRef { name, .. } = callee {
+            if self.is_runtime_extern(fx.module, name) {
+                let lits: Vec<Option<String>> = args
+                    .iter()
+                    .map(|x| match x {
+                        Expr::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                return self.runtime_extern(fx, name, a, vec![], lits);
+            }
+        }
+        self.call_with(fx, callee, a, vec![], byte_offset)
+    }
+
+    pub(crate) fn call_with(
+        &mut self,
+        fx: &Fx,
+        callee: &Expr,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+        byte_offset: u32,
+    ) -> NodeId {
+        match callee {
+            Expr::PropertyGet {
+                object,
+                property,
+                byte_offset: pb,
+            } => {
+                let o = self.expr(fx, object);
+                let a = self.m.atom(property);
+                let off = if *pb != 0 { *pb } else { byte_offset };
+                if off != 0 {
+                    self.read_sites.push(ReadSite {
+                        module: fx.module,
+                        byte_offset: off,
+                        key: a,
+                        recv: o,
+                        is_call: true,
+                        func: fx.f,
+                    });
+                }
+                self.mcall(o, Key::Named(a), args, spread)
+            }
+            Expr::IndexGet { object, index } => {
+                let o = self.expr(fx, object);
+                let i = self.expr(fx, index);
+                let r = self.m.reason("ToPropertyKey");
+                self.m.cons(i, Cons::Implicit { reason: r });
+                let key = match index.as_ref() {
+                    Expr::String(s) => Key::Named(self.m.atom(s)),
+                    _ => Key::Any,
+                };
+                self.mcall(o, key, args, spread)
+            }
+            Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
+                self.runtime_extern(fx, name, args, spread, vec![])
+            }
+            _ => {
+                let c = self.expr(fx, callee);
+                self.call_value(c, ThisArg::Undef, args, spread)
+            }
+        }
+    }
+
+    fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
+        name.starts_with("js_")
+            && !self.mods[mi as usize].imports.contains_key(name)
+            && !self.mods[mi as usize].scope.contains_key(name)
+    }
+
+    /// `ExternFuncRef { name }` read as a value: an import binding, a
+    /// module-scope name, or an unknown runtime/global value (⊤).
+    pub(crate) fn extern_value(&mut self, mi: u32, name: &str) -> NodeId {
+        if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+            return n;
+        }
+        if let Some(&n) = self.mods[mi as usize].scope.get(name) {
+            return n;
+        }
+        self.m.top_val(&format!("extern value {name}"))
+    }
+
+    /// A closure expression: register, walk its body, return its token.
+    pub(crate) fn closure(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let Expr::Closure {
+            func_id,
+            params,
+            body,
+            captures_this,
+            is_arrow,
+            is_async,
+            is_generator,
+            ..
+        } = e
+        else {
+            return self.m.top_tok_node;
+        };
+        let mi = fx.module;
+        let name = self.modules[mi as usize]
+            .1
+            .closure_display_names
+            .get(func_id)
+            .cloned()
+            .unwrap_or_else(|| format!("closure{func_id}"));
+        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
+        let info = self.m.funcs[f as usize].clone();
+        if *captures_this || *is_arrow {
+            // Captured `this` (arrow semantics, or a slot the runtime
+            // patches): the enclosing `this` flows in.
+            self.m.edge(fx.this, info.this);
+        }
+        let fn_ctor = !*is_arrow;
+        let cfx = Fx {
+            module: mi,
+            f,
+            this: info.this,
+            ret: info.ret,
+            class: fx.class,
+            ctor_of: None,
+            new_target: fx.new_target,
+            fn_ctor,
+        };
+        if !self.walked.contains(&f) {
+            self.walked.insert(f);
+            if fn_ctor {
+                let ph = crate::ctor_phase::analyze_closure(params, body);
+                self.note_fn_phase(f, ph);
+            }
+            self.params(&cfx, params);
+            if *is_async || *is_generator {
+                self.m.add_top(info.ret, |_| "async/generator closure result".into());
+            }
+            self.stmts(&cfx, body);
+            let _: &Vec<Stmt> = body;
+        }
+        self.tok_node(info.token)
+    }
+
+    /// `new Name(args)`.
+    pub(crate) fn new_named(
+        &mut self,
+        fx: &Fx,
+        name: &str,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+    ) -> NodeId {
+        let mi = fx.module;
+        let callee = if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
+            let t = self.m.tok(TokKind::ClassObj(tm));
+            Some(self.tok_node(t))
+        } else if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+            Some(n)
+        } else {
+            self.mods[mi as usize].scope.get(name).copied()
+        };
+        match callee {
+            Some(c) => {
+                let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                self.m.cons(c, Cons::New { call });
+                ret
+            }
+            None => self.new_builtin(fx, name, args, spread),
+        }
+    }
+
+    /// `new Name(...)` of a name that is not a program class: a builtin.
+    pub(crate) fn new_builtin(
+        &mut self,
+        _fx: &Fx,
+        name: &str,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+    ) -> NodeId {
+        let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+        crate::builtins::construct_named(&mut self.m, name, call);
+        ret
+    }
+
+    pub(crate) fn class_value(&mut self, mi: u32, name: &str) -> NodeId {
+        if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
+            let t = self.m.tok(TokKind::ClassObj(tm));
+            return self.tok_node(t);
+        }
+        if let Some(&n) = self.mods[mi as usize].imports.get(name) {
+            return n;
+        }
+        if let Some(&n) = self.mods[mi as usize].scope.get(name) {
+            return n;
+        }
+        self.m.top_val(&format!("unresolved class value {name}"))
+    }
+
+    /// Captured values of a class body (class expression environments).
+    pub(crate) fn class_env(&mut self, mi: u32, name: &str) -> NodeId {
+        let key = format!("{mi}:{name}");
+        if let Some(&n) = self.class_envs.get(&key) {
+            return n;
+        }
+        let n = self
+            .m
+            .node_named("classenv", || format!("classenv({name})"));
+        self.class_envs.insert(key, n);
+        n
+    }
+
+    pub(crate) fn computed_accessor(
+        &mut self,
+        mi: u32,
+        tm: TmplId,
+        is_static: bool,
+        getter: &Option<String>,
+        setter: &Option<String>,
+    ) {
+        let holder = if is_static {
+            self.m.tok(TokKind::ClassObj(tm))
+        } else {
+            self.m.tok(TokKind::Proto(tm))
+        };
+        let find = |gen: &Self, n: &str| -> Option<FnIdx> {
+            let module = gen.modules[mi as usize].1;
+            let TmplKind::Class { name, .. } = &gen.m.tmpls[tm as usize].kind else {
+                return None;
+            };
+            let c = module.classes.iter().find(|c| &c.name == name)?;
+            c.methods
+                .iter()
+                .chain(c.static_methods.iter())
+                .chain(c.getters.iter().map(|(_, f)| f))
+                .chain(c.setters.iter().map(|(_, f)| f))
+                .chain(c.computed_members.iter().map(|m| &m.function))
+                .find(|f| f.name == n)
+                .and_then(|f| gen.mods[mi as usize].funcs.get(&f.id).copied())
+        };
+        // A computed-key accessor may answer any key: it runs as unknown
+        // code, and any key read through the holder may yield anything (the
+        // derivation kills the templates whose chain reaches it).
+        let r = self.m.reason("accessor under a computed key");
+        for name in [getter, setter].into_iter().flatten() {
+            if let Some(f) = find(self, name) {
+                let ft = self.m.funcs[f as usize].token;
+                self.m.escape(ft, r);
+            }
+        }
+        let fa = self.m.field_any(holder);
+        self.m.add_top(fa, |_| "computed-key accessor on a class".into());
+        self.m.add_prim(fa, prim::ALL);
+        let star = self.m.atom(crate::STAR_KEY);
+        crate::gen::push_unique(self.m.accessor_keys.entry(holder).or_default(), star);
+        self.m.rel(|| format!("accstar {holder}"));
+        self.m.tmpls[tm as usize].has_computed_members = true;
+    }
+
+    pub(crate) fn super_starts(&mut self, fx: &Fx) -> Vec<Tok> {
+        match fx.class {
+            Some(tm) => self.super_starts_of(tm),
+            None => vec![TOP],
+        }
+    }
+
+    pub(crate) fn super_starts_of(&mut self, tm: TmplId) -> Vec<Tok> {
+        match self.m.tmpls[tm as usize].parent {
+            Some(p) => vec![
+                self.m.tok(TokKind::Proto(p)),
+                self.m.tok(TokKind::ClassObj(p)),
+            ],
+            None => {
+                if self.m.tmpls[tm as usize].native_parent.is_some() {
+                    vec![TOP]
+                } else {
+                    vec![self.m.tok(TokKind::ObjectProto)]
+                }
+            }
+        }
+    }
+
+    pub(crate) fn super_ctor(&mut self, fx: &Fx, args: Vec<NodeId>, spread: Vec<NodeId>) -> NodeId {
+        let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
+        match fx.class {
+            Some(tm) => {
+                self.m.cons(fx.this, Cons::SuperCtor { class: tm, call });
+            }
+            None => {
+                let c = self.m.calls[call as usize].clone();
+                for a in c.args.iter().chain(c.spread.iter()) {
+                    self.to_sink(*a, "super() outside a known class");
+                }
+            }
+        }
+        let _ = ret;
+        self.prim_node(prim::UNDEF)
+    }
+
+    pub(crate) fn super_method(
+        &mut self,
+        fx: &Fx,
+        method: &str,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+    ) -> NodeId {
+        let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
+        let a = self.m.atom(method);
+        for start in self.super_starts(fx) {
+            self.m.cons(
+                fx.this,
+                Cons::Super {
+                    start,
+                    key: Key::Named(a),
+                    act: ChainAct::Call(call),
+                },
+            );
+        }
+        ret
+    }
+
+    // ------------------------------------------------- runtime externs
+
+    /// Direct calls to runtime entries that HIR lowering emits by name.
+    fn runtime_extern(
+        &mut self,
+        fx: &Fx,
+        name: &str,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+        lits: Vec<Option<String>>,
+    ) -> NodeId {
+        let lit = |i: usize| lits.get(i).cloned().flatten();
+        let arg = |i: usize| args.get(i).copied();
+        // Is the first argument the parameter of an object-literal IIFE?
+        let birth_tm = self.iife_param_template(fx, &args);
+        match name {
+            "js_object_literal_define"
+            | "js_object_set_method_by_name"
+            | "js_object_set_symbol_method"
+            | "js_object_set_property_key_method"
+            | "js_object_literal_set_computed" => {
+                let (Some(o), Some(v)) = (arg(0), arg(2)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let key = match (name, lit(1)) {
+                    ("js_object_literal_define" | "js_object_set_method_by_name", Some(k)) => {
+                        Key::Named(self.m.atom(&k))
+                    }
+                    _ => Key::Any,
+                };
+                if let Key::Named(a) = key {
+                    if let Some(tm) = birth_tm {
+                        crate::gen::push_unique(&mut self.m.tmpls[tm as usize].birth_keys, a);
+                        crate::gen::push_unique(&mut self.m.tmpls[tm as usize].definite, a);
+                    }
+                } else if let Some(tm) = birth_tm {
+                    self.m.tmpls[tm as usize].birth_keys.clear();
+                    self.m.tmpls[tm as usize].definite.clear();
+                    self.m.tmpls[tm as usize].has_computed_members = true;
+                }
+                self.store(
+                    fx,
+                    o,
+                    key,
+                    v,
+                    name.to_string(),
+                    birth_tm,
+                    birth_tm.is_some(),
+                );
+                // Method closures see the object as `this`.
+                if name != "js_object_literal_define" && name != "js_object_literal_set_computed" {
+                    self.m.cons(v, Cons::ThisFrom { recv: o });
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "js_object_define_accessor" => {
+                let Some(o) = arg(0) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let k = lit(1);
+                let a = match &k {
+                    Some(k) => self.m.atom(k),
+                    None => self.m.atom(crate::STAR_KEY),
+                };
+                if k.is_some() {
+                    self.m.accessor_atoms.insert(a);
+                }
+                if let Some(tm) = birth_tm {
+                    // An accessor is never a data field (E25).
+                    crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
+                    if k.is_none() {
+                        self.m.tmpls[tm as usize].has_computed_members = true;
+                    }
+                } else {
+                    let r = self.m.reason("E5 accessor defined on an existing object");
+                    self.m.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E5DefineProperty,
+                            reason: r,
+                        },
+                    );
+                }
+                for (i, which) in [(2usize, 0u8), (3, 1)] {
+                    if let Some(f) = arg(i) {
+                        self.m.cons(
+                            f,
+                            Cons::Accessor {
+                                holder: o,
+                                key: a,
+                                setter: which == 1,
+                            },
+                        );
+                    }
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "js_object_literal_spread" => {
+                let (Some(o), Some(s)) = (arg(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let vals = self.load(s, Key::Any);
+                if let Some(tm) = birth_tm {
+                    self.m.tmpls[tm as usize].birth_keys.clear();
+                    self.m.tmpls[tm as usize].definite.clear();
+                    self.m.tmpls[tm as usize].has_computed_members = true;
+                }
+                self.store(
+                    fx,
+                    o,
+                    Key::Any,
+                    vals,
+                    name.to_string(),
+                    birth_tm,
+                    birth_tm.is_some(),
+                );
+                self.prim_node(prim::UNDEF)
+            }
+            "js_object_literal_set_prototype" => {
+                let (Some(o), Some(p)) = (arg(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                if birth_tm.is_some() {
+                    self.m.cons(o, Cons::ProtoFrom { src: p });
+                } else {
+                    let r = self.m.reason("E6 __proto__ set");
+                    self.m.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E6SetPrototypeOf,
+                            reason: r,
+                        },
+                    );
+                    self.m.cons(o, Cons::ProtoFrom { src: p });
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "js_object_define_getter" | "js_object_define_setter" | "js_object_define_property" => {
+                // E5 on the target.
+                let r = self.m.reason("E5 defineProperty/__defineGetter__");
+                if let Some(o) = arg(0) {
+                    self.m.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E5DefineProperty,
+                            reason: r,
+                        },
+                    );
+                    self.m.cons(o, Cons::TopSink { reason: r });
+                }
+                for a in args.iter().skip(1).chain(spread.iter()) {
+                    self.m.cons(*a, Cons::TopSink { reason: r });
+                }
+                arg(0).unwrap_or(self.m.top_tok_node)
+            }
+            "js_object_lookup_getter" | "js_object_lookup_setter" => {
+                let r = self.m.reason("__lookupGetter__ result");
+                for a in &args {
+                    self.m.cons(*a, Cons::Implicit { reason: r });
+                }
+                self.m.top_val("__lookupGetter__ result")
+            }
+            "js_tdz_check_binding" | "js_tdz_check_binding_then" => {
+                let out = self.tmp("tdz");
+                if let Some(v) = arg(0) {
+                    self.m.edge(v, out);
+                }
+                for a in args.iter().skip(1) {
+                    self.m.edge(*a, out);
+                }
+                out
+            }
+            "js_to_property_key"
+            | "js_object_literal_to_property_key"
+            | "js_to_numeric"
+            | "js_object_to_string"
+            | "js_object_has_own"
+            | "js_object_property_is_enumerable"
+            | "js_object_literal_infer_computed_function_name"
+            | "js_process_exit_code_get"
+            | "js_process_exit_code_set"
+            | "js_weakset_has"
+            | "js_weakmap_has"
+            | "js_weakset_delete"
+            | "js_weakmap_delete"
+            | "js_weakset_add"
+            | "js_map_compaction_epoch"
+            | "js_set_compaction_epoch" => {
+                let r = self.m.reason("ToPrimitive in runtime helper");
+                for a in &args {
+                    self.m.cons(*a, Cons::Implicit { reason: r });
+                }
+                let out = self.tmp("rt-prim");
+                self.m.add_prim(out, prim::ALL);
+                if name == "js_object_literal_infer_computed_function_name" {
+                    if let Some(v) = arg(0) {
+                        self.m.edge(v, out);
+                    }
+                }
+                if name == "js_weakset_add" {
+                    if let Some(v) = arg(0) {
+                        self.m.edge(v, out);
+                    }
+                }
+                out
+            }
+            "js_weakmap_set" => {
+                let (Some(mp), Some(v)) = (arg(0), arg(2)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let site = self.store_site(fx.module, fx.f, "weakmap.set".into(), None, false);
+                self.m.cons(
+                    mp,
+                    Cons::Store {
+                        key: Key::Any,
+                        src: v,
+                        site,
+                    },
+                );
+                mp
+            }
+            "js_weakmap_get" => {
+                let Some(mp) = arg(0) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let out = self.load(mp, Key::Any);
+                self.m.add_prim(out, prim::UNDEF);
+                out
+            }
+            "js_map_cursor_next" | "js_set_cursor_next" => {
+                let Some(mp) = arg(0) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let out = self.load(mp, Key::Any);
+                self.m.add_prim(out, prim::ALL);
+                out
+            }
+            n if n.starts_with("js_throw_") => {
+                for a in &args {
+                    self.m.edge(*a, self.thrown);
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "js_vm_module_call" | "js_module_create_require_devirt" => {
+                crate::builtins::set_dyn_eval(&mut self.m, "E14 vm / createRequire");
+                self.extern_fail(name, &args, &spread)
+            }
+            _ => self.extern_fail(name, &args, &spread),
+        }
+    }
+
+    pub(crate) fn extern_fail(&mut self, name: &str, args: &[NodeId], spread: &[NodeId]) -> NodeId {
+        let why = format!("argument of unmodeled runtime entry {name}");
+        for a in args.iter().chain(spread.iter()) {
+            self.to_sink(*a, &why);
+        }
+        self.m.top_val(&format!("result of unmodeled runtime entry {name}"))
+    }
+
+    /// The literal template born by an object-literal IIFE when the first
+    /// argument is that IIFE's parameter.
+    fn iife_param_template(&self, _fx: &Fx, args: &[NodeId]) -> Option<TmplId> {
+        let first = *args.first()?;
+        self.iife_birth.get(&first).copied()
+    }
+}

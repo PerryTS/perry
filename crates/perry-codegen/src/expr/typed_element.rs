@@ -125,6 +125,7 @@ pub(crate) fn try_lower_read(
         return Ok(None);
     }
     let integer_index = super::index_get::numeric_index_has_integer_array_index_proof(ctx, index);
+    let proven = super::wpfacts_access::ta_field_kind(ctx, object) == Some(kind);
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
         let value = emit_read(
             ctx,
@@ -133,6 +134,7 @@ pub(crate) fn try_lower_read(
             kind,
             integer_index,
             number_context,
+            proven,
         );
         ctx.record_lowered_value(
             "TypedArrayGet",
@@ -168,6 +170,7 @@ pub(crate) fn try_lower_store(
         return Ok(None);
     }
     let integer_index = super::index_get::numeric_index_has_integer_array_index_proof(ctx, index);
+    let proven = super::wpfacts_access::ta_field_kind(ctx, object) == Some(kind);
     crate::rooting::with_operands_rooted_across(
         ctx,
         &[object, index],
@@ -185,6 +188,7 @@ pub(crate) fn try_lower_store(
                 kind,
                 integer_index,
                 strict,
+                proven,
             );
             ctx.record_lowered_value(
                 "TypedArraySet",
@@ -210,8 +214,23 @@ pub(crate) fn try_lower_store(
 /// edge and returns the receiver's biased address (`receiver_range`): every
 /// cell field is addressed from it with the handle floor folded into the
 /// displacement.
-fn emit_owner_proof(ctx: &mut FnCtx<'_>, boxed: &str, kind: u8, miss: &str) -> String {
+///
+/// `proven` (wpfacts F6, `wpfacts_access::ta_field_kind`): the value is a
+/// stable owner of exactly this kind, so neither test is emitted; the bounds
+/// test that follows still runs.
+fn emit_owner_proof(
+    ctx: &mut FnCtx<'_>,
+    boxed: &str,
+    kind: u8,
+    miss: &str,
+    proven: bool,
+) -> String {
     use super::receiver_range::{emit_field_ptr, emit_fused_receiver_test};
+    if proven {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(boxed);
+        return emit_fused_receiver_test(blk, &bits).biased;
+    }
     let header = ctx.new_block("tael.header");
     let owner = ctx.new_block("tael.owner");
     let header_l = ctx.block_label(header);
@@ -348,6 +367,7 @@ fn emit_read(
     kind: u8,
     integer_index: bool,
     number_context: bool,
+    proven: bool,
 ) -> String {
     let slow = ctx.new_block("tael.get.slow");
     let done = ctx.new_block("tael.get.done");
@@ -357,7 +377,7 @@ fn emit_read(
     if !is_bigint(kind) {
         let load = ctx.new_block("tael.get.load");
         let load_l = ctx.block_label(load);
-        let biased = emit_owner_proof(ctx, boxed, kind, &slow_l);
+        let biased = emit_owner_proof(ctx, boxed, kind, &slow_l, proven);
         let (index, ok) = emit_index(ctx, &biased, key, integer_index);
         ctx.block().cond_br(&ok, &load_l, &slow_l);
         ctx.current_block = load;
@@ -399,6 +419,7 @@ fn emit_store(
     kind: u8,
     integer_index: bool,
     strict: bool,
+    proven: bool,
 ) {
     let slow = ctx.new_block("tael.set.slow");
     let done = ctx.new_block("tael.set.done");
@@ -407,7 +428,7 @@ fn emit_store(
     if !is_bigint(kind) && kind != KIND_FLOAT16 {
         let store = ctx.new_block("tael.set.store");
         let store_l = ctx.block_label(store);
-        let biased = emit_owner_proof(ctx, boxed, kind, &slow_l);
+        let biased = emit_owner_proof(ctx, boxed, kind, &slow_l, proven);
         let (index, ok) = emit_index(ctx, &biased, key, integer_index);
         let blk = ctx.block();
         // Only a plain double is stored inline: ToNumber of anything else may

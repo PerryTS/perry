@@ -5755,6 +5755,7 @@ pub fn run_with_parse_cache(
             // Filled per module after the static-shape pre-pass.
             static_shape_ids: Vec::new(),
             program_class_shape_ids: Default::default(),
+            program_facts: Default::default(),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             program_class_accessor_names: Some(std::sync::Arc::clone(
                 &program_class_accessor_names,
@@ -5954,6 +5955,23 @@ pub fn run_with_parse_cache(
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
+    // wpfacts (whole-program invariance facts, slice 1): one more
+    // whole-program pre-pass over the final HIR. It removes no check yet:
+    // each module's codegen gets only the digest of the facts it can observe
+    // (object-cache key) and, in a contract build, the claims section the
+    // runtime checks. See `program_facts.rs` for the knobs.
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        // The dyn-eval interpreter is linked (E14 possible): a prebuilt
+        // runtime, or an auto-optimized one that keeps the interpreter.
+        args.no_auto_optimize
+            || std::env::var_os("PERRY_NO_AUTO_OPTIMIZE")
+                .is_some_and(|v| !v.is_empty() && v != "0")
+            || perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.cjs_wrap_debug_sources,
+    );
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         &PathBuf,
@@ -6043,6 +6061,7 @@ pub fn run_with_parse_cache(
                 opts.program_class_shape_ids = program_class_shape_ids
                     .restricted_to(class_ids.iter().copied().chain(foreign));
             }
+            opts.program_facts = super::program_facts::view_for(&program_facts, path);
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry

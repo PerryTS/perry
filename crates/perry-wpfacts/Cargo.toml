@@ -1,0 +1,15 @@
+[package]
+name = "perry-wpfacts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Whole-program invariance facts for Perry (wpfacts): an inclusion-based value-flow analysis over final HIR"
+
+[lints]
+workspace = true
+
+[dependencies]
+perry-hir.workspace = true
+
+[dev-dependencies]
+perry-parser.workspace = true

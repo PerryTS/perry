@@ -124,6 +124,7 @@ mod typed_feedback;
 mod url_helpers;
 mod v8_interop;
 mod write_barrier;
+pub(crate) mod wpfacts_access;
 
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
 pub(crate) use array_literal::{
@@ -354,6 +355,18 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    /// wpfacts slice 2: this module's elision facts (`expr/wpfacts_access.rs`).
+    pub wpfacts: std::sync::Arc<crate::codegen::ElisionFacts>,
+    /// `this` slots whose value is the `this` of a HIR function: (slot,
+    /// function id). A `this` read is answered only while the top of
+    /// `this_stack` is one of these slots (an inlined constructor pushes its
+    /// own).
+    pub wpfacts_this: Vec<(String, u32)>,
+    /// Elided sites emitted so far in this function (witness site ids).
+    pub wpfacts_sites: u32,
+    /// (stable local, block) pairs whose receiver test already passed in
+    /// that block (`wpfacts_access::tested_in_block`).
+    pub wpfacts_tested: Vec<(i64, usize)>,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).

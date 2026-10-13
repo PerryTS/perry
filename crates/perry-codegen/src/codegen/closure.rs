@@ -1093,6 +1093,17 @@ pub(super) fn compile_closure(
         pending_labels: Vec::new(),
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
+        wpfacts: cross_module.wpfacts.clone(),
+        wpfacts_sites: 0,
+        wpfacts_tested: Vec::new(),
+        wpfacts_this: if captures_this {
+            this_stack
+                .last()
+                .map(|s| vec![(s.clone(), func_id)])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         this_stack,
         new_target_stack,
         class_stack,

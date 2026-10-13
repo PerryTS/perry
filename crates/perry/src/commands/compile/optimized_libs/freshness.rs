@@ -265,7 +265,12 @@ pub(crate) fn auto_optimized_cache_key(
         hot_diag_requested(),
         std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1"),
         env!("CARGO_PKG_VERSION"),
-    )
+    ) + if crate::commands::compile::program_facts::contracts_requested() {
+        // wpfacts contract build: `perry-runtime/contract-checks`.
+        "|contracts=1"
+    } else {
+        ""
+    }
 }
 
 pub(crate) fn auto_optimized_cross_features(
@@ -371,7 +376,11 @@ pub(crate) fn auto_optimized_cross_features(
     // schedule, alloc-site sampling) are ~180 KB no shipped program needs. A
     // runtime built without them aborts at startup when one of their knobs is
     // set, so a stress run can never silently exercise nothing.
-    if gc_instruments_requested() {
+    // A contract build (`PERRY_CHECK_CONTRACTS=1`) emits the witnesses those
+    // instruments define (`js_typed_element_contract`,
+    // `js_builtin_proto_contract_check`): without them it does not link.
+    if gc_instruments_requested() || crate::commands::compile::program_facts::contracts_requested()
+    {
         cross_features.push("perry-runtime/gc-instruments".to_string());
     }
     // `hot_diag`'s mutator probes (#10572): same contract as the GC
@@ -379,6 +388,11 @@ pub(crate) fn auto_optimized_cross_features(
     // a binary built without them.
     if hot_diag_requested() {
         cross_features.push("perry-runtime/hot-diag".to_string());
+    }
+    // wpfacts: a contract build (`PERRY_CHECK_CONTRACTS=1`) links the
+    // runtime's `.perry_facts` claim checks; nothing else does.
+    if crate::commands::compile::program_facts::contracts_requested() {
+        cross_features.push("perry-runtime/contract-checks".to_string());
     }
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());

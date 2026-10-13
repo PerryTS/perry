@@ -261,6 +261,15 @@ fn stable_type_key(ty: &perry_hir::types::Type) -> String {
 /// codesigning) affects the *linked binary*, not the object file — so
 /// a per-module `.o` cache can reuse bytes across runs as long as LLVM
 /// itself emits deterministic object code, which it does by default.
+fn section_hash(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 pub fn compute_object_cache_key(
     opts: &perry_codegen::CompileOptions,
     hir_hash: u64,
@@ -361,6 +370,18 @@ fn compute_object_cache_key_with_env(
     h.field(
         "program_class_shape_ids",
         &format!("{:?}", opts.program_class_shape_ids),
+    );
+    // wpfacts (design section 7): the digest of the whole-program facts this
+    // module can observe, and its contract-build claims section. A fact
+    // change recompiles exactly the modules that can see it.
+    h.field(
+        "program_facts",
+        &format!(
+            "{:016x}:{}:{:016x}",
+            opts.program_facts.digest,
+            opts.program_facts.contract_section.len(),
+            section_hash(&opts.program_facts.contract_section)
+        ),
     );
     // #11394: a module's method calls lower differently when ANY module in the
     // program writes that method name onto a builtin prototype.

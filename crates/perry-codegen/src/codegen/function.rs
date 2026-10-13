@@ -1217,6 +1217,13 @@ pub(super) fn compile_function(
         pending_labels: Vec::new(),
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
+        wpfacts: cross_module.wpfacts.clone(),
+        wpfacts_sites: 0,
+        wpfacts_tested: Vec::new(),
+        wpfacts_this: this_stack
+            .last()
+            .map(|s| vec![(s.clone(), f.id)])
+            .unwrap_or_default(),
         this_stack,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,

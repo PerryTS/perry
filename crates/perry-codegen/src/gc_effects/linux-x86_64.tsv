@@ -4358,5 +4358,6 @@ perry_updater_verify_hash	Reenters
 perry_updater_verify_signature	Reenters
 perry_updater_verify_signature_v2	Reenters
 perry_updater_write_sentinel	Reenters
+perry_wpfacts_check_field	Reenters
 redirect_lazy_to_materialized	Reenters
 setInterval	Reenters

@@ -206,6 +206,8 @@ fn target_callable_at_creation(target: f64) -> bool {
 
 #[no_mangle]
 pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
+    #[cfg(feature = "contract-checks")]
+    crate::contracts::hard_value(target, "new Proxy");
     // #2846: validate both arguments are objects before allocating.
     if !proxy_arg_is_object(target) || !proxy_arg_is_object(handler) {
         throw_proxy_non_object();

@@ -52,6 +52,7 @@ mod output_path;
 mod parse_cache;
 mod post_link;
 mod precompile_capture;
+mod program_facts;
 mod reachability;
 mod size_report;
 mod solid_config;

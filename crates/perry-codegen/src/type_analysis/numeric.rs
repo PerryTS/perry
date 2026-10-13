@@ -749,6 +749,11 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             if scalar_replaced_field_is_number(ctx, object, property) {
                 return true;
             }
+            // wpfacts slice 2: the bare read of a slot the facts prove always
+            // holds a canonical double (`wpfacts_access::proves_raw_f64`).
+            if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
+                return true;
+            }
             // #11759 (c′): the receiver is the guarded `new` of a repeatable
             // class declaration, an instance of SOME evaluation of the
             // template. Which fields hold a Number on every reachable store

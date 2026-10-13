@@ -578,6 +578,10 @@ pub struct CompileOptions {
     /// Part of the object-cache key. Default (empty) when the driver ran no
     /// pre-pass.
     pub program_class_shape_ids: super::ProgramClassShapeIds,
+    /// wpfacts: this module's view of the whole-program invariance facts
+    /// (digest for the object-cache key; contract-build claims section).
+    /// Default (zero digest, no section) when the pass did not run.
+    pub program_facts: super::ProgramFactsView,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -904,6 +908,9 @@ impl ImportedCtor {
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
+    /// wpfacts slice 2: the elision facts of this module
+    /// (`CompileOptions::program_facts`).
+    pub wpfacts: std::sync::Arc<super::ElisionFacts>,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// The class and method tables inverted (`class_hierarchy`). Set once

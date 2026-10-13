@@ -13,6 +13,8 @@ use super::*;
 /// protected frame is needed.
 #[no_mangle]
 pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f64 {
+    #[cfg(feature = "contract-checks")]
+    crate::contracts::hard_value(target, "Object.defineProperties");
     unsafe {
         if !definition_target_is_object(target) {
             throw_object_type_error(b"Object.defineProperties called on non-object");
@@ -163,6 +165,8 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
 /// + inherited property dispatch can consult it.
 #[no_mangle]
 pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 {
+    #[cfg(feature = "contract-checks")]
+    crate::contracts::hard_value(obj_value, "Object.setPrototypeOf");
     crate::array::subclass_elements::deopt_value(obj_value);
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;

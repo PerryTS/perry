@@ -8,6 +8,7 @@ fn options(target: Option<&str>) -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
         program_class_shape_ids: Default::default(),
+        program_facts: Default::default(),
         target: target.map(str::to_string),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),

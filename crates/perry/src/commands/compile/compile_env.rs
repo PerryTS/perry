@@ -46,6 +46,13 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_ENUM_DIAG",
     "PERRY_EVAL_CSP",
     "PERRY_EXTRA_LINK_ARGS",
+    "PERRY_FACTS_BUDGET_SECS",
+    "PERRY_FACTS_ELIDE",
+    "PERRY_FACTS_ELIDE_TA",
+    "PERRY_FACTS_MAX_PTS",
+    "PERRY_FACTS_MAX_WORK",
+    "PERRY_FACTS_SABOTAGE",
+    "PERRY_FACTS_WIDEN",
     "PERRY_FAST_MATH",
     "PERRY_FIELD_REPR_VERIFY",
     "PERRY_FNINFER_APPLY",
@@ -130,6 +137,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_PACKED_LOOP_ABRUPT",
     "PERRY_PACKED_LOOP_NUMERIC_ACCUMULATOR",
     "PERRY_PRECOMPILE_CAPTURE",
+    "PERRY_PROGRAM_FACTS",
     "PERRY_PROP_CSE",
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",
@@ -382,6 +390,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Changes Apple bundle metadata only; build-cache eligibility rejects bundled outputs.",
     ),
     (
+        "PERRY_CONTRACTS_REPORT",
+        "Read by the generated program runtime to print contract statistics; never consulted by compiler lowering.",
+    ),
+    (
         "PERRY_DT_SDK_BUILD",
         "Changes Apple bundle metadata only; build-cache eligibility rejects bundled outputs.",
     ),
@@ -432,6 +444,38 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_EXPERIMENTAL_VM_MODULES",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_FACTS_DUMP",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_ELIDE_TRACE",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_EXPLAIN",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_ONLY",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_PROFILE",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_RELATIONS",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_REPORT",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FACTS_WHATIF_NO_E14",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),
     (
         "PERRY_FAKE_XCRUN_LOG",

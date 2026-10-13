@@ -914,6 +914,12 @@ fn lower_new_impl_inner<'a>(
         ctx.block().store(DOUBLE, &obj_box, &this_slot);
     }
     ctx.this_stack.push(this_slot.clone());
+    // wpfacts slice 2: inside the inlined constructor, `this` is the
+    // constructor function's `this` (`ctx.wpfacts_this`).
+    let wpfacts_slot = class.constructor.as_ref().map(|ctor| {
+        ctx.wpfacts_this.push((this_slot.clone(), ctor.id));
+        this_slot.clone()
+    });
     ctx.class_stack.push(class_name.to_string());
 
     // #2768/new.target: `new C()` is fully inlined here, so the runtime
@@ -1915,6 +1921,9 @@ fn lower_new_impl_inner<'a>(
 
     ctx.new_target_stack.pop();
     ctx.this_stack.pop();
+    if let Some(slot) = wpfacts_slot {
+        ctx.wpfacts_this.retain(|(s, _)| *s != slot);
+    }
     ctx.class_stack.pop();
     Ok(final_box)
 }

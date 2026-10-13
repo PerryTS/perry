@@ -9,6 +9,7 @@ members = [
     "crates/perry-parser",
     "crates/perry-api-manifest",
     "crates/perry-hir",
+    "crates/perry-wpfacts",
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
@@ -549,6 +550,7 @@ zstd = "0.13"
 perry-parser = { path = "crates/perry-parser" }
 perry-api-manifest = { path = "crates/perry-api-manifest" }
 perry-hir = { path = "crates/perry-hir" }
+perry-wpfacts = { path = "crates/perry-wpfacts" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }

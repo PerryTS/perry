@@ -4864,6 +4864,7 @@ dependencies = [
  "perry-runtime",
  "perry-transform",
  "perry-updater",
+ "perry-wpfacts",
  "rand 0.10.3",
  "rayon",
  "rustc-demangle",
@@ -5738,6 +5739,14 @@ name = "perry-wasm-host"
 version = "0.5.1659"
 dependencies = [
  "wasmi",
+]
+
+[[package]]
+name = "perry-wpfacts"
+version = "0.5.1659"
+dependencies = [
+ "perry-hir",
+ "perry-parser",
 ]
 
 [[package]]
