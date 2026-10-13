@@ -85,6 +85,23 @@ fn numeric_options() -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
+/// `{ numeric: true }` is resolved once by the Collator-argument resolution and
+/// handed to the comparison as a flag (#12539): the comparison itself reads no
+/// option.
+#[test]
+fn collator_args_resolve_the_numeric_option() {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    assert_eq!(
+        js_string_resolve_collator_args(undefined, numeric_options()),
+        1
+    );
+    assert_eq!(js_string_resolve_collator_args(undefined, undefined), 0);
+    let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    let (a, b) = (heap_string(&units("file10")), heap_string(&units("file9")));
+    assert!(js_string_locale_compare_resolved(a, b, 1) > 0.0);
+    assert!(js_string_locale_compare_resolved(a, b, 0) < 0.0);
+}
+
 /// The precondition #10692 was about, stated so it cannot be argued with: the
 /// exact bytes the pre-fix `string_as_str(s)` handed to
 /// `str::from_utf8_unchecked` are rejected by the checked decoder, and the
@@ -261,7 +278,7 @@ fn locale_compare_matches_node_on_lone_surrogate_payloads() {
         // gives the same answers here (no digit runs are involved).
         let (sa, sb) = (heap_string(a), heap_string(b));
         assert_eq!(
-            sign(js_string_locale_compare_opts(sa, sb, numeric_options())),
+            sign(js_string_locale_compare_resolved(sa, sb, 1)),
             *expected,
             "{a:x?}.localeCompare({b:x?}, _, {{numeric:true}}) (Node v26.5.1)"
         );

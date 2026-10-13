@@ -84,8 +84,10 @@ pub extern "C" fn js_string_substring(
 /// matching `substring`/`slice`. Doing the coercion in the runtime (rather than
 /// a codegen `fptosi`, which is UB on a NaN) also avoids a sentinel collision: a
 /// `-Infinity` length must clamp to `0` (→ `""`), not be mistaken for "omitted".
-/// `s` is a live argument, so it stays pinned by the conservative stack scan
-/// across the inner `valueOf`. Closes #2897; fixes the substr tail of #5347.
+/// Either coercion can run user code and move `s` or a not-yet-coerced `length`
+/// object (the conservative native-stack scan is off by default, so nothing
+/// pins an argument address): both are rooted and re-read from their handles
+/// after the user code ran (#12539). Closes #2897; fixes the substr tail of #5347.
 #[no_mangle]
 pub extern "C" fn js_string_substr(
     s: *const StringHeader,
@@ -97,6 +99,10 @@ pub extern "C" fn js_string_substr(
     }
 
     let size = unsafe { (*s).utf16_len } as i64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    // `length` is still a raw NaN-boxed value while `start` coerces: root it too.
+    let length_handle = scope.root_nanbox_f64(length_val);
 
     // Step 4: ToIntegerOrInfinity(start), observed FIRST. ±Infinity clamps to
     // the i32 bounds; widen to i64 so `size + i32::MIN` can't overflow below.
@@ -111,6 +117,7 @@ pub extern "C" fn js_string_substr(
 
     // Step 8: an `undefined` length means the rest of the string (`size`);
     // otherwise ToIntegerOrInfinity(length), observed AFTER start.
+    let length_val = length_handle.get_nanbox_f64();
     let int_length = if crate::value::JSValue::from_bits(length_val.to_bits()).is_undefined() {
         size
     } else {
@@ -126,6 +133,7 @@ pub extern "C" fn js_string_substr(
     let start = start as i32;
     let end = end as i32;
 
+    let s = s_handle.get_raw_const_ptr::<StringHeader>();
     super::slice_range::copy_utf16_range(s, start as u32, end as u32)
 }
 

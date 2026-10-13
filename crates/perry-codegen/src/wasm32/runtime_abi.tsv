@@ -3691,7 +3691,7 @@ js_string_last_index_of_from	i32s	ptr,ptr,f64,i32s
 js_string_length	i32u	ptr
 js_string_link	ptr	ptr,ptr
 js_string_locale_compare	f64	ptr,ptr
-js_string_locale_compare_opts	f64	ptr,ptr,f64
+js_string_locale_compare_resolved	f64	ptr,ptr,i32s
 js_string_match_all_js	f64	f64,f64
 js_string_match_all_value	f64	ptr,f64
 js_string_match_js	f64	f64,f64
@@ -3725,6 +3725,7 @@ js_string_replace_search_dyn	ptr	ptr,f64,f64
 js_string_replace_string	ptr	ptr,ptr,ptr
 js_string_replace_string_dyn	ptr	ptr,ptr,f64
 js_string_replace_string_fn	ptr	ptr,ptr,f64
+js_string_resolve_collator_args	i32s	f64,f64
 js_string_search_js	f64	f64,f64
 js_string_search_value	f64	ptr,f64
 js_string_search_value_to_string	ptr	f64,i32s
@@ -3759,7 +3760,6 @@ js_string_to_well_formed	ptr	ptr
 js_string_trim	ptr	ptr
 js_string_trim_end	ptr	ptr
 js_string_trim_start	ptr	ptr
-js_string_validate_collator_args	void	f64,f64
 js_string_warn	void	ptr
 js_structured_clone	f64	f64
 js_structured_clone_with_options	f64	f64,f64

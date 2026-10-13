@@ -291,19 +291,32 @@ fn get_option_string(options: f64, key: &str) -> Option<String> {
     coerce_option_string(get_option_value(options, key))
 }
 
-/// Validate the `locales` / `options` arguments of `String.prototype.localeCompare`
+/// Resolve the `locales` / `options` arguments of `String.prototype.localeCompare`
 /// exactly as `Construct(%Collator%, « locales, options »)` would (ECMA-402
 /// §22.1.3.10 step 4). Perry's collation ordering stays locale-neutral (full ICU
 /// deferred), so `localeCompare` never actually builds a Collator — but the spec
-/// still requires the *observable throwing* of `CanonicalizeLocaleList(locales)`
-/// followed by `InitializeCollator`'s `CoerceOptionsToObject` + `GetOption` reads
-/// (test262 `localeCompare/throws-same-exceptions-as-Collator`, #5906).
-pub(crate) fn validate_locale_compare(locales: f64, options: f64) {
-    // requestedLocales = ? CanonicalizeLocaleList(locales) — reuse the exact
-    // Intl.getCanonicalLocales machinery for its TypeError/RangeError side effect
-    // (undefined yields an empty list and never throws).
-    let _ = locales::get_canonical_locales(locales);
-    date_collator::validate_collator_options(options);
+/// still requires the *observable* `CanonicalizeLocaleList(locales)` followed by
+/// `InitializeCollator`'s `CoerceOptionsToObject` + `GetOption` reads, each
+/// option read exactly once (test262 `localeCompare/throws-same-exceptions-as-
+/// Collator`, #5906). Returns the resolved `numeric` option (ToBoolean), so the
+/// comparison never reads `options` a second time (#12539).
+pub(crate) fn resolve_locale_compare(locales: f64, options: f64) -> bool {
+    // `options` is rooted across every read: CanonicalizeLocaleList and each
+    // GetOption below can run user code and move the options object.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    // requestedLocales = ? CanonicalizeLocaleList(locales), for its TypeError /
+    // RangeError side effects (undefined yields an empty list and never throws).
+    let _ = locales_from_value(locales);
+    date_collator::resolve_collator_options(&options)
+}
+
+/// `? CanonicalizeLocaleList(locales)` as a list of canonical tags, for the
+/// String methods that take a `locales` argument (`toLocaleLowerCase` /
+/// `toLocaleUpperCase`). Runs user code (array-like `length` / index getters,
+/// `ToString` on object entries), so it can collect.
+pub(crate) fn canonicalize_locale_list(locales: f64) -> Vec<String> {
+    locales_from_value(locales)
 }
 
 /// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,

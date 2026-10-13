@@ -1,12 +1,12 @@
 //! Locale-aware String methods: `toLocaleLowerCase` / `toLocaleUpperCase`
-//! and the `locales`-arg validation shared with `localeCompare`.
+//! and the `locales` / `options` resolution of `localeCompare`.
 //!
 //! Perry does not ship a full ICU/`Intl` collator, so locale-sensitive
 //! *collation* ordering (e.g. German vs. Swedish placement of `ä`) is still
 //! deferred (tracked by the umbrella Intl work). What this module DOES match
 //! against Node:
 //!
-//!   * BCP 47 language-tag validation — an invalid `locales` argument throws a
+//!   * `CanonicalizeLocaleList(locales)` — an invalid `locales` argument throws a
 //!     `RangeError: Invalid language tag: <tag>`, just like V8.
 //!   * Language-sensitive casing from SpecialCasing.txt:
 //!     - Turkish/Azeri (`tr`/`az`) dotted/dotless `I` — `"I".toLocaleLowerCase("tr")
@@ -19,136 +19,40 @@
 //!     language-neutral Unicode casing (`to_lowercase` / `to_uppercase`).
 //!
 //! Closes #2781.
+//!
+//! GC rule for every entry here (#12539): reading `locales` / `options` runs
+//! user code and can move strings, so the entries resolve them FIRST and only
+//! then borrow string payloads. A string argument the caller already passed as
+//! an address is rooted across the read and re-read from its handle; nothing
+//! borrowed from a GC string lives across a locale or option read.
 
 use super::*;
-use crate::value::JSValue;
 
-#[cold]
-fn throw_invalid_language_tag(tag: &str) -> ! {
-    let message = format!("Invalid language tag: {tag}");
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-/// Read a single locale tag JSValue (string / short-string) into an owned
-/// `String`. Returns `None` for non-string values (numbers, objects, etc.),
-/// which the caller coerces per spec (`ToString` would stringify them, but the
-/// realistic inputs are strings or arrays of strings).
-fn jsvalue_to_locale_string(v: JSValue) -> Option<String> {
-    if v.is_string() {
-        let ptr = v.as_string_ptr();
-        if !is_valid_string_ptr(ptr) {
-            return Some(String::new());
-        }
-        return Some(string_as_str(ptr).to_string());
-    }
-    if v.is_short_string() {
-        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let n = v.short_string_to_buf(&mut scratch);
-        return Some(String::from_utf8_lossy(&scratch[..n]).into_owned());
-    }
-    None
-}
-
-/// Validate a single BCP 47 language tag well enough to match V8's
-/// `RangeError` surface for the common invalid inputs (e.g. `not_a_locale`).
+/// Resolve the `locales` argument of `toLocaleLowerCase` / `toLocaleUpperCase`
+/// to the language subtag of the first requested locale (ECMA-402 TransformCase
+/// steps 1-4, with LookupMatchingLocaleByPrefix approximated as "first listed").
 ///
-/// This is intentionally a *structural* check, not the full RFC 5646 grammar:
-/// a tag is a sequence of `-`-separated subtags, each 1..=8 ASCII
-/// alphanumerics, and the primary subtag must be alphabetic. Underscores —
-/// which `not_a_locale` uses — are rejected, matching Node. Returns the
-/// lowercased primary language subtag on success.
-fn validate_language_tag(tag: &str) -> Result<String, ()> {
-    if tag.is_empty() {
-        return Err(());
-    }
-    let mut subtags = tag.split('-');
-    let primary = subtags.next().ok_or(())?;
-    // Primary subtag: 1..=8 ASCII letters (`i`/`x` private-use single letters
-    // are technically allowed as grandfathered/private tags, but the realistic
-    // locale inputs are language codes, so require alphabetic here).
-    if primary.is_empty() || primary.len() > 8 || !primary.bytes().all(|b| b.is_ascii_alphabetic())
-    {
-        return Err(());
-    }
-    for sub in subtags {
-        if sub.is_empty() || sub.len() > 8 || !sub.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return Err(());
-        }
-    }
-    Ok(primary.to_ascii_lowercase())
-}
-
-/// Resolve the `locales` argument to the primary (first) language subtag,
-/// validating every candidate tag. Throws `RangeError` for any malformed tag,
-/// matching Node. `undefined`/`null`/missing yields `None` (host default
-/// locale). An array yields the FIRST element's primary subtag (BestAvailable
-/// is approximated as "first listed").
+/// `requestedLocales = ? CanonicalizeLocaleList(locales)` is the same machinery
+/// `Intl.getCanonicalLocales` and the Collator validation use: a String is one
+/// tag, an Array or array-like is read through `length` and `Get`, an object
+/// entry goes through `ToString`, a non-String non-Object entry is a TypeError
+/// and a malformed tag a RangeError. Reading the list therefore runs user code
+/// (getters, `toString`), so it can collect: callers must not hold a raw string
+/// address across this call (#12539). `undefined` yields `None` (host default).
 fn resolve_primary_locale(locales: f64) -> Option<String> {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let locales_handle = scope.root_nanbox_f64(locales);
-    let v = JSValue::from_bits(locales_handle.get_nanbox_u64());
-    if v.is_undefined() || v.is_null() {
-        return None;
-    }
-    // Array of tags: validate each, return the first's primary subtag.
-    if v.is_pointer() {
-        let ptr = v.as_pointer::<u8>();
-        let addr = ptr as usize;
-        let is_array = !ptr.is_null()
-            && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
-            && unsafe {
-                let gc = (ptr.sub(crate::gc::GC_HEADER_SIZE)) as *const crate::gc::GcHeader;
-                (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
-            };
-        if is_array {
-            let len = crate::array::js_array_length(ptr as *const crate::array::ArrayHeader);
-            let mut first: Option<String> = None;
-            for i in 0..len {
-                // Indexed access can invoke an accessor and collect. Reload
-                // the array through its rooted NaN-boxed handle each time.
-                let current = JSValue::from_bits(locales_handle.get_nanbox_u64());
-                let arr = current.as_pointer::<crate::array::ArrayHeader>();
-                let elem = crate::array::js_array_get(arr, i);
-                // Keep an accessor result live while extracting its locale
-                // text; future coercion of an object-valued locale can also
-                // execute user code.
-                let elem_handle = scope.root_nanbox_f64(f64::from_bits(elem.bits()));
-                let elem = JSValue::from_bits(elem_handle.get_nanbox_u64());
-                if let Some(tag) = jsvalue_to_locale_string(elem) {
-                    match validate_language_tag(&tag) {
-                        Ok(primary) => {
-                            if first.is_none() {
-                                first = Some(primary);
-                            }
-                        }
-                        Err(()) => throw_invalid_language_tag(&tag),
-                    }
-                }
-            }
-            return first;
-        }
-    }
-    // Single string tag.
-    if let Some(tag) = jsvalue_to_locale_string(v) {
-        return match validate_language_tag(&tag) {
-            Ok(primary) => Some(primary),
-            Err(()) => throw_invalid_language_tag(&tag),
-        };
-    }
-    None
+    crate::intl::canonicalize_locale_list(locales)
+        .into_iter()
+        .next()
+        .map(|tag| primary_language_subtag(&tag))
 }
 
-/// Returns true if the primary language subtag uses Turkic dotted/dotless `I`
-/// casing rules (Turkish `tr` / Azeri `az`).
-fn is_turkic(primary: &Option<String>) -> bool {
-    matches!(primary.as_deref(), Some("tr") | Some("az"))
-}
-
-/// Returns true if the primary language subtag is Lithuanian (`lt`).
-fn is_lithuanian(primary: &Option<String>) -> bool {
-    matches!(primary.as_deref(), Some("lt"))
+/// The lowercased language subtag of a canonical BCP 47 tag (`"az-Latn-AZ"` ->
+/// `"az"`).
+fn primary_language_subtag(tag: &str) -> String {
+    tag.split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 /// Canonical Combining Class of `ch`. The full UCD table lives in
@@ -366,30 +270,52 @@ fn lithuanian_upper(s: &str) -> String {
     out
 }
 
-/// `String.prototype.toLocaleLowerCase(locales)` — validates `locales` and
-/// applies Turkic special casing when requested, else language-neutral.
+/// ECMA-402 TransformCase(S, locales, targetCase). `locales` is resolved first,
+/// with `s` rooted across it (resolution runs user code, see
+/// [`resolve_primary_locale`]); the payload is borrowed only from the address
+/// re-read from the handle afterwards.
+fn transform_case(
+    s: *const StringHeader,
+    locales: f64,
+    transform: fn(&str, Option<&str>) -> String,
+) -> *mut StringHeader {
+    if !is_valid_string_ptr(s) {
+        // Still observe CanonicalizeLocaleList's throws for an invalid receiver.
+        let _ = resolve_primary_locale(locales);
+        return js_string_from_bytes(ptr::null(), 0);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let (primary, s) = s_handle.across_const::<StringHeader, _>(|| resolve_primary_locale(locales));
+    let out = transform(string_as_str(s), primary.as_deref());
+    js_string_from_str(&out)
+}
+
+fn lower_for_locale(s: &str, primary: Option<&str>) -> String {
+    match primary {
+        Some("tr") | Some("az") => turkic_lower(s),
+        Some("lt") => lithuanian_lower(s),
+        _ => s.to_lowercase(),
+    }
+}
+
+fn upper_for_locale(s: &str, primary: Option<&str>) -> String {
+    match primary {
+        Some("tr") | Some("az") => turkic_upper(s),
+        Some("lt") => lithuanian_upper(s),
+        _ => s.to_uppercase(),
+    }
+}
+
+/// `String.prototype.toLocaleLowerCase(locales)` — resolves `locales` and
+/// applies Turkic / Lithuanian special casing when requested, else
+/// language-neutral.
 #[no_mangle]
 pub extern "C" fn js_string_to_locale_lower_case(
     s: *const StringHeader,
     locales: f64,
 ) -> *mut StringHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let string_handle = scope.root_string_ptr(s);
-    let locales_handle = scope.root_nanbox_f64(locales);
-    let primary = resolve_primary_locale(locales_handle.get_nanbox_f64());
-    let s = string_handle.get_raw_const_ptr::<StringHeader>();
-    if !is_valid_string_ptr(s) {
-        return js_string_from_bytes(ptr::null(), 0);
-    }
-    let str_data = string_as_str(s);
-    let lower = if is_turkic(&primary) {
-        turkic_lower(str_data)
-    } else if is_lithuanian(&primary) {
-        lithuanian_lower(str_data)
-    } else {
-        str_data.to_lowercase()
-    };
-    js_string_from_str(&lower)
+    transform_case(s, locales, lower_for_locale)
 }
 
 /// `String.prototype.toLocaleUpperCase(locales)` — see `..lower_case`.
@@ -398,34 +324,20 @@ pub extern "C" fn js_string_to_locale_upper_case(
     s: *const StringHeader,
     locales: f64,
 ) -> *mut StringHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let string_handle = scope.root_string_ptr(s);
-    let locales_handle = scope.root_nanbox_f64(locales);
-    let primary = resolve_primary_locale(locales_handle.get_nanbox_f64());
-    let s = string_handle.get_raw_const_ptr::<StringHeader>();
-    if !is_valid_string_ptr(s) {
-        return js_string_from_bytes(ptr::null(), 0);
-    }
-    let str_data = string_as_str(s);
-    let upper = if is_turkic(&primary) {
-        turkic_upper(str_data)
-    } else if is_lithuanian(&primary) {
-        lithuanian_upper(str_data)
-    } else {
-        str_data.to_uppercase()
-    };
-    js_string_from_str(&upper)
+    transform_case(s, locales, upper_for_locale)
 }
 
-/// Validate the `locales` / `options` arguments of `String.prototype.localeCompare`
-/// for their side effects — throwing exactly as `Construct(%Collator%, « locales,
-/// options »)` would (ECMA-402 §22.1.3.10). Returns nothing: the actual comparison
-/// still routes through the existing (locale-neutral) collation in `compare.rs`,
-/// since full ICU ordering is deferred. See [`crate::intl::validate_locale_compare`]
-/// (#5906).
+/// Resolve the `locales` / `options` arguments of `String.prototype.localeCompare`
+/// exactly as `Construct(%Collator%, « locales, options »)` would (ECMA-402
+/// §22.1.3.10): CanonicalizeLocaleList, then every InitializeCollator GetOption
+/// read, each option read exactly once and in spec order. Returns 1 when the
+/// resolved collation is numeric (`options.numeric`), else 0; the comparison
+/// itself ([`super::js_string_locale_compare_resolved`]) takes that flag and
+/// reads no JS value, so no user code runs while it holds the two strings.
+/// Ordering stays locale-neutral otherwise (full ICU deferred, #5906).
 #[no_mangle]
-pub extern "C" fn js_string_validate_collator_args(locales: f64, options: f64) {
-    crate::intl::validate_locale_compare(locales, options);
+pub extern "C" fn js_string_resolve_collator_args(locales: f64, options: f64) -> i32 {
+    crate::intl::resolve_locale_compare(locales, options) as i32
 }
 
 // `#[used]` keepalive anchors: these `#[no_mangle]` entry points are reached
@@ -441,27 +353,31 @@ static KEEP_LOCALE_UPPER: extern "C" fn(*const StringHeader, f64) -> *mut String
     js_string_to_locale_upper_case;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_VALIDATE_COLLATOR_ARGS: extern "C" fn(f64, f64) = js_string_validate_collator_args;
+static KEEP_RESOLVE_COLLATOR_ARGS: extern "C" fn(f64, f64) -> i32 = js_string_resolve_collator_args;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value::JSValue;
 
     #[test]
-    fn validates_well_formed_tags() {
-        assert_eq!(validate_language_tag("tr"), Ok("tr".to_string()));
-        assert_eq!(validate_language_tag("en-US"), Ok("en".to_string()));
-        assert_eq!(validate_language_tag("az-Latn-AZ"), Ok("az".to_string()));
-        assert_eq!(validate_language_tag("DE"), Ok("de".to_string()));
+    fn primary_subtag_of_canonical_tags() {
+        assert_eq!(primary_language_subtag("tr"), "tr");
+        assert_eq!(primary_language_subtag("en-US"), "en");
+        assert_eq!(primary_language_subtag("az-Latn-AZ"), "az");
+        assert_eq!(primary_language_subtag("DE"), "de");
     }
 
     #[test]
-    fn rejects_malformed_tags() {
-        assert!(validate_language_tag("not_a_locale").is_err());
-        assert!(validate_language_tag("").is_err());
-        assert!(validate_language_tag("e-").is_err());
-        assert!(validate_language_tag("toolongsubtag").is_err());
-        assert!(validate_language_tag("123").is_err());
+    fn locale_casing_dispatch() {
+        assert_eq!(upper_for_locale("i", Some("tr")), "\u{0130}");
+        assert_eq!(lower_for_locale("I", Some("az")), "\u{0131}");
+        assert_eq!(
+            lower_for_locale("I\u{0300}", Some("lt")),
+            "i\u{0307}\u{0300}"
+        );
+        assert_eq!(upper_for_locale("i", Some("en")), "I");
+        assert_eq!(lower_for_locale("I", None), "i");
     }
 
     #[test]

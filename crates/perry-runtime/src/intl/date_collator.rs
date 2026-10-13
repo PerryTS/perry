@@ -1656,18 +1656,22 @@ fn collator_enum_option(options: f64, key: &str, allowed: &[&str]) {
     }
 }
 
-/// `InitializeCollator` option reads, run for their observable throwing side
-/// effects only (Perry's collation is locale-neutral, so the resolved values are
-/// discarded). `CoerceOptionsToObject` returns an empty bag for `undefined` and
+/// `InitializeCollator` option reads for `String.prototype.localeCompare`, run
+/// for their observable throwing side effects; Perry's collation is otherwise
+/// locale-neutral, so only the resolved `numeric` flag is returned (the other
+/// values are discarded). `CoerceOptionsToObject` returns an empty bag for `undefined` and
 /// otherwise `ToObject`s the argument — which wraps primitives (numbers, strings,
 /// booleans, bigints) rather than throwing, and only rejects `null`. Each
 /// `GetOption` then runs in spec order so the first invalid option is the one
 /// that throws; a primitive/array/function argument simply has no matching own
 /// properties, so every read is absent and nothing throws.
-pub(super) fn validate_collator_options(options: f64) {
-    let js = JSValue::from_bits(options.to_bits());
+pub(super) fn resolve_collator_options(options: &crate::gc::RuntimeHandle<'_>) -> bool {
+    // Every GetOption can run a getter that moves the options object: re-read
+    // the rooted value for each read.
+    let options = || options.get_nanbox_f64();
+    let js = JSValue::from_bits(options().to_bits());
     if js.is_undefined() {
-        return;
+        return false;
     }
     // CoerceOptionsToObject delegates to ToObject, which throws only for `null`
     // (`undefined` handled above). A wrapped primitive exposes no option props,
@@ -1675,20 +1679,23 @@ pub(super) fn validate_collator_options(options: f64) {
     if js.is_null() {
         throw_type_error("Cannot convert undefined or null to object");
     }
-    collator_enum_option(options, "usage", &["sort", "search"]);
-    collator_enum_option(options, "localeMatcher", &["lookup", "best fit"]);
+    collator_enum_option(options(), "usage", &["sort", "search"]);
+    collator_enum_option(options(), "localeMatcher", &["lookup", "best fit"]);
     // `collation` (string, no enum), `numeric` / `ignorePunctuation` (boolean via
     // ToBoolean) never throw for an in-range value; read them so the GetOption
     // getter sequence still matches, but coerce a Symbol `collation` per ToString.
-    let _ = get_option_string(options, "collation");
-    let _ = get_option_value(options, "numeric");
-    collator_enum_option(options, "caseFirst", &["upper", "lower", "false"]);
+    let _ = get_option_string(options(), "collation");
+    // GetOption(options, "numeric", boolean): read once here and handed back, so
+    // the comparison never re-reads the getter.
+    let numeric = crate::value::js_is_truthy(get_option_value(options(), "numeric")) != 0;
+    collator_enum_option(options(), "caseFirst", &["upper", "lower", "false"]);
     collator_enum_option(
-        options,
+        options(),
         "sensitivity",
         &["base", "accent", "case", "variant"],
     );
-    let _ = get_option_value(options, "ignorePunctuation");
+    let _ = get_option_value(options(), "ignorePunctuation");
+    numeric
 }
 
 pub(crate) extern "C" fn collator_bound_compare_thunk(

@@ -1110,45 +1110,20 @@ fn locale_compare_numeric(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> f64 {
     locale_compare_canonical(a, b, locale_compare_numeric_raw)
 }
 
-/// `String.prototype.localeCompare(other, locales, options)` — honors the
-/// `{ numeric: true }` collation option (natural sort); `locales` is ignored
-/// (no Intl/ICU). `options` arrives as a NaN-boxed JSValue (the options object,
-/// or undefined when absent). Reads `options.numeric` (ToBoolean) and routes to
-/// `locale_compare_numeric` when set, else to the default `js_string_locale_compare`.
+/// `String.prototype.localeCompare(other, locales, options)` after the Collator
+/// arguments were resolved by `js_string_resolve_collator_args`: `numeric` is
+/// that call's result (1 = `{ numeric: true }`, natural sort). `locales` and
+/// `options` are NOT passed: they were read before the caller took `a` and `b`,
+/// and this function reads no JS value, so nothing can collect while it holds
+/// the two string addresses (#12539).
 #[no_mangle]
-pub extern "C" fn js_string_locale_compare_opts(
+pub extern "C" fn js_string_locale_compare_resolved(
     a: *const StringHeader,
     b: *const StringHeader,
-    options: f64,
+    numeric: i32,
 ) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let a_handle = scope.root_string_ptr(a);
-    let b_handle = scope.root_string_ptr(b);
-    let options_handle = scope.root_nanbox_f64(options);
-    // Creating the key can allocate. Root all incoming values first, then
-    // reload the options receiver before generic Get, which may invoke a
-    // getter and collect as well.
-    let numeric_key =
-        scope.root_string_ptr(crate::string::js_string_from_bytes(b"numeric".as_ptr(), 7));
-    let numeric = {
-        let options = options_handle.get_nanbox_f64();
-        let ptr =
-            crate::value::js_nanbox_get_pointer(options) as *const crate::object::ObjectHeader;
-        if ptr.is_null() || (ptr as usize) < 0x10000 {
-            false
-        } else {
-            let key = numeric_key.get_raw_const_ptr::<StringHeader>();
-            let v = crate::object::js_object_get_field_by_name_f64(ptr, key);
-            crate::value::js_is_truthy(v) != 0
-        }
-    };
-    let a = a_handle.get_raw_const_ptr::<StringHeader>();
-    let b = b_handle.get_raw_const_ptr::<StringHeader>();
-    if !numeric {
-        return js_string_locale_compare(a, b);
-    }
-    if !is_valid_string_ptr(a) || !is_valid_string_ptr(b) {
-        // Match the validity edge-cases of the default path.
+    if numeric == 0 || !is_valid_string_ptr(a) || !is_valid_string_ptr(b) {
+        // Invalid operands take the validity edge-cases of the default path.
         return js_string_locale_compare(a, b);
     }
     // SAFETY: both pointers were just validated above; see
@@ -1562,7 +1537,7 @@ mod locale_compare_moving_roots_tests {
     }
 
     #[test]
-    fn moving_locale_compare_options_getter_reloads_strings_and_options() {
+    fn moving_locale_compare_options_getter_runs_before_the_strings_are_read() {
         let _gc = crate::gc::CopyingNurseryTestGuard::new(0);
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _force = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
@@ -1591,10 +1566,18 @@ mod locale_compare_moving_roots_tests {
         let a_before = a.get_raw_const_ptr::<StringHeader>() as usize;
         let b_before = b.get_raw_const_ptr::<StringHeader>() as usize;
         let options_before = crate::value::js_nanbox_get_pointer(options.get_nanbox_f64()) as usize;
-        let result = js_string_locale_compare_opts(
+        // The Collator resolution runs the getter (and its collection) once,
+        // before either string address is taken; the comparison reads no
+        // option (#12539).
+        let numeric = super::super::js_string_resolve_collator_args(
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            options.get_nanbox_f64(),
+        );
+        assert_eq!(numeric, 1);
+        let result = js_string_locale_compare_resolved(
             a.get_raw_const_ptr::<StringHeader>(),
             b.get_raw_const_ptr::<StringHeader>(),
-            options.get_nanbox_f64(),
+            numeric,
         );
 
         assert_eq!(result, -1.0);

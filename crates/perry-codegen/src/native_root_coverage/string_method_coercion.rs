@@ -158,8 +158,8 @@ fn cases() -> Vec<(&'static str, Vec<Expr>, &'static str, &'static str)> {
         (
             "localeCompare",
             vec![s("a"), v()],
-            "js_string_validate_collator_args",
-            "js_string_locale_compare",
+            "js_string_resolve_collator_args",
+            "js_string_locale_compare_resolved",
         ),
     ]
 }

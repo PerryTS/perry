@@ -436,7 +436,7 @@ pub(super) fn detect_optional_feature_usage(
         // so err toward enabling (same contract as `temporal`).
         // `localeCompare` is deliberately NOT a trigger: it returns a number,
         // and its runtime path (`string/compare.rs` + the locale/option
-        // validation in `intl::validate_locale_compare`) lives outside the
+        // resolution in `intl::resolve_locale_compare`) lives outside the
         // `intl-namespace` gate. Triggering on it linked ~390 KB of unused
         // `Intl.*` constructors into every program that sorts with it.
         if hir_debug.contains("\"Intl\"")

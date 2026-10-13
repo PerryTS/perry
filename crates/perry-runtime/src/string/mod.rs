@@ -182,7 +182,7 @@ pub(crate) use char_ops::{
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
-    js_string_is_well_formed, js_string_locale_compare, js_string_locale_compare_opts,
+    js_string_is_well_formed, js_string_locale_compare, js_string_locale_compare_resolved,
     js_string_normalize, js_string_search_value_to_string, js_string_starts_with,
     js_string_starts_with_at, js_string_to_well_formed,
 };
@@ -259,8 +259,7 @@ pub use iter_object::{
     dispatch_string_iterator_method, string_values_iter, STRING_ITERATOR_CLASS_ID,
 };
 pub use locale::{
-    js_string_to_locale_lower_case, js_string_to_locale_upper_case,
-    js_string_validate_collator_args,
+    js_string_resolve_collator_args, js_string_to_locale_lower_case, js_string_to_locale_upper_case,
 };
 pub use pad::{
     js_string_alloc_space, js_string_pad_end, js_string_pad_fill, js_string_pad_start,

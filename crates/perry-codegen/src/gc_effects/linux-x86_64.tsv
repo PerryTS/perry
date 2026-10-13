@@ -3232,7 +3232,7 @@ js_string_length	Leaf
 js_string_length__Str	Leaf
 js_string_link	AllocOnly
 js_string_locale_compare	Reenters
-js_string_locale_compare_opts	Reenters
+js_string_locale_compare_resolved	Reenters
 js_string_match_all_js	Reenters
 js_string_match_all_value	Reenters
 js_string_match_js	Reenters
@@ -3266,6 +3266,7 @@ js_string_replace_search_dyn	Reenters
 js_string_replace_string	Reenters
 js_string_replace_string_dyn	Reenters
 js_string_replace_string_fn	Reenters
+js_string_resolve_collator_args	Reenters
 js_string_search_js	Reenters
 js_string_search_value	Reenters
 js_string_search_value_to_string	Reenters
@@ -3300,7 +3301,6 @@ js_string_to_well_formed	Reenters
 js_string_trim	AllocOnly
 js_string_trim_end	AllocOnly
 js_string_trim_start	AllocOnly
-js_string_validate_collator_args	Reenters
 js_string_warn	Leaf
 js_structured_clone	Reenters
 js_structured_clone_with_options	Reenters

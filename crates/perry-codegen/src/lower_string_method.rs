@@ -811,15 +811,15 @@ fn lower_string_method_dispatch(
                 StringCoercion::Plain,
                 later_coercion_may_collect(ctx, property, args, 0),
             )?;
-            // `options` is the 3rd arg; `locales` (2nd) is validated for its
-            // RangeError side effect (#2781) but collation ordering stays
-            // locale-neutral (full ICU deferred). With an options object
-            // present, route to the variant that honors `{ numeric: true }`.
-            if args.len() >= 2 {
-                // Validate `(locales, options)` exactly as `Construct(%Collator%,
-                // «locales, options»)` would — CanonicalizeLocaleList then the
-                // InitializeCollator GetOption reads — for the throwing side effect
-                // only; collation ordering stays locale-neutral (#2781, #5906).
+            // `(locales, options)` are resolved exactly as `Construct(%Collator%,
+            // «locales, options»)` would — CanonicalizeLocaleList then every
+            // InitializeCollator GetOption read, each option read ONCE — for the
+            // throwing side effects and the resolved `numeric` flag (#2781,
+            // #5906). Collation ordering otherwise stays locale-neutral (full
+            // ICU deferred). The comparison takes that flag and reads no JS
+            // value, so nothing runs user code once the string addresses are
+            // taken below (#12539).
+            let numeric = if args.len() >= 2 {
                 let loc = arg_group.reread(ctx, 1)?;
                 let opts = if args.len() >= 3 {
                     arg_group.reread(ctx, 2)?
@@ -827,13 +827,11 @@ fn lower_string_method_dispatch(
                     ctx.block()
                         .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
                 };
-                ctx.block().call_void(
-                    "js_string_validate_collator_args",
+                Some(ctx.block().call(
+                    I32,
+                    "js_string_resolve_collator_args",
                     &[(DOUBLE, &loc), (DOUBLE, &opts)],
-                );
-            }
-            let options_box = if args.len() >= 3 {
-                Some(arg_group.reread(ctx, 2)?)
+                ))
             } else {
                 None
             };
@@ -842,11 +840,11 @@ fn lower_string_method_dispatch(
             let other_handle = arg_group.reread_emitted(ctx, other);
             let blk = ctx.block();
             // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
-            let result = if let Some(opts) = options_box {
+            let result = if let Some(numeric) = numeric {
                 Ok(blk.call(
                     DOUBLE,
-                    "js_string_locale_compare_opts",
-                    &[(I64, &recv_handle), (I64, &other_handle), (DOUBLE, &opts)],
+                    "js_string_locale_compare_resolved",
+                    &[(I64, &recv_handle), (I64, &other_handle), (I32, &numeric)],
                 ))
             } else {
                 Ok(blk.call(

@@ -117,7 +117,10 @@ pub(super) unsafe fn dispatch_string(
                     return Some(f64::from_bits(JSValue::bool(eq).bits()));
                 }
                 "at" => {
-                    return Some(crate::string::js_string_at(s_ptr, arg_i32(0)));
+                    // ToIntegerOrInfinity(pos) can run user `valueOf` and move the
+                    // receiver: coerce first, then read the rooted receiver.
+                    let pos = arg_i32(0);
+                    return Some(crate::string::js_string_at(receiver_string(), pos));
                 }
                 // `str[Symbol.iterator]()` returns a real String iterator object
                 // (codepoint-aware, surrogate pairs collapse to one element) so
@@ -127,14 +130,19 @@ pub(super) unsafe fn dispatch_string(
                     return Some(crate::string::string_values_iter(receiver_string()));
                 }
                 "charAt" => {
-                    let result = crate::string::js_string_char_at(s_ptr, arg_i32(0));
+                    let pos = arg_i32(0);
+                    let result = crate::string::js_string_char_at(receiver_string(), pos);
                     if result.is_null() {
                         return Some(f64::from_bits(JSValue::undefined().bits()));
                     }
                     return Some(f64::from_bits(JSValue::string_ptr(result).bits()));
                 }
                 "charCodeAt" => {
-                    return Some(crate::string::js_string_char_code_at(s_ptr, arg_i32(0)));
+                    let pos = arg_i32(0);
+                    return Some(crate::string::js_string_char_code_at(
+                        receiver_string(),
+                        pos,
+                    ));
                 }
                 // #9761: `codePointAt` had a `String.prototype` thunk but no
                 // arm here, so it was the ONE method name the compiled
@@ -148,7 +156,11 @@ pub(super) unsafe fn dispatch_string(
                 // per-character wrapper. It is the sibling of `charCodeAt`
                 // one line up and reads the same receiver the same way.
                 "codePointAt" => {
-                    return Some(crate::string::js_string_code_point_at(s_ptr, arg_i32(0)));
+                    let pos = arg_i32(0);
+                    return Some(crate::string::js_string_code_point_at(
+                        receiver_string(),
+                        pos,
+                    ));
                 }
                 "slice" => {
                     // Coerce args first (`arg_i32` may run user `valueOf` and move
@@ -412,13 +424,15 @@ pub(super) unsafe fn dispatch_string(
                 "toLocaleLowerCase" => {
                     let locales =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
-                    let r = crate::string::js_string_to_locale_lower_case(s_ptr, locales);
+                    let r =
+                        crate::string::js_string_to_locale_lower_case(receiver_string(), locales);
                     return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
                 }
                 "toLocaleUpperCase" => {
                     let locales =
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
-                    let r = crate::string::js_string_to_locale_upper_case(s_ptr, locales);
+                    let r =
+                        crate::string::js_string_to_locale_upper_case(receiver_string(), locales);
                     return Some(f64::from_bits(JSValue::string_ptr(r).bits()));
                 }
                 "repeat" => {
@@ -507,26 +521,32 @@ pub(super) unsafe fn dispatch_string(
                 }
                 "localeCompare" => {
                     // ToString(that) is required even for undefined ("undefined").
-                    // Root it — `js_string_validate_collator_args` below may allocate.
+                    // Root it — `js_string_resolve_collator_args` below runs user code.
                     let other_raw = crate::builtins::js_string_coerce(
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
                     );
                     let other_h = root_scope.root_string_ptr(other_raw);
-                    // `locales` (2nd) + `options` (3rd) validated for the throwing
-                    // side effect of `Construct(%Collator%, «locales, options»)`.
-                    if arg_at(1).is_some() || arg_at(2).is_some() {
+                    // `locales` (2nd) + `options` (3rd) resolved exactly as
+                    // `Construct(%Collator%, «locales, options»)` would, each option
+                    // read once, BEFORE either string address is taken: the reads
+                    // run user code (#12539). The comparison gets the resolved
+                    // `numeric` flag and reads no JS value.
+                    let numeric = if arg_at(1).is_some() || arg_at(2).is_some() {
                         let undef = f64::from_bits(JSValue::undefined().bits());
                         let loc = arg_at(1).unwrap_or(undef);
                         let opts = arg_at(2).unwrap_or(undef);
-                        crate::string::js_string_validate_collator_args(loc, opts);
-                    }
+                        Some(crate::string::js_string_resolve_collator_args(loc, opts))
+                    } else {
+                        None
+                    };
                     let s = receiver_string();
                     let other = other_h.get_raw_const_ptr::<crate::StringHeader>();
                     // Returns a plain f64 (-1/0/1) — NOT NaN-tagged.
-                    return Some(if let Some(opts) = arg_at(2) {
-                        crate::string::js_string_locale_compare_opts(s, other, opts)
-                    } else {
-                        crate::string::js_string_locale_compare(s, other)
+                    return Some(match numeric {
+                        Some(numeric) => {
+                            crate::string::js_string_locale_compare_resolved(s, other, numeric)
+                        }
+                        None => crate::string::js_string_locale_compare(s, other),
                     });
                 }
                 "isWellFormed" => {
