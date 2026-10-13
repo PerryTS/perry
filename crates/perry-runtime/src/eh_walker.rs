@@ -757,61 +757,124 @@ struct WalkerImage {
 pub(crate) struct Walker {
     images: Vec<WalkerImage>,
     sites: ahash::AHashMap<u64, Site>,
+    /// `image_generation()` when `images` was enumerated.
+    generation: ImageGeneration,
 }
 
 static WALKER: OnceLock<Option<Mutex<Walker>>> = OnceLock::new();
 
+/// The loaded-object set's version. glibc bumps `dlpi_adds` on every
+/// dlopen and `dlpi_subs` on every dlclose that unmaps an object, so two
+/// equal readings mean no object came or went between them. Targets whose
+/// loader keeps no such counters (macOS, non-glibc) report a constant: their
+/// image set is fixed at the first walk.
+type ImageGeneration = (u64, u64);
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn image_generation() -> ImageGeneration {
+    unsafe extern "C" fn each(
+        info: *mut libc::dl_phdr_info,
+        _size: libc::size_t,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        let info = unsafe { &*info };
+        unsafe { *(data as *mut ImageGeneration) = (info.dlpi_adds as u64, info.dlpi_subs as u64) };
+        // The counters are process-wide and identical in every callback.
+        1
+    }
+    let mut generation: ImageGeneration = (0, 0);
+    unsafe { libc::dl_iterate_phdr(Some(each), &mut generation as *mut _ as *mut libc::c_void) };
+    generation
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn image_generation() -> ImageGeneration {
+    (0, 0)
+}
+
 fn walker() -> Option<&'static Mutex<Walker>> {
-    WALKER
-        .get_or_init(|| {
-            let mut images = Vec::new();
-            for mut image in find_eh_frame_images() {
-                let eh_frame = EhFrame::new(image.bytes, NativeEndian);
-                let bases = BaseAddresses::default()
-                    .set_eh_frame(image.eh_frame_addr)
-                    .set_text(image.text_addr);
-                // Index every FDE once: (start, end, offset), sorted by start.
-                // ELF images index through .eh_frame_hdr, whose table
-                // entries are relative to the header itself.
-                if image.hdr.is_some() {
-                    let bases = bases.set_eh_frame_hdr(image.hdr_addr);
-                    images.push(WalkerImage {
-                        image,
-                        eh_frame,
-                        bases,
-                    });
-                    continue;
-                }
-                let mut entries = eh_frame.entries(&bases);
-                let mut index = Vec::new();
-                while let Ok(Some(entry)) = entries.next() {
-                    if let gimli::CieOrFde::Fde(partial) = entry {
-                        if let Ok(fde) = partial.parse(EhFrame::cie_from_offset) {
-                            index.push((
-                                fde.initial_address(),
-                                fde.initial_address() + fde.len(),
-                                fde.offset().into(),
-                            ));
-                        }
-                    }
-                }
-                crate::cold_sort::sort_by_u64_key(&mut index, |e| e.0);
-                image.fde_index = index;
+    WALKER.get_or_init(|| Walker::build().map(Mutex::new)).as_ref()
+}
+
+/// Lock the walker with its image index current: if objects were loaded or
+/// unloaded since the index was built, rebuild it (and drop every cached
+/// site, which referred to the old images) before any frame is read. A
+/// range of an unloaded object is never walked.
+fn locked_walker() -> Option<std::sync::MutexGuard<'static, Walker>> {
+    let mut guard = walker()?.lock().ok()?;
+    guard.refresh();
+    Some(guard)
+}
+
+impl Walker {
+    fn build() -> Option<Walker> {
+        // Read before enumerating: an object that arrives mid-build leaves
+        // the stored generation behind the loader's, so the next walk
+        // rebuilds again.
+        let generation = image_generation();
+        let mut images = Vec::new();
+        for mut image in find_eh_frame_images() {
+            let eh_frame = EhFrame::new(image.bytes, NativeEndian);
+            let bases = BaseAddresses::default()
+                .set_eh_frame(image.eh_frame_addr)
+                .set_text(image.text_addr);
+            // Index every FDE once: (start, end, offset), sorted by start.
+            // ELF images index through .eh_frame_hdr, whose table
+            // entries are relative to the header itself.
+            if image.hdr.is_some() {
+                let bases = bases.set_eh_frame_hdr(image.hdr_addr);
                 images.push(WalkerImage {
                     image,
                     eh_frame,
                     bases,
                 });
+                continue;
             }
-            if images.is_empty() {
-                return None;
+            let mut entries = eh_frame.entries(&bases);
+            let mut index = Vec::new();
+            while let Ok(Some(entry)) = entries.next() {
+                if let gimli::CieOrFde::Fde(partial) = entry {
+                    if let Ok(fde) = partial.parse(EhFrame::cie_from_offset) {
+                        index.push((
+                            fde.initial_address(),
+                            fde.initial_address() + fde.len(),
+                            fde.offset().into(),
+                        ));
+                    }
+                }
             }
-            Some(Mutex::new(Walker {
-                images,
-                sites: ahash::AHashMap::new(),
-            }))
+            crate::cold_sort::sort_by_u64_key(&mut index, |e| e.0);
+            image.fde_index = index;
+            images.push(WalkerImage {
+                image,
+                eh_frame,
+                bases,
+            });
+        }
+        if images.is_empty() {
+            return None;
+        }
+        Some(Walker {
+            images,
+            sites: ahash::AHashMap::new(),
+            generation,
         })
-        .as_ref()
+    }
+
+    /// Rebuild the image index when the loaded-object set changed.
+    fn refresh(&mut self) {
+        if image_generation() == self.generation {
+            return;
+        }
+        match Walker::build() {
+            Some(fresh) => *self = fresh,
+            None => {
+                self.images.clear();
+                self.sites.clear();
+                self.generation = image_generation();
+            }
+        }
+    }
 }
 
 impl Walker {
@@ -1052,8 +1115,7 @@ fn step_with(row: &StepRow, regs: &WalkRegs, stack_low: u64) -> Option<WalkRegs>
 #[inline(never)]
 pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
     let mut regs = capture_here();
-    let w = walker()?;
-    let mut guard = w.lock().ok()?;
+    let mut guard = locked_walker()?;
     let stack_low = regs.regs[SP];
     let mut pcs = Vec::with_capacity(max.min(64));
     while pcs.len() < max {
@@ -1237,8 +1299,7 @@ struct Landing {
 /// holding it would strand the guard and deadlock every later throw.
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 fn find_handler(start: WalkRegs) -> Option<Landing> {
-    let w = walker()?;
-    let mut guard = w.lock().ok()?;
+    let mut guard = locked_walker()?;
     let handoff = crate::exception::worker_base_handoff_pending();
     let stack_low = start.regs[SP];
     let mut regs = start;
@@ -1538,5 +1599,103 @@ mod tests {
         let w = walker().unwrap();
         let cached = w.lock().unwrap().sites.len();
         assert!(cached >= a.len() - 1, "cache unpopulated: {cached}");
+    }
+
+    /// The image index follows the loaded-object set: an object dlopen'ed
+    /// after the index was built is covered by the next walk, and one that
+    /// was dlclose'd leaves no range behind.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn image_index_follows_dlopen_and_dlclose() {
+        use std::ffi::CStr;
+
+        /// An executable address of the loaded object whose path ends in
+        /// `name`, from the loader's own list.
+        fn text_addr_of(name: &str) -> Option<u64> {
+            struct Query<'a> {
+                name: &'a str,
+                found: Option<u64>,
+            }
+            unsafe extern "C" fn each(
+                info: *mut libc::dl_phdr_info,
+                _size: libc::size_t,
+                data: *mut libc::c_void,
+            ) -> libc::c_int {
+                let q = unsafe { &mut *(data as *mut Query) };
+                let info = unsafe { &*info };
+                if info.dlpi_name.is_null() {
+                    return 0;
+                }
+                let path = unsafe { std::ffi::CStr::from_ptr(info.dlpi_name) }.to_string_lossy();
+                if !path.ends_with(q.name) {
+                    return 0;
+                }
+                let phdrs = unsafe {
+                    core::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum as usize)
+                };
+                // Only an object the walker can index (unwind table + text).
+                if !phdrs.iter().any(|ph| ph.p_type == libc::PT_GNU_EH_FRAME) {
+                    return 0;
+                }
+                for ph in phdrs {
+                    if ph.p_type == libc::PT_LOAD && ph.p_flags & libc::PF_X != 0 {
+                        q.found = Some((info.dlpi_addr as u64).wrapping_add(ph.p_vaddr as u64));
+                        return 1;
+                    }
+                }
+                0
+            }
+            let mut q = Query { name, found: None };
+            unsafe { libc::dl_iterate_phdr(Some(each), &mut q as *mut _ as *mut libc::c_void) };
+            q.found
+        }
+
+        // Small system libraries that no Rust test binary links, tried in
+        // turn: the first that loads and carries unwind tables is used.
+        let candidates: [(&CStr, &str); 5] = [
+            (c"libnss_compat.so.2", "libnss_compat.so.2"),
+            (c"libnss_hesiod.so.2", "libnss_hesiod.so.2"),
+            (c"libnss_systemd.so.2", "libnss_systemd.so.2"),
+            (c"libz.so.1", "libz.so.1"),
+            (c"libutil.so.1", "libutil.so.1"),
+        ];
+        // Make sure the index exists (what the first throw does).
+        drop(locked_walker().expect("walker"));
+        let mut opened = None;
+        for (cname, name) in candidates {
+            let handle =
+                unsafe { libc::dlopen(cname.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+            if handle.is_null() {
+                continue;
+            }
+            match text_addr_of(name) {
+                Some(addr) => {
+                    opened = Some((handle, addr));
+                    break;
+                }
+                None => {
+                    unsafe { libc::dlclose(handle) };
+                }
+            }
+        }
+        let (handle, addr) = opened.expect("one of the candidate system libraries must be loadable and indexable");
+
+        let before = image_generation();
+        let (generation, indexed) = {
+            let guard = locked_walker().expect("walker");
+            (guard.generation, guard.image_for(addr).is_some())
+        };
+        assert_eq!(generation, before, "refresh left a stale generation");
+        assert!(indexed, "dlopen'ed object {addr:#x} is not indexed after refresh");
+
+        assert_eq!(unsafe { libc::dlclose(handle) }, 0);
+        let after = image_generation();
+        assert_ne!(after, before, "dlclose did not change the loader counters");
+        let (generation, indexed) = {
+            let guard = locked_walker().expect("walker");
+            (guard.generation, guard.image_for(addr).is_some())
+        };
+        assert_eq!(generation, after);
+        assert!(!indexed, "range of the dlclose'd object {addr:#x} is still indexed");
     }
 }
