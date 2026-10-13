@@ -1,0 +1,1 @@
+The URL parser now treats Windows drive letters after `file://` as path roots and normalizes backslash separators, matching Node's `file:///C:/...` form. Query and fragment contents remain unchanged; UNC file hosts retain their existing behavior. This is the file-URL parser portion of #10409.

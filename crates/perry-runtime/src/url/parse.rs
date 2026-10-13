@@ -7,6 +7,8 @@ use super::search_params::{create_url_search_params_object, parse_query_string};
 /// Simple URL parser
 /// Returns (protocol, host, hostname, port, pathname, search, hash)
 pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, String, String, String) {
+    let normalized_url = normalize_file_drive_authority(url_str);
+    let url_str = normalized_url.as_str();
     let mut protocol = String::new();
     // #854: `host`, `hostname`, `pathname` are always set by the file: /
     // non-file branches below, so the initial empty strings were dead
@@ -567,7 +569,8 @@ pub(crate) unsafe fn rebuild_url_host(url: *mut ObjectHeader) {
 /// scheme-specific data. Used by `URL.canParse` / `URL.parse` to mirror
 /// the validation Node's WHATWG parser performs before constructing.
 pub(crate) fn is_valid_absolute_url(s: &str) -> bool {
-    let s = s.trim();
+    let normalized = normalize_file_drive_authority(s.trim());
+    let s = normalized.as_str();
     if s.is_empty() {
         return false;
     }
@@ -618,6 +621,36 @@ pub(crate) fn is_valid_absolute_url(s: &str) -> bool {
         return false;
     }
     true
+}
+
+/// WHATWG treats a Windows drive letter after `file://` as the beginning of
+/// the path, not as an authority host. Backslashes are path separators in
+/// this file-URL form, but query and fragment bytes are left untouched.
+pub(super) fn normalize_file_drive_authority(input: &str) -> String {
+    let Some(colon) = input.find(':') else {
+        return input.to_string();
+    };
+    if !input[..colon].eq_ignore_ascii_case("file") || !input[colon + 1..].starts_with("//") {
+        return input.to_string();
+    }
+
+    let authority_start = colon + 3;
+    let url_end = input[authority_start..]
+        .find(['?', '#'])
+        .map_or(input.len(), |offset| authority_start + offset);
+    let tail = &input[url_end..];
+    let authority_and_path = &input[authority_start..url_end];
+    let drive_end = authority_and_path
+        .find(['/', '\\'])
+        .unwrap_or(authority_and_path.len());
+    let authority = &authority_and_path[..drive_end];
+    let drive_bytes = authority.as_bytes();
+    if drive_bytes.len() != 2 || !drive_bytes[0].is_ascii_alphabetic() || drive_bytes[1] != b':' {
+        return input.to_string();
+    }
+
+    let rest = authority_and_path[drive_end..].replace('\\', "/");
+    format!("{}///{}{}{}", &input[..=colon], authority, rest, tail)
 }
 
 fn is_valid_url_authority(scheme: &str, authority: &str) -> bool {
