@@ -105,9 +105,9 @@ fn keyed_read_matches_get_across_mutations() {
             &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
         )
     };
-    // The key is still a root (compared by identity); the hop is a stable
-    // weak word and is not.
-    assert!(marked.contains(&(key_now.to_bits() & crate::value::POINTER_MASK)));
+    // The key is an atom (immortal, never moved), so it is no root either;
+    // the hop is a stable weak word and is not.
+    assert!(!marked.contains(&(key_now.to_bits() & crate::value::POINTER_MASK)));
     mid.with_mut_ptr::<ObjectHeader, _>(|p| assert!(!marked.contains(&(p as u64))));
 }
 
@@ -508,5 +508,49 @@ fn rematerialized_names_reuse_the_traced_site_key_after_movement() {
         read(&mut slot, &object, make()),
         18.0,
         "values still come from the live receiver"
+    );
+}
+
+/// A static key is its atom (an image string: immortal, never moved), so an
+/// entry holding it needs no root and its site is never listed in
+/// `KEYED_SITES`; a heap string key is still listed and visited.
+#[test]
+fn atom_keyed_sites_are_never_listed() {
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
+    if !super::super::super::run_with_fresh_worker_gate("atom_keyed_sites_are_never_listed") {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = RuntimeHandleScope::new();
+    let k = atom(b"keyedAtomOnly");
+    assert!(
+        !unsafe { key_needs_root(k.to_bits()) },
+        "an atom is no root"
+    );
+    let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+    put(&proto, k, 5.0);
+    let o = inheriting(&scope, &proto);
+    let mut slot = std::ptr::null_mut();
+    assert_eq!(read(&mut slot, &o, k), 5.0);
+    assert_eq!(hit(slot, &o, k), Some(5.0f64.to_bits()));
+    assert!(
+        !unsafe { (*slot).registered },
+        "an atom-keyed site is never listed"
+    );
+
+    let text = b"keyedHeapOnly";
+    let heap = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let hk = scope.root_nanbox_f64(f64::from_bits(crate::value::STRING_TAG | heap as u64));
+    assert!(
+        unsafe { key_needs_root(hk.get_nanbox_u64()) },
+        "a heap string is a root"
+    );
+    put(&proto, hk.get_nanbox_f64(), 6.0);
+    let mut slot2 = std::ptr::null_mut();
+    assert_eq!(read(&mut slot2, &o, hk.get_nanbox_f64()), 6.0);
+    assert!(
+        unsafe { (*slot2).registered },
+        "a heap-string-keyed site is listed"
     );
 }

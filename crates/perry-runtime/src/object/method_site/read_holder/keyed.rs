@@ -1,10 +1,12 @@
 //! Computed reads own the same shape/holder proofs as named reads. Four ways
 //! belong to the site. Holders and hops follow the read sites' I1 rule (stable
-//! objects, weak words; see "Weak entries" in `read_holder.rs`). The KEY is
-//! still a strong root: a hit compares it by identity, and nothing makes a
-//! key string or symbol immortal yet (side-table plan I2, atoms immortal).
-//! Until then [`KEYED_SITES`] lists the sites so [`scan_keyed_key_roots_mut`]
-//! can visit their keys, and only their keys.
+//! objects, weak words; see "Weak entries" in `read_holder.rs`). A hit
+//! compares the KEY by identity. A static key is its atom
+//! (`string::js_string_pool_atom`: a pinned longlived leaf, immortal and never
+//! moved), or an inline short string, so its word needs no root and its site
+//! is never listed. A heap string or symbol key is still a strong root (I2):
+//! [`KEYED_SITES`] lists the sites holding one so [`scan_keyed_key_roots_mut`]
+//! can visit those keys, and only those keys.
 use super::*;
 
 const WAYS: usize = 4;
@@ -273,18 +275,48 @@ pub(crate) fn scan_keyed_key_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     }
 }
 
-/// One keyed site's keys. A fixed-name entry stores an untagged metadata
-/// address, which is not visited.
+/// One keyed site's keys that need a root ([`key_needs_root`]).
 ///
 /// # Safety
 /// `site` is a live `KeyedCache`.
 pub(super) unsafe fn scan_site_keys(site: usize, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let cache = &mut *(site as *mut KeyedCache);
     for e in &mut cache.entries {
-        if e.token != 0 && e.identity_key & !crate::value::POINTER_MASK != 0 {
+        if e.token != 0 && key_needs_root(e.identity_key) {
             visitor.visit_nanbox_u64_slot(&mut e.identity_key);
         }
     }
+}
+
+/// Does an entry's key word need the keyed root scan? Not an atom (immortal
+/// and never moved), not an inline short string, and not a
+/// fixed-name entry's untagged metadata address (no GC edge). A heap string
+/// or a symbol does.
+///
+/// # Safety
+/// A tagged string word is a live `StringHeader`.
+pub(super) unsafe fn key_needs_root(key: u64) -> bool {
+    let tag = key & !crate::value::POINTER_MASK;
+    if tag == 0 || tag == crate::value::SHORT_STRING_TAG {
+        return false;
+    }
+    if tag == crate::value::STRING_TAG {
+        let s = (key & crate::value::POINTER_MASK) as usize as *const crate::StringHeader;
+        return !string_is_atom(s);
+    }
+    true
+}
+
+/// Is `s` the agent's atom for its text (`string::js_string_pool_atom`: a
+/// pinned longlived leaf, never moved or swept) or an executable image
+/// string? Asked by the atom table itself, never inferred from a header.
+///
+/// # Safety
+/// `s` is a live `StringHeader`.
+unsafe fn string_is_atom(s: *const crate::StringHeader) -> bool {
+    let bytes = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    crate::string::atom_for_key(s, hash) == Some(s)
 }
 
 unsafe fn publish_keyed(
@@ -351,7 +383,7 @@ unsafe fn publish_keyed(
         epoch,
         ..KeyedEntry::EMPTY
     };
-    if !cache.registered {
+    if !cache.registered && key_needs_root(key) {
         KEYED_SITES
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
