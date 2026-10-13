@@ -36,6 +36,9 @@ int js_proxy_get(int x) { fixture_sink = x; return x ^ 0x5a; }
 void fixture_collect(void) { __asm__ volatile("" ::: "memory"); }
 void js_throw(void) { js_proxy_get(1); }
 extern int unknown_external(int);
+extern void _Unwind_RaiseException(void *);
+void fixture_poll(void) { fixture_collect(); }
+void fixture_collect_js(void) { js_proxy_get(0); }
 extern void *memcpy(void *, const void *, unsigned long);
 
 int leaf_helper(int x) { PLANT return x * 3 + 1; }
@@ -43,6 +46,9 @@ int js_back_hot_text(int x) { PLANT return x; }
 int alloc_helper(int x) { fixture_collect(); return x + 2; }
 int throw_helper(int x) { if (x > 100) js_throw(); return x; }
 int reenter_helper(int x) { return js_proxy_get(x) + 3; }
+int poll_helper(int x) { fixture_poll(); return x + 4; }
+int gc_reaches_js_helper(int x) { fixture_collect_js(); return x + 6; }
+int unwind_helper(int x) { _Unwind_RaiseException(0); return x + 8; }
 int chain_helper(int x) { return reenter_helper(x) * 5; }
 int indirect_helper(fp f, int x) { return f(x) + 7; }
 int extern_helper(int x) { return unknown_external(x) + 11; }
@@ -78,8 +84,13 @@ RULES = """\
 collector exact fixture_collect -- fixture stand-in for the allocation trigger
 js exact js_proxy_get -- fixture stand-in for a JS-invoking entry point
 throw exact js_throw -- fixture stand-in for the throw funnel
-extern regex ^memcpy$ -- libc memory primitive, no callbacks
+poll exact fixture_poll -- fixture stand-in for a declared GC poll
+unwind exact _Unwind_RaiseException -- fixture stand-in for an unwinding raise
+extern regex ^(memcpy|_Unwind_RaiseException)$ -- libc memory primitive / unwinder, no callbacks
 """
+
+# A collector body that reaches JS: cut in every solve, `throws` included.
+RULES_COLLECTOR_JS = RULES + "collector exact fixture_collect_js -- fixture collector that runs JS\n"
 
 EXPECTED = {
     "js_back_hot_text": "Leaf",
@@ -92,6 +103,25 @@ EXPECTED = {
     "chain_helper": "Reenters",
     "indirect_helper": "Reenters",
     "extern_helper": "Reenters",
+    "poll_helper": "Reenters",
+    "unwind_helper": "Reenters",
+}
+
+# The `throws` column. A poll is Reenters but cannot throw; the funnel, JS, an
+# unaudited indirect or extern callee, and an unwinding raise all can.
+EXPECTED_THROWS = {
+    "js_back_hot_text": "no",
+    "leaf_helper": "no",
+    "libc_helper": "no",
+    "switch_helper": "no",
+    "alloc_helper": "no",
+    "poll_helper": "no",
+    "throw_helper": "yes",
+    "reenter_helper": "yes",
+    "chain_helper": "yes",
+    "indirect_helper": "yes",
+    "extern_helper": "yes",
+    "unwind_helper": "yes",
 }
 
 TARGETS = {
@@ -267,7 +297,21 @@ def main() -> int:
             if cg.perry_member("8a1b2c3d-mimalloc.o", "js_back_hot_text"):
                 failures.append(f"{tag}: a dependency inherited native ownership by name")
             got = {k: res.cls.get(k, "(missing)") for k in EXPECTED}
-            per_format[tag] = got
+            got_throws = {k: res.throws.get(k, "(missing)") for k in EXPECTED_THROWS}
+            per_format[tag] = (got, got_throws)
+            for sym, want in EXPECTED_THROWS.items():
+                if got_throws[sym] != want:
+                    failures.append(f"{tag}: {sym} throws={got_throws[sym]}, expected {want}")
+            if cg.agreement_violations(res):
+                failures.append(f"{tag}: Leaf/AllocOnly with throws=yes: {cg.agreement_violations(res)}")
+            # A collector whose body reaches JS is cut in `throws` (the
+            # collection-never-unwinds premise), exactly as a collector is cut
+            # in AllocOnly: the helper stays AllocOnly and throws=no.
+            _, res_cj = classify(lib, load_rules_text(tmp, RULES_COLLECTOR_JS))
+            if (res_cj.cls["gc_reaches_js_helper"], res_cj.throws["gc_reaches_js_helper"]) != ("AllocOnly", "no"):
+                failures.append(f"{tag}: collector reaching JS: gc_reaches_js_helper is "
+                                f"{res_cj.cls['gc_reaches_js_helper']}/throws={res_cj.throws['gc_reaches_js_helper']}, "
+                                f"expected AllocOnly/no")
             for sym, want in EXPECTED.items():
                 if got[sym] != want:
                     failures.append(f"{tag}: {sym} is {got[sym]}, expected {want}")
@@ -294,6 +338,14 @@ def main() -> int:
             path = cg.witness_path(g2, res2, "leaf_helper", "L2")
             if not path or "js_proxy_get" not in path[-1]:
                 failures.append(f"{tag}: witness path does not end at js_proxy_get: {path}")
+            if res2.throws.get("leaf_helper") != "yes":
+                failures.append(f"{tag}: planted js_proxy_get call left leaf_helper throws=no")
+            unsafe_t, _ = cg.compare_throws(res.throws, res2.throws)
+            if not any(name == "leaf_helper" for name, _, _ in unsafe_t):
+                failures.append(f"{tag}: throws check did not report the planted helper as UNSAFE")
+            tpath = cg.witness_path(g2, res2, "leaf_helper", "throws")
+            if not tpath or "js_proxy_get" not in tpath[-1]:
+                failures.append(f"{tag}: throws witness does not end at js_proxy_get: {tpath}")
 
             # A seed that seeds nothing must fail, not pass vacuously.
             dead_rules = load_rules_text(tmp, RULES + "js exact no_such_symbol_anywhere -- a "
@@ -318,6 +370,16 @@ def main() -> int:
     unsafe, safe = cg.compare({"a": "Leaf", "b": "Reenters"}, {"b": "Leaf", "c": "Leaf"})
     if [u[0] for u in unsafe] != ["a"] or sorted(x[0] for x in safe) != ["b", "c"]:
         failures.append(f"compare() semantics broke: unsafe={unsafe} safe={safe}")
+
+    fake = cg.Classification()
+    fake.cls = {"a": "Leaf", "b": "AllocOnly", "c": "Reenters"}
+    fake.throws = {"a": "yes", "b": "no", "c": "yes"}
+    if cg.agreement_violations(fake) != ["a"]:
+        failures.append(f"agreement_violations() cannot fail: {cg.agreement_violations(fake)}")
+
+    unsafe, safe = cg.compare_throws({"a": "no", "b": "yes", "d": "no"}, {"b": "no", "c": "no", "d": "yes"})
+    if [u[0] for u in unsafe] != ["a", "d"] or [x[0] for x in safe] != ["b", "c"]:
+        failures.append(f"compare_throws() semantics broke: unsafe={unsafe} safe={safe}")
 
     if failures:
         print("gc_call_effects self-test FAILED:", file=sys.stderr)

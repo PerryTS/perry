@@ -518,6 +518,9 @@ pub fn js_call_catching(f: impl FnOnce() -> f64) -> Result<f64, f64> {
 /// `panic_cannot_unwind` before the landing pad can run.
 #[no_mangle]
 pub extern "C-unwind" fn js_throw(value: f64) -> ! {
+    // The throws premise of the generated GC-effects table: a collection never
+    // unwinds. Throw path only (see `forbid_throw_in_collection`).
+    crate::gc::allocation_pacing::forbid_throw_in_collection();
     // Pull the transport decision out under the TLS borrow, then act after
     // dropping it (neither longjmp nor a raise returns here, so leaving the
     // TLS access "open" would leave the cell permanently borrowed on this

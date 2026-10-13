@@ -186,12 +186,51 @@ pub(super) fn collector_step_active() -> bool {
     COLLECTOR_STEP.with(Cell::get)
 }
 
+/// The enforced half of the generated GC-effects `throws` premise: a
+/// collection never unwinds into the frame that triggered it
+/// (`scripts/gc_call_effects/seeds.txt`, kinds `collector` and `poll` are cut
+/// in the `throws` solve). Called on the THROW path only, by `js_throw` and by
+/// every raise entry (the Itanium and SEH raises, the aarch64 fast transport),
+/// so the no-throw path pays nothing. A JS throw raised while a collector step
+/// is in progress is a runtime defect, never a catchable exception: it aborts
+/// here instead of unwinding through a frame the codegen compiled as a plain
+/// `call`.
+#[inline]
+pub(crate) fn forbid_throw_in_collection() {
+    if COLLECTOR_STEP.with(Cell::get) {
+        throw_in_collection_abort();
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn throw_in_collection_abort() -> ! {
+    eprintln!(
+        "perry: FATAL: a JavaScript exception was raised during a garbage collection; \
+         the collector never throws, and an unwind here would skip frames the \
+         compiler emitted as plain calls"
+    );
+    std::process::abort();
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only sabotage hook: runs inside the collector step, right after the
+    /// step flag is set. Lets a test raise a throw from "inside a collection".
+    static TEST_STEP_HOOK: Cell<Option<fn()>> = const { Cell::new(None) };
+}
+
 pub(super) struct CollectorStepGuard(bool);
 
 impl CollectorStepGuard {
     pub(super) fn enter() -> Self {
         sample_arena();
-        Self(COLLECTOR_STEP.with(|active| active.replace(true)))
+        let guard = Self(COLLECTOR_STEP.with(|active| active.replace(true)));
+        #[cfg(test)]
+        if let Some(hook) = TEST_STEP_HOOK.with(Cell::get) {
+            hook();
+        }
+        guard
     }
 }
 
@@ -255,6 +294,55 @@ impl Drop for BurstBoundaryGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ABORT_CHILD_ENV: &str = "PERRY_TEST_THROW_IN_COLLECTION_CHILD";
+
+    /// A JS throw raised from inside a collection must abort the process with
+    /// the fatal message, never unwind (the premise of the generated
+    /// `throws` column). The child process installs the sabotage hook, runs a
+    /// real collection and throws from inside it; the parent checks it died by
+    /// abort and said why.
+    #[test]
+    fn js_throw_inside_a_collection_aborts() {
+        if std::env::var_os(ABORT_CHILD_ENV).is_some() {
+            TEST_STEP_HOOK.with(|h| h.set(Some(|| crate::exception::js_throw(1.0))));
+            let _ = super::super::gc_collect_minor();
+            // Reaching here means the throw returned or unwound: fail loudly.
+            std::process::exit(77);
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gc::allocation_pacing::tests::js_throw_inside_a_collection_aborts",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(ABORT_CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("exception was raised during a garbage collection"),
+            "no fatal message; status {:?}, stderr: {stderr}",
+            out.status
+        );
+        assert_ne!(out.status.code(), Some(77), "the throw returned");
+        assert!(!out.status.success());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(out.status.signal(), Some(6), "expected SIGABRT");
+        }
+    }
+
+    /// Outside a collection the check is inert.
+    #[test]
+    fn forbid_throw_is_inert_outside_a_collection() {
+        forbid_throw_in_collection();
+        let _step = CollectorStepGuard::enter();
+        drop(_step);
+        forbid_throw_in_collection();
+    }
 
     #[test]
     fn shared_runtime_bumps_do_not_charge_collector_bytes_to_mutator() {

@@ -34,6 +34,26 @@ poll exact js_gc_collect -- explicit gc(): a declared poll (RFC D1), never cut
 poll exact js_gc_memory_pressure -- memory-pressure collection: a declared poll (RFC D1)
 poll regex ^perry_runtime::gc::idle_reclaim::(?![A-Z][A-Z0-9_]*::) -- idle reclaim / compaction: a declared poll (RFC D1)
 
+# THROWS PREMISE (kinds `collector` and `poll` are cut in the `throws` solve).
+# A collection or declared poll never unwinds into the frame that triggered it.
+# Allocation failure aborts; finalization-registry callbacks are enqueued, not
+# run, inside a collection. The graph cannot check this: walking the collector
+# bodies reaches hundreds of unaudited indirect calls and `js_array_length`
+# (which can run a Proxy trap), so honouring the graph would make every
+# allocating helper and every poll `throws=yes`. It is the premise the codegen
+# hand list ("the GC has no throw path", `js_gc_*` nounwind) already rested on.
+# ENFORCED, not assumed: `gc::allocation_pacing::forbid_throw_in_collection`
+# (crates/perry-runtime/src/gc/allocation_pacing.rs) aborts the process with a
+# fatal message when a JS throw is raised while a collector step is active
+# (`COLLECTOR_STEP`, set by every `CollectorStepGuard`: full, minor and
+# budgeted steps). It runs on the throw path only: `js_throw` (exception.rs),
+# `eh::raise_perry_exception` (Itanium), `eh_windows::raise_perry_exception`
+# (SEH) and the aarch64 `eh_walker::try_fast_transport`; the no-throw path
+# pays nothing. Test: `gc::allocation_pacing::tests::js_throw_inside_a_collection_aborts`
+# raises a throw from a sabotage hook inside a real collection and observes
+# SIGABRT. So the failure mode is a loud abort, never an exception escaping a
+# plain `call` inside a `try`.
+
 # --------------------------------------------------------------------- poll
 # Declared polls (RFC D1). Never cut: reaching one means a precise, possibly
 # moving collection can begin inside the call.
@@ -82,11 +102,30 @@ panic regex ^core::slice::index::|^core::str::slice_error_fail|^core::cell::pani
 teardown regex ^perry_runtime::arena::thread_exit:: -- thread-exit arena release, run from the arena's TLS destructor
 teardown regex ^<perry_runtime::arena::block::Arena as core::ops::drop::Drop>::drop$ -- the arena's TLS destructor
 teardown regex ^(core::ptr::drop_glue|std::sys::thread_local::native::lazy::destroy)::<perry_runtime::tls_hot::HotCell< -- a perry_thread_local! value's destructor (TLS teardown)
+teardown regex ^<perry_runtime::state::StateOwner as core::ops::drop::Drop>::drop$ -- the runtime state's TLS owner (crates/perry-runtime/src/state.rs:79): freed at thread exit only. The static edge from `init_state` (state.rs:108) is the destructor of the PREVIOUS STATE_OWNER value in `*o.borrow_mut() = Some(..)`; that slot is written only there, init_state runs only while STATE_PTR is null, and after the first init STATE_PTR stays set until StateOwner::drop itself runs (state.rs:81), at which point the slot is being destroyed and try_with fails. So the previous value is always None
 teardown regex ^std::sys::thread_local::destructors::|^std::sys::thread_local::guard:: -- std's TLS destructor runner: thread exit only
+
+# ------------------------------------------------------------------ nothrow
+# Audited cuts for the `throws` solve ONLY (class solves are untouched): the
+# graph reaches a throw seed through a static edge that provably never carries
+# a JS throw at this call. Each rule states the evidence (file:line) and must
+# still match a node. A function that really can throw JS never belongs here.
+nothrow exact perry_runtime::object::keys_lookup::keys_array_dense_slots -- its argument is a shape key list, already validated GC_TYPE_ARRAY by every caller (crates/perry-runtime/src/object/keys_lookup.rs:16-24). The only edge from `clean_arr_ptr` to JS-adjacent code is `force_materialize_lazy`, taken solely for a header of type GC_TYPE_LAZY_ARRAY (crates/perry-runtime/src/array/header.rs:565-575), which only JSON.parse results carry and no shape key list ever is
+
+# ------------------------------------------------------------------- unwind
+# Externs that ORIGINATE an unwind: the throw transport's raise and a longjmp
+# out of the callee. They seed every solve, because the extern allowlist below
+# makes the unwinder a leaf for "unknown callee" purposes while a function that
+# raises is neither a collection leaf nor non-throwing. `_Unwind_Resume` is
+# deliberately absent: it only continues an unwind already in flight (the end of
+# a cleanup pad, which std's prebuilt objects carry although panics abort), so
+# it can run only if a callee already unwound, and that callee is a `throws=yes`
+# seed of its own. Reported, not failed, when the rule matches nothing on a target.
+unwind regex ^(_Unwind_(RaiseException|ForcedUnwind)|__cxa_(throw|rethrow)|_CxxThrowException|RaiseException|_?longjmp|siglongjmp|__longjmp_chk|perry_wasi_longjmp)$ -- an unwinding raise or a longjmp out of the callee: the caller's frame can be abandoned (`throws`)
 
 # ------------------------------------------------------------------- extern
 extern regex ^(memset_pattern(4|8|16)|__strlcat_chk|__strlcpy_chk|strlcpy|strlcat|atoi|atol|random|srandom|confstr|getloadavg|getpriority|setpriority|getgroups|setgroups|initgroups|setuid|setgid|seteuid|setegid|setpgid|getpeereid|gethostuuid|chroot|lchmod|fsctl|pathconf|fpathconf|statvfs|fstatvfs|seekdir|telldir|pause|sigismember|sigpending|sigwait|clock|openpty|cfsetispeed|cfsetospeed|gnu_get_libc_version|pidfd_getpid|pidfd_spawnp|waitid|qsort_r|realpath\$DARWIN_EXTSN|__realpath_chk|_setjmp|setjmp|longjmp|_longjmp|sigsetjmp|siglongjmp|pthread_attr_\w+|pthread_setname_np|proc_pid_rusage|host_processor_info|host_statistics64|getsectiondata|_dyld_\w+|malloc_create_zone|malloc_default_zone|malloc_set_zone_name|malloc_zone_\w+|copyfile_state_\w+|posix_spawn_file_actions_\w+|posix_spawnattr_\w+|__addtf3|__subtf3|__multf3|__divtf3|__eqtf2|__netf2|__gttf2|__getf2|__lttf2|__letf2|__unordtf2|__floatsitf|__floattitf|__fixtfsi|__extenddftf2|__trunctfdf2|CF\w+)$ -- more libc / libSystem / CoreFoundation / soft-float primitives: none takes a Perry callback (qsort_r's comparator is the calling C code's own)
-extern regex ^(\?\?3@YAXPEAX_K@Z|\?\?2@YAPEAX_K@Z|\?\?3@YAXPEAX@Z|\?get_new_handler@std@@.*|LoadLibrary\w*|FreeLibrary|GetProcAddress|AdjustTokenPrivileges|LookupPrivilegeValue\w*|OpenProcess\w*|K32\w+|CoTaskMemFree|SHGetKnownFolderPath|ConnectNamedPipe|DisconnectNamedPipe|FreeEnvironmentStrings\w*|GetSystemDirectory\w*|GetWindowsDirectory\w*|ConvertFiberToThread|ConvertThreadToFiber|IsThreadAFiber|PostQueuedCompletionStatus|ReadConsole\w*|ReadFileEx|RemoveDirectory\w*|ResetEvent|ResizePseudoConsole|UpdateProcThreadAttribute|_close|_gmtime64_s|_localtime64_s|_hypot|_wgetenv|qsort_s|strspn|strcspn|srandomdev|fork|pthread_setname_np|sel_registerName|objc_getClass)$ -- Win32 / MSVC CRT / libc leaves: operator new/delete, library loading for backtrace symbolization (DllMain cannot call into Perry), process tokens, console and pipe I/O, time conversion. NOT listed: objc_msgSend and RegisterWaitForSingleObject / UnregisterWaitEx, which run callbacks and stay seeds
+extern regex ^(\?\?3@YAXPEAX_K@Z|\?\?2@YAPEAX_K@Z|\?\?3@YAXPEAX@Z|\?get_new_handler@std@@.*|LoadLibrary\w*|FreeLibrary|GetProcAddress|AdjustTokenPrivileges|LookupPrivilegeValue\w*|OpenProcess\w*|K32\w+|CoTaskMemFree|SHGetKnownFolderPath|ConnectNamedPipe|DisconnectNamedPipe|FreeEnvironmentStrings\w*|GetSystemDirectory\w*|GetWindowsDirectory\w*|ConvertFiberToThread|ConvertThreadToFiber|IsThreadAFiber|PostQueuedCompletionStatus|ReadConsole\w*|ReadFileEx|RemoveDirectory\w*|ResetEvent|ResizePseudoConsole|UpdateProcThreadAttribute|_close|_write|_gmtime64_s|_localtime64_s|_hypot|_wgetenv|qsort_s|strspn|strcspn|srandomdev|fork|pthread_setname_np|sel_registerName|objc_getClass)$ -- Win32 / MSVC CRT / libc leaves (`_write`: libc::write of the builtin-proto trace line, builtin_proto.rs:503): operator new/delete, library loading for backtrace symbolization (DllMain cannot call into Perry), process tokens, console and pipe I/O, time conversion. NOT listed: objc_msgSend and RegisterWaitForSingleObject / UnregisterWaitEx, which run callbacks and stay seeds
 extern regex ^compiler_builtins:: -- compiler_builtins arithmetic resolved at final link (demangled spelling on targets where the crate's objects are not in the graph)
 # Undefined symbols (defined by no archive in the graph) that are system or C
 # runtime leaves: they cannot call back into Perry code. Any other undefined
@@ -169,6 +208,7 @@ trusted regex ^perry_(parser|diagnostics)$ -- the SWC wrapper and diagnostics cr
 # ------------------------------------------------------------------- idiom
 # Indirect-call idioms the parser recognizes structurally (callgraph._idiom);
 # each names the only functions the idiom can land on, which become callees.
+indirect regex ^perry_runtime::object::shapes::stamp_object_shape_id_with_carrier_note$ -- aarch64 only: its indirect calls are Mach-O thread-local accesses, `ldr x10,[x19]; mov x0,x19; blr x10` at two sites (disassembly of the macos archive: +0x68 and +0x2c8 from the symbol, 0x597960 `adrp x19; ldr x19,[x19]` loads the TLVP descriptor). The generator's reaching-definitions proof for the TLV idiom (callgraph.py _tlv_thunk_call) gives up because x19 is a callee-saved register redefined later in the function; the callee is dyld's TLV getter, which never enters Perry code
 idiom io_os_functions => regex ^std::sys::(io::error|pal)::\w+::(decode_error_kind|error_string|is_interrupted) -- the OS_FUNCTIONS table only ever holds std's own errno helpers
 idiom io_error_drop => regex ^alloc::io::error::custom_owner_from_box::drop_box_raw -- dropping an io::Error's custom payload calls the owner-drop fn std stored in the box: always a drop_box_raw::<T> instantiation. Same bit-packed repr on every 64-bit target; on x86_64-pc-windows-msvc the box is passed in %rcx (`movq %r, %rcx ; decq %rcx ; callq *0x17(%r)`), which covers the stdio / fs / child-process result drops of js_console_*, js_checkpoint and the tui writers (#12479)
 #

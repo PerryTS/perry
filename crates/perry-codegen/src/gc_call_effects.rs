@@ -23,6 +23,13 @@
 //! * `ThrowOnly` additionally reaches JS only through the throw funnel;
 //! * `Reenters`  everything else.
 //!
+//! Every row also carries a `throws` bit (a fourth solve, see the generator's
+//! docs): `yes` if a call can reach `js_throw`, an unwinding raise, JavaScript
+//! or an unaudited callee. It is independent of the class (a poll is
+//! `Reenters` but may be unable to throw); `Leaf` and `AllocOnly` imply `no`.
+//! [`runtime_throws`] reads it, and `eh_mode::nothrow_callee` is its only
+//! consumer: a symbol absent from any table is `throws=yes`.
+//!
 //! Codegen uses the MOST conservative class across the three target tables,
 //! and a symbol missing from any table is `Reenters`. Under today's runtime
 //! (an allocation can still start a collection) only `Leaf` may be marked
@@ -84,6 +91,14 @@ impl RuntimeClass {
     }
 }
 
+/// What the generated tables say about one runtime symbol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeFacts {
+    pub(crate) class: RuntimeClass,
+    /// A call can unwind (reach `js_throw`, a raise, JS or an unaudited callee).
+    pub(crate) throws: bool,
+}
+
 /// The committed per-target tables. Regenerate with
 /// `scripts/gc_call_effects/regen.sh <target>` (or take the CI artifact);
 /// never edit by hand.
@@ -109,41 +124,52 @@ pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
 ];
 
-/// Merge target tables: the most conservative class wins, and a symbol absent
-/// from any table is dropped (reads as `Reenters`). Panics on a malformed row:
-/// a table codegen cannot read must fail the build, never degrade silently.
-pub(crate) fn merge_tables(tables: &[(&str, &str)]) -> HashMap<String, RuntimeClass> {
-    let mut merged: HashMap<String, (RuntimeClass, usize)> = HashMap::new();
+/// Merge target tables: the most conservative class wins, `throws` is `yes` if
+/// any target says so, and a symbol absent from any table is dropped (reads as
+/// `Reenters`, `throws=yes`). Panics on a malformed row: a table codegen cannot
+/// read must fail the build, never degrade silently.
+pub(crate) fn merge_tables(tables: &[(&str, &str)]) -> HashMap<String, RuntimeFacts> {
+    let mut merged: HashMap<String, (RuntimeFacts, usize)> = HashMap::new();
     for (target, text) in tables {
         let mut seen: HashSet<&str> = HashSet::new();
         for (n, line) in text.lines().enumerate() {
             if line.starts_with('#') || line.trim().is_empty() {
                 continue;
             }
-            let (sym, class) = line
-                .split_once('\t')
-                .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: malformed row", n + 1));
+            let mut cols = line.split('\t');
+            let (Some(sym), Some(class), Some(throws), None) =
+                (cols.next(), cols.next(), cols.next(), cols.next())
+            else {
+                panic!("gc_effects/{target}.tsv:{}: malformed row", n + 1)
+            };
             let class = RuntimeClass::parse(class)
                 .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: bad class", n + 1));
+            let throws = match throws {
+                "yes" => true,
+                "no" => false,
+                _ => panic!("gc_effects/{target}.tsv:{}: bad throws", n + 1),
+            };
+            let row = RuntimeFacts { class, throws };
             assert!(
                 seen.insert(sym),
                 "gc_effects/{target}.tsv:{}: duplicate {sym}",
                 n + 1
             );
-            let e = merged.entry(sym.to_string()).or_insert((class, 0));
-            e.0 = e.0.max(class);
+            let e = merged.entry(sym.to_string()).or_insert((row, 0));
+            e.0.class = e.0.class.max(class);
+            e.0.throws |= throws;
             e.1 += 1;
         }
     }
     merged
         .into_iter()
         .filter(|(_, (_, count))| *count == tables.len())
-        .map(|(sym, (class, _))| (sym, class))
+        .map(|(sym, (facts, _))| (sym, facts))
         .collect()
 }
 
-fn generated() -> &'static HashMap<String, RuntimeClass> {
-    static TABLE: OnceLock<HashMap<String, RuntimeClass>> = OnceLock::new();
+fn generated() -> &'static HashMap<String, RuntimeFacts> {
+    static TABLE: OnceLock<HashMap<String, RuntimeFacts>> = OnceLock::new();
     TABLE.get_or_init(|| merge_tables(GENERATED_TABLES))
 }
 
@@ -151,8 +177,14 @@ fn generated() -> &'static HashMap<String, RuntimeClass> {
 pub(crate) fn runtime_class(name: &str) -> RuntimeClass {
     generated()
         .get(name)
-        .copied()
-        .unwrap_or(RuntimeClass::Reenters)
+        .map_or(RuntimeClass::Reenters, |f| f.class)
+}
+
+/// Whether a call to this runtime symbol can unwind, merged over the three
+/// target tables. A symbol no table proves (user code, a new helper, a name
+/// missing on one target) answers `true`: the caller keeps its `invoke`.
+pub(crate) fn runtime_throws(name: &str) -> bool {
+    generated().get(name).is_none_or(|f| f.throws)
 }
 
 fn effect_of_class(class: RuntimeClass) -> GcCallEffect {
@@ -529,7 +561,7 @@ mod tests {
         let merged = generated();
         let leaves = merged
             .values()
-            .filter(|c| **c == RuntimeClass::Leaf)
+            .filter(|f| f.class == RuntimeClass::Leaf)
             .count();
         assert!(
             merged.len() >= 1000 && leaves >= 200,
@@ -540,11 +572,20 @@ mod tests {
 
     #[test]
     fn merge_takes_the_most_conservative_class_and_drops_partial_symbols() {
-        let a = "# target: a\na_only\tLeaf\nboth\tLeaf\nweaker\tAllocOnly\n";
-        let b = "# target: b\nboth\tLeaf\nweaker\tReenters\n";
+        let a = "# target: a\na_only\tLeaf\tno\nboth\tLeaf\tno\nweaker\tAllocOnly\tno\nthr\tReenters\tno\n";
+        let b = "# target: b\nboth\tLeaf\tno\nweaker\tReenters\tno\nthr\tReenters\tyes\n";
         let m = merge_tables(&[("a", a), ("b", b)]);
-        assert_eq!(m.get("both"), Some(&RuntimeClass::Leaf));
-        assert_eq!(m.get("weaker"), Some(&RuntimeClass::Reenters));
+        assert_eq!(m.get("both").map(|f| f.class), Some(RuntimeClass::Leaf));
+        assert_eq!(
+            m.get("weaker").map(|f| f.class),
+            Some(RuntimeClass::Reenters)
+        );
+        assert_eq!(m.get("both").map(|f| f.throws), Some(false));
+        assert_eq!(
+            m.get("thr").map(|f| f.throws),
+            Some(true),
+            "throws is yes if any target says yes"
+        );
         assert_eq!(
             m.get("a_only"),
             None,
@@ -555,7 +596,19 @@ mod tests {
     #[test]
     #[should_panic(expected = "bad class")]
     fn a_malformed_table_fails_the_build() {
-        merge_tables(&[("x", "sym\tMaybeLeaf\n")]);
+        merge_tables(&[("x", "sym\tMaybeLeaf\tno\n")]);
+    }
+
+    #[test]
+    #[should_panic(expected = "malformed row")]
+    fn a_row_without_the_throws_column_fails_the_build() {
+        merge_tables(&[("x", "sym\tLeaf\n")]);
+    }
+
+    #[test]
+    #[should_panic(expected = "bad throws")]
+    fn a_bad_throws_value_fails_the_build() {
+        merge_tables(&[("x", "sym\tLeaf\tmaybe\n")]);
     }
 
     /// The classification of every runtime callee flows from the table:
@@ -564,7 +617,8 @@ mod tests {
     fn classification_flows_from_the_generated_table() {
         let merged = generated();
         let mut seen = [0usize; 4];
-        for (sym, class) in merged {
+        for (sym, facts) in merged {
+            let class = &facts.class;
             if OVERRIDES.iter().any(|(n, _, _)| n == sym) {
                 continue;
             }
@@ -631,6 +685,69 @@ mod tests {
                 GcCallEffect::CannotCollect,
                 "{name}: run scripts/gc_call_effects/why.py to see what now taints it"
             );
+        }
+    }
+
+    fn table_row<'a>(text: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+        text.lines().find_map(|l| {
+            let mut c = l.split('\t');
+            (c.next() == Some(name)).then(|| (c.next().unwrap_or(""), c.next().unwrap_or("")))
+        })
+    }
+
+    /// The hand audit behind the nounwind attribute groups becomes a checked
+    /// claim: every helper they mark must be `throws=no` in all three tables.
+    /// A helper the graph cannot prove loses its `nounwind` declaration (or
+    /// gets an audited cut in seeds.txt); there is no allowlist of exceptions.
+    #[test]
+    fn nounwind_declared_helpers_are_proven_not_to_throw() {
+        let mut checked = 0;
+        for name in crate::module::nounwind_declared_helpers() {
+            for (target, text) in GENERATED_TABLES {
+                let proven = table_row(text, name).is_some_and(|(_, throws)| throws == "no");
+                assert!(
+                    proven,
+                    "{name} is declared nounwind but gc_effects/{target}.tsv does not \
+                     prove throws=no (run scripts/gc_call_effects/why.py)"
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked >= 15, "only {checked} nounwind helpers enumerated");
+    }
+
+    /// Leaf and AllocOnly reach no throw seed, so they can never throw. The
+    /// generator enforces this; the merged table is checked again here so a
+    /// hand-edited or mixed-generation table cannot slip past.
+    #[test]
+    fn leaf_and_alloc_only_helpers_never_throw() {
+        for (sym, facts) in generated() {
+            if matches!(facts.class, RuntimeClass::Leaf | RuntimeClass::AllocOnly) {
+                assert!(!facts.throws, "{sym}: {:?} but throws=yes", facts.class);
+            }
+        }
+    }
+
+    #[test]
+    fn throws_column_answers_from_the_table() {
+        for name in [
+            "js_throw",
+            "js_closure_call0",
+            "js_native_call_value",
+            "js_to_primitive",
+            "js_number_coerce",
+            // IC miss tower: slow arms can run getters and throw.
+            "js_object_get_field_ic_slow",
+            "js_object_get_field_ic_miss",
+            // not in any table: user code, a new helper
+            "user_function_not_in_any_archive",
+        ] {
+            assert!(runtime_throws(name), "{name}");
+        }
+        // Declared polls are `Reenters` (a collection can begin) yet cannot throw.
+        for name in ["js_gc_safepoint", "js_gc_loop_safepoint", "js_gc_collect"] {
+            assert_eq!(runtime_class(name), RuntimeClass::Reenters, "{name}");
+            assert!(!runtime_throws(name), "{name}");
         }
     }
 

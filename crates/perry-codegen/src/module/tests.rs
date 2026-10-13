@@ -699,6 +699,11 @@ fn helper_attr_groups_on_verified_declarations_only() {
     m.declare_function("js_string_compare_value", I32, &[DOUBLE, DOUBLE]);
     m.declare_function("js_nanbox_string", DOUBLE, &[I64]);
     m.declare_function(
+        "js_typed_feedback_plain_array_index_get_guard",
+        I32,
+        &[I64, DOUBLE, I32, I32],
+    );
+    m.declare_function(
         "js_typed_feedback_numeric_array_index_get_guard",
         I32,
         &[I64, DOUBLE, I32, I32],
@@ -735,7 +740,12 @@ fn helper_attr_groups_on_verified_declarations_only() {
     // Repsel 4a.0: the array-index guards carry #4 (nounwind willreturn,
     // no memory attribute — the first-touch path rebuilds raw-f64 layout).
     assert!(ir.contains(
-        "declare i32 @js_typed_feedback_numeric_array_index_get_guard(i64, double, i32, i32) #4"
+        "declare i32 @js_typed_feedback_plain_array_index_get_guard(i64, double, i32, i32) #4"
+    ));
+    // The numeric guards can force-materialize a lazy JSON array (a generic
+    // property set the throws column cannot prove inert): no nounwind.
+    assert!(ir.contains(
+        "declare i32 @js_typed_feedback_numeric_array_index_get_guard(i64, double, i32, i32)\n"
     ));
     assert_eq!(
         ir.matches("attributes #4 = { nounwind willreturn }")

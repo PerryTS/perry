@@ -67,6 +67,7 @@ unsafe extern "system" {
 /// (no handler accepted it and something continued execution) — the caller
 /// treats that as transport failure and aborts loudly.
 pub(crate) fn raise_perry_exception() -> i32 {
+    crate::gc::allocation_pacing::forbid_throw_in_collection();
     unsafe {
         RaiseException(
             PERRY_SEH_CODE,

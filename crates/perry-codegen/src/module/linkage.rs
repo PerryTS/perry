@@ -308,6 +308,107 @@ fn take_keyword<'a>(s: &'a str, keywords: &[&'static str]) -> (&'static str, &'a
     ("", t)
 }
 
+/// `cold` placement hint only: says nothing about unwinding.
+const COLD_HELPERS: &[&str] = &[
+    // These calls sit behind cache-hit / inactive-marking guards. Keep
+    // register saves and code layout focused on the inline continuation.
+    // `cold` is only a profitability hint: both calls remain fully
+    // memory-clobbering and the cache miss remains GC-capable/throwing.
+    "js_object_get_field_ic_miss_packed",
+    "js_object_get_field_ic_slow",
+    "js_object_get_field_ic_nonptr",
+    "js_write_barrier_root_nanbox",
+    // S2 (`expr/ic_fast_split.rs`): the collecting continuations behind
+    // a declined GC-leaf hit. Still throwing, still GC-capable.
+    "js_object_get_field_ic_fast_miss",
+    // The prologue stack check's overflow arm (`expr/stack_guard.rs`).
+    // `-> !` in the runtime, but declared without `noreturn` here: the
+    // clone-call check rejoins its call after it.
+    "js_stack_overflow",
+];
+
+/// Group `#2`: nounwind, willreturn, readnone.
+const PURE_HELPERS: &[&str] = &[
+    // PURE — each verified: pure bit tests/masking on the f64/i64 args,
+    // total over arbitrary bits, no memory access anywhere in the body.
+    //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL
+    //   js_nanbox_get_pointer    value/nanbox.rs — mask ladder, no deref
+    //   js_typed_f64_arg_guard   native_abi.rs — tag-band check
+    //   js_typed_i32_arg_guard   native_abi.rs — tag check + finite/fract/range
+    //   js_typed_i1_arg_guard    native_abi.rs — bits == TAG_TRUE|TAG_FALSE
+    //   js_typed_i1_arg_to_raw   native_abi.rs — bits == TAG_TRUE
+    //   js_typed_i32_arg_to_raw  native_abi.rs — bit extract / saturating cast
+    //   js_typed_string_arg_guard native_abi.rs — STRING/SHORT_STRING tag check
+    "js_nanbox_pointer",
+    "js_nanbox_get_pointer",
+    "js_typed_f64_arg_guard",
+    "js_typed_i32_arg_guard",
+    "js_typed_i1_arg_guard",
+    "js_typed_i1_arg_to_raw",
+    "js_typed_i32_arg_to_raw",
+    "js_typed_string_arg_guard",
+];
+
+/// Group `#3`: nounwind, willreturn, readonly.
+const READONLY_HELPERS: &[&str] = &[
+    // READONLY — verified: tag ladder plus reads of StringHeader.utf16_len
+    // (via is_valid_string_ptr, a pure magnitude check) and BigInt limbs
+    // (js_bigint_is_zero via clean_bigint_ptr, pure bit cleanup). No
+    // registry/lock access, no allocation, no throw, no writes.
+    "js_is_truthy",
+    // string/compare.rs: pointer magnitude guards, immutable byte views,
+    // bounded word scans / UTF-16 decoder iteration only. No allocation,
+    // GC, locks, writes, or JavaScript coercion. Read-any (not argmem:
+    // operands are i64 handles) orders it against every GC-capable call.
+    // js_string_compare_value is NOT eligible: number coercion allocates.
+    "js_string_compare",
+];
+
+/// Group `#4`: nounwind, willreturn.
+const NOUNWIND_HELPERS: &[&str] = &[
+    // First-read D3 (`object/field_get_set/ic_miss/read_confirm.rs`): a
+    // generic read site's miss front. Loads, compares and at most one
+    // store (D3b re-aims the site's compact word); no allocation, lock,
+    // throw, call or unbounded loop (the ways and the second-chance scan
+    // are bounded). NOT readonly: it writes the site word. Also a proven
+    // `Leaf` in the generated call-effects table, so the call is
+    // `"gc-leaf-function"`.
+    "js_object_get_field_ic_front",
+    // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
+    // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
+    // anywhere in the body, every loop bounded by the 16M length/capacity
+    // sanity caps, no allocation, no GC trigger. They are NOT readonly:
+    // the numeric guards' first-touch path REBUILDS unmarked arrays into
+    // raw-f64 layout (slot writes + flag store), feedback mode
+    // (`PERRY_TYPED_FEEDBACK`, a runtime env check) records observations,
+    // and `js_array_numeric_value_to_raw_f64`'s ClassRef probe takes
+    // registry RwLock reads (a lock word write). #6082 trap notes apply:
+    // argmem is unsound for NaN-box args, and `willreturn` is only
+    // admissible because these helpers cannot reach `js_throw` — any
+    // divergence is a Rust panic-abort, which never resumes the program.
+    // NOT in this list: the NUMERIC index guards
+    // (`js_typed_feedback_numeric_array_index_{get,set}_guard`). They resolve
+    // the receiver through `clean_arr_ptr_resolve`, which force-materializes a
+    // lazy JSON array, and that runs the generic `js_object_set_field_by_name`
+    // (`json_tape.rs` `materialize_object`). The generated throws column cannot
+    // prove that call non-throwing for every key, so they keep no `nounwind`.
+    "js_typed_feedback_plain_array_index_get_guard",
+    "js_typed_feedback_plain_array_index_set_guard",
+    "js_typed_feedback_numeric_array_push_guard",
+    "js_array_numeric_value_to_raw_f64",
+    // S2 GC-leaf hits (`expr/ic_fast_split.rs`), each `extern "C"` with
+    // no throw anywhere in its call graph — every case that would throw
+    // (nullish receiver, setter/getter, TDZ) is declined to the `_fast_miss`
+    // continuation instead — and no loop outside the audited guards'
+    // bounded ones. Being nounwind is also what keeps them a plain `call`
+    // inside a `try`, so the leaf marking never depends on the invoke arm.
+    "js_object_get_field_ic_fast",
+    "js_property_rmw_fast",
+    // `js_put_value_set_packed_fast`: `throws=no` since the generated table
+    // cuts `StateOwner::drop` as thread teardown (seeds.txt, `teardown`).
+    "js_put_value_set_packed_fast",
+];
+
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by
 /// helper name (#6082 tranche 1).
 ///
@@ -360,88 +461,29 @@ fn take_keyword<'a>(s: &'a str, keywords: &[&'static str]) -> (&'static str, &'a
 /// `js_value_length_f64` (Buffer/TypedArray registry lookups take locks —
 /// a lock acquisition writes memory).
 fn helper_decl_contract(name: &str) -> HelperDeclContract {
-    match name {
-        // These calls sit behind cache-hit / inactive-marking guards. Keep
-        // register saves and code layout focused on the inline continuation.
-        // `cold` is only a profitability hint: both calls remain fully
-        // memory-clobbering and the cache miss remains GC-capable/throwing.
-        "js_object_get_field_ic_miss_packed"
-        | "js_object_get_field_ic_slow"
-        | "js_object_get_field_ic_nonptr"
-        | "js_write_barrier_root_nanbox"
-        // S2 (`expr/ic_fast_split.rs`): the collecting continuations behind
-        // a declined GC-leaf hit. Still throwing, still GC-capable.
-        | "js_object_get_field_ic_fast_miss"
-        // The prologue stack check's overflow arm (`expr/stack_guard.rs`).
-        // `-> !` in the runtime, but declared without `noreturn` here: the
-        // clone-call check rejoins its call after it.
-        | "js_stack_overflow" => HelperDeclContract::Cold,
-        // PURE — each verified: pure bit tests/masking on the f64/i64 args,
-        // total over arbitrary bits, no memory access anywhere in the body.
-        //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL
-        //   js_nanbox_get_pointer    value/nanbox.rs — mask ladder, no deref
-        //   js_typed_f64_arg_guard   native_abi.rs — tag-band check
-        //   js_typed_i32_arg_guard   native_abi.rs — tag check + finite/fract/range
-        //   js_typed_i1_arg_guard    native_abi.rs — bits == TAG_TRUE|TAG_FALSE
-        //   js_typed_i1_arg_to_raw   native_abi.rs — bits == TAG_TRUE
-        //   js_typed_i32_arg_to_raw  native_abi.rs — bit extract / saturating cast
-        //   js_typed_string_arg_guard native_abi.rs — STRING/SHORT_STRING tag check
-        "js_nanbox_pointer"
-        | "js_nanbox_get_pointer"
-        | "js_typed_f64_arg_guard"
-        | "js_typed_i32_arg_guard"
-        | "js_typed_i1_arg_guard"
-        | "js_typed_i1_arg_to_raw"
-        | "js_typed_i32_arg_to_raw"
-        | "js_typed_string_arg_guard" => HelperDeclContract::Pure,
-        // READONLY — verified: tag ladder plus reads of StringHeader.utf16_len
-        // (via is_valid_string_ptr, a pure magnitude check) and BigInt limbs
-        // (js_bigint_is_zero via clean_bigint_ptr, pure bit cleanup). No
-        // registry/lock access, no allocation, no throw, no writes.
-        "js_is_truthy" => HelperDeclContract::ReadOnly,
-        // string/compare.rs: pointer magnitude guards, immutable byte views,
-        // bounded word scans / UTF-16 decoder iteration only. No allocation,
-        // GC, locks, writes, or JavaScript coercion. Read-any (not argmem:
-        // operands are i64 handles) orders it against every GC-capable call.
-        // js_string_compare_value is NOT eligible: number coercion allocates.
-        "js_string_compare" => HelperDeclContract::ReadOnly,
-        // First-read D3 (`object/field_get_set/ic_miss/read_confirm.rs`): a
-        // generic read site's miss front. Loads, compares and at most one
-        // store (D3b re-aims the site's compact word); no allocation, lock,
-        // throw, call or unbounded loop (the ways and the second-chance scan
-        // are bounded). NOT readonly: it writes the site word. Also a proven
-        // `Leaf` in the generated call-effects table, so the call is
-        // `"gc-leaf-function"`.
-        "js_object_get_field_ic_front" => HelperDeclContract::NoUnwind,
-        // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
-        // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
-        // anywhere in the body, every loop bounded by the 16M length/capacity
-        // sanity caps, no allocation, no GC trigger. They are NOT readonly:
-        // the numeric guards' first-touch path REBUILDS unmarked arrays into
-        // raw-f64 layout (slot writes + flag store), feedback mode
-        // (`PERRY_TYPED_FEEDBACK`, a runtime env check) records observations,
-        // and `js_array_numeric_value_to_raw_f64`'s ClassRef probe takes
-        // registry RwLock reads (a lock word write). #6082 trap notes apply:
-        // argmem is unsound for NaN-box args, and `willreturn` is only
-        // admissible because these helpers cannot reach `js_throw` — any
-        // divergence is a Rust panic-abort, which never resumes the program.
-        "js_typed_feedback_plain_array_index_get_guard"
-        | "js_typed_feedback_numeric_array_index_get_guard"
-        | "js_typed_feedback_plain_array_index_set_guard"
-        | "js_typed_feedback_numeric_array_index_set_guard"
-        | "js_typed_feedback_numeric_array_push_guard"
-        | "js_array_numeric_value_to_raw_f64"
-        // S2 GC-leaf hits (`expr/ic_fast_split.rs`), each `extern "C"` with
-        // no throw anywhere in its call graph — every case that would throw
-        // (nullish receiver, setter/getter, TDZ) is declined to the `_fast_miss`
-        // continuation instead — and no loop outside the audited guards'
-        // bounded ones. Being nounwind is also what keeps them a plain `call`
-        // inside a `try`, so the leaf marking never depends on the invoke arm.
-        | "js_object_get_field_ic_fast"
-        | "js_property_rmw_fast"
-        | "js_put_value_set_packed_fast" => HelperDeclContract::NoUnwind,
-        _ => HelperDeclContract::Conservative,
+    if COLD_HELPERS.contains(&name) {
+        HelperDeclContract::Cold
+    } else if PURE_HELPERS.contains(&name) {
+        HelperDeclContract::Pure
+    } else if READONLY_HELPERS.contains(&name) {
+        HelperDeclContract::ReadOnly
+    } else if NOUNWIND_HELPERS.contains(&name) {
+        HelperDeclContract::NoUnwind
+    } else {
+        HelperDeclContract::Conservative
     }
+}
+
+/// Every helper whose `declare` carries a `nounwind` group (`#2`, `#3`, `#4`).
+/// Each one is an audited promise that the call never unwinds; the generated
+/// table's `throws` column must agree (checked in `gc_call_effects` tests).
+#[cfg(test)]
+pub(crate) fn nounwind_declared_helpers() -> impl Iterator<Item = &'static str> {
+    PURE_HELPERS
+        .iter()
+        .chain(READONLY_HELPERS)
+        .chain(NOUNWIND_HELPERS)
+        .copied()
 }
 
 enum HelperDeclContract {

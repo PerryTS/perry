@@ -1541,7 +1541,7 @@ impl LlBlock {
     /// LlBlock keeps appending into the continuation transparently.
     fn eh_invoke_suffix(&mut self, func_name: &str) -> Option<(String, String)> {
         let lpad = self.counter.current_eh_unwind_label()?;
-        if crate::eh_mode::callee_is_nothrow(func_name) {
+        if crate::eh_mode::nothrow_callee(func_name) {
             return None;
         }
         let cont = format!("eh.cont{}", self.counter.next());

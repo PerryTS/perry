@@ -70,34 +70,31 @@ fn flush_left_label(line: &str) -> Option<&str> {
         .then_some(rest)
 }
 
-/// Runtime helpers that participate in the EH machinery itself and are
-/// verified never to reach `js_throw` — they stay plain `call`s inside a
-/// protected region (an `invoke` on them would be legal but wires the EH
-/// bookkeeping into its own landing pads, which is both noise and, for the
-/// catch-entry sequence, a self-referential shape).
+/// May a call to `name` be emitted as a plain `call` inside a protected
+/// region? True only when the callee provably cannot unwind.
 ///
-/// `js_shadow_*` (GC shadow-stack bookkeeping: TLS pushes/pops/stores) and
-/// `js_gc_*` (collection entry points) cannot throw JS by construction —
-/// the GC has no throw path; allocation failure is a Rust abort.
-pub(crate) fn callee_is_nothrow(name: &str) -> bool {
+/// A runtime symbol answers from the generated table's `throws` column
+/// (`gc_call_effects::runtime_throws`, one solve over the linked archives; a
+/// symbol no table proves, such as user code, counts as throwing). That column
+/// is the only source of truth for runtime calls: there is no hand list of
+/// names behind it. The EH bookkeeping helpers (`js_eh_try_push`, `js_try_end`,
+/// ...) and the GC entry points are in the table like any other symbol and are
+/// plain calls because the graph proves them `no`.
+///
+/// Two clauses name things that are not runtime calls and so have no row:
+/// * `llvm.*` intrinsics. The ones Perry emits do not unwind (the rule
+///   `callee_is_nothrow` had); slice b replaces the prefix with LLVM's own
+///   intrinsic attributes.
+/// * `js_shadow_*`: the root-lowering directives (`js_shadow_slot_bind`,
+///   `js_shadow_frame_enter`, ...). The native-roots lowering pattern-matches
+///   them as plain `call`s and erases them, so an `invoke` would leave the
+///   function un-lowered; on shadow-frame targets they are stack bookkeeping
+///   that cannot unwind. They are absent from the Linux table because the
+///   runtime no longer exports them there.
+pub(crate) fn nothrow_callee(name: &str) -> bool {
     name.starts_with("llvm.")
         || name.starts_with("js_shadow_")
-        || name.starts_with("js_gc_")
-        || matches!(
-            name,
-            "js_eh_try_push"
-                | "js_try_end"
-                | "js_get_exception"
-                | "js_clear_exception"
-                | "js_catch_enter"
-                | "js_has_exception"
-                | "js_derived_super_scope_push"
-                | "js_derived_super_scope_pop"
-        )
-        // Only these groups carry an audited nounwind promise. Profitability
-        // hints such as `cold` do not rule out a JavaScript getter throwing.
-        // Unknown/new attributes conservatively retain the invoke edge.
-        || matches!(crate::module::helper_decl_attrs(name), " #2" | " #3" | " #4")
+        || !crate::gc_call_effects::runtime_throws(name)
 }
 
 #[cfg(test)]
@@ -117,10 +114,10 @@ mod tests {
             "js_object_get_field_ic_nonptr",
         ] {
             assert_eq!(crate::module::helper_decl_attrs(name), " cold", "{name}");
-            assert!(!callee_is_nothrow(name), "{name}");
+            assert!(!nothrow_callee(name), "{name}");
         }
-        assert!(!callee_is_nothrow("js_object_get_field_ic_miss"));
-        assert!(!callee_is_nothrow("unknown_runtime_helper"));
+        assert!(!nothrow_callee("js_object_get_field_ic_miss"));
+        assert!(!nothrow_callee("unknown_runtime_helper"));
     }
 
     #[test]
@@ -131,9 +128,34 @@ mod tests {
             "js_string_compare",
             "js_array_numeric_value_to_raw_f64",
         ] {
-            assert!(callee_is_nothrow(name), "{name}");
+            assert!(nothrow_callee(name), "{name}");
         }
-        assert!(!callee_is_nothrow("js_string_compare_value"));
+        assert!(!nothrow_callee("js_string_compare_value"));
+    }
+
+    #[test]
+    fn eh_bookkeeping_gc_polls_and_intrinsics_stay_plain_calls() {
+        // The names the deleted hand list carried: the table proves them.
+        for name in [
+            "js_eh_try_push",
+            "js_try_end",
+            "js_get_exception",
+            "js_clear_exception",
+            "js_catch_enter",
+            "js_has_exception",
+            "js_derived_super_scope_push",
+            "js_derived_super_scope_pop",
+            "js_gc_safepoint",
+            "js_gc_loop_safepoint",
+            "js_shadow_slot_bind",
+            "js_shadow_frame_enter",
+            "llvm.memcpy.p0.p0.i64",
+        ] {
+            assert!(nothrow_callee(name), "{name}");
+        }
+        for name in ["js_throw", "js_closure_call0", "js_to_primitive"] {
+            assert!(!nothrow_callee(name), "{name}");
+        }
     }
 
     #[test]

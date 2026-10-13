@@ -1035,6 +1035,7 @@ fn fast_transport_enabled() -> bool {
 #[inline(never)]
 pub(crate) fn try_fast_transport(exception_object: u64) {
     use std::sync::atomic::Ordering::Relaxed;
+    crate::gc::allocation_pacing::forbid_throw_in_collection();
     // Diff mode is a VERIFICATION mode: the system unwinder must perform
     // the transfer so the personality can compare its answer with our
     // prediction. Installing here would bypass the very check being run.

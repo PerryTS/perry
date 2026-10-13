@@ -188,6 +188,7 @@ pub(crate) fn exception_object_addr() -> u64 {
 /// `-C force-unwind-tables` from the runtime build), which the caller must
 /// report loudly rather than mask.
 pub(crate) fn raise_perry_exception() -> UnwindReasonCode {
+    crate::gc::allocation_pacing::forbid_throw_in_collection();
     let exc = EXC_OBJECT.with(|c| c.get());
     unsafe {
         // Re-arm the header on every raise: the unwinder scribbles on the

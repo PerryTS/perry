@@ -289,9 +289,10 @@ pub(super) fn check(ir: &str) {
                         let callee = line.split('@').nth(1).unwrap().split('(').next().unwrap();
                         let effects = include_str!("../gc_effects/linux-x86_64.tsv");
                         assert!(
-                            effects
-                                .lines()
-                                .any(|effect| effect == format!("{callee}\tLeaf")),
+                            effects.lines().any(|effect| {
+                                let mut cols = effect.split('\t');
+                                cols.next() == Some(callee) && cols.next() == Some("Leaf")
+                            }),
                             "collecting call before completed birth: {line}"
                         );
                     }
