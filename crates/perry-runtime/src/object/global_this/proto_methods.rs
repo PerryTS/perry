@@ -378,6 +378,17 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
         set_intrinsic_to_string_tag(proto_obj, builtin_name);
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        // `Object.prototype.toLocaleString` is a real generic method: it calls
+        // the receiver's `toString`. A no-op-backed copy is re-dispatched by
+        // name and would incorrectly call `receiver.toLocaleString` again.
+        // Keep this override collection-only; Array has its own element-wise
+        // locale-string behavior.
+        install_proto_method(
+            proto_obj,
+            "toLocaleString",
+            crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+            0,
+        );
         return;
     }
     // #7947: WeakRef / FinalizationRegistry prototypes get brand-checking
