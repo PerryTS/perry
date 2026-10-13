@@ -1033,11 +1033,11 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     let Some(finalizer) = &t.finalizer else {
         return exec_try_catch(ctx, t, env_idx);
     };
-    let trap = crate::exception::js_try_push();
-    // Armed in a C trampoline frame (#9305). Both continuations below run
+    crate::exception::trap_push();
+    // Runs under the trap shim (`exception::trap`). Both continuations below run
     // after `js_try_end` pops this trap, so a throw out of the finalizer
     // (or the rethrow) targets the enclosing handler — as before.
-    let outcome = crate::exception::arm_trap_and_run(trap, || exec_try_catch(ctx, t, env_idx));
+    let outcome = crate::exception::trap(|| exec_try_catch(ctx, t, env_idx));
     crate::exception::js_try_end();
     match outcome {
         Some(flow) => match exec_block_scope(ctx, finalizer, env_idx) {
@@ -1070,10 +1070,10 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
 /// The try-block + catch-handler pair (no finalizer handling).
 #[inline(never)]
 fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
-    let trap = crate::exception::js_try_push();
-    // Armed in a C trampoline frame (#9305); the catch handler runs after
+    crate::exception::trap_push();
+    // Runs under the trap shim (`exception::trap`); the catch handler runs after
     // `js_try_end`, so its own throws target the enclosing trap.
-    let outcome = crate::exception::arm_trap_and_run(trap, || protected_block(ctx, t, env_idx));
+    let outcome = crate::exception::trap(|| protected_block(ctx, t, env_idx));
     crate::exception::js_try_end();
     if let Some(flow) = outcome {
         return flow;

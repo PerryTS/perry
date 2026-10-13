@@ -386,14 +386,13 @@ extern "C" fn outer_thunk(
     // Trap synchronous throws so the wrapper can reject the promise
     // instead of crashing the process. Mirrors the timer / microtask
     // runners' guard shape.
-    let trap_buf = crate::exception::js_try_push();
+    crate::exception::trap_push();
     let mut called = false;
-    // Armed in a C trampoline frame (#9305). Loop shape: the rejection
-    // handler runs under a fresh arm, so a throw out of it (promise hooks
-    // can run JS) lands back here — matching the raw shape, where the
-    // still-armed setjmp caught it.
+    // Runs under the trap shim (`exception::trap`). Loop shape: the rejection
+    // handler runs under the next `trap`, so a throw out of it (promise hooks
+    // can run JS) lands back here, under this entry.
     loop {
-        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+        let completed = crate::exception::trap(|| {
             if !called {
                 called = true;
                 let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
@@ -527,14 +526,13 @@ extern "C" fn gkp_outer_thunk(
     combined = js_array_push_f64(combined, cb_value_handle.get_nanbox_f64());
     let combined_handle = scope.root_raw_mut_ptr(combined);
 
-    let trap_buf = crate::exception::js_try_push();
+    crate::exception::trap_push();
     let mut called = false;
-    // Armed in a C trampoline frame (#9305). Loop shape: the rejection
-    // handler runs under a fresh arm, so a throw out of it (promise hooks
-    // can run JS) lands back here — matching the raw shape, where the
-    // still-armed setjmp caught it.
+    // Runs under the trap shim (`exception::trap`). Loop shape: the rejection
+    // handler runs under the next `trap`, so a throw out of it (promise hooks
+    // can run JS) lands back here, under this entry.
     loop {
-        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+        let completed = crate::exception::trap(|| {
             if !called {
                 called = true;
                 let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();

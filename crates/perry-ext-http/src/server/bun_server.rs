@@ -48,8 +48,6 @@ extern "C" {
     fn js_promise_value(ptr: *mut Promise) -> f64;
     fn js_promise_reason(ptr: *mut Promise) -> f64;
     fn js_promise_resolved(value: f64) -> *mut Promise;
-    fn js_try_push() -> *mut c_int;
-    fn js_try_end();
     fn js_get_exception() -> f64;
     fn js_clear_exception();
     fn js_jsvalue_to_string(value: f64) -> *mut StringHeader;
@@ -57,9 +55,16 @@ extern "C" {
         obj: *const perry_ffi::ObjectHeader,
         key: *const StringHeader,
     ) -> JsValue;
-    fn perry_sjlj_try(
-        env: *mut core::ffi::c_void,
-        body: unsafe extern "C" fn(*mut core::ffi::c_void),
+}
+
+extern "C" {
+    /// perry-runtime's runtime trap (`exception::js_trap_call`): pushes a
+    /// handler entry, runs `body(ctx)` under the landing-pad shim, pops the
+    /// entry. 0 = returned, 1 = a JS throw landed (value in the exception
+    /// slot, not yet cleared). Nounwind on purpose: nothing unwinds out of it,
+    /// and a `"C-unwind"` declaration would plant terminate pads in callers.
+    fn js_trap_call(
+        body: unsafe extern "C-unwind" fn(*mut core::ffi::c_void),
         ctx: *mut core::ffi::c_void,
     ) -> c_int;
 }
@@ -128,14 +133,15 @@ struct ClosureCallResult {
     thrown: Option<f64>,
 }
 
-fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut c_int, f: F) -> Option<R> {
+/// Run `f` under the runtime's trap; `None` when a JS throw landed.
+fn trap<R, F: FnOnce() -> R>(f: F) -> Option<R> {
     struct Ctx<F, R> {
         f: Option<F>,
         ret: Option<R>,
     }
-    unsafe extern "C" fn invoke<F: FnOnce() -> R, R>(raw: *mut core::ffi::c_void) {
+    unsafe extern "C-unwind" fn invoke<F: FnOnce() -> R, R>(raw: *mut core::ffi::c_void) {
         let ctx = unsafe { &mut *(raw as *mut Ctx<F, R>) };
-        let f = ctx.f.take().expect("sjlj trampoline invoked body twice");
+        let f = ctx.f.take().expect("trap shim invoked body twice");
         ctx.ret = Some(f());
     }
     let mut ctx = Ctx {
@@ -143,8 +149,7 @@ fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut c_int, f: F) -> Option<R> {
         ret: None,
     };
     let rc = unsafe {
-        perry_sjlj_try(
-            env as *mut core::ffi::c_void,
+        js_trap_call(
             invoke::<F, R>,
             &mut ctx as *mut Ctx<_, R> as *mut core::ffi::c_void,
         )
@@ -153,7 +158,7 @@ fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut c_int, f: F) -> Option<R> {
         Some(
             ctx.ret
                 .take()
-                .expect("sjlj trampoline returned 0 without a body result"),
+                .expect("trap shim returned without a body result"),
         )
     } else {
         None
@@ -161,19 +166,14 @@ fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut c_int, f: F) -> Option<R> {
 }
 
 unsafe fn call_catching(f: impl FnOnce() -> f64) -> ClosureCallResult {
-    let trap = js_try_push();
-    match arm_trap_and_run(trap, f) {
-        Some(value) => {
-            js_try_end();
-            ClosureCallResult {
-                value,
-                thrown: None,
-            }
-        }
+    match trap(f) {
+        Some(value) => ClosureCallResult {
+            value,
+            thrown: None,
+        },
         None => {
             let exception = js_get_exception();
             js_clear_exception();
-            js_try_end();
             ClosureCallResult {
                 value: f64::from_bits(TAG_UNDEFINED),
                 thrown: Some(exception),

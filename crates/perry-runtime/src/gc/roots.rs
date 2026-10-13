@@ -585,8 +585,8 @@ pub(super) fn mark_stack_roots_unchecked(
                                                // call is a register-spilling trick (setjmp dumps the callee-saved
                                                // registers into the buffer for the conservative scan below) and
                                                // returns exactly once, so LLVM's single-return assumption holds.
-                                               // Every jmp_buf that CAN be longjmp'd to is armed through the C
-                                               // trampoline `exception::arm_trap_and_run` instead — never add a raw
+                                               // Every jmp_buf that CAN be longjmp'd to (WASI only) is armed through
+                                               // the C trampoline `perry_sjlj_try` instead — never add a raw
                                                // `setjmp` whose buffer reaches `js_throw`.
                                                // WASI: wasm keeps no machine registers in linear memory, so there is
                                                // nothing to spill (and no `setjmp` without the EH proposal, #11378).

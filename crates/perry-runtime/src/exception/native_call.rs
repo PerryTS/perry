@@ -1,5 +1,6 @@
-//! Reuse a lazily captured savepoint during one native call. Jump targets
-//! remain trampoline-local; between callbacks the handler is disarmed.
+//! Reuse a lazily captured savepoint during one native call. Each callback
+//! runs under its own trap (the landing-pad shim; setjmp on WASI); between
+//! callbacks the handler is disarmed.
 
 use super::*;
 
@@ -72,6 +73,10 @@ pub(crate) unsafe fn catch_native_callback(
     let (s, depth) = if s.is_null() {
         // Capture here, after the first callback's argument roots exist.
         // No callback means no capture or handler stack mutation.
+        // The callback's trap is a landing pad: prove the unwinder can step
+        // runtime frames, as every other trap's push does.
+        #[cfg(not(windows))]
+        crate::eh::verify_unwind_tables_once();
         try_push_with_kind(HandlerKind::NativeInactive);
         let s = with_exception_state(|s| s);
         let depth = (*s).try_depth - 1;
@@ -92,8 +97,7 @@ pub(crate) unsafe fn catch_native_callback(
             .refresh_native_roots();
         (s, depth)
     };
-    *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = HandlerKind::Setjmp;
-    let env = (*s).jump_buffer_ptr(depth);
+    *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = TRAP_KIND;
     // POD context avoids generic FnOnce/Option transport on every callback.
     struct Invocation {
         callee: f64,
@@ -102,7 +106,7 @@ pub(crate) unsafe fn catch_native_callback(
         len: usize,
         result: f64,
     }
-    unsafe extern "C" fn invoke(raw: *mut core::ffi::c_void) {
+    unsafe extern "C-unwind" fn invoke(raw: *mut core::ffi::c_void) {
         let ctx = &mut *(raw as *mut Invocation);
         let this = crate::closure::JsThis::from_f64(ctx.this);
         // A function whose body the compiler emitted (every arrow or
@@ -122,10 +126,10 @@ pub(crate) unsafe fn catch_native_callback(
         len: args.len(),
         result: 0.0,
     };
-    let rc = perry_sjlj_try(env.cast(), invoke, (&raw mut ctx).cast());
+    let returned = trap_raw::<false>(invoke, (&raw mut ctx).cast());
     assert_eq!((*s).try_depth, depth + 1, "unbalanced callback return");
     *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = HandlerKind::NativeInactive;
-    if rc == 0 {
+    if returned {
         Ok(ctx.result)
     } else {
         let err = js_get_exception();

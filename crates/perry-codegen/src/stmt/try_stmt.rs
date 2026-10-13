@@ -82,11 +82,11 @@ fn emit_eh_dispatch_inner(
         ctx.block().cond_br(&thrown, exc_label, normal_label);
         return String::new();
     }
-    if !registered {
-        ctx.func.personality = Some("perry_iterator_eh_personality");
-    } else if ctx.func.personality != Some("perry_iterator_eh_personality") {
-        ctx.func.personality = Some("perry_eh_personality");
-    }
+    // One personality for every pad. An unregistered (entry-free) iterator
+    // cleanup pad needs no boundary check: runtime traps are landing pads
+    // too (perry-runtime `exception::trap`), so the unwinder stops at
+    // whichever handler is innermost.
+    ctx.func.personality = Some("perry_eh_personality");
 
     if registered {
         ctx.block().call_void("js_eh_try_push", &[]);

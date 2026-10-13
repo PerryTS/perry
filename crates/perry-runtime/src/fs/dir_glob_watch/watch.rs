@@ -358,12 +358,12 @@ fn has_change_listeners(listeners: &HashMap<String, Vec<WatchListener>>) -> bool
 }
 
 fn with_watcher_uncaught_trap<F: FnOnce()>(f: F) {
-    let trap_buf = crate::exception::js_try_push();
+    crate::exception::trap_push();
     let mut f = Some(f);
-    // Armed in a C trampoline frame (#9305); loop shape so the uncaught
-    // path runs under a fresh arm — see `timer::with_timer_uncaught_trap`.
+    // Runs under the trap shim (`exception::trap`); loop shape so the uncaught
+    // path runs under the next `trap` — see `timer::with_timer_uncaught_trap`.
     loop {
-        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+        let completed = crate::exception::trap(|| {
             if let Some(f) = f.take() {
                 f();
             } else {

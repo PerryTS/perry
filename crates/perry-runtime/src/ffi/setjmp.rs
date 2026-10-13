@@ -7,9 +7,10 @@
 //! across the call — which corrupted `run_microtasks`' longjmp-return path
 //! (#9305). The ONLY remaining legitimate caller is the GC's
 //! register-snapshot spill (`gc/roots.rs`), which never longjmps and so
-//! really is a single-return call. Every jmp_buf that `js_throw` can
-//! `longjmp` to must be armed through the C trampoline instead:
-//! `exception::arm_trap_and_run` / `perry_sjlj_try`
+//! really is a single-return call. Runtime catches never use a jmp_buf on
+//! native targets (they are landing pads: `exception::trap`, the shim
+//! `src/ffi/perry_trap.ll`); on WASI every jmp_buf that `js_throw` can
+//! `longjmp` to is armed through the C trampoline `perry_sjlj_try`
 //! (`src/ffi/perry_sjlj.c`).
 //!
 //! Before this module, both `gc.rs` (register-snapshot path) and `promise.rs`

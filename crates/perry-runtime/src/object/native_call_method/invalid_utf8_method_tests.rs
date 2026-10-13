@@ -48,17 +48,7 @@ fn assert_method_call_binds_receiver(name: &[u8]) {
 }
 
 fn runtime_throw(f: impl FnOnce()) -> bool {
-    let env = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut std::os::raw::c_int) };
-    if jumped == 0 {
-        f();
-        crate::exception::js_try_end();
-        false
-    } else {
-        crate::exception::js_try_end();
-        crate::exception::js_clear_exception();
-        true
-    }
+    crate::exception::catch_js_throw(f).is_err()
 }
 
 #[test]

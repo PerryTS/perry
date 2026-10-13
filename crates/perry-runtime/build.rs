@@ -570,6 +570,72 @@ fn emit_instrument_cfgs() {
     }
 }
 
+/// Compile the runtime-catch shim `src/ffi/perry_trap.ll` (ehfree 2b) into
+/// `libperry_trap.a`. It is built once, here, with the runtime; generated
+/// programs never emit it.
+///
+/// LLVM IR needs clang. The cc crate's compiler is used when it is clang
+/// (Apple, Android NDK: its target and deployment flags carry over). A GNU
+/// `cc` is replaced by `clang` from PATH, and cargo-xwin's `clang-cl` by its
+/// `clang` driver sibling, both with an explicit `--target`.
+/// `PERRY_TRAP_CLANG` overrides the choice. On windows-msvc the custom
+/// personality makes LLVM emit `.seh_handler perry_eh_personality, @unwind,
+/// @except` plus the Itanium LSDA in `.xdata`, the shape generated code
+/// already uses (eh_windows.rs).
+fn build_trap_shim() {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    println!("cargo:rerun-if-env-changed=PERRY_TRAP_CLANG");
+    let target = std::env::var("TARGET").expect("TARGET not set by Cargo");
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let tool = cc::Build::new().get_compiler();
+    let explicit_target = || vec![OsString::from(format!("--target={target}"))];
+    let (clang, mut args): (PathBuf, Vec<OsString>) =
+        if let Some(clang) = std::env::var_os("PERRY_TRAP_CLANG") {
+            (PathBuf::from(clang), explicit_target())
+        } else if tool.is_like_clang() && !tool.is_like_msvc() {
+            (tool.path().to_path_buf(), tool.args().to_vec())
+        } else if tool.is_like_msvc() && tool.is_like_clang() {
+            let sibling =
+                tool.path()
+                    .with_file_name(if cfg!(windows) { "clang.exe" } else { "clang" });
+            let clang = if sibling.exists() {
+                sibling
+            } else {
+                PathBuf::from("clang")
+            };
+            (clang, explicit_target())
+        } else {
+            (PathBuf::from("clang"), explicit_target())
+        };
+    let obj = out_dir.join("perry_trap.o");
+    args.extend(
+        [
+            "-c",
+            "-x",
+            "ir",
+            "-O2",
+            "-Wno-override-module",
+            "-Wno-unused-command-line-argument",
+        ]
+        .into_iter()
+        .map(OsString::from),
+    );
+    args.push(OsString::from("src/ffi/perry_trap.ll"));
+    args.push(OsString::from("-o"));
+    args.push(obj.clone().into_os_string());
+    let status = std::process::Command::new(&clang)
+        .args(&args)
+        .status()
+        .unwrap_or_else(|e| panic!("perry_trap.ll needs clang ({}): {e}", clang.display()));
+    assert!(
+        status.success(),
+        "compiling src/ffi/perry_trap.ll with {} failed ({status})",
+        clang.display()
+    );
+    cc::Build::new().object(&obj).compile("perry_trap");
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(perry_check_contracts)");
@@ -617,13 +683,12 @@ fn main() {
     println!("cargo:rerun-if-changed=../perry-dispatch/src/lib.rs");
     println!("cargo:rerun-if-env-changed=TARGET");
 
-    // setjmp trampoline for the Rust-side exception transport (#9305).
-    // Must be compiled by a C compiler: rustc cannot express
-    // `returns_twice`, so a Rust frame containing a live `setjmp` is
-    // miscompiled under LLVM's one-return assumption (stack-slot
-    // coloring across the call). See the header comment in the C file.
+    // Runtime catches (`exception::trap`). Native targets catch through the
+    // landing-pad shim `perry_trap.ll`; WASI keeps the setjmp trampoline
+    // (#9305: it must be compiled by a C compiler, rustc cannot express
+    // `returns_twice`), which the wasm SjLj pass lowers to wasm EH.
     println!("cargo:rerun-if-changed=src/ffi/perry_sjlj.c");
-    println!("cargo:rerun-if-changed=src/ffi/perry_iterator_personality.c");
+    println!("cargo:rerun-if-changed=src/ffi/perry_trap.ll");
     // WASI uses the standardized wasm EH proposal for SjLj, paired with
     // wasi-libc's libsetjmp and the generated-code lowering (#11378).
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
@@ -637,14 +702,7 @@ fn main() {
             .flag("-wasm-use-legacy-eh=false")
             .compile("perry_sjlj");
     } else {
-        cc::Build::new()
-            .file("src/ffi/perry_sjlj.c")
-            .file("src/ffi/perry_iterator_personality.c")
-            // The trampoline is never unwound through (a raise targeting a
-            // generated frame is always innermost-above it), but keep CFI so
-            // debuggers and the unwind-table self-check can walk past it.
-            .flag_if_supported("-fasynchronous-unwind-tables")
-            .compile("perry_sjlj");
+        build_trap_shim();
     }
     println!(
         "cargo:rustc-env=PERRY_RUNTIME_TARGET={}",

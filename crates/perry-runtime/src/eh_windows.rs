@@ -14,7 +14,8 @@
 //! precise roots every other target gets.
 //!
 //! So windows-msvc now uses the SAME `invoke`/`landingpad` lowering as
-//! ELF/Mach-O, with Perry's own personality. LLVM classifies a non-MSVC
+//! ELF/Mach-O, with Perry's own personality — for generated `try` and for the
+//! runtime's trap shim (`ffi/perry_trap.ll`) alike. LLVM classifies a non-MSVC
 //! personality as non-funclet EH and emits, for a COFF x64 target:
 //!
 //! ```text
@@ -170,6 +171,14 @@ pub unsafe extern "system" fn perry_eh_personality(
     let func_start = dc
         .image_base
         .wrapping_add((*dc.function_entry).begin_address as u64) as usize;
+
+    // A worker-base handoff (`exception::hand_to_worker_base`) passes every
+    // handler but the base trap's shim.
+    if crate::exception::worker_base_handoff_pending()
+        && func_start != crate::exception::worker_base_shim_addr()
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     // `ControlPc` is a return address — one byte past the call — which could
     // fall into the NEXT call-site range. Same bias the Itanium path applies.
     let ip = (dc.control_pc as usize).wrapping_sub(1);

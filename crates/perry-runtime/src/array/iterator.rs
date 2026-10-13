@@ -469,10 +469,10 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         true
     };
 
-    let trap_buf = crate::exception::js_try_push();
-    // Armed in a C trampoline frame (#9305); everything between the landing
+    crate::exception::trap_push();
+    // Runs under the trap shim (`exception::trap`); everything between the landing
     // and `js_try_end` below is pure TLS bookkeeping.
-    let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
+    let outcome = crate::exception::trap(|| {
         let args_ptr = if args.is_empty() {
             std::ptr::null()
         } else {
@@ -528,8 +528,8 @@ fn async_from_sync_call_cached_raw(
             b"Async-from-sync iterator method is not callable",
         ));
     }
-    let trap_buf = crate::exception::js_try_push();
-    let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
+    crate::exception::trap_push();
+    let outcome = crate::exception::trap(|| {
         let args_ptr = if args.is_empty() {
             std::ptr::null()
         } else {
@@ -1163,13 +1163,13 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             // receiver from the call, so pass it — mirroring `js_get_iterator`.
             // Without it the wrapper saw a stale `this` and the generator
             // yielded nothing (empty spread).
-            let trap_buf = crate::exception::js_try_push();
-            // `js_try_push` captured the handle-stack depth AFTER these roots
-            // were pushed, so the `longjmp` restore leaves them intact and
-            // reading them here is sound. Armed in a C trampoline frame
-            // (#9305); the rethrow below runs after `js_try_end` pops this
+            crate::exception::trap_push();
+            // `trap_push` captured the handle-stack depth AFTER these roots
+            // were pushed, so the throw-time restore leaves them intact and
+            // reading them here is sound. Runs under the trap shim
+            // (`exception::trap`); the rethrow below runs after `js_try_end` pops this
             // trap, so it targets the enclosing handler.
-            let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
+            let outcome = crate::exception::trap(|| {
                 crate::closure::js_closure_call0(
                     js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
                         as *const crate::closure::ClosureHeader,

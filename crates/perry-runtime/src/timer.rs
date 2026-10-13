@@ -442,16 +442,14 @@ fn timer_handle_value(id: i64) -> f64 {
 }
 
 fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
-    let trap_buf = crate::exception::js_try_push();
+    crate::exception::trap_push();
     let mut f = Some(f);
-    // The jmp_buf is armed inside a C trampoline frame (#9305 — a raw
-    // `setjmp` in a Rust frame is unsound). Loop shape: a throw from the
-    // timer callback lands in the trampoline, and the uncaught path then
-    // runs under the NEXT arm — so a throw out of an 'uncaughtException'
-    // listener lands here again instead of targeting a dead frame,
-    // matching the raw shape where the still-armed setjmp caught it.
+    // The body runs under the trap shim (`exception::trap`). Loop shape: a
+    // throw from the timer callback lands in the trap, and the uncaught path
+    // then runs under the NEXT `trap` — so a throw out of an
+    // 'uncaughtException' listener lands here again, under this entry.
     loop {
-        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+        let completed = crate::exception::trap(|| {
             if let Some(f) = f.take() {
                 f();
             } else {
