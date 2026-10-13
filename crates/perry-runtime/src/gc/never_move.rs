@@ -88,12 +88,11 @@ pub(crate) unsafe fn request_never_move(addr: usize) {
     }
 }
 
-/// Is `addr` in the old generation (an old-arena or longlived block)? For a
-/// birth that follows its owner's lifetime (`class_registry::
-/// ensure_function_prototype_object`).
+/// Is `addr` in the old generation (an old-arena or longlived block)?
 ///
 /// # Safety
 /// `addr` is a live GC user pointer.
+#[cfg(test)]
 pub(crate) unsafe fn lives_old(addr: usize) -> bool {
     matches!(
         crate::arena::classify_heap_generation(addr),
