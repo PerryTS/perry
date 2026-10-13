@@ -378,109 +378,19 @@ fn collect_keys_from_expr(
                     register_key(key, key_to_idx, keys);
                 }
             }
-            if let Some(obj) = object {
-                collect_keys_from_expr(obj, key_to_idx, keys);
-            }
-            for arg in args {
-                collect_keys_from_expr(arg, key_to_idx, keys);
-            }
-        }
-        // Structural expressions — recurse
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => {
-            collect_keys_from_expr(left, key_to_idx, keys);
-            collect_keys_from_expr(right, key_to_idx, keys);
-        }
-        Expr::Unary { operand, .. } => {
-            collect_keys_from_expr(operand, key_to_idx, keys);
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_keys_from_expr(condition, key_to_idx, keys);
-            collect_keys_from_expr(then_expr, key_to_idx, keys);
-            collect_keys_from_expr(else_expr, key_to_idx, keys);
-        }
-        Expr::Call { callee, args, .. } => {
-            collect_keys_from_expr(callee, key_to_idx, keys);
-            for arg in args {
-                collect_keys_from_expr(arg, key_to_idx, keys);
-            }
-        }
-        Expr::CallSpread { callee, args, .. } => {
-            collect_keys_from_expr(callee, key_to_idx, keys);
-            for arg in args {
-                match arg {
-                    perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
-                        collect_keys_from_expr(e, key_to_idx, keys);
-                    }
-                }
-            }
-        }
-        Expr::Array(elements) => {
-            for e in elements {
-                collect_keys_from_expr(e, key_to_idx, keys);
-            }
-        }
-        Expr::Object(fields) => {
-            for (_, val) in fields {
-                collect_keys_from_expr(val, key_to_idx, keys);
-            }
-        }
-        Expr::ObjectSpread { parts } => {
-            for (_, val) in parts {
-                collect_keys_from_expr(val, key_to_idx, keys);
-            }
-        }
-        Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } => {
-            collect_keys_from_expr(object, key_to_idx, keys);
-            collect_keys_from_expr(index, key_to_idx, keys);
-        }
-        Expr::PropertyGet { object, .. } | Expr::PropertySet { object, .. } => {
-            collect_keys_from_expr(object, key_to_idx, keys);
-        }
-        Expr::LocalSet(_, expr) | Expr::GlobalSet(_, expr) => {
-            collect_keys_from_expr(expr, key_to_idx, keys);
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_keys_from_expr(child, key_to_idx, keys);
+            });
         }
         Expr::Closure { body, .. } => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_keys_from_expr(child, key_to_idx, keys);
+            });
             collect_keys_from_stmts(body, key_to_idx, keys);
         }
-        Expr::New { args, .. }
-        | Expr::NewDynamic { args, .. }
-        | Expr::SuperCall(args)
-        | Expr::StaticMethodCall { args, .. }
-        | Expr::Sequence(args)
-        | Expr::MathMin(args)
-        | Expr::MathMax(args) => {
-            for arg in args {
-                collect_keys_from_expr(arg, key_to_idx, keys);
-            }
-        }
-        Expr::Await(expr) | Expr::TypeOf(expr) | Expr::Void(expr) | Expr::Delete(expr) => {
-            collect_keys_from_expr(expr, key_to_idx, keys);
-        }
-        Expr::Yield {
-            value: Some(expr), ..
-        } => {
-            collect_keys_from_expr(expr, key_to_idx, keys);
-        }
-        Expr::In { property, object } => {
-            collect_keys_from_expr(property, key_to_idx, keys);
-            collect_keys_from_expr(object, key_to_idx, keys);
-        }
-        Expr::InstanceOf { expr, .. } => {
-            collect_keys_from_expr(expr, key_to_idx, keys);
-        }
-        Expr::SuperMethodCall { args, .. } => {
-            for arg in args {
-                collect_keys_from_expr(arg, key_to_idx, keys);
-            }
-        }
-        // Leaf/domain-specific expressions — no recursion needed
-        _ => {}
+        _ => perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            collect_keys_from_expr(child, key_to_idx, keys);
+        }),
     }
 }
 
@@ -697,13 +607,11 @@ fn replace_in_expr(
             if (is_localizable_ui || is_i18n_t) && !args.is_empty() {
                 if let Expr::String(key) = &args[0] {
                     if let Some(&idx) = key_to_idx.get(key) {
-                        // Extract params from second argument if it's an object literal
                         let params = if args.len() > 1 {
                             extract_params(&args[1], anon_shapes)
                         } else {
                             Vec::new()
                         };
-                        // Look up plural forms for this key
                         let forms = plural_info.get(key).cloned().unwrap_or_default();
                         let p_param = plural_param_map.get(key).cloned();
                         args[0] = Expr::I18nString {
@@ -716,178 +624,169 @@ fn replace_in_expr(
                     }
                 }
             }
-            if let Some(obj) = object {
-                replace_in_expr(obj, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
-            for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
+            perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+                replace_in_expr(
+                    child,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
+            });
         }
-        Expr::Binary { left, right, .. }
-        | Expr::Compare { left, right, .. }
-        | Expr::Logical { left, right, .. } => {
-            replace_in_expr(left, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_expr(
-                right,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-        }
-        Expr::Unary { operand, .. } => {
-            replace_in_expr(
-                operand,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-        }
-        Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            replace_in_expr(
-                condition,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-            replace_in_expr(
-                then_expr,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-            replace_in_expr(
-                else_expr,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-        }
-        Expr::Call { callee, args, .. } => {
-            replace_in_expr(
-                callee,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-            for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
-        }
-        Expr::CallSpread { callee, args, .. } => {
-            replace_in_expr(
-                callee,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-            for arg in args.iter_mut() {
-                match arg {
-                    perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
-                        replace_in_expr(e, key_to_idx, plural_info, plural_param_map, anon_shapes);
-                    }
+        Expr::Closure { params, body, .. } => {
+            for param in params {
+                if let Some(default) = &mut param.default {
+                    replace_in_expr(
+                        default,
+                        key_to_idx,
+                        plural_info,
+                        plural_param_map,
+                        anon_shapes,
+                    );
                 }
             }
-        }
-        Expr::Array(elements) => {
-            for e in elements.iter_mut() {
-                replace_in_expr(e, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
-        }
-        Expr::Object(fields) => {
-            for (_, val) in fields.iter_mut() {
-                replace_in_expr(val, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
-        }
-        Expr::ObjectSpread { parts } => {
-            for (_, val) in parts.iter_mut() {
-                replace_in_expr(val, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
-        }
-        Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } => {
-            replace_in_expr(
-                object,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-            replace_in_expr(
-                index,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-        }
-        Expr::PropertyGet { object, .. } | Expr::PropertySet { object, .. } => {
-            replace_in_expr(
-                object,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
-        }
-        Expr::LocalSet(_, expr) | Expr::GlobalSet(_, expr) => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
-        }
-        Expr::Closure { body, .. } => {
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
-        Expr::New { args, .. }
-        | Expr::NewDynamic { args, .. }
-        | Expr::SuperCall(args)
-        | Expr::StaticMethodCall { args, .. }
-        | Expr::Sequence(args)
-        | Expr::MathMin(args)
-        | Expr::MathMax(args) => {
-            for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            }
-        }
-        Expr::Await(expr) | Expr::TypeOf(expr) | Expr::Void(expr) | Expr::Delete(expr) => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
-        }
-        Expr::Yield {
-            value: Some(expr), ..
-        } => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
-        }
-        Expr::In { property, object } => {
+        _ => perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
             replace_in_expr(
-                property,
+                child,
                 key_to_idx,
                 plural_info,
                 plural_param_map,
                 anon_shapes,
             );
-            replace_in_expr(
-                object,
-                key_to_idx,
-                plural_info,
-                plural_param_map,
-                anon_shapes,
-            );
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(key: &str) -> Expr {
+        Expr::NativeMethodCall {
+            module: "perry/i18n".into(),
+            class_name: None,
+            object: None,
+            method: "t".into(),
+            args: vec![Expr::String(key.into())],
         }
-        Expr::InstanceOf { expr, .. } => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
-        }
-        Expr::SuperMethodCall { args, .. } => {
-            for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
+    }
+
+    fn set_exprs() -> Vec<Expr> {
+        vec![
+            Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "label".into(),
+                value: Box::new(t("property")),
+            },
+            Expr::IndexSet {
+                object: Box::new(Expr::This),
+                index: Box::new(Expr::String("slot".into())),
+                value: Box::new(t("index")),
+            },
+            Expr::PutValueSet {
+                target: Box::new(Expr::This),
+                key: Box::new(Expr::String("slot".into())),
+                value: Box::new(t("put-value")),
+                receiver: Box::new(Expr::This),
+                strict: true,
+            },
+        ]
+    }
+
+    fn collect(expr: &Expr) -> Vec<String> {
+        let mut map = HashMap::new();
+        let mut keys = Vec::new();
+        collect_keys_from_expr(expr, &mut map, &mut keys);
+        keys
+    }
+
+    #[test]
+    fn collects_and_replaces_localization_calls_in_all_setter_values() {
+        let mut expr = Expr::Sequence(set_exprs());
+        let keys = collect(&expr);
+        assert_eq!(keys, ["property", "index", "put-value"]);
+
+        let map = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.clone(), i as u32))
+            .collect::<HashMap<_, _>>();
+        replace_in_expr(
+            &mut expr,
+            &map,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let mut replaced = Vec::new();
+        fn visit(expr: &Expr, found: &mut Vec<String>) {
+            if let Expr::I18nString { key, .. } = expr {
+                found.push(key.clone());
             }
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                visit(child, found);
+            });
         }
-        _ => {}
+        visit(&expr, &mut replaced);
+        assert_eq!(replaced, keys);
+    }
+
+    #[test]
+    fn setter_collection_deduplicates_keys_in_first_seen_order() {
+        let expr = Expr::Sequence(vec![
+            Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "a".into(),
+                value: Box::new(t("repeat")),
+            },
+            Expr::IndexSet {
+                object: Box::new(Expr::This),
+                index: Box::new(Expr::String("b".into())),
+                value: Box::new(t("next")),
+            },
+            Expr::PutValueSet {
+                target: Box::new(Expr::This),
+                key: Box::new(Expr::String("c".into())),
+                value: Box::new(t("repeat")),
+                receiver: Box::new(Expr::This),
+                strict: false,
+            },
+        ]);
+        assert_eq!(collect(&expr), ["repeat", "next"]);
+    }
+
+    #[test]
+    fn traverses_closure_bodies_and_parameter_defaults() {
+        let expr = Expr::Closure {
+            func_id: 0,
+            params: vec![perry_hir::Param {
+                id: 0,
+                name: "arg".into(),
+                ty: perry_hir::types::Type::String,
+                default: Some(t("default")),
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            }],
+            return_type: perry_hir::types::Type::Void,
+            body: vec![Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "label".into(),
+                value: Box::new(t("body")),
+            })],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        };
+        assert_eq!(collect(&expr), ["default", "body"]);
     }
 }

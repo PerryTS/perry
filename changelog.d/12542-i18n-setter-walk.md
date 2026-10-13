@@ -1,0 +1,1 @@
+The i18n transform now visits localization calls inside property, index, and PutValue assignments, including closure parameter defaults and bodies. This covers the i18n traversal portion of #10654; other transform passes remain outside this change.
