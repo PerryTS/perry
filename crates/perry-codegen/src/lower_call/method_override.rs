@@ -356,7 +356,7 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
     (first, second)
 }
 
-fn emit_inline_direct_method_word_probe(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
+pub(crate) fn emit_inline_direct_method_word_probe(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
     emit_direct_method_probe(ctx, recv_box, true).0
 }
 

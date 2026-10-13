@@ -1477,7 +1477,7 @@ fn block_calling<'a>(
 /// stayed dead on the one workload `Ptr<Shape>` exists for.
 #[test]
 fn tower_case_routes_to_proven_this_clone() {
-    let ir = emit(&tower_site_module(), false);
+    let ir = emit_static(&tower_site_module(), false);
     // Anti-vacuity: this must really be the class-id tower, not one of the two
     // guard-dominated sites that already routed before this change.
     assert!(
@@ -1502,7 +1502,7 @@ fn tower_case_routes_to_proven_this_clone() {
 #[test]
 fn tower_case_composes_receiver_shape_and_proven_index_clones() {
     const INDEX_ID: u32 = 83;
-    let ir = emit(&indexed_tower_site_module(), false);
+    let ir = emit_static(&indexed_tower_site_module(), false);
     let caller = function_body(&ir, "__probeIndex(");
     let public = "perry_method_pshape_index_tower_ts__Row__lookup";
     let indexed = format!("{public}$idx_u31_{INDEX_ID}");
@@ -1533,7 +1533,7 @@ fn tower_case_composes_receiver_shape_and_proven_index_clones() {
 #[test]
 fn tower_route_is_guarded_by_the_class_shape_id() {
     let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
-    let ir = emit(&tower_site_module(), false);
+    let ir = emit_static(&tower_site_module(), false);
     let bs = blocks(&ir);
     let clone = pshape_definitions(&ir)
         .into_iter()
@@ -1581,14 +1581,26 @@ fn tower_route_is_guarded_by_the_class_shape_id() {
                 .any(|line| line.contains("icmp eq i32") && line.contains(&expected))
                 .then(|| (slot.to_string(), expected))
         })
+        .or_else(|| {
+            // With whole-program static shapes the class ShapeId is a
+            // constant: the guard compares the receiver's live ShapeId
+            // (header offset 4) with that literal, and no slot is involved.
+            guard_body.iter().find_map(|line| {
+                let line = line.trim();
+                let rhs = line.split("icmp eq i32 ").nth(1)?.rsplit(", ").next()?;
+                rhs.parse::<u32>().ok().map(|_| (String::new(), rhs.to_string()))
+            })
+        })
         .unwrap_or_else(|| {
             panic!(
                 "the routed call is not dominated by the hoisted ShapeId's reload and compare:\n{guard_body:#?}"
             )
         });
     assert!(
-        !ir.lines()
-            .any(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(&slot)),
+        slot.is_empty()
+            || !ir
+                .lines()
+                .any(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(&slot)),
         "a ShapeId scalar must not be registered as a moving GC root:\n{ir}"
     );
     assert!(
@@ -1611,18 +1623,40 @@ fn tower_route_is_guarded_by_the_class_shape_id() {
 }
 
 #[test]
-fn tower_class_shape_id_cache_is_a_native_scalar() {
+fn tower_receiver_word_is_a_native_scalar() {
     let _native = crate::codegen::helpers::NativeRootsPin::native();
-    let ir = emit(&tower_site_module(), false);
-    let global_load = ir
+    let ir = emit_static(&tower_site_module(), false);
+    // The tower selects through its method certificates: the receiver's
+    // header word (class_id | ShapeId) is compared as an i64 scalar.
+    let caller = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\nmcert.way"))
+        .unwrap_or_else(|| panic!("the tower site has no certificate compare:\n{ir}"));
+    let way = caller.split("\nmcert.way").nth(1).unwrap();
+    let way = way.split("\n\n").next().unwrap();
+    let compare = way
         .lines()
-        .find(|line| line.contains("= load i32, ptr @perry_class_shape_id_"))
-        .unwrap_or_else(|| panic!("the class ShapeId is never read:\n{ir}"));
-    let global_reg = global_load.trim().split(' ').next().expect("ssa name");
+        .find(|line| line.contains("icmp eq i64"))
+        .unwrap_or_else(|| panic!("no receiver-word compare:\n{way}"));
+    let word = compare
+        .split("icmp eq i64 ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .expect("compare operand")
+        .trim()
+        .to_string();
     assert!(
-        ir.lines()
-            .any(|line| line.contains(&format!("store i32 {global_reg}, ptr "))),
-        "the class ShapeId must be cached as an i32 scalar:\n{ir}"
+        caller
+            .lines()
+            .any(|line| line.trim_start().starts_with(&format!("{word} = phi i64"))),
+        "the receiver word must be an i64 scalar:\n{caller}"
+    );
+    assert!(
+        !caller.lines().any(|line| {
+            (line.contains("store ") && line.contains(&format!(" {word},")))
+                || (line.contains("@js_shadow_slot_bind") && line.contains(&word))
+        }),
+        "a receiver word must never be stored to a slot or registered as a moving GC root:\n{caller}"
     );
 }
 
@@ -1801,7 +1835,16 @@ fn class_array_observable_args_keep_lookup_before_call() {
     }
     let ir = emit_static(&m, false);
     let caller = function_body(&ir, "__probe(");
-    assert!(caller.contains("@js_method_site_lookup") && caller.contains("idisp.split_call"));
+    // The method is read before the arguments: certificate selection, then
+    // the split lookup for a receiver no compiled body claims.
+    let select = caller
+        .find("@js_method_site_certify(")
+        .expect("certified selection");
+    let lookup = caller
+        .find("@js_method_site_lookup(")
+        .expect("split lookup half");
+    let shift = caller.find("shift").expect("observable argument");
+    assert!(select < shift && lookup < shift, "{caller}");
     assert!(!caller.contains("method_direct.sub0."));
 }
 
@@ -1873,4 +1916,31 @@ fn class_array_subclass_callback_keeps_its_public_body() {
         .iter()
         .any(|line| line.contains("__Derived__bump(")));
     assert!(!subclass.1.iter().any(|line| line.contains("$pshape(")));
+}
+
+/// Decision 129 slice 2: the class-id tower selects its body from the site's
+/// method certificate (`PristineReceiverFact::Shape`: receiver word against the
+/// proof word, the proof epoch against `PERRY_PROTO_VALIDITY`) and its one
+/// generic entry; no own-property probe or holder-directory read remains, and
+/// release code carries no contract check.
+#[test]
+fn tower_selects_by_method_certificate() {
+    let ir = emit_static(&tower_site_module(), false);
+    assert!(ir.contains("idispatch.case"), "{ir}");
+    assert!(ir.contains("mcert.hit") && ir.contains("@js_method_site_certify("));
+    assert!(ir.contains("@PERRY_PROTO_VALIDITY"));
+    assert!(
+        ir.contains("__eclo$info"),
+        "selection compares the compiled bodies"
+    );
+    let site = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("mcert.hit"))
+        .expect("the function holding the certified site");
+    assert!(
+        !site.contains("@js_object_get_own_field_or_undef("),
+        "{site}"
+    );
+    assert!(!site.contains("holder.tower"), "{site}");
+    assert!(!site.contains("call void @js_method_site_cert_contract_check("));
 }

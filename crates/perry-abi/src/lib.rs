@@ -803,6 +803,16 @@ pub const METHOD_SITE_VALUE_INFO: u64 = 1;
 /// kind or info load after the shape compare.
 pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
 pub const METHOD_SITE_CHAIN: u64 = 1 << 58;
+/// A certified class-dispatch site's record (`method_site/cert.rs`,
+/// `MethodCertSite`): one proof epoch, a replacement cursor, then
+/// `METHOD_CERT_WAYS` (receiver word, certified body info) pairs. The same
+/// footprint as a method site's record.
+pub const METHOD_CERT_EPOCH_OFFSET: usize = 0;
+pub const METHOD_CERT_WAYS_OFFSET: usize = 16;
+pub const METHOD_CERT_WAY_SIZE: usize = 16;
+pub const METHOD_CERT_WORD_OFFSET: usize = 0;
+pub const METHOD_CERT_INFO_OFFSET: usize = 8;
+pub const METHOD_CERT_WAYS: usize = 6;
 /// Entry-owned shape proof ABI: native (address, shape word) pairs.
 pub const SHAPE_CHAIN_LEN_OFFSET: usize = 8;
 pub const SHAPE_CHAIN_HOP_BYTES: usize = 24;

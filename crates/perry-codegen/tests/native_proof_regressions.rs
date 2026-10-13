@@ -13186,9 +13186,10 @@ fn typed_i1_method_clone_rejects_dynamic_receiver_call_site() {
         !non_wrapper_ir.contains(&format!("call i1 @{typed}(")),
         "dynamic receiver call must not use the direct typed-i1 method clone path:\n{ir}"
     );
+    // The generic arm of a class-dispatch site is the universal method site.
     assert!(
-        ir.contains("call double @js_native_call_method"),
-        "dynamic receiver call should dispatch through the generic method fallback:\n{ir}"
+        non_wrapper_ir.contains("call double @js_method_site_miss("),
+        "dynamic receiver call should dispatch through the generic method site:\n{ir}"
     );
 }
 

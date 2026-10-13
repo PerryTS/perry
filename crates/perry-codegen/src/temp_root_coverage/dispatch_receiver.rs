@@ -3,8 +3,8 @@
 //!
 //! `lower_call/property_get/dynamic_dispatch.rs` lowers `object` first — JS
 //! evaluation order requires the MemberExpression to be evaluated before the
-//! arguments — and consumes it last, in `js_object_get_own_field_or_undef`, the
-//! class-id tower and `js_native_call_method`. Between those two points sit the
+//! arguments — and consumes it last, in the selected method body's direct call
+//! or the site's generic arm. Between those two points sit the
 //! argument expressions, which are arbitrary user code that can allocate. A bare
 //! SSA register is not a GC root, so an evacuating young-gen minor in an
 //! argument leaves the receiver naming from-space
@@ -168,10 +168,16 @@ fn main_ir_for_dispatch_case(
     });
     module.init.push(Stmt::Expr(Expr::LocalGet(RECV_LOCAL)));
 
-    let opts = CompileOptions {
+    let mut opts = CompileOptions {
         app_metadata: AppMetadata::default(),
         ..entry_opts()
     };
+    // The static prototype shapes a whole-program compile assigns: the
+    // dispatch site compiles a case only for a class they name.
+    let births = crate::module_birth_shapes(&module, opts.clone()).expect("birth shapes");
+    opts.static_shape_ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape))
+        .into_iter()
+        .collect();
     let bytes =
         compile_module(&module, opts).unwrap_or_else(|e| panic!("codegen failed for {name}: {e}"));
     let ir = String::from_utf8(bytes).expect("LLVM IR should be UTF-8");
@@ -248,7 +254,7 @@ fn a_dispatch_receiver_is_rooted_across_its_argument_list() {
         assert_rooted_across(
             &ir,
             &producer,
-            "js_object_get_own_field_or_undef",
+            "perry_method_dispatch_receiver_rooted_ts__Tagged__join",
             &format!(
                 "{lowering}: #9417 — the dispatch receiver is live across the argument \
                  list, which allocates"

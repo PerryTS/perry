@@ -997,8 +997,6 @@ pub(crate) struct SiteLookup {
     /// `i64`: the hit's code address, `0` when the lookup did not hit. A code
     /// address, never a heap reference.
     code: String,
-    /// `i1`: [`emit_method_site_lookup_unless`] skipped the lookup.
-    skip: Option<String>,
     pub(crate) slot_ref: String,
     lanes: Vec<crate::codegen::static_constfn::StaticMethodLane>,
 }
@@ -1041,14 +1039,13 @@ pub(crate) fn emit_method_site_lookup(
     SiteLookup {
         value,
         code,
-        skip: None,
         slot_ref,
         lanes: lanes.to_vec(),
     }
 }
 
 /// [`emit_method_site_lookup`] behind a guard: when `skip` (an `i1`) holds,
-/// no lookup runs, and [`emit_lookup_skipped`] answers `skip` itself before
+/// no lookup runs, and the caller answers from `skip` itself before
 /// the call half. The interface tower's implementor arms read nothing and
 /// skip it.
 pub(crate) fn emit_method_site_lookup_unless(
@@ -1079,14 +1076,8 @@ pub(crate) fn emit_method_site_lookup_unless(
     SiteLookup {
         value,
         code,
-        skip: Some(skip.to_string()),
         ..looked
     }
-}
-
-/// Did [`emit_method_site_lookup_unless`] skip its lookup? An `i1`.
-pub(crate) fn emit_lookup_skipped(lookup: &SiteLookup) -> String {
-    lookup.skip.clone().unwrap_or_else(|| "false".to_string())
 }
 
 /// Is the method the lookup read nullish (an optional call short-circuits)?

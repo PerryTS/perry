@@ -672,6 +672,14 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     // #11910: the split site's lookup half and its call half's runtime path.
     module.declare_function("js_method_site_prepare", DOUBLE, &[PTR, DOUBLE, I64, I64]);
+    // Decision 129 slice 2: the certified class-dispatch site's generic
+    // entry, and its contract-mode check (`PERRY_CHECK_CONTRACTS` only).
+    module.declare_function("js_method_site_certify", I64, &[PTR, DOUBLE, I64]);
+    module.declare_function(
+        "js_method_site_cert_contract_check",
+        VOID,
+        &[DOUBLE, I64, I64, I64, I64],
+    );
     module.declare_function(
         "js_method_site_lookup",
         DOUBLE,

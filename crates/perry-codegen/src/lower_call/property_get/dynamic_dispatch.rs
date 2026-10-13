@@ -8,11 +8,12 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{nanbox_pointer_inline, unbox_to_i64, FnCtx};
-use crate::lower_call::holder_shape_guard::gate_named_classes;
 use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
 
+#[path = "dynamic_dispatch_cert.rs"]
+mod cert;
 #[path = "dynamic_dispatch_collapse.rs"]
 mod collapse;
 #[path = "dispatch_receiver_class.rs"]
@@ -267,10 +268,7 @@ pub(crate) fn try_lower_instance_method_call(
         // instance with a longer chain. Inherited dispatch gets `None` and
         // keeps today's lowering.
         let mut impl_owner: Vec<Option<String>> = Vec::new();
-        // Concrete receiver class for each implementor entry. Unlike
-        // `impl_owner`, this is present for inherited implementations too and
-        // lets the override probe compare the receiver against that class's
-        // canonical ShapeId.
+        // The receiver class of each implementor entry (inherited ones too).
         let mut impl_class: Vec<String> = Vec::new();
         let mut seen_pairs: std::collections::HashSet<(u32, String)> =
             std::collections::HashSet::new();
@@ -364,43 +362,48 @@ pub(crate) fn try_lower_instance_method_call(
             if collapse_dynamic {
                 return Ok(None);
             }
+            // A compiled case is a candidate only for a class whose prototype
+            // chain the compiler names (`static_prototype::chain`: a declared
+            // class with a complete static prototype shape); the certificate,
+            // not this, proves it. Receivers of any other class keep the
+            // universal method site, and a site with no candidate is that
+            // generic arm alone (no certificate record).
+            let cased: Vec<bool> = implementors
+                .iter()
+                .zip(&impl_class)
+                .map(|((_, f), class)| {
+                    !f.starts_with("perry_static_")
+                        && crate::codegen::static_prototype::chain(ctx, class, property).is_some()
+                })
+                .collect();
             let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
                 || impl_meta
                     .iter()
                     .any(|&(has_rest, has_synthetic, _, _)| has_rest || has_synthetic);
             let mut roots = crate::rooting::open_rooted_group(1 + args.len() + usize::from(split));
+            // The method is selected before the arguments (ECMA-262 13.3.6.1);
+            // the receiver's root window is still the arguments' (#9480).
             let recv_collects = split
                 || post_args_may_collect
                 || crate::rooting::any_operand_may_collect(ctx, args.iter());
             let recv_idx = roots.lower(ctx, object, recv_collects)?;
-            // #11910: an unclaimed receiver performs the split lookup before
-            // the arguments. The tower reuses this receiver and holder proof,
-            // preserving the body selected before argument evaluation.
-            let mut pre_probe: Option<(String, String)> = None;
+            let recv = roots.reread(ctx, recv_idx)?;
+            let key_idx = ctx.strings.intern(property);
+            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+            // Decision 129 slice 2: the site's certificate selects the body
+            // (`PristineReceiverFact::Shape`, two compares and one load), or
+            // its one generic entry re-resolves and rewrites it. 0 = no
+            // compiled body: the call takes the site's generic arm.
+            let selected = if cased.contains(&true) {
+                cert::select(ctx, &recv, &method_id, &implementors, &cased)
+            } else {
+                "0".to_string()
+            };
+            // #11910: a receiver no compiled body claims reads its method
+            // through the split method site before the arguments.
             let pre_lookup = if split {
-                let recv = roots.reread(ctx, recv_idx)?;
-                let key_idx = ctx.strings.intern(property);
-                let (cid, shape_id) =
-                    crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
-                        ctx, &recv,
-                    );
-                let cid = gate_named_classes(ctx, &cid, property, &impl_class);
-                pre_probe = Some((cid.clone(), shape_id));
-                let claimed = {
-                    let blk = ctx.block();
-                    let mut hit: Option<String> = None;
-                    for (class_id, _) in implementors.iter() {
-                        let eq = blk.icmp_eq(I32, &cid, &class_id.to_string());
-                        hit = Some(match hit {
-                            None => eq,
-                            Some(prev) => blk.or(I1, &prev, &eq),
-                        });
-                    }
-                    hit.unwrap_or_else(|| "false".to_string())
-                };
-                let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-                let method_id =
-                    crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+                let claimed = ctx.block().icmp_ne(I32, &selected, "0");
                 crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
                 let lookup = crate::expr::method_site::emit_method_site_lookup_unless(
                     ctx,
@@ -413,19 +416,12 @@ pub(crate) fn try_lower_instance_method_call(
                 let any_arg_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
                 let value_root =
                     roots.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &value, any_arg_collects);
-                Some((lookup, value_root, method_id))
+                Some((lookup, value_root))
             } else {
                 None
             };
             // #1758 / epic #1785: the raw user args (no `this`, no issue-#235
-            // padding, no rest-bundling) drive every concrete callee below. A
-            // `perry_static_*` implementor (a class-object value reaching this
-            // instance-method tower — e.g. `class X extends
-            // (make(...)).annotations(y) {}`) must dispatch through
-            // `js_class_static_method_call`, which binds `this` and applies
-            // static arity/rest semantics; the instance-style `fname(recv,
-            // args…)` direct call would pass recv as arg0 and never set
-            // IMPLICIT_THIS (the #1787 broken-tower bug).
+            // padding, no rest-bundling) drive every concrete callee below.
             let mut arg_idxs: Vec<usize> = Vec::with_capacity(args.len());
             for (index, a) in args.iter().enumerate() {
                 let collects = post_args_may_collect
@@ -437,21 +433,70 @@ pub(crate) fn try_lower_instance_method_call(
             for &idx in &arg_idxs {
                 static_user_args.push(roots.reread(ctx, idx)?);
             }
-            // #11910: an unclaimed receiver calls what its lookup read; the
-            // tower below serves the implementor arms. The split call's last
-            // block joins the tower's outer merge.
-            let split_arm = match pre_lookup {
-                Some((lookup, value_root, method_id)) => {
+            let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let generic_idx = ctx.new_block("idispatch.generic");
+            let merge_idx = ctx.new_block("idispatch.merge");
+            let generic_label = ctx.block_label(generic_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            // Case `i + 1` is implementor `i`; every miss is the generic arm.
+            let case_idxs: Vec<(usize, usize)> = implementors
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| cased[i])
+                .map(|(i, _)| (i, ctx.new_block(&format!("idispatch.case{i}"))))
+                .collect();
+            let mut switch = format!("switch i32 {selected}, label %{generic_label} [");
+            for &(i, idx) in &case_idxs {
+                switch.push_str(&format!(" i32 {}, label %{}", i + 1, ctx.block_label(idx)));
+            }
+            switch.push_str(" ]");
+            ctx.block().emit_raw(switch);
+            ctx.block().mark_terminated();
+            let mut phi_inputs: Vec<(String, String)> = Vec::new();
+            for &(i, case_idx) in &case_idxs {
+                ctx.current_block = case_idx;
+                let fname = &implementors[i].1;
+                let (has_rest, has_synth, has_user_rest, decl) = impl_meta[i];
+                // #5437: this implementor's own declared arity and rest-ness.
+                let case_args = build_direct_method_args(
+                    ctx,
+                    &recv_box,
+                    &static_user_args,
+                    has_rest,
+                    has_synth,
+                    has_user_rest,
+                    false,
+                    decl,
+                    &undefined_lit,
+                );
+                let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                    case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                let v = match tower_pshape_route(
+                    ctx,
+                    impl_owner[i].as_deref(),
+                    property,
+                    fname,
+                    args,
+                ) {
+                    Some(route) => {
+                        let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
+                        emit_tower_pshape_call(ctx, i, &route, &recv_handle, &case_arg_slices)
+                    }
+                    None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
+                };
+                let after = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&merge_label);
+                }
+                phi_inputs.push((v, after));
+            }
+            // The generic arm: the split call half (the method was read before
+            // the arguments), else the universal method site.
+            ctx.current_block = generic_idx;
+            let v_generic = match pre_lookup {
+                Some((lookup, value_root)) => {
                     let value = roots.reread_emitted(ctx, value_root);
-                    let split_idx = ctx.new_block("idisp.split_call");
-                    let tower_arm_idx = ctx.new_block("idisp.tower_arm");
-                    let split_label = ctx.block_label(split_idx);
-                    let tower_arm_label = ctx.block_label(tower_arm_idx);
-                    let skipped = crate::expr::method_site::emit_lookup_skipped(&lookup);
-                    ctx.block()
-                        .cond_br(&skipped, &tower_arm_label, &split_label);
-                    ctx.current_block = split_idx;
-                    let r = crate::lower_call::console_promise::emit_split_call_half(
+                    crate::lower_call::console_promise::emit_split_call_half(
                         ctx,
                         &lookup,
                         &recv_box,
@@ -460,488 +505,30 @@ pub(crate) fn try_lower_instance_method_call(
                         property,
                         call_byte_offset,
                         &method_id,
-                    );
-                    let end_idx = ctx.current_block;
-                    ctx.current_block = tower_arm_idx;
-                    Some((r, end_idx))
+                    )
                 }
-                None => None,
-            };
-            // #5437: each implementor of `property` has its OWN declared arity
-            // and rest-ness. The rest-bundle (and default-param padding) MUST be
-            // applied per-implementor, not once globally — otherwise a single
-            // rest-bearing implementor forces EVERY case (including non-rest
-            // ones with more positional params) to receive a single bundled rest
-            // array, dropping the real positional args. That was the Next.js
-            // `f.get(r,u,context)` bug: `get` has rest- and non-rest impls
-            // (`LRUCache.get`/`CacheHandler.get`/`ResponseCache.get`, arities
-            // 1/2/3), so the global rest-bundle truncated `nh.get`'s 3 args into
-            // one array passed as arg0 → `context` (the 3rd param) read 0.0.
-            //
-            // (has_rest, decl_param_count) per implementor was built in the
-            // discovery loop above (`impl_meta`, aligned 1:1 with `implementors`);
-            // each case block builds its own per-arity args below.
-            let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-
-            // Own overrides precede the class tower; canonical shapes can
-            // exclude them without a keys-array scan (#620, #628, #8406).
-            let key_idx_probe = ctx.strings.intern(property);
-            let probe_entry = ctx.strings.entry(key_idx_probe);
-            let probe_bytes_global = format!("@{}", probe_entry.bytes_global);
-            let probe_name_len_str = probe_entry.byte_len.to_string();
-            let probe_override_idx = ctx.new_block("idisp.override");
-            let probe_dispatch_idx = ctx.new_block("idisp.dispatch");
-            let probe_outer_merge_idx = ctx.new_block("idisp.outer_merge");
-            let probe_override_label = ctx.block_label(probe_override_idx);
-            let probe_dispatch_label = ctx.block_label(probe_dispatch_idx);
-            let probe_outer_merge_label = ctx.block_label(probe_outer_merge_idx);
-            if let Some((_, end_idx)) = split_arm.as_ref() {
-                let here = ctx.current_block;
-                ctx.current_block = *end_idx;
-                ctx.block().br(&probe_outer_merge_label);
-                ctx.current_block = here;
-            }
-
-            // #8406: an exact compiler-published (class id, ShapeId) pair can
-            // prove that no post-construction own-method override was added.
-            // Probe the receiver once and bypass the keys-array scan for those
-            // canonical shapes. Classes whose canonical layout itself may
-            // contain `property` stay on the old probe, as do wide towers to
-            // keep code-size growth bounded.
-            let shape_probe_arms: Vec<(u32, String)> =
-                if implementors.len() <= MAX_SUBCLASS_DISPATCH_ARMS {
-                    implementors
-                        .iter()
-                        .zip(impl_class.iter())
-                        .filter_map(|((class_id, _), class_name)| {
-                            if !canonical_shape_excludes_own_property(ctx, class_name, property) {
-                                return None;
-                            }
-                            let keys_global = ctx.class_keys_globals.get(class_name)?;
-                            let expected_shape = crate::typed_shape::class_shape_id_operand(
-                                ctx,
-                                class_name,
-                                keys_global,
-                            );
-                            Some((*class_id, expected_shape))
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-            // Every tower probes its receiver; unclaimed classes use the method site (#10507).
-            let shape_probe_cid: Option<String>;
-            let site_arm: Option<(String, String)>;
-            {
-                let (cid, shape_id) = match pre_probe.take() {
-                    Some(read) => read,
-                    None => {
-                        crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
-                            ctx, &recv_box,
-                        )
-                    }
-                };
-                let cid = if split {
-                    cid
-                } else {
-                    gate_named_classes(ctx, &cid, property, &impl_class)
-                };
-                shape_probe_cid = Some(cid.clone());
-                let own_idx = ctx.new_block("idisp.own_probe");
-                let test_idxs: Vec<usize> = (1..shape_probe_arms.len())
-                    .map(|i| ctx.new_block(&format!("idisp.shape_test{i}")))
-                    .collect();
-                for (i, (class_id, expected_shape)) in shape_probe_arms.iter().enumerate() {
-                    if i > 0 {
-                        ctx.current_block = test_idxs[i - 1];
-                    }
-                    let miss_label = test_idxs
-                        .get(i)
-                        .map(|&idx| ctx.block_label(idx))
-                        .unwrap_or_else(|| ctx.block_label(own_idx));
-                    let blk = ctx.block();
-                    let cid_ok = blk.icmp_eq(I32, &cid, &class_id.to_string());
-                    let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
-                        blk,
-                        &shape_id,
-                        expected_shape,
-                        &[],
-                    );
-                    let exact = blk.and(I1, &cid_ok, &shape_ok);
-                    blk.cond_br(&exact, &probe_dispatch_label, &miss_label);
-                }
-                if shape_probe_arms.is_empty() {
-                    let own_label = ctx.block_label(own_idx);
-                    ctx.block().br(&own_label);
-                }
-                ctx.current_block = own_idx;
-                // #10507: a receiver whose class id names no implementor
-                // (a plain object, a function-constructed instance, a
-                // primitive) can only reach the tower's default. It takes the
-                // universal method site instead — own and inherited entries
-                // call the body directly, and its miss is the same by-name
-                // dispatch — with no own-property probe call first.
-                let site_idx = ctx.new_block("idisp.site");
-                let own_call_idx = ctx.new_block("idisp.own_probe_call");
-                let site_label = ctx.block_label(site_idx);
-                let own_call_label = ctx.block_label(own_call_idx);
-                {
-                    let blk = ctx.block();
-                    let mut implementor_hit: Option<String> = None;
-                    for (class_id, _) in implementors.iter() {
-                        let eq = blk.icmp_eq(I32, &cid, &class_id.to_string());
-                        implementor_hit = Some(match implementor_hit {
-                            None => eq,
-                            Some(prev) => blk.or(I1, &prev, &eq),
-                        });
-                    }
-                    let hit = implementor_hit.unwrap_or_else(|| "false".to_string());
-                    blk.cond_br(&hit, &own_call_label, &site_label);
-                }
-                ctx.current_block = site_idx;
-                let v_site = crate::lower_call::console_promise::emit_native_method_str_dispatch(
+                None => crate::lower_call::console_promise::emit_native_method_str_dispatch(
                     ctx,
                     property,
                     call_byte_offset,
                     &recv_box,
                     &static_user_args,
-                );
-                let after_site = ctx.block().label.clone();
-                if !ctx.block().is_terminated() {
-                    ctx.block().br(&probe_outer_merge_label);
-                }
-                site_arm = Some((v_site, after_site));
-                ctx.current_block = own_call_idx;
-            }
-            let default_idx = ctx.new_block("idispatch.default");
-            let default_label = ctx.block_label(default_idx);
-            let own_method_probe = ctx.block().call(
-                DOUBLE,
-                "js_object_get_own_field_or_undef",
-                &[
-                    (DOUBLE, &recv_box),
-                    (crate::types::PTR, &probe_bytes_global),
-                    (I64, &probe_name_len_str),
-                ],
-            );
-            let own_bits_probe = ctx.block().bitcast_double_to_i64(&own_method_probe);
-            let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
-            let is_undef_probe = ctx.block().icmp_eq(I64, &own_bits_probe, &undef_bits_str);
-            let proto_idx = ctx.new_block("idisp.prototype");
-            let proto_label = ctx.block_label(proto_idx);
-            ctx.block()
-                .cond_br(&is_undef_probe, &proto_label, &probe_override_label);
-            ctx.current_block = proto_idx;
-            // #12466: read the full ShapeId field used by object_prototype_word.
-            // PLAIN kind plus class admission proves the nominal edge;
-            // foreign/subclass/null edges are WORD/NULL. Reload after the own probe.
-            let handle = unbox_to_i64(ctx.block(), &recv_box);
-            let ptr = ctx.block().inttoptr(I64, &handle);
-            let at = ctx.block().gep(crate::types::I8, &ptr, &[(I64, "4")]);
-            let shape = ctx.block().load(I32, &at);
-            let kind = ctx.block().and(I32, &shape, "3145728");
-            let nominal = ctx.block().icmp_eq(I32, &kind, "0");
-            ctx.block()
-                .cond_br(&nominal, &probe_dispatch_label, &default_label);
-            // Override path: pack user args (skip recv at slot 0) and
-            // invoke via js_native_call_value. The stored value is
-            // typically an arrow function or `.bind()` closure whose
-            // `this` is captured/bound, so we don't pass the receiver
-            // as an extra arg — matches the static-class fast path's
-            // contract.
-            //
-            // Use `static_user_args` (the raw user args captured before
-            // rest-bundling / issue-#235 padding mutated `lowered_args`).
-            // The override target runs its own rest-bundling at call time
-            // (via `js_native_call_value` → closure-call dispatch), so it
-            // must receive the un-bundled args — the same fix as the
-            // default branch below for #321 / regression from #2162.
-            ctx.current_block = probe_override_idx;
-            let user_arg_count_probe = static_user_args.len();
-            let (probe_args_ptr, probe_args_len_str) = if user_arg_count_probe == 0 {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, user_arg_count_probe);
-                for (i, a_val) in static_user_args.iter().enumerate() {
-                    let slot = ctx
-                        .block()
-                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    ctx.block().store(DOUBLE, a_val, &slot);
-                }
-                let ptr_reg = ctx.block().next_reg();
-                ctx.block().emit_raw(format!(
-                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                    ptr_reg, user_arg_count_probe, buf_reg
-                ));
-                (ptr_reg, user_arg_count_probe.to_string())
-            };
-            // Issue #632: pass the receiver as `this` to the override
-            // call. The stored function may be a class field assigning a
-            // non-arrow function (`class X { match = match; }` — hono
-            // RegExpRouter — where the imported `match` body reads
-            // `this.buildAllMatchers()`). Mirrors the closure-call
-            // fallthrough pattern (#519).
-            let this_bits_probe = ctx.block().bitcast_double_to_i64(&recv_box);
-            let v_override_probe = ctx.block().call(
-                DOUBLE,
-                "js_native_call_value",
-                &[
-                    (DOUBLE, &own_method_probe),
-                    (I64, &this_bits_probe),
-                    (crate::types::PTR, &probe_args_ptr),
-                    (I64, &probe_args_len_str),
-                ],
-            );
-            let after_override_probe = ctx.block().label.clone();
-            if !ctx.block().is_terminated() {
-                ctx.block().br(&probe_outer_merge_label);
-            }
-
-            // Dispatch path: existing class-id switch tower.
-            // Pre-create the tower blocks first so the POINTER_TAG guard below
-            // can branch the non-pointer (primitive) case to the default
-            // (runtime-dispatch) fallback.
-            let mut case_idxs: Vec<usize> = Vec::with_capacity(implementors.len());
-            for (i, _) in implementors.iter().enumerate() {
-                case_idxs.push(ctx.new_block(&format!("idispatch.case{}", i)));
-            }
-            let merge_idx = ctx.new_block("idispatch.merge");
-            let merge_label = ctx.block_label(merge_idx);
-
-            // A class-id switch is only valid for a real heap object
-            // (POINTER_TAG = 0x7FFD). For a non-pointer receiver — a string
-            // (STRING_TAG 0x7FFF / SSO), number, boolean — `unbox_to_i64` would
-            // mask garbage low-48 bits that `js_object_get_class_id` ->
-            // `is_valid_obj_ptr` can false-positive and dereference, crashing
-            // with EXC_BAD_ACCESS. Gate the tower on a POINTER_TAG check and send
-            // any non-pointer receiver to `idispatch.default`, whose
-            // `js_native_call_method` path dispatches primitives via the runtime.
-            // Idiom mirrors `expr/class_field_inline_guard.rs` (lshr 48; icmp eq
-            // 0x7FFD).
-            ctx.current_block = probe_dispatch_idx;
-            let tower_idx = ctx.new_block("idispatch.tower");
-            let tower_label = ctx.block_label(tower_idx);
-            let default_label_guard = ctx.block_label(default_idx);
-            {
-                let blk = ctx.block();
-                let recv_bits = blk.bitcast_double_to_i64(&recv_box);
-                let recv_tag = blk.lshr(I64, &recv_bits, "48");
-                let is_ptr = blk.icmp_eq(I64, &recv_tag, "32765"); // 0x7FFD POINTER_TAG
-                blk.cond_br(&is_ptr, &tower_label, &default_label_guard);
-            }
-
-            // Tower of icmp+br: each implementor's case calls
-            // its concrete method, default returns 0.0 (the
-            // closure-call fallback would also handle this but
-            // returning a sentinel is cheaper).
-            ctx.current_block = tower_idx;
-            let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
-            // Zero sends a failed receiver or holder proof to the fallback.
-            let cid = shape_probe_cid.expect("the receiver probe runs for every tower");
-
-            for (i, (case_cid, _)) in implementors.iter().enumerate() {
-                let case_label = ctx.block_label(case_idxs[i]);
-                let cmp = ctx.block().icmp_eq(I32, &cid, &case_cid.to_string());
-                if i + 1 < implementors.len() {
-                    let next_idx = ctx.new_block(&format!("idispatch.test{}", i + 1));
-                    let next_lbl = ctx.block_label(next_idx);
-                    ctx.block().cond_br(&cmp, &case_label, &next_lbl);
-                    ctx.current_block = next_idx;
-                } else {
-                    let default_label = ctx.block_label(default_idx);
-                    ctx.block().cond_br(&cmp, &case_label, &default_label);
-                }
-            }
-
-            let mut phi_inputs: Vec<(String, String)> = Vec::new();
-            for (
-                case_no,
-                (
-                    (
-                        ((_, fname), &case_idx),
-                        &(impl_has_rest, impl_has_synth, impl_has_user_rest, impl_decl_count),
-                    ),
-                    owner,
                 ),
-            ) in implementors
-                .iter()
-                .zip(case_idxs.iter())
-                .zip(impl_meta.iter())
-                .zip(impl_owner.iter())
-                .enumerate()
-            {
-                ctx.current_block = case_idx;
-                // Static implementors retain their receiver binding and runtime arity.
-                let v = if fname.starts_with("perry_static_") {
-                    let n = static_user_args.len();
-                    let (sa_ptr, sa_len) = if n == 0 {
-                        ("null".to_string(), "0".to_string())
-                    } else {
-                        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                        for (i, a_val) in static_user_args.iter().enumerate() {
-                            let slot =
-                                ctx.block()
-                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                            ctx.block().store(DOUBLE, a_val, &slot);
-                        }
-                        let ptr_reg = ctx.block().next_reg();
-                        ctx.block().emit_raw(format!(
-                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                            ptr_reg, n, buf_reg
-                        ));
-                        (ptr_reg, n.to_string())
-                    };
-                    let name_ptr_i64 = ctx.block().ptrtoint(&probe_bytes_global, I64);
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_class_static_method_call",
-                        &[
-                            (DOUBLE, &recv_box),
-                            (I64, &name_ptr_i64),
-                            (I64, &probe_name_len_str),
-                            (crate::types::PTR, &sa_ptr),
-                            (I64, &sa_len),
-                        ],
-                    )
-                } else {
-                    // #5437: build THIS implementor's args from the raw user
-                    // args (`static_user_args`), applying its own declared arity
-                    // + rest-ness. A non-rest callee gets its positional params
-                    // padded with `undefined`; a rest callee gets the trailing
-                    // args bundled into a single array at its rest slot. This is
-                    // per-case so one rest-bearing sibling can't force the others
-                    // to receive a bundled array in place of positional params.
-                    let case_args = build_direct_method_args(
-                        ctx,
-                        &recv_box,
-                        &static_user_args,
-                        impl_has_rest,
-                        impl_has_synth,
-                        impl_has_user_rest,
-                        false,
-                        impl_decl_count,
-                        &undefined_lit,
-                    );
-                    let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                        case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    match tower_pshape_route(ctx, owner.as_deref(), property, fname, args) {
-                        Some(route) => emit_tower_pshape_call(
-                            ctx,
-                            case_no,
-                            &route,
-                            &recv_handle,
-                            &case_arg_slices,
-                        ),
-                        None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
-                    }
-                };
-                let after_label = ctx.block().label.clone();
-                if !ctx.block().is_terminated() {
-                    ctx.block().br(&merge_label);
-                }
-                phi_inputs.push((v, after_label));
-            }
-            // Default branch: receiver's class id didn't match any user
-            // class implementing `property`. Rather than returning 0.0,
-            // fall through to the runtime's `js_native_call_method` so
-            // same-named built-in methods (Buffer.readUInt8, Array.push,
-            // Map.get, …) still reach their native dispatch. Without
-            // this, a `buf.readUInt8(i)` call site ends up in the
-            // default branch and returns 0, silently corrupting reads
-            // any time a user class in scope happens to declare a
-            // method of the same name.
-            ctx.current_block = default_idx;
-            let key_idx = ctx.strings.intern(property);
-            let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-            let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-            let (fb_args_ptr, fb_args_len) = if static_user_args.is_empty() {
-                ("null".to_string(), "0".to_string())
-            } else {
-                // Hoist the args-array alloca to the function entry
-                // block — see issue #167 and `alloca_entry_array` doc.
-                //
-                // Use `static_user_args` (the raw user-provided args captured
-                // before rest-bundling / issue-#235 padding mutated
-                // `lowered_args`). The `js_native_call_method` fallback path
-                // performs its own rest-bundling at runtime, so it must
-                // receive the un-bundled args. Pre-fix this read from the
-                // post-bundling `lowered_args`, which on a rest-bearing
-                // dispatch (e.g. `obj.pipe(c1, c2, c3)` post-#2162 where
-                // `pipe()` now has a synthesized `...arguments` rest) had
-                // already been truncated+rest_box'd to `[recv, rest_arr]`.
-                // The old code then alloca'd `[args.len() x double]`, stored
-                // only the rest_arr into slot 0, and told the runtime to
-                // read `args.len()` doubles — slots 1..N-1 were uninit
-                // garbage that landed in pipeArguments's `arguments[i]`,
-                // tripping `value is not a function` (#321 regression from
-                // #2162; effect-barrel-init crash).
-                let n = static_user_args.len();
-                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                for (i, a_val) in static_user_args.iter().enumerate() {
-                    let slot = ctx
-                        .block()
-                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    ctx.block().store(DOUBLE, a_val, &slot);
-                }
-                let ptr_reg = ctx.block().next_reg();
-                ctx.block().emit_raw(format!(
-                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                    ptr_reg, n, buf_reg
-                ));
-                (ptr_reg, n.to_string())
             };
-            // #5247: record the source location of this call right before the
-            // dynamic dispatch, so the runtime "X is not a function" /
-            // "(kind).method is not a function" TypeError this fallback may
-            // throw carries `at <file>:<line>`. Args are already lowered, so a
-            // nested-call argument's location no longer shadows this one.
-            crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-            let v_def = ctx.block().call(
-                DOUBLE,
-                "js_native_call_method_by_id",
-                &[
-                    (DOUBLE, &recv_box),
-                    (I64, &method_id),
-                    (crate::types::PTR, &fb_args_ptr),
-                    (I64, &fb_args_len),
-                ],
-            );
-            let def_label = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
-            phi_inputs.push((v_def, def_label));
-
+            let after_generic = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+            phi_inputs.push((v_generic, after_generic));
             ctx.current_block = merge_idx;
             let phi_args: Vec<(&str, &str)> = phi_inputs
                 .iter()
                 .map(|(v, l)| (v.as_str(), l.as_str()))
                 .collect();
-            let v_dispatch_phi = ctx.block().phi(DOUBLE, &phi_args);
-            let after_dispatch_phi = ctx.block().label.clone();
-            if !ctx.block().is_terminated() {
-                ctx.block().br(&probe_outer_merge_label);
-            }
-
-            // Outer merge: phi over override and dispatch values.
-            ctx.current_block = probe_outer_merge_idx;
-            let mut outer_inputs: Vec<(&str, &str)> = vec![
-                (v_override_probe.as_str(), after_override_probe.as_str()),
-                (v_dispatch_phi.as_str(), after_dispatch_phi.as_str()),
-            ];
-            if let Some((v_site, after_site)) = site_arm.as_ref() {
-                outer_inputs.push((v_site.as_str(), after_site.as_str()));
-            }
-            let split_end = split_arm.as_ref().map(|(_, idx)| ctx.block_label(*idx));
-            if let (Some((v_split, _)), Some(after_split)) =
-                (split_arm.as_ref(), split_end.as_ref())
-            {
-                outer_inputs.push((v_split.as_str(), after_split.as_str()));
-            }
-            let v_probe_phi = ctx.block().phi(DOUBLE, &outer_inputs);
-            // The release has to post-dominate BOTH arms of the override probe
-            // and every case block of the tower, which is why this group is
-            // `open_rooted_group` and the release sits in the outer merge.
+            let result = ctx.block().phi(DOUBLE, &phi_args);
+            // The release post-dominates every case and the generic arm.
             roots.release(ctx);
-            return Ok(Some(v_probe_phi));
+            return Ok(Some(result));
         }
     }
 

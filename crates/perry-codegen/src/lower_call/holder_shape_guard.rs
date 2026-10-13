@@ -136,17 +136,3 @@ pub(crate) fn gate_class(
         .collect();
     ctx.block().phi(I32, &refs)
 }
-
-/// Tower names already carry the class ids registered by this module.
-pub(crate) fn gate_named_classes(
-    ctx: &mut FnCtx<'_>,
-    cid: &str,
-    method: &str,
-    names: &[String],
-) -> String {
-    let candidates: Vec<_> = names
-        .iter()
-        .filter_map(|n| ctx.class_ids.get(n).map(|&id| (id, n.clone())))
-        .collect();
-    gate_class(ctx, cid, method, &candidates)
-}

@@ -96,7 +96,9 @@
 use crate::object::ObjectHeader;
 
 mod builtin_receiver;
+mod cert;
 pub(crate) use builtin_receiver::shape_proof as builtin_shape_proof;
+pub use cert::*;
 pub(crate) mod chain_memo;
 mod function_receiver;
 mod holder_prime;

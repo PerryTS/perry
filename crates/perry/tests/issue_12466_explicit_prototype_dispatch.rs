@@ -149,57 +149,69 @@ fn read_ir(dir: &Path) -> String {
     ir
 }
 
+/// The text of the first block whose label starts with `label` (up to the
+/// blank line that ends it).
+fn block<'a>(ir: &'a str, label: &str) -> &'a str {
+    let at = ir
+        .find(&format!("\n{label}"))
+        .unwrap_or_else(|| panic!("no block {label}"));
+    let text = &ir[at + 1..];
+    text.split("\n\n").next().unwrap()
+}
+
 #[test]
 fn instance_explicit_prototype_method_and_shape_miss_ir() {
     let dir = tempfile::tempdir().unwrap();
     let binary = compile(dir.path(), GAP);
     assert_eq!(run(&binary), "104\n");
     let ir = read_ir(&dir.path().join(".perry-trace/llvm"));
-    // The no-own miss checks the encoded live edge before choosing the tower.
-    let lines: Vec<_> = ir.lines().collect();
-    let probe = lines
-        .iter()
-        .position(|line| line.contains("call double @js_object_get_own_field_or_undef("))
-        .expect("fixture must exercise the tower's own probe");
-    let branch = lines[probe..]
-        .iter()
-        .find(|line| line.contains("br i1 "))
-        .unwrap();
-    assert!(branch.contains("label %idisp.prototype"), "{branch}");
-    let proto = ir
-        .split("\nidisp.prototype")
-        .nth(1)
-        .expect("live edge block");
-    let proto = proto.split("\n\n").next().unwrap();
+    let call_at = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("callAt") && f.contains("mcert."))
+        .expect("fixture must emit a certified class-dispatch site");
+    // The receiver word carries the full runtime ShapeId: a receiver whose
+    // prototype edge is not the nominal one (explicit/foreign, kind bits
+    // 0x300000) yields word 0, which no certificate names.
+    let word = block(call_at, "method_probe.read");
     assert!(
-        !proto.contains("call ") && proto.matches("load ").count() == 1,
-        "edge comparison adds only one header load: {proto}"
+        !word.contains("call ") && word.matches("load ").count() == 1,
+        "the receiver word is one header load: {word}"
     );
     assert!(
-        proto.contains("load i32")
-            && proto.contains("and i32")
-            && proto.contains(", 3145728")
-            && !proto.contains("load i8")
-            && !proto.contains("and i8"),
-        "compare the full runtime ShapeId prototype edge: {proto}"
+        word.contains("load i64")
+            && word.contains("and i32")
+            && word.contains(", 3145728")
+            && word
+                .lines()
+                .any(|l| l.contains("select i1") && l.contains("i64 0")),
+        "a non-nominal prototype edge must zero the receiver word: {word}"
     );
-    let branch = proto.lines().find(|line| line.contains("br i1 ")).unwrap();
+    let merge = block(call_at, "method_probe.merge");
     assert!(
-        branch.contains("label %idisp.dispatch"),
-        "nominal edge: {branch}"
+        merge.contains("switch i32") && merge.contains("label %mcert.got"),
+        "word 0 must skip the certificates: {merge}"
+    );
+    // A certificate hit compares the whole word and the one epoch.
+    let way = block(call_at, "mcert.way");
+    assert!(
+        way.contains("icmp eq i64") && way.contains("@PERRY_PROTO_VALIDITY"),
+        "certificate fact: {way}"
+    );
+    // The own-property probe is gone; every miss re-proves in the runtime.
+    assert!(
+        !call_at.contains("@js_object_get_own_field_or_undef("),
+        "the certified site must not probe own properties"
     );
     assert!(
-        branch.contains("label %idispatch.default"),
-        "foreign edge: {branch}"
+        call_at.contains("call i64 @js_method_site_certify("),
+        "every miss must reach the generic entry"
     );
+    // A receiver no certificate names takes the generic method site.
     assert!(
-        ir.contains("call double @js_native_call_method_by_id("),
+        call_at
+            .lines()
+            .any(|l| l.contains("switch i32") && l.contains("label %idispatch.generic")),
         "generic operation must remain emitted"
-    );
-    assert!(
-        ir.lines()
-            .any(|line| line.contains("br i1 ") && line.contains("label %idisp.dispatch")),
-        "canonical shape hit must still enter the existing tower"
     );
 }
 
