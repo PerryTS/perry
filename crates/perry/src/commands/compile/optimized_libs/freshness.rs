@@ -207,7 +207,7 @@ pub(crate) fn auto_optimized_cache_key(
     cobuilt.sort_unstable();
     cobuilt.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|hotdiag={}|contracts={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|hotdiag={}|contracts={}|generic={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -264,6 +264,7 @@ pub(crate) fn auto_optimized_cache_key(
         gc_instruments_requested(),
         hot_diag_requested(),
         std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1"),
+        std::env::var("PERRY_FORCE_GENERIC").as_deref() == Ok("1"),
         env!("CARGO_PKG_VERSION"),
     )
 }

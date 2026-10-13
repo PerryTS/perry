@@ -227,9 +227,14 @@ fn ordinary_memo_expires_receiver_holder_and_intermediate_shapes() {
             (PIC_ID_TOKEN_BIT | u64::from(if position == 0 { expired } else { live })) as i64;
         words[HOLDER_SHAPE] = i64::from(if position == 1 { expired } else { live });
         words[HOLDER_KIND] = (HOLDER_STUB | (2 << HOLDER_DEPTH_SHIFT)) as i64;
-        words[HOLDER_HOP_SHAPES] = i64::from(if position == 2 { expired } else { live });
+        // A deep entry's hop word is its proof epoch: a passed epoch retires
+        // it as an expired hop ShapeId once did.
+        words[HOLDER_HOP_SHAPES] = crate::object::method_site::memo_epoch() as i64;
         assert!(!unsafe { super::super::holder_entry_retired(&words) });
         retire(expired, keys);
+        if position == 2 {
+            crate::object::proto_validity::bump_proto_validity();
+        }
         assert!(unsafe { super::super::holder_entry_retired(&words) });
         // Accessor pairs/code words must never be mistaken for hop ShapeIds.
         if position != 2 {

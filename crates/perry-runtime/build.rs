@@ -576,6 +576,13 @@ fn main() {
     if std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=perry_check_contracts");
     }
+    // The differential gate (`object::method_site::contracts`): every typed
+    // read body declines to the one generic entry.
+    println!("cargo:rerun-if-env-changed=PERRY_FORCE_GENERIC");
+    println!("cargo:rustc-check-cfg=cfg(perry_force_generic)");
+    if std::env::var("PERRY_FORCE_GENERIC").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=perry_force_generic");
+    }
     // Keep page backing outside the Rust CGU. Its unreferenced object is not
     // extracted by ordinary links, preserving their code and literal layout.
     println!("cargo:rerun-if-changed=src/hot_text.c");

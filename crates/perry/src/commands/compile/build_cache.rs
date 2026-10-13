@@ -246,6 +246,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #11915: contract mode emits `js_builtin_proto_contract_check` at every
     // direct arm a `Pristine` proof admitted (`perry-codegen` builtin_proto).
     "PERRY_CHECK_CONTRACTS",
+    // Links a runtime whose typed read bodies all decline (the differential
+    // gate, `perry-runtime` `object::method_site::contracts`).
+    "PERRY_FORCE_GENERIC",
 ];
 
 /// #7183: codegen env vars that deliberately do NOT key the build cache.

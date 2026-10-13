@@ -111,25 +111,45 @@ unsafe fn entry_answer_other(c: &HolderEntry, kind: i64, recv: *const ObjectHead
             k as u32,
         )
     };
-    let hop_shapes = c[HOLDER_HOP_SHAPES] as u64;
-    let shape_words = [
-        hop_shapes as u32,
-        (hop_shapes >> 32) as u32,
-        (c[HOLDER_SHAPE] as u64 >> 32) as u32,
-    ];
-    for i in 0..depth.saturating_sub(1).min(HOLDER_MAX_DEPTH - 1) {
-        if shape_word(c[HOLDER_HOPS + i] as usize) != shape_words[i] {
-            return None;
-        }
+    // `Obj(S, memo)`: the receiver's token matched, so its direct link is the
+    // recorded one; the intermediate hops hold while the entry's proof epoch
+    // is current (`method_site::memo_proof_epoch`); the holder's ShapeId is
+    // compared. No hop ShapeId is read.
+    if depth > 1
+        && (c[HOLDER_HOP_SHAPES] as u64 != super::super::memo_epoch()
+            || super::super::contracts::force_generic())
+    {
+        return None;
     }
     let holder = c[HOLDER_OBJ] as usize;
     if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
         return None;
     }
+    super::super::contracts::assert_holds(
+        || deep_hops_marked(c, depth),
+        "read_holder::entry_answer_other",
+        "Obj(S, memo)",
+        c as *const HolderEntry as usize,
+        c[HOLDER_RECV] as u64,
+    );
     if absent {
         return Some(crate::value::TAG_UNDEFINED);
     }
     holder_slot_value(holder, slot)
+}
+
+/// Contract mode's check of a deep entry's proof: every intermediate hop it
+/// names is a marked prototype, so each structural change of a hop advances
+/// the epoch the hit compared (`method_site::memo_proof_epoch`). The hops'
+/// ShapeIds are not recorded; the epoch stands for them.
+#[cold]
+#[inline(never)]
+unsafe fn deep_hops_marked(c: &HolderEntry, depth: usize) -> bool {
+    (0..depth.saturating_sub(1).min(HOLDER_MAX_DEPTH - 1)).all(|i| {
+        let hop = c[HOLDER_HOPS + i] as usize;
+        crate::object::proto_validity::object_is_marked_prototype(hop)
+            || (cfg!(test) && crate::value::addr_class::try_read_tracked_gc_header(hop).is_none())
+    })
 }
 
 /// A second through tenth receiver shape of a multi-shape depth-1 entry is a

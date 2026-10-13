@@ -1,9 +1,16 @@
 //! Bounded read-site facts for declared-class instances.
 //!
 //! A bare CLASS ShapeId names its prototype through the identity word.
-//! Each hit compares that live word with the stable first hop, then checks
-//! every hop and holder shape. Publication and replacement are ordinary
-//! shape-link facts; no process-wide generation is needed.
+//! A hit is the typed body `Obj(S, memo)` (decision 129): the receiver's
+//! ShapeId equals the entry's token, which pins its class identity (a relink
+//! retires the displaced prototype and advances the proof epoch,
+//! `class_registry::retire_displaced_decl_prototype`); the intermediate hops
+//! hold while the proof epoch the entry recorded is current (every hop is a
+//! marked prototype, `method_site::memo_proof_epoch`); the identity word
+//! still names the recorded direct link; the holder's ShapeId is compared.
+//! No class id and no hop ShapeId is read on a hit.
+//! The collecting path re-proves a stale entry by its shapes and records the
+//! current epoch.
 //! The entries belong to one PicCache site (word 2 points to its bounded
 //! process-lifetime record), never to a process-global `(shape, key)` table.
 //!
@@ -11,9 +18,8 @@
 //! name (babel's parser: a method on `Tokenizer.prototype` read through eight
 //! prototypes of mixin and subclass layers). An entry therefore describes up
 //! to [`CLASS_READ_MAX_DEPTH`] objects. Its intermediate hops live in one
-//! block, sized to the chain, that the entry owns. Every hop is still
-//! compared by ShapeId on every use; depth adds compares, never a different
-//! kind of fact.
+//! block, sized to the chain, that the entry owns. Depth costs a hit
+//! nothing: the epoch covers every hop.
 
 use super::*;
 
@@ -251,10 +257,54 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
     {
         return None;
     }
-    if !reprove_direct(e, recv) {
+    let epoch = super::super::memo_epoch();
+    if !reprove_direct(e, recv) || !valid_chain(e) {
         return None;
     }
-    pinned_answer(e)
+    refresh_epoch(e, epoch);
+    value_of(e)
+}
+
+/// The collecting re-proof found `e` valid by its shapes at `epoch` (read
+/// before the proof): record it, so the typed body answers again. Its hops
+/// were marked at publication and marks are set-only.
+#[inline]
+fn refresh_epoch(e: &mut Entry, epoch: u64) {
+    if e.depth > 1 && e.epoch != epoch {
+        e.epoch = epoch;
+        super::super::note_epoch_refresh();
+    }
+}
+
+/// `Obj(S, memo)` admission for a site entry whose token the receiver's
+/// ShapeId already matched: a bare CLASS identity's live word still names the
+/// recorded direct link (several writers maintain identity words, so the
+/// link is compared, not inferred), then the hops by the proof epoch. A
+/// forward-absent alias entry always takes the collecting path.
+#[inline(always)]
+unsafe fn typed_admits(e: &Entry) -> bool {
+    !e.forward_absent
+        && e.hops_hold()
+        && identity_matches(e)
+        && !super::super::contracts::force_generic()
+}
+
+/// The typed body: the holder's ShapeId, then the value. In contract mode
+/// it first re-runs the full proof publication established (direct link,
+/// every hop's ShapeId, the holder's).
+#[inline(always)]
+unsafe fn typed_bits(e: &Entry) -> u64 {
+    if !e.holder_holds() {
+        return crate::value::TAG_HOLE;
+    }
+    super::super::contracts::assert_holds(
+        || valid_chain(e),
+        "read_holder::class_read typed hit",
+        "Obj(S, memo)",
+        e as *const Entry as usize,
+        e.token as u64,
+    );
+    value_of(e).unwrap_or(crate::value::TAG_HOLE)
 }
 
 // Both collecting paths re-prove the receiver's direct class link in one
@@ -278,11 +328,10 @@ unsafe fn identity_matches(e: &Entry) -> bool {
         && *(e.identity_key as *const u64) == crate::value::POINTER_TAG | direct as u64
 }
 
-/// The entry's answer once the receiver and its direct link are proved: the
-/// hops and the holder by ShapeId alone (the entry's hops all record pinning
-/// identities), as `entry_answer_other` proves a site's own deep entry.
-#[inline(always)]
-unsafe fn pinned_answer(e: &Entry) -> Option<u64> {
+/// The collecting re-proof's answer: the entry's full shape proof (every hop
+/// and the holder by ShapeId), then the value.
+#[cfg(test)]
+unsafe fn shape_reproof(e: &Entry) -> Option<u64> {
     if !valid_chain(e) {
         return None;
     }
@@ -346,40 +395,24 @@ pub(super) unsafe fn leaf_bits(c: &PicCache, recv: *const ObjectHeader, token: i
 #[cold]
 #[inline(never)]
 unsafe fn leaf_site_bits(s: &Site, recv: *const ObjectHeader, token: i64) -> u64 {
-    let class_id = (*recv).class_id;
     let e = &s.primary_class;
-    if e.token == token
-        && e.class_id == class_id
-        && identity_matches(e)
-        && e.pinned_hops
-        && !e.forward_absent
-    {
-        return pinned_answer(e).unwrap_or(crate::value::TAG_HOLE);
+    if e.token == token && typed_admits(e) {
+        return typed_bits(e);
     }
     if s.entries.is_empty() && s.holders.is_empty() && s.next & (SHARED_MASK << CURSOR_BITS) == 0 {
         return crate::value::TAG_HOLE;
     }
-    secondary_leaf_bits(s, recv, token, class_id)
+    secondary_leaf_bits(s, recv, token)
 }
 
 /// Neither a monomorphic ordinary nor a matching first class answer enters
 /// this scan. Its loop bounds and scratch registers stay out of the front.
 #[cold]
 #[inline(never)]
-unsafe fn secondary_leaf_bits(
-    s: &Site,
-    recv: *const ObjectHeader,
-    token: i64,
-    class_id: u32,
-) -> u64 {
+unsafe fn secondary_leaf_bits(s: &Site, recv: *const ObjectHeader, token: i64) -> u64 {
     for e in &s.entries {
-        if e.token == token
-            && e.class_id == class_id
-            && identity_matches(e)
-            && e.pinned_hops
-            && !e.forward_absent
-        {
-            return pinned_answer(e).unwrap_or(crate::value::TAG_HOLE);
+        if e.token == token && typed_admits(e) {
+            return typed_bits(e);
         }
     }
     for e in &s.holders {
@@ -388,7 +421,7 @@ unsafe fn secondary_leaf_bits(
         }
     }
     if s.next & (SHARED_MASK << CURSOR_BITS) != 0 {
-        return probe_shared_leaf(s, class_id, token).to_bits();
+        return probe_shared_leaf(s, token).to_bits();
     }
     crate::value::TAG_HOLE
 }
@@ -571,6 +604,10 @@ pub(super) unsafe fn publish_chain(cache: *mut PicCache, recv: *const ObjectHead
         super::note_young_retry(&mut *cache);
         return;
     }
+    // `Obj(S, memo)`: the hops hold while this epoch is current.
+    let Some(epoch) = super::super::memo_proof_epoch(walked.iter().map(|&(addr, _)| addr)) else {
+        return;
+    };
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     // The walk proved the direct link through this identity's word, so the
     // slot exists; an identity without one has nothing a hit could compare.
@@ -619,6 +656,8 @@ pub(super) unsafe fn publish_chain(cache: *mut PicCache, recv: *const ObjectHead
                 }
             }
             if group != WAYS {
+                // The group's chain is the one just walked (`same_absence`).
+                s.class_entry_mut(group).epoch = epoch;
                 s.next |= 1 << (group as u32 + CURSOR_BITS);
                 return;
             }
@@ -664,6 +703,7 @@ pub(super) unsafe fn publish_chain(cache: *mut PicCache, recv: *const ObjectHead
         holder_shape: w.holder_shape,
         hops,
         identity_key: word as u64,
+        epoch,
     };
     PRIMES.fetch_add(1, Ordering::Relaxed);
     super::super::stats_report_enabled();
@@ -745,20 +785,18 @@ mod tests;
 
 #[cold]
 #[inline(never)]
-unsafe fn probe_shared_leaf(s: &Site, class_id: u32, token: i64) -> f64 {
+unsafe fn probe_shared_leaf(s: &Site, token: i64) -> f64 {
     let mut shared = (s.next >> CURSOR_BITS) & SHARED_MASK;
     while shared != 0 {
         let i = shared.trailing_zeros() as usize;
         shared &= shared - 1;
         let e = s.class_entry(i);
         // Shared bits name only absent sets; replacement clears the bit.
-        // The primary scan already handled the group's primary token.
-        if e.class_id == class_id && identity_matches(e) && *e.receiver_bucket(token as u32) != 0 {
-            return f64::from_bits(if valid_chain(e) {
-                crate::value::TAG_UNDEFINED
-            } else {
-                crate::value::TAG_HOLE
-            });
+        // The primary scan already handled the group's primary token. Every
+        // receiver ShapeId in the set was admitted with this entry's direct
+        // link and chain, so a member token is the same `Obj(S, memo)` proof.
+        if *e.receiver_bucket(token as u32) != 0 && typed_admits(e) {
+            return f64::from_bits(typed_bits(e));
         }
     }
     f64::from_bits(crate::value::TAG_HOLE)
@@ -777,7 +815,9 @@ unsafe fn try_shared_hit(s: *mut Site, recv: *const ObjectHeader) -> Option<u64>
         // The bitmap admits only shared absent ways. Validate their receiver
         // set and the same direct-link and chain proofs as ordinary ways.
         if e.class_id == class_id && *e.receiver_bucket(token) != 0 {
+            let epoch = super::super::memo_epoch();
             if reprove_direct(e, recv) && valid_chain(e) {
+                refresh_epoch(e, epoch);
                 return Some(crate::value::TAG_UNDEFINED);
             }
         }
@@ -889,6 +929,9 @@ fn empty_site() -> *mut Site {
         accessor_depth: 0,
     }))
 }
+#[cfg(test)]
+#[path = "class_read/epoch_tests.rs"]
+mod epoch_tests;
 #[cfg(test)]
 #[path = "class_read/retirement_tests.rs"]
 mod retirement_tests;

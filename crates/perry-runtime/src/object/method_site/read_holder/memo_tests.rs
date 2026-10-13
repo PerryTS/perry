@@ -67,12 +67,7 @@ fn alternating_terminals_and_deep_hops_hit_and_invalidate_independently() {
             );
         }
     }
-    hops[3].parent_class_id += 1000;
-    assert_eq!(unsafe { entry_answer(&cache, token(3)) }, None);
-    assert_eq!(
-        unsafe { entry_answer(&cache, token(2)) },
-        Some(crate::value::TAG_UNDEFINED)
-    );
+    // A holder's change is its own ShapeId: only its entry declines.
     holders[4].parent_class_id += 1000;
     assert_eq!(unsafe { entry_answer(&cache, token(4)) }, None);
     assert_eq!(
@@ -127,6 +122,12 @@ fn alternating_terminals_and_deep_hops_hit_and_invalidate_independently() {
         Some(crate::value::TAG_UNDEFINED),
         "an evicted receiver can prime again"
     );
+    // A hop's structural change advances the one proof epoch (every hop is a
+    // marked prototype): each deep entry declines until a walk re-publishes it.
+    hops[3].parent_class_id += 1000;
+    crate::object::proto_validity::bump_proto_validity();
+    assert_eq!(unsafe { entry_answer(&cache, token(3)) }, None);
+    assert_eq!(unsafe { entry_answer(&cache, token(2)) }, None);
     WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
     assert_eq!(unsafe { entry_answer(&cache, token(2)) }, None);
 }

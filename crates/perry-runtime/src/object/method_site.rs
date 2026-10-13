@@ -97,6 +97,7 @@ use crate::object::ObjectHeader;
 
 mod builtin_receiver;
 mod cert;
+pub(crate) mod contracts;
 pub(crate) use builtin_receiver::shape_proof as builtin_shape_proof;
 pub use cert::*;
 pub(crate) mod chain_memo;
@@ -327,6 +328,62 @@ pub(crate) unsafe fn memo_referents_stable(addrs: impl IntoIterator<Item = usize
     true
 }
 
+/// The proof epoch an `Obj(S, memo)` entry records for its intermediate
+/// `hops` (`PERRY_PROTO_VALIDITY`, `object::proto_validity`): while the epoch
+/// is current, no marked prototype has changed shape, so every hop the entry
+/// names still lacks the key and still links to the next one, and a hit
+/// trusts the hop pairs without comparing their ShapeIds.
+///
+/// That holds only for MARKED hops: a marked object's structural mutation
+/// advances the epoch (`proto_validity::note_object_shape_stamped`). An
+/// unmarked hop is marked here and the publication is declined (`None`): the
+/// mark moves it to a fresh ShapeId, so the walk that found it is stale, and
+/// the site's next miss walks again and publishes. Marks are set-only, so a
+/// published entry's hops stay marked.
+///
+/// # Safety
+/// Every address is a live object admitted by [`memo_referents_stable`].
+pub(crate) unsafe fn memo_proof_epoch(hops: impl IntoIterator<Item = usize>) -> Option<u64> {
+    let epoch = crate::object::proto_validity::proto_validity();
+    let mut marked = false;
+    for addr in hops.into_iter().filter(|&a| a != 0) {
+        // A boxed fixture header admitted by `never_move::test_admit` has no
+        // heap block for a meta record; such a fixture stands for a marked hop.
+        #[cfg(test)]
+        if crate::gc::never_move::test_admit::on()
+            && crate::value::addr_class::try_read_tracked_gc_header(addr).is_none()
+        {
+            continue;
+        }
+        if !crate::object::proto_validity::object_is_marked_prototype(addr) {
+            // The referent is old and never-move (`memo_referents_stable`);
+            // nothing may collect while the caller holds the walk.
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            crate::object::proto_validity::mark_object_as_prototype(addr);
+            EPOCH_HOP_MARKS.fetch_add(1, Ordering::Relaxed);
+            marked = true;
+        }
+    }
+    (!marked).then_some(epoch)
+}
+
+/// The proof epoch a hit compares with an entry's recorded one.
+#[inline(always)]
+pub(crate) fn memo_epoch() -> u64 {
+    crate::object::proto_validity::proto_validity()
+}
+
+per_test_global! {
+    static EPOCH_HOP_MARKS: AtomicU64 = AtomicU64::new(0);
+    static EPOCH_REFRESHES: AtomicU64 = AtomicU64::new(0);
+}
+
+/// A generic re-proof found a stale-epoch entry still valid by shapes and
+/// recorded the current epoch (stats only).
+pub(crate) fn note_epoch_refresh() {
+    EPOCH_REFRESHES.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Publications refused because a referent was not yet stable.
 pub fn memo_unstable_referent_refusals() -> u64 {
     UNSTABLE_REFERENTS.load(Ordering::Relaxed)
@@ -456,7 +513,7 @@ pub(crate) fn stats_report_enabled() -> bool {
                 let (ap, ah) = read_holder::read_accessor_stats();
                 let (cp, ch) = read_holder::class_read_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_builtin={} primes_function={} primes_constfn={} chain_memo_records={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} read_accessor_same_shape_relinks={} read_holder_refused={hr} unstable_referent_refusals={} unstable_young={} unstable_not_object={}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_builtin={} primes_function={} primes_constfn={} chain_memo_records={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} read_accessor_same_shape_relinks={} read_holder_refused={hr} unstable_referent_refusals={} unstable_young={} unstable_not_object={} proof_epoch={} epoch_hop_marks={} epoch_refreshes={}{refused}",
                     PRIMES_BUILTIN.load(Ordering::Relaxed),
                     method_site_function_primes(),
                     PRIMES_CONSTFN.load(Ordering::Relaxed),
@@ -466,6 +523,9 @@ pub(crate) fn stats_report_enabled() -> bool {
                     memo_unstable_referent_refusals(),
                     UNSTABLE_YOUNG.load(Ordering::Relaxed),
                     UNSTABLE_NOT_OBJECT.load(Ordering::Relaxed),
+                    memo_epoch(),
+                    EPOCH_HOP_MARKS.load(Ordering::Relaxed),
+                    EPOCH_REFRESHES.load(Ordering::Relaxed),
                 );
             }
             unsafe { libc::atexit(report) };

@@ -24,6 +24,11 @@ pub(crate) struct SharedEntry {
     // Method proofs include full object and class identity words. Their
     // owned block uses ShapeHop rather than the shape-only read Hop.
     pub(crate) exact_chain: bool,
+    // `Obj(S, memo)`: the proof epoch (`method_site::memo_proof_epoch`) its
+    // intermediate hops were recorded at; 0 never matches. Unused by method
+    // chains (`exact_chain`) and by entries of depth 0 or 1, which name no
+    // intermediate hop.
+    pub(crate) epoch: u64,
 }
 
 impl SharedEntry {
@@ -40,6 +45,7 @@ impl SharedEntry {
         pinned_hops: false,
         forward_absent: false,
         exact_chain: false,
+        epoch: 0,
     };
 
     pub(crate) unsafe fn method(
@@ -90,7 +96,27 @@ impl SharedEntry {
         ));
     }
 
-    /// The same shape validator serves keyed and runtime read entries.
+    /// `Obj(S, memo)`, once the receiver's ShapeId matched the entry's token:
+    /// do the intermediate hops still hold? An entry of depth 0 or 1 names
+    /// none; a deeper one holds while the proof epoch it was recorded at is
+    /// current (`method_site::memo_proof_epoch`). No hop ShapeId is read.
+    #[inline(always)]
+    pub(crate) fn hops_hold(&self) -> bool {
+        self.depth <= 1 || self.epoch == super::super::memo_epoch()
+    }
+
+    /// The holder fact: the holder (the terminal object of an absent entry)
+    /// still has the ShapeId the entry recorded. True for an entry naming no
+    /// holder (an own key, or a null-link absence).
+    #[inline(always)]
+    pub(crate) unsafe fn holder_holds(&self) -> bool {
+        self.holder == 0 || shape_word(self.holder) == self.holder_shape
+    }
+
+    /// The complete shape proof publication established: every hop's
+    /// ShapeId and the holder's. Contract mode re-runs it in each typed body
+    /// (`contracts`); the collecting re-proof uses it before it records a
+    /// fresh epoch.
     #[inline]
     pub(super) unsafe fn valid_shapes(&self) -> bool {
         if self.depth == 0 {
@@ -121,11 +147,23 @@ impl SharedEntry {
         )
     }
 
+    /// The keyed/runtime typed body (`Obj(S, memo)`), after the caller
+    /// matched the receiver's token and the key: hops by the proof epoch, the
+    /// holder by its ShapeId, then the slot. Any failed proof declines to
+    /// the one generic entry (the site's miss), which re-walks and
+    /// re-publishes.
     #[inline]
     pub(super) unsafe fn read_value(&self, recv: *const ObjectHeader) -> Option<u64> {
-        if !self.valid_shapes() {
+        if !self.hops_hold() || !self.holder_holds() || super::super::contracts::force_generic() {
             return None;
         }
+        super::super::contracts::assert_holds(
+            || self.valid_shapes(),
+            "read_holder::SharedEntry::read_value",
+            "Obj(S, memo)",
+            self as *const Self as usize,
+            self.token as u64,
+        );
         self.slot_value(recv)
             .filter(|&bits| bits != crate::value::TAG_HOLE)
     }
@@ -141,7 +179,7 @@ impl SharedEntry {
 
 #[cfg(target_pointer_width = "64")]
 const _: () = {
-    assert!(std::mem::size_of::<SharedEntry>() == 56);
+    assert!(std::mem::size_of::<SharedEntry>() == 64);
     assert!(std::mem::offset_of!(SharedEntry, hops) == 0);
     assert!(std::mem::offset_of!(SharedEntry, depth) == crate::codegen_abi::SHAPE_CHAIN_LEN_OFFSET);
     assert!(

@@ -67,7 +67,7 @@ pub struct KeyedCache {
 #[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(std::mem::offset_of!(KeyedCache, entries) == 0);
-    assert!(std::mem::size_of::<KeyedEntry>() == 56);
+    assert!(std::mem::size_of::<KeyedEntry>() == 64);
 };
 
 /// Only shape-matchable receiver words enter the hit path. Every other cell's
@@ -301,6 +301,8 @@ unsafe fn publish_keyed(
     ) {
         return None;
     }
+    let epoch =
+        super::super::memo_proof_epoch(w.hops[..depth.saturating_sub(1)].iter().map(|&(a, _)| a))?;
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     let available = cache
         .entries
@@ -346,6 +348,7 @@ unsafe fn publish_keyed(
         absent: w.slot.is_none(),
         depth,
         hops,
+        epoch,
         ..KeyedEntry::EMPTY
     };
     if !cache.registered {

@@ -238,8 +238,9 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
     assert_eq!(e.slot & !MULTI_ABSENT, 96);
     assert_eq!(unsafe { e.hops() }.len(), 8);
     // The runtime shares this record at arbitrary chain depth. Its usize
-    // depth adds eight bytes to the old u8-depth record on 64-bit targets.
-    assert_eq!(std::mem::size_of::<Entry>(), 56);
+    // depth adds eight bytes to the old u8-depth record on 64-bit targets,
+    // and its proof epoch eight more.
+    assert_eq!(std::mem::size_of::<Entry>(), 64);
     // Fake hops are not registered shapes. Exercise the same pinned
     // shape comparisons the real admitted walk proves.
     for r in &receivers {
@@ -269,6 +270,8 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
         let ptr = &**hop as *const ObjectHeader as *mut ObjectHeader;
         let original = unsafe { (*ptr).parent_class_id };
         unsafe { (*ptr).parent_class_id = base + 500 };
+        // A marked hop's structural change advances the proof epoch.
+        crate::object::proto_validity::bump_proto_validity();
         assert_eq!(unsafe { answer(e, r) }, None, "hop {i} changed");
         assert_eq!(
             unsafe { leaf_answer(&cache, r, token) },
@@ -422,6 +425,9 @@ fn multi_absent_reproves_shared_class_link_after_generation_change() {
         crate::object::shapes::PROTO_ID_CLASS | u64::from(unsafe { (*receivers[0]).class_id }),
         0,
     );
+    // A relink advances the proof epoch (`retire_displaced_decl_prototype`);
+    // the raw word store above stands for one.
+    crate::object::proto_validity::bump_proto_validity();
     for r in &receivers {
         let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
         assert_eq!(unsafe { leaf_answer(&cache, *r, token) }, None);
@@ -441,6 +447,8 @@ fn multi_absent_reproves_shared_class_link_after_generation_change() {
         );
     }
     crate::object::test_seed_class_decl_prototype_object_root(CID, b as usize);
+    // The relink advances the proof epoch (`retire_displaced_decl_prototype`).
+    crate::object::proto_validity::bump_proto_validity();
     for r in &receivers {
         let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
         assert_eq!(unsafe { leaf_answer(&cache, *r, token) }, None);
@@ -606,7 +614,7 @@ fn deep_entry_compares_every_hop() {
     let e = *e;
 
     assert_eq!(
-        unsafe { pinned_answer(&e) },
+        unsafe { shape_reproof(&e) },
         Some(crate::value::TAG_UNDEFINED)
     );
     // Each hop's ShapeId is a fact the answer rests on, the deepest too.
@@ -619,7 +627,7 @@ fn deep_entry_compares_every_hop() {
         let hop = &*chain[i] as *const ObjectHeader as *mut ObjectHeader;
         let original = unsafe { (*hop).parent_class_id };
         unsafe { (*hop).parent_class_id = base + 300 };
-        assert_eq!(unsafe { pinned_answer(&e) }, None, "hop {i} moved");
+        assert_eq!(unsafe { shape_reproof(&e) }, None, "hop {i} moved");
         unsafe { (*hop).parent_class_id = original };
     }
     // A shallow chain published over the same way gets a block its size.
@@ -704,6 +712,7 @@ fn bare_class_link_replacement_with_same_holder_shape_declines() {
         pinned_hops: true,
         forward_absent: false,
         exact_chain: false,
+        epoch: 0,
         slot: 0,
         holder: a as usize,
         holder_shape: proto_shape,

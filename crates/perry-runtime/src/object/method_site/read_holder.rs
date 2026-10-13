@@ -145,7 +145,8 @@ mod memo_tests;
 pub const HOLDER_RECV: usize = crate::codegen_abi::PIC_HOLDER_RECV_WORD;
 /// The holder's (or, for an absent entry, the terminal object's) address.
 pub const HOLDER_OBJ: usize = crate::codegen_abi::PIC_HOLDER_OBJ_WORD;
-/// Low 32 bits: the holder's ShapeId. High 32 bits: the third hop's ShapeId.
+/// Low 32 bits: the holder's ShapeId. High 32 bits: unused (0), except a
+/// multi-shape depth-1 entry's first extra receiver ShapeId.
 pub const HOLDER_SHAPE: usize = crate::codegen_abi::PIC_HOLDER_SHAPE_WORD;
 /// The answer's kind:
 ///
@@ -161,7 +162,9 @@ pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
 /// the first word is the immutable pair root, the second its native getter
 /// code (a scalar used by non-observable probes), and the third is unused.
 pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
-/// Data/absence: first and second hop ShapeIds. Accessor: the code the hit
+/// Data/absence: the proof epoch a deep entry's intermediate hops were
+/// recorded at (`method_site::memo_proof_epoch`; 0 for depth 1). Accessor:
+/// the code the hit
 /// calls for the getter the primed pair names, `double get(double this, i64
 /// pair)`: a compiled class getter, or the closure-getter entry
 /// (`accessor_pair::holder_closure_getter_entry`), which reads the closure
@@ -326,15 +329,10 @@ unsafe fn holder_entry_retired(c: &HolderEntry) -> bool {
     if kind & (HOLDER_ACCESSOR | HOLDER_MULTI_ABSENT) != 0 || kind & HOLDER_STUB == 0 {
         return false;
     }
+    // A deep entry whose proof epoch has passed answers nothing until a
+    // walk re-publishes it.
     let depth = ((kind >> HOLDER_DEPTH_SHIFT) & 0xF) as usize;
-    let shapes = [
-        c[HOLDER_HOP_SHAPES] as u32,
-        (c[HOLDER_HOP_SHAPES] as u64 >> 32) as u32,
-        (c[HOLDER_SHAPE] as u64 >> 32) as u32,
-    ];
-    shapes[..depth.saturating_sub(1).min(HOLDER_MAX_DEPTH - 1)]
-        .iter()
-        .any(|&shape| retired(shape))
+    depth > 1 && c[HOLDER_HOP_SHAPES] as u64 != super::memo_epoch()
 }
 
 /// Spare depth-1 ABSENT words: the upper half of the holder-shape word and
@@ -1255,6 +1253,10 @@ unsafe fn publish_token(
         note_young_retry(&mut *cache);
         return;
     }
+    // `Obj(S, memo)`: a deep entry's hops hold while this epoch is current.
+    let Some(epoch) = super::memo_proof_epoch(w.hops[..named_hops].iter().map(|&(a, _)| a)) else {
+        return;
+    };
     let c = &mut *cache;
     // A default-prototype optional field is often absent from many receiver
     // shapes at ONE read site (TypeScript AST's `.name` is the canonical
@@ -1329,7 +1331,7 @@ unsafe fn publish_token(
     class_read::clear_accessor_hops(c);
     c[HOLDER_RECV] = 0;
     c[HOLDER_OBJ] = w.holder as i64;
-    c[HOLDER_SHAPE] = (u64::from(w.holder_shape) | u64::from(w.hops[2].1) << 32) as i64;
+    c[HOLDER_SHAPE] = i64::from(w.holder_shape);
     c[HOLDER_KIND] = if accessor {
         (HOLDER_ACCESSOR | u64::from(w.slot.expect("accessor has slot"))) as i64
     } else {
@@ -1361,8 +1363,10 @@ unsafe fn publish_token(
         // The slot word distinguishes inline and spill storage. Both retain
         // the immutable pair's getter; replacing its lane invalidates it.
         w.getter as i64
+    } else if w.depth > 1 {
+        epoch as i64
     } else {
-        (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64
+        0
     };
     // Last: the entry is live only once every other word is written.
     c[HOLDER_RECV] = token;

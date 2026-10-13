@@ -273,10 +273,15 @@ mod tests {
             let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
             let _admit = crate::gc::never_move::test_admit::Guard::new();
             let mut slot = &mut cache as *mut PicCache;
-            assert_eq!(
-                prime_array_read(recv.cast(), key, &mut slot).map(f64::to_bits),
-                Some(crate::value::TAG_UNDEFINED)
-            );
+            // The first miss marks `%Array.prototype%`'s bag a prototype (a
+            // deep entry's hop, `memo_proof_epoch`), which restamps it; the
+            // second publishes.
+            for _ in 0..2 {
+                assert_eq!(
+                    prime_array_read(recv.cast(), key, &mut slot).map(f64::to_bits),
+                    Some(crate::value::TAG_UNDEFINED)
+                );
+            }
             assert_eq!(
                 front(recv.cast(), &mut slot),
                 crate::value::TAG_UNDEFINED,

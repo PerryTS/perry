@@ -904,8 +904,9 @@ fn link_decl_prototype_object(class_id: u32, proto_ptr: *mut ObjectHeader) {
 /// generic-origin redirect that changes what it answers) must leave no site
 /// trusting the old holder. The displaced prototype takes a semantic shape
 /// transition: a process-unique ShapeId no site was trained on. Every site
-/// that names that holder compares its ShapeId on each hit, so the relink is
-/// seen through shapes alone, without a global generation word.
+/// that names that holder as its holder compares its ShapeId on each hit;
+/// a site that names it as an intermediate hop trusts the proof epoch
+/// (`method_site::memo_proof_epoch`), so the relink also advances it.
 pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
     if old.is_null() {
         return;
@@ -923,6 +924,7 @@ pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
             crate::object::shapes::transition_object_shape_semantics(old);
         }
     }
+    crate::object::proto_validity::bump_proto_validity();
 }
 
 pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {
