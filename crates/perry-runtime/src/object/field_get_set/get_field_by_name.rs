@@ -97,6 +97,88 @@ pub extern "C" fn js_object_get_field_by_name(
 /// out so a class function object is routed here BEFORE the closure arms of
 /// the generic read (`get_field_by_name_after_site_miss`), which it
 /// would otherwise walk end to end first.
+unsafe fn class_value_get_wtf8_field(
+    class_value: f64,
+    class_id: u32,
+    is_prototype_ref: bool,
+    key: *const crate::StringHeader,
+    name: &[u8],
+) -> JSValue {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class_value = scope.root_nanbox_f64(class_value);
+    let key = scope.root_string_ptr(key);
+    if is_prototype_ref {
+        if super::super::native_module::class_has_own_method_bytes(class_id, name) {
+            if let Some(value) =
+                super::super::class_registry::class_method_slot_value_bytes(class_id, name)
+            {
+                return JSValue::from_bits(value);
+            }
+        }
+        if let Some((value, _)) =
+            super::super::class_registry::class_chain_getter_value_bytes(class_id, name, || {
+                class_value.get_nanbox_f64()
+            })
+        {
+            return value;
+        }
+        return key.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::class_value::class_prototype_get(
+                class_id,
+                key,
+                class_value.get_nanbox_f64(),
+            )
+        });
+    }
+
+    // A capture-carrying class declaration may be referenced through its
+    // template ClassRef from an earlier-created helper closure. Runtime-added
+    // static properties live on the current evaluation's heap class object,
+    // so give that object first chance to answer the exact WTF-8 key too.
+    if let Some(class_object) = super::super::class_registry::class_object_value_for_cid(class_id) {
+        let class_object = JSValue::from_bits(class_object.to_bits());
+        if class_object.is_pointer() {
+            let class_object = class_object.as_pointer::<ObjectHeader>();
+            if !class_object.is_null() {
+                let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    js_object_get_field_by_name(class_object, key)
+                });
+                if !value.is_undefined() {
+                    return value;
+                }
+            }
+        }
+    }
+
+    if super::super::class_registry::class_static_key_deleted_bytes(class_id, name) {
+        return key.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::class_value::class_prototype_get(
+                class_id,
+                key,
+                class_value.get_nanbox_f64(),
+            )
+        });
+    }
+    if let Some(value) = crate::object::class_value::class_static_get_bytes(class_id, name) {
+        return JSValue::from_bits(value.to_bits());
+    }
+    if let Some(value) =
+        crate::object::class_value::inherited_static_method_value_bytes(class_id, name)
+    {
+        return JSValue::from_bits(value.to_bits());
+    }
+    if let Some(value) = super::super::class_registry::class_static_accessor_getter_value_bytes(
+        class_id,
+        name,
+        class_value.get_nanbox_f64(),
+    ) {
+        return JSValue::from_bits(value.to_bits());
+    }
+    key.with_const_ptr::<crate::StringHeader, _>(|key| {
+        crate::object::class_value::class_prototype_get(class_id, key, class_value.get_nanbox_f64())
+    })
+}
+
 #[inline(never)]
 pub(crate) fn class_value_get_field(
     obj: *const ObjectHeader,
@@ -130,8 +212,18 @@ pub(crate) fn class_value_get_field(
     unsafe {
         let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let name_len = (*key).byte_len as usize;
-        let name =
-            std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).unwrap_or("");
+        let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+        let name = std::str::from_utf8(name_bytes).unwrap_or("");
+        if name.is_empty() && !name_bytes.is_empty() {
+            let name_bytes = name_bytes.to_vec();
+            return class_value_get_wtf8_field(
+                class_value,
+                class_id,
+                is_prototype_ref,
+                key,
+                &name_bytes,
+            );
+        }
         // v0.5.752: class_ref.constructor synthesizes back to the
         // same class ref so drizzle's
         // `Object.getPrototypeOf(value).constructor === Class` chain
@@ -1093,7 +1185,7 @@ fn get_field_by_name_past_data_probe(
                             b"byteOffset" => {
                                 return JSValue::number(
                                     crate::typedarray_view::js_typed_array_byte_offset(ta) as f64,
-                                )
+                                );
                             }
                             b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
                             // `(new Int8Array(…)).constructor === Int8Array`. The
@@ -1365,10 +1457,12 @@ fn get_field_by_name_past_data_probe(
             if class_id != 0 {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
-                let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
-                    .unwrap_or("");
-                if !name.is_empty()
-                    && !super::super::class_registry::class_static_key_deleted(class_id, name)
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                let name = std::str::from_utf8(name_bytes).ok();
+                if !name_bytes.is_empty()
+                    && !super::super::class_registry::class_static_key_deleted_bytes(
+                        class_id, name_bytes,
+                    )
                 {
                     // A class object owns every static method its template
                     // declares (`define_class_object_own_properties`), and so
@@ -1377,15 +1471,16 @@ fn get_field_by_name_past_data_probe(
                     // DELETED from its object: it must not come back. Only a
                     // method of a shared (never-evaluated-to-an-object) class
                     // is served from the registry.
-                    if super::super::class_registry::lookup_static_method_owner(class_id, name)
-                        .is_some_and(|(owner, _)| {
-                            let object_owned =
-                                super::super::class_registry::class_object_value_for_cid(owner)
-                                    .is_some()
-                                    || owner == class_id;
-                            !object_owned
-                        })
-                    {
+                    if super::super::class_registry::lookup_static_method_owner_bytes(
+                        class_id, name_bytes,
+                    )
+                    .is_some_and(|(owner, _)| {
+                        let object_owned =
+                            super::super::class_registry::class_object_value_for_cid(owner)
+                                .is_some()
+                                || owner == class_id;
+                        !object_owned
+                    }) {
                         let heap_name = {
                             let layout =
                                 std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
@@ -1397,9 +1492,9 @@ fn get_field_by_name_past_data_probe(
                         return JSValue::from_bits(result.to_bits());
                     }
                     if let Some(v) =
-                        super::super::class_registry::class_static_accessor_getter_value(
+                        super::super::class_registry::class_static_accessor_getter_value_bytes(
                             class_id,
-                            name,
+                            name_bytes,
                             class_value,
                         )
                     {
@@ -1407,13 +1502,15 @@ fn get_field_by_name_past_data_probe(
                     }
                     // Fresh nested Promise subclasses inherit the same reified
                     // statics as ClassRef receivers (`P.all`, `P.resolve`, ...).
-                    if super::super::promise_parent_in_chain(class_id)
-                        && super::super::promise_static_function_spec(name).is_some()
-                    {
-                        let value =
-                            super::super::js_promise_static_function_value(name_ptr, name_len);
-                        if value.to_bits() != crate::value::TAG_UNDEFINED {
-                            return JSValue::from_bits(value.to_bits());
+                    if let Some(name) = name.filter(|name| !name.is_empty()) {
+                        if super::super::promise_parent_in_chain(class_id)
+                            && super::super::promise_static_function_spec(name).is_some()
+                        {
+                            let value =
+                                super::super::js_promise_static_function_value(name_ptr, name_len);
+                            if value.to_bits() != crate::value::TAG_UNDEFINED {
+                                return JSValue::from_bits(value.to_bits());
+                            }
                         }
                     }
                 }
@@ -1881,6 +1978,55 @@ mod null_key_guard_5972 {
                 crate::value::TAG_UNDEFINED,
                 "null key should miss → undefined"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod wtf8_class_object_forwarding_tests {
+    use super::*;
+
+    #[test]
+    fn template_class_ref_forwards_runtime_wtf8_static_properties() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            const CID: u32 = 62_447;
+            crate::object::js_register_class_id(CID);
+            crate::object::js_register_class_name(CID, b"LateStatic".as_ptr(), 10);
+
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let template =
+                scope.root_nanbox_f64(crate::object::class_value::js_class_value(CID as i32));
+            let class = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            class
+                .with_mut_ptr::<ObjectHeader, _>(|p| crate::object::js_object_mark_class(p as i64));
+
+            for bytes in [&b"ascii"[..], &b"\xed\xa0\x80"[..], &b"\xed\xb0\x80"[..]] {
+                let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                ));
+                key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    class.with_mut_ptr::<ObjectHeader, _>(|p| {
+                        crate::object::js_object_set_field_by_name(p, key, 42.0)
+                    });
+                    class.with_const_ptr::<ObjectHeader, _>(|p| {
+                        assert_eq!(
+                            js_object_get_field_by_name(p, key).as_number(),
+                            42.0,
+                            "heap class own property {bytes:?}"
+                        );
+                    });
+                    let template_ptr =
+                        crate::value::js_nanbox_get_pointer(template.get_nanbox_f64())
+                            as *const ObjectHeader;
+                    assert_eq!(
+                        js_object_get_field_by_name(template_ptr, key).as_number(),
+                        42.0,
+                        "template class ref must forward key {bytes:?}"
+                    );
+                });
+            }
         }
     }
 }

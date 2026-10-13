@@ -33,6 +33,8 @@ mod code_point_at_dispatch_tests;
 #[cfg(test)]
 mod dispatch_arg_coercion_tests;
 #[cfg(test)]
+mod invalid_utf8_method_tests;
+#[cfg(test)]
 mod probe_dispatch_tests;
 #[cfg(test)]
 /// #8139: `toLocaleString` on an array / typed-array / buffer receiver.
@@ -1254,6 +1256,11 @@ pub(crate) unsafe fn native_call_method_tower(
             args_ptr,
             args_len,
         );
+    }
+    if let Some(result) =
+        call_invalid_utf8_method_exact(object, method_name_ptr, method_name_len, args_ptr, args_len)
+    {
+        return result;
     }
     if !method_name_ptr.is_null() && method_name_len > 0 {
         let method_name_bytes =
@@ -2617,6 +2624,73 @@ pub(crate) unsafe fn native_call_method_tower(
         method_name.as_ptr(),
         method_name.len(),
     );
+}
+
+/// Preserve the exact property key for method calls whose UTF-8 byte spelling
+/// contains a WTF-8 surrogate. The general dispatch tower below is optimized
+/// around Rust `str`; converting such a key lossily changes it to U+FFFD before
+/// the ordinary class/prototype lookup can answer it.
+///
+/// Valid UTF-8 names keep using the existing specialized tower. For a pointer
+/// receiver and invalid UTF-8 key, do the equivalent `Get(receiver, key)` and
+/// call the resolved value with the original receiver as `this`.
+///
+/// # Safety
+/// The method-name and argument slices are readable for their supplied
+/// lengths.
+unsafe fn call_invalid_utf8_method_exact(
+    receiver: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method_name_ptr.is_null() || method_name_len == 0 {
+        return None;
+    }
+    let name_bytes = std::slice::from_raw_parts(method_name_ptr.cast::<u8>(), method_name_len);
+    if std::str::from_utf8(name_bytes).is_ok() {
+        return None;
+    }
+    // Keep a stable copy before rooting/allocating anything; the source pointer
+    // can refer to storage owned by a moving JS string.
+    let name_bytes = name_bytes.to_vec();
+    let receiver = canonicalize_bare_gc_receiver(receiver);
+    let args = if args_len != 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    } else {
+        Vec::new()
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let args = scope.root_nanbox_f64_slice(&args);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name_bytes.as_ptr(),
+        name_bytes.len() as u32,
+    ));
+    let key_value = scope.root_nanbox_f64(
+        key.with_const_ptr::<crate::StringHeader, _>(crate::value::nanbox_string_key),
+    );
+    let value = crate::object::js_object_get_index_polymorphic(
+        receiver.get_nanbox_u64() as i64,
+        key_value.get_nanbox_f64(),
+    );
+    let value = scope.root_nanbox_u64(value.to_bits());
+    let rebound = crate::closure::clone_closure_rebind_this(
+        value.get_nanbox_u64(),
+        receiver.get_nanbox_f64(),
+    );
+    let rebound = scope.root_nanbox_u64(rebound);
+    // Rebinding can allocate. Refresh both the receiver and arguments only
+    // after the callee has been rooted, immediately before entering user code.
+    let this_value = receiver.get_nanbox_f64();
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
+    Some(crate::closure::native_call_value_this(
+        f64::from_bits(rebound.get_nanbox_u64()),
+        crate::closure::JsThis::from_f64(this_value),
+        args.as_ptr(),
+        args.len(),
+    ))
 }
 
 #[cfg(test)]

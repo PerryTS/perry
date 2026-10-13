@@ -45,6 +45,41 @@ fn own_names(proto: f64) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn computed_member_name_round_trips_wtf8_bytes_without_replacement() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let bytes = [0xed, 0xa0, 0x80]; // WTF-8 encoding of one lone high surrogate.
+    let value = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    let value = f64::from_bits(crate::JSValue::string_ptr(value).bits());
+    assert_eq!(
+        member_name_of_value(value, true),
+        MemberName::Str(bytes.to_vec())
+    );
+    let round_trip = member_name_value(&MemberName::Str(bytes.to_vec()));
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    assert_eq!(
+        unsafe {
+            crate::string::js_string_key_bytes(
+                crate::JSValue::from_bits(round_trip.to_bits()),
+                &mut scratch,
+            )
+        },
+        Some(bytes.as_slice())
+    );
+}
+
+#[test]
+fn declaration_method_lookup_matches_exact_wtf8_bytes() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6F00;
+    register(cid, b"Wtf8Lookup");
+    let key = [0xed, 0xa0, 0x80];
+    test_declare_member(cid, &key, method());
+
+    assert!(class_method_decl_bytes(cid, &key).is_some());
+    assert!(class_method_decl_bytes(cid, b"\xef\xbf\xbd").is_none());
+}
+
 /// A birth before the definition names a computed member stops there;
 /// naming it installs it and the literal members after it, so the prototype
 /// keeps ClassBody order.
@@ -59,7 +94,7 @@ fn computed_member_keeps_classbody_order_across_an_early_birth() {
     for (name, order) in [("a", 10u32), ("b", 12)] {
         super::super::registration::record_class_string_member_order(
             cid,
-            name.to_string(),
+            name.as_bytes().to_vec(),
             false,
             order,
         );
@@ -67,8 +102,8 @@ fn computed_member_keeps_classbody_order_across_an_early_birth() {
     // The prototype is born before the definition evaluates the key.
     let proto = crate::object::class_decl_prototype_value(cid);
     assert_eq!(own_names(proto), ["constructor", "a"]);
-    super::super::registration::record_class_string_member_order(cid, "k".to_string(), false, 11);
-    name_computed_member(cid, 11, MemberName::Str("k".as_bytes().to_vec()));
+    super::super::registration::record_class_string_member_order(cid, b"k".to_vec(), false, 11);
+    name_computed_member(cid, 11, MemberName::Str(b"k".to_vec()));
     assert_eq!(own_names(proto), ["constructor", "a", "k", "b"]);
     assert!(crate::object::class_method_slot_target(cid, "b").is_some());
     assert!(crate::object::class_method_slot_target(cid, "k").is_some());
@@ -100,7 +135,7 @@ fn reevaluated_computed_member_keeps_the_holder_bounded() {
     let cid = 0x6F03;
     register(cid, b"Renamed");
     test_declare_computed_member(cid, 30, method());
-    name_computed_member(cid, 30, MemberName::Str("k0".as_bytes().to_vec()));
+    name_computed_member(cid, 30, MemberName::Str(b"k0".to_vec()));
     let holder = crate::object::class_value::class_value_ptr(cid) as usize;
     let mut previous = crate::object::class_prototype_method_value_for_name(cid, "k0").to_bits();
     let baseline = unsafe { crate::closure::props::state_key_count(holder) };
@@ -145,7 +180,7 @@ fn holder_namespace_separates_names_values_and_private_statics() {
     // a private static key.
     literal(cid, "\u{1}k:40", 41);
     literal(cid, "#x", 42);
-    name_computed_member(cid, 40, MemberName::Str("real".as_bytes().to_vec()));
+    name_computed_member(cid, 40, MemberName::Str(b"real".to_vec()));
     let is_function = |v: f64| {
         let js = crate::JSValue::from_bits(v.to_bits());
         js.is_pointer() && crate::closure::is_closure_ptr(js.as_pointer::<u8>() as usize)
@@ -165,7 +200,7 @@ fn holder_namespace_separates_names_values_and_private_statics() {
     let computed = decl.members().iter().find(|m| m.name.is_null()).unwrap();
     assert_eq!(
         class_member_name(cid, computed),
-        MemberName::Str("real".as_bytes().to_vec())
+        MemberName::Str(b"real".to_vec())
     );
     // Each value answers again with the same object.
     assert_eq!(
@@ -210,7 +245,7 @@ fn class_expression_evaluations_keep_their_own_computed_names() {
     register(cid, b"Expr");
     literal(cid, "x", 60);
     test_declare_computed_member(cid, 61, method());
-    super::super::registration::record_class_string_member_order(cid, "x".to_string(), false, 60);
+    super::super::registration::record_class_string_member_order(cid, b"x".to_vec(), false, 60);
     let scope = crate::gc::RuntimeHandleScope::new();
     let mut classes = Vec::new();
     for key in ["p", "q"] {
@@ -222,7 +257,7 @@ fn class_expression_evaluations_keep_their_own_computed_names() {
             class.with_mut_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
         super::super::registration::record_class_string_member_order(
             cid,
-            key.to_string(),
+            key.as_bytes().to_vec(),
             false,
             61,
         );
@@ -260,8 +295,8 @@ fn computed_method_names_preserve_surrogate_bytes() {
     test_declare_computed_member(cid, 90, method());
     let bytes = vec![0xED, 0xA0, 0x80];
     name_computed_member(cid, 90, MemberName::Str(bytes.clone()));
-    assert!(class_method_decl(cid, &bytes).is_some());
-    assert!(class_method_decl(cid, b"").is_none());
+    assert!(class_method_decl_bytes(cid, &bytes).is_some());
+    assert!(class_method_decl_bytes(cid, b"").is_none());
     assert!(class_method_decl(cid, "\u{FFFD}").is_none());
     let prototype = crate::object::class_decl_prototype_value(cid);
     let object = crate::JSValue::from_bits(prototype.to_bits()).as_pointer::<crate::ObjectHeader>();

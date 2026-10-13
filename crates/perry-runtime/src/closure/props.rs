@@ -226,6 +226,10 @@ pub(crate) unsafe fn bag_get(ptr: usize, key: &[u8]) -> Option<f64> {
 }
 
 unsafe fn object_own_set(obj: *mut ObjectHeader, key: &str, value: f64) {
+    object_own_set_bytes(obj, key.as_bytes(), value);
+}
+
+unsafe fn object_own_set_bytes(obj: *mut ObjectHeader, key: &[u8], value: f64) {
     let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     // These are ordinary properties of the bag, even when their spelling
     // matches an internal private storage key. Do not reinterpret the string
@@ -239,18 +243,20 @@ unsafe fn object_own_set(obj: *mut ObjectHeader, key: &str, value: f64) {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_set(ptr: usize, key: &str, value: f64) {
-    let _no_move = crate::gc::GcSuppressScope::new();
-    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
-    let bag = bag_ensure(ptr);
-    object_own_set(bag, key, value);
-    declared_value_replaced(ptr, key, declared);
+    bag_set_bytes(ptr, key.as_bytes(), value);
 }
 
-/// After a write to own `key`: when it held the declaration (`declared`) and
-/// no longer does, the shape transitions.
-unsafe fn declared_value_replaced(ptr: usize, key: &str, declared: Option<f64>) {
+pub(crate) unsafe fn bag_set_bytes(ptr: usize, key: &[u8], value: f64) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
+    let bag = bag_ensure(ptr);
+    object_own_set_bytes(bag, key, value);
+    declared_value_replaced_bytes(ptr, key, declared);
+}
+
+unsafe fn declared_value_replaced_bytes(ptr: usize, key: &[u8], declared: Option<f64>) {
     let Some(old) = declared else { return };
-    if bag_get(ptr, key.as_bytes()).is_some_and(|v| v.to_bits() == old.to_bits()) {
+    if bag_get(ptr, key).is_some_and(|v| v.to_bits() == old.to_bits()) {
         return;
     }
     crate::object::shapes::transition_object_shape_semantics(bag_of(ptr));
@@ -265,25 +271,30 @@ unsafe fn declared_value_replaced(ptr: usize, key: &str, declared: Option<f64>) 
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
+    bag_define_value_bytes(ptr, key.as_bytes(), value);
+}
+
+pub(crate) unsafe fn bag_define_value_bytes(ptr: usize, key: &[u8], value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
-    if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[]) {
-        declared_value_replaced(ptr, key, declared);
-        return;
+    if let Ok(key) = std::str::from_utf8(key) {
+        if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[]) {
+            return;
+        }
     }
+    let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
     let bag = bag_ensure(ptr);
-    if !bag_has_own(ptr, key.as_bytes()) {
+    if !bag_has_own(ptr, key) {
         // A NEW property — including one `delete` removed earlier: it is
         // appended as any new key is, so it enumerates last. The in-place
         // store below would find the deleted key's tombstoned entry and
         // bring the property back at its old position.
-        object_own_set(bag, key, value);
-        declared_value_replaced(ptr, key, declared);
+        object_own_set_bytes(bag, key, value);
+        declared_value_replaced_bytes(ptr, key, declared);
         return;
     }
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
-    declared_value_replaced(ptr, key, declared);
+    declared_value_replaced_bytes(ptr, key, declared);
 }
 
 /// [[DefineOwnProperty]] of own data property `key` with its value AND its
@@ -295,16 +306,29 @@ pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
-pub(crate) unsafe fn bag_define_data_with_attrs(ptr: usize, key: &str, value: f64, attrs: u8) {
+pub(crate) unsafe fn bag_define_data_with_attrs_bytes(
+    ptr: usize,
+    key: &[u8],
+    value: f64,
+    attrs: u8,
+) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let entry = crate::object::key_attrs::attr_bits_to_entry(attrs);
-    if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[entry]) {
-        return;
+    if let Ok(key) = std::str::from_utf8(key) {
+        if bag_of(ptr).is_null()
+            && bag_born_with_attrs(
+                ptr,
+                &[(key, value)],
+                &[crate::object::key_attrs::attr_bits_to_entry(attrs)],
+            )
+        {
+            return;
+        }
     }
-    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
+    let entry = crate::object::key_attrs::attr_bits_to_entry(attrs);
+    let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
     let bag = bag_ensure(ptr);
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let present = bag_has_own(ptr, key.as_bytes());
+    let present = bag_has_own(ptr, key);
     if !present
         && entry != 0
         && crate::object::shapes::object_shape_descriptor(bag).is_some_and(|d| d.hole_count == 0)
@@ -320,19 +344,16 @@ pub(crate) unsafe fn bag_define_data_with_attrs(ptr: usize, key: &str, value: f6
             crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
         } else {
             // New (possibly after a delete): appended, so it enumerates last.
-            object_own_set(bag, key, value);
+            object_own_set_bytes(bag, key, value);
         }
-        if crate::object::key_attrs::object_key_entry(bag, key.as_bytes()) != entry {
+        if crate::object::key_attrs::object_key_entry(bag, key) != entry {
             crate::object::descriptor_state::note_descriptor_target_edits(
                 bag as usize,
-                &[crate::object::key_attrs::AttrsEdit::Data(
-                    key.as_bytes(),
-                    attrs,
-                )],
+                &[crate::object::key_attrs::AttrsEdit::Data(key, attrs)],
             );
         }
     }
-    declared_value_replaced(ptr, key, declared);
+    declared_value_replaced_bytes(ptr, key, declared);
 }
 
 /// Remove the function's own data property `key`; true when it existed.
@@ -340,17 +361,21 @@ pub(crate) unsafe fn bag_define_data_with_attrs(ptr: usize, key: &str, value: f6
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_remove(ptr: usize, key: &str) -> bool {
+    bag_remove_bytes(ptr, key.as_bytes())
+}
+
+pub(crate) unsafe fn bag_remove_bytes(ptr: usize, key: &[u8]) -> bool {
     let bag = bag_of(ptr);
-    if bag.is_null() || !bag_has_own(ptr, key.as_bytes()) {
+    if bag.is_null() || !bag_has_own(ptr, key) {
         return false;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
-    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
+    let declared = crate::object::class_value::holds_declared_static_method_bytes(ptr, key);
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::js_object_delete_field(bag, key_hdr);
     // Deleting the declaration must not let a re-add reach the shape that
     // proved it (a removed last key re-added lands on the same key list).
-    declared_value_replaced(ptr, key, declared);
+    declared_value_replaced_bytes(ptr, key, declared);
     true
 }
 
@@ -386,6 +411,13 @@ pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_accessor_names(ptr: usize) -> Vec<String> {
+    bag_accessor_names_bytes(ptr)
+        .into_iter()
+        .map(|name| String::from_utf8_lossy(&name).into_owned())
+        .collect()
+}
+
+pub(crate) unsafe fn bag_accessor_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
     let bag = bag_of(ptr);
     if bag.is_null() {
         return Vec::new();
@@ -406,7 +438,7 @@ pub(crate) unsafe fn bag_accessor_names(ptr: usize) -> Vec<String> {
             if crate::object::field_get_set::own_key_hidden_bytes(bag, bytes) {
                 continue;
             }
-            out.push(String::from_utf8_lossy(bytes).into_owned());
+            out.push(bytes.to_vec());
         }
     }
     out
@@ -419,6 +451,13 @@ pub(crate) unsafe fn bag_accessor_names(ptr: usize) -> Vec<String> {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
+    bag_own_key_names_bytes(ptr)
+        .into_iter()
+        .map(|name| String::from_utf8_lossy(&name).into_owned())
+        .collect()
+}
+
+pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
     let bag = bag_of(ptr);
     if bag.is_null() {
         return Vec::new();
@@ -443,7 +482,7 @@ pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
             if crate::object::field_get_set::own_key_hidden_bytes(bag, bytes) {
                 continue;
             }
-            out.push(String::from_utf8_lossy(bytes).into_owned());
+            out.push(bytes.to_vec());
         }
     }
     out
@@ -537,39 +576,52 @@ unsafe fn state_ensure(ptr: usize) -> Option<*mut ObjectHeader> {
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn state_is_deleted(ptr: usize, key: &str) -> bool {
+    state_is_deleted_bytes(ptr, key.as_bytes())
+}
+
+pub(crate) unsafe fn state_is_deleted_bytes(ptr: usize, key: &[u8]) -> bool {
     let state = state_of(ptr);
     if state.is_null() {
         return false;
     }
-    let mut marker = String::with_capacity(DELETED_PREFIX.len() + key.len());
-    marker.push_str(DELETED_PREFIX);
-    marker.push_str(key);
-    object_own_get(state, marker.as_bytes()).is_some()
+    let mut marker = Vec::with_capacity(DELETED_PREFIX.len() + key.len());
+    marker.extend_from_slice(DELETED_PREFIX.as_bytes());
+    marker.extend_from_slice(key);
+    object_own_get(state, &marker).is_some()
 }
 
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn state_mark_deleted(ptr: usize, key: &str) {
+    state_mark_deleted_bytes(ptr, key.as_bytes());
+}
+
+pub(crate) unsafe fn state_mark_deleted_bytes(ptr: usize, key: &[u8]) {
     let _no_move = crate::gc::GcSuppressScope::new();
     let Some(state) = state_ensure(ptr) else {
         return;
     };
-    object_own_set(
-        state,
-        &format!("{DELETED_PREFIX}{key}"),
-        f64::from_bits(crate::value::TAG_TRUE),
-    );
+    let mut marker = Vec::with_capacity(DELETED_PREFIX.len() + key.len());
+    marker.extend_from_slice(DELETED_PREFIX.as_bytes());
+    marker.extend_from_slice(key);
+    object_own_set_bytes(state, &marker, f64::from_bits(crate::value::TAG_TRUE));
 }
 
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn state_clear_deleted(ptr: usize, key: &str) {
-    if !state_is_deleted(ptr, key) {
+    state_clear_deleted_bytes(ptr, key.as_bytes());
+}
+
+pub(crate) unsafe fn state_clear_deleted_bytes(ptr: usize, key: &[u8]) {
+    if !state_is_deleted_bytes(ptr, key) {
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     let state = state_of(ptr);
-    let marker = format!("{DELETED_PREFIX}{key}");
+    let mut marker = Vec::with_capacity(DELETED_PREFIX.len() + key.len());
+    marker.extend_from_slice(DELETED_PREFIX.as_bytes());
+    marker.extend_from_slice(key);
     let key_hdr = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
     crate::object::js_object_delete_field(state, key_hdr);
 }

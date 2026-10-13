@@ -111,14 +111,25 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
     name: &str,
     receiver: f64,
 ) -> Option<f64> {
-    if name.starts_with('#') {
-        return private_static_accessor_getter_value(class_id, name, receiver);
+    class_static_accessor_getter_value_bytes(class_id, name.as_bytes(), receiver)
+}
+
+pub(crate) unsafe fn class_static_accessor_getter_value_bytes(
+    class_id: u32,
+    name: &[u8],
+    receiver: f64,
+) -> Option<f64> {
+    if name.starts_with(b"#") {
+        return std::str::from_utf8(name)
+            .ok()
+            .and_then(|name| private_static_accessor_getter_value(class_id, name, receiver));
     }
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
         // A per-evaluation class object's own `defineProperty` accessor.
-        if let Some(result) = class_dynamic_static_accessor_getter_value(cid, name, receiver) {
+        if let Some(result) = class_dynamic_static_accessor_getter_value_bytes(cid, name, receiver)
+        {
             return Some(result);
         }
         // The class function object's own accessor property (ClassBody or
@@ -126,7 +137,8 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
         // chain, `receiver` is the class it was found on (the capture/private
         // owner); `this` is the class the read started from, stashed as the
         // accessor-receiver override (effect's `static get ast()`, #10891).
-        if let Some((acc, _, _)) = crate::object::class_value::class_static_own_accessor(cid, name)
+        if let Some((acc, _, _)) =
+            crate::object::class_value::class_static_own_accessor_bytes(cid, name)
         {
             return Some(crate::object::class_value::class_static_accessor_call_get(
                 acc, receiver,
@@ -191,24 +203,39 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
     receiver: f64,
     value: f64,
 ) -> bool {
-    if name.starts_with('#') {
-        return private_static_accessor_setter_apply(class_id, name, receiver, value);
+    class_static_accessor_setter_apply_bytes(class_id, name.as_bytes(), receiver, value)
+}
+
+/// Byte-preserving form of static accessor assignment. Class keys can contain
+/// WTF-8 that is not valid Rust UTF-8, so assignment must retain the original
+/// key bytes through descriptor lookup and invocation.
+pub(crate) unsafe fn class_static_accessor_setter_apply_bytes(
+    class_id: u32,
+    name: &[u8],
+    receiver: f64,
+    value: f64,
+) -> bool {
+    if let Ok(name_str) = std::str::from_utf8(name) {
+        if name_str.starts_with('#') {
+            return private_static_accessor_setter_apply(class_id, name_str, receiver, value);
+        }
     }
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
         if let Some(applied) =
-            class_dynamic_static_accessor_setter_apply(cid, name, receiver, value)
+            class_dynamic_static_accessor_setter_apply_bytes(cid, name, receiver, value)
         {
             if !applied {
-                throw_static_getter_only(class_id, name);
+                throw_static_getter_only_bytes(class_id, name);
             }
             return true;
         }
-        if let Some((acc, _, _)) = crate::object::class_value::class_static_own_accessor(cid, name)
+        if let Some((acc, _, _)) =
+            crate::object::class_value::class_static_own_accessor_bytes(cid, name)
         {
             if !crate::object::class_value::class_static_accessor_call_set(acc, receiver, value) {
-                throw_static_getter_only(class_id, name);
+                throw_static_getter_only_bytes(class_id, name);
             }
             return true;
         }
@@ -227,6 +254,16 @@ fn throw_static_getter_only(class_id: u32, name: &str) -> ! {
     let class_name = class_name_for_id(class_id).unwrap_or_default();
     crate::collection_iter::throw_type_error(&format!(
         "Cannot set property {name} of [class {class_name}] which has only a getter"
+    ))
+}
+
+fn throw_static_getter_only_bytes(class_id: u32, name: &[u8]) -> ! {
+    if let Ok(name) = std::str::from_utf8(name) {
+        throw_static_getter_only(class_id, name);
+    }
+    let class_name = class_name_for_id(class_id).unwrap_or_default();
+    crate::collection_iter::throw_type_error(&format!(
+        "Cannot set property of [class {class_name}] which has only a getter"
     ))
 }
 

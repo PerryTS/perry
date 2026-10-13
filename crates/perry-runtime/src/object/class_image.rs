@@ -97,12 +97,12 @@ pub type StaticAccessorTable = PtrHashMap<u32, StaticNameMap<super::class_regist
 /// the runtime's hasher for untrusted string keys (as in `json::parser`), in
 /// place of std's slower SipHash. A static call that misses its site guard
 /// probes this map once per class on the parent chain.
-pub type StaticNameMap<V> = HashMap<String, V, ahash::RandomState>;
+pub type StaticNameMap<V> = HashMap<Vec<u8>, V, ahash::RandomState>;
 /// `(class_id, is_static, property_name) -> source-order token` for declared
 /// string-keyed methods and accessors. The token is the member function's HIR
 /// id, which is allocated while walking the class body and therefore orders
 /// entries across the otherwise separate method/getter/setter registries.
-pub type StringMemberOrderTable = HashMap<(u32, bool, String), u32>;
+pub type StringMemberOrderTable = HashMap<(u32, bool, Vec<u8>), u32>;
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
 /// class_id -> (has_synthetic_arguments, has_rest, parameters before the first
@@ -126,17 +126,18 @@ pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 /// Iteration order is not observable for any of these: nothing in the tree
 /// iterates them (only `get` / `insert` / `contains`). The `String`-keyed
 /// INNER maps of [`StaticMethodTable`] / [`StaticAccessorTable`] keep a
-/// randomly keyed hasher ([`StaticNameMap`]), and the `(u32, String)`-keyed
-/// `method_bind_lengths` pair below stays on SipHash: their keys are
-/// JS-supplied member names. The inner maps are enumerated on paths that
+/// randomly keyed hasher ([`StaticNameMap`]), and the `(u32, Vec<u8>)`-keyed
+/// `method_bind_lengths` pair below keeps the default randomized hasher: their
+/// keys are JS-supplied member names. The inner maps are enumerated on paths
+/// that
 /// reach user-visible output, so no caller may rely on their order.
 pub struct ClassImageTables {
     pub(crate) declarations: RwLock<super::class_registry::declarations::ClassDeclarationIndex>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
     pub(crate) string_member_orders: RwLock<Option<StringMemberOrderTable>>,
-    pub(crate) method_bind_lengths: RwLock<Option<HashMap<(u32, String), u32>>>,
-    pub(crate) static_method_bind_lengths: RwLock<Option<HashMap<(u32, String), u32>>>,
+    pub(crate) method_bind_lengths: RwLock<Option<HashMap<(u32, Vec<u8>), u32>>>,
+    pub(crate) static_method_bind_lengths: RwLock<Option<HashMap<(u32, Vec<u8>), u32>>>,
     pub(crate) registered_class_ids: RwLock<Option<PtrHashSet<u32>>>,
     pub(crate) parents: RwLock<Option<PtrHashMap<u32, u32>>>,
     /// `parent + 1` for every registered edge whose child id is

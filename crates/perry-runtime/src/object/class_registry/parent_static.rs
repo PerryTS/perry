@@ -639,10 +639,7 @@ pub unsafe extern "C" fn js_register_class_static_method(
     if class_id == 0 || name_ptr.is_null() || name_len <= 0 {
         return;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
-    };
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize).to_vec();
     {
         let mut guard = CLASS_STATIC_METHODS.write().unwrap();
         if guard.is_none() {
@@ -659,7 +656,7 @@ pub unsafe extern "C" fn js_register_class_static_method(
             })
             .or_insert((func_ptr as usize, param_count as u32, has_rest != 0, 0));
     }
-    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
+    crate::object::class_value::note_intrinsic_registration_bytes(class_id as u32, &name);
 }
 
 /// Record the `JsFunctionInfo` of the closure-convention entry
@@ -678,10 +675,7 @@ pub unsafe extern "C" fn js_register_class_static_method_entry(
     if class_id == 0 || name_ptr.is_null() || name_len <= 0 || entry == 0 {
         return;
     }
-    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
-    else {
-        return;
-    };
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize);
     {
         let mut guard = CLASS_STATIC_METHODS.write().unwrap();
         let Some(record) = guard
@@ -693,7 +687,7 @@ pub unsafe extern "C" fn js_register_class_static_method_entry(
         };
         record.3 = entry as usize;
     }
-    crate::object::class_value::note_intrinsic_registration(class_id as u32, name);
+    crate::object::class_value::note_intrinsic_registration_bytes(class_id as u32, name);
 }
 
 /// A class definition evaluated an instance computed member's key: a class
@@ -727,20 +721,17 @@ fn name_computed_instance_member(
     }
 }
 
-fn property_key_string(key: f64) -> Option<Vec<u8>> {
-    let property_key = unsafe { crate::object::js_to_property_key(key) };
+fn property_key_bytes(property_key: f64) -> Option<Vec<u8>> {
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         return None;
     }
-    let str_ptr = crate::value::js_jsvalue_to_string(property_key);
-    if str_ptr.is_null() {
-        return Some(Vec::new());
-    }
+    let mut short = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     unsafe {
-        let len = (*str_ptr).byte_len as usize;
-        let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        Some(bytes.to_vec())
+        crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits(property_key.to_bits()),
+            &mut short,
+        )
+        .map(<[u8]>::to_vec)
     }
 }
 
@@ -829,18 +820,16 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         }
         return;
     }
-    let name = match property_key_string(property_key) {
+    let name = match property_key_bytes(property_key) {
         Some(name) => name,
         None => return,
     };
-    if let Ok(utf8) = std::str::from_utf8(&name) {
-        super::registration::record_class_string_member_order(
-            class_id,
-            utf8.to_owned(),
-            is_static != 0,
-            definition_order as u32,
-        );
-    }
+    super::registration::record_class_string_member_order(
+        class_id,
+        name.clone(),
+        is_static != 0,
+        definition_order as u32,
+    );
     if is_static != 0 && name == b"prototype" {
         throw_object_type_error(b"Classes may not have a static property named 'prototype'");
     }
@@ -890,6 +879,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if crate::closure::is_closure_ptr(addr) {
             crate::closure::shape::refresh_closure_shape(addr);
         }
+        crate::object::class_value::note_intrinsic_registration_bytes(class_id, &name);
     } else {
         // The member's declaration carries its body; this evaluation names
         // it, which also installs it when the decl prototype is waiting for
@@ -964,17 +954,14 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         }
         return;
     }
-    if let Some(bytes) = property_key_string(property_key) {
-        let Ok(name) = String::from_utf8(bytes) else {
-            return;
-        };
+    if let Some(name) = property_key_bytes(property_key) {
         super::registration::record_class_string_member_order(
             class_id,
             name.clone(),
             is_static != 0,
             definition_order as u32,
         );
-        if is_static != 0 && name == "prototype" {
+        if is_static != 0 && name == b"prototype" {
             throw_object_type_error(b"Classes may not have a static property named 'prototype'");
         }
         if is_static == 0 {
@@ -984,7 +971,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 owner,
                 class_id,
                 definition_order,
-                super::declarations::MemberName::Str(name.into_bytes()),
+                super::declarations::MemberName::Str(name),
                 property_key,
             );
         } else {
@@ -1007,7 +994,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                     entry.set = setter_ptr as usize;
                 }
             }
-            crate::object::class_value::note_intrinsic_registration(class_id, &name);
+            crate::object::class_value::note_intrinsic_registration_bytes(class_id, &name);
         }
     }
 }
@@ -1018,6 +1005,10 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
 /// `getOwnPropertyDescriptor(C, name)`, where inherited statics must NOT be
 /// reported as own properties of `C`.
 pub(crate) fn class_has_own_static_method(class_id: u32, name: &str) -> bool {
+    class_has_own_static_method_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_has_own_static_method_bytes(class_id: u32, name: &[u8]) -> bool {
     CLASS_STATIC_METHODS
         .read()
         .ok()
@@ -1034,6 +1025,13 @@ pub(crate) fn class_own_static_method_entry(
     class_id: u32,
     name: &str,
 ) -> Option<(usize, u32, bool)> {
+    class_own_static_method_entry_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_own_static_method_entry_bytes(
+    class_id: u32,
+    name: &[u8],
+) -> Option<(usize, u32, bool)> {
     let guard = CLASS_STATIC_METHODS.read().ok()?;
     let e = guard.as_ref()?.get(&class_id)?.get(name).copied()?;
     Some((e.0, e.1, e.2))
@@ -1042,6 +1040,10 @@ pub(crate) fn class_own_static_method_entry(
 /// The closure-convention entry of ClassBody static method `name` declared by
 /// class `class_id` itself: the code of its own function object.
 pub(crate) fn class_own_static_method_code(class_id: u32, name: &str) -> Option<usize> {
+    class_own_static_method_code_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_own_static_method_code_bytes(class_id: u32, name: &[u8]) -> Option<usize> {
     let guard = CLASS_STATIC_METHODS.read().ok()?;
     let e = guard.as_ref()?.get(&class_id)?.get(name).copied()?;
     (e.3 != 0).then_some(e.3)
@@ -1055,7 +1057,14 @@ pub(crate) fn lookup_static_method_in_chain(
     class_id: u32,
     name: &str,
 ) -> Option<(usize, u32, bool)> {
-    lookup_static_method_owner(class_id, name).map(|(_, e)| e)
+    lookup_static_method_in_chain_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn lookup_static_method_in_chain_bytes(
+    class_id: u32,
+    name: &[u8],
+) -> Option<(usize, u32, bool)> {
+    lookup_static_method_owner_bytes(class_id, name).map(|(_, e)| e)
 }
 
 /// [`lookup_static_method_in_chain`] plus the class whose declaration runs.
@@ -1067,6 +1076,13 @@ pub(crate) fn lookup_static_method_owner(
     class_id: u32,
     name: &str,
 ) -> Option<(u32, (usize, u32, bool))> {
+    lookup_static_method_owner_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn lookup_static_method_owner_bytes(
+    class_id: u32,
+    name: &[u8],
+) -> Option<(u32, (usize, u32, bool))> {
     use crate::object::class_value::StaticMethodProperty;
     let mut cid = class_id;
     let mut depth = 0usize;
@@ -1075,7 +1091,11 @@ pub(crate) fn lookup_static_method_owner(
             let guard = CLASS_STATIC_METHODS.read().ok()?;
             guard.as_ref()?.get(&cid).and_then(|m| m.get(name)).copied()
         };
-        match crate::object::class_value::static_method_property(cid, name, entry.map(|e| e.3)) {
+        match crate::object::class_value::static_method_property_bytes(
+            cid,
+            name,
+            entry.map(|e| e.3),
+        ) {
             StaticMethodProperty::Live => {
                 return entry.map(|e| (cid, (e.0, e.1, e.2)));
             }
@@ -1102,7 +1122,7 @@ pub(crate) fn lookup_static_method_owner(
 /// Note: does not subtract for default-valued params (the registry doesn't
 /// record the first-default position); methods with defaults already reported
 /// the wrong length, so this is a strict improvement, never a regression.
-pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32> {
+pub(crate) fn class_method_bind_length_bytes(class_id: u32, name: &[u8]) -> Option<u32> {
     // Exact spec length (default-aware) when codegen recorded it; walk the
     // parent chain so an inherited method's `.length` resolves too.
     if let Ok(guard) = CLASS_METHOD_BIND_LENGTHS.read() {
@@ -1110,7 +1130,7 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
             let mut cid = class_id;
             let mut depth = 0usize;
             while cid != 0 && depth < 32 {
-                if let Some(&len) = map.get(&(cid, name.to_string())) {
+                if let Some(&len) = map.get(&(cid, name.to_vec())) {
                     return Some(len);
                 }
                 match get_parent_class_id(cid) {
@@ -1127,7 +1147,8 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
     // member while its evaluation prototype is being filled. Consume the
     // declaration's function value rather than building a canonical holder,
     // which would evaluate the superclass's prototype a second time.
-    let declaration = crate::object::class_prototype_method_value_for_name(class_id, name);
+    let declaration =
+        crate::object::native_module::class_prototype_method_value_for_name_bytes(class_id, name);
     if let Some((_, params, synthetic, rest)) =
         unsafe { crate::object::native_module::class_method_value_target(declaration.to_bits()) }
     {
@@ -1141,7 +1162,7 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
             let mut cid = class_id;
             let mut depth = 0usize;
             while cid != 0 && depth < 32 {
-                if let Some(&len) = map.get(&(cid, name.to_string())) {
+                if let Some(&len) = map.get(&(cid, name.to_vec())) {
                     return Some(len);
                 }
                 match get_parent_class_id(cid) {
@@ -1155,7 +1176,7 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
         }
     }
     // CLASS_STATIC_METHODS stores (func_ptr, param_count, has_rest).
-    if let Some((_, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
+    if let Some((_, param_count, has_rest)) = lookup_static_method_in_chain_bytes(class_id, name) {
         let mut len = param_count;
         if has_rest {
             len = len.saturating_sub(1);
@@ -1667,6 +1688,10 @@ pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 /// Materialization is a no-move window: legacy callers can hold raw
 /// receiver/argument pointers while asking this question.
 pub(crate) fn class_method_slot_value(class_id: u32, name: &str) -> Option<u64> {
+    class_method_slot_value_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_method_slot_value_bytes(class_id: u32, name: &[u8]) -> Option<u64> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let selected = decl_prototype_identity_id(class_id);
     let word = crate::object::class_holder_word_selected(selected);
@@ -1680,7 +1705,7 @@ pub(crate) fn class_method_slot_value(class_id: u32, name: &str) -> Option<u64> 
     } else {
         existing.as_pointer::<ObjectHeader>() as *const ObjectHeader
     };
-    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name);
     match unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) } {
         crate::object::native_call_method::class_holder::ChainMethod::Data { value, .. } => {
             Some(value)

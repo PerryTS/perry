@@ -60,24 +60,32 @@ pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
 }
 
 pub(crate) unsafe fn metadata_key_to_string(value: f64) -> Option<String> {
+    let bytes = metadata_key_to_bytes(value)?;
+    std::str::from_utf8(&bytes).ok().map(str::to_owned)
+}
+
+pub(crate) unsafe fn metadata_key_to_bytes(value: f64) -> Option<Vec<u8>> {
     let key_str = crate::builtins::js_string_coerce(value);
     if key_str.is_null() {
         return None;
     }
     let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     let name_len = (*key_str).byte_len as usize;
-    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
-        .ok()
-        .map(|s| s.to_string())
+    Some(std::slice::from_raw_parts(name_ptr, name_len).to_vec())
 }
 
 pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
+    class_has_own_method_bytes(class_id, method_name.as_bytes())
+}
+
+pub(crate) fn class_has_own_method_bytes(class_id: u32, method_name: &[u8]) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
-    if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
-        method_name.as_bytes(),
-    ) {
-        if class_non_property_method_value(class_id, method_name).is_some() {
-            return true;
+    if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(method_name)
+    {
+        if let Ok(method_name) = std::str::from_utf8(method_name) {
+            if class_non_property_method_value(class_id, method_name).is_some() {
+                return true;
+            }
         }
     }
     let selected = crate::object::class_registry::decl_prototype_identity_id(class_id);
@@ -94,8 +102,7 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
     } else {
         existing.as_pointer::<ObjectHeader>() as *const ObjectHeader
     };
-    let key =
-        crate::object::native_call_method::class_holder::MethodKey::bytes(method_name.as_bytes());
+    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(method_name);
     matches!(unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) },
         crate::object::native_call_method::class_holder::ChainMethod::Data { holder, .. } if holder == start)
 }
@@ -122,12 +129,15 @@ pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
     )
 }
 
-pub fn class_prototype_method_value_for_name(class_id: u32, name: &str) -> f64 {
-    class_prototype_method_value_for_bytes(class_id, name.as_bytes())
+pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
+    class_prototype_method_value_for_name_bytes(class_id, method_name.as_bytes())
 }
 
-pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8]) -> f64 {
-    if let Some(bits) = class_kept_method_value(class_id, method_name) {
+pub(crate) fn class_prototype_method_value_for_name_bytes(
+    class_id: u32,
+    method_name: &[u8],
+) -> f64 {
+    if let Some(bits) = class_kept_method_value_bytes(class_id, method_name) {
         return f64::from_bits(bits);
     }
     // The class's holder keeps its method values, so a declared class gets
@@ -141,7 +151,7 @@ pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8])
         && !crate::object::class_registry::template_has_class_objects(class_id)
     {
         crate::object::class_value::class_value_ptr(class_id);
-        if let Some(bits) = class_kept_method_value(class_id, method_name) {
+        if let Some(bits) = class_kept_method_value_bytes(class_id, method_name) {
             return f64::from_bits(bits);
         }
     }
@@ -149,8 +159,8 @@ pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8])
     // The declaration is read only to materialize its function object.
     // Calls and probes subsequently read the holder's slot.
     let declaration =
-        crate::object::class_registry::declarations::class_method_decl(class_id, method_name).map(
-            |m| {
+        crate::object::class_registry::declarations::class_method_decl_bytes(class_id, method_name)
+            .map(|m| {
                 (
                     m.code as usize,
                     m.param_count,
@@ -159,8 +169,7 @@ pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8])
                     m.entry as usize,
                     m.name.is_null(),
                 )
-            },
-        );
+            });
     let Some((body, params, synthetic, rest, entry, computed_name)) = declaration else {
         if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
             method_name,
@@ -173,7 +182,7 @@ pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8])
             .map(f64::from_bits)
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
     };
-    let value = class_method_declaration_value(
+    let value = class_method_declaration_value_bytes(
         class_prototype_ref_value(class_id),
         method_name,
         body,
@@ -186,14 +195,15 @@ pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8])
     // The immutable declaration input distinguishes a literal alias-looking
     // string key from a private or symbol member at materialization. Readers
     // use this typed function-value entry, never reclassify a deleted key.
-    let kind = if std::str::from_utf8(method_name).is_ok_and(|name| {
-        crate::object::class_registry::proto_member_has_no_string_key(class_id, name)
-    }) {
+    let kind = if crate::object::class_registry::proto_member_has_no_string_key_bytes(
+        class_id,
+        method_name,
+    ) {
         ClassDeclarationValueKind::NonPropertyMethod
     } else {
         ClassDeclarationValueKind::Method
     };
-    crate::object::class_registry::class_declaration_value_store(
+    crate::object::class_registry::class_declaration_value_store_bytes(
         class_id,
         kind,
         method_name,
@@ -205,17 +215,15 @@ pub fn class_prototype_method_value_for_bytes(class_id: u32, method_name: &[u8])
 /// The method value class `class_id`'s holder keeps for `name`: one name
 /// has one kind (`proto_member_has_no_string_key` decides it, as the store
 /// below does).
-fn class_kept_method_value(class_id: u32, name: impl AsRef<[u8]>) -> Option<u64> {
-    let name = name.as_ref();
-    use crate::object::class_registry::{class_declaration_value, ClassDeclarationValueKind};
-    let kind = if std::str::from_utf8(name).is_ok_and(|name| {
-        crate::object::class_registry::proto_member_has_no_string_key(class_id, name)
-    }) {
-        ClassDeclarationValueKind::NonPropertyMethod
-    } else {
-        ClassDeclarationValueKind::Method
-    };
-    class_declaration_value(class_id, kind, name)
+fn class_kept_method_value_bytes(class_id: u32, name: &[u8]) -> Option<u64> {
+    use crate::object::class_registry::{class_declaration_value_bytes, ClassDeclarationValueKind};
+    let kind =
+        if crate::object::class_registry::proto_member_has_no_string_key_bytes(class_id, name) {
+            ClassDeclarationValueKind::NonPropertyMethod
+        } else {
+            ClassDeclarationValueKind::Method
+        };
+    class_declaration_value_bytes(class_id, kind, name)
 }
 
 /// A materialized lexical/symbol member, separate from public properties.
@@ -317,23 +325,19 @@ pub(crate) fn class_method_declaration_value_bytes(
             crate::object::set_builtin_closure_non_constructable(ptr as usize);
         });
     }
-    // Literal compiled members retain their immutable image metadata and
-    // birth shape. A computed key supplies an evaluation-specific own name.
-    if entry == 0 || computed_name {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let key = scope.root_string_ptr(key);
-        f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
-            let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                crate::value::js_nanbox_string(key as i64)
-            });
-            crate::closure::closure_define_data_with_attrs(
-                ptr as usize,
-                "name",
-                value,
-                crate::object::PropertyAttrs::new(false, false, true),
-            );
+    let name_value = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name_value = scope.root_string_ptr(name_value);
+    f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+        let value = name_value.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::value::js_nanbox_string(key as i64)
         });
-    }
+        crate::closure::closure_define_data_with_attrs(
+            ptr as usize,
+            "name",
+            value,
+            crate::object::PropertyAttrs::new(false, false, true),
+        );
+    });
     crate::value::js_nanbox_pointer(f.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64)
 }
 
@@ -353,15 +357,8 @@ pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, 
     let Some((name, body, params, synthetic, rest, computed_name)) = declaration else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    class_method_declaration_value(
-        home,
-        &name,
-        body,
-        params,
-        synthetic,
-        rest,
-        entry,
-        computed_name,
+    class_method_declaration_value_bytes(
+        home, &name, body, params, synthetic, rest, entry, computed_name,
     )
 }
 
@@ -447,11 +444,11 @@ pub extern "C" fn js_class_prototype_method_value(class_ref: f64, method_key: f6
     let Some(class_id) = class_ref_id(class_ref) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    let method_name = unsafe { metadata_key_to_string(method_key) };
+    let method_name = unsafe { metadata_key_to_bytes(method_key) };
     let Some(method_name) = method_name else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    crate::object::class_method_slot_value(class_id, &method_name)
+    crate::object::class_method_slot_value_bytes(class_id, &method_name)
         .map(f64::from_bits)
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }

@@ -386,6 +386,8 @@ pub use class_meta_registry::{
     js_register_class_has_instance, js_register_class_to_string_tag,
 };
 #[cfg(test)]
+pub(crate) use descriptor_state::set_builtin_accessor_pair;
+#[cfg(test)]
 pub(crate) use descriptor_state::test_may_have_descriptor_entry;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_instance_set_may_intercept, clear_accessor_descriptor,
@@ -395,8 +397,7 @@ pub(crate) use descriptor_state::{
     owner_has_property_descriptors, owner_may_have_descriptor_entries,
     plain_custom_prototype_may_intercept, plain_data_write_may_intercept,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs, AccessorDescriptor,
-    PropertyAttrs,
+    set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{

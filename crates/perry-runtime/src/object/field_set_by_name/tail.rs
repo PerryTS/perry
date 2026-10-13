@@ -302,17 +302,15 @@ pub(crate) fn set_field_by_name_object_tail(
         {
             let name_ptr = crate::string::string_data(key);
             let name_len = (*key).byte_len as usize;
-            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-                let receiver =
-                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                if super::class_registry::class_static_accessor_setter_apply(
-                    obj_class_id,
-                    name,
-                    receiver,
-                    value,
-                ) {
-                    return;
-                }
+            let name = std::slice::from_raw_parts(name_ptr, name_len);
+            let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+            if super::class_registry::class_static_accessor_setter_apply_bytes(
+                obj_class_id,
+                name,
+                receiver,
+                value,
+            ) {
+                return;
             }
         }
 
@@ -343,32 +341,33 @@ pub(crate) fn set_field_by_name_object_tail(
                 let key_bytes = {
                     let name_ptr =
                         (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    std::slice::from_raw_parts(name_ptr, (*key).byte_len as usize)
+                    std::slice::from_raw_parts(name_ptr, (*key).byte_len as usize).to_vec()
                 };
-                if let Ok(name) = std::str::from_utf8(key_bytes) {
-                    // Class accessors are properties of the class prototype
-                    // chain (charter step 3). A getter-only accessor refuses
-                    // the write: no data property is created.
-                    let this_f64: f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    let throw_getter_only = || {
-                        let class_name = super::class_registry::class_name_for_id(class_id)
-                            .unwrap_or_else(|| "Object".to_string());
-                        crate::collection_iter::throw_type_error(&format!(
-                            "Cannot set property {name} of #<{class_name}> which has only a getter"
-                        ));
-                    };
-                    // #11499: the receiver carrying a `class_id` may be the
-                    // CLASS OBJECT itself, not an instance of that class. The
-                    // vtable accessors below live on `C.prototype`, which is
-                    // NOT on the constructor's own prototype chain
-                    // (`VR8 -> XX -> Error -> Function.prototype`), so a
-                    // static write must resolve against the STATIC accessor
-                    // chain. cc 2.1.112 hits this with
-                    // `class XX extends Error { get errorCode(){…} }` plus
-                    // `VR8.errorCode = "invalid_request"`: the instance getter
-                    // was found for a static write and refused it.
-                    if crate::object::is_class_object_ptr(obj.cast()) {
+                // Class accessors are properties of the class prototype chain
+                // (charter step 3). Keep the owned bytes across prototype
+                // materialization and possible user code in the setter.
+                let name = std::str::from_utf8(&key_bytes).ok();
+                let this_f64: f64 =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                let throw_getter_only = || {
+                    let class_name = super::class_registry::class_name_for_id(class_id)
+                        .unwrap_or_else(|| "Object".to_string());
+                    let display_name = String::from_utf8_lossy(&key_bytes);
+                    crate::collection_iter::throw_type_error(&format!(
+                        "Cannot set property {display_name} of #<{class_name}> which has only a getter"
+                    ));
+                };
+                // #11499: the receiver carrying a `class_id` may be the
+                // CLASS OBJECT itself, not an instance of that class. The
+                // vtable accessors below live on `C.prototype`, which is
+                // NOT on the constructor's own prototype chain
+                // (`VR8 -> XX -> Error -> Function.prototype`), so a
+                // static write must resolve against the STATIC accessor
+                // chain. The byte-aware class-object path above handles
+                // non-UTF8 static keys; retain this string path for private
+                // names and existing diagnostic behavior.
+                if crate::object::is_class_object_ptr(obj.cast()) {
+                    if let Some(name) = name {
                         if super::class_registry::static_accessor_in_chain(class_id, name) {
                             // A real `static set name(v)` (own or inherited
                             // through `extends`) must still fire.
@@ -381,20 +380,20 @@ pub(crate) fn set_field_by_name_object_tail(
                             // refusal the instance side gives.
                             throw_getter_only();
                         }
-                        // No static accessor of this name: fall through to the
-                        // ordinary own-property store below.
-                    } else {
-                        match super::class_registry::instance_chain_setter_apply(
-                            obj, name, this_f64, value,
-                        ) {
-                            Some(true) => return,
-                            // This entry point is the strict one (issue #615:
-                            // strict is the TS default; sloppy writes reach
-                            // `js_put_value_set` with `strict = 0`, whose
-                            // OrdinarySet walk refuses the same write silently).
-                            Some(false) => throw_getter_only(),
-                            None => {}
-                        }
+                    }
+                    // No static accessor of this name: fall through to the
+                    // ordinary own-property store below.
+                } else {
+                    match super::class_registry::instance_chain_setter_apply_bytes(
+                        obj, &key_bytes, this_f64, value,
+                    ) {
+                        Some(true) => return,
+                        // This entry point is the strict one (issue #615:
+                        // strict is the TS default; sloppy writes reach
+                        // `js_put_value_set` with `strict = 0`, whose
+                        // OrdinarySet walk refuses the same write silently).
+                        Some(false) => throw_getter_only(),
+                        None => {}
                     }
                 }
             }

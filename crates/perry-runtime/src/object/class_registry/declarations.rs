@@ -598,17 +598,6 @@ fn member_is_named(class_id: u32, member: &ClassMemberDecl, name: &[u8]) -> bool
     }
 }
 
-/// The index (in declaration order) of the method `name` of class
-/// `class_id` as last declared, and the declaration's member count.
-#[inline]
-pub(crate) fn class_method_decl_index(
-    class_id: u32,
-    name: impl AsRef<[u8]>,
-) -> Option<(usize, usize)> {
-    class_method_decl_index_bytes(class_id, name.as_ref())
-}
-
-#[inline(never)]
 pub(crate) fn class_method_decl_index_bytes(class_id: u32, name: &[u8]) -> Option<(usize, usize)> {
     let decl = class_declaration(class_id)?;
     let members = decl.members();
@@ -619,15 +608,11 @@ pub(crate) fn class_method_decl_index_bytes(class_id: u32, name: &[u8]) -> Optio
 }
 
 /// The method `name` of class `class_id` as last declared.
-#[inline]
-pub(crate) fn class_method_decl(
-    class_id: u32,
-    name: impl AsRef<[u8]>,
-) -> Option<&'static ClassMemberDecl> {
-    class_method_decl_bytes(class_id, name.as_ref())
+#[cfg(test)]
+pub(crate) fn class_method_decl(class_id: u32, name: &str) -> Option<&'static ClassMemberDecl> {
+    class_method_decl_bytes(class_id, name.as_bytes())
 }
 
-#[inline(never)]
 pub(crate) fn class_method_decl_bytes(
     class_id: u32,
     name: &[u8],
@@ -641,12 +626,10 @@ pub(crate) fn class_method_decl_bytes(
 
 /// The accessor `name` of class `class_id` as declared: each half from the
 /// last member declaring it, and the setter's spec `.length`.
-#[inline]
-pub(crate) fn class_accessor_decl(class_id: u32, name: impl AsRef<[u8]>) -> Option<AccessorDecl> {
-    class_accessor_decl_bytes(class_id, name.as_ref())
+pub(crate) fn class_accessor_decl(class_id: u32, name: &str) -> Option<AccessorDecl> {
+    class_accessor_decl_bytes(class_id, name.as_bytes())
 }
 
-#[inline(never)]
 pub(crate) fn class_accessor_decl_bytes(class_id: u32, name: &[u8]) -> Option<AccessorDecl> {
     let decl = class_declaration(class_id)?;
     if !decl.has_accessors() {
@@ -860,10 +843,8 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
         let accessor = member.is_accessor();
         proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
             if accessor {
-                super::decl_accessors::install_decl_prototype_accessor(
-                    proto,
-                    class_id,
-                    std::str::from_utf8(&name).expect("accessor name"),
+                super::decl_accessors::install_decl_prototype_accessor_bytes(
+                    proto, class_id, &name,
                 );
             } else {
                 super::state::install_class_decl_prototype_method_field(proto, class_id, &name);

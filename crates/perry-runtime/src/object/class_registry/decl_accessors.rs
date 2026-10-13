@@ -22,17 +22,25 @@ use crate::object::accessor_pair::{own_accessor, Accessor};
 /// A half whose compiled entry is unchanged keeps its closure, so reflection
 /// hands out the same function object every time.
 pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id: u32, name: &str) {
+    install_decl_prototype_accessor_bytes(proto, class_id, name.as_bytes())
+}
+
+pub(crate) fn install_decl_prototype_accessor_bytes(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    name: &[u8],
+) {
     if proto.is_null() {
         return;
     }
-    let Some((raw_get, raw_set)) = class_own_accessor_ptrs(class_id, name) else {
+    let Some((raw_get, raw_set)) = class_own_accessor_ptrs_bytes(class_id, name) else {
         return;
     };
     // A half arriving later keeps whatever attributes the accessor has now
     // (a `defineProperty` may have changed them); a fresh one takes the
     // ClassBody defaults.
     use crate::object::key_attrs as ka;
-    let entry = unsafe { ka::object_key_entry(proto, name.as_bytes()) };
+    let entry = unsafe { ka::object_key_entry(proto, name) };
     let (enumerable, configurable) = if entry & ka::ENTRY_ACCESSOR != 0 {
         (
             entry & ka::ENTRY_NON_ENUMERABLE == 0,
@@ -44,7 +52,7 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
     let existing = proto_h
-        .with_mut_ptr(|p: *mut ObjectHeader| unsafe { own_accessor(p as usize, name.as_bytes()) })
+        .with_mut_ptr(|p: *mut ObjectHeader| unsafe { own_accessor(p as usize, name) })
         .unwrap_or_default();
     let half = |raw: usize, have_raw: usize, have: u64, is_setter: bool| -> u64 {
         if raw == 0 {
@@ -53,11 +61,11 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
             have
         } else {
             let set_length = if is_setter {
-                class_own_setter_length(class_id, name, false)
+                class_own_setter_length_bytes(class_id, name, false)
             } else {
                 None
             };
-            class_accessor_function_value(raw, is_setter, false, name, set_length).to_bits()
+            class_accessor_function_value_bytes(raw, is_setter, false, name, set_length).to_bits()
         }
     };
     let get = scope.root_nanbox_u64(half(raw_get, existing.raw_get, existing.get, false));
@@ -71,9 +79,9 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
         static_set: 0,
     };
     proto_h.with_mut_ptr(|p: *mut ObjectHeader| {
-        crate::object::set_builtin_accessor_pair(
+        crate::object::descriptor_state::set_builtin_accessor_pair_bytes(
             p as usize,
-            name.to_string(),
+            name,
             pair,
             PropertyAttrs::new(true, enumerable, configurable),
         )
@@ -102,6 +110,10 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str, newly
 /// a `defineProperty` or `delete` has made of it — so the ref and the object
 /// never disagree. `None` for every other key.
 pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f64> {
+    decl_prototype_own_accessor_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn decl_prototype_own_accessor_bytes(class_id: u32, name: &[u8]) -> Option<f64> {
     let proto = class_decl_prototype_value(class_id);
     let js = crate::JSValue::from_bits(proto.to_bits());
     if !js.is_pointer() {
@@ -111,8 +123,8 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
     // The live shape alone decides whether the key is an accessor. A
     // declaration cannot resurrect a deleted or replaced property.
     let holds = unsafe {
-        crate::object::key_attrs::attrs_live_in_keys_of_bits(proto.to_bits())
-            && crate::object::key_attrs::object_key_is_accessor(obj, name.as_bytes())
+        crate::object::key_attrs::attrs_live_in_keys(obj as usize)
+            && crate::object::key_attrs::object_key_is_accessor(obj, name)
     };
     holds.then_some(proto)
 }
@@ -123,6 +135,10 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
 /// own property named `name` — an accessor answers, a data property shadows
 /// (`None`). This is the one lookup the class-accessor readers use (S3).
 pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, Accessor)> {
+    class_proto_accessor_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_proto_accessor_bytes(class_id: u32, name: &[u8]) -> Option<(usize, Accessor)> {
     let _no_move = crate::gc::GcSuppressScope::new();
     prototype_accessor(class_decl_prototype_value(class_id), name)
 }
@@ -133,6 +149,15 @@ pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, 
 pub(crate) unsafe fn instance_proto_accessor(
     obj: *const ObjectHeader,
     name: &str,
+) -> Option<(usize, Accessor)> {
+    instance_proto_accessor_bytes(obj, name.as_bytes())
+}
+
+/// Byte-preserving form of [`instance_proto_accessor`] for class member keys
+/// that may contain WTF-8 encodings of lone surrogates.
+pub(crate) unsafe fn instance_proto_accessor_bytes(
+    obj: *const ObjectHeader,
+    name: &[u8],
 ) -> Option<(usize, Accessor)> {
     // The walk runs no user code. Materialization is rare and cannot move
     // these raw pointers; an ordinary miss needs no handle-scope allocation.
@@ -175,7 +200,7 @@ unsafe fn accessor_prototype(obj: *const ObjectHeader) -> Option<f64> {
     }
 }
 
-fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
+fn prototype_accessor(start: f64, name: &[u8]) -> Option<(usize, Accessor)> {
     use crate::object::key_attrs as ka;
     let mut cur = start;
     for _ in 0..10_000 {
@@ -198,11 +223,7 @@ fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
         // these skipped data holders shadows it.
         let slot = (shape.summary() & ka::SUMMARY_ACCESSOR != 0)
             .then(|| unsafe {
-                ka::keys_find_accessor_slot_resolved(
-                    keys,
-                    shape.logical_key_count(),
-                    name.as_bytes(),
-                )
+                ka::keys_find_accessor_slot_resolved(keys, shape.logical_key_count(), name)
             })
             .flatten();
         if let Some(slot) = slot {
@@ -223,7 +244,7 @@ fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
 
 /// Called only after an accessor was found. No user code ran in either walk;
 /// the same shape links lead to its holder. Uncertainty declines the answer.
-unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &str) -> bool {
+unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[u8]) -> bool {
     let mut cur = start;
     for _ in 0..10_000 {
         let value = crate::JSValue::from_bits(cur.to_bits());
@@ -240,7 +261,7 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &s
         if crate::object::keys_find_slot_by_bytes_resolved(
             shape.keys() as usize as *const crate::array::ArrayHeader,
             shape.logical_key_count(),
-            name.as_bytes(),
+            name,
         )
         .is_some()
         {
@@ -270,6 +291,15 @@ pub(crate) unsafe fn class_chain_getter_value(
     this_of: impl FnOnce() -> f64,
 ) -> Option<(crate::JSValue, usize)> {
     let acc = class_proto_accessor(class_id, name)?.1;
+    Some(invoke_instance_getter(acc, this_of()))
+}
+
+pub(crate) unsafe fn class_chain_getter_value_bytes(
+    class_id: u32,
+    name: &[u8],
+    this_of: impl FnOnce() -> f64,
+) -> Option<(crate::JSValue, usize)> {
+    let acc = class_proto_accessor_bytes(class_id, name)?.1;
     Some(invoke_instance_getter(acc, this_of()))
 }
 
@@ -341,7 +371,18 @@ pub(crate) unsafe fn instance_chain_setter_apply(
     this: f64,
     value: f64,
 ) -> Option<bool> {
-    let acc = instance_proto_accessor(obj, name)?.1;
+    instance_chain_setter_apply_bytes(obj, name.as_bytes(), this, value)
+}
+
+/// Byte-preserving form of [`instance_chain_setter_apply`] for class member
+/// keys that may contain WTF-8 encodings of lone surrogates.
+pub(crate) unsafe fn instance_chain_setter_apply_bytes(
+    obj: *const ObjectHeader,
+    name: &[u8],
+    this: f64,
+    value: f64,
+) -> Option<bool> {
+    let acc = instance_proto_accessor_bytes(obj, name)?.1;
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_h = scope.root_nanbox_f64(this);
     let value_h = scope.root_nanbox_f64(value);

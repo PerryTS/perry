@@ -633,10 +633,34 @@ unsafe fn class_object_in_template_shape(
                 .map_or(crate::value::TAG_UNDEFINED, f64::to_bits),
             Fill::Method(code) => {
                 let f = static_method_value(code);
-                class.with_mut_ptr::<ObjectHeader, _>(|class| {
-                    set_static_method_home(f, crate::value::js_nanbox_pointer(class as i64))
-                });
-                crate::value::js_nanbox_pointer(f as i64).to_bits()
+                if f.is_null() {
+                    crate::value::TAG_UNDEFINED
+                } else {
+                    let f = scope.root_raw_mut_ptr(f);
+                    let name = class.with_const_ptr::<ObjectHeader, _>(|class| {
+                        let stored = crate::object::object_keys(class as *const ObjectHeader)
+                            .get(slot as u32);
+                        let mut short = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                        unsafe {
+                            crate::string::js_string_key_bytes(stored, &mut short)
+                                .map(|bytes| bytes.to_vec())
+                        }
+                    });
+                    if let Some(name) = name {
+                        let f_value = f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
+                            crate::value::js_nanbox_pointer(f as i64)
+                        });
+                        crate::object::native_module::set_function_name_bytes(f_value, &name);
+                    }
+                    f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f| {
+                        class.with_mut_ptr::<ObjectHeader, _>(|class| {
+                            set_static_method_home(f, crate::value::js_nanbox_pointer(class as i64))
+                        })
+                    });
+                    f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
+                        crate::value::js_nanbox_pointer(f as i64).to_bits()
+                    })
+                }
             }
             Fill::Parent => {
                 // `js_class_evaluation_object`'s ordering rule: arm before
@@ -708,11 +732,13 @@ unsafe fn record_class_object_template(
         {
             saw_parent = true;
             Fill::Parent
-        } else if let Some(name) = statics.iter().find(|name| is(name.as_bytes())) {
+        } else if let Some(name) = statics.iter().find(|name| is(name)) {
             // A static method's own function object (a static accessor of
             // this name leaves an accessor, which no template records).
             let Some(code) =
-                super::super::class_registry::class_own_static_method_code(class_id, name)
+                super::super::class_registry::parent_static::class_own_static_method_code_bytes(
+                    class_id, name,
+                )
             else {
                 return;
             };
@@ -892,29 +918,20 @@ enum ProtoFill {
 /// template `class_id`: it runs the method's closure-convention entry, and its
 /// home capture names class object `class`. `None` when the template
 /// registered no entry for `name`.
-#[inline]
-pub(crate) unsafe fn evaluation_method_value(
-    class_id: u32,
-    name: impl AsRef<[u8]>,
-    class: f64,
-) -> Option<f64> {
-    evaluation_method_value_bytes(class_id, name.as_ref(), class)
-}
-
-#[inline(never)]
 pub(crate) unsafe fn evaluation_method_value_bytes(
     class_id: u32,
     name: &[u8],
     class: f64,
 ) -> Option<f64> {
-    let Some(code) = super::super::class_registry::class_method_entry(class_id, name) else {
+    let Some(code) = super::super::class_registry::class_method_entry_bytes(class_id, name) else {
         // A computed member is its body: the function object captures it
         // (at home in, and branded by, this evaluation), never a name to
         // look up again after a later evaluation renamed the member.
-        let decl = super::super::class_registry::declarations::class_method_decl(class_id, name)
-            .filter(|decl| decl.name.is_null())?;
+        let decl =
+            super::super::class_registry::declarations::class_method_decl_bytes(class_id, name)
+                .filter(|decl| decl.name.is_null())?;
         return Some(
-            crate::object::native_module::class_method_declaration_value(
+            crate::object::native_module::class_method_declaration_value_bytes(
                 class,
                 name,
                 decl.code as usize,
@@ -1062,8 +1079,7 @@ pub(crate) unsafe fn record_prototype_template(
         let fill = if slot == 0 && is(b"constructor") && bits == owner {
             ProtoFill::Constructor
         } else if let Some((name, false)) = members.iter().find(|(name, _)| is(name)) {
-            let name = name.as_slice();
-            let Some(code) = super::super::class_registry::class_method_entry(class_id, name)
+            let Some(code) = super::super::class_registry::class_method_entry_bytes(class_id, name)
             else {
                 return;
             };

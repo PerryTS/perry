@@ -28,7 +28,7 @@ pub(super) fn publish_unbuilt_holder(class_id: u32) {
 
 pub(crate) fn record_class_string_member_order(
     class_id: u32,
-    name: String,
+    name: Vec<u8>,
     is_static: bool,
     definition_order: u32,
 ) {
@@ -61,6 +61,14 @@ pub(crate) fn record_class_string_member_order(
 /// dispatch registry entry for fast calls, but retire its declaration-order
 /// position until a future class evaluation explicitly registers it again.
 pub(crate) fn invalidate_class_string_member_order(class_id: u32, name: &str, is_static: bool) {
+    invalidate_class_string_member_order_bytes(class_id, name.as_bytes(), is_static);
+}
+
+pub(crate) fn invalidate_class_string_member_order_bytes(
+    class_id: u32,
+    name: &[u8],
+    is_static: bool,
+) {
     if class_id == 0 {
         return;
     }
@@ -74,7 +82,7 @@ pub(crate) fn invalidate_class_string_member_order(class_id: u32, name: &str, is
     guard
         .as_mut()
         .unwrap()
-        .insert((class_id, is_static, name.to_string()), u32::MAX);
+        .insert((class_id, is_static, name.to_vec()), u32::MAX);
     drop(guard);
     if !is_static {
         super::class_meta::refresh_anon_declaration_role(class_id);
@@ -116,13 +124,10 @@ pub unsafe extern "C" fn js_register_class_string_member_order(
     if class_id <= 0 || name_ptr.is_null() || name_len < 0 {
         return;
     }
-    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
-    else {
-        return;
-    };
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize).to_vec();
     record_class_string_member_order(
         class_id as u32,
-        name.to_string(),
+        name,
         is_static != 0,
         definition_order as u32,
     );
@@ -217,16 +222,8 @@ pub extern "C" fn js_register_class_prototype_shape(class_id: u32, shape_id: u32
     super::declarations::test_declare_birth_shape(class_id, shape_id);
 }
 
-/// The ClassBody's own public instance accessor declaration for `class_id` +
-/// `name`: `(getter_ptr, setter_ptr)`, each 0 when that half is absent.
-///
-/// Class metadata: read by the decl-prototype installer (`decl_accessors.rs`)
-/// and by "does this class declare an accessor `name`" filters. A property
-/// read, write or reflection must not answer from it — the prototype's real
-/// accessor property is the truth, and `defineProperty` / `delete` may have
-/// changed it.
-pub(crate) fn class_own_accessor_ptrs(class_id: u32, name: &str) -> Option<(usize, usize)> {
-    let decl = super::declarations::class_accessor_decl(class_id, name)?;
+pub(crate) fn class_own_accessor_ptrs_bytes(class_id: u32, name: &[u8]) -> Option<(usize, usize)> {
+    let decl = super::declarations::class_accessor_decl_bytes(class_id, name)?;
     (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
 }
 
@@ -239,20 +236,29 @@ pub(crate) fn class_registered_static_accessor_ptrs(
     class_id: u32,
     name: &str,
 ) -> Option<(usize, usize)> {
+    class_registered_static_accessor_ptrs_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_registered_static_accessor_ptrs_bytes(
+    class_id: u32,
+    name: &[u8],
+) -> Option<(usize, usize)> {
     let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
     let reg = guard.as_ref()?;
     let decl = reg.get(&class_id)?.get(name).copied()?;
     (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
 }
 
-/// The recorded spec `.length` of `class_id`'s own setter `name` (static when
-/// `is_static`), for [`class_accessor_function_value`].
-pub(crate) fn class_own_setter_length(class_id: u32, name: &str, is_static: bool) -> Option<u32> {
+pub(crate) fn class_own_setter_length_bytes(
+    class_id: u32,
+    name: &[u8],
+    is_static: bool,
+) -> Option<u32> {
     if is_static {
         let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
         guard.as_ref()?.get(&class_id)?.get(name)?.set_length
     } else {
-        super::declarations::class_accessor_decl(class_id, name)?.set_length
+        super::declarations::class_accessor_decl_bytes(class_id, name)?.set_length
     }
 }
 
@@ -389,6 +395,22 @@ pub(crate) fn class_accessor_function_value(
     prop_name: &str,
     setter_length: Option<u32>,
 ) -> f64 {
+    class_accessor_function_value_bytes(
+        raw_ptr,
+        is_setter,
+        is_static,
+        prop_name.as_bytes(),
+        setter_length,
+    )
+}
+
+pub(crate) fn class_accessor_function_value_bytes(
+    raw_ptr: usize,
+    is_setter: bool,
+    is_static: bool,
+    prop_name: &[u8],
+    setter_length: Option<u32>,
+) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -404,7 +426,11 @@ pub(crate) fn class_accessor_function_value(
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure = scope.root_raw_mut_ptr(closure);
+    closure.with_mut_ptr(|closure| {
+        crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64)
+    });
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
     // has `.length === 0` (defaults don't count). Codegen records the setter's
@@ -416,24 +442,39 @@ pub(crate) fn class_accessor_function_value(
     } else {
         0
     };
-    super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
-    super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    });
     // Spec `.name` = "get <key>" / "set <key>" with attributes
     // { writable: false, enumerable: false, configurable: true } (mirrors the
     // `Function.prototype.bind` name path). Without this the reflected accessor
     // value's `.name` defaulted to "" — refs class/.../fn-name-accessor-{get,set}.
-    let prefix = if is_setter { "set " } else { "get " };
-    let fn_name = format!("{prefix}{prop_name}");
+    let prefix = if is_setter {
+        b"set ".as_slice()
+    } else {
+        b"get ".as_slice()
+    };
+    let mut fn_name = Vec::with_capacity(prefix.len() + prop_name.len());
+    fn_name.extend_from_slice(prefix);
+    fn_name.extend_from_slice(prop_name);
     let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
-    let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
-    crate::closure::closure_define_dynamic_prop(closure as usize, "name", name_value);
-    crate::object::set_builtin_property_attrs(
-        closure as usize,
-        "name".to_string(),
-        crate::object::PropertyAttrs::new(false, false, true),
-    );
-    crate::gc::runtime_write_barrier_root_raw_ptr(closure as *const u8);
-    crate::value::js_nanbox_pointer(closure as i64)
+    let name = scope.root_string_ptr(name_ptr);
+    closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        let name_value = name.with_const_ptr::<crate::StringHeader, _>(|name| {
+            f64::from_bits(
+                crate::value::JSValue::string_ptr(name as *mut crate::StringHeader).bits(),
+            )
+        });
+        crate::closure::closure_define_dynamic_prop(closure as usize, "name", name_value);
+        crate::object::set_builtin_property_attrs(
+            closure as usize,
+            "name".to_string(),
+            crate::object::PropertyAttrs::new(false, false, true),
+        );
+        crate::gc::runtime_write_barrier_root_raw_ptr(closure as *const u8);
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 /// Unit tests declare a class's accessor halves one at a time (codegen emits
@@ -538,10 +579,7 @@ pub unsafe extern "C" fn js_register_class_method_bind_length(
     if name_ptr.is_null() || name_len < 0 {
         return;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
-    };
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize).to_vec();
     let mut guard = match CLASS_METHOD_BIND_LENGTHS.write() {
         Ok(g) => g,
         Err(_) => return,
@@ -572,10 +610,7 @@ pub unsafe extern "C" fn js_register_class_static_method_bind_length(
     if name_ptr.is_null() || name_len < 0 {
         return;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
-    };
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize).to_vec();
     let mut guard = match CLASS_STATIC_METHOD_BIND_LENGTHS.write() {
         Ok(g) => g,
         Err(_) => return,
@@ -607,10 +642,7 @@ unsafe fn register_class_static_accessor_half(
     let name = if name_ptr.is_null() || name_len < 0 {
         return;
     } else {
-        match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize)) {
-            Ok(s) => s.to_string(),
-            Err(_) => return,
-        }
+        std::slice::from_raw_parts(name_ptr, name_len as usize).to_vec()
     };
     {
         let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
@@ -631,5 +663,5 @@ unsafe fn register_class_static_accessor_half(
             entry.set_length = set_length;
         }
     }
-    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
+    crate::object::class_value::note_intrinsic_registration_bytes(class_id as u32, &name);
 }

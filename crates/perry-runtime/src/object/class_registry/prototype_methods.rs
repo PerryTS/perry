@@ -123,6 +123,13 @@ pub unsafe extern "C" fn js_class_computed_field_key(
 /// Compatibility entry points for HIR assembled by embedders. The prototype
 /// is read before the value is stored; its ordinary [[Set]] owns the mutation.
 pub(crate) fn class_prototype_set(class_id: u32, name: String, value_bits: u64) {
+    class_prototype_set_bytes(class_id, name.as_bytes(), value_bits);
+}
+
+pub(crate) fn class_prototype_set_bytes(class_id: u32, name: &[u8], value_bits: u64) {
+    // Prototype materialization below can allocate and move the source JS
+    // string, so retain an owned exact-byte key across those safepoints.
+    let name = name.to_vec();
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_u64(value_bits);
     // The holder an instance read walks (declared, else synthetic); a class

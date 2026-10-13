@@ -189,6 +189,17 @@ pub(crate) fn class_dynamic_static_accessor_descriptor(
     crate::object::AccessorDescriptor,
     crate::object::PropertyAttrs,
 )> {
+    class_dynamic_static_accessor_descriptor_bytes(class_id, name.as_bytes(), receiver)
+}
+
+pub(crate) fn class_dynamic_static_accessor_descriptor_bytes(
+    class_id: u32,
+    name: &[u8],
+    receiver: f64,
+) -> Option<(
+    crate::object::AccessorDescriptor,
+    crate::object::PropertyAttrs,
+)> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let owner = dynamic_static_accessor_owner(class_id, receiver.get_nanbox_f64());
@@ -197,7 +208,7 @@ pub(crate) fn class_dynamic_static_accessor_descriptor(
     }
     if !is_class_object_ptr(owner as *const u8) {
         let (acc, enumerable, configurable) =
-            crate::object::class_value::class_static_own_accessor(class_id, name)?;
+            crate::object::class_value::class_static_own_accessor_bytes(class_id, name)?;
         return Some((
             crate::object::AccessorDescriptor {
                 get: acc.get,
@@ -206,16 +217,15 @@ pub(crate) fn class_dynamic_static_accessor_descriptor(
             crate::object::PropertyAttrs::new(false, enumerable, configurable),
         ));
     }
-    let key = dynamic_static_accessor_storage_key(owner, name);
-    let descriptor = crate::object::get_accessor_descriptor(owner, &key)?;
-    let attrs = crate::object::get_property_attrs(owner, &key)
+    let descriptor = crate::object::descriptor_state::get_accessor_descriptor_bytes(owner, name)?;
+    let attrs = crate::object::descriptor_state::get_property_attrs_bytes(owner, name)
         .unwrap_or(crate::object::PropertyAttrs::new(false, false, false));
     Some((descriptor, attrs))
 }
 
-pub(crate) unsafe fn class_dynamic_static_accessor_getter_value(
+pub(crate) unsafe fn class_dynamic_static_accessor_getter_value_bytes(
     class_id: u32,
-    name: &str,
+    name: &[u8],
     receiver: f64,
 ) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -224,12 +234,7 @@ pub(crate) unsafe fn class_dynamic_static_accessor_getter_value(
     // The class function object's accessors are its own properties
     // (`class_static_accessor_getter_value` reads them).
     let descriptor = (owner != 0 && is_class_object_ptr(owner as *const u8))
-        .then(|| {
-            crate::object::get_accessor_descriptor(
-                owner,
-                &dynamic_static_accessor_storage_key(owner, name),
-            )
-        })
+        .then(|| crate::object::descriptor_state::get_accessor_descriptor_bytes(owner, name))
         .flatten()?;
     if descriptor.get == 0 {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -242,9 +247,9 @@ pub(crate) unsafe fn class_dynamic_static_accessor_getter_value(
 /// `Some(true)` means a setter was invoked, `Some(false)` means an accessor
 /// exists but has no setter, and `None` means this class has no such dynamic
 /// accessor.
-pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
+pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply_bytes(
     class_id: u32,
-    name: &str,
+    name: &[u8],
     receiver: f64,
     value: f64,
 ) -> Option<bool> {
@@ -253,12 +258,7 @@ pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
     let value = scope.root_nanbox_f64(value);
     let owner = dynamic_static_accessor_owner(class_id, receiver.get_nanbox_f64());
     let descriptor = (owner != 0 && is_class_object_ptr(owner as *const u8))
-        .then(|| {
-            crate::object::get_accessor_descriptor(
-                owner,
-                &dynamic_static_accessor_storage_key(owner, name),
-            )
-        })
+        .then(|| crate::object::descriptor_state::get_accessor_descriptor_bytes(owner, name))
         .flatten()?;
     if descriptor.set == 0 {
         return Some(false);
@@ -339,7 +339,7 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
         .ok()?
         .as_ref()?
         .get(&owner_class_id)?
-        .get(name)
+        .get(name.as_bytes())
         .copied()?;
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_value = scope.root_nanbox_f64(this_value);

@@ -88,6 +88,10 @@ pub(crate) fn throw_non_constructable_builtin_function() -> ! {
 /// that owns the member: it was declared, the class's decl prototype exists,
 /// and that object no longer holds the key.
 pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
+    class_proto_key_deleted_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_proto_key_deleted_bytes(class_id: u32, name: &[u8]) -> bool {
     if class_id == 0 {
         return false;
     }
@@ -101,7 +105,7 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
     if unsafe { crate::object::shapes::pristine_declaration_holder(proto) } {
         return false;
     }
-    if proto_member_has_no_string_key(class_id, name) {
+    if proto_member_has_no_string_key_bytes(class_id, name) {
         return false;
     }
     // SAFETY: `proto` is this realm's live decl prototype; nothing below
@@ -110,8 +114,7 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
         let keys = crate::object::object_keys(proto);
         let arr = keys.arr();
         !arr.is_null()
-            && crate::object::keys_find_slot_by_bytes_resolved(arr, keys.count(), name.as_bytes())
-                .is_some()
+            && crate::object::keys_find_slot_by_bytes_resolved(arr, keys.count(), name).is_some()
     }
 }
 
@@ -122,8 +125,8 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
 /// well-known-symbol method (`@@iterator` stands in for `[Symbol.iterator]`,
 /// which lives under its symbol key). A source method literally named
 /// `"@@iterator"` has a string-member order registration and is a real key.
-pub(crate) fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool {
-    if name.starts_with('#') {
+pub(crate) fn proto_member_has_no_string_key_bytes(class_id: u32, name: &[u8]) -> bool {
+    if name.starts_with(b"#") {
         return true;
     }
     internal_symbol_dispatch_alias(name)
@@ -133,7 +136,7 @@ pub(crate) fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool 
             .and_then(|guard| {
                 guard
                     .as_ref()
-                    .map(|map| map.contains_key(&(class_id, false, name.to_string())))
+                    .map(|map| map.contains_key(&(class_id, false, name.to_vec())))
             })
             .unwrap_or(false)
 }
@@ -143,6 +146,10 @@ pub(crate) fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool 
 /// Derived from the class function object that owns it.
 pub(crate) fn class_static_key_deleted(class_id: u32, name: &str) -> bool {
     crate::object::class_value::class_static_key_deleted(class_id, name)
+}
+
+pub(crate) fn class_static_key_deleted_bytes(class_id: u32, name: &[u8]) -> bool {
+    crate::object::class_value::class_static_key_deleted_bytes(class_id, name)
 }
 
 /// Record `C.<name> = value` in the class-ref side table that dynamic reads
@@ -232,7 +239,11 @@ pub(crate) fn class_ref_dynamic_prop_root_store(class_id: u32, name: &str, value
 /// constructor ref so `verifyProperty(C, "field", …)` sees a real data
 /// descriptor (test262 class/elements static-field-declaration & friends).
 pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<f64> {
-    crate::object::class_value::class_static_get(class_id, name)
+    class_own_static_field_value_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_own_static_field_value_bytes(class_id: u32, name: &[u8]) -> Option<f64> {
+    crate::object::class_value::class_static_get_bytes(class_id, name)
 }
 
 /// Enumerable own string keys of a class constructor: the static fields (and
@@ -271,19 +282,37 @@ pub(crate) fn class_static_set_defined_attrs(
     enumerable: bool,
     configurable: bool,
 ) {
+    class_static_set_defined_attrs_bytes(
+        class_id,
+        name.as_bytes(),
+        writable,
+        enumerable,
+        configurable,
+    )
+}
+
+pub(crate) fn class_static_set_defined_attrs_bytes(
+    class_id: u32,
+    name: &[u8],
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+) {
     {
         let _no_collect = crate::gc::GcSuppressScope::new();
         let ptr = crate::object::class_value::class_value_ptr(class_id) as usize;
         // SAFETY: this agent's live class function object; no collection in
         // this scope.
         let bag = unsafe { crate::closure::props::bag_ensure(ptr) };
-        crate::object::set_builtin_property_attrs(
+        crate::object::descriptor_state::set_builtin_property_attrs_bytes(
             bag as usize,
-            name.to_string(),
+            name,
             crate::object::PropertyAttrs::new(writable, enumerable, configurable),
         );
     }
-    class_static_alias_sync(class_id, name);
+    if let Ok(name) = std::str::from_utf8(name) {
+        class_static_alias_sync(class_id, name);
+    }
 }
 
 /// Static `name` becomes an ordinary writable, enumerable, configurable data
@@ -308,16 +337,23 @@ pub(crate) fn class_static_clear_defined_attrs(class_id: u32, name: &str) {
 /// the key of the function object's own-property object and never mints the
 /// function object (one never created owns no properties).
 pub(crate) fn class_static_defined_attrs(class_id: u32, name: &str) -> Option<(bool, bool, bool)> {
+    class_static_defined_attrs_bytes(class_id, name.as_bytes())
+}
+
+pub(crate) fn class_static_defined_attrs_bytes(
+    class_id: u32,
+    name: &[u8],
+) -> Option<(bool, bool, bool)> {
     let ptr = crate::object::class_value::class_value_if_minted(class_id)? as usize;
     // SAFETY: this agent's live class function object.
     unsafe {
-        if crate::object::is_internal_runtime_key(name)
-            || crate::closure::props::bag_get(ptr, name.as_bytes()).is_none()
+        if std::str::from_utf8(name).is_ok_and(crate::object::is_internal_runtime_key)
+            || crate::closure::props::bag_get(ptr, name).is_none()
         {
             return None;
         }
         let bag = crate::closure::props::bag_of(ptr);
-        let attrs = crate::object::get_property_attrs(bag as usize, name)
+        let attrs = crate::object::descriptor_state::get_property_attrs_bytes(bag as usize, name)
             .unwrap_or(crate::object::PropertyAttrs::new(true, true, true));
         Some((attrs.writable(), attrs.enumerable(), attrs.configurable()))
     }
@@ -359,18 +395,16 @@ fn method_values(holder: usize) -> Option<*mut crate::ArrayHeader> {
 
 /// Does (`kind`, `name`) name a method of the declaration, and is that the
 /// kind it is kept as? A name has one kind: `proto_member_has_no_string_key`.
-fn declared_method_index(
+fn declared_method_index_bytes(
     class_id: u32,
     kind: ClassDeclarationValueKind,
-    name: impl AsRef<[u8]>,
+    name: &[u8],
 ) -> Option<(usize, usize)> {
-    let name = name.as_ref();
-    let non_property =
-        std::str::from_utf8(name).is_ok_and(|name| proto_member_has_no_string_key(class_id, name));
+    let non_property = proto_member_has_no_string_key_bytes(class_id, name);
     if non_property != (kind == ClassDeclarationValueKind::NonPropertyMethod) {
         return None;
     }
-    super::declarations::class_method_decl_index(class_id, name)
+    super::declarations::class_method_decl_index_bytes(class_id, name)
 }
 
 /// Class `class_id`'s declaration value (`kind`, `name`), if its holder
@@ -398,7 +432,7 @@ pub(crate) fn class_declaration_value_bytes(
         }
         .map(f64::to_bits);
     }
-    let (index, _) = declared_method_index(class_id, kind, name)?;
+    let (index, _) = declared_method_index_bytes(class_id, kind, name)?;
     let values = method_values(holder)?;
     let bits = crate::array::js_array_get_f64(values, index as u32).to_bits();
     (bits != crate::value::TAG_UNDEFINED).then_some(bits)
@@ -432,10 +466,10 @@ pub(crate) fn class_declaration_value_store_bytes(
     };
     let holder = holder as usize;
     if kind == ClassDeclarationValueKind::PrivateStaticMethod {
-        let key = class_declaration_value_key(
-            kind,
-            std::str::from_utf8(name).expect("private identifier"),
-        );
+        let Ok(name) = std::str::from_utf8(name) else {
+            return;
+        };
+        let key = class_declaration_value_key(kind, name);
         // SAFETY: this agent's live, pinned class function object; the
         // internal write allocates under its own GcSuppressScope and stores
         // through the state record's barriered slot.
@@ -444,7 +478,7 @@ pub(crate) fn class_declaration_value_store_bytes(
         };
         return;
     }
-    let Some((index, count)) = declared_method_index(class_id, kind, name) else {
+    let Some((index, count)) = declared_method_index_bytes(class_id, kind, name) else {
         return;
     };
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -563,13 +597,13 @@ pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrde
 /// which overcounts methods with default-valued params; codegen computes the
 /// real `.length` at registration and stashes it here so `C.prototype.m.length`
 /// is exact (Test262 .../class/*/dflt-params-trailing-comma).
-pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
+pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, Vec<u8>), u32>>>> =
     ImageTable::new(|image| &image.method_bind_lengths);
 
 /// The closure-convention entry declared for method `name` of class
 /// `class_id`, if any.
-pub(crate) fn class_method_entry(class_id: u32, name: impl AsRef<[u8]>) -> Option<usize> {
-    let entry = super::declarations::class_method_decl(class_id, name)?.entry as usize;
+pub(crate) fn class_method_entry_bytes(class_id: u32, name: &[u8]) -> Option<usize> {
+    let entry = super::declarations::class_method_decl_bytes(class_id, name)?.entry as usize;
     (entry != 0).then_some(entry)
 }
 
@@ -579,7 +613,7 @@ pub(crate) fn class_method_entry(class_id: u32, name: impl AsRef<[u8]>) -> Optio
 /// colliding on the (class_id, name) key. (Test262 *-method-static
 /// dflt-params-trailing-comma.)
 pub static CLASS_STATIC_METHOD_BIND_LENGTHS: ImageTable<
-    RwLock<Option<HashMap<(u32, String), u32>>>,
+    RwLock<Option<HashMap<(u32, Vec<u8>), u32>>>,
 > = ImageTable::new(|image| &image.static_method_bind_lengths);
 
 crate::perry_thread_local! {
@@ -1069,43 +1103,34 @@ pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
     crate::object::class_value::class_decl_prototype_link(decl_prototype_identity_id(class_id))
 }
 
-fn internal_symbol_dispatch_alias(name: &str) -> bool {
+fn internal_symbol_dispatch_alias(name: &[u8]) -> bool {
     matches!(
         name,
-        "@@iterator"
-            | "@@asyncIterator"
-            | "@@toPrimitive"
-            | "__perry_dispose__"
-            | "__perry_async_dispose__"
-            | "__perry_inspect_custom__"
+        b"@@iterator"
+            | b"@@asyncIterator"
+            | b"@@toPrimitive"
+            | b"__perry_dispose__"
+            | b"__perry_async_dispose__"
+            | b"__perry_inspect_custom__"
     )
 }
 
-fn order_class_string_member_names<K: AsRef<[u8]> + Ord>(
-    class_id: u32,
-    is_static: bool,
-    names: &mut Vec<K>,
-) {
+fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut Vec<Vec<u8>>) {
+    names.sort();
+    names.dedup();
     let orders = CLASS_STRING_MEMBER_ORDERS.read().ok();
     let order_for = |name: &[u8]| {
-        std::str::from_utf8(name)
-            .ok()
-            .and_then(|name| {
-                orders
-                    .as_ref()
-                    .and_then(|guard| guard.as_ref())
-                    .and_then(|map| map.get(&(class_id, is_static, name.to_string())).copied())
-            })
-            .or_else(|| {
-                super::declarations::class_method_decl(class_id, name).map(|m| m.definition_order)
-            })
+        orders
+            .as_ref()
+            .and_then(|guard| guard.as_ref())
+            .and_then(|map| map.get(&(class_id, is_static, name.to_vec())).copied())
     };
     names.retain(|name| {
         let key = name.as_ref();
         let order = order_for(key);
         order != Some(u32::MAX)
             && (order.is_some()
-                || !std::str::from_utf8(key).is_ok_and(internal_symbol_dispatch_alias))
+                || !internal_symbol_dispatch_alias(key))
     });
     crate::cold_sort::sort_by(names, |left, right| {
         match (order_for(left.as_ref()), order_for(right.as_ref())) {
@@ -1124,7 +1149,7 @@ fn order_class_string_member_names<K: AsRef<[u8]> + Ord>(
 /// Own string-keyed methods and accessors in ClassBody definition order.
 /// The dispatch registries intentionally remain hash maps; reflection is the
 /// only consumer that needs their cross-kind ordering.
-pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> Vec<String> {
+pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> Vec<Vec<u8>> {
     let mut names = Vec::new();
     if is_static {
         if let Ok(methods) = CLASS_STATIC_METHODS.read() {
@@ -1157,15 +1182,13 @@ pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> V
             for i in 0..keys.count() {
                 let value = crate::array::js_array_get(keys.arr(), i);
                 if let Some(bytes) = crate::string::js_string_key_bytes(value, &mut short) {
-                    if let Ok(name) = std::str::from_utf8(bytes) {
-                        names.push(name.to_string());
-                    }
+                    names.push(bytes.to_vec());
                 }
             }
         }
         return names;
     }
-    names.retain(|name| !name.starts_with('#'));
+    names.retain(|name| !name.starts_with(b"#"));
     order_class_string_member_names(class_id, is_static, &mut names);
     names
 }
@@ -1185,7 +1208,7 @@ pub(super) fn install_class_decl_prototype_method_field(
     // name and make the installation write the class constructor straight
     // back. The canonical vtable value is the property value we need.
     let method_handle = scope.root_nanbox_f64(
-        crate::object::native_module::class_prototype_method_value_for_bytes(class_id, name),
+        crate::object::native_module::class_prototype_method_value_for_name_bytes(class_id, name),
     );
     let key_handle = scope.root_string_ptr(crate::string::js_string_from_bytes(
         name.as_ptr(),
@@ -1201,10 +1224,11 @@ pub(super) fn install_class_decl_prototype_method_field(
             }
         })
     });
-    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
-        crate::object::key_attrs::apply_edits(
-            proto,
-            &[crate::object::key_attrs::AttrsEdit::Data(name, 5)],
+    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        crate::object::descriptor_state::set_builtin_property_attrs_bytes(
+            proto as usize,
+            name,
+            PropertyAttrs::new(true, false, true),
         )
     });
 }
@@ -1350,10 +1374,8 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
         // Both installers root the prototype across their own allocations.
         proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
             if is_accessor {
-                super::decl_accessors::install_decl_prototype_accessor(
-                    proto,
-                    class_id,
-                    std::str::from_utf8(&name).expect("accessor name"),
+                super::decl_accessors::install_decl_prototype_accessor_bytes(
+                    proto, class_id, &name,
                 );
             } else {
                 install_class_decl_prototype_method_field(proto, class_id, &name);

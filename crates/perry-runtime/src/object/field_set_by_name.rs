@@ -450,30 +450,40 @@ pub extern "C" fn js_object_set_field_by_name(
                     let name_ptr =
                         (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                     let name_len = (*key).byte_len as usize;
-                    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
-                        .unwrap_or("")
-                        .to_string();
+                    // Keep the key alive independently of the StringHeader:
+                    // class accessor lookup and prototype materialization can
+                    // allocate and move the original JS string.
+                    let name_storage = std::slice::from_raw_parts(name_ptr, name_len).to_vec();
+                    let name = name_storage.as_slice();
+                    let name_str = std::str::from_utf8(name).ok();
                     let recv = crate::object::class_value::boxed_class_word(bits);
                     let is_prototype_ref = super::class_prototype_ref_id(recv).is_some();
                     if is_prototype_ref {
-                        super::class_registry::class_prototype_set(class_id, name, value.to_bits());
+                        super::class_registry::class_prototype_set_bytes(
+                            class_id,
+                            name,
+                            value.to_bits(),
+                        );
                         return;
                     }
                     if !is_prototype_ref
-                        && name == "name"
-                        && !super::class_registry::class_static_key_deleted(class_id, &name)
-                        && super::class_registry::lookup_static_method_in_chain(class_id, &name)
-                            .is_none()
-                        && super::class_registry::class_static_defined_attrs(class_id, &name)
+                        && name_str == Some("name")
+                        && !super::class_registry::class_static_key_deleted_bytes(class_id, name)
+                        && super::class_registry::lookup_static_method_in_chain_bytes(
+                            class_id, name,
+                        )
+                        .is_none()
+                        && super::class_registry::class_static_defined_attrs_bytes(class_id, name)
                             .is_none_or(|(writable, _, _)| !writable)
                     {
                         return;
                     }
                     let has_own_data =
-                        crate::object::class_value::class_static_get(class_id, &name).is_some();
+                        crate::object::class_value::class_static_get_bytes(class_id, name)
+                            .is_some();
                     if !has_own_data
-                        && super::class_registry::class_static_accessor_setter_apply(
-                            class_id, &name, recv, value,
+                        && super::class_registry::class_static_accessor_setter_apply_bytes(
+                            class_id, name, recv, value,
                         )
                     {
                         return;
@@ -483,7 +493,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     // from Function.prototype. Prototype refs are plain objects.
                     if !is_prototype_ref
                         && !has_own_data
-                        && matches!(name.as_str(), "caller" | "arguments")
+                        && matches!(name_str, Some("caller" | "arguments"))
                     {
                         crate::fs::validate::throw_type_error_with_code(
                             "Restricted function property access",
@@ -494,13 +504,21 @@ pub extern "C" fn js_object_set_field_by_name(
                         // A read-only own static (defineProperty writable:false):
                         // strict-mode [[Set]] throws; the value stays.
                         if has_own_data
-                            && super::class_registry::class_static_defined_attrs(class_id, &name)
-                                .is_some_and(|(writable, _, _)| !writable)
+                            && super::class_registry::class_static_defined_attrs_bytes(
+                                class_id, name,
+                            )
+                            .is_some_and(|(writable, _, _)| !writable)
                         {
-                            let message = format!(
-                                "Cannot assign to read only property '{name}' of function '{}'",
-                                super::class_registry::class_ref_to_string(class_id)
-                            );
+                            let class_name = super::class_registry::class_ref_to_string(class_id);
+                            let message = if let Some(name) = name_str {
+                                format!(
+                                    "Cannot assign to read only property '{name}' of function '{class_name}'"
+                                )
+                            } else {
+                                format!(
+                                    "Cannot assign to read only property of function '{class_name}'"
+                                )
+                            };
                             crate::node_submodules::diagnostics::throw_type_error_no_code(
                                 message.as_bytes(),
                             );
@@ -509,7 +527,13 @@ pub extern "C" fn js_object_set_field_by_name(
                         // property dispatch and the LLVM global used by direct
                         // `C.name` reads. Keep both coherent for every runtime
                         // spelling, including a genuinely dynamic `C[key]`.
-                        class_ref_dynamic_prop_root_store(class_id, &name, value);
+                        if let Some(name) = name_str {
+                            class_ref_dynamic_prop_root_store(class_id, name, value);
+                        } else {
+                            crate::object::class_value::class_static_set_bytes(
+                                class_id, name, value,
+                            );
+                        }
                     }
                 }
                 return;

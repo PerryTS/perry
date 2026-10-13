@@ -559,13 +559,22 @@ pub(crate) fn closure_define_data_with_attrs(
     value: f64,
     attrs: crate::object::PropertyAttrs,
 ) {
+    closure_define_data_with_attrs_bytes(ptr, prop.as_bytes(), value, attrs)
+}
+
+pub(crate) fn closure_define_data_with_attrs_bytes(
+    ptr: usize,
+    prop: &[u8],
+    value: f64,
+    attrs: crate::object::PropertyAttrs,
+) {
     if !is_closure_ptr(ptr) {
         return;
     }
     crate::object::prop_plan::prop_plan_epoch_bump_for_owner(ptr);
     unsafe {
-        super::props::bag_define_data_with_attrs(ptr, prop, value, attrs.bits);
-        super::props::state_clear_deleted(ptr, prop);
+        super::props::bag_define_data_with_attrs_bytes(ptr, prop, value, attrs.bits);
+        super::props::state_clear_deleted_bytes(ptr, prop);
     }
     super::shape::refresh_closure_shape(ptr);
 }

@@ -9,6 +9,79 @@ use super::*;
 pub(crate) mod own_keys;
 pub(crate) use own_keys::{OwnNamesSnapshot, OwnProperty};
 
+unsafe fn class_ref_wtf8_own_property(
+    obj_value: f64,
+    class_id: u32,
+    key_value: f64,
+    name: &[u8],
+) -> Option<OwnProperty> {
+    let is_prototype = super::class_prototype_ref_id(obj_value).is_some();
+    if is_prototype {
+        if super::class_registry::class_proto_key_deleted_bytes(class_id, name) {
+            return None;
+        }
+        if let Some(proto) =
+            super::class_registry::decl_prototype_own_accessor_bytes(class_id, name)
+        {
+            return own_property(proto, key_value);
+        }
+        if super::native_module::class_has_own_method_bytes(class_id, name) {
+            if let Some(value) =
+                super::class_registry::class_method_slot_value_bytes(class_id, name)
+            {
+                return OwnProperty::data(f64::from_bits(value), true, false, true);
+            }
+        }
+        return None;
+    }
+
+    if super::class_registry::class_static_key_deleted_bytes(class_id, name) {
+        return None;
+    }
+    if let Some((accessor, attrs)) =
+        super::class_registry::class_dynamic_static_accessor_descriptor_bytes(
+            class_id, name, obj_value,
+        )
+    {
+        let undefined = crate::value::TAG_UNDEFINED;
+        return OwnProperty::accessor(
+            f64::from_bits(if accessor.get == 0 {
+                undefined
+            } else {
+                accessor.get
+            }),
+            f64::from_bits(if accessor.set == 0 {
+                undefined
+            } else {
+                accessor.set
+            }),
+            attrs.enumerable(),
+            attrs.configurable(),
+        );
+    }
+    if let Some(descriptor) =
+        crate::object::class_value::class_static_accessor_descriptor_bytes(class_id, name)
+    {
+        return OwnProperty::public(descriptor);
+    }
+    if let Some(value) = super::class_registry::class_own_static_field_value_bytes(class_id, name) {
+        let (writable, enumerable, configurable) =
+            super::class_registry::class_static_defined_attrs_bytes(class_id, name)
+                .unwrap_or((true, true, true));
+        return OwnProperty::data(value, writable, enumerable, configurable);
+    }
+    if super::class_registry::lookup_static_method_owner_bytes(class_id, name)
+        .is_some_and(|(owner, _)| owner == class_id)
+    {
+        if let Some(value) =
+            crate::object::class_value::inherited_static_method_value_bytes(class_id, name)
+        {
+            return OwnProperty::data(value, true, false, true);
+        }
+    }
+    None
+}
+
 fn property_name_array_index(name: &str) -> Option<u32> {
     if name.is_empty() || (name.len() > 1 && name.as_bytes()[0] == b'0') {
         return None;
@@ -33,6 +106,30 @@ pub(crate) fn sort_property_names_ecma(names: &mut Vec<String>) {
     indexed.sort_by_key(|(index, _)| *index);
     names.extend(indexed.into_iter().map(|(_, name)| name));
     names.extend(rest);
+}
+
+fn sort_property_name_bytes_ecma(names: &mut Vec<Vec<u8>>) {
+    let mut indexed = Vec::new();
+    let mut rest = Vec::new();
+    for name in names.drain(..) {
+        let index = std::str::from_utf8(&name)
+            .ok()
+            .and_then(property_name_array_index);
+        if let Some(index) = index {
+            indexed.push((index, name));
+        } else {
+            rest.push(name);
+        }
+    }
+    indexed.sort_by_key(|(index, _)| *index);
+    names.extend(indexed.into_iter().map(|(_, name)| name));
+    names.extend(rest);
+}
+
+fn push_unique_name_bytes(names: &mut Vec<Vec<u8>>, name: Vec<u8>) {
+    if !names.iter().any(|existing| existing == &name) {
+        names.push(name);
+    }
 }
 
 fn push_unique_name(names: &mut Vec<String>, name: String) {
@@ -244,15 +341,13 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         {
             let metadata_scope = crate::gc::RuntimeHandleScope::new();
             let metadata_obj_value = metadata_scope.root_nanbox_u64(obj_value.to_bits());
-            if let Some(method_name) = metadata_key_to_string(key_value) {
+            if let Some(method_name) = super::metadata_key_to_bytes(key_value) {
                 let obj_value = f64::from_bits(metadata_obj_value.get_nanbox_u64());
                 let class_obj = extract_obj_ptr(obj_value);
                 if !class_obj.is_null() {
                     // `prototype`: `{ !w, !e, !c }`, owned for the object's
                     // whole life (`class_object_has_prototype_property`).
-                    if super::field_get_set::class_object_has_prototype_property(
-                        method_name.as_bytes(),
-                    ) {
+                    if super::field_get_set::class_object_has_prototype_property(&method_name) {
                         let proto = f64::from_bits(
                             super::field_get_set::class_object_prototype_value(class_obj).bits(),
                         );
@@ -260,7 +355,7 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     }
                     let class_id = super::js_object_get_class_id(class_obj);
                     if let Some((acc, attrs)) =
-                        super::class_registry::class_dynamic_static_accessor_descriptor(
+                        super::class_registry::class_dynamic_static_accessor_descriptor_bytes(
                             class_id,
                             &method_name,
                             obj_value,
@@ -273,6 +368,14 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                             attrs.enumerable(),
                             attrs.configurable(),
                         );
+                    }
+                    if let Some(descriptor) =
+                        crate::object::class_value::class_static_accessor_descriptor_bytes(
+                            class_id,
+                            &method_name,
+                        )
+                    {
+                        return OwnProperty::public(descriptor);
                     }
                 }
             }
@@ -446,8 +549,19 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         }
 
         if let Some(class_id) = class_ref_id(obj_value) {
-            let method_name = metadata_key_to_string(key_value);
-            if let Some(method_name) = method_name {
+            let method_name = super::metadata_key_to_bytes(key_value);
+            if let Some(method_name_bytes) = method_name {
+                let method_name = match String::from_utf8(method_name_bytes.clone()) {
+                    Ok(name) => name,
+                    Err(_) => {
+                        return class_ref_wtf8_own_property(
+                            obj_value,
+                            class_id,
+                            key_value,
+                            &method_name_bytes,
+                        )
+                    }
+                };
                 if if class_prototype_ref_id(obj_value).is_some() {
                     super::class_registry::class_proto_key_deleted(class_id, &method_name)
                 } else {
@@ -1161,28 +1275,32 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 if let Some(fo) = crate::object::class_value::class_value_if_minted(class_id) {
                     let ptr = fo as usize;
                     // This agent's live class closure (the enclosing `unsafe`).
-                    let names = crate::closure::props::bag_own_key_names(ptr);
-                    let mut out: Vec<String> = Vec::new();
-                    for intrinsic in ["length", "name", "prototype"] {
+                    let names = crate::closure::bag_own_key_names_bytes(ptr);
+                    let mut out: Vec<Vec<u8>> = Vec::new();
+                    for intrinsic in [b"length".as_slice(), b"name", b"prototype"] {
                         if !names.iter().any(|n| n == intrinsic)
-                            && !crate::closure::closure_is_key_deleted(ptr, intrinsic)
-                            && (intrinsic == "prototype"
+                            && !crate::closure::closure_is_key_deleted(
+                                ptr,
+                                std::str::from_utf8(intrinsic).unwrap(),
+                            )
+                            && (intrinsic == b"prototype"
                                 || !super::class_registry::class_static_key_deleted(
-                                    class_id, intrinsic,
+                                    class_id,
+                                    std::str::from_utf8(intrinsic).unwrap(),
                                 ))
                         {
-                            out.push(intrinsic.to_string());
+                            out.push(intrinsic.to_vec());
                         }
                     }
                     for name in names {
-                        if name.starts_with('#')
-                            || super::field_get_set::is_internal_runtime_key(&name)
+                        if name.starts_with(b"#")
+                            || super::field_get_set::is_internal_runtime_key_bytes(&name)
                         {
                             continue;
                         }
-                        push_unique_name(&mut out, name);
+                        push_unique_name_bytes(&mut out, name);
                     }
-                    sort_property_names_ecma(&mut out);
+                    sort_property_name_bytes_ecma(&mut out);
                     let result = crate::array::js_array_alloc(out.len() as u32);
                     for name in out {
                         let str_ptr =
@@ -1192,44 +1310,41 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
                 }
             }
-            let mut names: Vec<String> = if is_prototype_ref {
-                vec!["constructor".to_string()]
+            let mut names: Vec<Vec<u8>> = if is_prototype_ref {
+                vec![b"constructor".to_vec()]
             } else {
-                vec![
-                    "length".to_string(),
-                    "name".to_string(),
-                    "prototype".to_string(),
-                ]
+                vec![b"length".to_vec(), b"name".to_vec(), b"prototype".to_vec()]
             };
             for name in
                 super::class_registry::class_own_string_member_names(class_id, !is_prototype_ref)
             {
                 let deleted = if is_prototype_ref {
-                    super::class_registry::class_proto_key_deleted(class_id, &name)
+                    super::class_registry::class_proto_key_deleted_bytes(class_id, &name)
                 } else {
-                    super::class_registry::class_static_key_deleted(class_id, &name)
+                    super::class_registry::class_static_key_deleted_bytes(class_id, &name)
                 };
                 if !deleted {
-                    push_unique_name(&mut names, name);
+                    push_unique_name_bytes(&mut names, name);
                 }
             }
             if !is_prototype_ref {
                 for name in super::class_registry::class_own_dynamic_prop_names(class_id) {
-                    push_unique_name(&mut names, name);
+                    push_unique_name_bytes(&mut names, name.into_bytes());
                 }
                 // Accessor properties a `defineProperty` added.
-                for name in crate::object::class_value::class_static_accessor_names(class_id) {
-                    push_unique_name(&mut names, name);
+                for name in crate::object::class_value::class_static_accessor_names_bytes(class_id)
+                {
+                    push_unique_name_bytes(&mut names, name);
                 }
             }
             names.retain(|n| {
-                !super::field_get_set::is_internal_runtime_key(n)
+                !super::field_get_set::is_internal_runtime_key_bytes(n)
                     // A deleted `length` / `name` is no longer own.
                     && !(!is_prototype_ref
-                        && matches!(n.as_str(), "length" | "name")
-                        && super::class_registry::class_static_key_deleted(class_id, n))
+                        && (n.as_slice() == b"length" || n.as_slice() == b"name")
+                        && super::class_registry::class_static_key_deleted_bytes(class_id, n))
             });
-            sort_property_names_ecma(&mut names);
+            sort_property_name_bytes_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {
                 let str_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -1410,7 +1525,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         if let Some(class_id) =
             super::class_registry::class_id_for_decl_prototype_object(obj as usize)
         {
-            let mut physical = Vec::new();
+            let mut physical: Vec<Vec<u8>> = Vec::new();
             let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             for i in 0..len {
                 let key_val = crate::array::js_array_get(keys, pos(i));
@@ -1432,27 +1547,25 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 {
                     continue;
                 }
-                if let Ok(name) = std::str::from_utf8(bytes) {
-                    push_unique_name(&mut physical, name.to_string());
-                }
+                push_unique_name_bytes(&mut physical, bytes.to_vec());
             }
 
-            let mut names = Vec::new();
-            if physical.iter().any(|name| name == "constructor") {
-                names.push("constructor".to_string());
+            let mut names: Vec<Vec<u8>> = Vec::new();
+            if physical.iter().any(|name| name == b"constructor") {
+                names.push(b"constructor".to_vec());
             }
             for name in super::class_registry::class_own_string_member_names(class_id, false) {
-                if super::class_registry::class_proto_key_deleted(class_id, &name) {
+                if super::class_registry::class_proto_key_deleted_bytes(class_id, &name) {
                     continue;
                 }
                 if physical.contains(&name) {
-                    push_unique_name(&mut names, name);
+                    push_unique_name_bytes(&mut names, name);
                 }
             }
             for name in physical {
-                push_unique_name(&mut names, name);
+                push_unique_name_bytes(&mut names, name);
             }
-            sort_property_names_ecma(&mut names);
+            sort_property_name_bytes_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);

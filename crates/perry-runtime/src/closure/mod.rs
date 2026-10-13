@@ -91,7 +91,8 @@ pub(crate) use dynamic_props::{
     function_prototype_inherited_get,
 };
 pub(crate) use dynamic_props::{
-    closure_define_data_with_attrs, closure_define_first_props_with_attrs,
+    closure_define_data_with_attrs, closure_define_data_with_attrs_bytes,
+    closure_define_first_props_with_attrs,
 };
 pub use dynamic_props::{
     closure_define_dynamic_prop, closure_define_first_props, closure_delete_own_dynamic_prop,
@@ -100,8 +101,7 @@ pub use dynamic_props::{
     closure_set_dynamic_prop, closure_set_static_prototype, closure_static_prototype,
     is_closure_bits, is_closure_ptr,
 };
-#[cfg(feature = "wasm-host")]
-pub(crate) use wasm_funcref::register_wasm_funcref_external;
+pub(crate) use props::bag_own_key_names_bytes;
 
 // v8_stubs re-exports the AOT stubs + non-macOS Rust V8-interop stubs.
 #[cfg(not(target_os = "macos"))]

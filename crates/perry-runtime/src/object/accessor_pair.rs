@@ -336,6 +336,10 @@ pub(crate) unsafe fn own_accessor(obj: usize, key: &[u8]) -> Option<Accessor> {
 /// `obj` is a live object whose attributes live with its keys, and `key` is
 /// one of its own keys.
 pub(crate) unsafe fn store_own_accessor(obj: usize, key: &str, acc: Option<Accessor>) {
+    store_own_accessor_bytes(obj, key.as_bytes(), acc);
+}
+
+pub(crate) unsafe fn store_own_accessor_bytes(obj: usize, key: &[u8], acc: Option<Accessor>) {
     let _no_move = crate::gc::GcSuppressScope::new();
     let value = match acc {
         Some(acc) => crate::value::js_nanbox_pointer(pair_new(acc) as i64),

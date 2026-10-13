@@ -307,30 +307,38 @@ pub(super) fn build_bound_method_closure_with_private_brand(
         }
     });
     if !method_name_ptr.is_null() && method_name_len > 0 {
-        if let Ok(name) = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
-        } {
+        let name_bytes = unsafe { std::slice::from_raw_parts(method_name_ptr, method_name_len) };
+        let native_length = if let Ok(name) = std::str::from_utf8(name_bytes) {
             closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
                 set_bound_native_closure_name(closure, name)
             });
-            if let Some(length) = bound_native_method_length(name) {
+            bound_native_method_length(name)
+        } else {
+            super::set_function_name_bytes(
+                closure_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                    crate::value::js_nanbox_pointer(closure as i64)
+                }),
+                name_bytes,
+            );
+            None
+        };
+        if let Some(length) = native_length {
+            closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+                set_builtin_closure_length(closure as usize, length)
+            });
+        } else if let Some(class_id) =
+            class_id_from_method_receiver(instance_handle.get_nanbox_f64())
+        {
+            // User class method bound as a value (`C.prototype.m`, `c.m`):
+            // stamp its spec `.length` from the registered param count so
+            // `C.prototype.m.length` reflects the declared arity instead of
+            // the closure's capture count (Test262 method `.length` tests).
+            if let Some(length) =
+                super::class_registry::class_method_bind_length_bytes(class_id, name_bytes)
+            {
                 closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
                     set_builtin_closure_length(closure as usize, length)
                 });
-            } else if let Some(class_id) =
-                class_id_from_method_receiver(instance_handle.get_nanbox_f64())
-            {
-                // User class method bound as a value (`C.prototype.m`, `c.m`):
-                // stamp its spec `.length` from the registered param count so
-                // `C.prototype.m.length` reflects the declared arity instead of
-                // the closure's capture count (Test262 method `.length` tests).
-                if let Some(length) =
-                    super::class_registry::class_method_bind_length(class_id, name)
-                {
-                    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-                        set_builtin_closure_length(closure as usize, length)
-                    });
-                }
             }
         }
     }

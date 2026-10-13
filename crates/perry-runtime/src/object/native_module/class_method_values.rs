@@ -3,15 +3,29 @@ pub(crate) fn class_evaluation_method_value_for_name(
     method_name: &str,
     evaluation_brand: f64,
 ) -> f64 {
+    class_evaluation_method_value_for_name_bytes(
+        owner_class_id,
+        method_name.as_bytes(),
+        evaluation_brand,
+    )
+}
+
+pub(crate) fn class_evaluation_method_value_for_name_bytes(
+    owner_class_id: u32,
+    method_name: &[u8],
+    evaluation_brand: f64,
+) -> f64 {
     // A template compiled with method entries gives each evaluation's
     // prototype its own function object per method (`<method>__eclo`): that
     // is the evaluation's method value while the prototype still holds it.
     if let Some(value) =
-        evaluation_prototype_method_value(owner_class_id, method_name, evaluation_brand)
+        evaluation_prototype_method_value_bytes(owner_class_id, method_name, evaluation_brand)
     {
         return value;
     }
-    let cache_key = format!("#<perry:class-evaluation-method:{owner_class_id}:{method_name}>");
+    let mut cache_key = format!("#<perry:class-evaluation-method:{owner_class_id}:").into_bytes();
+    cache_key.extend_from_slice(method_name);
+    cache_key.push(b'>');
     let cached = crate::object::js_object_get_own_field_or_undef(
         evaluation_brand,
         cache_key.as_ptr(),
@@ -23,14 +37,15 @@ pub(crate) fn class_evaluation_method_value_for_name(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let brand = scope.root_nanbox_f64(evaluation_brand);
-    let leaked = intern_class_method_name(owner_class_id, method_name);
+    let name = intern_class_method_name_bytes(owner_class_id, method_name);
     let method = build_bound_method_closure_with_private_brand(
         class_prototype_ref_value(owner_class_id),
-        leaked.as_ptr(),
-        leaked.len(),
+        name.as_ptr(),
+        name.len(),
         Some(brand.get_nanbox_f64()),
     );
     let method = scope.root_nanbox_f64(method);
+    set_function_name_bytes(method.get_nanbox_f64(), method_name);
     let key = crate::string::js_string_from_bytes(cache_key.as_ptr(), cache_key.len() as u32);
     let key = scope.root_string_ptr(key);
     let class_obj = JSValue::from_bits(brand.get_nanbox_f64().to_bits())
@@ -38,16 +53,40 @@ pub(crate) fn class_evaluation_method_value_for_name(
     let class_obj = scope.root_raw_mut_ptr(class_obj);
     class_obj.with_mut_ptr::<ObjectHeader, _>(|class_obj| {
         key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            crate::object::define_builtin_data_property(
+            crate::object::descriptor_state::define_builtin_data_property_bytes(
                 class_obj,
                 key,
                 method.get_nanbox_f64(),
-                cache_key.clone(),
+                &cache_key,
                 crate::object::PropertyAttrs::new(true, true, true),
             );
         });
     });
     method.get_nanbox_f64()
+}
+
+pub(crate) fn set_function_name_bytes(function: f64, name: &[u8]) {
+    let value = crate::JSValue::from_bits(function.to_bits());
+    if !value.is_pointer() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let function = scope
+        .root_raw_mut_ptr(value.as_pointer::<crate::closure::ClosureHeader>()
+            as *mut crate::closure::ClosureHeader);
+    let name = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name = scope.root_string_ptr(name);
+    function.with_mut_ptr::<crate::closure::ClosureHeader, _>(|function| {
+        let value = name.with_const_ptr::<crate::StringHeader, _>(|name| {
+            crate::value::js_nanbox_string(name as i64)
+        });
+        crate::closure::closure_define_data_with_attrs(
+            function as usize,
+            "name",
+            value,
+            crate::object::PropertyAttrs::new(false, false, true),
+        );
+    });
 }
 
 pub(crate) fn class_private_static_method_value_for_name(
@@ -112,16 +151,20 @@ pub(crate) fn class_private_static_method_value_for_name(
     class_declaration_value_store(owner_class_id, kind, method_name, method.to_bits());
     method
 }
-static CLASS_METHOD_NAME_INTERNER: OnceLock<RwLock<HashMap<(u32, String), &'static [u8]>>> =
+static CLASS_METHOD_NAME_INTERNER: OnceLock<RwLock<HashMap<(u32, Vec<u8>), &'static [u8]>>> =
     OnceLock::new();
 
 /// Stable storage for the method-name pointer captured by bound-method
 /// closures. The key set is bounded by the program's declared class methods,
 /// even when one class expression is evaluated arbitrarily many times.
 pub(super) fn intern_class_method_name(class_id: u32, method_name: &str) -> &'static [u8] {
+    intern_class_method_name_bytes(class_id, method_name.as_bytes())
+}
+
+pub(super) fn intern_class_method_name_bytes(class_id: u32, method_name: &[u8]) -> &'static [u8] {
     let interner =
         crate::once_init::get_or_init(&CLASS_METHOD_NAME_INTERNER, || RwLock::new(HashMap::new()));
-    let key = (class_id, method_name.to_string());
+    let key = (class_id, method_name.to_vec());
     if let Ok(guard) = interner.read() {
         if let Some(bytes) = guard.get(&key).copied() {
             return bytes;
@@ -133,7 +176,7 @@ pub(super) fn intern_class_method_name(class_id: u32, method_name: &str) -> &'st
     if let Some(bytes) = guard.get(&key).copied() {
         return bytes;
     }
-    let bytes: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    let bytes: &'static [u8] = method_name.to_vec().leak();
     guard.insert(key, bytes);
     bytes
 }
@@ -152,7 +195,11 @@ pub(crate) fn build_bound_method_closure(
 /// `owner_class_id`) holds for method `name` in its prototype, while that
 /// prototype's own `name` is still the declaration's entry-backed function at
 /// home in `brand`. `None` for a template without method entries.
-fn evaluation_prototype_method_value(owner_class_id: u32, name: &str, brand: f64) -> Option<f64> {
+fn evaluation_prototype_method_value_bytes(
+    owner_class_id: u32,
+    name: &[u8],
+    brand: f64,
+) -> Option<f64> {
     if !class_registry::is_class_object_value(brand) {
         return None;
     }
@@ -164,7 +211,7 @@ fn evaluation_prototype_method_value(owner_class_id: u32, name: &str, brand: f64
     // an existing holder only; asking to build it here would recurse for a
     // declaration without a closure-convention entry.
     let proto = crate::object::field_get_set::class_object_materialized_prototype(class)?;
-    let value = class_registry::class_object_own_field_bytes(proto, name.as_bytes())?;
+    let value = class_registry::class_object_own_field_bytes(proto, name)?;
     let closure = JSValue::from_bits(value.to_bits());
     if !closure.is_pointer() {
         return None;

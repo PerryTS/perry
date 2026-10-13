@@ -233,10 +233,8 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         if is_accessor {
             // S2: an accessor is a real accessor property of this prototype.
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                super::super::class_registry::install_decl_prototype_accessor(
-                    proto,
-                    class_id,
-                    std::str::from_utf8(&name).expect("accessor name"),
+                super::super::class_registry::install_decl_prototype_accessor_bytes(
+                    proto, class_id, &name,
                 )
             });
             continue;
@@ -248,22 +246,27 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         // The evaluation's own function object for the method: its entry runs
         // the method at home in this evaluation (`<method>__eclo`). A template
         // compiled without entries keeps the by-name method value.
-        let method =
-            super::class_object_template::evaluation_method_value(class_id, &name, class_value)
-                .unwrap_or_else(|| {
-                    super::super::native_module::class_evaluation_method_value_for_name(
-                        class_id,
-                        std::str::from_utf8(&name).expect("method without entry"),
-                        class_value,
-                    )
-                });
+        let method = super::class_object_template::evaluation_method_value_bytes(
+            class_id,
+            &name,
+            class_value,
+        )
+        .unwrap_or_else(|| {
+            super::super::native_module::class_evaluation_method_value_for_name_bytes(
+                class_id,
+                &name,
+                class_value,
+            )
+        });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
-                crate::object::object_ops::define_property_force_store_value(proto, key, method);
-                crate::object::key_attrs::apply_edits(
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::descriptor_state::define_builtin_data_property_bytes(
                     proto,
-                    &[crate::object::key_attrs::AttrsEdit::Data(&name, 5)],
-                );
+                    key,
+                    method,
+                    &name,
+                    PropertyAttrs::new(true, false, true),
+                )
             });
         });
     }
@@ -336,22 +339,23 @@ pub(crate) unsafe fn define_class_object_own_properties(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_raw_mut_ptr(obj);
-    let define = |name: &str, value: f64, attrs: (bool, bool, bool)| {
+    let define_bytes = |name: &[u8], value: f64, attrs: (bool, bool, bool)| {
         let value = scope.root_nanbox_f64(value);
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = scope.root_string_ptr(key);
         class.with_mut_ptr::<ObjectHeader, _>(|class| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                define_builtin_data_property(
+                crate::object::descriptor_state::define_builtin_data_property_bytes(
                     class,
                     key,
                     value.get_nanbox_f64(),
-                    name.to_string(),
+                    name,
                     PropertyAttrs::new(attrs.0, attrs.1, attrs.2),
                 )
             })
         });
     };
+    let define = |name: &str, value: f64, attrs| define_bytes(name.as_bytes(), value, attrs);
     for (bit, key) in [(1, "length"), (2, "name")] {
         // A static method of this name replaces the value (and the attributes)
         // in the same position, below; a static accessor leaves nothing here.
@@ -382,7 +386,9 @@ pub(crate) unsafe fn define_class_object_own_properties(
         // it is called (`js_static_method_entry_enter_home`). An accessor has
         // no entry.
         let Some(code) =
-            super::super::class_registry::class_own_static_method_code(class_id, &name)
+            super::super::class_registry::parent_static::class_own_static_method_code_bytes(
+                class_id, &name,
+            )
         else {
             continue;
         };
@@ -390,15 +396,24 @@ pub(crate) unsafe fn define_class_object_own_properties(
         if f.is_null() {
             continue;
         }
-        class.with_mut_ptr::<ObjectHeader, _>(|class| {
-            super::class_object_template::set_static_method_home(
-                f,
-                crate::value::js_nanbox_pointer(class as i64),
-            )
+        let f = scope.root_raw_mut_ptr(f);
+        let f_value = f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
+            crate::value::js_nanbox_pointer(f as i64)
         });
-        define(
+        crate::object::native_module::set_function_name_bytes(f_value, &name);
+        f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f| {
+            class.with_mut_ptr::<ObjectHeader, _>(|class| {
+                super::class_object_template::set_static_method_home(
+                    f,
+                    crate::value::js_nanbox_pointer(class as i64),
+                )
+            })
+        });
+        define_bytes(
             &name,
-            crate::value::js_nanbox_pointer(f as i64),
+            f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
+                crate::value::js_nanbox_pointer(f as i64)
+            }),
             (true, false, true),
         );
     }
