@@ -1,0 +1,58 @@
+# path | owning function | exact raw-test count | why a header-only (POINTER_TAG) test is right here
+# Gate: scripts/reference_test_inventory.py. A JavaScript-semantic branch uses JSValue::is_reference()
+# (heap object OR native handle, #12540); is_pointer() only where the next step reads a GC header.
+crates/perry-runtime/src/builtins/numbers.rs | js_number_coerce | 1 | Heap-object arm (symbol brand, Date cell, array join, typed array); HANDLE_TAG took the ToPrimitive arm just above it.
+crates/perry-runtime/src/value/addr_class.rs | object_ref_addr | 1 | Header address of a heap object reference.
+crates/perry-runtime/src/value/dyn_index.rs | js_dyn_index_get | 3 | Heap-only fast paths (string-key IC, typed-array index, raw-word gate); handles take the generic reference path.
+crates/perry-runtime/src/value/dyn_index.rs | js_dyn_index_set_strict | 8 | After the handle arm returns through [[Set]], only heap and raw allocator-owned receivers remain; selects their header-safe form.
+crates/perry-runtime/src/value/dynamic_object.rs | js_value_length_f64 | 1 | Buffer/typed-array/heap length reads by header.
+crates/perry-runtime/src/value/equality.rs | is_plain_number | 2 | Forwarding resolution of two heap objects (reads GC headers).
+crates/perry-runtime/src/value/equality.rs | extract_string_ptr | 1 | Legacy string pointer extraction from a heap word.
+crates/perry-runtime/src/value/jsvalue.rs | is_pointer | 1 | The definition of the representation test.
+crates/perry-runtime/src/value/jsvalue.rs | as_pointer | 1 | The debug contract of as_pointer itself.
+crates/perry-runtime/src/value/jsvalue.rs | fmt | 1 | Debug formatting of a heap word; handles have their own arm.
+crates/perry-runtime/src/value/nanbox.rs | js_nanbox_is_pointer | 1 | FFI representation test (POINTER_TAG only) for callers that read a header.
+crates/perry-runtime/src/value/nanbox.rs | js_get_string_pointer_unified | 1 | Legacy cross-module string pointer extraction.
+crates/perry-runtime/src/value/tags.rs | is_reference_bits | 1 | The definition of the canonical reference test.
+crates/perry-runtime/src/value/to_string_array.rs | array_prototype_to_string_override | 2 | Proves a heap prototype object / closure method before a header read or call.
+crates/perry-runtime/src/value/to_string_array.rs | call_array_prototype_to_string_method | 1 | Proves a heap prototype object before a header read.
+crates/perry-runtime/src/value/to_string_primitive.rs | value_is_null_proto_object | 1 | Reads the heap object prototype; a handle is never null-prototype.
+crates/perry-runtime/src/value/to_string_primitive.rs | function_to_string_method_result | 1 | Proves a heap closure.
+crates/perry-runtime/src/value/to_string_primitive.rs | call_own_method | 1 | The method must be a heap closure to be called.
+crates/perry-runtime/src/value/to_string_primitive.rs | ordinary_to_primitive_number_for_add | 1 | Typed-array and closure registry probes on a heap word.
+crates/perry-runtime/src/value/to_string_primitive.rs | call_method_for_primitive | 1 | The method must be a heap closure to be called.
+crates/perry-runtime/src/value/to_string_primitive.rs | call_function_method | 2 | Proves a heap closure receiver and method before calling.
+crates/perry-runtime/src/value/to_string_primitive.rs | function_method_value | 1 | Function.prototype is a heap object.
+crates/perry-runtime/src/value/truthy.rs | js_is_truthy | 1 | Zero-payload falsy check of the heap word; HANDLE_TAG has its own arm.
+crates/perry-runtime/src/builtins/arithmetic.rs | classify_value_typeof | 1 | Header kind read; HANDLE_TAG and V8 handles are classified by the arms above it.
+crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs | attach_boxed_primitive_prototype | 2 | Boxed-primitive constructor and prototype are heap closures/objects; header writes.
+crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs | boxed_primitive_payload | 1 | Boxed primitives are heap objects; reads their class id and payload field.
+crates/perry-runtime/src/builtins/formatting/collection_equality.rs | heap_value_type | 1 | Reads the GC header type byte.
+crates/perry-runtime/src/builtins/formatting/deep_equal.rs | js_util_deep_strict_equal_bool | 2 | Routes heap operands to the header-reading prototype gate; handles take the identity/format compare.
+crates/perry-runtime/src/builtins/formatting/identity_equality.rs | is_weak_collection_value | 1 | WeakMap/WeakSet are heap objects; reads the header.
+crates/perry-runtime/src/builtins/formatting/typed_array_equality.rs | value_pointer_addr | 1 | Typed arrays and buffers are heap allocations; brand probe reads the header.
+crates/perry-runtime/src/builtins/formatting/util_format.rs | util_format_json_value_has_cycle | 1 | Walks heap object/array fields for cycle detection.
+crates/perry-runtime/src/builtins/formatting/util_format.rs | util_format_s_inspects | 1 | Decides inspect-vs-String for heap objects; a handle takes the String() route, as before #12529.
+crates/perry-runtime/src/builtins/formatting/util_format.rs | object_has_a_user_to_string | 1 | Proves a callable closure (heap) before calling it.
+crates/perry-runtime/src/builtins/console.rs | is_console_instance_value | 1 | Console instances are heap objects; reads their header.
+crates/perry-runtime/src/builtins/console.rs | console_instance_state | 1 | Reads a native_state word the runtime stored as a heap array pointer.
+crates/perry-runtime/src/builtins/console.rs | console_label_from_value | 1 | Symbol-cell probe before js_string_coerce, which owns the reference ladder.
+crates/perry-runtime/src/builtins/console.rs | object_property | 1 | Reads an ObjectHeader field of a console options object.
+crates/perry-runtime/src/builtins/console.rs | value_gc_type | 1 | Reads the GC header type byte.
+crates/perry-runtime/src/builtins/console.rs | js_console_count_reset_value | 1 | Symbol-cell probe before js_string_coerce, which owns the reference ladder.
+crates/perry-runtime/src/builtins/console.rs | decode_dir_depth_option | 1 | Reads an options ObjectHeader field; a handle carries no options.
+crates/perry-runtime/src/builtins/console.rs | decode_dir_bool_option | 1 | Reads an options ObjectHeader field; a handle carries no options.
+crates/perry-runtime/src/object/instanceof.rs | value_is_callable | 1 | Callables are heap closures or class refs; a handle is never callable.
+crates/perry-runtime/src/object/instanceof.rs | is_native_module_namespace_value | 1 | Namespace objects are heap ObjectHeaders; reads the header.
+crates/perry-runtime/src/object/instanceof.rs | proto_identity_addr | 1 | Prototype identity of a heap prototype object.
+crates/perry-runtime/src/object/instanceof.rs | subclass_of_builtin_reaches | 1 | Walks a heap ObjectHeader prototype chain.
+crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | classify | 1 | Proves a heap closure (RHS of instanceof) before reading closure info.
+crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | js_instanceof_dynamic | 1 | Raw heap address of a prototype object for the ancestry walk.
+crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | class_shape_reaches | 3 | Shape ancestry of heap class instances; reads headers and shape records.
+crates/perry-runtime/src/object/instanceof/shape_ancestry.rs | physical_target | 1 | Resolves the physical heap target of a forwarded object.
+crates/perry-runtime/src/object/instanceof/static_dispatch.rs | native_instanceof | 7 | Brand probes on heap receivers (header kind / class id); handle receivers are dispatched by the handle-band arms.
+crates/perry-runtime/src/symbol/iterator.rs | js_object_get_own_property_symbols | 1 | Reads the tracked GC header of a heap object.
+crates/perry-runtime/src/symbol/iterator.rs | js_get_iterator | 3 | Heap-only iterator fast paths (arguments object, builtin iterator, URLSearchParams); handles reach the generic Symbol.iterator path.
+crates/perry-runtime/src/symbol/iterator.rs | js_to_primitive | 1 | Looks up [Symbol.toPrimitive] on a heap object; a handle returns unchanged to OrdinaryToPrimitive, which routes it to its native toString.
+crates/perry-runtime/src/thread/clone_write.rs | slot | 1 | structuredClone: heap values serialize by header; a HANDLE_TAG value is rejected as an unsupported native handle.
+crates/perry-runtime/src/thread/clone_write.rs | value | 1 | structuredClone: heap values serialize by header; a HANDLE_TAG value is rejected as an unsupported native handle.

@@ -294,8 +294,7 @@ pub(crate) fn emit_u8_cached_dyn_set(
         let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
         let idx_lt = blk.fcmp("olt", idx_d, "2147483648.0");
         let val_bits = blk.bitcast_double_to_i64(val_double);
-        // 0x7FF9 << 48: the lowest NaN-box tag.
-        let val_is_number = blk.icmp_slt(I64, &val_bits, "9221401712017801216");
+        let val_is_number = crate::codegen::emit_plain_number_bits_test(blk, &val_bits);
         let val_lt = blk.fcmp("olt", val_double, "2147483648.0");
         let val_gt = blk.fcmp("ogt", val_double, "-2147483648.0");
         let g = blk.and(I1, &hit, &idx_ge0);

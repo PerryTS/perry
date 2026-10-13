@@ -667,7 +667,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // with `js_object_keys_value`, which *throws* on `null`/`undefined` instead
     // of skipping it as the spec requires.
     let target_value = JSValue::from_bits(target_f64.to_bits());
-    if !target_value.is_pointer() && !target_value.is_handle() {
+    if !target_value.is_reference() {
         return target_f64;
     }
     // A proxy has no heap header. Feed it to the same descriptor-driven

@@ -293,7 +293,7 @@ pub extern "C" fn js_jsvalue_to_string_radix(
         // Forward the argument to the receiver's own `toString`. A Temporal
         // value routes to its options-aware `toString`; a plain object falls
         // back to `Object.prototype.toString` ([object Object]).
-        if jsval.is_pointer() {
+        if jsval.is_reference() {
             let args = [radix_value];
             let result = unsafe {
                 crate::object::js_native_call_method(

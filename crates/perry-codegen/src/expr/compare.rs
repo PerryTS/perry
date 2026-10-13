@@ -436,15 +436,12 @@ pub(crate) fn lower_string_literal_strict_eq(
 /// Returns an i64 holding `TAG_TRUE`/`TAG_FALSE` (or `js_eq`'s own tagged
 /// boolean), i.e. the same value the bare call produced.
 /// All unboxed IEEE doubles, including NaNs. Boxed values occupy the
-/// positive signed suffix starting at SHORT_STRING_TAG; one signed compare
-/// rejects it. The ordered fcmp predicates below already make NaN unequal
-/// and unordered, so a NaN does not need the coercing helper.
+/// sign-closed tag band (the positive tags and `HANDLE_TAG`'s negative
+/// mirror), so the shared plain-number test rejects them. The ordered fcmp
+/// predicates below already make NaN unequal and unordered, so a NaN does
+/// not need the coercing helper.
 fn emit_is_unboxed_number(ctx: &mut FnCtx<'_>, bits: &str) -> String {
-    ctx.block().icmp_slt(
-        I64,
-        bits,
-        &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-    )
+    crate::codegen::emit_plain_number_bits_test(ctx.block(), bits)
 }
 
 /// Dynamic-operand comparison with an inline plain-number fast path.

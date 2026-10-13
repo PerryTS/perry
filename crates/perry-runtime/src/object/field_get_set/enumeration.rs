@@ -199,9 +199,9 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             return out;
         }
     }
-    if jv.is_pointer() {
-        let ptr = jv.as_pointer::<u8>() as usize;
-        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
+    if jv.is_reference() {
+        let ptr = jv.reference_payload();
+        // A native handle (HANDLE_TAG: zlib stream, fetch Request/Response/
         // Headers/Blob, …) is not an address — never dereference it. Its TYPED
         // surface (`blob.size`, `response.status`) lives on the prototype as
         // accessors, so it contributes no own keys; but anything the USER
@@ -321,7 +321,7 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     // Non-pointer primitives (number/boolean, boxed string) have only their own
     // enumerable keys; every prototype property they inherit is non-enumerable.
-    if !jv.is_pointer() && !jv.is_handle() {
+    if !jv.is_reference() {
         if diag {
             crate::hot_diag::enum_with(|d| d.for_in_primitive += 1);
         }
@@ -386,7 +386,7 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     // Depth cap guards against pathological / cyclic prototype graphs.
     for _ in 0..1000 {
         let cv = JSValue::from_bits(current.get_nanbox_u64());
-        if cv.is_null() || cv.is_undefined() || (!cv.is_pointer() && !cv.is_handle()) {
+        if cv.is_null() || cv.is_undefined() || (!cv.is_reference()) {
             break;
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
@@ -883,9 +883,9 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
             )
         };
     }
-    if jv.is_pointer() {
-        let ptr = jv.as_pointer::<u8>() as usize;
-        // A POINTER_TAG registry handle — see `js_object_keys_value`. Derive the
+    if jv.is_reference() {
+        let ptr = jv.reference_payload();
+        // A native handle (HANDLE_TAG) — see `js_object_keys_value`. Derive the
         // values from its own enumerable keys so a user expando
         // (`handle.foo = 1`) shows up here exactly as it does in `Object.keys`
         // (#6363), instead of dereferencing unmapped low memory.
@@ -995,9 +995,9 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
             )
         };
     }
-    if jv.is_pointer() {
-        let ptr = jv.as_pointer::<u8>() as usize;
-        // A POINTER_TAG registry handle — see `js_object_keys_value` / the
+    if jv.is_reference() {
+        let ptr = jv.reference_payload();
+        // A native handle (HANDLE_TAG) — see `js_object_keys_value` / the
         // `Object.values` twin above (#6363).
         if crate::value::addr_class::is_handle_band(ptr) {
             return handle_own_entries(value, HandleEnum::Entries);

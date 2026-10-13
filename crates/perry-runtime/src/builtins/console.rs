@@ -63,8 +63,8 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
             Some(s) => println!("{}{}", p, s),
             None => println!("{}null", p),
         }
-    } else if jsval.is_pointer() {
-        // Object/array pointer - format as JSON
+    } else if jsval.is_reference() {
+        // Object/array pointer or native handle (#12540) - format as JSON
         println!("{}{}", p, format_jsvalue(value, 0));
     } else if jsval.is_bigint() {
         // Bigint — defer to format_jsvalue which already prints the
@@ -277,8 +277,8 @@ pub extern "C" fn js_console_error_dynamic(value: f64) {
             Some(s) => eprintln!("{}", s),
             None => eprintln!("null"),
         }
-    } else if jsval.is_pointer() {
-        // Object/array pointer - format as JSON
+    } else if jsval.is_reference() {
+        // Object/array pointer or native handle (#12540) - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
     } else if jsval.is_int32() {
         eprintln!("{}", int32_or_class_repr(value));
@@ -338,8 +338,8 @@ pub extern "C" fn js_console_warn_dynamic(value: f64) {
             Some(s) => eprintln!("{}", s),
             None => eprintln!("null"),
         }
-    } else if jsval.is_pointer() {
-        // Object/array pointer - format as JSON
+    } else if jsval.is_reference() {
+        // Object/array pointer or native handle (#12540) - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
     } else if jsval.is_int32() {
         eprintln!("{}", int32_or_class_repr(value));

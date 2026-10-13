@@ -812,7 +812,7 @@ pub extern "C" fn js_object_delete_field(
 /// id (`HANDLE_TAG`, whose own properties are its expandos).
 fn delete_receiver_is_pointer(obj_value: f64) -> bool {
     let value = crate::value::JSValue::from_bits(obj_value.to_bits());
-    value.is_pointer() || value.is_handle()
+    value.is_reference()
 }
 
 /// `[[Delete]]` of class `class_id`'s own string key `name` (the class

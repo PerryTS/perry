@@ -145,16 +145,11 @@ pub(crate) fn bump(counter: &AtomicU64) {
 /// removes ~600 ns of work from every await steady-state iteration.
 #[inline(always)]
 pub(crate) fn is_definitely_primitive(value: f64) -> bool {
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-    let bits = value.to_bits();
-    let tag = bits & TAG_MASK;
-    // Only POINTER_TAG-tagged values can be promises or thenable
-    // objects. Strings (STRING_TAG), bigints (BIGINT_TAG), int32s
-    // (INT32_TAG), bool/null/undefined (TAG_xxx), and raw f64
-    // numbers (no special tag) are all primitives in spec terms. Native ids
-    // (HANDLE_TAG: Proxy, Web Fetch, streams) are objects.
-    tag != POINTER_TAG && tag != crate::value::HANDLE_TAG
+    // Only references (heap objects and native ids — Proxy, Web Fetch,
+    // streams) can be promises or thenable objects. Strings, bigints,
+    // int32s, bool/null/undefined and raw f64 numbers are all primitives in
+    // spec terms.
+    !crate::value::is_reference_bits(value.to_bits())
 }
 
 // Instrumentation counters (set PERRY_MT_PROFILE=1 to print at exit).

@@ -46,7 +46,15 @@ pub(crate) struct EntryArgGuard {
 /// and prevents arithmetic from turning an admitted negative NaN into a tag.
 pub(crate) fn emit_plain_number_test(blk: &mut LlBlock, value: &str) -> String {
     let bits = blk.bitcast_double_to_i64(value);
-    let magnitude = blk.and(I64, &bits, "9223372036854775807");
+    emit_plain_number_bits_test(blk, &bits)
+}
+
+/// [`emit_plain_number_test`] on a word already in an i64 register. The one
+/// emitted form of `JSValue::is_number`: a one-sided signed compare against
+/// the positive tag band admits `HANDLE_TAG` (0xFFF9, a negative NaN) as a
+/// "number", and an `fcmp` on it then answers as if for NaN (#12540).
+pub(crate) fn emit_plain_number_bits_test(blk: &mut LlBlock, bits: &str) -> String {
+    let magnitude = blk.and(I64, bits, "9223372036854775807");
     blk.icmp_ule(I64, &magnitude, PLAIN_NUMBER_MAX_I64)
 }
 

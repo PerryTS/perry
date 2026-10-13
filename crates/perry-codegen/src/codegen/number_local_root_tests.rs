@@ -11,6 +11,8 @@ use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, Function, Module, Param, Stmt};
 
 const SHORT_STRING_TAG_I64: &str = "9221401712017801216";
+/// `SHORT_STRING_TAG - 1`: the shared plain-number test is `|bits| <= this`.
+const PLAIN_NUMBER_MAX_I64: &str = "9221401712017801215";
 const MAGNITUDE_MASK_I64: &str = "9223372036854775807";
 
 fn param(id: u32, ty: Type) -> Param {
@@ -99,8 +101,10 @@ fn number_guard_rejects_the_mirror_of_the_tag_band() {
     for line in &masked {
         let reg = line.trim().split(' ').next().unwrap();
         assert!(
-            ir.lines().any(|l| l.contains("icmp ult i64 ")
-                && l.contains(&format!("{reg}, {SHORT_STRING_TAG_I64}"))),
+            ir.lines().any(|l| (l.contains("icmp ult i64 ")
+                && l.contains(&format!("{reg}, {SHORT_STRING_TAG_I64}")))
+                || (l.contains("icmp ule i64 ")
+                    && l.contains(&format!("{reg}, {PLAIN_NUMBER_MAX_I64}")))),
             "the masked magnitude {reg} must be compared unsigned below the band:\n{ir}"
         );
     }

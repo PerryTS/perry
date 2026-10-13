@@ -623,8 +623,10 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     format!("{}n", num_str)
                 }
             }
-        } else if jsval.is_pointer() {
-            let ptr: *const crate::array::ArrayHeader = jsval.as_pointer();
+        } else if jsval.is_reference() {
+            // A heap object or a native handle (#12540); the handle-band arm
+            // below keeps a handle id away from the GC-header dispatch.
+            let ptr = jsval.reference_payload() as *const crate::array::ArrayHeader;
             if ptr.is_null() {
                 "null".to_string()
             } else if crate::symbol::is_registered_symbol(ptr as usize) {
@@ -1426,8 +1428,10 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     format!("{}n", num_str)
                 }
             }
-        } else if jsval.is_pointer() {
-            let ptr: *const crate::array::ArrayHeader = jsval.as_pointer();
+        } else if jsval.is_reference() {
+            // A heap object or a native handle (#12540); the handle-band arm
+            // below keeps a handle id away from the GC-header dispatch.
+            let ptr = jsval.reference_payload() as *const crate::array::ArrayHeader;
             if ptr.is_null() {
                 "null".to_string()
             } else {

@@ -58,7 +58,7 @@ impl InstanceofRhs {
             } else {
                 RhsKind::Native
             }
-        } else if let Some(id) = (!jv.is_pointer()).then(|| class_ref_id(value)).flatten() {
+        } else if let Some(id) = (!jv.is_reference()).then(|| class_ref_id(value)).flatten() {
             RhsKind::Class(id)
         } else if is_class_object_value(value) {
             RhsKind::ClassObject

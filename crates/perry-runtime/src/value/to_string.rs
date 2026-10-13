@@ -130,7 +130,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
         // BigInt - convert to decimal string
         let ptr = jsval.as_bigint_ptr();
         crate::bigint::js_bigint_to_string(ptr)
-    } else if jsval.is_handle() || jsval.is_pointer() {
+    } else if jsval.is_reference() {
         // Arrays stringify via join; other objects use their own conversion.
         let ptr = (jsval.bits() & POINTER_MASK) as *const u8;
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the

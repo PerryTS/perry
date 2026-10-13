@@ -155,7 +155,7 @@ fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
 /// `this_arg` is a real heap object (not a closure, not another handle).
 pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
     let result_jv = JSValue::from_bits(result.to_bits());
-    if !result_jv.is_pointer() && !result_jv.is_handle() {
+    if !result_jv.is_reference() {
         return;
     }
     let Some(obj_addr) = plain_object_addr_of(this_arg) else {

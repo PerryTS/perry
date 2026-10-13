@@ -257,8 +257,8 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // address is *in range*, so it was dereferenced as an `ObjectHeader` →
     // garbage/crash. Drop the heuristic: a non-pointer receiver is a number and
     // its indexed read is `undefined` on every platform (#63/#321 denormal-safe).
-    let raw_ptr = if jsval.is_pointer() || jsval.is_handle() {
-        (bits & POINTER_MASK) as usize
+    let raw_ptr = if jsval.is_reference() {
+        jsval.reference_payload()
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     };
@@ -676,6 +676,13 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
             );
         }
         return value;
+    }
+    // A native handle is an object with no indexed storage and no header:
+    // every computed write is the ordinary receiver-aware [[Set]], which owns
+    // key coercion and the handle's property dispatch (#12540). The probes
+    // below are all for GC-headed or allocator-owned receivers.
+    if jsval.is_handle() {
+        return crate::proxy::js_put_value_set(obj, index, value, obj, strict);
     }
     let raw_ptr = if jsval.is_pointer() {
         (bits & POINTER_MASK) as usize

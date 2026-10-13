@@ -422,11 +422,7 @@ fn emit_store(
             let exponent = blk.lshr(I64, &doubled, "53");
             blk.icmp_ult(I64, &exponent, "1086")
         } else {
-            blk.icmp_slt(
-                I64,
-                &bits,
-                &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-            )
+            crate::codegen::emit_plain_number_bits_test(blk, &bits)
         };
         let mut ok = blk.and(I1, &ok, &number);
         let mut clamped = None;

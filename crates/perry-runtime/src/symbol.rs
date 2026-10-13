@@ -669,7 +669,7 @@ pub(crate) unsafe fn obj_key_from_f64(obj_f64: f64) -> usize {
     let tag = bits & 0xFFFF_0000_0000_0000;
     // A native id keys its own symbol entries by id; ids never collide with
     // heap addresses (they sit below the id-band ceiling).
-    if tag != POINTER_TAG && tag != crate::value::HANDLE_TAG {
+    if !crate::value::is_reference_bits(tag) {
         return 0;
     }
     (bits & POINTER_MASK) as usize

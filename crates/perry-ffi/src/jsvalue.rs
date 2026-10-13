@@ -251,6 +251,14 @@ impl JsValue {
         (self.0 & TAG_MASK) == POINTER_TAG
     }
 
+    /// True for an object reference: a heap object (`POINTER_TAG`) or a
+    /// native handle id (`HANDLE_TAG`). The runtime's
+    /// `JSValue::is_reference`: the test for "is this a JS object?" (#12540).
+    #[inline]
+    pub const fn is_reference(self) -> bool {
+        self.is_pointer() || self.is_handle()
+    }
+
     /// True if the value is a 32-bit integer.
     #[inline]
     pub const fn is_int32(self) -> bool {

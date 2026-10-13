@@ -126,10 +126,36 @@ impl JSValue {
         (self.bits & !INT32_MASK) == INT32_TAG
     }
 
-    /// Check if this is a pointer (object or array)
+    /// A `POINTER_TAG` word: a GC-headed heap allocation whose header may be
+    /// read. This is a *representation* test. A native handle (`HANDLE_TAG`)
+    /// is a JavaScript object too but has no header, so it fails here; a site
+    /// that asks "is this an object reference?" for JavaScript semantics uses
+    /// [`is_reference`](Self::is_reference) instead (#12540).
     #[inline]
     pub fn is_pointer(&self) -> bool {
         (self.bits & !POINTER_MASK) == POINTER_TAG
+    }
+
+    /// A reference value: a GC-headed heap word (`POINTER_TAG`, which also
+    /// covers Symbol cells) or a native handle id (`HANDLE_TAG`: Headers,
+    /// Blob, Request/Response, Web Streams, sockets, ...). This is the set
+    /// `POINTER_TAG` named before honest pointers (#12529) split the handles
+    /// out, and the one test every JavaScript-semantic dispatch branches on:
+    /// ToPrimitive / ToNumber / ToString ladders, equality, inspection and
+    /// serialization. Without it a handle falls through such a ladder into its
+    /// "plain number" arm and arithmetic propagates the tag (#12540). Only
+    /// [`is_pointer`](Self::is_pointer) proves a header is readable.
+    #[inline]
+    pub fn is_reference(&self) -> bool {
+        is_reference_bits(self.bits)
+    }
+
+    /// The 48-bit payload of an [`is_reference`](Self::is_reference) value:
+    /// the heap address of a `POINTER_TAG` word or the id of a handle.
+    #[inline]
+    pub fn reference_payload(&self) -> usize {
+        debug_assert!(self.is_reference(), "Value is not a reference");
+        (self.bits & POINTER_MASK) as usize
     }
 
     /// Check if this is a heap-allocated string pointer
@@ -393,6 +419,8 @@ impl std::fmt::Debug for JSValue {
             write!(f, "{}i", self.as_int32())
         } else if self.is_pointer() {
             write!(f, "<ptr {:p}>", self.as_pointer::<u8>())
+        } else if self.is_handle() {
+            write!(f, "<handle {}>", self.as_handle())
         } else {
             write!(f, "<unknown 0x{:016x}>", self.bits)
         }

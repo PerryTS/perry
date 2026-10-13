@@ -6915,12 +6915,7 @@ pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> Strin
     // tag `0x7FFD_...`. The admitted set, {x : |x| below the band}, is closed
     // under those operations, and it contains both default NaNs
     // (`0x7FF8_0000_0000_0000`, x86's `0xFFF8_0000_0000_0000`).
-    let magnitude = ctx.block().and(I64, &n_bits, "9223372036854775807");
-    ctx.block().icmp_ult(
-        I64,
-        &magnitude,
-        &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-    )
+    crate::codegen::emit_plain_number_bits_test(ctx.block(), &n_bits)
 }
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.

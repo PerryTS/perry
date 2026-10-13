@@ -217,7 +217,7 @@ pub(crate) extern "C" fn global_this_date_thunk(
 
 fn global_this_fetch_option(init: f64, name: &[u8]) -> f64 {
     let value = crate::value::JSValue::from_bits(init.to_bits());
-    if !value.is_pointer() && !value.is_handle() {
+    if !value.is_reference() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let raw = crate::value::js_nanbox_get_pointer(init);

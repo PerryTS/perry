@@ -50,8 +50,8 @@ unsafe fn describe_mix_operand(v: f64) -> String {
             s.truncate(cut);
         }
         format!("string({s:?})")
-    } else if jv.is_pointer() {
-        format!("pointer(0x{:x})", jv.as_pointer::<u8>() as usize)
+    } else if jv.is_reference() {
+        format!("reference(0x{:x})", jv.reference_payload())
     } else {
         format!("number({v}) bits=0x{:016x}", v.to_bits())
     }
@@ -110,8 +110,9 @@ unsafe fn to_numeric(value: f64) -> f64 {
         return crate::builtins::js_number_coerce(primitive);
     }
     // Non-object primitives (number/int32/string/bool/null/undefined) never
-    // become a BigInt; defer to the existing ToNumber coercion.
-    if !jsval.is_pointer() && !jsval.is_handle() {
+    // become a BigInt; defer to the existing ToNumber coercion. A native
+    // handle is an object and takes ToPrimitive like any other (#12540).
+    if !jsval.is_reference() {
         return crate::builtins::js_number_coerce(value);
     }
     // Symbols are pointers but ToNumber(Symbol) throws — let js_number_coerce
@@ -183,17 +184,17 @@ unsafe fn is_nonprimitive_object_value(value: f64) -> bool {
     if jsval.is_handle() {
         return true;
     }
-    if !jsval.is_pointer() {
+    if !jsval.is_reference() {
         return false;
     }
-    let ptr = jsval.as_pointer::<u8>() as usize;
+    let ptr = jsval.reference_payload();
     ptr >= 0x1000 && !is_symbol_value(value)
 }
 
 unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
     let is_class_ref = crate::object::class_ref_id(value).is_some();
-    if (!jsval.is_pointer() && !is_class_ref) || is_symbol_value(value) {
+    if (!jsval.is_reference() && !is_class_ref) || is_symbol_value(value) {
         return value;
     }
 
@@ -208,7 +209,7 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return crate::value::to_string::class_ref_to_primitive(value, 0);
     }
 
-    let ptr = jsval.as_pointer::<u8>() as usize;
+    let ptr = jsval.reference_payload();
     if ptr < 0x1000 {
         return value;
     }

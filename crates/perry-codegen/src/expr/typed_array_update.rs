@@ -51,7 +51,7 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
 use crate::rooting::{self, Repr};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32};
 
 use super::FnCtx;
 
@@ -103,11 +103,7 @@ pub(super) fn try_lower(
         {
             let blk = ctx.block();
             let bits = blk.bitcast_double_to_i64(&old);
-            let is_number = blk.icmp_slt(
-                I64,
-                &bits,
-                &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-            );
+            let is_number = crate::codegen::emit_plain_number_bits_test(blk, &bits);
             blk.cond_br(&is_number, &fast_label, &slow_label);
         }
 

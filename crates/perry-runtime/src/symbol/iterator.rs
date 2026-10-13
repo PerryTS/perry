@@ -358,7 +358,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     let mut is_registered_class_ref = false;
     {
         let jsv = crate::value::JSValue::from_bits(value().to_bits());
-        if !jsv.is_pointer() && !jsv.is_handle() && !jsv.is_any_string() {
+        if !jsv.is_reference() && !jsv.is_any_string() {
             is_registered_class_ref = crate::object::class_ref_id(value()).is_some();
             if !is_registered_class_ref {
                 throw_value_not_iterable(value());
@@ -503,7 +503,7 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // Method must be a closure pointer.
     let method_bits = method.to_bits();
     let method_tag = method_bits & 0xFFFF_0000_0000_0000;
-    if method_tag != POINTER_TAG && method_tag != crate::value::HANDLE_TAG {
+    if !crate::value::is_reference_bits(method_tag) {
         return value_handle.get_nanbox_f64();
     }
     let method_handle = scope.root_nanbox_f64(method);

@@ -584,7 +584,7 @@ fn a_number_read_guard_value_tests_a_word_that_asks() {
                     .any(|i| i.contains("and i64") && i.contains("9223372036854775807"))
                 && insts
                     .iter()
-                    .any(|i| i.contains("icmp ult i64") && i.contains("9221401712017801216"))
+                    .any(|i| i.contains("icmp ule i64") && i.contains("9221401712017801215"))
         }),
         "every value test must load the slot and test it below the tag band:\n{value:#?}"
     );

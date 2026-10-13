@@ -226,13 +226,9 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             .block()
             .icmp_eq(I64, &top, crate::nanbox::INT32_TAG_TOP16_I64);
         if !strict_numeric_equality {
-            // Signed ordering admits negative IEEE values and canonical NaNs;
-            // non-number tags occupy the positive quiet-NaN band.
-            let plain = ctx.block().icmp_slt(
-                I64,
-                &bits,
-                &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-            );
+            // The sign-closed plain-number test: negative IEEE values and
+            // canonical NaNs pass, every tag (HANDLE_TAG included) fails.
+            let plain = crate::codegen::emit_plain_number_bits_test(ctx.block(), &bits);
             let numeric = ctx.block().or(I1, &plain, &int);
             all_numbers = ctx.block().and(I1, &all_numbers, &numeric);
         }

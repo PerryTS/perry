@@ -136,6 +136,7 @@ run_check "GC store-site inventory" python3 scripts/gc_store_site_inventory.py
 run_check "address-classification self-test" \
     python3 scripts/addr_class_inventory.py --self-test
 run_check "address-classification audit" python3 scripts/addr_class_inventory.py
+run_check "reference-test audit" python3 scripts/reference_test_inventory.py
 
 # 8. The gap-suite ratchet's own logic. Guarded so this script works on a
 #    checkout predating the snapshot ratchet (#6755).

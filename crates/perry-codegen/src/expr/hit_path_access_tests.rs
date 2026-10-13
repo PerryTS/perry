@@ -278,7 +278,7 @@ fn inline_typed_array_store_rejects_boxed_values_and_wraps_exactly() {
     ));
     assert!(
         ir.lines()
-            .any(|line| line.contains("icmp slt i64") && line.contains("9221401712017801216")),
+            .any(|line| line.contains("icmp ule i64") && line.contains("9221401712017801215")),
         "the entry guard must reject NaN-boxed values:\n{ir}"
     );
     let store = block_body(&ir, "tav.set.store").unwrap_or_else(|| panic!("no store block:\n{ir}"));

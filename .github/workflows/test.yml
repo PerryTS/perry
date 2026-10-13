@@ -531,6 +531,19 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # Reference-test audit: since honest pointers a native handle carries
+      # HANDLE_TAG, not POINTER_TAG, but it is still a JS object. A
+      # JavaScript-semantic branch (ToPrimitive/ToNumber/ToString ladders,
+      # equality, inspect, instanceof, structuredClone) must use
+      # JSValue::is_reference(); a raw is_pointer() there sends handles into
+      # the "plain number" arm (#12540). Allowlist:
+      # scripts/reference_test_allowlist.txt.
+      - name: Reference-test audit
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/reference_test_inventory.py --self-test
+          python3 scripts/reference_test_inventory.py
+
       # Two bindings on one turnloop completion-sink slot is a correctness bug:
       # every completion goes to whichever registered last, which reads the
       # token's low bits as one of its OWN connection ids. Three pairs shipped

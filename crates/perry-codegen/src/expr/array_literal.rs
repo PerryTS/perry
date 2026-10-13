@@ -320,8 +320,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
                     continue;
                 }
                 let bits = blk.bitcast_double_to_i64(v);
-                // 0x7FF9 << 48: the lowest NaN-box tag.
-                let plain = blk.icmp_slt(I64, &bits, "9221401712017801216");
+                let plain = crate::codegen::emit_plain_number_bits_test(blk, &bits);
                 all_plain = Some(match all_plain {
                     None => plain,
                     Some(acc) => blk.and(I1, &acc, &plain),

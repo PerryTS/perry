@@ -539,8 +539,8 @@ fn rhs_is_object_value(value: f64) -> bool {
     {
         return false;
     }
-    if jsval.is_pointer() {
-        let ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if jsval.is_reference() {
+        let ptr = jsval.reference_payload();
         // Symbols are primitives; small registry handles aren't real objects
         // here either, but they're still object-typed in JS (`typeof` is
         // "object"), so a "not callable" message is the right one for them.

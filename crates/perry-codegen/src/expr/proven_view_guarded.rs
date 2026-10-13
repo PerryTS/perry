@@ -59,9 +59,6 @@ use crate::native_value::{BoundsState, BufferAccessMode, BufferElem, LoweredValu
 use crate::rooting;
 use crate::types::{DOUBLE, I1, I32, I64};
 
-/// The lowest NaN-box tag (`0x7FF9 << 48`). A signed compare below it admits
-/// every plain double, negative values and the canonical NaN included.
-const LOWEST_NANBOX_TAG: &str = "9221401712017801216";
 /// The canonical quiet NaN, `ToNumber(undefined)`.
 const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
@@ -211,7 +208,8 @@ pub(crate) fn try_lower_proven_view_guarded_store(
         } else {
             let blk = ctx.block();
             let bits = blk.bitcast_double_to_i64(val_d);
-            let plain = blk.icmp_slt(I64, &bits, LOWEST_NANBOX_TAG);
+            // Sign-closed: a HANDLE_TAG object must not store as its NaN bits.
+            let plain = crate::codegen::emit_plain_number_bits_test(blk, &bits);
             let undef = blk.icmp_eq(I64, &bits, &TAG_UNDEFINED.to_string());
             let convertible = blk.or(I1, &plain, &undef);
             let nan = crate::nanbox::double_literal(f64::from_bits(CANONICAL_NAN_BITS));

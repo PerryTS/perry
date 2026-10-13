@@ -51,6 +51,15 @@ pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const HANDLE_TAG: u64 = crate::codegen_abi::HANDLE_TAG;
 pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
+/// `JSValue::is_reference` on raw bits: a `POINTER_TAG` heap word or a
+/// `HANDLE_TAG` native handle id, i.e. every boxed JavaScript object
+/// reference (#12540). The canonical test for a site with bits in hand.
+#[inline(always)]
+pub const fn is_reference_bits(bits: u64) -> bool {
+    let top16 = bits >> 48;
+    top16 == POINTER_TAG >> 48 || top16 == HANDLE_TAG >> 48
+}
+
 /// Int32 tag: 0x7FFE_0000_XXXX_XXXX (32 bits for i32)
 pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;

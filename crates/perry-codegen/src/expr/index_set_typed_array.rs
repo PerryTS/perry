@@ -238,11 +238,11 @@ fn emit_inline_ta_set(
         // `valueOf`, or an int32-boxed number — needs the runtime's full
         // ToNumber first. Without this a warmed site stored the box's bits
         // raw (`f64[i] = true` read back `true`) and truncated every one of
-        // them to 0 in an integer array. One signed compare admits every
+        // them to 0 in an integer array. The shared plain-number test admits every
         // plain double, negative values and NaN included.
         let val_bits = blk.bitcast_double_to_i64(val_double);
-        // 0x7FF9 << 48: the lowest NaN-box tag.
-        let val_is_plain_number = blk.icmp_slt(I64, &val_bits, "9221401712017801216");
+        // Sign-closed, so a HANDLE_TAG object is not stored as its NaN bits.
+        let val_is_plain_number = crate::codegen::emit_plain_number_bits_test(blk, &val_bits);
         let g = blk.and(I1, &is_ptr, &addr_match);
         let g = blk.and(I1, &g, &kind_ok);
         let g = blk.and(I1, &g, &idx_ge0);

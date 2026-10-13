@@ -76,6 +76,8 @@ pub use tags::{
     JS_NATIVE_WEBCRYPTO_DISPATCH, JS_NATIVE_ZLIB_DISPATCH, JS_NEW_FROM_HANDLE_V8,
     SHORT_STRING_MAX_LEN,
 };
+// The canonical "heap object or native handle" test (#12540).
+pub use tags::is_reference_bits;
 
 // Crate-internal handle dispatch atomics + callback type aliases (read by
 // every dispatcher that needs to call back into perry-jsruntime).

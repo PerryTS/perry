@@ -961,7 +961,7 @@ pub(crate) unsafe fn extract_pointer(bits: u64) -> Option<*const u8> {
     let tag = bits & 0xFFFF_0000_0000_0000;
     // A native id (HANDLE_TAG) is extracted too: the serializers route
     // Proxies through their traps and render other ids by the id band.
-    if tag == POINTER_TAG || tag == crate::value::HANDLE_TAG {
+    if crate::value::is_reference_bits(tag) {
         Some((bits & POINTER_MASK) as *const u8)
     } else if is_raw_pointer(bits) {
         Some(bits as *const u8)
