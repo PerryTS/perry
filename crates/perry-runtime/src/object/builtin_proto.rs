@@ -969,10 +969,11 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call3(
     js_builtin_proto_generic_call(GENERIC_RECEIVER, recv, method_id, args.as_ptr(), 3)
 }
 
-/// Debug/instrumented builds: a site that took the direct builtin path must
+/// Contract builds: a site that took the direct builtin path must
 /// have held `Pristine(family)`. Codegen emits a call to this only under
-/// `PERRY_CHECK_CONTRACTS`; release code never references it.
-#[cfg(feature = "gc-instruments")]
+/// `PERRY_CHECK_CONTRACTS`; release code never references it. Defined in
+/// every build (contract builds link the plain runtime, without
+/// `gc-instruments`).
 #[no_mangle]
 pub extern "C" fn js_builtin_proto_contract_check(family: u64) {
     if let Some(f) = BuiltinProto::from_index(family as usize) {

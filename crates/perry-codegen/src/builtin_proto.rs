@@ -152,7 +152,7 @@ pub(crate) fn emit_pristine_receiver(blk: &mut LlBlock, fact: &PristineReceiverF
 
 /// Contract mode (decision 129 §4.5): with `PERRY_CHECK_CONTRACTS` set at
 /// compile time, every direct arm a `Pristine(family)` proof admitted first
-/// calls `js_builtin_proto_contract_check(family)` (runtime, `gc-instruments`),
+/// calls `js_builtin_proto_contract_check(family)` (runtime, every build),
 /// which aborts naming the family if the fact does not hold. Release code
 /// emits nothing.
 pub(crate) fn emit_contract_check(blk: &mut LlBlock, families: &[BuiltinProto]) {
