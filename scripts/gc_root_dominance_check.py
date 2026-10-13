@@ -1724,6 +1724,8 @@ POLL_CAPABLE_RUNTIME = {
     "js_jsvalue_to_string_method", "js_jsvalue_to_string_radix",
     "js_string_coerce", "js_string_coerce_method_this",
     "js_number_coerce", "js_object_coerce",
+    # These legacy index ABIs accept tagged values and can reach ToNumber.
+    "js_string_index_to_i32", "js_string_end_index_to_i32",
     # #10762: the NaN-box-returning twins the `String(x)`, `${x}` and
     # `x.toString()` lowerings call instead. Each forwards every non-number,
     # non-string argument to its pointer-returning original above, so each can
@@ -6897,6 +6899,14 @@ entry.0:
                   "POLL_CAPABLE_RUNTIME. Codegen emits these and never emits "
                   "js_object_get_field_by_name, so dropping them puts the GET "
                   "half of property access back outside --moving-only.",
+                  file=sys.stderr)
+            ok = False
+        _numeric_index_coercers = {
+            "js_string_index_to_i32", "js_string_end_index_to_i32",
+        }
+        if not _numeric_index_coercers <= POLL_CAPABLE_RUNTIME:
+            print("self-test FAIL: tagged string-index coercion helpers must "
+                  f"stay poll-capable: {sorted(_numeric_index_coercers - POLL_CAPABLE_RUNTIME)}",
                   file=sys.stderr)
             ok = False
 
