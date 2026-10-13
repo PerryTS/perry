@@ -114,6 +114,18 @@ const _: () = assert!(std::mem::size_of::<StaticAtom>() == 16);
 /// [`register_static_layouts`] replaces it with the registered id. Every other
 /// descriptor is emitted with 0 and stays 0.
 pub const LAYOUT_ID_CARRIED: u32 = u32::MAX;
+// The descriptor word has exactly three states: 0 (static data), the carried
+// sentinel (not registered yet) and a registered ShapeId. The sentinel must
+// never read as a ShapeId, or registration would install it as one.
+const _: () = assert!(LAYOUT_ID_CARRIED >= super::shapes::SHAPE_ID_END);
+const _: () = assert!(super::shapes::SHAPE_ID_BASE != 0);
+
+/// The ShapeId a descriptor word holds, if registration already wrote one
+/// (this agent or an earlier one); `None` for 0 and for the carried sentinel.
+#[inline]
+fn registered_layout_id(word: u32) -> Option<u32> {
+    super::shapes::is_shape_id(word).then_some(word)
+}
 
 /// A section sentinel's family: not a layout.
 const SENTINEL_FAMILY: u32 = u32::MAX;
@@ -326,9 +338,11 @@ pub(crate) fn register_static_layouts() {
 unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
-    let existing = word.load(Ordering::Acquire);
-    if existing != 0 && super::shapes::shape_descriptor_by_id(existing).is_some() {
-        return existing;
+    let existing = registered_layout_id(word.load(Ordering::Acquire));
+    if let Some(id) = existing {
+        if super::shapes::shape_descriptor_by_id(id).is_some() {
+            return id;
+        }
     }
     let d = &*desc;
     if d.kind != 0 || requested >= super::shapes::STATIC_SHAPE_ID_END {
@@ -409,8 +423,8 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
         integrity,
     )
     .filter(|&id| super::shapes::is_static_shape_id(id));
-    let proposed = if existing != 0 {
-        existing
+    let proposed = if let Some(id) = existing {
+        id
     } else if let Some(id) = found {
         id
     } else if proto_id == super::shapes::PROTO_ID_DEFAULT {
@@ -419,12 +433,18 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
         super::shapes::allocate_declared_layout_id(proto_id)
     };
     // End the descriptor borrow before the startup-only id publication.
-    let id = if existing != 0 {
-        existing
+    let id = if let Some(id) = existing {
+        id
     } else {
-        match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
+        match word.compare_exchange(
+            LAYOUT_ID_CARRIED,
+            proposed,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
             Ok(_) => proposed,
-            Err(id) => id,
+            Err(other) => registered_layout_id(other)
+                .expect("a carried layout word holds the sentinel or a ShapeId"),
         }
     };
     if super::shapes::shape_descriptor_by_id(id).is_none() {
@@ -446,14 +466,13 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
     let d = &*desc;
-    let id = d.layout_id;
-    if id == 0 {
+    let Some(id) = registered_layout_id(d.layout_id) else {
         eprintln!(
             "Perry internal error: perry_alloc_layout of an unregistered layout (family {:#x})",
             d.family
         );
         std::process::abort();
-    }
+    };
     let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
