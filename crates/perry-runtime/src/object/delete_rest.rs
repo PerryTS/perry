@@ -398,7 +398,7 @@ pub extern "C" fn js_object_delete_field(
         // property. Bun and Node remove the property entirely; we
         // match that.
         let field_count = crate::object::object_live_slot_count(obj);
-        let alloc_limit = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+        let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
         let new_count = key_count - 1;
 
         // The clone below exists because one keys_array is shared by every
@@ -996,9 +996,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         // The new token still retires every generated cache entry, which is
         // mandatory because slot zero will name a different key next epoch.
         if next_holes == shape.logical_key_count && slot == tail {
-            let alloc_limit = shape
-                .live_inline_slot_count
-                .max(crate::object::INLINE_SLOT_FLOOR as u32);
+            let alloc_limit = crate::object::object_inline_capacity(obj);
             let fields =
                 (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut crate::JSValue;
             let old_value = if slot < alloc_limit {
@@ -1082,9 +1080,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         elements.add(slot as usize) as usize,
         crate::value::TAG_HOLE,
     );
-    let live_slots = shape
-        .live_inline_slot_count
-        .max(crate::object::INLINE_SLOT_FLOOR as u32);
+    let live_slots = crate::object::object_inline_capacity(obj);
     if slot < live_slots {
         let fields =
             (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut crate::JSValue;

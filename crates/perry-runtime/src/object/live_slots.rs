@@ -9,6 +9,15 @@
 use super::shapes;
 use super::ObjectHeader;
 
+/// Physical inline capacity, including exact-width declared layout births.
+/// The GC allocation header already owns this fact; no floor or side record.
+#[inline]
+pub(crate) unsafe fn object_inline_capacity(obj: *const ObjectHeader) -> u32 {
+    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    ((*gc).size as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<ObjectHeader>()) as u32
+        / 8
+}
+
 /// Revision of the [`ObjectHeader`] ABI, paired with
 /// `perry_ffi::OBJECT_HEADER_ABI_REVISION`.
 ///

@@ -961,8 +961,7 @@ pub(crate) unsafe fn define_property_force_store_value(
                     crate::object::key_attrs::keys_entry(keys, i as u32),
                 )
             {
-                let live_slots = crate::object::object_live_slot_count(obj) as usize;
-                let inline_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
+                let inline_limit = crate::object::object_inline_capacity(obj) as usize;
                 if i < inline_limit {
                     js_object_set_field(
                         obj,

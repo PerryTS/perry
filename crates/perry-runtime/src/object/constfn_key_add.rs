@@ -29,8 +29,7 @@ unsafe fn try_cached_constfn_key_add(
         || d.keys != keys.arr() as usize as u64
         || d.logical_key_count != keys.count()
         || d.live_inline_slot_count <= slot
-        || d.live_inline_slot_count
-            > super::object_live_slot_count(obj).max(super::INLINE_SLOT_FLOOR as u32)
+        || d.live_inline_slot_count > super::object_inline_capacity(obj)
         || d.constfn_infos().len() != 1
         || u32::from(d.constfn_infos()[0].slot) != slot
         || field_rep_store::constfn_store_info(bits) != Some(d.constfn_infos()[0].info)

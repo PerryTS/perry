@@ -220,10 +220,7 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
     if super::super::key_attrs::key_is_accessor_at(keys, index) {
         return;
     }
-    let spill = index
-        >= shape
-            .live_inline_slot_count
-            .max(super::super::INLINE_SLOT_FLOOR as u32);
+    let spill = index >= super::super::object_inline_capacity(next as *const ObjectHeader);
     if index >= shape.live_inline_slot_count && !spill {
         return;
     }

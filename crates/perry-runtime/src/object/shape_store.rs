@@ -1611,7 +1611,7 @@ unsafe fn apply_proven_add(
     let predecessor = shapes::object_shape_stamp(obj);
     let predecessor_rep = record.rep();
     let number_lane = slot < super::field_rep::REP_SLOTS as usize
-        && slot < (record.live_inline_slot_count() as usize).max(super::INLINE_SLOT_FLOOR)
+        && slot < super::object_inline_capacity(obj) as usize
         && super::field_rep::f64_slot_bits(value.get_nanbox_f64().to_bits()).is_some();
     if number_lane {
         // Publish the value-bearing edge directly, as the named-store tail
@@ -1673,10 +1673,9 @@ unsafe fn apply_proven_add(
     if super::dictionary::is_dictionary(obj) {
         return None;
     }
-    let live_slots = super::object_live_slot_count(obj) as usize;
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     let bits = value.get_nanbox_f64().to_bits();
-    if slot < live_slots.max(super::INLINE_SLOT_FLOOR) {
+    if slot < super::object_inline_capacity(obj) as usize {
         super::js_object_set_field(obj, slot as u32, crate::JSValue::from_bits(bits));
     } else {
         super::overflow_set(obj as usize, slot, bits);

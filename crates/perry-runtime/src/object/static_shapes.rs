@@ -686,6 +686,9 @@ pub extern "C" fn js_shape_register_static_seed(seed: extern "C" fn()) {
 /// facts under a counter id.
 #[no_mangle]
 pub extern "C" fn js_shape_run_static_seed() {
+    // Canonical image atoms must precede key-list construction by the legacy
+    // hash-band seeds. Descriptors still follow those seeds and share their ids.
+    super::layout_desc::seed_static_atoms();
     let seed = STATIC_SEED.load(std::sync::atomic::Ordering::Acquire);
     if seed != 0 {
         // SAFETY: only `js_shape_register_static_seed` stores a non-zero

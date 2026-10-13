@@ -1238,23 +1238,12 @@ fn dir_iterator_self_value(closure: *const ClosureHeader) -> f64 {
 }
 
 fn dir_iterator_result(value: f64, done: bool) -> f64 {
-    use crate::value::JSValue;
-
-    let obj = crate::object::js_object_alloc(0, 2);
-    let value_key = js_string_from_bytes(b"value".as_ptr(), b"value".len() as u32);
-    let done_key = js_string_from_bytes(b"done".as_ptr(), b"done".len() as u32);
-    let keys = crate::array::js_array_alloc(2);
-    crate::array::js_array_push(keys, JSValue::string_ptr(value_key));
-    crate::array::js_array_push(keys, JSValue::string_ptr(done_key));
-    crate::object::js_object_set_keys(obj, keys);
-
-    crate::object::js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
-    crate::object::js_object_set_field(
-        obj,
-        1,
-        JSValue::from_bits(crate::value::JSValue::bool(done).bits()),
-    );
-    f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
+    unsafe {
+        crate::iter_result::make_iter_result(
+            crate::value::JSValue::from_bits(value.to_bits()),
+            done,
+        )
+    }
 }
 
 extern "C" fn dir_iterator_next_impl(

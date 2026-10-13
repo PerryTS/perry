@@ -55,16 +55,9 @@ unsafe fn events_on_state_set(state: *mut ArrayHeader, idx: u32, value: f64) {
 
 /// Build a `{ value, done }` iterator-result object.
 fn events_iter_result(value: f64, done: bool) -> f64 {
-    let packed = b"value\0done\0";
-    let obj = perry_runtime::object::js_object_alloc_with_shape(
-        EVENTS_ON_ITER_SHAPE_ID,
-        2,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
-    perry_runtime::object::js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
-    perry_runtime::object::js_object_set_field(obj, 1, JSValue::bool(done));
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    unsafe {
+        perry_runtime::iter_result::make_iter_result(JSValue::from_bits(value.to_bits()), done)
+    }
 }
 
 /// A Promise already resolved with `{ value, done }`.

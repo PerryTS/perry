@@ -1549,6 +1549,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // must not re-read `globalThis.URL`, which user code can replace.
             crate::object::URL_INTRINSIC_PROTO_PTR
                 .store(proto() as i64, std::sync::atomic::Ordering::Release);
+            // The static runtime layout names this builtin prototype identity.
+            unsafe {
+                crate::object::runtime_layouts::bind_builtin_prototype(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::URL_COMPONENTS),
+                    proto_h.get_nanbox_u64(),
+                );
+            }
             // Install order is Node's own key order: `toString`, then the
             // WebIDL component accessors, then `toJSON`.
             install_proto_method(

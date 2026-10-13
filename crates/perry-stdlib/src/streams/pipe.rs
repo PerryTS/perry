@@ -689,20 +689,7 @@ unsafe fn pipe_iter_result(result: f64) -> Option<(bool, u64)> {
 }
 
 unsafe fn pipe_iter_result_object(value_bits: u64, done: bool) -> u64 {
-    let obj = perry_runtime::js_object_alloc(0, 2);
-    let keys = perry_runtime::js_array_alloc(2);
-    let k_value = js_string_from_bytes(b"value".as_ptr(), 5);
-    let k_done = js_string_from_bytes(b"done".as_ptr(), 4);
-    perry_runtime::js_array_push(keys, JSValue::string_ptr(k_value));
-    perry_runtime::js_array_push(keys, JSValue::string_ptr(k_done));
-    perry_runtime::js_object_set_field(obj, 0, JSValue::from_bits(value_bits));
-    perry_runtime::js_object_set_field(
-        obj,
-        1,
-        JSValue::from_bits(if done { TAG_TRUE } else { TAG_FALSE }),
-    );
-    perry_runtime::js_object_set_keys(obj, keys);
-    JSValue::object_ptr(obj as *mut u8).bits()
+    perry_runtime::iter_result::make_iter_result(JSValue::from_bits(value_bits), done).to_bits()
 }
 
 fn pipe_closure(

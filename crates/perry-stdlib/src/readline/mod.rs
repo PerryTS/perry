@@ -1006,16 +1006,9 @@ const READLINE_ITER_SHAPE_ID: u32 = 0x7FFF_FF4B;
 
 /// Build a `{ value, done }` iterator-result object.
 fn iter_result(value: f64, done: bool) -> f64 {
-    let packed = b"value\0done\0";
-    let obj = js_object_alloc_with_shape(
-        READLINE_ITER_SHAPE_ID,
-        2,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
-    js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
-    js_object_set_field(obj, 1, JSValue::bool(done));
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    unsafe {
+        perry_runtime::iter_result::make_iter_result(JSValue::from_bits(value.to_bits()), done)
+    }
 }
 
 /// A Promise already resolved with `{ value, done }`.

@@ -864,32 +864,8 @@ unsafe fn stream_object_closure(object: f64, name: &[u8]) -> i64 {
 }
 
 unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_u64(value_bits);
-    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
-    let keys = scope.root_raw_mut_ptr(js_array_alloc(2));
-    let k_done = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
-    let k_value = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
-    keys.set_raw_mut_ptr(js_array_push(
-        keys.get_raw_mut_ptr(),
-        JSValue::string_ptr(k_done.get_raw_mut_ptr()),
-    ));
-    keys.set_raw_mut_ptr(js_array_push(
-        keys.get_raw_mut_ptr(),
-        JSValue::string_ptr(k_value.get_raw_mut_ptr()),
-    ));
-    js_object_set_field(
-        obj.get_raw_mut_ptr(),
-        0,
-        JSValue::from_bits(if done { TAG_TRUE } else { TAG_FALSE }),
-    );
-    js_object_set_field(
-        obj.get_raw_mut_ptr(),
-        1,
-        JSValue::from_bits(value.get_nanbox_u64()),
-    );
-    js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
-    JSValue::object_ptr(obj.get_raw_mut_ptr() as *mut u8).bits()
+    perry_runtime::iter_result::make_sqlite_iter_result(JSValue::from_bits(value_bits), done)
+        .to_bits()
 }
 
 pub(crate) unsafe fn alloc_uint8array_from_bytes(bytes: &[u8]) -> u64 {

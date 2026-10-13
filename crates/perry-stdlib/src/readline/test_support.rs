@@ -63,6 +63,7 @@ pub(super) fn event_name(name: &str) -> *mut StringHeader {
 
 pub(super) fn reset() -> MutexGuard<'static, ()> {
     let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    crate::test_runtime::initialize();
     DATA_COUNT.with(|count| *count.borrow_mut() = 0);
     KEYPRESS_NAMES.with(|names| names.borrow_mut().clear());
     QUESTION_CALLBACK.with(|c| *c.borrow_mut() = None);

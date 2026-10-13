@@ -15,7 +15,6 @@ pub(crate) const URL_SEARCH_PARAMS_ENTRIES: u32 = 0; // Array of [key, value] pa
 /// (TAG_UNDEFINED) for free-standing URLSearchParams created via
 /// `new URLSearchParams(...)`.
 pub(crate) const URL_SEARCH_PARAMS_OWNER: u32 = 1;
-pub(crate) const URL_SEARCH_PARAMS_FIELD_COUNT: u32 = 2;
 
 /// Hidden field installed on a `class X extends URLSearchParams` instance by
 /// `js_url_search_params_subclass_init`, holding the native backing params
@@ -332,13 +331,11 @@ fn coerce_search_param_arg(value: f64) -> String {
 
 /// Create a URLSearchParams object from entries
 pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) -> *mut ObjectHeader {
-    let obj = js_object_alloc(0, URL_SEARCH_PARAMS_FIELD_COUNT);
-
-    // Create keys array
-    let mut keys = js_array_alloc(URL_SEARCH_PARAMS_FIELD_COUNT);
-    keys = js_array_push_f64(keys, create_string_f64("_entries"));
-    keys = js_array_push_f64(keys, create_string_f64("_owner"));
-    js_object_set_keys(obj, keys);
+    let obj = unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
+            crate::object::runtime_layouts::URL_SEARCH_PARAMS
+        ))
+    };
     // Owner starts as undefined; the URL constructor sets it when it adopts
     // this params object as its `.searchParams`.
     js_object_set_field_f64(

@@ -1565,8 +1565,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // by every field read below and by the stamp; this used to be two
         // probes here (one of them into an unused binding) plus one more
         // inside every `js_object_get_field` the scan returned through.
-        let alloc_limit =
-            std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
 
         // #5054: wide objects get a validated key→index map so per-key reads
         // stay O(1) instead of O(key_count). A `None` falls through to the

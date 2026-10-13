@@ -308,18 +308,22 @@ fn state_proto(kind: usize) -> f64 {
             PropertyAttrs::new(true, false, true),
         );
     }
-    f64::from_bits(STATE_PROTOS.with(|protos| protos.borrow()[kind]))
-}
-
-thread_local! {
-    static READABLE_BIRTH: Cell<u32> = const { Cell::new(0) };
-    static WRITABLE_BIRTH: Cell<u32> = const { Cell::new(0) };
+    let proto = f64::from_bits(STATE_PROTOS.with(|protos| protos.borrow()[kind]));
+    let desc = if kind == READABLE_KIND {
+        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
+    } else {
+        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
+    };
+    unsafe {
+        crate::object::runtime_layouts::bind_builtin_prototype(desc, proto.to_bits());
+    }
+    proto
 }
 
 /// Internal reads use the very shape that birthed the public state. A changed
 /// descriptor, deletion, key addition or replacement stops this proof; the
 /// caller then performs the same ordinary Get through its existing read site.
-/// Each side reads its own birth word directly (a GC leaf: no call).
+/// Each side reads its declared layout id directly (a GC leaf: no call).
 #[inline]
 pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Option<f64> {
     let index = match data {
@@ -332,25 +336,20 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
         StateData::WritableCorked => 2,
         StateData::WritableWriteLen => 4,
     };
-    let shape = if data.readable() {
-        READABLE_BIRTH.with(Cell::get)
+    let desc = if data.readable() {
+        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
     } else {
-        WRITABLE_BIRTH.with(Cell::get)
+        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
     };
+    let shape = unsafe { crate::object::runtime_layouts::layout_id(desc) };
     // SAFETY: the caller validated this live ordinary state receiver.
     if shape == 0 || unsafe { (*obj).parent_class_id } != shape {
         return None;
     }
-    // A recorded birth always has the same two inline slots and canonical
-    // spill buffer; the shape match proves the slot and its data descriptor.
+    // This declared family has all its public data slots inline.
     let bits = unsafe {
-        if index < 2 {
-            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-            *fields.add(index)
-        } else {
-            let spill = (*(*obj).meta).spill as *const crate::array::ArrayHeader;
-            *crate::array::array_elements_ptr(spill).add(index)
-        }
+        let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+        *fields.add(index)
     };
     Some(f64::from_bits(bits))
 }
@@ -360,62 +359,16 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
 fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_key::NamedStateKey) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
-    let proto = scope.root_nanbox_f64(state_proto(kind));
-    let site = if kind == READABLE_KIND {
-        &READABLE_BIRTH
+    // Materialize the shared prototype identity before the newborn escapes.
+    let _proto = scope.root_nanbox_f64(state_proto(kind));
+    let desc = if kind == READABLE_KIND {
+        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
     } else {
-        &WRITABLE_BIRTH
+        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
     };
-    let readable = [
-        "highWaterMark",
-        "buffer",
-        "bufferIndex",
-        "length",
-        "pipes",
-        "awaitDrainWriters",
-    ];
-    let writable = [
-        "highWaterMark",
-        "length",
-        "corked",
-        "onwrite",
-        "writelen",
-        "bufferedIndex",
-        "pendingcb",
-    ];
-    let names = if kind == READABLE_KIND {
-        &readable[..]
-    } else {
-        &writable[..]
-    };
-    let view = if let Some(obj) = crate::object::object_alloc_recorded_birth(
-        site.with(Cell::get),
-        proto.get_nanbox_u64(),
-        names.len() as u32,
-        2,
-        false,
-    ) {
-        scope.root_nanbox_f64(box_pointer(obj.cast()))
-    } else {
-        let _no_move = crate::gc::GcSuppressScope::new();
-        let entries: Vec<_> = names
-            .iter()
-            .map(|&n| (n, f64::from_bits(TAG_UNDEFINED)))
-            .collect();
-        let obj = unsafe {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs_and_inline(
-                &entries,
-                &[],
-                2,
-            )
-        };
-        crate::object::prototype_chain::object_link_created_prototype(
-            obj as usize,
-            proto.get_nanbox_u64(),
-        );
-        site.with(|memo| memo.set(unsafe { crate::object::shapes::object_shape_stamp(obj) }));
-        scope.root_nanbox_f64(box_pointer(obj.cast()))
-    };
+    let view = scope.root_nanbox_f64(box_pointer(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(desc).cast()
+    }));
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
     unsafe { crate::object::object_meta_ensure(obj) };
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
@@ -467,11 +420,9 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
     }
     let values = scope.root_nanbox_f64_slice(&values);
     let words: Vec<f64> = values.iter().map(|v| v.get_nanbox_f64()).collect();
-    unsafe {
-        crate::object::object_fill_recorded_birth(
-            object_ptr_from_value(view.get_nanbox_f64()).unwrap(),
-            &words,
-        );
+    let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
+    for (slot, value) in words.iter().enumerate() {
+        crate::object::js_object_set_field_f64(obj, slot as u32, *value);
     }
     super::constructors::birth::stream_birth_field!(
         stream.get_nanbox_f64(),

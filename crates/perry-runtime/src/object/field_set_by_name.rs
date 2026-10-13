@@ -259,10 +259,7 @@ pub extern "C" fn js_object_set_field_by_name(
                                 }
                                 // #8113: one bound probe, reused.
                                 let live_slots = crate::object::object_live_slot_count(o);
-                                let alloc_limit = std::cmp::max(
-                                    live_slots,
-                                    crate::object::INLINE_SLOT_FLOOR as u32,
-                                ) as usize;
+                                let alloc_limit = crate::object::object_inline_capacity(o) as usize;
                                 if (slot_idx as usize) < alloc_limit {
                                     if slot_idx >= live_slots {
                                         set_object_live_slot_count(o, slot_idx + 1);

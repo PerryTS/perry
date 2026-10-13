@@ -49,22 +49,28 @@ impl PrivateStorageKey {
         let object = unsafe { private_element_holder(receiver) }?;
         let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
         if unsafe { crate::object::key_attrs::object_summary(object) }
-            & crate::object::key_attrs::SUMMARY_PRIVATE == 0
+            & crate::object::key_attrs::SUMMARY_PRIVATE
+            == 0
         {
             return None;
         }
         if unsafe { crate::object::dictionary::is_dictionary(object) } {
             let keys = unsafe { crate::object::object_keys(object) };
-            let index = unsafe { crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), self.as_bytes()) }?;
-            return Some((object, index, unsafe { crate::object::object_live_slot_count(object) }));
+            let index = unsafe {
+                crate::object::keys_find_private_slot_by_bytes(
+                    keys.arr(),
+                    keys.count(),
+                    self.as_bytes(),
+                )
+            }?;
+            return Some((object, index, unsafe {
+                crate::object::object_live_slot_count(object)
+            }));
         }
         let slot = self.slot.get().filter(|slot| slot.0 == shape).or_else(|| {
-            if !crate::object::shapes::shape_object_kind_by_id(shape)
-                .is_some_and(|kind| {
-                    kind.is_ordinary_layout()
-                        || kind == crate::object::shapes::ShapeObjectKind::Class
-                })
-            {
+            if !crate::object::shapes::shape_object_kind_by_id(shape).is_some_and(|kind| {
+                kind.is_ordinary_layout() || kind == crate::object::shapes::ShapeObjectKind::Class
+            }) {
                 return None;
             }
             let keys = unsafe { crate::object::object_keys(object) };
@@ -72,7 +78,11 @@ impl PrivateStorageKey {
                 return None;
             }
             let index = unsafe {
-                crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), self.as_bytes())
+                crate::object::keys_find_private_slot_by_bytes(
+                    keys.arr(),
+                    keys.count(),
+                    self.as_bytes(),
+                )
             }?;
             let attrs = unsafe { crate::object::key_attrs::keys_entry(keys.arr(), index) };
             if attrs != crate::object::key_attrs::PRIVATE_FIELD_ENTRY {
@@ -126,7 +136,7 @@ impl PrivateStorageKey {
             };
             if index < live {
                 crate::object::store_object_field_slot(object, index as usize, bits);
-            } else if index < live.max(crate::object::INLINE_SLOT_FLOOR as u32) {
+            } else if index < crate::object::object_inline_capacity(object) {
                 crate::object::set_object_live_slot_count(object, index + 1);
                 crate::object::store_object_field_slot(object, index as usize, bits);
             } else {
@@ -230,23 +240,39 @@ mod private_storage_cache_tests {
         let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let storage = private_storage_key_by_id(0, 0, "[[RegExpMatcher]]");
         let site = IntrinsicPrivateReadSite::new("[[RegExpMatcher]]");
-        let spelling = scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
+        let spelling =
+            scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
         object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
-            crate::object::key_attrs::apply_edits(obj, &[crate::object::key_attrs::AttrsEdit::Private(storage.as_bytes())]);
+            crate::object::key_attrs::apply_edits(
+                obj,
+                &[crate::object::key_attrs::AttrsEdit::Private(
+                    storage.as_bytes(),
+                )],
+            );
         });
-        let receiver = || object.with_mut_ptr(|obj: *mut ObjectHeader| crate::value::js_nanbox_pointer(obj as i64));
+        let receiver = || {
+            object
+                .with_mut_ptr(|obj: *mut ObjectHeader| crate::value::js_nanbox_pointer(obj as i64))
+        };
         assert!(storage.set_cached(receiver(), 11.0));
         assert_eq!(site.read(receiver()), Some(11.0));
         assert_eq!(site.read(receiver()), Some(11.0));
-        object.with_mut_ptr(|obj: *mut ObjectHeader| spelling.with_const_ptr(|key| {
-            assert!(crate::object::js_object_get_field_by_name(obj, key).is_undefined());
-            js_object_set_field_by_name(obj, key, 7.0);
-        }));
+        object.with_mut_ptr(|obj: *mut ObjectHeader| {
+            spelling.with_const_ptr(|key| {
+                assert!(crate::object::js_object_get_field_by_name(obj, key).is_undefined());
+                js_object_set_field_by_name(obj, key, 7.0);
+            })
+        });
         assert_eq!(storage.get_cached(receiver()), Some(11.0));
         assert_eq!(site.read(receiver()), Some(11.0));
-        object.with_mut_ptr(|obj: *mut ObjectHeader| spelling.with_const_ptr(|key| {
-            assert_eq!(crate::object::js_object_get_field_by_name(obj, key).as_number(), 7.0);
-        }));
+        object.with_mut_ptr(|obj: *mut ObjectHeader| {
+            spelling.with_const_ptr(|key| {
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(obj, key).as_number(),
+                    7.0
+                );
+            })
+        });
         assert!(storage.set_cached(receiver(), 22.0));
         assert_eq!(storage.get_cached(receiver()), Some(22.0));
         assert_eq!(site.read(receiver()), Some(22.0));
@@ -260,12 +286,16 @@ mod private_storage_cache_tests {
 
     #[test]
     fn intrinsic_identity_zero_is_disjoint_from_class_templates_and_evaluations() {
-        let template = private_storage_key_by_id(0, PRIVATE_TEMPLATE_EVALUATION_ID, "[[RegExpMatcher]]");
+        let template =
+            private_storage_key_by_id(0, PRIVATE_TEMPLATE_EVALUATION_ID, "[[RegExpMatcher]]");
         let intrinsic = private_storage_key_by_id(0, 0, "[[RegExpMatcher]]");
         let evaluated = private_storage_key_by_id(0, 1, "[[RegExpMatcher]]");
         assert_ne!(template.spelling, intrinsic.spelling);
         assert_ne!(evaluated.spelling, intrinsic.spelling);
-        assert_eq!(private_storage_evaluation_id(0, None, None), PRIVATE_TEMPLATE_EVALUATION_ID);
+        assert_eq!(
+            private_storage_evaluation_id(0, None, None),
+            PRIVATE_TEMPLATE_EVALUATION_ID
+        );
     }
 
     /// A field added past twenty public keys spills to overflow storage; both
@@ -294,8 +324,11 @@ mod private_storage_cache_tests {
                     11.0,
                 )
             });
-            let storage =
-                private_storage_key_by_id(CID, PRIVATE_TEMPLATE_EVALUATION_ID, intern_private_name(field.as_bytes()).unwrap());
+            let storage = private_storage_key_by_id(
+                CID,
+                PRIVATE_TEMPLATE_EVALUATION_ID,
+                intern_private_name(field.as_bytes()).unwrap(),
+            );
             let key =
                 scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
             let read = || {
@@ -331,7 +364,10 @@ mod private_storage_cache_tests {
                     ],
                 )
             });
-            assert!(write(99.0), "a property edit must not reach a private field");
+            assert!(
+                write(99.0),
+                "a property edit must not reach a private field"
+            );
             assert_eq!(read(), Some(99.0));
         }
     }
@@ -352,9 +388,9 @@ mod private_storage_cache_tests {
             "a hot namespace must not format a new key"
         );
         let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(62_641, 0));
-        let receiver = || obj.with_mut_ptr(|obj: *mut ObjectHeader| {
-            crate::value::js_nanbox_pointer(obj as i64)
-        });
+        let receiver = || {
+            obj.with_mut_ptr(|obj: *mut ObjectHeader| crate::value::js_nanbox_pointer(obj as i64))
+        };
         assert_eq!(key.get_cached(receiver()), None);
         assert!(
             key.slot.get().is_none(),
@@ -367,9 +403,9 @@ mod private_storage_cache_tests {
         assert!(!key.is_present(receiver()));
 
         let other = scope.root_raw_mut_ptr(crate::object::js_object_alloc(62_641, 0));
-        let other_receiver = || other.with_mut_ptr(|obj: *mut ObjectHeader| {
-            crate::value::js_nanbox_pointer(obj as i64)
-        });
+        let other_receiver = || {
+            other.with_mut_ptr(|obj: *mut ObjectHeader| crate::value::js_nanbox_pointer(obj as i64))
+        };
         let held = scope.root_raw_mut_ptr(crate::object::js_object_alloc(62_641, 0));
         let _ = held;
         // `apply_edits` suppresses moving collection for its whole body.
@@ -419,7 +455,6 @@ mod private_storage_cache_tests {
     }
 }
 
-
 /// A builtin's fixed intrinsic private read. The hit is the existing runtime
 /// read site's packed shape/slot word; namespace/ENTRY_PRIVATE validation and
 /// Rust key spelling live only on the miss. No receiver or value is retained.
@@ -430,7 +465,10 @@ pub(crate) struct IntrinsicPrivateReadSite {
 
 impl IntrinsicPrivateReadSite {
     pub(crate) const fn new(name: &'static str) -> Self {
-        Self { name, site: super::runtime_read_site::RuntimeReadSite::new() }
+        Self {
+            name,
+            site: super::runtime_read_site::RuntimeReadSite::new(),
+        }
     }
 
     /// The same evaluation-qualified spelling used by class private slots.
@@ -491,7 +529,8 @@ impl IntrinsicPrivateReadSite {
     fn read_miss(&self, receiver: f64) -> Option<f64> {
         let (object, _) = unsafe { private_plain_receiver_shape(receiver) }?;
         if unsafe { crate::object::key_attrs::object_summary(object) }
-            & crate::object::key_attrs::SUMMARY_PRIVATE == 0
+            & crate::object::key_attrs::SUMMARY_PRIVATE
+            == 0
         {
             return None;
         }
@@ -501,7 +540,11 @@ impl IntrinsicPrivateReadSite {
         let spelling = private_storage_spelling(0, 0, self.name);
         let keys = unsafe { crate::object::object_keys(object) };
         let index = unsafe {
-            crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), spelling.as_bytes())
+            crate::object::keys_find_private_slot_by_bytes(
+                keys.arr(),
+                keys.count(),
+                spelling.as_bytes(),
+            )
         }?;
         let live = unsafe { crate::object::object_live_slot_count(object) };
         let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
@@ -524,9 +567,8 @@ pub(crate) fn intrinsic_private_set(receiver: f64, name: &'static str, value: f6
         return false;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_raw_mut_ptr(
-        crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader,
-    );
+    let receiver =
+        scope.root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader);
     let value = scope.root_nanbox_f64(value);
     let atom = crate::string::intern_ascii_literal(key.as_bytes());
     receiver.with_mut_ptr::<ObjectHeader, _>(|object| {
@@ -540,9 +582,8 @@ pub(crate) fn intrinsic_private_set(receiver: f64, name: &'static str, value: f6
 #[cfg(feature = "regex-engine")]
 pub(crate) fn intrinsic_private_add(receiver: f64, name: &'static str, value: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_raw_mut_ptr(
-        crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader,
-    );
+    let receiver =
+        scope.root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader);
     let value = scope.root_nanbox_f64(value);
     let key = private_storage_key_by_id(0, 0, name);
     receiver.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {

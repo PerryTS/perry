@@ -174,10 +174,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         }
         let key_slots = crate::array::array_elements_ptr(keys as *const crate::array::ArrayHeader)
             as *const f64;
-        let alloc_limit = std::cmp::max(
-            crate::object::object_live_slot_count(obj),
-            crate::object::INLINE_SLOT_FLOOR as u32,
-        ) as usize;
+        let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
         for i in 0..key_count {
             let key_val = crate::JSValue::from_bits((*key_slots.add(i)).to_bits());
             // #1781: SSO-aware match by byte slice — the

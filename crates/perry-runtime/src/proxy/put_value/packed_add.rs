@@ -728,9 +728,8 @@ pub(crate) unsafe fn packed_add_prime(
         return;
     }
     census(C_FULL_KEYADD);
-    let floor = crate::object::INLINE_SLOT_FLOOR as u32;
     let live = pre_d.live_inline_slot_count;
-    let inline = n < live.max(floor);
+    let inline = n < crate::object::object_inline_capacity(obj);
     if census_enabled() {
         if !inline {
             census(C_FULL_KEYADD_SPILL);

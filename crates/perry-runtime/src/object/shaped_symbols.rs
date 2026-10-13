@@ -84,7 +84,7 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
             index
         };
         let live = object_live_slot_count(current);
-        if index < live.max(INLINE_SLOT_FLOOR as u32) {
+        if index < object_inline_capacity(current) {
             if index >= live {
                 set_object_live_slot_count(current, index + 1);
             }
@@ -268,7 +268,7 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
 
 unsafe fn store(obj: *mut ObjectHeader, index: u32, bits: u64) {
     let live = object_live_slot_count(obj);
-    if index < live.max(INLINE_SLOT_FLOOR as u32) {
+    if index < object_inline_capacity(obj) {
         if index >= live {
             set_object_live_slot_count(obj, index + 1);
         }

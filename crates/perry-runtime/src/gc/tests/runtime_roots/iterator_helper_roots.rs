@@ -36,12 +36,11 @@ fn prepare() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::iter_result::scan_iter_result_keys_roots_mut);
+    crate::object::static_shapes::js_shape_run_static_seed();
     assert!(crate::object::iterator_prototype_for_class_id(
         crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
     )
     .is_some());
-    crate::iter_result::reset_shared_keys_for_test();
     COPIED.with(|count| count.set(0));
     ORDER.with(|order| order.set(0));
 }

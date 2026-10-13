@@ -183,7 +183,7 @@ mod live_slots;
 mod null_stub;
 mod side_table_roots;
 mod string_wrapper;
-pub(crate) use live_slots::set_object_live_slot_count;
+pub(crate) use live_slots::{object_inline_capacity, set_object_live_slot_count};
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
@@ -266,6 +266,9 @@ pub(crate) mod shape_carriers;
 // other hooks are feature-only), so a stock non-test build never
 // reaches it and the linker drops it: the shipped runtime pays nothing.
 pub mod layout_desc;
+pub(crate) mod runtime_layouts;
+#[cfg(test)]
+mod layout_desc_tests;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;

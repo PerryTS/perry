@@ -602,12 +602,12 @@ fn bool_value(value: bool) -> f64 {
 }
 
 fn iterator_result(value: f64, done: bool) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let obj = js_object_alloc(0, 2);
-    set_named_value(obj, b"value", value.get_nanbox_f64());
-    set_named_value(obj, b"done", bool_value(done));
-    object_value(obj)
+    unsafe {
+        crate::iter_result::make_iter_result(
+            crate::value::JSValue::from_bits(value.to_bits()),
+            done,
+        )
+    }
 }
 
 fn resolved_iterator_promise(value: f64, done: bool) -> f64 {

@@ -133,7 +133,7 @@ pub(crate) unsafe fn try_delete_last_added_field(
 /// `obj` is a live `ObjectHeader` whose shape lists `slot + 1` keys, and the
 /// caller has established that the key may be deleted.
 pub(crate) unsafe fn rollback(obj: *mut ObjectHeader, slot: u32) -> bool {
-    let inline = (super::object_live_slot_count(obj) as usize).max(super::INLINE_SLOT_FLOOR);
+    let inline = super::object_inline_capacity(obj) as usize;
     if super::shapes::publish_object_shape_last_key_rollback(obj, slot + 1) == 0 {
         return false;
     }

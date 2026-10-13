@@ -227,7 +227,7 @@ unsafe fn existing_own_data_overwrite(
     } else {
         vbits
     };
-    let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     if idx < live_slots {
         // An overwrite of a key the shape already places in a live inline
         // slot keeps the receiver's ShapeId, the layout a class-field read
@@ -362,7 +362,7 @@ pub(crate) unsafe fn add_absent_key_to_null_proto_object(
         set_object_keys(obj, next_keys);
     }
     let live_slots = crate::object::object_live_slot_count(obj);
-    let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     let vbits = value.to_bits();
     let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
         crate::value::TAG_UNDEFINED
@@ -485,7 +485,7 @@ pub(crate) fn try_readd_stable_tombstone(
 
         let new_index = shape.logical_key_count;
         let live_slots = shape.live_inline_slot_count;
-        let alloc_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR as u32);
+        let alloc_limit = crate::object::object_inline_capacity(obj);
         let old_keys_handle = scope.root_raw_mut_ptr(keys);
         let ((new_keys, old_keys), obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
             old_keys_handle.across_mut::<ArrayHeader, _>(|| {
@@ -578,9 +578,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         return None;
     }
     let new_index = shape.logical_key_count;
-    let alloc_limit = shape
-        .live_inline_slot_count
-        .max(crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(obj);
     let next_live = if new_index < alloc_limit {
         shape.live_inline_slot_count.max(new_index + 1)
     } else {
@@ -878,8 +876,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
 
         // #8113: one bound probe, reused.
         let live_slots = crate::object::object_live_slot_count(obj);
-        let alloc_limit =
-            std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+        let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
         let slot_usize = slot_idx as usize;
         let vbits = value.to_bits();
         let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {

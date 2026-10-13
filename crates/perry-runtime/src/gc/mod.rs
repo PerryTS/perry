@@ -1203,7 +1203,6 @@ pub fn gc_init() {
     // swept and the next `.next()` would install a freed keys array. It also
     // REWRITES: an evacuating collection moves them like any other array, and
     // the thread-local slot is the only place the new address can be recorded.
-    reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
     // Same shape as the line above: the shared keys arrays behind
     // `Intl.Segmenter`'s segment records are referenced only by this cache.
     reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);

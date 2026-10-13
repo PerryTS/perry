@@ -43,6 +43,11 @@ const _: () = assert!(LAYOUT_BASE == crate::codegen_abi::SHAPE_ID_BASE + (1 << 1
 /// is a `*const PerryLayoutDesc`, which step 1 introduces).
 pub const LAYOUT_PROTO_OBJECT: usize = 0;
 pub const LAYOUT_PROTO_NULL: usize = 1;
+pub const LAYOUT_PROTO_URL: usize = 2;
+pub const LAYOUT_PROTO_READABLE_STATE: usize = 3;
+pub const LAYOUT_PROTO_WRITABLE_STATE: usize = 4;
+pub const LAYOUT_PROTO_TIMEOUT: usize = 5;
+pub const LAYOUT_PROTO_IMMEDIATE: usize = 6;
 
 /// A program-named key: its precomputed FNV-1a hash (the runtime's key hash)
 /// and the immutable image string that is its one address.
@@ -60,6 +65,10 @@ pub struct PerryLayoutKey {
     pub attrs: u8,
     pub _pad: [u8; 3],
 }
+
+// Atom records and key sequences point only to immutable image data.
+unsafe impl Sync for StaticAtom {}
+unsafe impl Sync for PerryLayoutKey {}
 
 /// One compiler-owned layout. Emitted by `perry-codegen/src/layout_desc.rs`;
 /// the field order and sizes are pinned by the asserts below.
@@ -262,13 +271,18 @@ unsafe fn atom_bytes<'a>(atom: *const StaticAtom) -> Option<&'a [u8]> {
 
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
 /// agent from `js_shape_run_static_seed`, after the hash-band literal seeds.
-pub(crate) fn register_static_layouts() {
+pub(crate) fn seed_static_atoms() {
     unsafe {
         for atom in records::<StaticAtom>(atom_bounds()) {
             if let Some(bytes) = atom_bytes(atom) {
                 crate::string::seed_static_atom(bytes, (*atom).hash, (*atom).string);
             }
         }
+    }
+}
+
+pub(crate) fn register_static_layouts() {
+    unsafe {
         let mut index = 0u32;
         for desc in records::<PerryLayoutDesc>(layout_bounds()) {
             if (*desc).family == SENTINEL_FAMILY || (*desc).keys.is_null() && (*desc).key_count != 0
@@ -289,36 +303,115 @@ pub(crate) fn register_static_layouts() {
 /// when this runtime cannot represent it yet (a descriptor prototype, a
 /// non-ordinary kind, slots not in key order, a key that is not an atom).
 unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
+    let existing = word.load(Ordering::Acquire);
+    if existing != 0 && super::shapes::shape_descriptor_by_id(existing).is_some() {
+        return existing;
+    }
     let d = &*desc;
-    if d.kind != 0 || d.integrity != 0 || d.proto != LAYOUT_PROTO_OBJECT || d.key_count == 0 {
+    if d.kind != 0 || requested >= super::shapes::STATIC_SHAPE_ID_END {
         return 0;
     }
-    if requested >= super::shapes::STATIC_SHAPE_ID_END {
-        return 0;
-    }
-    let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
-    let mut names: Vec<&[u8]> = Vec::with_capacity(keys.len());
-    for (i, k) in keys.iter().enumerate() {
-        // Coexistence: a shape's slot IS its key's position.
-        if k.slot as usize != i || k.attrs != 0 {
+    let keys = if d.key_count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(d.keys, d.key_count as usize)
+    };
+    let mut entries: Vec<(&str, f64)> = Vec::with_capacity(keys.len());
+    let mut attrs: Vec<u8> = Vec::with_capacity(keys.len());
+    for (i, key) in keys.iter().enumerate() {
+        if key.slot as usize != i || key.slot >= d.slot_count {
             return 0;
         }
-        match atom_bytes(k.atom) {
-            Some(b) => names.push(b),
-            None => return 0,
-        }
+        let Some(bytes) = atom_bytes(key.atom) else {
+            return 0;
+        };
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            return 0;
+        };
+        entries.push((name, f64::from_bits(crate::value::TAG_UNDEFINED)));
+        attrs.push(key.attrs);
     }
-    let ck = super::static_shapes::canonical_keys_for_names(&names);
-    let id = super::shapes::publish_shape_result(super::shapes::class_birth_shape_ensure(
-        ck.arr(),
-        ck.count(),
-        d.slot_count.max(d.key_count),
+    let proto_id = match d.proto {
+        LAYOUT_PROTO_OBJECT => super::shapes::PROTO_ID_DEFAULT,
+        LAYOUT_PROTO_NULL => super::shapes::PROTO_ID_NULL,
+        LAYOUT_PROTO_URL..=LAYOUT_PROTO_IMMEDIATE => super::shapes::fresh_unique_proto_id(),
+        _ => return 0,
+    };
+    let key_count = d.key_count;
+    let slot_count = d.slot_count;
+    let rep = d.rep;
+    let integrity = d.integrity as u16;
+    // Compatibility key arrays are owned by the one authoritative shape
+    // record, and are shared by the canonical key trie when names/attrs agree.
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let list = if key_count == 0 {
+        std::ptr::null_mut()
+    } else {
+        let list = super::key_attrs::alloc_canonical_key_list(
+            key_count,
+            true,
+            attrs.iter().any(|&a| a != 0),
+        );
+        let values = crate::array::array_elements_ptr(list);
+        let attributes = super::key_attrs::keys_attrs(list);
+        for (i, key) in keys.iter().enumerate() {
+            // GC_STORE_AUDIT(INIT): unpublished startup list, under suppression.
+            *values.add(i) =
+                crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits();
+            if !attributes.is_null() {
+                super::key_attrs::attrs_write(attributes, i as u32, key.attrs, entries[i].0);
+            }
+        }
+        (*list).length = key_count;
+        super::canonical_keys::canonicalize(
+            &super::canonical_keys::SharedLayout::shape_cache_entry(),
+            list,
+            key_count,
+        )
+        .view()
+        .arr()
+    };
+    let summary = super::key_attrs::keys_summary(list, key_count);
+    let found = super::shapes::shape_descriptor_find_with_rep(
+        list,
+        key_count,
+        slot_count,
         0,
-        d.rep,
-        Some(requested),
-    ));
+        super::shapes::ShapeObjectKind::Ordinary,
+        0,
+        proto_id,
+        summary,
+        rep,
+        &[],
+        integrity,
+    )
+    .filter(|&id| super::shapes::is_static_shape_id(id));
+    let proposed = if existing != 0 {
+        existing
+    } else if let Some(id) = found {
+        id
+    } else if proto_id == super::shapes::PROTO_ID_DEFAULT {
+        requested
+    } else {
+        super::shapes::allocate_declared_layout_id(proto_id)
+    };
+    // End the descriptor borrow before the startup-only id publication.
+    let id = if existing != 0 {
+        existing
+    } else {
+        match word.compare_exchange(0, proposed, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => proposed,
+            Err(id) => id,
+        }
+    };
+    if super::shapes::shape_descriptor_by_id(id).is_none() {
+        super::shapes::install_declared_layout(
+            id, list, key_count, slot_count, proto_id, summary, rep, integrity,
+        );
+    }
     super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_by_id(id));
-    super::static_shapes::note_static_request("layout", requested, id);
     id
 }
 
@@ -340,12 +433,42 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
         );
         std::process::abort();
     }
-    let obj = super::alloc_basic::object_alloc_born(0, d.slot_count, id);
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
+    let obj =
+        crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
+    // GC_STORE_AUDIT(INIT): unpublished header and hole-only declared slots.
+    std::ptr::write(
+        obj,
+        ObjectHeader {
+            class_id: 0,
+            parent_class_id: id,
+            meta: std::ptr::null_mut(),
+            #[cfg(target_pointer_width = "32")]
+            _slot_alignment_padding: 0,
+        },
+    );
+    let fields = obj
+        .cast::<u8>()
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>();
     for i in 0..d.slot_count as usize {
-        // GC_STORE_AUDIT(INIT): the hole marker is a scalar.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
+    super::shapes::store_kind::premark_plain_ordinary(obj);
+    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
+    if d.proto == LAYOUT_PROTO_NULL {
+        (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
+    }
+    if d.integrity != 0
+        || (d.key_count != 0
+            && std::slice::from_raw_parts(d.keys, d.key_count as usize)
+                .iter()
+                .any(|key| key.attrs != 0))
+    {
+        (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+    }
+    (*gc)._reserved |= d.integrity as u16;
+    super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     obj
 }
 

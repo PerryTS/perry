@@ -857,10 +857,7 @@ fn get_field_by_name_past_data_probe(
                             && ((keys as u64) >> 48) == 0
                             && crate::value::addr_class::is_above_handle_band(keys as usize)
                         {
-                            let alloc_limit = std::cmp::max(
-                                crate::object::object_live_slot_count(o),
-                                crate::object::INLINE_SLOT_FLOOR as u32,
-                            ) as usize;
+                            let alloc_limit = crate::object::object_inline_capacity(o) as usize;
                             if let Some(idx) = super::super::prop_plan::read_plan_lookup(
                                 keys as usize,
                                 key as usize,

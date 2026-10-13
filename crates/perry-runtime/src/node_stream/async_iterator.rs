@@ -39,14 +39,12 @@ const SINGLE_VALUE_ITERATOR_SHAPE_ID: u32 = 0x7FFF_FF64;
 const SINGLE_VALUE_ITERATOR_VALUE_KEY: &[u8] = b"__perrySingleValueIteratorValue";
 
 fn iterator_result(value: f64, done: bool) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 2);
-    js_object_set_field_by_name(obj, hidden_key(b"value"), value);
-    js_object_set_field_by_name(
-        obj,
-        hidden_key(b"done"),
-        f64::from_bits(if done { TAG_TRUE } else { TAG_FALSE }),
-    );
-    box_pointer(obj as *const u8)
+    unsafe {
+        crate::iter_result::make_iter_result(
+            crate::value::JSValue::from_bits(value.to_bits()),
+            done,
+        )
+    }
 }
 
 fn readable_iterator_done() -> f64 {

@@ -144,7 +144,7 @@ unsafe fn ensure_key_in_keys_array_inner(
                 });
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
                     let live = crate::object::object_live_slot_count(obj);
-                    let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
+                    let alloc_limit = crate::object::object_inline_capacity(obj);
                     if !next_keys.is_null()
                         && (writes_value || slot_idx < alloc_limit)
                         && cached_target_fits(target_shape_id, alloc_limit)
@@ -196,7 +196,9 @@ unsafe fn ensure_key_in_keys_array_inner(
             refresh_define_property_roots!();
             publish_definition_keys(obj, new_keys, 0, numeric);
             refresh_define_property_roots!();
-            if crate::object::object_live_slot_count(obj) == 0 {
+            if crate::object::object_live_slot_count(obj) == 0
+                && crate::object::object_inline_capacity(obj) != 0
+            {
                 set_object_live_slot_count(obj, 1);
             }
             if let Some(handle) = interned.as_ref() {
@@ -312,7 +314,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
-            let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
+            let alloc_limit = crate::object::object_inline_capacity(obj);
             // An overflow target stays on the private path below for a
             // KEYS-ONLY install (an accessor claiming its slot): it writes no
             // value, so the overflow entry such an edge implies would never be
@@ -414,7 +416,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     let new_index = key_count as u32;
     // #8113: one bound probe, reused.
     let live_slots = crate::object::object_live_slot_count(obj);
-    let inline_capacity = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32);
+    let inline_capacity = crate::object::object_inline_capacity(obj);
     if new_index < inline_capacity && new_index >= live_slots {
         set_object_live_slot_count(obj, new_index + 1);
     }
@@ -486,8 +488,7 @@ unsafe fn publish_definition_keys(
         let rep = crate::object::field_rep_store::shape_rep(
             crate::object::shapes::object_shape_stamp(obj),
         );
-        let live = crate::object::object_live_slot_count(obj);
-        let inline = slot < live.max(crate::object::INLINE_SLOT_FLOOR as u32);
+        let inline = slot < crate::object::object_inline_capacity(obj);
         crate::object::field_rep_store::publish_key_add_edge(obj, keys, rep, slot, numeric, inline);
     } else {
         let live = crate::object::object_live_slot_count(obj);

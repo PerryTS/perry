@@ -482,6 +482,17 @@ fn build_timer_prototypes() {
         }
         // No `Symbol.toStringTag`: node brands both as `[object Object]`.
         slot.store(proto as i64, Ordering::Release);
+        let desc = if is_immediate {
+            std::ptr::addr_of!(crate::object::runtime_layouts::IMMEDIATE)
+        } else {
+            std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT)
+        };
+        unsafe {
+            crate::object::runtime_layouts::bind_builtin_prototype(
+                desc,
+                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+            );
+        }
     }
 }
 
@@ -507,28 +518,24 @@ pub(super) fn timer_object(id: i64, kind: CallbackTimerKind) -> i64 {
         CallbackTimerKind::Immediate => IMMEDIATE_CLASS_ID,
         _ => TIMEOUT_CLASS_ID,
     };
-    let obj = crate::object::js_object_alloc(class_id, 0);
-    if obj.is_null() {
-        return 0;
-    }
-    // Building the prototype allocates (lazily, on the first timer of a
-    // program) and `GC_TYPE_OBJECT` is movable, so the instance is re-read
-    // through its handle after each allocating step.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let handle = scope.root_raw_mut_ptr(obj);
     let proto = timer_prototype(kind);
-    debug_assert!(
+    assert!(
         !proto.is_null(),
-        "a timer handle must carry its prototype, or it has no methods"
+        "timer prototype must exist before layout birth"
     );
-    if !proto.is_null() {
-        handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
-            crate::object::prototype_chain::object_link_class_default_prototype(
-                obj as usize,
-                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-            );
-        });
+    let desc = match kind {
+        CallbackTimerKind::Immediate => {
+            std::ptr::addr_of!(crate::object::runtime_layouts::IMMEDIATE)
+        }
+        _ => std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT),
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = unsafe { crate::object::layout_desc::perry_alloc_layout(desc) };
+    // GC_STORE_AUDIT(POINTER_FREE): timer family brand, published before escape.
+    unsafe {
+        (*object).class_id = class_id;
     }
+    let handle = scope.root_raw_mut_ptr(object);
     handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
         let meta = crate::object::object_meta_ensure(obj);
         debug_assert!(!meta.is_null(), "a timer handle must carry its meta");

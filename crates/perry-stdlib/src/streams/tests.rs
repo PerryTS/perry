@@ -7,9 +7,11 @@ use super::*;
 static ALLOCATOR_TEST_SERIAL: Mutex<()> = Mutex::new(());
 
 pub(crate) fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
-    ALLOCATOR_TEST_SERIAL
+    let guard = ALLOCATOR_TEST_SERIAL
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    crate::test_runtime::initialize();
+    guard
 }
 
 fn alloc_closed_readable() -> usize {

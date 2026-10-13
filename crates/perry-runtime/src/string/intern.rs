@@ -344,6 +344,12 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
             return existing;
         }
 
+        let bytes = std::slice::from_raw_parts(string_data(key), byte_len as usize);
+        if let Some(atom) = atom_lookup(bytes, hash) {
+            publish_intern_entry(hash, atom);
+            return atom;
+        }
+
         // Miss or collision — insert (evict on collision)
         publish_intern_entry(hash, key);
 
@@ -426,6 +432,11 @@ pub(super) fn intern_prehashed_bytes(
     });
     if let Some(existing) = hit {
         return existing;
+    }
+
+    if let Some(atom) = atom_lookup(input, hash) {
+        publish_intern_entry(hash, atom);
+        return atom;
     }
 
     let key = if is_wtf8 {

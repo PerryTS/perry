@@ -275,34 +275,12 @@ fn undefined_value() -> f64 {
 }
 
 fn async_from_sync_iter_result(value: f64, done: bool) -> f64 {
-    // The result value and the freshly-allocated object are live young objects
-    // held across sibling allocations (the object alloc, and each
-    // `set_field_by_name`, which can grow the shape). The default-on moving
-    // scavenge evacuates young survivors, so cache them in a handle scope and
-    // re-read through the (GC-updated) handles instead of stale raw copies.
-    // Property-name keys use the long-lived allocator so they never move and
-    // need no rooting.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value_h = scope.root_nanbox_f64(value);
-    let obj = crate::object::js_object_alloc(0, 2);
-    let obj_h = scope.root_raw_mut_ptr(obj);
-    let value_key = crate::string::js_string_from_bytes_longlived(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes_longlived(b"done".as_ptr(), 4);
-    crate::object::js_object_set_field_by_name(
-        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        value_key,
-        value_h.get_nanbox_f64(),
-    );
-    crate::object::js_object_set_field_by_name(
-        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        done_key,
-        if done {
-            f64::from_bits(crate::value::TAG_TRUE)
-        } else {
-            f64::from_bits(crate::value::TAG_FALSE)
-        },
-    );
-    crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64)
+    unsafe {
+        crate::iter_result::make_iter_result(
+            crate::value::JSValue::from_bits(value.to_bits()),
+            done,
+        )
+    }
 }
 
 extern "C" fn async_from_sync_fulfilled(

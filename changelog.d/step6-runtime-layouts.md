@@ -1,0 +1,3 @@
+Declare runtime-created stream state, URL/URLSearchParams, timer and iterator-result layouts in Rust and register them at startup. Creation fills fixed slots and uses shape-owned prototype links. This removes state-view birth replay, iterator-result key caches and their scanner, URL structural branding and first-expando tombstone construction, and timer birth/link shape minting.
+
+Ordinary property growth reads the allocation's physical inline capacity, including zero-slot layouts. Static atoms retain canonical string addresses across dynamic interning, and static shape records remain alive through full collection. ELF and Mach-O section bounds use the shared runtime descriptor ABI.

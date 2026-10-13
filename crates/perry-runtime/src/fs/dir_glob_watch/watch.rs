@@ -548,12 +548,12 @@ fn abort_promise_watcher(id: usize, reason: f64) -> Vec<*mut crate::promise::Pro
 }
 
 fn iterator_result(value: f64, done: bool) -> f64 {
-    let value_key = js_string_from_bytes(b"value".as_ptr(), b"value".len() as u32);
-    let done_key = js_string_from_bytes(b"done".as_ptr(), b"done".len() as u32);
-    let obj = crate::object::js_object_alloc(0, 2);
-    crate::object::js_object_set_field_by_name(obj, value_key, value);
-    crate::object::js_object_set_field_by_name(obj, done_key, bool_value(done));
-    boxed_ptr(obj as *const u8)
+    unsafe {
+        crate::iter_result::make_iter_result(
+            crate::value::JSValue::from_bits(value.to_bits()),
+            done,
+        )
+    }
 }
 
 fn set_named_field(obj: *mut crate::object::ObjectHeader, name: &[u8], value: f64) {

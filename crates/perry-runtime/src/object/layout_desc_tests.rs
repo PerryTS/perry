@@ -1,0 +1,137 @@
+use super::layout_desc::*;
+use super::*;
+
+use super::runtime_layouts::{atom_hash, bind_builtin_prototype, layout_id};
+
+#[test]
+fn static_layout_real_abi_and_dynamic_atom_identity() {
+    crate::gc::js_gc_init();
+    static_shapes::js_shape_run_static_seed();
+    let descriptor = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(descriptor) });
+    let atom = unsafe { (*(*descriptor).keys).atom };
+    let key = unsafe { (*atom).string };
+    let supplied = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    let interned = crate::string::js_string_intern(supplied, atom_hash(b"value"));
+    assert_eq!(
+        interned, key,
+        "dynamic names must share the static atom address"
+    );
+    assert_eq!(unsafe { perry_layout_index_probe(descriptor, atom) }, 0);
+    obj.with_const_ptr(|object: *const ObjectHeader| unsafe {
+        let gc = crate::gc::header_from_trusted_user_ptr(object.cast());
+        assert_eq!(
+            (*gc).size as usize,
+            crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ObjectHeader>() + 16
+        );
+        assert_eq!((*object).parent_class_id, layout_id(descriptor));
+        let fields = object
+            .cast::<u8>()
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>();
+        assert_eq!(*fields, crate::value::TAG_HOLE);
+        assert_eq!(*fields.add(1), crate::value::TAG_HOLE);
+    });
+    obj.with_mut_ptr(|object| js_object_set_field(object, 0, JSValue::number(37.0)));
+    crate::gc::js_gc_collect();
+    obj.with_const_ptr(|object| assert_eq!(js_object_get_field_by_name_f64(object, key), 37.0));
+}
+
+#[test]
+fn static_layout_zero_slots_expand_without_an_inline_floor() {
+    crate::gc::js_gc_init();
+    static_shapes::js_shape_run_static_seed();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prototype = scope.root_raw_mut_ptr(js_object_alloc_plain(1));
+    let inherited = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"inherited".as_ptr(),
+        9,
+    ));
+    prototype.with_mut_ptr::<ObjectHeader, _>(|object| {
+        js_object_set_field_by_name(object, inherited.get_raw_mut_ptr(), 41.0);
+    });
+    unsafe {
+        bind_builtin_prototype(
+            std::ptr::addr_of!(runtime_layouts::TIMEOUT),
+            prototype.with_const_ptr::<ObjectHeader, _>(|object| {
+                crate::js_nanbox_pointer(object as i64).to_bits()
+            }),
+        );
+    }
+    let obj = scope.root_raw_mut_ptr(unsafe {
+        perry_alloc_layout(std::ptr::addr_of!(runtime_layouts::TIMEOUT))
+    });
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"extra".as_ptr(), 5));
+    obj.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {
+        assert_eq!(object_inline_capacity(object), 0);
+        (*object).class_id = crate::native_class_ids::TIMEOUT;
+        assert_eq!(
+            shape_store::try_store(
+                crate::value::js_nanbox_pointer(object as i64),
+                crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+                23.0,
+            ),
+            Some(23.0),
+        );
+    });
+    obj.with_const_ptr::<ObjectHeader, _>(|object| unsafe {
+        assert_eq!(
+            object_live_slot_count(object),
+            0,
+            "expando must not expose nonexistent inline storage"
+        );
+        assert_eq!(
+            js_object_get_field_by_name_f64(object, key.get_raw_mut_ptr()),
+            23.0
+        );
+        assert_eq!(
+            js_object_get_field_by_name_f64(object, inherited.get_raw_mut_ptr()),
+            41.0,
+            "key addition must retain the declared prototype identity"
+        );
+    });
+    crate::gc::js_gc_collect();
+    obj.with_const_ptr::<ObjectHeader, _>(|object| {
+        assert_eq!(
+            js_object_get_field_by_name_f64(object, key.get_raw_mut_ptr()),
+            23.0
+        );
+        assert_eq!(
+            js_object_get_field_by_name_f64(object, inherited.get_raw_mut_ptr()),
+            41.0
+        );
+    });
+}
+
+#[test]
+fn static_layout_state_views_have_no_fixed_field_spill() {
+    crate::gc::js_gc_init();
+    static_shapes::js_shape_run_static_seed();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let readable = scope.root_nanbox_f64(crate::node_stream::js_node_stream_readable_new(
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    ));
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"_readableState".as_ptr(),
+        14,
+    ));
+    let stream = crate::js_nanbox_get_pointer(readable.get_nanbox_f64()) as *mut ObjectHeader;
+    let view = scope.root_nanbox_f64(js_object_get_field_by_name_f64(
+        stream,
+        key.get_raw_mut_ptr(),
+    ));
+    let object = crate::js_nanbox_get_pointer(view.get_nanbox_f64()) as *const ObjectHeader;
+    unsafe {
+        assert_eq!(
+            (*object).parent_class_id,
+            layout_id(std::ptr::addr_of!(runtime_layouts::READABLE_STATE))
+        );
+        assert_eq!(object_live_slot_count(object), 6);
+        assert_eq!(
+            (*(*object).meta).spill,
+            0,
+            "fixed state fields belong to the declared slots"
+        );
+    }
+}

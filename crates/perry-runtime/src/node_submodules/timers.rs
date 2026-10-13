@@ -193,14 +193,12 @@ fn boxed_value_to_ptr<T>(value: f64) -> *mut T {
 }
 
 fn iter_result(value: f64, done: bool) -> f64 {
-    let obj = js_object_alloc(0, 2);
-    js_object_set_field_by_name(obj, string_key(b"value"), value);
-    js_object_set_field_by_name(
-        obj,
-        string_key(b"done"),
-        f64::from_bits(JSValue::bool(done).bits()),
-    );
-    boxed_ptr(obj as *const u8)
+    unsafe {
+        crate::iter_result::make_iter_result(
+            crate::value::JSValue::from_bits(value.to_bits()),
+            done,
+        )
+    }
 }
 
 extern "C" fn timers_promises_interval_next(

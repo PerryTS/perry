@@ -72,10 +72,7 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     }
     // Refuse growth before changing membership. A reservation/floor is
     // physical storage; the target still decides which slots are visible.
-    if to.live_inline_slot_count()
-        > from
-            .live_inline_slot_count()
-            .max(crate::object::INLINE_SLOT_FLOOR as u32)
+    if to.live_inline_slot_count() > crate::object::object_inline_capacity(obj)
         || (slot >= to.live_inline_slot_count()
             && !crate::object::spill_store_would_be_in_capacity(obj as usize, slot as usize))
         || crate::object::field_rep::has_deprecated(to.rep())

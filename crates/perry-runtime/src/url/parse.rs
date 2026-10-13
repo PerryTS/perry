@@ -409,15 +409,21 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         format!("{}//{}", protocol, host)
     };
 
-    // Allocate object with URL_FIELD_COUNT fields
-    // Using class_id 0 for now (generic object)
-    let obj = js_object_alloc(0, URL_FIELD_COUNT);
+    // Component storage and its intrinsic prototype are declared at startup.
+    let obj = unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
+            crate::object::runtime_layouts::URL_COMPONENTS
+        ));
+        // GC_STORE_AUDIT(POINTER_FREE): immutable runtime family brand.
+        (*obj).class_id = crate::object::runtime_layouts::URL_CLASS_ID;
+        obj
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
 
-    // The numbered fields are internal URL state. Named properties live on
-    // URL.prototype; an expando write seeds twelve tombstone keys before its
-    // first append so it cannot overwrite these fields.
+    // The declared private slots hold URL state. Public names remain on
+    // URL.prototype; expandos append after the private slots without seeding
+    // a tombstone layout on the first write.
 
     // Set all the URL properties
     let set_string = |field, text: &str| {
@@ -471,12 +477,7 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
             ptr => crate::value::js_nanbox_pointer(ptr),
         }
     };
-    if proto.to_bits() != crate::value::TAG_UNDEFINED {
-        crate::object::prototype_chain::object_link_class_default_prototype(
-            crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize,
-            proto.to_bits(),
-        );
-    }
+    debug_assert_ne!(proto.to_bits(), crate::value::TAG_UNDEFINED);
     crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader
 }
 

@@ -504,25 +504,7 @@ pub(crate) fn is_url_object_shape(url: *mut ObjectHeader) -> bool {
         return false;
     }
     unsafe {
-        if !is_gc_object_header(url)
-            || (*url).class_id != 0
-            || crate::object::object_live_slot_count(url) < URL_FIELD_COUNT
-        {
-            return false;
-        }
-        let href = get_string_content(crate::object::js_object_get_field_f64(url, URL_HREF));
-        if !is_valid_absolute_url(&href) {
-            return false;
-        }
-        let params_f64 = crate::object::js_object_get_field_f64(url, URL_SEARCH_PARAMS);
-        let Some(params) = object_from_f64(params_f64) else {
-            return false;
-        };
-        if !is_gc_object_header(params) {
-            return false;
-        }
-        let owner_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_OWNER);
-        object_from_f64(owner_f64).is_some_and(|owner| owner == url)
+        is_gc_object_header(url) && (*url).class_id == crate::object::runtime_layouts::URL_CLASS_ID
     }
 }
 

@@ -171,6 +171,8 @@ unsafe fn closure(info: *const crate::closure::JsFunctionInfo) -> f64 {
 /// this fails on the `iterator-helper` / `string` pair.
 #[test]
 fn iterator_class_ids_are_pairwise_distinct() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     let ids: [(&str, u32); 7] = [
         ("buffer", crate::buffer::BUFFER_ITERATOR_CLASS_ID),
         ("array", crate::array::ARRAY_ITERATOR_CLASS_ID),
@@ -200,6 +202,8 @@ fn iterator_class_ids_are_pairwise_distinct() {
 /// Pin them so a future renumbering is a deliberate act.
 #[test]
 fn op_kinds_are_distinct() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     let ops = [
         super::OP_IDENTITY,
         OP_MAP,
@@ -221,6 +225,8 @@ fn op_kinds_are_distinct() {
 
 #[test]
 fn iterator_from_yields_the_source_sequence() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         assert_eq!(drain(helper_over(&[1.0, 2.0, 3.0])), vec![1.0, 2.0, 3.0]);
     }
@@ -228,6 +234,8 @@ fn iterator_from_yields_the_source_sequence() {
 
 #[test]
 fn iterator_from_on_an_existing_helper_returns_it_unchanged() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let h = helper_over(&[1.0, 2.0]);
         assert_eq!(
@@ -241,6 +249,8 @@ fn iterator_from_on_an_existing_helper_returns_it_unchanged() {
 
 #[test]
 fn helper_inherits_a_callable_next_from_its_shared_prototype() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let h = helper_over(&[1.0]);
         let obj = crate::value::js_nanbox_get_pointer(h) as *const ObjectHeader;
@@ -269,6 +279,8 @@ fn helper_inherits_a_callable_next_from_its_shared_prototype() {
 
 #[test]
 fn helper_created_from_a_raw_iterator_inherits_the_same_next() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let array = number_array(&[1.0]);
         let array_iter = crate::array::array_values_iter(array);
@@ -296,6 +308,8 @@ fn helper_created_from_a_raw_iterator_inherits_the_same_next() {
 
 #[test]
 fn helper_next_rejects_a_non_helper_iterator_receiver() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let array_iter = crate::array::array_values_iter(number_array(&[9.0]));
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -332,6 +346,8 @@ fn helper_next_rejects_a_non_helper_iterator_receiver() {
 
 #[test]
 fn map_returns_a_helper_and_transforms_lazily() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let m = tower(
             helper_over(&[1.0, 2.0, 3.0]),
@@ -350,6 +366,8 @@ fn map_returns_a_helper_and_transforms_lazily() {
 
 #[test]
 fn filter_returns_a_helper_and_keeps_matching_values() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let f = tower(
             helper_over(&[1.0, 2.0, 3.0, 4.0]),
@@ -363,6 +381,8 @@ fn filter_returns_a_helper_and_keeps_matching_values() {
 
 #[test]
 fn take_returns_a_helper_and_stops_after_n() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let t = tower(
             helper_over(&[1.0, 2.0, 3.0, 4.0, 5.0]),
@@ -376,6 +396,8 @@ fn take_returns_a_helper_and_stops_after_n() {
 
 #[test]
 fn drop_returns_a_helper_and_skips_the_first_n() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let d = tower(
             helper_over(&[1.0, 2.0, 3.0, 4.0]),
@@ -389,6 +411,8 @@ fn drop_returns_a_helper_and_skips_the_first_n() {
 
 #[test]
 fn flat_map_returns_a_helper_and_flattens_one_level() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let f = tower(
             helper_over(&[1.0, 2.0]),
@@ -404,6 +428,8 @@ fn flat_map_returns_a_helper_and_flattens_one_level() {
 
 #[test]
 fn map_iterator_inherits_flat_map_and_to_array_through_the_tower() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     let _serialized = crate::array::test_serialize();
     unsafe {
         let map = crate::map::js_map_alloc(2);
@@ -437,6 +463,8 @@ fn map_iterator_inherits_flat_map_and_to_array_through_the_tower() {
 
 #[test]
 fn chained_helpers_compose() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         // Iterator.from([1..6]).map(x => x*2).filter(even).take(2) → [2, 4]
         let m = tower(
@@ -456,6 +484,8 @@ fn chained_helpers_compose() {
 
 #[test]
 fn to_array_drains_the_chain() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let a = tower(helper_over(&[1.0, 2.0, 3.0]), "toArray", &[]);
         assert_eq!(array_numbers(a), vec![1.0, 2.0, 3.0]);
@@ -470,6 +500,8 @@ fn to_array_drains_the_chain() {
 
 #[test]
 fn reduce_with_and_without_an_initial_value() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let with_init = tower(
             helper_over(&[1.0, 2.0, 3.0]),
@@ -492,6 +524,8 @@ fn reduce_with_and_without_an_initial_value() {
 
 #[test]
 fn some_every_find_short_circuit() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         assert_eq!(
             tower(
@@ -546,6 +580,8 @@ fn some_every_find_short_circuit() {
 
 #[test]
 fn symbol_iterator_returns_the_helper_itself() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let h = helper_over(&[1.0]);
         assert_eq!(tower(h, "@@iterator", &[]).to_bits(), h.to_bits());
@@ -565,6 +601,8 @@ fn symbol_iterator_returns_the_helper_itself() {
 /// `iterator_step` and this reports a receiver of `undefined`.
 #[test]
 fn an_own_next_method_is_called_with_the_iterator_as_this() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     use std::sync::atomic::{AtomicU64, Ordering};
     /// Bits of the `this` the last `next()` observed.
     static OBSERVED_THIS: AtomicU64 = AtomicU64::new(0);
@@ -615,6 +653,8 @@ fn an_own_next_method_is_called_with_the_iterator_as_this() {
 /// renumbering — the other half of the collision.
 #[test]
 fn string_iterator_still_dispatches_to_its_own_family() {
+    crate::gc::js_gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
     unsafe {
         let s = crate::string::js_string_from_bytes(b"ab".as_ptr(), 2);
         let it = crate::string::string_values_iter(s);

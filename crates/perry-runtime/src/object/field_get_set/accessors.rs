@@ -139,8 +139,7 @@ pub unsafe extern "C" fn js_object_record_set_by_bytes(
     }) else {
         return 0;
     };
-    let inline_limit =
-        crate::object::object_live_slot_count(obj).max(crate::object::INLINE_SLOT_FLOOR as u32);
+    let inline_limit = crate::object::object_inline_capacity(obj);
     if index < inline_limit {
         js_object_set_field(obj, index, value);
     } else {
@@ -218,10 +217,7 @@ unsafe fn own_property_slot(
     if key_count > 65536 {
         return None;
     }
-    let alloc_limit = std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    ) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     // #6759: shape-index + raw dense-slot scan, replacing the per-element
     // `js_array_get` + `js_string_key_matches` walk. This is the READ path's
     // copy of the scan that #8936 killed on the [[Set]]/delete side — an

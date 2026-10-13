@@ -1585,9 +1585,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         // `max(live slots, INLINE_SLOT_FLOOR)` it is inline, above it in the
         // spill buffer. The gap between the shape's live inline count and
         // the floor is refused rather than guessed.
-        let spill_from = shape
-            .live_inline_slot_count
-            .max(super::INLINE_SLOT_FLOOR as u32);
+        let spill_from = super::object_inline_capacity(addr as *const ObjectHeader);
         let (value, slot_word) = if s < shape.live_inline_slot_count {
             (field_bits(addr, s), s as u64)
         } else if s < spill_from {

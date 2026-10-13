@@ -452,8 +452,7 @@ unsafe fn positional_entry(
     {
         return None;
     }
-    let live = crate::object::object_live_slot_count(src) as usize;
-    let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR);
+    let alloc_limit = crate::object::object_inline_capacity(src) as usize;
     let value = if i < alloc_limit {
         std::ptr::read(
             (src as *const u8).add(std::mem::size_of::<ObjectHeader>() + i * 8) as *const f64,

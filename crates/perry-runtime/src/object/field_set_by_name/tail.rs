@@ -585,8 +585,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 }
                 // #8113: one bound probe, reused.
                 let live_slots = crate::object::object_live_slot_count(obj);
-                let alloc_limit =
-                    std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+                let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
                 if (slot_idx as usize) < alloc_limit {
                     // Inline the field write — `obj` has already been
                     // validated (GC header read, type check, closure
@@ -664,8 +663,9 @@ pub(crate) fn set_field_by_name_object_tail(
             };
             refresh_roots_after_alloc!();
 
-            // Reallocate fields to hold at least one value
-            // Note: We assume the object has enough field slots pre-allocated
+            // The first key follows the same allocation-capacity rule as
+            // every later key; a zero-slot layout begins in overflow.
+            let inline = crate::object::object_inline_capacity(obj) != 0;
             // #7154 publication order: `gc_field_slot_range` bounds the
             // collector's view of the payload by `field_count`, so a slot at an
             // index the count does not yet cover is invisible to BOTH tracing
@@ -681,10 +681,15 @@ pub(crate) fn set_field_by_name_object_tail(
                 super::field_rep_store::shape_rep(prev_shape_id),
                 0,
                 Some(value.to_bits()),
-                true,
+                inline,
             );
             refresh_roots_after_alloc!();
-            js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+            if inline {
+                js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+            } else {
+                let bits = overflow_store_bits(value, obj, 0);
+                overflow_set(obj as usize, 0, bits);
+            }
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             // Record the null→single-key transition so the next object
@@ -795,10 +800,7 @@ pub(crate) fn set_field_by_name_object_tail(
 
         // Search through the keys array for a match
         let key_count = keys_view.count() as usize;
-        let alloc_limit = std::cmp::max(
-            crate::object::object_live_slot_count(obj),
-            crate::object::INLINE_SLOT_FLOOR as u32,
-        ) as usize;
+        let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
 
         // Sidecar O(1) lookup when keys_array has grown past the
         // linear-scan break-even. Without this, the build-then-fill

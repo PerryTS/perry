@@ -361,3 +361,6 @@ mod buffer_b1_test_support;
 
 #[cfg(all(test, feature = "compression-gzip"))]
 mod buffer_b1_zlib_tests;
+
+#[cfg(test)]
+mod test_runtime;

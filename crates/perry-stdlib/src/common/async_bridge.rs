@@ -790,6 +790,7 @@ mod tests {
     /// Take the queues for this test and start it from empty.
     fn own_pending_queues() -> std::sync::MutexGuard<'static, ()> {
         let guard = pending_queue_test_lock();
+        crate::test_runtime::initialize();
         clear_pending();
         guard
     }

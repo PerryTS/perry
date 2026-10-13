@@ -1158,8 +1158,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         return;
     }
     let key_count = src_keys.count() as usize;
-    let src_field_count = crate::object::object_live_slot_count(src) as usize;
-    let alloc_limit = std::cmp::max(src_field_count, crate::object::INLINE_SLOT_FLOOR);
+    let alloc_limit = crate::object::object_inline_capacity(src) as usize;
     let header_size = std::mem::size_of::<ObjectHeader>();
     let src_fields = (src as *const u8).add(header_size) as *const u64;
 
