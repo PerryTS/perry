@@ -442,17 +442,22 @@ pub extern "C" fn js_string_search_value_to_string(
     value: f64,
     method_id: i32,
 ) -> *mut StringHeader {
-    if string_search_is_regexp(value) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if string_search_is_regexp(value.get_nanbox_f64()) {
         throw_regexp_search_type_error(method_id);
     }
     // ToString(searchString): a Symbol throws a TypeError (§7.1.17) rather than
     // stringifying to "Symbol(...)".
+    let value = value.get_nanbox_f64();
     crate::builtins::reject_symbol_to_string(value);
     crate::value::js_jsvalue_to_string(value)
 }
 
 fn string_search_is_regexp(value: f64) -> bool {
-    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let jsval = crate::value::JSValue::from_bits(value.get_nanbox_u64());
     if !jsval.is_pointer() {
         return false;
     }
@@ -466,14 +471,20 @@ fn string_search_is_regexp(value: f64) -> bool {
     if !match_sym.is_null() {
         let match_sym_f64 =
             f64::from_bits(crate::value::JSValue::pointer(match_sym as *const u8).bits());
-        let matcher = unsafe { crate::symbol::js_object_get_symbol_property(value, match_sym_f64) };
+        let matcher = unsafe {
+            crate::symbol::js_object_get_symbol_property(value.get_nanbox_f64(), match_sym_f64)
+        };
         if matcher.to_bits() != crate::value::TAG_UNDEFINED {
             return crate::value::js_is_truthy(matcher) != 0;
         }
     }
 
+    // Symbol.match getters may run user code and evacuate the receiver. Read
+    // the current pointer from the handle before consulting RegExp's internal
+    // data, rather than using the pre-getter `jsval` snapshot above.
+    let value = crate::value::JSValue::from_bits(value.get_nanbox_u64());
     crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
-        (jsval.as_pointer::<u8>()) as i64,
+        (value.as_pointer::<u8>()) as i64,
     ))
     .is_some()
 }
@@ -1602,6 +1613,154 @@ mod locale_compare_moving_roots_tests {
             crate::value::js_nanbox_get_pointer(options.get_nanbox_f64()) as usize,
             "the getter's forced moving minor must relocate its options receiver"
         );
+    }
+}
+
+#[cfg(test)]
+mod search_value_moving_roots_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        static MATCH_GETTER: Cell<(u64, u32)> = const { Cell::new((crate::value::TAG_UNDEFINED, 0)) };
+    }
+
+    extern "C" fn match_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        crate::gc::gc_collect_minor();
+        let bits = MATCH_GETTER.with(|state| {
+            let (result, calls) = state.get();
+            state.set((result, calls + 1));
+            result
+        });
+        f64::from_bits(bits)
+    }
+
+    fn runtime_moving_gc() -> crate::gc::RuntimeHandleScope {
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::shapes::scan_shape_table_rekey_mut,
+        );
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+        crate::gc::RuntimeHandleScope::new()
+    }
+
+    unsafe fn search_object(
+        scope: &crate::gc::RuntimeHandleScope,
+        result: f64,
+    ) -> crate::gc::RuntimeHandle<'_> {
+        MATCH_GETTER.with(|state| state.set((result.to_bits(), 0)));
+        let object = crate::object::js_object_alloc(0, 0);
+        let object = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(object as i64));
+        let getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+            crate::fn_info!(match_getter, 0),
+            0,
+        ) as i64);
+        let symbol = crate::symbol::well_known_symbol("match");
+        let symbol = f64::from_bits(crate::value::JSValue::pointer(symbol as *const u8).bits());
+        crate::object::js_object_define_getter(object.get_nanbox_f64(), symbol, getter);
+        object
+    }
+
+    unsafe fn search_regexp(
+        scope: &crate::gc::RuntimeHandleScope,
+        result: f64,
+    ) -> crate::gc::RuntimeHandle<'_> {
+        MATCH_GETTER.with(|state| state.set((result.to_bits(), 0)));
+        let pattern = scope.root_string_ptr(js_string_from_str("needle"));
+        let flags = scope.root_string_ptr(js_string_from_str(""));
+        let regexp = scope.root_raw_mut_ptr(pattern.with_const_ptr(|pattern| {
+            flags.with_const_ptr(|flags| crate::regex::js_regexp_new(pattern, flags))
+        }));
+        let regexp = scope.root_nanbox_f64(regexp.with_mut_ptr(
+            |regexp: *mut crate::regex::RegExpHeader| {
+                crate::value::js_nanbox_pointer(regexp as i64)
+            },
+        ));
+        let getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+            crate::fn_info!(match_getter, 0),
+            0,
+        ) as i64);
+        let prototype = crate::object::js_object_alloc(0, 0);
+        let prototype = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(prototype as i64));
+        let symbol = crate::symbol::well_known_symbol("match");
+        let symbol = f64::from_bits(crate::value::JSValue::pointer(symbol as *const u8).bits());
+        crate::object::js_object_define_getter(prototype.get_nanbox_f64(), symbol, getter);
+        crate::object::js_object_set_prototype_of(
+            regexp.get_nanbox_f64(),
+            prototype.get_nanbox_f64(),
+        );
+        regexp
+    }
+
+    fn object_string(value: f64) -> String {
+        let result = js_string_search_value_to_string(value, 0);
+        string_as_str(result).to_owned()
+    }
+
+    #[test]
+    fn search_value_moving_roots_handle_symbol_match_getters_and_primitives() {
+        let _gc = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        let scope = runtime_moving_gc();
+
+        for answer in [
+            f64::from_bits(crate::value::TAG_FALSE),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        ] {
+            let search = unsafe { search_object(&scope, answer) };
+            let before = crate::value::js_nanbox_get_pointer(search.get_nanbox_f64()) as usize;
+            assert_eq!(object_string(search.get_nanbox_f64()), "[object Object]");
+            let after = crate::value::js_nanbox_get_pointer(search.get_nanbox_f64()) as usize;
+            assert_ne!(
+                before, after,
+                "Symbol.match getter must evacuate the receiver"
+            );
+            assert_eq!(MATCH_GETTER.with(|state| state.get().1), 1);
+        }
+
+        let search = unsafe { search_regexp(&scope, f64::from_bits(crate::value::TAG_UNDEFINED)) };
+        let before = crate::value::js_nanbox_get_pointer(search.get_nanbox_f64()) as usize;
+        let thrown = crate::exception::catch_js_throw(|| {
+            js_string_search_value_to_string(search.get_nanbox_f64(), 0);
+        })
+        .expect_err("undefined Symbol.match must fall back to the RegExp internal slot");
+        assert_ne!(
+            before,
+            crate::value::js_nanbox_get_pointer(search.get_nanbox_f64()) as usize,
+            "undefined getter must evacuate the RegExp receiver"
+        );
+        assert_eq!(MATCH_GETTER.with(|state| state.get().1), 1);
+        let error = crate::value::js_nanbox_get_pointer(thrown) as *mut crate::error::ErrorHeader;
+        assert_eq!(
+            crate::error::js_error_get_kind(error),
+            crate::error::ERROR_KIND_TYPE_ERROR
+        );
+
+        let search = unsafe { search_object(&scope, f64::from_bits(crate::value::TAG_TRUE)) };
+        let before = crate::value::js_nanbox_get_pointer(search.get_nanbox_f64()) as usize;
+        let thrown = crate::exception::catch_js_throw(|| {
+            js_string_search_value_to_string(search.get_nanbox_f64(), 0);
+        })
+        .expect_err("truthy Symbol.match must reject a RegExp-like search value");
+        let after = crate::value::js_nanbox_get_pointer(search.get_nanbox_f64()) as usize;
+        assert_ne!(
+            before, after,
+            "truthy getter must also force receiver evacuation"
+        );
+        assert_eq!(MATCH_GETTER.with(|state| state.get().1), 1);
+        let error = crate::value::js_nanbox_get_pointer(thrown) as *mut crate::error::ErrorHeader;
+        assert_eq!(
+            crate::error::js_error_get_kind(error),
+            crate::error::ERROR_KIND_TYPE_ERROR
+        );
+
+        let primitive = js_string_search_value_to_string(42.0, 0);
+        assert_eq!(string_as_str(primitive), "42");
+        assert_eq!(MATCH_GETTER.with(|state| state.get().1), 1);
     }
 }
 

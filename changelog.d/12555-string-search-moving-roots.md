@@ -1,0 +1,1 @@
+String search argument validation now roots the search value across `Symbol.match` getters and reloads it before the RegExp internal-data check and string coercion. This is a moving-GC safety slice of #12538; the broader audit remains open.
