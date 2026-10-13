@@ -1819,6 +1819,8 @@ mod tombstone_tests;
 #[cfg(test)]
 mod transition_ic_tests;
 #[cfg(test)]
+mod value_of_placeholder_tests;
+#[cfg(test)]
 mod wide_field_read_tests;
 #[cfg(test)]
 mod wide_object_membership_tests;

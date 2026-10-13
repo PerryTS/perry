@@ -1186,6 +1186,9 @@ pub(crate) fn install_noop_proto_methods(proto_obj: *mut ObjectHeader, methods: 
             "propertyIsEnumerable" => {
                 fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_flags(FN_BUILTIN))
             }
+            "valueOf" => {
+                fn_info!(object_prototype_value_of_thunk, 0; with_flags(FN_BUILTIN))
+            }
             // Annex B accessor methods get real thunks (reflective `.call`).
             "__defineGetter__" => {
                 fn_info!(object_prototype_define_getter_thunk, 2; with_flags(FN_BUILTIN))
