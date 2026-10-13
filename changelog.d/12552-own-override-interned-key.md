@@ -1,0 +1,1 @@
+The own-override predicate now accepts the pooled NaN-boxed property key directly instead of rebuilding it from raw bytes. This is the interned-key ABI slice of #10957; the helper remains `Reenters`, and the broader issue remains open.

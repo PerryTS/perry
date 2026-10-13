@@ -52,10 +52,10 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use super::helpers::is_date_receiver;
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::{FnCtx, lower_expr};
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_declared_map_expr, is_map_expr, is_set_expr};
-use crate::types::{DOUBLE, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I8, I16, I32, I64};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
 /// below. Over-approximating is safe — a name the chain declines simply makes
@@ -208,21 +208,17 @@ pub(crate) fn emit_own_override_branch(
     }
 
     ctx.current_block = ask_idx;
-    // The predicate takes the name as BYTES, not a dispatch id: it asks
-    // `Object.hasOwn`'s own predicate, which needs a real key.
-    let (name_bytes, name_len) = {
-        let idx = ctx.strings.intern(property);
-        let entry = ctx.strings.entry(idx);
-        (
-            format!("@{}", entry.bytes_global),
-            entry.byte_len.to_string(),
-        )
-    };
+    // The predicate takes the interned key value (not a dispatch id). The
+    // string-pool handle is already a rooted NaN-boxed string; passing it
+    // avoids rebuilding the same property key from raw bytes in the runtime.
+    let idx = ctx.strings.intern(property);
+    let key_handle = format!("@{}", ctx.strings.entry(idx).handle_global);
     let blk = ctx.block();
+    let key = blk.load(DOUBLE, &key_handle);
     let maybe = blk.call(
         I32,
         "js_receiver_may_own_named_method",
-        &[(DOUBLE, recv), (PTR, &name_bytes), (I64, &name_len)],
+        &[(DOUBLE, recv), (DOUBLE, &key)],
     );
     let may_own = blk.icmp_ne(I32, &maybe, "0");
     blk.cond_br(&may_own, own_label, builtin_label);

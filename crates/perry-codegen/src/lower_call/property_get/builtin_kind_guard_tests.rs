@@ -343,6 +343,22 @@ fn unproven_date_receiver_asks_the_own_override_test_before_the_builtin() {
         ir.contains(OWN_FLAG) && ir.contains(OWN_TEST),
         "a Date receiver must take the own-override test before the builtin:\n{ir}"
     );
+    let own_call = ir
+        .lines()
+        .find(|line| line.contains(OWN_TEST))
+        .expect("own-override call");
+    assert!(
+        own_call.contains(", double "),
+        "the own-override ABI passes the interned key as a NaN-boxed double:\n{own_call}"
+    );
+    assert!(
+        ir.lines().any(|line| {
+            line.contains("load double, ptr @")
+                && line.contains(".str.")
+                && line.contains(".handle")
+        }),
+        "the guard must load its key from the interned string handle global:\n{ir}"
+    );
     assert_eq!(
         ir.matches(DISPATCH).count(),
         1,

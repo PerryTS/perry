@@ -1938,8 +1938,10 @@ js_multipart_parse	ptr	ptr,ptr
 js_multipart_parse_with_sizes	ptr	ptr,ptr
 js_nanbox_bigint	f64	i64
 js_nanbox_get_bigint	i64	f64
+js_nanbox_get_handle	i64	f64
 js_nanbox_get_pointer	i64	f64
 js_nanbox_get_string_pointer	i64	f64
+js_nanbox_handle	f64	i64
 js_nanbox_is_bigint	i32s	f64
 js_nanbox_is_pointer	i32s	f64
 js_nanbox_is_string	i32s	f64
@@ -3226,7 +3228,7 @@ js_readline_stdin_unref	f64
 js_readline_terminal	f64	i64
 js_readline_write	f64	i64,f64
 js_readonly_set_has	f64	f64,f64
-js_receiver_may_own_named_method	i32s	f64,ptr,usize
+js_receiver_may_own_named_method	i32s	f64,f64
 js_recv_route_note	void	i32u
 js_referenceerror_new	ptr	ptr
 js_reflect_apply	f64	f64,f64,f64

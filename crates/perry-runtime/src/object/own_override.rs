@@ -186,14 +186,10 @@ pub(crate) fn note_exotic_named_prop_install(owner: usize) {
 /// `1` is only slower.
 ///
 /// # Safety
-/// `name_ptr`/`name_len` must describe a live UTF-8 method name; `recv` is any
-/// NaN-boxed value.
+/// `recv` is any NaN-boxed value; `key` is a live NaN-boxed interned string
+/// from the codegen string pool.
 #[no_mangle]
-pub unsafe extern "C" fn js_receiver_may_own_named_method(
-    recv: f64,
-    name_ptr: *const u8,
-    name_len: usize,
-) -> i32 {
+pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -> i32 {
     let jsval = crate::JSValue::from_bits(recv.to_bits());
     if !jsval.is_pointer() {
         // A primitive's methods come from its wrapper prototype; it has no own
@@ -275,7 +271,7 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
             {
                 return 0;
             }
-            return authoritative_has_own(recv, name_ptr, name_len);
+            return authoritative_has_own(recv, key);
         }
     } else {
         // No readable GC header. Cannot prove absence — decline.
@@ -289,24 +285,20 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
         return 0;
     }
 
-    authoritative_has_own(recv, name_ptr, name_len)
+    authoritative_has_own(recv, key)
 }
 
 /// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
 /// correctly for every cell kind and needs no readable ShapeId.
 ///
 /// # Safety
-/// `recv` is any NaN-boxed value; `name_ptr`/`name_len` name this call's
-/// method.
-unsafe fn authoritative_has_own(recv: f64, name_ptr: *const u8, name_len: usize) -> i32 {
-    if name_ptr.is_null() || name_len == 0 {
+/// `recv` is any NaN-boxed value; `key` is a live NaN-boxed interned string.
+unsafe fn authoritative_has_own(recv: f64, key: f64) -> i32 {
+    if !crate::JSValue::from_bits(key.to_bits()).is_string() {
         return 1;
     }
-    let key = method_key(name_ptr, name_len);
-    if key.is_null() {
-        return 1;
-    }
-    authoritative_has_own_key(recv, key)
+    let has_own = crate::object::object_ops::has_own::js_object_has_own(recv, key);
+    i32::from(has_own.to_bits() == crate::value::TAG_TRUE)
 }
 
 /// This call's method name as a property key: the thread's canonical interned
@@ -328,15 +320,7 @@ unsafe fn method_key(name_ptr: *const u8, name_len: usize) -> *mut crate::String
 /// # Safety
 /// `recv` is any NaN-boxed value; `key` is a live, non-null string header.
 unsafe fn authoritative_has_own_key(recv: f64, key: *mut crate::StringHeader) -> i32 {
-    let key_value = f64::from_bits(crate::JSValue::string_ptr(key).bits());
-    // The authoritative predicate — the one behind `Object.hasOwn` — which
-    // already answers correctly for every cell kind (the `hasOwn` rows of
-    // `test_parity_own_override_beats_builtin.ts` pass on unfixed main; only
-    // the CALL disagreed). Asking it, rather than re-deriving own-ness from a
-    // shape descriptor, is the point: it does not need a readable ShapeId, and
-    // a Map/Set/Array cell's `+4` word is `capacity`, not one.
-    let has_own = crate::object::object_ops::has_own::js_object_has_own(recv, key_value);
-    i32::from(has_own.to_bits() == crate::value::TAG_TRUE)
+    authoritative_has_own(recv, f64::from_bits(crate::JSValue::string_ptr(key).bits()))
 }
 
 /// The receiver's own USER method of this name, if it has one.
@@ -647,6 +631,35 @@ pub(crate) unsafe fn array_owning_push_for_test(
     arr: *mut crate::array::ArrayHeader,
 ) -> Option<*mut crate::array::ArrayHeader> {
     array_owning_push(arr)
+}
+
+#[cfg(test)]
+mod interned_key_abi_tests {
+    use super::*;
+
+    #[test]
+    fn own_override_predicate_uses_the_passed_interned_key() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let present = crate::string::canonical_key(b"present");
+            let absent = crate::string::canonical_key(b"absent");
+            let present_value = f64::from_bits(crate::JSValue::string_ptr(present).bits());
+            let absent_value = f64::from_bits(crate::JSValue::string_ptr(absent).bits());
+
+            object
+                .with_mut_ptr(|obj| crate::object::js_object_set_field_by_name(obj, present, 17.0));
+            PERRY_OWN_NAMED_PROP_INSTALLED.store(1, Ordering::Relaxed);
+            let recv = object.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {
+                crate::value::js_nanbox_pointer(obj as i64)
+            });
+
+            assert_eq!(js_receiver_may_own_named_method(recv, present_value), 1);
+            assert_eq!(js_receiver_may_own_named_method(recv, absent_value), 0);
+        }
+    }
 }
 
 // Called from generated code only, so release/LTO builds may otherwise strip

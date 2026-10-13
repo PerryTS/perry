@@ -147,12 +147,31 @@ fn a_set_has_with_a_non_allocating_value_pays_no_temp_slot() {
                 ir.contains("@js_set_has(") || ir.contains("@js_set_delete("),
                 "{lowering}: {name} must reach the generic Set helper, or this proves nothing:\n{ir}"
             );
+            if name == "set_has_no_gc.ts" {
+                let own_call = ir
+                    .lines()
+                    .find(|line| line.contains("call i32 @js_receiver_may_own_named_method("))
+                    .expect("folded Set.has own-override call");
+                assert!(
+                    own_call.contains(", double "),
+                    "{lowering}: folded guard passes the interned key value:\n{own_call}"
+                );
+                assert!(
+                    ir.lines().any(|line| {
+                        line.contains("load double, ptr @")
+                            && line.contains(".str.")
+                            && line.contains(".handle")
+                    }),
+                    "{lowering}: folded guard loads an interned string handle:\n{ir}"
+                );
+            }
             // #10943 moved this from "none" to "exactly one", deliberately and
             // with a measurement. The own-override guard tests the receiver
             // before it branches, and the receiver must stay rooted across
-            // that call — the predicate allocates today (`js_string_from_bytes`
-            // on its authoritative tier), so it is not a GC leaf and the root
-            // is not optional.
+            // that call. The #10957 ABI now passes the pooled key directly,
+            // avoiding byte-to-string reconstruction, but the authoritative
+            // `hasOwn` predicate still reenters runtime code. Keep this root
+            // until its complete effect is proven non-collecting.
             //
             // Measured on this exact shape (`s.has(2)` in a hot loop, same
             // compiler with Set in and out of the guard's gate, min of 3,
@@ -160,11 +179,8 @@ fn a_set_has_with_a_non_allocating_value_pays_no_temp_slot() {
             // +0.01 — LLVM hoists the test, the branch and the slot traffic
             // out of the loop. The cost is emitted shape, not runtime.
             //
-            // #10957 removes it for real: pass the INTERNED KEY instead of
-            // (ptr, len), which takes the allocation out of the predicate,
-            // makes the GC-leaf claim provable rather than assumed, and drops
-            // this slot with it. Until then this is a ratchet: one slot is
-            // accounted for, a second reddens.
+            // This remains a ratchet: one slot is accounted for, a second
+            // reddens.
             assert_temp_rooting_count(
                 &ir,
                 1,
