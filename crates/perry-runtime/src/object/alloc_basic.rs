@@ -79,6 +79,16 @@ pub extern "C" fn js_object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
     object_alloc_plain(field_count)
 }
 
+/// A statically identified module-singleton literal prototype. O3 storage
+/// uses the same ordinary birth mint and barriered construction as a young
+/// literal; only its allocation generation differs. Its ShapeId remains the
+/// authority for reads, writes and weak holder-memo reachability.
+#[no_mangle]
+pub extern "C" fn js_object_literal_prototype_birth() -> f64 {
+    let object = object_alloc_with_parent_impl::<true, false, true>(0, 0, 0);
+    crate::value::js_nanbox_pointer(object as i64)
+}
+
 /// `Object.create`: publish only the final ordinary prototype shape. Only
 /// scalar shape/prototype identities cross the allocating call; the prototype
 /// is refreshed through its caller's handle afterwards.
@@ -644,6 +654,24 @@ pub extern "C" fn js_object_alloc_fast_with_parent(
 #[cfg(test)]
 mod filled_birth_tests {
     use super::*;
+
+    #[test]
+    fn literal_prototype_birth_is_immediately_memo_admitted() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let cycles = crate::gc::copying_minor_cycles();
+        let value = js_object_literal_prototype_birth();
+        let object = crate::JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
+        unsafe {
+            assert!(crate::gc::never_move::lives_old(object as usize));
+            assert!(crate::gc::never_move::stable_memo_referent(object as usize));
+            let shape = shapes::shape_record_by_id((*object).parent_class_id).unwrap();
+            assert_eq!(shape.object_kind(), shapes::ShapeObjectKind::Ordinary);
+            let header = crate::gc::header_from_trusted_user_ptr(object.cast());
+            assert_eq!((*header).gc_flags & crate::gc::GC_FLAG_PINNED, 0);
+        }
+        assert_eq!(cycles, crate::gc::copying_minor_cycles());
+    }
 
     #[test]
     fn replay_uses_recorded_kind_and_validates_prototype_and_width() {

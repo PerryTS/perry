@@ -21,6 +21,7 @@ pub mod inline;
 mod local_copies;
 pub mod module_const_fold;
 pub mod prop_cse;
+mod prototype_birth;
 mod source_spans;
 pub mod state_desugar;
 mod suspending_iife;
@@ -64,6 +65,7 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     // Let the shape-specific passes consume their bindings first, then remove
     // plain copies before codegen attaches string-sharing and root barriers.
     local_copies::run(module);
+    prototype_birth::run(module);
     // #11516: after the copy cleanup (an alias it folds is one less escape)
     // and before the async/generator transforms (which box locals and split
     // expressions at `await`).
