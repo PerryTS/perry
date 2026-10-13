@@ -36,6 +36,12 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/object/shapes_birth_width.rs",
+      "name": "COMPLETE_BIRTH_PROOFS",
+      "verdict": "test_only",
+      "why": "#12561: cfg(test) thread-local Cell<u32> count of complete immutable birth proofs. Its only writes reset or increment the count; assertions read it to prove validated weak shape relationships do not resolve again per birth. It stores neither a heap pointer nor a NaN-boxed value and is absent from release builds."
+    },
+    {
       "file": "crates/perry-runtime/src/turnloop_net/transport.rs",
       "name": "LINK_RESOURCES",
       "verdict": "not_a_gc_pointer",

@@ -333,3 +333,59 @@ fn classless_function_store_records_a_shape_plan() {
         ));
     }
 }
+
+#[test]
+fn function_and_object_create_share_the_birth_allocator_without_extra_records() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let func = compiled_function();
+    let first = construct(func);
+    let proto = own_prototype(func);
+    let record = unsafe { (*(*proto).meta).instance_birth };
+    let created = crate::object::js_object_create(crate::value::js_nanbox_pointer(proto as i64));
+    let created =
+        JSValue::from_bits(created.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    assert_eq!(
+        unsafe { crate::object::shapes::object_shape_stamp(first) },
+        unsafe { crate::object::shapes::object_shape_stamp(created) }
+    );
+    unsafe {
+        assert_eq!(
+            (*(*proto).meta).instance_birth,
+            record,
+            "Object.create consumes the existing birth model without writing a function record"
+        );
+    }
+    for _ in 2..8 {
+        construct(func);
+    }
+    let narrow = construct(func);
+    unsafe {
+        assert_eq!(
+            crate::object::object_live_slot_count(narrow),
+            0,
+            "the existing tracking proof cannot freeze the chosen width"
+        );
+    }
+    let record = unsafe { (*(*proto).meta).instance_birth };
+    let created = crate::object::js_object_create(crate::value::js_nanbox_pointer(proto as i64));
+    let created =
+        JSValue::from_bits(created.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    assert_eq!(prototype_of(created), proto);
+    assert_eq!(
+        unsafe { crate::object::shapes::object_shape_stamp(narrow) },
+        unsafe { crate::object::shapes::object_shape_stamp(created) }
+    );
+    unsafe {
+        assert_eq!((*(*proto).meta).instance_birth, record);
+    }
+    let plain = crate::object::js_object_alloc(0, 0);
+    crate::object::js_object_create(crate::value::js_nanbox_pointer(plain as i64));
+    unsafe {
+        assert_eq!(
+            (*(*plain).meta).instance_birth,
+            0,
+            "the shared allocator adds no persistent caching to Object.create"
+        );
+    }
+}

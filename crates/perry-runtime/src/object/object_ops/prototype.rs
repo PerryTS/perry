@@ -123,7 +123,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
         crate::object::shapes::keyless_birth_width(proto_id, producer)
     });
     let proto_id = serial.unwrap_or_else(crate::object::shapes::fresh_unique_proto_id);
-    let born = crate::object::alloc_basic::object_alloc_created(&proto, proto_id, birth);
+    let born = crate::object::alloc_basic::object_alloc_created(&proto, proto_id, birth, 0);
     crate::value::js_nanbox_pointer(born as i64)
 }
 

@@ -89,17 +89,19 @@ pub extern "C" fn js_object_literal_prototype_birth() -> f64 {
     crate::value::js_nanbox_pointer(object as i64)
 }
 
-/// `Object.create`: publish only the final ordinary prototype shape. Only
+/// Keyless ordinary birth: Object.create or an ordinary function's existing
+/// scalar birth proof. Publish only the final prototype shape. Only
 /// scalar shape/prototype identities cross the allocating call; the prototype
 /// is refreshed through its caller's handle afterwards.
 pub(crate) fn object_alloc_created(
     proto: &crate::gc::RuntimeHandle<'_>,
     proto_id: u64,
     birth: shapes::KeylessBirth,
+    recorded: u32,
 ) -> *mut ObjectHeader {
     use crate::object::shapes;
     let width = birth.width();
-    let mut shape = shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth);
+    let mut shape = shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth, recorded);
     let alloc_width = (width as usize).max(crate::object::INLINE_SLOT_FLOOR);
     let size = std::mem::size_of::<ObjectHeader>() + alloc_width * 8;
     let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
@@ -130,7 +132,7 @@ pub(crate) fn object_alloc_created(
             let scope = crate::gc::RuntimeHandleScope::new();
             let owner = scope.root_raw_mut_ptr(obj);
             (shape, obj) = owner.across_mut::<ObjectHeader, _>(|| {
-                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth)
+                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth, 0)
             });
         }
         if !no_collection {

@@ -172,45 +172,6 @@ unsafe fn own_prototype_object(closure: usize) -> Option<*mut ObjectHeader> {
     (header.obj_type == crate::gc::GC_TYPE_OBJECT).then_some(proto as *mut ObjectHeader)
 }
 
-/// Replay only the saved keyless birth for this actual prototype and the
-/// width its existing shape birth record now serves. Shape ids are weak and
-/// may be retired or reused between constructions.
-#[inline]
-unsafe fn birth_record(proto: *const ObjectHeader, slots: u32) -> Option<u32> {
-    let meta = (*proto).meta;
-    if meta.is_null() {
-        return None;
-    }
-    let shape = ((*meta).instance_birth >> 32) as u32;
-    crate::object::shapes::shape_is_keyless_birth_of(
-        shape,
-        (*meta).proto_serial,
-        slots,
-        crate::object::shapes::ShapeObjectKind::Ordinary,
-    )
-    .then_some(shape)
-}
-
-/// A first or changed-width construction uses the same final-shape birth
-/// allocator as Object.create. Only the prototype's existing scalar birth
-/// record is updated; the newborn carries the actual prototype in its shape.
-#[cold]
-#[inline(never)]
-unsafe fn mint_birth_record(
-    proto: &crate::gc::RuntimeHandle<'_>,
-    serial: u64,
-    birth: crate::object::shapes::KeylessBirth,
-) -> f64 {
-    let obj = crate::object::alloc_basic::object_alloc_created(proto, serial, birth);
-    let shape = crate::object::shapes::object_shape_stamp(obj);
-    let ptr = (proto.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-    // Marking the prototype already installed its meta. No allocating call
-    // occurs between birth publication and returning the newborn.
-    // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
-    (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
-    crate::value::js_nanbox_pointer(obj as i64)
-}
-
 /// The class `class_id`'s registered prototype moved from `old` to another
 /// object: a birth record on `old` minted for that class no longer describes
 /// a construction by its function (#10507).
@@ -226,22 +187,6 @@ pub(crate) unsafe fn forget_birth_record_of_class(old: *mut ObjectHeader, class_
         // GC_STORE_AUDIT(POINTER_FREE): clears a class id / ShapeId pair.
         (*meta).instance_birth = 0;
     }
-}
-
-/// Replay the shape through the existing recorded-birth allocator, which
-/// revalidates facts after a collecting allocation and shades the actual
-/// prototype edge. No per-instance record is allocated.
-///
-/// # Safety
-/// `proto` is a live `ObjectHeader` marked as a prototype, and `shape_id`
-/// passed [`birth_record`] for it.
-#[inline]
-unsafe fn born_from_record(
-    shape_id: u32,
-    slots: u32,
-    proto_bits: u64,
-) -> Option<*mut ObjectHeader> {
-    crate::object::alloc_basic::object_alloc_recorded_birth(shape_id, proto_bits, 0, slots, false)
 }
 
 /// `new F(...args)` for an ordinary compiled function `F` (`closure`), or
@@ -288,12 +233,20 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
         serial,
         crate::object::shapes::object_shape_stamp(proto),
     );
-    let replay = birth_record(proto, birth.width())
-        .and_then(|shape| born_from_record(shape, birth.width(), proto_handle.get_nanbox_u64()));
-    let instance = match replay {
-        Some(obj) => crate::value::js_nanbox_pointer(obj as i64),
-        None => mint_birth_record(&proto_handle, serial, birth),
-    };
+    // The existing owner record supplies a scalar shape proof to the same
+    // allocator as Object.create. It validates the chosen width and actual
+    // prototype serial once, then revalidates after any collecting allocation.
+    let recorded = ((*(*proto).meta).instance_birth >> 32) as u32;
+    let obj =
+        crate::object::alloc_basic::object_alloc_created(&proto_handle, serial, birth, recorded);
+    let shape = crate::object::shapes::object_shape_stamp(obj);
+    if shape != recorded {
+        let ptr = crate::value::JSValue::from_bits(proto_handle.get_nanbox_u64())
+            .as_pointer::<ObjectHeader>();
+        // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
+        (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
+    }
+    let instance = crate::value::js_nanbox_pointer(obj as i64);
     Some(run_constructor_body(
         func_handle.get_nanbox_f64(),
         instance,

@@ -157,7 +157,7 @@ fn resolved_floor_birth_reuses_identity_and_refreshes_prototype_word() {
         assert_ne!(birth.shape, 0, "fixture must carry a resolved shape");
         // A reused shape must still restore the identity's current rooted word.
         super::super::shapes_prototype::write_identity_word(proto_id, 0);
-        let shape = super::created_birth_shape(proto_id, boxed(proto).to_bits(), &birth);
+        let shape = super::created_birth_shape(proto_id, boxed(proto).to_bits(), &birth, 0);
         assert_eq!(shape, birth.shape);
         assert_eq!(
             super::super::shapes_prototype::identity_prototype_word(proto_id),
@@ -187,7 +187,7 @@ fn resolved_tracking_birth_does_not_reuse_zero_live_bound() {
             0,
             super::ShapeObjectKind::Ordinary
         ));
-        let shape = super::created_birth_shape(proto_id, boxed(proto).to_bits(), &birth);
+        let shape = super::created_birth_shape(proto_id, boxed(proto).to_bits(), &birth, 0);
         assert_ne!(
             shape, birth.shape,
             "allocation slack requires its actual live bound"
@@ -223,7 +223,7 @@ fn retired_resolved_birth_is_reminted_before_publication() {
             super::super::shape_is_retired(birth.shape),
             "fixture must retire the proof"
         );
-        let shape = super::created_birth_shape(proto_id, boxed(proto).to_bits(), &birth);
+        let shape = super::created_birth_shape(proto_id, boxed(proto).to_bits(), &birth, 0);
         assert_ne!(
             shape, birth.shape,
             "retired identities cannot be stamped on newborns"
@@ -344,7 +344,7 @@ fn resolved_floor_birth_declines_a_foreign_prototype_and_a_retired_shape() {
         let second_id =
             crate::object::proto_validity::mark_object_as_prototype(second as usize).unwrap();
         assert_ne!(first_id, second_id);
-        let foreign = super::created_birth_shape(second_id, boxed(second).to_bits(), &birth);
+        let foreign = super::created_birth_shape(second_id, boxed(second).to_bits(), &birth, 0);
         assert_ne!(
             foreign, birth.shape,
             "a layout proof cannot change prototype identity"
@@ -361,7 +361,7 @@ fn resolved_floor_birth_declines_a_foreign_prototype_and_a_retired_shape() {
             birth.shape,
         );
         assert!(super::shapes_store::ShapeSlab::agent_record_present(birth.shape).is_none());
-        let renewed = super::created_birth_shape(first_id, boxed(first).to_bits(), &birth);
+        let renewed = super::created_birth_shape(first_id, boxed(first).to_bits(), &birth, 0);
         assert_ne!(
             renewed, birth.shape,
             "a retired proof must remint through the interner"
@@ -372,5 +372,163 @@ fn resolved_floor_birth_declines_a_foreign_prototype_and_a_retired_shape() {
             0,
             super::ShapeObjectKind::Ordinary
         ));
+    }
+}
+
+#[test]
+fn recorded_keyless_birth_replays_without_the_shape_interner() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let proto = prototype();
+        let first = create(proto);
+        let shape = super::super::object_shape_stamp(first);
+        let serial = (*(*proto).meta).proto_serial;
+        assert_eq!(
+            (*(*proto).meta).instance_birth,
+            0,
+            "Object.create must not acquire a new owner cache"
+        );
+        let birth = super::keyless_birth_width(serial, super::super::object_shape_stamp(proto));
+        assert_eq!(birth.width(), TRACKING_WIDTH);
+        assert!(
+            super::super::shape_is_keyless_birth_of(
+                shape,
+                serial,
+                birth.width(),
+                super::ShapeObjectKind::Ordinary
+            ),
+            "the scalar proof must be live and exact"
+        );
+        let table = &crate::state::state().shapes;
+        let _index_unavailable = table.inner.borrow_mut();
+        assert_eq!(
+            super::created_birth_shape(serial, boxed(proto).to_bits(), &birth, shape),
+            shape,
+            "a complete recorded birth must not resolve the final shape again"
+        );
+    }
+}
+
+#[test]
+fn recorded_keyless_birth_revalidates_width_serial_and_retirement() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let proto = prototype();
+        let tracking_shape = super::super::object_shape_stamp(create(proto));
+        let serial = (*(*proto).meta).proto_serial;
+        for _ in 1..TRACKING_BIRTHS {
+            create(proto);
+        }
+        let floor = create(proto);
+        assert_eq!(live(floor), 0);
+        for i in 0..13 {
+            let name = format!("recorded_width_{i}");
+            crate::object::js_object_set_field_by_name(floor, key(&name), i as f64);
+        }
+        let birth = super::keyless_birth_width(serial, super::super::object_shape_stamp(proto));
+        assert_eq!(birth.width(), 13);
+        let wide =
+            super::created_birth_shape(serial, boxed(proto).to_bits(), &birth, tracking_shape);
+        assert!(
+            super::super::shape_is_keyless_birth_of(
+                wide,
+                serial,
+                13,
+                super::ShapeObjectKind::Ordinary
+            ),
+            "a stale tracking width must be rejected"
+        );
+        let other = prototype();
+        let other_first = create(other);
+        for i in 0..13 {
+            let name = format!("recorded_width_{i}");
+            crate::object::js_object_set_field_by_name(other_first, key(&name), i as f64);
+        }
+        let foreign = create(other);
+        assert_eq!(
+            live(foreign),
+            13,
+            "isolate serial mismatch at the same width"
+        );
+        let foreign_shape = super::super::object_shape_stamp(foreign);
+        assert_ne!(foreign_shape, wide);
+        assert_eq!(
+            super::created_birth_shape(serial, boxed(proto).to_bits(), &birth, foreign_shape),
+            wide,
+            "a shared layout or width cannot replace the actual prototype serial"
+        );
+        let table = &crate::state::state().shapes;
+        super::super::remove_descriptor_and_reverse_indices(&mut table.inner.borrow_mut(), wide);
+        assert!(super::shapes_store::ShapeSlab::agent_record_present(wide).is_none());
+        let renewed = super::created_birth_shape(serial, boxed(proto).to_bits(), &birth, wide);
+        assert_ne!(renewed, wide);
+        assert!(
+            super::super::shape_is_keyless_birth_of(
+                renewed,
+                serial,
+                13,
+                super::ShapeObjectKind::Ordinary
+            ),
+            "a retired record uses the sole interner"
+        );
+    }
+}
+
+#[test]
+fn validated_birth_relationship_resolves_complete_facts_once() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let proto = prototype();
+        let serial =
+            crate::object::proto_validity::mark_object_as_prototype(proto as usize).unwrap();
+        let producer = super::super::object_shape_stamp(proto);
+        super::COMPLETE_BIRTH_PROOFS.with(|n| n.set(0));
+        let first = super::keyless_birth_width(serial, producer);
+        assert_eq!(
+            super::COMPLETE_BIRTH_PROOFS.with(|n| n.get()),
+            1,
+            "an initial relationship must resolve a complete immutable proof"
+        );
+        for _ in 1..TRACKING_BIRTHS {
+            let birth = super::keyless_birth_width(serial, producer);
+            assert_eq!(birth.shape, first.shape);
+            assert_eq!(birth.width(), TRACKING_WIDTH);
+        }
+        assert_eq!(super::keyless_birth_width(serial, producer).width(), 0);
+        let table = &crate::state::state().shapes;
+        (*table.slab().record_ptr(first.shape).unwrap()).note_descendant_width(13);
+        assert_eq!(
+            super::keyless_birth_width(serial, producer).width(),
+            13,
+            "reuse still reads fresh width rather than a cached choice"
+        );
+        assert_eq!(
+            super::COMPLETE_BIRTH_PROOFS.with(|n| n.get()),
+            1,
+            "a validated relationship must not compare its immutable tuple per birth"
+        );
+        let other = prototype();
+        let other_serial =
+            crate::object::proto_validity::mark_object_as_prototype(other as usize).unwrap();
+        assert!(
+            super::linked_birth_record(first.shape, other_serial).is_none(),
+            "a producer layout is insufficient without its actual serial"
+        );
+        super::super::remove_descriptor_and_reverse_indices(
+            &mut table.inner.borrow_mut(),
+            first.shape,
+        );
+        assert!(super::linked_birth_record(first.shape, serial).is_none());
+        let renewed = super::keyless_birth_width(serial, producer);
+        assert_ne!(renewed.shape, first.shape);
+        assert_eq!(renewed.width(), TRACKING_WIDTH);
+        assert_eq!(
+            super::COMPLETE_BIRTH_PROOFS.with(|n| n.get()),
+            2,
+            "retirement resolves a new proof through the existing interner"
+        );
     }
 }

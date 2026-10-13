@@ -145,10 +145,11 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
     }
     // A prototype shape names its receivers' keyless birth record. This is
     // a weak scalar relationship, not a carrier: pruning still retires the
-    // birth record, and every use validates its complete facts.
+    // birth record. Resolution validates the complete immutable facts;
+    // reuse checks presence and the actual prototype serial.
     let prior = shapes_store::ShapeSlab::agent_record_present(prototype_shape)
         .map_or(0, |record| unsafe { (*record).created_birth_shape() });
-    let resolved = birth_record_for_prototype(prior, proto_id);
+    let resolved = linked_birth_record(prior, proto_id);
     let Some((id, record)) = resolved.or_else(|| resolve_birth_record(proto_id)) else {
         return KeylessBirth::untracked();
     };
@@ -184,10 +185,34 @@ pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> Keyles
     }
 }
 
+/// The existing relationship was published only after the complete floor
+/// birth proof resolved. ShapeIds are never reused and those zero-key facts
+/// are immutable. A shared producer layout can name another prototype's
+/// relationship, so every reuse still checks the actual serial and presence.
+#[inline]
+fn linked_birth_record(id: u32, proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
+    if id == 0 {
+        return None;
+    }
+    let record = shapes_store::ShapeSlab::agent_record_present(id)?;
+    // SAFETY: this agent's present, previously validated floor record.
+    let r = unsafe { &*record };
+    (r.has(RECORD_FLAG_FACTS_INDEXED) && r.proto_id == proto_id).then_some((id, record))
+}
+
+#[cfg(test)]
+thread_local! {
+    // Test-only observation; it cannot steer a production birth or retain data.
+    static COMPLETE_BIRTH_PROOFS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// Validate the prototype shape's weak birth relationship now. Width and
 /// tracking state remain solely on the referenced live birth record.
-#[inline]
+#[cold]
+#[inline(never)]
 fn birth_record_for_prototype(id: u32, proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
+    #[cfg(test)]
+    COMPLETE_BIRTH_PROOFS.with(|n| n.set(n.get() + 1));
     if id == 0 {
         return None;
     }
@@ -221,14 +246,21 @@ fn resolve_birth_record(proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
         ));
         Some((id, table.slab().record_ptr(id)?))
     })?;
-    Some(resolved)
+    // Publish the relationship only after its complete immutable proof has
+    // resolved. Subsequent uses read the live learner through that proof.
+    birth_record_for_prototype(resolved.0, proto_id)
 }
 
 /// Resolve an ordinary keyless birth on its final prototype, including the
 /// slack slots this birth was served. The identity word is an edge of its
 /// carriers, not a permanent root; the caller roots the prototype until the
 /// newborn carries this shape.
-pub(crate) fn created_birth_shape(proto_id: u64, proto_bits: u64, birth: &KeylessBirth) -> u32 {
+pub(crate) fn created_birth_shape(
+    proto_id: u64,
+    proto_bits: u64,
+    birth: &KeylessBirth,
+    recorded: u32,
+) -> u32 {
     // An identity names one prototype for its lifetime. GC rewrites its word;
     // another birth need not write it or append another young-log entry.
     if super::shapes_prototype::identity_prototype_word(proto_id) != proto_bits {
@@ -245,6 +277,20 @@ pub(crate) fn created_birth_shape(proto_id: u64, proto_bits: u64, birth: &Keyles
         && shapes_store::ShapeSlab::agent_record_present(birth.shape).is_some()
     {
         return birth.shape;
+    }
+    // An ordinary function already recorded its final-width birth shape.
+    // Consume that proof here, before allocation, instead of validating it
+    // again in a second replay allocator. Width still comes from the live
+    // learner, and the actual serial remains part of this complete check.
+    if recorded != 0
+        && super::shape_is_keyless_birth_of(
+            recorded,
+            proto_id,
+            birth.width,
+            ShapeObjectKind::Ordinary,
+        )
+    {
+        return recorded;
     }
     super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
         std::ptr::null(),
