@@ -102,23 +102,37 @@ fn has_box_type(addr: usize, kind: u8) -> bool {
 /// foreign pointer is rejected without a registry.
 #[inline]
 pub(crate) fn has_cell_type(addr: usize, kind: u8, size: Option<usize>) -> bool {
+    cell_header(addr).is_some_and(|header| {
+        header.obj_type == kind && size.is_none_or(|size| header.size as usize == size)
+    })
+}
+
+/// Admit a capture cell's header once from the allocator's exact start bit.
+/// The returned borrow must not cross an allocation or collection safepoint.
+/// Keep admission shared; callers only test the admitted header's kind/size.
+#[inline(never)]
+pub(crate) fn cell_header(addr: usize) -> Option<&'static crate::gc::GcHeader> {
+    if crate::value::addr_class::is_handle_band(addr) {
+        return None;
+    }
     let Some(header_addr) = addr.checked_sub(crate::gc::GC_HEADER_SIZE) else {
-        return false;
+        return None;
     };
     let Some((_, base, starts)) = crate::arena::classify_heap_space_in_range(header_addr) else {
-        return false;
+        return None;
     };
     if !crate::arena::arena_header_is_object_start(header_addr, base, starts) {
-        return false;
+        return None;
     }
+    // The start bitmap proves alignment and readable, allocation-authored
+    // header storage. No safepoint intervened: a second allocator admission
+    // through the general tracked-header resolver would repeat this proof.
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_type(addr, kind).is_some_and(
-            |header| {
-                let header = header.as_ref();
-                header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                    && size.is_none_or(|size| header.size as usize == size)
-            },
-        )
+        let header = &*crate::gc::header_from_trusted_user_ptr(addr as *const u8);
+        (header.gc_flags & (crate::gc::GC_FLAG_ARENA | crate::gc::GC_FLAG_FORWARDED)
+            == crate::gc::GC_FLAG_ARENA
+            && header.size as usize >= crate::gc::GC_HEADER_SIZE)
+            .then_some(header)
     }
 }
 fn is_registered_box_ptr(ptr: *mut Box) -> bool {
@@ -242,10 +256,13 @@ fn box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
 /// scope object. A closure's cell capture slot holds one from birth on.
 pub fn is_live_capture_cell(bits: u64) -> bool {
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    has_box_type(addr, crate::gc::GC_TYPE_BOX)
-        || has_box_type(addr, crate::gc::GC_TYPE_I32_BOX)
-        || has_box_type(addr, crate::gc::GC_TYPE_BOOL_BOX)
-        || crate::r#box::scope::is_scope_ptr(addr as u64)
+    cell_header(addr).is_some_and(|header| match header.obj_type {
+        crate::gc::GC_TYPE_SCOPE => true,
+        crate::gc::GC_TYPE_BOX | crate::gc::GC_TYPE_I32_BOX | crate::gc::GC_TYPE_BOOL_BOX => {
+            header.size as usize == crate::gc::GC_HEADER_SIZE + 8
+        }
+        _ => false,
+    })
 }
 
 /// The birth check codegen emits under `PERRY_ASSERT_CAPTURE_CELLS=1` for each

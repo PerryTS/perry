@@ -1,4 +1,5 @@
 # Address-classification audit allowlist (scripts/addr_class_inventory.py).
+crates/perry-runtime/src/box/tests.rs | let inner_header = (scope as usize + 8) as *mut crate::gc::GcHeader; | Negative control: forge a header-shaped word entirely inside an allocated scope's payload, then verify that the exact-start bitmap rejects it as a capture cell.
 # Canonical image classifier: bounds precede every header read.
 crates/perry-runtime/src/value/addr_class/image.rs | as *const GcHeader | Canonical image admission: linker section bounds prove the complete header and StringHeader readable before this cast.
 crates/perry-runtime/src/value/addr_class/image.rs | as *mut GcHeader | Canonical image admission returns a raw address only after validating section bounds, immutable marker and complete payload; callers must not write image headers.

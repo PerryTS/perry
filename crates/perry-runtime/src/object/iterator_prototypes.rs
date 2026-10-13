@@ -1045,18 +1045,24 @@ pub(crate) unsafe fn iterator_next_property_owner(
 }
 
 pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool {
+    iterator_step_builtin_info(obj).is_some()
+}
+
+/// Retain the immutable body named by the shape proof, so method admission
+/// consumes that answer without rereading the receiver edge and family shape.
+unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
     let Some((proto, canonical)) = iterator_family_owner(obj) else {
-        return false;
+        return None;
     };
     let Some(family) = super::shapes::object_shape_record(proto) else {
-        return false;
+        return None;
     };
     if family.logical_key_count() != 2
         || family.summary() & super::key_attrs::SUMMARY_ACCESSOR != 0
         || super::field_rep::slot_rep(super::field_rep::identity_with_special(family.rep()), 0)
             != super::field_rep::REP_SPECIAL
     {
-        return false;
+        return None;
     }
     // The intrinsic is born with next in ConstFn slot 0 and a symbol in
     // slot 1. Ordinary writes/delete revoke that lane; they cannot learn a
@@ -1064,27 +1070,27 @@ pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool 
     let keys = family.keys() as *const crate::array::ArrayHeader;
     let slots = crate::array::array_elements_ptr(keys);
     if !JSValue::from_bits(*slots.add(1)).is_pointer() {
-        return false;
+        return None;
     }
     let Some(info) = family.constfn_info(0) else {
-        return false;
+        return None;
     };
     if (*(info as *const crate::closure::JsFunctionInfo)).code != canonical {
-        return false;
+        return None;
     }
     let parent_bits = super::shapes::object_prototype_word(proto);
     if !JSValue::from_bits(parent_bits).is_pointer() {
-        return false;
+        return None;
     }
     let parent =
         crate::value::js_nanbox_get_pointer(f64::from_bits(parent_bits)) as *const ObjectHeader;
     if !crate::value::addr_class::try_read_gc_header(parent as usize)
         .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
     {
-        return false;
+        return None;
     }
     let Some(shared) = super::shapes::object_shape_record(parent) else {
-        return false;
+        return None;
     };
     // The shared parent may carry symbols, but no named protocol methods.
     let symbol_keys_only = if shared.logical_key_count() == 0 {
@@ -1095,9 +1101,10 @@ pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool 
         (0..shared.logical_key_count())
             .all(|i| JSValue::from_bits(*slots.add(i as usize)).is_pointer())
     };
-    shared.summary() & super::key_attrs::SUMMARY_ACCESSOR == 0
+    (shared.summary() & super::key_attrs::SUMMARY_ACCESSOR == 0
         && symbol_keys_only
-        && super::shapes::object_prototype_word(parent) == 0
+        && super::shapes::object_prototype_word(parent) == 0)
+        .then_some(info)
 }
 
 #[cfg(test)]
@@ -1789,23 +1796,14 @@ pub(crate) unsafe fn iterator_step_method_is_builtin(
     obj: *const ObjectHeader,
     method: f64,
 ) -> bool {
-    if !iterator_step_is_builtin(obj) {
+    let Some(info) = iterator_step_builtin_info(obj) else {
         return false;
-    }
+    };
     if !crate::closure::is_closure_bits(method.to_bits()) {
         return false;
     }
     let method =
         crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader;
-    let proto = crate::value::js_nanbox_get_pointer(f64::from_bits(
-        super::shapes::object_prototype_word(obj),
-    )) as *const ObjectHeader;
-    let Some(shape) = super::shapes::object_shape_record(proto) else {
-        return false;
-    };
-    let Some(info) = shape.constfn_info(0) else {
-        return false;
-    };
     (*method).info as usize as u64 == info
         || crate::closure::get_valid_func_ptr(method)
             == (*(info as *const crate::closure::JsFunctionInfo)).code

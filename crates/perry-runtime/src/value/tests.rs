@@ -218,6 +218,37 @@ fn test_jsvalue_equals_numbers() {
 }
 
 #[test]
+fn strict_equality_rejects_equal_and_distinct_numeric_nan_payloads() {
+    let nans = [
+        0x7FF8_0000_0000_0000u64,
+        0x7FF8_0000_0000_0001,
+        0xFFF8_0000_0000_0000,
+        0xFFF8_0000_0000_0002,
+        0x7FF0_0000_0000_0001,
+    ];
+    let others = [
+        0.0,
+        -0.0,
+        1.0,
+        f64::from_bits(JSValue::int32(1).bits()),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_NULL),
+        f64::from_bits(TAG_TRUE),
+        f64::from_bits(JSValue::try_short_string(b"NaN").unwrap().bits()),
+    ];
+    for bits in nans {
+        let nan = f64::from_bits(bits);
+        assert!(JSValue::from_bits(bits).is_number());
+        assert!(nan.is_nan());
+        for other in nans.map(f64::from_bits).into_iter().chain(others) {
+            assert_eq!(js_jsvalue_equals(nan, other), 0);
+            assert_eq!(js_jsvalue_equals(other, nan), 0);
+        }
+        assert_eq!(js_jsvalue_same_value_zero(nan, nan), 1);
+    }
+}
+
+#[test]
 fn test_jsvalue_equals_distinct_box_allocated_registered_symbols() {
     let left_key = f64::from_bits(JSValue::try_short_string(b"eq_l").unwrap().bits());
     let right_key = f64::from_bits(JSValue::try_short_string(b"eq_r").unwrap().bits());

@@ -86,11 +86,6 @@ pub unsafe extern "C" fn js_scope_set(base: i64, index: i32, bits: i64) {
     crate::gc::runtime_write_barrier_slot(base as usize, slot, bits as u64);
 }
 
-/// True when `bits` is the raw user pointer of a live scope object.
-pub(crate) fn is_scope_ptr(bits: u64) -> bool {
-    crate::r#box::has_cell_type(bits as usize, GC_TYPE_SCOPE, None)
-}
-
 /// A scope object's slot words, for thread transfer.
 pub fn scope_slot_contents(bits: u64) -> Option<Vec<u64>> {
     let bits = if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
@@ -98,12 +93,12 @@ pub fn scope_slot_contents(bits: u64) -> Option<Vec<u64>> {
     } else {
         bits
     };
-    if !is_scope_ptr(bits) {
+    let header = crate::r#box::cell_header(bits as usize)?;
+    if header.obj_type != GC_TYPE_SCOPE {
         return None;
     }
     unsafe {
-        let header = crate::value::addr_class::try_read_tracked_gc_header(bits as usize)?;
-        let n = scope_slot_count(header.as_ptr());
+        let n = scope_slot_count(header);
         let slots = bits as usize as *const u64;
         Some((0..n).map(|i| slots.add(i).read()).collect())
     }
@@ -112,7 +107,16 @@ pub fn scope_slot_contents(bits: u64) -> Option<Vec<u64>> {
 /// A captured cell word a trusted clone may read directly: a variable box or a
 /// scope object.
 pub fn is_capture_cell_ptr(bits: u64) -> bool {
-    crate::r#box::box_slot_contents_bits(bits).is_some() || is_scope_ptr(bits)
+    let addr = if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        bits & crate::value::POINTER_MASK
+    } else {
+        bits
+    };
+    crate::r#box::cell_header(addr as usize).is_some_and(|header| {
+        header.obj_type == GC_TYPE_SCOPE
+            || (header.obj_type == crate::gc::GC_TYPE_BOX
+                && header.size as usize == GC_HEADER_SIZE + 8)
+    })
 }
 
 #[cfg(feature = "keepalive-anchors")]

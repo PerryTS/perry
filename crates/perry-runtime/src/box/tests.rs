@@ -164,3 +164,48 @@ fn capture_cell_check_accepts_only_live_cells() {
         assert!(!is_live_capture_cell(word), "{word:#x} is not a cell");
     }
 }
+
+#[test]
+fn capture_cell_admission_uses_one_boundary_proof() {
+    let boxed = js_box_alloc_bits(17) as u64;
+    let scope = scope::js_scope_alloc(4, crate::value::TAG_UNDEFINED as i64) as u64;
+    let probes = crate::value::addr_class::tracked_header_probe_count_for_tests();
+    assert!(is_registered_box_ptr(boxed as *mut Box));
+    assert!(scope::is_capture_cell_ptr(boxed));
+    assert!(scope::is_capture_cell_ptr(scope));
+    assert!(scope::scope_slot_contents(scope).is_some());
+    assert_eq!(
+        crate::value::addr_class::tracked_header_probe_count_for_tests(),
+        probes,
+        "exact allocation starts must not repeat general allocator admission"
+    );
+
+    // A header-shaped word inside an owned scope is readable, aligned and
+    // the correct kind/size. It still is not an allocation boundary.
+    let inner_header = (scope as usize + 8) as *mut crate::gc::GcHeader;
+    let forged = scope + 8 + crate::gc::GC_HEADER_SIZE as u64;
+    unsafe {
+        inner_header.write(crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_BOX,
+            gc_flags: crate::gc::GC_FLAG_ARENA,
+            _reserved: 0,
+            size: (crate::gc::GC_HEADER_SIZE + 8) as u32,
+        });
+    }
+    assert!(!is_live_capture_cell(forged));
+    assert!(!scope::is_capture_cell_ptr(forged));
+    // Restore ordinary non-pointer slot contents before any collection.
+    unsafe { (inner_header as *mut u64).write(crate::value::TAG_UNDEFINED) };
+
+    let header = unsafe { crate::gc::header_from_trusted_user_ptr(boxed as *const u8) }.cast_mut();
+    let flags = unsafe { (*header).gc_flags };
+    for rejected in [
+        flags | crate::gc::GC_FLAG_FORWARDED,
+        flags & !crate::gc::GC_FLAG_ARENA,
+    ] {
+        unsafe { (*header).gc_flags = rejected };
+        let admitted = is_live_capture_cell(boxed);
+        unsafe { (*header).gc_flags = flags };
+        assert!(!admitted);
+    }
+}

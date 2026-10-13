@@ -55,25 +55,12 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
     let a = f64::from_bits(abits);
     let b = f64::from_bits(bbits);
 
-    // NaN === NaN is false in JS (strict equality follows IEEE 754).
-    // Raw IEEE NaN has top16 = 0x7FF8 (the canonical quiet-NaN). NaN-
-    // boxed tagged values use top16 0x7FFA–0x7FFF and never collide.
-    // Must come BEFORE the abits==bbits fast path: `[1, NaN, 3].indexOf(NaN)`
-    // routes through this helper, both sides decode to f64::NAN (same
-    // bit pattern), and pre-fix the fast path returned 1 (wrongly equal)
-    // so indexOf reported index 1 instead of -1.
-    // Any IEEE NaN — positive 0x7FF8 OR the negative 0xFFF8 payload that libm
-    // returns from out-of-domain acosh/atanh/log/sqrt — is unequal to itself
-    // and to every other value under ===. Must precede the bit-pattern fast
-    // path: two identical negative-NaN bit patterns would otherwise compare
-    // equal (`Math.acosh(0) === Math.acosh(0)` wrongly true → `x !== x` false).
-    if is_number_nan(abits) || is_number_nan(bbits) {
-        return 0;
-    }
-
-    // Fast path: same bit pattern → equal (same number, same pointer, same boolean, etc.)
+    // Identity needs only one NaN check. Unequal NaN bit patterns already
+    // compare false below: numeric comparisons use IEEE equality, and every
+    // nonnumeric route requires its own tag. Rechecking both operands before
+    // dispatch repeats work on every ordinary equality.
     if abits == bbits {
-        return 1;
+        return i32::from(!is_number_nan(abits));
     }
 
     let a_val = JSValue::from_bits(abits);
