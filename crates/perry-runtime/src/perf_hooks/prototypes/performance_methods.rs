@@ -107,16 +107,6 @@ pub(super) extern "C" fn to_json(
     js_perf_to_json()
 }
 
-pub(super) extern "C" fn event_loop_utilization(
-    _closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    utilization1: f64,
-    utilization2: f64,
-) -> f64 {
-    require_performance_receiver(this);
-    js_perf_event_loop_utilization(utilization1, utilization2)
-}
-
 pub(super) extern "C" fn mark_resource_timing(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -140,14 +130,4 @@ pub(super) extern "C" fn mark_resource_timing(
         response_status,
         delivery_type,
     )
-}
-
-pub(super) extern "C" fn timerify(
-    _closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    function: f64,
-    options: f64,
-) -> f64 {
-    require_performance_receiver(this);
-    js_perf_timerify(function, options)
 }

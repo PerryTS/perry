@@ -1,0 +1,1 @@
+`Performance.prototype.timerify` and `Performance.prototype.eventLoopUtilization` now share callable identity with their corresponding `perf_hooks` exports. Both methods also work when detached from a `Performance` receiver.

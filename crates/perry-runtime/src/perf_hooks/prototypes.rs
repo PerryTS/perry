@@ -2,9 +2,9 @@ use super::*;
 
 mod performance_methods;
 use performance_methods::{
-    clear_marks, clear_measures, clear_resource_timings, event_loop_utilization, get_entries,
-    get_entries_by_name, get_entries_by_type, mark, mark_resource_timing, measure, now,
-    set_resource_timing_buffer_size, timerify, to_json,
+    clear_marks, clear_measures, clear_resource_timings, get_entries, get_entries_by_name,
+    get_entries_by_type, mark, mark_resource_timing, measure, now, set_resource_timing_buffer_size,
+    to_json,
 };
 
 const PERF_CONSTRUCTOR_NAMES: &[&str] = &[
@@ -322,7 +322,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
     match class_name {
         "Performance" => {
-            let methods = [
+            let methods: [(&str, *const crate::closure::JsFunctionInfo, u32, bool); 14] = [
                 (
                     "clearMarks",
                     crate::fn_info!(clear_marks, 1; with_declared(0)),
@@ -379,32 +379,25 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                     0,
                     true,
                 ),
-                (
-                    "eventLoopUtilization",
-                    crate::fn_info!(event_loop_utilization, 2; with_declared(2)),
-                    2,
-                    false,
-                ),
+                ("eventLoopUtilization", std::ptr::null(), 2, false),
                 (
                     "markResourceTiming",
                     crate::fn_info!(mark_resource_timing, 8; with_declared(7)),
                     7,
                     false,
                 ),
-                (
-                    "timerify",
-                    crate::fn_info!(timerify, 2; with_declared(1)),
-                    1,
-                    false,
-                ),
+                ("timerify", std::ptr::null(), 1, false),
             ];
             for (method, thunk, arity, enumerable) in methods {
-                install_perf_method(
-                    proto,
-                    method,
-                    perf_method_value(thunk, method, arity),
-                    enumerable,
-                );
+                // These two aliases intentionally share the module export's
+                // canonical closure identity; all other prototype methods
+                // stay receiver-aware thunks.
+                let value = if thunk.is_null() {
+                    crate::object::bound_native_callable_export_value("perf_hooks", method)
+                } else {
+                    perf_method_value(thunk, method, arity)
+                };
+                install_perf_method(proto, method, value, enumerable);
             }
             let getter = perf_method_value(
                 crate::fn_info!(perf_time_origin_getter_thunk, 0; with_declared(0)),
@@ -573,3 +566,6 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
         );
     }
 }
+
+#[cfg(test)]
+mod tests;
