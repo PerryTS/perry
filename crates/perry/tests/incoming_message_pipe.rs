@@ -1,4 +1,4 @@
-//! Regression (#5783): `IncomingMessage.pipe(dest)` must (a) return `dest`
+//! Regression (#5783, #10670): `IncomingMessage.pipe(dest)` must (a) return `dest`
 //! and (b) forward the response body to `dest.write()` / `dest.end()`.
 //!
 //! Before the fix, a client response's `.pipe()` was unimplemented: it returned
@@ -23,19 +23,22 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn compile_and_run(dir: &Path, source: &str) -> String {
+fn compile_and_run(dir: &Path, source: &str, no_auto_optimize: bool) -> String {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
     std::fs::write(&entry, source).expect("write entry");
 
-    let compile = Command::new(perry_bin())
+    let mut command = Command::new(perry_bin());
+    command
         .current_dir(dir)
         .arg("compile")
         .arg(&entry)
         .arg("-o")
-        .arg(&output)
-        .output()
-        .expect("run perry compile");
+        .arg(&output);
+    if no_auto_optimize {
+        command.env("PERRY_NO_AUTO_OPTIMIZE", "1");
+    }
+    let compile = command.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -85,14 +88,14 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
 
 #[test]
 fn incoming_message_pipe_forwards_body_and_returns_dest() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let out = compile_and_run(
-        dir.path(),
-        r#"
+    let source = r#"
 import http from "http";
 import { PassThrough } from "stream";
 
 const BODY = '{"ok":true,"x":12345}';
+function pipeResponse(response: any, dest: any): any {
+  return response.pipe(dest);
+}
 const srv = http.createServer((req: any, res: any): void => {
   res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(BODY.length) });
   res.end(BODY);
@@ -102,7 +105,7 @@ srv.listen(0, (): void => {
   http.get(`http://127.0.0.1:${port}/`, (res: any): void => {
     // node-fetch's exact pattern: pipe the response into a PassThrough and
     // keep only the return value as the readable body.
-    const body = res.pipe(new PassThrough());
+    const body = pipeResponse(res, new PassThrough());
     if (!body) {
       console.log("RET:undefined");
       srv.close();
@@ -117,15 +120,18 @@ srv.listen(0, (): void => {
     });
   });
 });
-"#,
-    );
+"#;
 
-    assert!(
-        out.contains("RET:dest"),
-        "pipe() must return the destination stream, not undefined: {out}"
-    );
-    assert!(
-        out.contains(r#"BODY:{"ok":true,"x":12345}"#),
-        "piped PassThrough never received the full response body: {out}"
-    );
+    for (mode, no_auto_optimize) in [("auto-optimize", false), ("no-auto-optimize", true)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = compile_and_run(dir.path(), source, no_auto_optimize);
+        assert!(
+            out.contains("RET:dest"),
+            "{mode}: pipe() must return the destination stream, not undefined: {out}"
+        );
+        assert!(
+            out.contains(r#"BODY:{"ok":true,"x":12345}"#),
+            "{mode}: piped PassThrough never received the full response body: {out}"
+        );
+    }
 }

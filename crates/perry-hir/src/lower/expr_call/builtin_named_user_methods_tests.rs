@@ -223,3 +223,18 @@ fn imported_builtin_modules_keep_their_intrinsics() {
         "an inner local must shadow the imported builtin alias: {hir}"
     );
 }
+
+#[test]
+fn pipe_response_any_helper_uses_generic_method_dispatch() {
+    let hir = lower(
+        r#"
+        function pipeResponse(response: any, dest: any): any {
+            return response.pipe(dest);
+        }
+        "#,
+    );
+    assert!(
+        hir.contains("PropertyGet") && hir.contains("property: \"pipe\""),
+        "an any-typed response.pipe call should retain generic method lookup: {hir}"
+    );
+}
