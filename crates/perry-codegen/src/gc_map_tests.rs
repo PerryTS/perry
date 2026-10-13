@@ -8,7 +8,10 @@ use super::*;
 #[test]
 fn object_format_tracks_target_os_across_triple_spellings() {
     for target in ["aarch64-apple-darwin", "arm64-apple-macosx15.0.0"] {
-        assert!(matches!(format_for(target), ObjectFormat::MachO), "{target}");
+        assert!(
+            matches!(format_for(target), ObjectFormat::MachO),
+            "{target}"
+        );
     }
     for target in ["x86_64-pc-windows-msvc", "windows-arm64"] {
         assert!(matches!(format_for(target), ObjectFormat::Coff), "{target}");

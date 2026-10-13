@@ -418,6 +418,9 @@ fn producer_walks_publish_provenance_for_every_slot_and_restore_the_caller() {
             });
             assert_eq!(seen, 1, "the staged producer must actually be visited");
         });
-        assert_eq!(super::super::pin::copying_walk_phase(), Some("outer_test_walk"));
+        assert_eq!(
+            super::super::pin::copying_walk_phase(),
+            Some("outer_test_walk")
+        );
     }
 }

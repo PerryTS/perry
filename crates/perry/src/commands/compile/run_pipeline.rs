@@ -1716,6 +1716,9 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // fninfer (decision 140): inferred parameter types as guarded
+    // annotations (`PERRY_FNINFER_APPLY`; off by default).
+    super::fn_infer::apply(&mut ctx.native_modules);
     // Collect all non-generic type aliases from all modules.
     // These are passed to each module's compiler so type_to_abi can resolve
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.
@@ -5948,6 +5951,9 @@ pub fn run_with_parse_cache(
         module_births.iter().flat_map(|(_, b)| b),
         &static_shape_ids,
     );
+    // fninfer (decision 140): per-function inferred signatures over the
+    // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
+    super::fn_infer::dump(&ctx.native_modules);
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         &PathBuf,

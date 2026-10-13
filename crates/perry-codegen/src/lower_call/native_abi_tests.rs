@@ -1,6 +1,6 @@
 //! #11408: check emitted calls, including omitted optional arguments, rather
 //! than relying only on the source-level signature audit.
-use crate::{CompileOptions, compile_module};
+use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Stmt};
 

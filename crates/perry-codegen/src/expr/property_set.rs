@@ -256,7 +256,14 @@ fn lower_class_field_store(
     assignment_strict: bool,
     f64_lane: bool,
 ) -> Result<String> {
-    lower_static_key_store(ctx, object, property, value, assignment_strict, Some(f64_lane))
+    lower_static_key_store(
+        ctx,
+        object,
+        property,
+        value,
+        assignment_strict,
+        Some(f64_lane),
+    )
 }
 
 fn lower_static_key_store(

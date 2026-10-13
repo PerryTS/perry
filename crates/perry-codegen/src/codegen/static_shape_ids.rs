@@ -212,7 +212,9 @@ pub fn static_band_size(count: usize) -> u32 {
         .max(MIN_STATIC_BAND as usize)
         .checked_next_power_of_two()
         .unwrap_or(usize::MAX);
-    want.min(STATIC_SHAPE_ID_COUNT as usize) as u32
+    // The upper half of the static band holds the section-ordered layout
+    // ids (object model step 0, `layout_desc`).
+    want.min(STATIC_SHAPE_ID_COUNT as usize / 2) as u32
 }
 
 /// Assign every distinct content a static id in a band sized to the program:

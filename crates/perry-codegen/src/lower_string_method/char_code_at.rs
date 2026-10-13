@@ -276,9 +276,9 @@ fn lower_inline(
         ctx.block().call(DOUBLE, entry, &operands)
     } else {
         let recv_handle = str_operand_handle_tag_dispatched(ctx, object, recv_box);
-        let slow_idx_i32 = ctx
-            .block()
-            .call(I32, "js_string_number_index_to_i32", &[(DOUBLE, idx_d)]);
+        let slow_idx_i32 =
+            ctx.block()
+                .call(I32, "js_string_number_index_to_i32", &[(DOUBLE, idx_d)]);
         ctx.block().call(
             DOUBLE,
             "js_string_char_code_at",

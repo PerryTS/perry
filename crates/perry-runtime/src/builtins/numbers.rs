@@ -83,7 +83,11 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
                 return f64::NAN;
             }
 
-            if is_negative { -value } else { value }
+            if is_negative {
+                -value
+            } else {
+                value
+            }
         } else {
             f64::NAN
         }
@@ -421,7 +425,11 @@ mod parse_float_tests {
 /// swallowed by a downstream `is_nan()` shortcut.
 pub extern "C" fn js_to_integer_or_infinity(value: f64) -> f64 {
     let n = js_number_coerce(value);
-    if n.is_nan() { 0.0 } else { n.trunc() }
+    if n.is_nan() {
+        0.0
+    } else {
+        n.trunc()
+    }
 }
 
 #[no_mangle]
@@ -445,7 +453,11 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     } else if jsval.is_null() {
         0.0
     } else if jsval.is_bool() {
-        if jsval.as_bool() { 1.0 } else { 0.0 }
+        if jsval.as_bool() {
+            1.0
+        } else {
+            0.0
+        }
     } else if jsval.is_any_string() {
         // Parse string as number. Accepts both STRING_TAG heap
         // pointers and SHORT_STRING_TAG inline SSO values

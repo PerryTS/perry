@@ -52,10 +52,10 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use super::helpers::is_date_receiver;
-use crate::expr::{FnCtx, lower_expr};
+use crate::expr::{lower_expr, FnCtx};
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_declared_map_expr, is_map_expr, is_set_expr};
-use crate::types::{DOUBLE, I8, I16, I32, I64};
+use crate::types::{DOUBLE, I16, I32, I64, I8};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
 /// below. Over-approximating is safe — a name the chain declines simply makes

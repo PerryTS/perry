@@ -242,8 +242,15 @@ pub struct CloneShape {
 /// Fixed-size message records. Rare builtin payloads retain their existing codec.
 #[derive(Debug)]
 pub enum CloneNode {
-    Object { shape: u32, start: u32 },
-    Array { start: u32, len: u32, properties: Option<(u32, u32)> },
+    Object {
+        shape: u32,
+        start: u32,
+    },
+    Array {
+        start: u32,
+        len: u32,
+        properties: Option<(u32, u32)>,
+    },
     Ref(u32),
     Value(Box<SerializedValue>),
 }
@@ -253,19 +260,37 @@ pub enum CloneNode {
 #[derive(Debug, Clone, Copy)]
 pub struct CloneSlot(u64);
 impl CloneSlot {
-    fn inline(bits: u64) -> Self { Self(bits) }
-    fn string(index: u32) -> Self { Self(STRING_TAG | index as u64) }
-    fn node(index: u32) -> Self { Self(POINTER_TAG | index as u64) }
+    fn inline(bits: u64) -> Self {
+        Self(bits)
+    }
+    fn string(index: u32) -> Self {
+        Self(STRING_TAG | index as u64)
+    }
+    fn node(index: u32) -> Self {
+        Self(POINTER_TAG | index as u64)
+    }
     const HOLE: Self = Self(crate::value::TAG_HOLE);
-    fn is_hole(self) -> bool { self.0 == crate::value::TAG_HOLE }
+    fn is_hole(self) -> bool {
+        self.0 == crate::value::TAG_HOLE
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum SerializedValue {
     RawArray(Vec<u64>),
-    Message { root: Box<SerializedValue>, data: std::sync::Arc<CloneMessage> },
-    SlotArray { start: u32, len: u32, properties: Option<(u32, u32)> },
-    ShapeObject { shape: u32, start: u32 },
+    Message {
+        root: Box<SerializedValue>,
+        data: std::sync::Arc<CloneMessage>,
+    },
+    SlotArray {
+        start: u32,
+        len: u32,
+        properties: Option<(u32, u32)>,
+    },
+    ShapeObject {
+        shape: u32,
+        start: u32,
+    },
     StringRef(u32),
     /// A raw 64-bit value that needs no pointer fixup.
     /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
@@ -379,7 +404,10 @@ pub enum SerializedValue {
     },
 
     /// A RegExp: its source pattern and flags. `lastIndex` starts at 0.
-    RegExp { source: Vec<u8>, flags: Vec<u8> },
+    RegExp {
+        source: Vec<u8>,
+        flags: Vec<u8>,
+    },
 
     /// A `SharedArrayBuffer` crossing a `perry/thread` boundary (#4913).
     /// Carries the process-global backing-store address by reference — NOT a
@@ -387,7 +415,9 @@ pub enum SerializedValue {
     /// memory and `Atomics.wait`/`notify` coordinate across threads. The
     /// backing is never freed (see `crate::shared_sab`), so the raw address
     /// stays valid for the life of the process.
-    SharedArrayBuffer { addr: usize },
+    SharedArrayBuffer {
+        addr: usize,
+    },
 
     /// A value whose runtime type cannot cross a thread boundary (Promise,
     /// Symbol, Temporal, native handles, a detached ArrayBuffer; for a
@@ -421,9 +451,9 @@ unsafe impl Sync for SerializedValue {}
 //
 // The writer is `thread/clone_write.rs`, the reader `thread/clone_read.rs`.
 
+mod clone_read;
 #[cfg(feature = "gc-instruments")]
 mod clone_timing;
-mod clone_read;
 mod clone_write;
 pub use clone_read::deserialize_nanbox_on_current_thread;
 use clone_write::serialize_capture_for_thread;
@@ -502,11 +532,14 @@ fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
 /// if the whole tree is transferable.
 pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'static str> {
     match sv {
-        SerializedValue::Message { root, data } => first_unsupported_transfer_type(root)
-            .or_else(|| data.nodes.iter().find_map(|node| match node {
-                CloneNode::Value(value) => first_unsupported_transfer_type(value),
-                _ => None,
-            })),
+        SerializedValue::Message { root, data } => {
+            first_unsupported_transfer_type(root).or_else(|| {
+                data.nodes.iter().find_map(|node| match node {
+                    CloneNode::Value(value) => first_unsupported_transfer_type(value),
+                    _ => None,
+                })
+            })
+        }
         SerializedValue::Unsupported(name) => Some(name),
         SerializedValue::Array(elements) => {
             elements.iter().find_map(first_unsupported_transfer_type)

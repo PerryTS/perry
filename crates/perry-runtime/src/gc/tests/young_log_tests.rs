@@ -604,7 +604,10 @@ fn full_shape_walk_rejects_a_suppressed_logging_site() {
     let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
     }));
-    assert!(rejected.is_err(), "full walk must reject a missing writer note");
+    assert!(
+        rejected.is_err(),
+        "full walk must reject a missing writer note"
+    );
 }
 
 /// Promotion removes a shape address from the minor log, without removing the

@@ -16,12 +16,12 @@ mod payload_io;
 mod payload_pipe;
 mod payload_prototype;
 mod payload_provider;
+#[cfg(test)]
+mod payload_regression_tests;
 mod payload_server;
 mod payload_socket;
 #[cfg(test)]
 mod payload_tests;
-#[cfg(test)]
-mod payload_regression_tests;
 mod payload_tls;
 mod payload_transport;
 #[cfg(test)]

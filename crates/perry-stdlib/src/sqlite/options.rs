@@ -125,9 +125,8 @@ pub(crate) unsafe fn string_from_value_verbatim(value: f64, name: &str) -> Strin
         throw_type(&format!("The \"{}\" argument must be of type string", name));
     }
     let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
-    string_from_header(ptr).unwrap_or_else(|| {
-        throw_type(&format!("The \"{}\" argument must be of type string", name))
-    })
+    string_from_header(ptr)
+        .unwrap_or_else(|| throw_type(&format!("The \"{}\" argument must be of type string", name)))
 }
 
 /// SQL text (`DatabaseSync#prepare` / `#exec`). Node hands the bytes straight

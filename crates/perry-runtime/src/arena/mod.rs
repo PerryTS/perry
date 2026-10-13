@@ -48,9 +48,9 @@ mod tests;
 #[cfg(test)]
 mod tests_alloc_fast;
 #[cfg(test)]
-mod tests_inline_state;
-#[cfg(test)]
 mod tests_batch_unregister;
+#[cfg(test)]
+mod tests_inline_state;
 #[cfg(test)]
 mod tests_page_meta_audit;
 #[cfg(test)]
@@ -187,11 +187,10 @@ pub(crate) use page_meta::{
     old_object_single_page, old_page_account_became_never_move, old_page_account_dirty_slot,
     old_page_account_dirty_slots, old_page_account_swept_object, old_page_account_swept_tally,
     old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
-    old_pages_begin_gc_cycle,
-    old_pages_reset_sweep_accounting, record_arena_object_start, uniform_heap_generation,
-    unregister_old_object_pages, unregister_old_objects_batch, HeapGeneration, HeapSpace,
-    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
-    OldPageSweepTally, RegionOwnership,
+    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, record_arena_object_start,
+    uniform_heap_generation, unregister_old_object_pages, unregister_old_objects_batch,
+    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
+    OldPageSummary, OldPageSweepTally, RegionOwnership,
 };
 
 #[cfg(test)]

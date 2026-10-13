@@ -2645,7 +2645,9 @@ pub(crate) fn load_inline_arena_state(ctx: &mut FnCtx<'_>) -> String {
         // ThreadHeap is established by gc_init on the main thread and every
         // worker before compiled code enters. One address per activation;
         // collections update the cursor in place and never move TLS storage.
-        return ctx.func.entry_materialized_tls_address("PERRY_INLINE_ARENA_STATE");
+        return ctx
+            .func
+            .entry_materialized_tls_address("PERRY_INLINE_ARENA_STATE");
     }
     // The state is resolved on the first allocation that actually executes,
     // not in the entry block: a function whose hot path never allocates
@@ -3150,8 +3152,6 @@ pub(crate) mod region_read_run;
 pub(crate) use compare::lower_string_literal_strict_eq;
 #[cfg(test)]
 mod compare_tests;
-#[cfg(test)]
-mod kind_entry_selection_tests;
 mod conditional;
 mod dyn_extern_i18n;
 #[cfg(test)]
@@ -3161,9 +3161,11 @@ mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
 mod index_get;
-mod index_key;
 #[cfg(test)]
 mod index_get_claim_tests;
+mod index_key;
+#[cfg(test)]
+mod kind_entry_selection_tests;
 pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
@@ -3219,6 +3221,7 @@ mod logical_collections;
 mod math_simple;
 pub(crate) mod method_site;
 mod misc_methods;
+mod named_accessor;
 pub(crate) mod new_dynamic;
 pub(crate) mod number_to_string_inline;
 #[cfg(test)]
@@ -3228,7 +3231,6 @@ pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
-mod named_accessor;
 pub(crate) use named_accessor::contained_number_get;
 pub(crate) mod proxy_reflect;
 pub(crate) mod put_value_store_ic;

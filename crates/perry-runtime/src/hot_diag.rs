@@ -425,8 +425,14 @@ impl RegexDiag {
         let secs = self.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
         let _ = writeln!(out, "[regex-cache] perex_compiles={} validations={} identity_hits={} content_hits={} hash_bytes={}",
             self.perex_compiles, self.perex_validations, self.program_identity_hits, self.program_content_hits, self.program_hash_bytes);
-        let _ = writeln!(out, "[regex-perex] canonical_execs={} searches={} scratch_allocs={} scratch_grows={}",
-            self.perex_canonical_execs, self.perex_searches, self.perex_scratch_allocs, self.perex_scratch_grows);
+        let _ = writeln!(
+            out,
+            "[regex-perex] canonical_execs={} searches={} scratch_allocs={} scratch_grows={}",
+            self.perex_canonical_execs,
+            self.perex_searches,
+            self.perex_scratch_allocs,
+            self.perex_scratch_grows
+        );
         let _ = writeln!(
             out,
             "[regex-proofs] exec hit={} miss={} refresh={} method hit={} miss={} split hit={} miss={} \

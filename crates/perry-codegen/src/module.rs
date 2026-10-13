@@ -570,6 +570,25 @@ impl LlModule {
             .retain(|name| !candidates.contains(name) || live.contains(name));
     }
 
+    /// Drop the function defined at `idx` when it is `name` (an unreferenced
+    /// typed-body clone that was not installed). Helpers it published stay:
+    /// they are shared by name.
+    pub(crate) fn remove_defined_function(&mut self, idx: usize, name: &str) {
+        if self.functions.get(idx).is_some_and(|f| f.name == name) {
+            self.functions.remove(idx);
+            self.defined_names.remove(name);
+        }
+    }
+
+    /// Rename the function defined at `idx` (typed-body dispatch: the generic
+    /// body moves off the public symbol, which the dispatcher then defines).
+    pub(crate) fn rename_defined_function(&mut self, idx: usize, new_name: &str) {
+        if let Some(f) = self.functions.get_mut(idx) {
+            f.name = new_name.to_string();
+            self.defined_names.insert(new_name.to_string());
+        }
+    }
+
     /// Number of functions defined so far. Used to recover the index of a
     /// just-`define_function`ed function (whose `&mut` borrow must be released
     /// before the index can be read) when emitting a sequence of functions —

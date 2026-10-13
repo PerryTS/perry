@@ -48,6 +48,9 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_EXTRA_LINK_ARGS",
     "PERRY_FAST_MATH",
     "PERRY_FIELD_REPR_VERIFY",
+    "PERRY_FNINFER_APPLY",
+    "PERRY_FNINFER_SABOTAGE",
+    "PERRY_FNINFER_STRICT",
     "PERRY_FORCE_WELL_KNOWN",
     "PERRY_FP_CONTRACT",
     "PERRY_FULL_OUTLINE_IC",
@@ -82,6 +85,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_IOS_SYSROOT",
     "PERRY_JSCVT",
     "PERRY_KEEP_SYMBOLS",
+    "PERRY_LAYOUT_DESCS",
     "PERRY_LAYOUT_DIAG",
     "PERRY_LD",
     "PERRY_LD64.LLD",
@@ -159,6 +163,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_TREE_SHAKE",
     "PERRY_TVOS_SYSROOT",
     "PERRY_TYPED_ARRAY_RMW",
+    "PERRY_TYPED_BODIES",
     "PERRY_TYPED_FEEDBACK",
     "PERRY_TYPED_FEEDBACK_TRACE",
     "PERRY_U8_INLINE_READ",
@@ -435,6 +440,22 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_FETCH_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FNINFER_DUMP",
+        "Writes the fninfer precision dump; emitted code does not depend on it.",
+    ),
+    (
+        "PERRY_FNINFER_ONLY",
+        "Exits after writing the fninfer dump (analysis-only run); produces no object.",
+    ),
+    (
+        "PERRY_FNINFER_REPORT",
+        "Prints the count of applied parameter types; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FNINFER_TRACE",
+        "Prints fninfer solver diagnostics; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_FORCE_LINK_RESPONSE_FILE",
@@ -939,6 +960,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_TTY_TEST_PIPED_CHILD",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_TYPED_BODIES_LOG",
+        "Writes the typed-body clone log; no emitted instructions depend on the log.",
     ),
     (
         "PERRY_TYPED_ELEMENT_SABOTAGE",

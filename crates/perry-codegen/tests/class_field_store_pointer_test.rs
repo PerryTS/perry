@@ -579,7 +579,9 @@ fn raw_f64_field_store_is_the_store_site_and_never_canonicalizes() {
             let ir = compile_ir(&module_with_param_receiver_raw_f64_store(strict, stored));
             let blocks = probe_blocks(&ir);
             assert!(
-                blocks.iter().any(|(label, _)| label.starts_with("put.pic.")),
+                blocks
+                    .iter()
+                    .any(|(label, _)| label.starts_with("put.pic.")),
                 "strict={strict}: the store must be the static-key store site:\n{ir}"
             );
             for (label, body) in &blocks {

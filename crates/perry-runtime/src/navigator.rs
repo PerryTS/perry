@@ -14,7 +14,7 @@
 use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::js_string_from_bytes;
-use crate::value::{JSValue, js_nanbox_pointer, js_nanbox_string};
+use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
 
 pub const NAVIGATOR_CLASS_ID: u32 = 0x7FFF_FF22;
 

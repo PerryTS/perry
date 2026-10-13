@@ -10,18 +10,18 @@
 //! normalizes them to the `util/types` / `util.types` module keys.
 
 use anyhow::Result;
-use perry_hir::Expr;
 use perry_hir::types::Type as HirType;
+use perry_hir::Expr;
 
 use crate::rooting::{
     any_operand_may_collect, operand_may_collect, with_operands_rooted, with_rooted_group,
 };
 
 use crate::expr::{
-    FnCtx, TypedFeedbackContract, TypedFeedbackKind, emit_typed_feedback_register_site, lower_expr,
-    nanbox_pointer_inline,
+    emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
-use crate::nanbox::{POINTER_MASK_I64, double_literal};
+use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I64, PTR};
 

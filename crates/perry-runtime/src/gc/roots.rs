@@ -1498,9 +1498,8 @@ pub(super) fn visit_shadow_stack_root_slots(
 
 /// Visit every registered module-global root slot.
 pub(super) fn visit_global_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
-    let _phase = super::pin::CopyingWalkPhaseGuard::enter(
-        MutableRootSlotKind::GlobalRoot.walk_phase_name(),
-    );
+    let _phase =
+        super::pin::CopyingWalkPhaseGuard::enter(MutableRootSlotKind::GlobalRoot.walk_phase_name());
     GLOBAL_ROOTS.with(|roots| {
         let roots = roots.borrow();
         for &root_ptr in roots.iter() {

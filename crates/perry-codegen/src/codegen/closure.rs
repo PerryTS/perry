@@ -489,6 +489,9 @@ pub(super) fn compile_closure(
     cross_module: &CrossModuleCtx,
     trusted_box_captures: bool,
     versioned_loop_callback: bool,
+    // fninfer slice 0: compile the `$tbody` clone whose parameter types are
+    // proofs (`codegen/typed_body.rs`).
+    typed_body: Option<&super::typed_body::TypedBodyPlan>,
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
@@ -563,7 +566,9 @@ pub(super) fn compile_closure(
     } else {
         public_llvm_name.clone()
     };
-    let llvm_name = if versioned_loop_callback {
+    let llvm_name = if typed_body.is_some() {
+        super::typed_body::typed_body_name(&public_llvm_name)
+    } else if versioned_loop_callback {
         format!("{ordinary_body_name}$trusted_boxes$versioned_loop")
     } else if trusted_box_captures {
         format!("{ordinary_body_name}$trusted_boxes")
@@ -589,7 +594,7 @@ pub(super) fn compile_closure(
     // indirect-call admission is computed correctly but never reaches
     // `new_site_is_in_loop` while the closure body is emitted.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&func_id);
-    if typed_public_trampoline.is_some() || trusted_box_captures {
+    if typed_public_trampoline.is_some() || trusted_box_captures || typed_body.is_some() {
         lf.linkage = "internal".to_string();
     }
 
@@ -1067,14 +1072,13 @@ pub(super) fn compile_closure(
         native_facts: &native_facts,
         locals,
         local_types,
-        proven_local_types: std::collections::HashMap::new(),
+        // A typed body's entry check (the public dispatcher) proved these.
+        proven_local_types: typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals,
-        index_alias_writers: crate::collectors::spec_abi_sites::index_alias_writers(
-            body, params,
-        ),
+        index_alias_writers: crate::collectors::spec_abi_sites::index_alias_writers(body, params),
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,

@@ -4193,6 +4193,7 @@ js_zlib_zstd_decompress	Reenters
 js_zlib_zstd_decompress_init	Reenters
 js_zlib_zstd_decompress_sync	Reenters
 keys_array_len_capped_to_capacity	Reenters
+perry_alloc_layout	AllocOnly
 perry_app_group_init	Leaf
 perry_app_group_suite_name	Leaf
 perry_arkts_register_text_id	Reenters
@@ -4287,6 +4288,7 @@ perry_init_guard_check_and_set	Leaf
 perry_iterator_cleanup_query	Leaf
 perry_iterator_eh_personality	Leaf
 perry_key_content_hash	Leaf
+perry_layout_index_probe	Leaf
 perry_macos_bundle_chdir	Leaf
 perry_memory_profile_allow_thp	Leaf
 perry_native_iterator_cleanup_before_trap	Leaf

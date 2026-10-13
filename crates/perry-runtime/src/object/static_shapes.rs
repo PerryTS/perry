@@ -693,6 +693,9 @@ pub extern "C" fn js_shape_run_static_seed() {
         let seed: extern "C" fn() = unsafe { std::mem::transmute::<usize, extern "C" fn()>(seed) };
         seed();
     }
+    // Object model step 0: atoms and compiler-owned layouts, after the
+    // hash-band seeds (a by-facts hit keeps their ids).
+    super::layout_desc::register_static_layouts();
 }
 
 /// The canonical keys node for `names`, built exactly as a class keys array

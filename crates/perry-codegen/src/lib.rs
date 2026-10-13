@@ -25,6 +25,7 @@ pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
 pub mod inprocess;
 pub mod inst;
+pub(crate) mod layout_desc;
 pub mod linker;
 pub(crate) mod loop_purity;
 pub(crate) mod lower_array_method;

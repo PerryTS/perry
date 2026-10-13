@@ -129,21 +129,25 @@ unsafe fn old_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
 unsafe fn malloc_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let shape_id = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1)
         .expect("fixture shape id");
-    let payload = std::mem::size_of::<crate::object::ObjectHeader>()
-        + crate::object::INLINE_SLOT_FLOOR * 8;
+    let payload =
+        std::mem::size_of::<crate::object::ObjectHeader>() + crate::object::INLINE_SLOT_FLOOR * 8;
     let parent = gc_malloc(payload, GC_TYPE_OBJECT).cast::<crate::object::ObjectHeader>();
     std::ptr::write_bytes(parent.cast::<u8>(), 0, payload);
     crate::object::shapes::store_kind::premark_plain_ordinary(parent);
     (*parent).parent_class_id = shape_id;
-    let fields = parent.cast::<u8>().add(std::mem::size_of::<crate::object::ObjectHeader>())
+    let fields = parent
+        .cast::<u8>()
+        .add(std::mem::size_of::<crate::object::ObjectHeader>())
         .cast::<u64>();
     *fields = bits;
     layout_note_slot(parent as usize, 0, bits);
     js_shadow_slot_set(0, ptr_bits(parent as usize));
     let header = header_from_user_ptr(parent.cast());
     (*header).gc_flags |= GC_FLAG_MARKED;
-    assert!(matches!(crate::gc::barrier::barrier_remembering_parent(parent as usize),
-        Some(crate::gc::barrier::RememberingParent::Malloc)));
+    assert!(matches!(
+        crate::gc::barrier::barrier_remembering_parent(parent as usize),
+        Some(crate::gc::barrier::RememberingParent::Malloc)
+    ));
     (header, GcMutableSlot::new(fields, None))
 }
 
@@ -155,8 +159,14 @@ fn malloc_coverage(drop_entry: bool) {
             let valid = valid_set(classifier);
             let _drop = drop_entry.then(trace::remembered_mark_sabotage::Guard::arm);
             let sticky = fold(parent, &valid);
-            assert_ne!((*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED, 0);
-            assert!(sticky.old_pages.is_empty(), "malloc custody must be owner-qualified");
+            assert_ne!(
+                (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+            assert!(
+                sticky.old_pages.is_empty(),
+                "malloc custody must be owner-qualified"
+            );
             assert_coverage(&sticky, drop_entry);
         });
     }
@@ -177,9 +187,10 @@ fn malloc_ephemeron_words_are_not_unconditional_remembered_edges() {
     isolated(|| unsafe {
         let child = young_leaf();
         let payload = std::mem::size_of::<crate::weakref::storage::WeakStorage>()
-            + std::mem::size_of::<crate::weakref::storage::Entry>() + 3 * 4;
-        let storage = gc_malloc(payload, GC_TYPE_WEAK_STORAGE)
-            .cast::<crate::weakref::storage::WeakStorage>();
+            + std::mem::size_of::<crate::weakref::storage::Entry>()
+            + 3 * 4;
+        let storage =
+            gc_malloc(payload, GC_TYPE_WEAK_STORAGE).cast::<crate::weakref::storage::WeakStorage>();
         std::ptr::write_bytes(storage.cast::<u8>(), 0, payload);
         (*storage).capacity = 1;
         (*storage).len = 1;
@@ -188,7 +199,10 @@ fn malloc_ephemeron_words_are_not_unconditional_remembered_edges() {
         let header = header_from_user_ptr(storage.cast());
         (*header).gc_flags |= GC_FLAG_MARKED;
         let sticky = fold(header, &valid_set(false));
-        assert_eq!((*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED, 0);
+        assert_eq!(
+            (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
+            0
+        );
         assert!(sticky.old_pages.is_empty() && sticky.external_pages.is_empty());
     });
 }
@@ -567,7 +581,11 @@ impl Drop for ObserverScope {
 fn changing_observer_parent(sabotage: bool, malloc: bool) {
     isolated(move || unsafe {
         let child = young_leaf();
-        let (parent, slot) = if malloc { malloc_parent(ptr_bits(7)) } else { old_parent(ptr_bits(7)) };
+        let (parent, slot) = if malloc {
+            malloc_parent(ptr_bits(7))
+        } else {
+            old_parent(ptr_bits(7))
+        };
         OBSERVER_SLOT.with(|value| value.set(slot.slot));
         OBSERVER_CHILD.with(|value| value.set(string_bits(child)));
         OBSERVER_HITS.with(|value| value.set(0));

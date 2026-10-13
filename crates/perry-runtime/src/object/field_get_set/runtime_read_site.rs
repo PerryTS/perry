@@ -283,9 +283,9 @@ impl RuntimeReadSite {
         };
         let scope = crate::gc::RuntimeHandleScope::new();
         let handle = scope.root_raw_mut_ptr(obj);
-        if let Some(value) = crate::object::method_site::read_holder::read_runtime_chain(
-            obj, key, self.slot_ptr(),
-        ) {
+        if let Some(value) =
+            crate::object::method_site::read_holder::read_runtime_chain(obj, key, self.slot_ptr())
+        {
             return (value, obj);
         }
         handle.across_mut::<ObjectHeader, _>(|| {

@@ -1124,12 +1124,13 @@ pub unsafe extern "C-unwind" fn js_arguments_call_spread(
     let mut values = vec![receiver];
     let symbol = crate::symbol::well_known_symbol("iterator");
     let own_iterator = crate::symbol::js_object_has_own_symbol_property(
-        args.get_nanbox_f64(), crate::value::js_nanbox_pointer(symbol as i64),
+        args.get_nanbox_f64(),
+        crate::value::js_nanbox_pointer(symbol as i64),
     );
     // Ask the actual iterator method on mutated arguments (including a user
     // iterator getter) before falling back to their intrinsic array iterator.
-    let iter = crate::symbol::get_iterator_from_method(args.get_nanbox_f64())
-        .unwrap_or_else(|| {
+    let iter =
+        crate::symbol::get_iterator_from_method(args.get_nanbox_f64()).unwrap_or_else(|| {
             if own_iterator {
                 super::throw_object_type_error(b"Arguments iterator is not callable");
             }
@@ -1139,9 +1140,9 @@ pub unsafe extern "C-unwind" fn js_arguments_call_spread(
     let next = scope.root_nanbox_f64(crate::array::js_iterator_next_method(iter.get_nanbox_f64()));
     loop {
         let mut value = f64::from_bits(crate::value::TAG_UNDEFINED);
-        if crate::array::js_iterator_step(
-            iter.get_nanbox_f64(), next.get_nanbox_f64(), &mut value,
-        ) != 0 {
+        if crate::array::js_iterator_step(iter.get_nanbox_f64(), next.get_nanbox_f64(), &mut value)
+            != 0
+        {
             break;
         }
         values.push(scope.root_nanbox_f64(value));

@@ -88,7 +88,9 @@ fn module_lexical_class_expression_binding_is_tdz_checked() {
         "an earlier reachable function read of C must be TDZ guarded: {early_body}"
     );
     assert!(
-        early_body.contains(&format!("LocalGet(\n                                {c_binding},")),
+        early_body.contains(&format!(
+            "LocalGet(\n                                {c_binding},"
+        )),
         "the earlier read must use the same local as the class-expression binding: {early_body}"
     );
     let shadow = hir

@@ -28,6 +28,9 @@ pub fn is_global_intrinsic_value_name(name: &str) -> bool {
 mod uses_this;
 pub(crate) use uses_this::{closure_uses_new_target, closure_uses_this, uses_this_stmt};
 
+pub mod fn_infer;
+#[cfg(test)]
+mod fn_infer_tests;
 mod value_types;
 pub(crate) use value_types::coalesce_type;
 pub use value_types::{infer_expr_type, infer_refinable_expr_type, HirTypeEnv, HirTypeFacts};

@@ -52,11 +52,11 @@ pub(crate) mod perex_match_search;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_memory;
 #[cfg(feature = "regex-engine")]
+mod perex_output;
+#[cfg(feature = "regex-engine")]
 pub(crate) mod perex_owner;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_position_hint;
-#[cfg(feature = "regex-engine")]
-mod perex_output;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_replace;
 #[cfg(feature = "regex-engine")]

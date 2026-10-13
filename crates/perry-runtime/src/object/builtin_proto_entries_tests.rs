@@ -80,7 +80,10 @@ fn the_array_admission_reads_the_family_byte_and_the_cell() {
         let proto = crate::object::js_object_alloc(0, 1);
         crate::object::builtin_proto::seal_object(proto, BuiltinProto::Array);
         crate::object::store_object_field_slot(proto, 0, 1.0f64.to_bits());
-        assert!(!array_admits(&mut recv, b"map", &mut []), "a modified Array.prototype");
+        assert!(
+            !array_admits(&mut recv, b"map", &mut []),
+            "a modified Array.prototype"
+        );
         assert_ne!(
             crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
                 .load(std::sync::atomic::Ordering::Relaxed)

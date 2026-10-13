@@ -721,7 +721,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, PTR],
     );
     module.declare_function("js_property_rmw_fast", DOUBLE, &[DOUBLE, DOUBLE, I32, PTR]);
-    module.declare_function("js_property_rmw", DOUBLE, &[DOUBLE, I64, DOUBLE, I32, PTR, PTR]);
+    module.declare_function(
+        "js_property_rmw",
+        DOUBLE,
+        &[DOUBLE, I64, DOUBLE, I32, PTR, PTR],
+    );
     // #9708: takes the site's cache SLOT plus the way index to prime.
     module.declare_function(
         "js_put_value_set_ic_miss",

@@ -14,6 +14,10 @@ use super::spec_function_length;
 
 mod class_birth_image;
 mod image;
+
+pub(super) fn image_pointer(entry: &crate::strings::StringEntry) -> String {
+    image::pointer(entry)
+}
 mod image_handles;
 use image_handles::{
     add_mutable_string_handle, emit_prepare_agent_strings, emit_runtime_boxed_image_handle,

@@ -6,7 +6,7 @@
 //! `js_jsvalue_to_string` (kept in `to_string.rs`) and other coercion sites
 //! (`+`, `String()`, template literals) dispatch through.
 
-use super::to_string_class_ref::{CustomToPrimitiveOutcome, custom_to_primitive};
+use super::to_string_class_ref::{custom_to_primitive, CustomToPrimitiveOutcome};
 use super::*;
 use std::cell::Cell;
 

@@ -184,7 +184,6 @@ mod artifacts;
 pub(crate) mod boxed_locals;
 mod cjs_exports;
 mod class_artifacts;
-mod shared_class_method_bodies;
 pub(crate) mod class_hierarchy;
 #[cfg(test)]
 mod clone_suffix_tests;
@@ -194,6 +193,7 @@ mod closure_collect;
 mod constructor_contracts;
 #[cfg(test)]
 mod number_local_root_tests;
+mod shared_class_method_bodies;
 pub use constructor_contracts::{ConstructorContracts, ResolvedConstructorContracts};
 mod ctor_arity;
 pub use ctor_arity::{
@@ -273,12 +273,19 @@ pub(crate) use static_shape_ids::{
 };
 mod class_declarations;
 mod string_pool;
+
+/// The image-string address expression of a pool entry (object model step 0's
+/// static atoms point at it).
+pub(crate) fn string_pool_image_pointer(entry: &crate::strings::StringEntry) -> String {
+    string_pool::image_pointer(entry)
+}
 #[cfg(test)]
 mod testing_feature_gate_tests;
 #[cfg(test)]
 mod trusted_box_callback_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
+pub(crate) mod typed_body;
 mod typed_entry;
 pub(crate) use typed_entry::{emit_plain_number_bits_test, emit_plain_number_test};
 #[cfg(test)]

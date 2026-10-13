@@ -265,6 +265,7 @@ pub(crate) mod shape_carriers;
 // `#[cfg(any(test, feature = "shape-mint-diag"))]` at the mint funnel (the
 // other hooks are feature-only), so a stock non-test build never
 // reaches it and the linker drops it: the shipped runtime pays nothing.
+pub mod layout_desc;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;

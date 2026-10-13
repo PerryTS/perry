@@ -1128,9 +1128,7 @@ fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut V
     names.retain(|name| {
         let key = name.as_ref();
         let order = order_for(key);
-        order != Some(u32::MAX)
-            && (order.is_some()
-                || !internal_symbol_dispatch_alias(key))
+        order != Some(u32::MAX) && (order.is_some() || !internal_symbol_dispatch_alias(key))
     });
     crate::cold_sort::sort_by(names, |left, right| {
         match (order_for(left.as_ref()), order_for(right.as_ref())) {

@@ -56,7 +56,10 @@ fn birth_shape_proves_indices_beyond_the_arity_cache() {
     let args = born(&values, 0);
     unsafe {
         assert!((*args).meta.is_null());
-        assert_eq!(arguments_object_born_slice(args).unwrap(), values.as_slice());
+        assert_eq!(
+            arguments_object_born_slice(args).unwrap(),
+            values.as_slice()
+        );
         assert_eq!(arguments_object_get_index(args, 64), Some(64.0));
     }
 }

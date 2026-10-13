@@ -184,6 +184,23 @@ pub(crate) unsafe fn atom_for_key(
         .flatten()
 }
 
+/// Object model step 0: make `string` (an immutable image string, a static
+/// atom of the program) this agent's atom for `bytes` unless one exists.
+///
+/// # Safety
+/// `string` is an image string whose bytes are `bytes`.
+pub(crate) unsafe fn seed_static_atom(bytes: &[u8], hash: u64, string: *const StringHeader) {
+    if bytes.is_empty() || bytes.len() > INTERN_MAX_BYTE_LEN as usize {
+        return;
+    }
+    let _ = ATOMS.try_with(|t| {
+        let t = &mut *t.get();
+        if t.lookup(bytes, hash).is_none() {
+            t.insert(hash, string);
+        }
+    });
+}
+
 /// Mint (or find) the atom for a pooled literal: the one string object this
 /// agent uses for that text from now on. Called from `__perry_init_strings_*`
 /// in place of `js_string_from_bytes` for pool entries that can be property
