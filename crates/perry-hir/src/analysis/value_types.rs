@@ -816,6 +816,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             method,
             receiver,
             args,
+            ..
         } => infer_arraylike_method_type(method, receiver, args, env),
 
         Expr::BigIntCoerce(_) => Type::BigInt,

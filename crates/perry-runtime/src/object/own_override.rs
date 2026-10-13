@@ -73,9 +73,25 @@ use std::sync::atomic::Ordering;
 ///
 /// A `u32` rather than a bool so the emitted load matches the barrier gate's
 /// alignment and width; only zero / non-zero is meaningful.
+///
+/// #11915: also armed when a builtin prototype is modified
+/// ([`note_builtin_proto_modified`]); the predicate then answers "may own"
+/// for a receiver whose prototype is not pristine, which is how the guards
+/// this flag gates prove `Pristine` without a test of their own.
 #[no_mangle]
 pub static PERRY_OWN_NAMED_PROP_INSTALLED: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
+
+/// Arm [`PERRY_OWN_NAMED_PROP_INSTALLED`] because a builtin prototype was
+/// modified (#11915, `builtin_proto`): from now on the emitted guard asks
+/// [`js_receiver_may_own_named_method`], which answers from
+/// `builtin_proto::receiver_pristine`.
+#[inline]
+pub(crate) fn note_builtin_proto_modified() {
+    if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
+        PERRY_OWN_NAMED_PROP_INSTALLED.store(1, Ordering::Relaxed);
+    }
+}
 
 /// Has any non-`ObjectHeader` cell ever taken a named property at all,
 /// including the runtime's own builtin definitions? Set-only, like
@@ -122,6 +138,13 @@ crate::perry_thread_local! {
 ///
 /// Thread-local rather than save-and-restore of the global flag, so an arm by
 /// another thread in the same window is never undone. Nests.
+/// Is this thread inside [`as_builtin_definition`]? The builtin-prototype
+/// fact (`builtin_proto::note_write`) does not count the runtime's own
+/// definitions as modifications.
+pub(crate) fn in_builtin_definition() -> bool {
+    BUILTIN_INTRINSIC_INSTALL.with(|flag| flag.get())
+}
+
 pub(crate) fn as_builtin_definition<R>(install: impl FnOnce() -> R) -> R {
     let outer = BUILTIN_INTRINSIC_INSTALL.with(|flag| flag.replace(true));
     // Restored on unwind too: a leaked `true` would stop user installs from
@@ -190,6 +213,15 @@ pub(crate) fn note_exotic_named_prop_install(owner: usize) {
 /// from the codegen string pool.
 #[no_mangle]
 pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -> i32 {
+    // #11915: a receiver whose builtin prototype was modified (or an array
+    // with its own `[[Prototype]]`) does not read the builtin either. The
+    // emitted guard's gate (`PERRY_OWN_NAMED_PROP_INSTALLED`) is armed by
+    // every such modification, so this answer is how a proven Map, Set or
+    // Date site — and every receiver kind the gate guards — proves
+    // `Pristine` with no test of its own.
+    if !super::builtin_proto::receiver_pristine(recv) {
+        return 1;
+    }
     let jsval = crate::JSValue::from_bits(recv.to_bits());
     if !jsval.is_pointer() {
         // A primitive's methods come from its wrapper prototype; it has no own
@@ -571,6 +603,14 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
     if !own_out.is_null() {
         *own_out = 0;
     }
+    // #11915: a modified `%Array.prototype%` (or `%Object.prototype%`) may
+    // hold a replacement `push`; the real `Get` decides, through the shared
+    // generic path. One load while pristine.
+    if !crate::object::builtin_proto::pristine(crate::object::builtin_proto::BuiltinProto::Array) {
+        if let Some(bits) = push_patched_proto(arr, value, own_out) {
+            return bits;
+        }
+    }
     // The common case, in the one header probe `js_array_push_f64_spec` makes
     // anyway: a plain live array has `OBJ_FLAG_ARRAY_DESCRIPTORS` clear, so it
     // owns no named property at all. Asking `array_owning_push` first cost the
@@ -585,6 +625,29 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
         return head as u64;
     }
     push_or_own_declined(arr, value, own_out)
+}
+
+/// [`js_array_push_f64_spec_or_own`] under a modified builtin prototype: the
+/// method actually selected, through `builtin_proto::redirect_call`. `None`
+/// when it is still the builtin, so the caller's plain push runs.
+#[cold]
+#[inline(never)]
+unsafe fn push_patched_proto(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> Option<u64> {
+    let live = crate::array::clean_arr_ptr_mut(arr);
+    if live.is_null() {
+        return None;
+    }
+    let recv = crate::value::js_nanbox_pointer(live as i64);
+    let args = [value];
+    let result = crate::object::builtin_proto::redirect_call(recv, b"push", args.as_ptr(), 1)?;
+    if !own_out.is_null() {
+        *own_out = 1;
+    }
+    Some(result.to_bits())
 }
 
 /// [`js_array_push_f64_spec_or_own`] for every receiver the plain push

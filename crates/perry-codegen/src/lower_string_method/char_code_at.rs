@@ -78,6 +78,39 @@ pub(super) fn lower_char_code_at_inline(
     recv_box: &str,
     idx_d: &str,
 ) -> Option<String> {
+    lower_inline(ctx, object, recv_box, idx_d, None)
+}
+
+/// [`lower_char_code_at_inline`] proving `Pristine(String)` (#11915): the
+/// byte joins the index test every inline arm (heap, SSO, out-of-bounds) is
+/// dominated by, so a modified prototype reaches only the slow arm — which
+/// is the checked entry `entry(recv, args…)`, replacing the unbox, index
+/// coercion and decoder calls it had.
+pub(super) fn lower_char_code_at_inline_entry(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv_box: &str,
+    idx_d: &str,
+    entry: &str,
+    args: &[String],
+    prove_here: bool,
+) -> Option<String> {
+    lower_inline(
+        ctx,
+        object,
+        recv_box,
+        idx_d,
+        Some((entry, args, prove_here)),
+    )
+}
+
+fn lower_inline(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv_box: &str,
+    idx_d: &str,
+    entry: Option<(&str, &[String], bool)>,
+) -> Option<String> {
     use crate::nanbox::POINTER_MASK_I64;
     if !crate::expr::static_string_lowering_enabled() {
         return None;
@@ -89,7 +122,22 @@ pub(super) fn lower_char_code_at_inline(
         .block()
         .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    let handle_ok = ctx.block().icmp_uge(I64, &handle, "4096");
+    // #11915: with `prove_here`, the heap arm's handle bound is the runtime's
+    // `PERRY_STRING_INLINE_MIN_HANDLE` — 4096 while `%String.prototype%` and
+    // `%Object.prototype%` are unmodified, the largest address once either
+    // is — so the compare the heap arm already makes also proves
+    // `Pristine(String)`, at no extra instruction (an immediate operand
+    // becomes a memory one); the short-string arm tests the byte itself. A
+    // modified prototype reaches only the slow arm, the checked entry. With
+    // `prove_here == false` the caller proved it before the arguments and the
+    // slow arm is the unchecked body.
+    let prove_here = matches!(entry, Some((_, _, true)));
+    let min_handle = if prove_here {
+        ctx.block().load(I64, "@PERRY_STRING_INLINE_MIN_HANDLE")
+    } else {
+        "4096".to_string()
+    };
+    let handle_ok = ctx.block().icmp_uge(I64, &handle, &min_handle);
     let idx_ge0 = ctx.block().fcmp("oge", idx_d, "0.0");
     let idx_lt_max = ctx
         .block()
@@ -129,6 +177,17 @@ pub(super) fn lower_char_code_at_inline(
         .block()
         .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
     let sso_ok = ctx.block().and(I1, &is_sso, &idx_ok);
+    let sso_ok = if prove_here {
+        let blk = ctx.block();
+        let patched = crate::builtin_proto::emit_patched_test(
+            blk,
+            crate::builtin_proto::BuiltinProto::String,
+        );
+        let pristine = blk.xor(I1, &patched, "true");
+        blk.and(I1, &sso_ok, &pristine)
+    } else {
+        sso_ok
+    };
     ctx.block().cond_br(&sso_ok, &sso_label, &slow_label);
 
     // Dominated by the index range test, so `fptosi` is in range.
@@ -211,15 +270,21 @@ pub(super) fn lower_char_code_at_inline(
 
     // Slow block: coercing indices and Unicode keep the existing decoder.
     ctx.current_block = slow_idx;
-    let recv_handle = str_operand_handle_tag_dispatched(ctx, object, recv_box);
-    let slow_idx_i32 = ctx
-        .block()
-        .call(I32, "js_string_index_to_i32", &[(DOUBLE, idx_d)]);
-    let slow_val = ctx.block().call(
-        DOUBLE,
-        "js_string_char_code_at",
-        &[(I64, &recv_handle), (I32, &slow_idx_i32)],
-    );
+    let slow_val = if let Some((entry, args, _)) = entry {
+        let mut operands: Vec<(crate::types::LlvmType, &str)> = vec![(DOUBLE, recv_box)];
+        operands.extend(args.iter().map(|a| (DOUBLE, a.as_str())));
+        ctx.block().call(DOUBLE, entry, &operands)
+    } else {
+        let recv_handle = str_operand_handle_tag_dispatched(ctx, object, recv_box);
+        let slow_idx_i32 = ctx
+            .block()
+            .call(I32, "js_string_index_to_i32", &[(DOUBLE, idx_d)]);
+        ctx.block().call(
+            DOUBLE,
+            "js_string_char_code_at",
+            &[(I64, &recv_handle), (I32, &slow_idx_i32)],
+        )
+    };
     let slow_pred = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

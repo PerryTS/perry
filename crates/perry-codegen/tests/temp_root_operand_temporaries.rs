@@ -328,7 +328,15 @@ fn concat_accumulator_is_rooted_and_written_back() {
                 property: "concat".to_string(),
                 byte_offset: 0,
             }),
-            args: vec![allocating()],
+            // Three arguments: `concat` with at most two goes through the
+            // checked entry `js_string_m_concat<n>` (#11915), one call that
+            // takes its operands boxed; the fused chain this test pins is
+            // the lowering for longer argument lists.
+            args: vec![
+                allocating(),
+                Expr::String("x".to_string()),
+                Expr::String("y".to_string()),
+            ],
             type_args: Vec::new(),
             byte_offset: 0,
         })],

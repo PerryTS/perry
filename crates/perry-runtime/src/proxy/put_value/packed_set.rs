@@ -499,6 +499,20 @@ unsafe fn prime_packed_set(
     {
         return;
     }
+    // #11915: never learn a marked prototype's shape (it is on a private
+    // lineage, so no other receiver shares it). Every store to a prototype
+    // then reaches `store_object_field_slot`, whose hook advances
+    // `PERRY_PROTO_VALIDITY` on a method replacement and withdraws a sealed
+    // builtin prototype's `Pristine` fact — an emitted hit could do neither.
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && (*meta).flags
+            & (crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+                | crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
+            != 0
+    {
+        return;
+    }
     // The key is matched by CONTENT below, so any live heap string will do.
     // Only the pointer-keyed read-plan memo needs an interned (never-recycled)
     // key: a non-interned key's address could later name a different string.

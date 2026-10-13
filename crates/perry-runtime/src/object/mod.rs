@@ -162,6 +162,8 @@ pub(crate) use global_this::{
     temporal_kind_prototype as global_this_temporal_kind_prototype,
     temporal_subclass_super as global_this_temporal_subclass_super,
 };
+pub mod builtin_proto;
+mod builtin_proto_entries;
 pub mod handle_expando;
 pub(crate) mod owned_state_bag;
 pub(crate) mod prop_plan;

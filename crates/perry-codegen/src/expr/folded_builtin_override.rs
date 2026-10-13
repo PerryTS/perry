@@ -177,6 +177,206 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
         // the property chain at all — which is why `d.setHours = () => 1`
         // emitted no guard and ran the builtin. A getter carries the receiver
         // alone; a setter carries its argument list.
+        // #11915: every folded Array method reads `%Array.prototype%`, so it
+        // takes the same guard: an own property OR a modified prototype goes
+        // to the dispatcher, whose runtime entry performs the real `Get`.
+        Expr::ArrayForEach { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "forEach",
+            args: vec![callback],
+        },
+        Expr::ArrayMap { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "map",
+            args: vec![callback],
+        },
+        Expr::ArrayFilter { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "filter",
+            args: vec![callback],
+        },
+        Expr::ArrayFind { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "find",
+            args: vec![callback],
+        },
+        Expr::ArrayFindIndex { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "findIndex",
+            args: vec![callback],
+        },
+        Expr::ArrayFindLast { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "findLast",
+            args: vec![callback],
+        },
+        Expr::ArrayFindLastIndex { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "findLastIndex",
+            args: vec![callback],
+        },
+        Expr::ArraySome { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "some",
+            args: vec![callback],
+        },
+        Expr::ArrayEvery { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "every",
+            args: vec![callback],
+        },
+        Expr::ArrayFlatMap { array, callback } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "flatMap",
+            args: vec![callback],
+        },
+        Expr::ArraySort { array, comparator } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "sort",
+            args: vec![comparator],
+        },
+        Expr::ArrayReduce {
+            array,
+            callback,
+            initial,
+        } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "reduce",
+            args: std::iter::once(callback.as_ref())
+                .chain(initial.as_deref())
+                .collect(),
+        },
+        Expr::ArrayReduceRight {
+            array,
+            callback,
+            initial,
+        } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "reduceRight",
+            args: std::iter::once(callback.as_ref())
+                .chain(initial.as_deref())
+                .collect(),
+        },
+        Expr::ArrayLastIndexOf {
+            array,
+            value,
+            from_index,
+        } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "lastIndexOf",
+            args: std::iter::once(value.as_ref())
+                .chain(from_index.as_deref())
+                .collect(),
+        },
+        Expr::ArrayIncludes {
+            array,
+            value,
+            from_index,
+        } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "includes",
+            args: std::iter::once(value.as_ref())
+                .chain(from_index.as_deref())
+                .collect(),
+        },
+        Expr::ArrayAt { array, index } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "at",
+            args: vec![index],
+        },
+        Expr::ArrayJoin { array, separator } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "join",
+            args: separator.as_deref().into_iter().collect(),
+        },
+        Expr::ArrayFlat { array } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "flat",
+            args: Vec::new(),
+        },
+        Expr::ArrayToReversed { array } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "toReversed",
+            args: Vec::new(),
+        },
+        Expr::ArrayToSorted { array, comparator } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "toSorted",
+            args: comparator.as_deref().into_iter().collect(),
+        },
+        Expr::ArrayToSpliced {
+            array,
+            start,
+            delete_count,
+            items,
+        } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "toSpliced",
+            args: [start.as_ref(), delete_count.as_ref()]
+                .into_iter()
+                .chain(items.iter())
+                .collect(),
+        },
+        Expr::ArrayWith {
+            array,
+            index,
+            value,
+        } => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "with",
+            args: vec![index, value],
+        },
+        Expr::ArrayEntries(array) => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "entries",
+            args: Vec::new(),
+        },
+        Expr::ArrayKeys(array) => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "keys",
+            args: Vec::new(),
+        },
+        Expr::ArrayValues(array) => FoldedCall {
+            receiver: Receiver::Expr(array),
+            method: "values",
+            args: Vec::new(),
+        },
+        Expr::ArrayShift(array_id) => FoldedCall {
+            receiver: Receiver::Local(*array_id),
+            method: "shift",
+            args: Vec::new(),
+        },
+        Expr::ArrayUnshift { array_id, value } => FoldedCall {
+            receiver: Receiver::Local(*array_id),
+            method: "unshift",
+            args: vec![value],
+        },
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => FoldedCall {
+            receiver: Receiver::Local(*array_id),
+            method: "splice",
+            args: std::iter::once(start.as_ref())
+                .chain(delete_count.as_deref())
+                .chain(items.iter())
+                .collect(),
+        },
+        Expr::ArrayCopyWithin {
+            array_id,
+            target,
+            start,
+            end,
+        } => FoldedCall {
+            receiver: Receiver::Local(*array_id),
+            method: "copyWithin",
+            args: [target.as_ref(), start.as_ref()]
+                .into_iter()
+                .chain(end.as_deref())
+                .collect(),
+        },
         Expr::DateGetTime(date) => FoldedCall {
             receiver: Receiver::Expr(date),
             method: "getTime",
@@ -396,20 +596,51 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
 /// Branch to `own_label` when `recv` may own a property named `method`, else
 /// to `builtin_label`.
 
-fn emit_dispatcher(
-    ctx: &mut FnCtx<'_>,
-    receiver: &Expr,
-    method: &str,
-    args: &[&Expr],
-) -> Result<String> {
-    let mut operands: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
-    operands.push(receiver);
-    operands.extend(args.iter().copied());
-    rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
-        let (recv, arg_vals) = values.split_first().expect("the receiver is operand 0");
-        Ok(crate::lower_call::emit_native_method_str_dispatch_plain(
-            ctx, method, 0, recv, arg_vals,
-        ))
+/// The builtin-prototype family a folded node's method belongs to (#11915):
+/// the receiver kind the fold proved. Every row of [`folded_call`] that is
+/// not a Map, Set or Array method is a Date method.
+fn folded_family(expr: &Expr) -> Option<crate::builtin_proto::BuiltinProto> {
+    use crate::builtin_proto::BuiltinProto;
+    folded_call(expr)?;
+    Some(match expr {
+        Expr::MapGet { .. }
+        | Expr::MapSet { .. }
+        | Expr::MapHas { .. }
+        | Expr::MapDelete { .. } => BuiltinProto::Map,
+        Expr::SetHas { .. } | Expr::SetDelete { .. } | Expr::SetAdd { .. } => BuiltinProto::Set,
+        Expr::NativeMethodCall { .. }
+        | Expr::ArrayIndexOf { .. }
+        | Expr::ArraySlice { .. }
+        | Expr::ArrayForEach { .. }
+        | Expr::ArrayMap { .. }
+        | Expr::ArrayFilter { .. }
+        | Expr::ArrayFind { .. }
+        | Expr::ArrayFindIndex { .. }
+        | Expr::ArrayFindLast { .. }
+        | Expr::ArrayFindLastIndex { .. }
+        | Expr::ArraySome { .. }
+        | Expr::ArrayEvery { .. }
+        | Expr::ArrayFlatMap { .. }
+        | Expr::ArraySort { .. }
+        | Expr::ArrayReduce { .. }
+        | Expr::ArrayReduceRight { .. }
+        | Expr::ArrayLastIndexOf { .. }
+        | Expr::ArrayIncludes { .. }
+        | Expr::ArrayAt { .. }
+        | Expr::ArrayJoin { .. }
+        | Expr::ArrayFlat { .. }
+        | Expr::ArrayToReversed { .. }
+        | Expr::ArrayToSorted { .. }
+        | Expr::ArrayToSpliced { .. }
+        | Expr::ArrayWith { .. }
+        | Expr::ArrayEntries(_)
+        | Expr::ArrayKeys(_)
+        | Expr::ArrayValues(_)
+        | Expr::ArrayShift(_)
+        | Expr::ArrayUnshift { .. }
+        | Expr::ArraySplice { .. }
+        | Expr::ArrayCopyWithin { .. } => BuiltinProto::Array,
+        _ => BuiltinProto::Date,
     })
 }
 
@@ -443,16 +674,44 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     // collector rewrites, so re-lowering it IS the re-read the rooting
     // invariant wants; only a receiver that cannot be evaluated twice needs a
     // materialisation of its own.
+    //
+    // #11915: the guard runs BEFORE the arguments (ECMA-262 reads `recv.m`
+    // before evaluating them), so each arm lowers its own arguments — one arm
+    // runs. The direct arm is the ordinary fold; the generic arm is one call
+    // into the shared runtime helper, which performs the real `Get` and call.
+    // #11915: a folded Array method with a checked entry, whose arguments
+    // cannot observe when the method is read, is ONE call: the entry proves
+    // `Pristine(Array)` and the receiver's own proof (no own property of the
+    // name, no own `[[Prototype]]`) and runs the fold's body, or takes the
+    // generic path. No diamond, no test at the site.
+    if let Some((entry, observing)) = folded_array_entry(ctx, expr, &call) {
+        if !observing {
+            let mut operands: Vec<&Expr> = Vec::with_capacity(call.args.len() + 1);
+            operands.push(receiver_expr);
+            operands.extend(call.args.iter().copied());
+            return rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
+                let ops: Vec<(crate::types::LlvmType, &str)> =
+                    values.iter().map(|v| (DOUBLE, v.as_str())).collect();
+                Ok(ctx.block().call(DOUBLE, &entry, &ops))
+            })
+            .map(Some);
+        }
+        return lower_pre_read_entry(ctx, receiver_expr, &call, &entry).map(Some);
+    }
     let materialize = matches!(call.receiver, Receiver::Expr(_))
         && !matches!(receiver_expr, Expr::LocalGet(_) | Expr::This);
+    let receiver_is_array = matches!(expr, Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. })
+        || crate::type_analysis::is_array_expr(ctx, receiver_expr);
+    let family = folded_family(expr).unwrap_or(crate::builtin_proto::BuiltinProto::Object);
+    let method = call.method;
 
     let receiver_value = lower_expr(ctx, receiver_expr)?;
     let key = receiver_expr as *const Expr as usize;
     let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
-        let own_idx = ctx.new_block("ownoverride.folded.own");
+        let generic_idx = ctx.new_block("ownoverride.folded.own");
         let builtin_idx = ctx.new_block("ownoverride.folded.builtin");
         let merge_idx = ctx.new_block("ownoverride.folded.merge");
-        let own_label = ctx.block_label(own_idx);
+        let generic_label = ctx.block_label(generic_idx);
         let builtin_label = ctx.block_label(builtin_idx);
         let merge_label = ctx.block_label(merge_idx);
 
@@ -460,23 +719,23 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             Some(value) => value,
             None => lower_expr(ctx, receiver_expr)?,
         };
-        let receiver_is_array = matches!(expr, Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. })
-            || crate::type_analysis::is_array_expr(ctx, receiver_expr);
         emit_own_override_branch(
             ctx,
-            call.method,
+            method,
             &recv,
             receiver_is_array,
-            &own_label,
+            Some(family),
+            &generic_label,
             &builtin_label,
         );
 
-        ctx.current_block = own_idx;
-        let own_value = emit_dispatcher(ctx, receiver_expr, call.method, &call.args)?;
-        let own_end = ctx.block().label.clone();
+        ctx.current_block = generic_idx;
+        let generic_value = emit_generic(ctx, receiver_expr, method, &call.args)?;
+        let generic_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
         ctx.current_block = builtin_idx;
+        crate::builtin_proto::emit_contract_check(ctx.block(), &[family]);
         let builtin_value = {
             let _suppressed = Suppressed::enter(node);
             lower_expr(ctx, expr)?
@@ -488,7 +747,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         Ok(ctx.block().phi(
             DOUBLE,
             &[
-                (own_value.as_str(), own_end.as_str()),
+                (generic_value.as_str(), generic_end.as_str()),
                 (builtin_value.as_str(), builtin_end.as_str()),
             ],
         ))
@@ -500,6 +759,145 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         emit(ctx)?
     };
     Ok(Some(value))
+}
+
+/// The checked entry a folded Array node calls instead of its guard
+/// (#11915), when it has one for its arity, its arguments are order-free
+/// (`args_may_observe_lookup`), and its fold is a plain runtime call (the
+/// captureless `some` loop is inline, and keeps the guard).
+fn folded_array_entry(
+    ctx: &FnCtx<'_>,
+    expr: &Expr,
+    call: &FoldedCall<'_>,
+) -> Option<(String, bool)> {
+    if folded_family(expr) != Some(crate::builtin_proto::BuiltinProto::Array) {
+        return None;
+    }
+    if let Expr::ArraySome { callback, .. } = expr {
+        if super::logical_collections::captureless_some_callback(ctx, callback).is_some() {
+            return None;
+        }
+    }
+    let entry = crate::builtin_proto::array_entry(call.method, call.args.len())?;
+    let observing = call
+        .args
+        .iter()
+        .any(|a| crate::expr::method_site::args_may_observe_lookup(ctx, std::slice::from_ref(*a)));
+    Some((entry, observing))
+}
+
+/// A folded Array method whose arguments could observe WHEN the method is
+/// read (#11915): the receiver, then the proof — the own-override test with
+/// the Array byte, as the guard has it — BEFORE the arguments, which are then
+/// evaluated ONCE; a failed proof takes one generic call, a held one the
+/// unchecked body `js_array_b_<method><argc>`.
+fn lower_pre_read_entry(
+    ctx: &mut FnCtx<'_>,
+    receiver_expr: &Expr,
+    call: &FoldedCall<'_>,
+    entry: &str,
+) -> Result<String> {
+    use crate::rooting::{open_rooted_group, Repr};
+    let receiver_is_array = crate::type_analysis::is_array_expr(ctx, receiver_expr);
+    let receiver_value = lower_expr(ctx, receiver_expr)?;
+    let mut group = open_rooted_group(call.args.len() + 1);
+    // The own-override predicate behind the test may allocate.
+    let rooted_recv = group.adopt_emitted(ctx, Repr::Boxed, &receiver_value, true);
+    let recv = group.reread_emitted(ctx, rooted_recv);
+    let failed_idx = ctx.new_block("arrentry.pre_failed");
+    let held_idx = ctx.new_block("arrentry.pre_held");
+    let args_idx = ctx.new_block("arrentry.args");
+    let failed_label = ctx.block_label(failed_idx);
+    let held_label = ctx.block_label(held_idx);
+    let args_label = ctx.block_label(args_idx);
+    emit_own_override_branch(
+        ctx,
+        call.method,
+        &recv,
+        receiver_is_array,
+        Some(crate::builtin_proto::BuiltinProto::Array),
+        &failed_label,
+        &held_label,
+    );
+    ctx.current_block = failed_idx;
+    ctx.block().br(&args_label);
+    ctx.current_block = held_idx;
+    ctx.block().br(&args_label);
+    ctx.current_block = args_idx;
+    let patched = ctx.block().phi(
+        crate::types::I1,
+        &[("true", &failed_label), ("false", &held_label)],
+    );
+    for (i, arg) in call.args.iter().enumerate() {
+        let collects = rooting::any_operand_may_collect(ctx, call.args[i + 1..].iter().copied());
+        group.lower(ctx, arg, collects)?;
+    }
+    let recv = group.reread_emitted(ctx, rooted_recv);
+    let args = group.reread_all(ctx)?;
+
+    let generic_idx = ctx.new_block("arrentry.generic");
+    let direct_idx = ctx.new_block("arrentry.direct");
+    let merge_idx = ctx.new_block("arrentry.merge");
+    let generic_label = ctx.block_label(generic_idx);
+    let direct_label = ctx.block_label(direct_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&patched, &generic_label, &direct_label);
+
+    ctx.current_block = generic_idx;
+    let generic_value = crate::builtin_proto::emit_generic_call(
+        ctx,
+        crate::builtin_proto::GenericRead::Receiver,
+        &recv,
+        call.method,
+        &args,
+    );
+    let generic_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = direct_idx;
+    let body = entry.replacen("js_array_m_", "js_array_b_", 1);
+    let mut operands: Vec<(crate::types::LlvmType, &str)> = vec![(DOUBLE, recv.as_str())];
+    operands.extend(args.iter().map(|a| (DOUBLE, a.as_str())));
+    let direct_value = ctx.block().call(DOUBLE, &body, &operands);
+    let direct_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let value = ctx.block().phi(
+        DOUBLE,
+        &[
+            (generic_value.as_str(), generic_end.as_str()),
+            (direct_value.as_str(), direct_end.as_str()),
+        ],
+    );
+    group.release(ctx);
+    Ok(value)
+}
+
+/// The guard's generic arm: the receiver (re-read) and the arguments, each
+/// rooted across the next, then ONE call into the shared runtime helper
+/// (`builtin_proto::emit_generic_call`): the real `Get` — an own property, a
+/// replaced prototype method — and call; the builtin itself continues by name
+/// in the runtime.
+fn emit_generic(
+    ctx: &mut FnCtx<'_>,
+    receiver: &Expr,
+    method: &str,
+    args: &[&Expr],
+) -> Result<String> {
+    let mut operands: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
+    operands.push(receiver);
+    operands.extend(args.iter().copied());
+    rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
+        let (recv, arg_vals) = values.split_first().expect("the receiver is operand 0");
+        Ok(crate::builtin_proto::emit_generic_call(
+            ctx,
+            crate::builtin_proto::GenericRead::Receiver,
+            recv,
+            method,
+            arg_vals,
+        ))
+    })
 }
 
 #[cfg(test)]

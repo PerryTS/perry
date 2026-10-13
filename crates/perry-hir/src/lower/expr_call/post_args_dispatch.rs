@@ -152,11 +152,15 @@ pub(super) fn try_object_has_own_call(
                             (&mid.prop, mid.obj.as_ref())
                         {
                             if mid_obj.sym.as_ref() == "Object" {
+                                // #11915: the `js_borrowed_*` entries run the
+                                // builtin body while `Object.prototype` and
+                                // `Function.prototype.call` are pristine, and
+                                // otherwise call the method actually there.
                                 let runtime_fn = match mid_prop.sym.as_ref() {
-                                    "hasOwnProperty" => Some("js_object_has_own"),
+                                    "hasOwnProperty" => Some("js_borrowed_object_has_own"),
                                     // #2891: Object.propertyIsEnumerable.call(obj, key)
                                     "propertyIsEnumerable" => {
-                                        Some("js_object_property_is_enumerable")
+                                        Some("js_borrowed_object_property_is_enumerable")
                                     }
                                     _ => None,
                                 };
@@ -207,17 +211,19 @@ pub(super) fn try_object_prototype_call(
                         if let (ast::MemberProp::Ident(mid_prop), ast::Expr::Member(inner)) =
                             (&mid.prop, mid.obj.as_ref())
                         {
+                            // #11915: `js_borrowed_*` = the builtin body under
+                            // the builtin-prototype proof, else the real call.
                             let runtime_fn = match (mid_prop.sym.as_ref(), args.len()) {
-                                ("toString", 1) => Some("js_object_to_string"),
+                                ("toString", 1) => Some("js_borrowed_object_to_string"),
                                 // #2891: Object.prototype.propertyIsEnumerable.call(obj, key)
                                 ("propertyIsEnumerable", 2) => {
-                                    Some("js_object_property_is_enumerable")
+                                    Some("js_borrowed_object_property_is_enumerable")
                                 }
                                 // Annex B accessor helpers: .call(obj, key[, fn]).
-                                ("__defineGetter__", 3) => Some("js_object_define_getter"),
-                                ("__defineSetter__", 3) => Some("js_object_define_setter"),
-                                ("__lookupGetter__", 2) => Some("js_object_lookup_getter"),
-                                ("__lookupSetter__", 2) => Some("js_object_lookup_setter"),
+                                ("__defineGetter__", 3) => Some("js_borrowed_object_define_getter"),
+                                ("__defineSetter__", 3) => Some("js_borrowed_object_define_setter"),
+                                ("__lookupGetter__", 2) => Some("js_borrowed_object_lookup_getter"),
+                                ("__lookupSetter__", 2) => Some("js_borrowed_object_lookup_setter"),
                                 _ => None,
                             };
                             if let Some(runtime_fn) = runtime_fn {

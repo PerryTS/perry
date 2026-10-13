@@ -8,6 +8,19 @@ use crate::types::{FuncId, GlobalId, LocalId, Type};
 /// Fallback when a dynamic `with` object environment does not bind the
 /// assignment target. The object lookup is performed before the RHS is
 /// evaluated, matching ECMAScript Reference resolution order.
+/// Where an [`Expr::ArrayLikeMethod`]'s method value comes from (#11915).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArrayLikeSource {
+    /// `recv.m(cb, thisArg)` on a proven array: the receiver's own `[[Get]]`.
+    Receiver,
+    /// `Array.prototype.m.call(x, …)` / `[].m.call(x, …)`: a read of
+    /// `%Array.prototype%` at the call.
+    Prototype,
+    /// `const m = [].m; m.call(x, …)`: the value the binding captured. The
+    /// prototype may be patched later without changing what `m` holds.
+    Binding,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WithSetFallback {
     Local(LocalId),
@@ -1838,10 +1851,14 @@ pub enum Expr {
     /// preserving receiver identity for the callback's 3rd argument.
     /// `method` is the resolved Array method name; `args` are the post-receiver
     /// positional arguments (already expanded from `.apply`).
+    ///
+    /// `source` says where the method VALUE comes from (#11915), which is what
+    /// a failed builtin-prototype proof must read instead.
     ArrayLikeMethod {
         method: String,
         receiver: Box<Expr>,
         args: Vec<Expr>,
+        source: ArrayLikeSource,
     },
 
     // String methods

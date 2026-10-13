@@ -68,8 +68,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         // NAMED_PROPS | ARRAY_DESCRIPTORS: no own method or method getter.
         let named = blk.and(I16, &reserved, "1280");
         let no_own = blk.icmp_eq(I16, &named, "0");
-        let default_proto =
-            super::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+        let default_proto = super::array_proto_guard::emit_array_method_admission(blk, &reserved);
         let plain = blk.and(I1, &array, &live);
         let method = blk.and(I1, &no_own, &default_proto);
         let ok = blk.and(I1, &plain, &method);

@@ -39,6 +39,21 @@ pub(super) fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> 
                 crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
             let arr_box = rooted_values[0].clone();
             let cb_box = rooted_values[1].clone();
+            if !crate::expr::method_site::args_may_observe_lookup(
+                ctx,
+                std::slice::from_ref(callback),
+            ) {
+                // #11915: the checked entry proves `Pristine(Array)` and the
+                // receiver's own proof, then validates the callback (#4091)
+                // and maps without a result; otherwise the real `map`.
+                ctx.block().call(
+                    DOUBLE,
+                    "js_array_m_mapDiscard1",
+                    &[(DOUBLE, &arr_box), (DOUBLE, &cb_box)],
+                );
+                rooted_group.release(ctx);
+                return Ok(true);
+            }
             let blk = ctx.block();
             let arr_handle = crate::expr::unbox_to_i64(blk, &arr_box);
             // #4091: throw TypeError for a non-callable callback before iterating

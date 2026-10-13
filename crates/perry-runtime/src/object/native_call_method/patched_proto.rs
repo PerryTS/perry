@@ -51,18 +51,6 @@ unsafe fn receiver_has_by_name_builtins(receiver: f64) -> bool {
     }
 }
 
-/// A function the PROGRAM created, as opposed to a builtin method closure the
-/// runtime installed on a prototype (`install_proto_method` marks every one of
-/// those non-constructable; no compiled user function is in that set).
-fn is_user_function(value: JSValue) -> bool {
-    if (value.bits() & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
-        return false;
-    }
-    let ptr = (value.bits() & crate::value::POINTER_MASK) as usize;
-    crate::closure::is_closure_ptr(ptr)
-        && !crate::object::builtin_closure_is_non_constructable_value(f64::from_bits(value.bits()))
-}
-
 /// `recv.<name>(args…)` where the program writes `<name>` onto a builtin
 /// prototype somewhere. See the module docs.
 ///
@@ -82,46 +70,14 @@ pub unsafe extern "C-unwind" fn js_native_call_method_patched_proto(
         return js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len);
     }
     let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-    // The lookup allocates (the key, and a getter may run user code), so the
-    // receiver and every argument are read back from roots afterwards.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(object);
-    let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
-        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
-    } else {
-        Vec::new()
-    };
-    let arg_handles = scope.root_nanbox_f64_slice(&original_args);
-
-    let key = crate::string::canonical_key(name);
-    let receiver_ptr =
-        JSValue::from_bits(receiver.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>();
-    let method = js_object_get_field_by_name(receiver_ptr, key);
-    if !is_user_function(method) {
-        let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-        return js_native_call_method(
-            receiver.get_nanbox_f64(),
-            method_name_ptr,
-            method_name_len,
-            args.as_ptr(),
-            args.len(),
-        );
+    // #11915: the shared generic path — the spec `Get` and call, which throws
+    // for a non-callable; only the builtin itself continues by name.
+    if let Some(value) =
+        crate::object::builtin_proto::redirect_call(object, name, args_ptr, args_len)
+    {
+        return value;
     }
-    let method = scope.root_nanbox_f64(f64::from_bits(method.bits()));
-    let bound = crate::closure::clone_closure_rebind_this(
-        method.get_nanbox_f64().to_bits(),
-        receiver.get_nanbox_f64(),
-    );
-    let bound = scope.root_nanbox_u64(bound);
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // A non-arrow function body reads its receiver from its `this` argument;
-    // `clone_closure_rebind_this` only covers a closure that captured `this`.
-    crate::closure::native_call_value_this(
-        bound.get_nanbox_f64(),
-        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
-        args.as_ptr(),
-        args.len(),
-    )
+    js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
 /// Spread form of [`js_native_call_method_patched_proto`]: `args_array_handle`

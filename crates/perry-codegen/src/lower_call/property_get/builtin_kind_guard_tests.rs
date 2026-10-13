@@ -283,10 +283,21 @@ fn proven_receivers_keep_the_direct_builtin_call() {
         1,
         "a proven receiver pays exactly one own-override test:\n{ir}"
     );
+    // #11915: that other arm is the ONE shared generic path — the real `Get`
+    // (own property or replaced prototype method) and call — not a second
+    // copy of the dispatcher tower.
     assert_eq!(
-        ir.matches(DISPATCH).count(),
+        ir.matches("call double @js_builtin_proto_generic_call")
+            .count(),
         1,
-        "and reaches the dispatcher only as that test's other arm:\n{ir}"
+        "and reaches the shared generic path only as that test's other arm:\n{ir}"
+    );
+    // #11915: the own-override gate the test already reads is armed by any
+    // builtin prototype modification, and its predicate answers for a
+    // modified Date prototype — the proof costs the site nothing.
+    assert!(
+        ir.contains(OWN_FLAG) && !ir.contains("@PERRY_BUILTIN_PROTO_PATCHED"),
+        "the test's own gate proves the Date prototype unmodified:\n{ir}"
     );
 }
 
@@ -304,9 +315,10 @@ fn zero_argument_search_methods_compile_on_any_receiver_and_on_a_string() {
             ),
         ],
     );
+    // #11915: through the checked entries, with the arity in the symbol.
     assert!(
-        ir.contains("call i32 @js_string_ends_with(")
-            && ir.contains("call i32 @js_string_starts_with(")
+        ir.contains("call double @js_string_m_endsWith0(")
+            && ir.contains("call double @js_string_m_startsWith0(")
             && dispatches(&ir),
         "an omitted searchString is `undefined`, not a compile error:\n{ir}"
     );

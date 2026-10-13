@@ -198,6 +198,15 @@ pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usiz
 pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
+        super::builtin_proto::note_value_store(
+            obj,
+            super::builtin_proto::StoredSlot::Spill {
+                obj: obj_ptr,
+                index: field_index,
+            },
+            vbits,
+            "spill store",
+        );
         // Hot path: meta and buffer already exist with capacity — the
         // in-range barriered store cannot allocate or move anything, so no
         // handle scope is needed. This is every write after the first to a

@@ -101,7 +101,9 @@ unsafe fn admitted_append(receiver: f64, index: f64) -> Option<*mut ArrayHeader>
         | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
         | crate::gc::GC_ARRAY_CUSTOM_PROTO;
     if array_object_flags_resolved(arr) & REJECT != 0
-        || PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(std::sync::atomic::Ordering::Relaxed) != 0
+        || PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(std::sync::atomic::Ordering::Relaxed)
+            & super::INDEX_INVALIDATED
+            != 0
         || value_bits_to_number(index.to_bits()) != Some((*arr).length as f64)
         || (*arr).length > (*arr).capacity
     {

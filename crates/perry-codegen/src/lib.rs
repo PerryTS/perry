@@ -7,6 +7,7 @@
 mod array_storage;
 pub mod block;
 pub(crate) mod boxed_vars;
+pub(crate) mod builtin_proto;
 pub mod codegen;
 pub(crate) mod collectors;
 pub(crate) mod concat_site_cache;
@@ -95,14 +96,14 @@ pub mod workers;
 pub use codegen::{
     assign_static_shape_ids, compile_module, context_free_ctor_abi, context_free_ctor_param_count,
     decode_static_seed, encode_static_seed, module_birth_shapes, namespace_member_class_key,
-    namespace_member_func_key, namespace_member_var_key, resolve_target_triple, target_os_of,
-    TARGET_NAMES,
-    short_spread_method_capabilities, take_module_static_seeds, user_function_symbol, AppMetadata,
-    BirthProto, BirthShape, ClassAccessorNames, CompileOptions, ConstFnBirth, ConstructorContracts,
-    CtorAbi, DefinedClassShape, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
+    namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
+    short_spread_method_capabilities, take_module_static_seeds, target_os_of, user_function_symbol,
+    AppMetadata, BirthProto, BirthShape, ClassAccessorNames, CompileOptions, ConstFnBirth,
+    ConstructorContracts, CtorAbi, DefinedClassShape, ExportedObjectLiteralCapability,
+    FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth,
+    NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
     ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
+    TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
 pub use codegen::{set_worker_entries, worker_entries};

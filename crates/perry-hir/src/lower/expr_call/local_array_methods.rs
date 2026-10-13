@@ -433,6 +433,7 @@ pub(super) fn try_local_array_methods(
                                 method: method_name.to_string(),
                                 receiver: Box::new(Expr::LocalGet(array_id)),
                                 args,
+                                source: crate::ir::ArrayLikeSource::Receiver,
                             }));
                         }
                         match method_name {

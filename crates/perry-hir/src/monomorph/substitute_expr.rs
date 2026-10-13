@@ -630,7 +630,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             method,
             receiver,
             args,
+            source,
         } => Expr::ArrayLikeMethod {
+            source: *source,
             method: method.clone(),
             receiver: Box::new(substitute_expr(receiver, substitutions)),
             args: args

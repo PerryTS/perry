@@ -237,6 +237,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // - js_array_join(arr, sep) -> *mut StringHeader (i64)
     // - js_array_join_value(arr, sep_value) -> *mut StringHeader (i64)
     module.declare_function("js_array_pop_f64", DOUBLE, &[I64]);
+    // #11915: `arr.pop()` from compiled code, under the builtin-prototype proof.
+    module.declare_function("js_array_pop_f64_site", DOUBLE, &[I64]);
     module.declare_function("js_array_join", I64, &[I64, I64]);
     module.declare_function("js_array_join_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_forEach", VOID, &[I64, I64]);

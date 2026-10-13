@@ -1254,6 +1254,12 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
     false
 }
 
+/// [`spec_get`] for the builtin-prototype generic path
+/// (`builtin_proto::redirect_call`).
+pub(crate) unsafe fn spec_get_value(recv: f64, name: &[u8]) -> f64 {
+    spec_get(recv, name)
+}
+
 /// The spec [[Get]] of `name` on `recv`: runs a getter (with `recv` as
 /// `this`), a Proxy trap, or throws for a nullish receiver.
 unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
@@ -2071,9 +2077,9 @@ mod constfn_tests {
                 assert_eq!(d.special_constfn_mask != 0, admitted);
                 if admitted {
                     assert_ne!(base, id, "ordinary allocation must finalize after stores");
-                    assert!(super::super::field_rep_store::completed_shape_matches_layout(
-                        id, base
-                    ));
+                    assert!(
+                        super::super::field_rep_store::completed_shape_matches_layout(id, base)
+                    );
                     assert_eq!(primed_slot(finalized), METHOD_SITE_CONSTFN);
                     assert_eq!(
                         crate::closure::js_closure_get_capture_bits(c, 0),

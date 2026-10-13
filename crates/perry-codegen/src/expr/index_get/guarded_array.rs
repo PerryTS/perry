@@ -997,6 +997,11 @@ pub(crate) fn lower_record_index(
     let invalidated = ctx
         .block()
         .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let invalidated = ctx.block().and(
+        I8,
+        &invalidated,
+        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
+    );
     let prototype_clear = ctx.block().icmp_eq(I8, &invalidated, "0");
     let safe = ctx.block().and(I1, &safe, &prototype_clear);
     ctx.block().cond_br(&safe, &fl, &cl);
@@ -1060,6 +1065,11 @@ pub(crate) fn lower_record_next(
     let invalidated = ctx
         .block()
         .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let invalidated = ctx.block().and(
+        I8,
+        &invalidated,
+        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
+    );
     let clear = ctx.block().icmp_eq(I8, &invalidated, "0");
     let safe = ctx.block().and(I1, &safe, &clear);
     ctx.block().cond_br(&safe, &bl, &cl);

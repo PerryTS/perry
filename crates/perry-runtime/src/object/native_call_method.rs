@@ -1165,6 +1165,30 @@ pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
+/// A `String.prototype` method's native body, by name, on a string receiver
+/// (#11915, `builtin_proto_entries.rs`): no `Get`, no prototype read — the
+/// builtin itself, for a caller that has already proven `Pristine(String)`.
+/// `None` for a receiver the string arms do not take.
+///
+/// # Safety
+/// `recv` and `args` are NaN-boxed values.
+pub(crate) unsafe fn string_native_method(recv: f64, name: &str, args: &[f64]) -> Option<f64> {
+    let root_scope = crate::gc::RuntimeHandleScope::new();
+    let object_handle = root_scope.root_nanbox_f64(recv);
+    let arg_handles = root_scope.root_nanbox_f64_slice(args);
+    string_methods::dispatch_string(
+        &root_scope,
+        &object_handle,
+        &arg_handles,
+        recv,
+        name,
+        name.as_ptr().cast(),
+        name.len(),
+        args.as_ptr(),
+        args.len(),
+    )
+}
+
 #[no_mangle]
 // Dynamic native calls may synchronously throw from the selected module
 // implementation. Keep this bridge unwind-capable so a generated caller's JS

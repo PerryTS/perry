@@ -179,6 +179,50 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     // dedicated thunks; do not include it here to avoid clobbering those.
 ];
 
+/// [`OBJECT_PROTO_METHODS`] minus the members only `%Object.prototype%` owns
+/// (`hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` and the Annex B
+/// accessor helpers; ECMA-262 20.1.3, B.2.2): the members a builtin prototype
+/// other than `Object.prototype` still installs. Every other builtin
+/// prototype INHERITS the Object-only ones (#11915) — a copy would hide a
+/// replacement on `Object.prototype` from arrays, Maps, functions and
+/// primitives alike.
+const SHARED_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[("toLocaleString", 0), ("valueOf", 0)];
+
+/// [`OBJECT_PROTO_METHODS`] for `builtin_name`'s prototype: all of them on
+/// `Object.prototype`, and on any other prototype only the members that are
+/// not `Object.prototype`'s alone.
+fn install_object_proto_copies(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    if builtin_name == "Object" {
+        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+    } else {
+        install_noop_proto_methods(proto_obj, SHARED_OBJECT_PROTO_METHODS);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn shared_object_proto_methods_are_the_complement_of_the_object_only_ones() {
+    const OBJECT_ONLY_METHODS: [&str; 7] = [
+        "hasOwnProperty",
+        "isPrototypeOf",
+        "propertyIsEnumerable",
+        "__defineGetter__",
+        "__defineSetter__",
+        "__lookupGetter__",
+        "__lookupSetter__",
+    ];
+    let shared: Vec<&str> = OBJECT_PROTO_METHODS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !OBJECT_ONLY_METHODS.contains(name))
+        .collect();
+    let listed: Vec<&str> = SHARED_OBJECT_PROTO_METHODS
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
+    assert_eq!(shared, listed);
+}
+
 /// Populate well-known method properties on a built-in constructor's
 /// prototype object. Each registered method is a closure carrying a
 /// proper `name` property so feature-detection idioms like
@@ -377,7 +421,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
         set_intrinsic_to_string_tag(proto_obj, builtin_name);
-        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        install_object_proto_copies(builtin_name, proto_obj);
         // `Object.prototype.toLocaleString` is a real generic method: it calls
         // the receiver's `toString`. A no-op-backed copy is re-dispatched by
         // name and would incorrectly call `receiver.toLocaleString` again.
@@ -395,7 +439,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
     // thunks, so `WeakRef.prototype.deref.call(wr)`, `wr.deref.bind(wr)` and
     // `typeof wr.deref` resolve instead of answering `undefined`.
     if super::super::weakref_proto_thunks::install_weakref_proto_methods(builtin_name, proto_obj) {
-        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        install_object_proto_copies(builtin_name, proto_obj);
         return;
     }
     // #4795: TC39 explicit-resource-management stacks.
@@ -403,21 +447,16 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         builtin_name,
         proto_obj,
     ) {
-        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+        install_object_proto_copies(builtin_name, proto_obj);
         return;
     }
     // #4100: primitive wrapper prototypes need real thunks for their own
     // methods so reflective calls brand-check `this` instead of hitting the
     // generic Object no-op/valueOf fallbacks.
     if primitive_proto_thunks::install_primitive_proto_methods(builtin_name, proto_obj) {
-        install_noop_proto_methods(
-            proto_obj,
-            &[
-                ("hasOwnProperty", 1),
-                ("isPrototypeOf", 1),
-                ("propertyIsEnumerable", 1),
-            ],
-        );
+        // #11915: `hasOwnProperty` / `isPrototypeOf` / `propertyIsEnumerable`
+        // are inherited from `%Object.prototype%`, never copied, so a
+        // replacement there is what every primitive reads.
         if !matches!(builtin_name, "Number" | "BigInt") {
             install_noop_proto_methods(proto_obj, &[("toLocaleString", 0)]);
         }
@@ -642,7 +681,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(native_args array_prototype_concat_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         "ArrayBuffer" => {
             install_proto_method(
@@ -705,7 +744,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 }
             }
             set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         "SharedArrayBuffer" => {
             // Mirror the ArrayBuffer.prototype shape: a brand-checking `slice`
@@ -729,7 +768,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 }
             }
             set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         "DataView" => {
             // Install the reflectable `byteLength`/`byteOffset`/`buffer`
@@ -739,7 +778,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // `DataView.prototype.getInt32.call(dv, …)` cascade.
             super::super::dataview_proto_thunks::install_dataview_proto_methods(proto_obj);
             set_intrinsic_to_string_tag(proto_obj, "DataView");
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         "Object" => {
             install_proto_method(
@@ -843,7 +882,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(native_args function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             install_function_has_instance_symbol(proto_obj);
         }
         "String" => {
@@ -857,7 +896,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // override `toString` and `valueOf` with brand-checking thunks — they
             // must throw TypeError for non-String receivers (ECMA-262 §22.1.3.28
             // `thisStringValue`), unlike the generic coercing methods above.
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -884,7 +923,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // OBJECT_PROTO_METHODS installs noop `valueOf`/`toLocaleString`, so
             // it must run BEFORE the brand thunks below — otherwise it clobbers
             // them back to no-ops.
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: `valueOf`/`toLocaleString` brand-check `this` and throw a
             // `TypeError` on an incompatible reflective receiver instead of
             // falling back to `Object.prototype` (`"[object Object]"`).
@@ -902,7 +941,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
         }
         "Boolean" => {
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: brand-checking `toString`/`valueOf` (mirror `Number`).
             // Installed after OBJECT_PROTO_METHODS so the brand `valueOf` wins.
             install_proto_method(
@@ -919,7 +958,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
         }
         "Symbol" => {
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: Symbol.prototype previously had no own methods, so
             // reflective `Symbol.prototype.toString.call(sym)` resolved to
             // `Object.prototype.toString` (`"[object Symbol]"`) and an
@@ -941,7 +980,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
         }
         "BigInt" => {
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: mirror `Symbol` — brand-checking `toString`(radix)/`valueOf`
             // re-dispatched to the canonical BigInt logic (`(5n).toString(2)`
             // → `"101"`). After OBJECT_PROTO_METHODS so the brand `valueOf` wins.
@@ -1012,7 +1051,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("valueOf", 0),
                 ],
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             // Overwrite the no-op getter entries with brand-checking thunks so
             // `Date.prototype.getX.call(this)` performs `thisTimeValue(this)`
             // (TypeError on a non-Date receiver) and dispatches correctly.
@@ -1055,7 +1094,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // engine it falls back to the Annex-B no-op here.
             #[cfg(not(feature = "regex-engine"))]
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         #[cfg(feature = "global-url")]
         "URLPattern" => {
@@ -1139,7 +1178,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("values", 0),
                 ],
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
         }
         "Promise" => {
@@ -1162,7 +1201,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 2,
             );
             set_intrinsic_to_string_tag(proto_obj, "Promise");
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         // #340/#341: these carried `install_noop_proto_methods` placeholders —
         // the prototype looked right to reflection while the real work went
@@ -1191,7 +1230,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             for name in ["encode", "encodeInto"] {
                 make_proto_member_enumerable(proto_obj, name);
             }
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
         #[cfg(feature = "global-text")]
@@ -1218,7 +1257,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),
             );
             make_proto_member_enumerable(proto_obj, "decode");
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }
         #[cfg(feature = "global-webfetch")]
@@ -1248,7 +1287,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("values", 0),
                 ],
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
         #[cfg(feature = "global-webfetch")]
@@ -1310,7 +1349,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     install_fetch_prototype_getter(proto_obj, name);
                 }
             }
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         #[cfg(feature = "global-webfetch")]
@@ -1325,7 +1364,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("text", 0),
                 ],
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         #[cfg(feature = "global-webfetch")]
@@ -1345,13 +1384,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("values", 0),
                 ],
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
         #[cfg(feature = "global-websocket")]
         "WebSocket" => {
             websocket_global::install_proto_methods(proto_obj);
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         #[cfg(feature = "global-webcrypto")]
         "Crypto" => {
@@ -1372,7 +1411,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         #[cfg(feature = "global-webcrypto")]
         "CryptoKey" => {
@@ -1396,7 +1435,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             ] {
                 install_webcrypto_proto_getter(proto_obj, name, func_ptr);
             }
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
@@ -1424,11 +1463,11 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             ] {
                 install_webcrypto_proto_method_rest_with_length(proto_obj, name, func_ptr, length);
             }
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
         | "AggregateError" | "EvalError" | "URIError" => {
-            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_object_proto_copies(builtin_name, proto_obj);
             install_proto_method(
                 proto_obj,
                 "toString",

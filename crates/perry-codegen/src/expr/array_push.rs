@@ -1288,7 +1288,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     // setter, so the raw append is valid only while the
                     // receiver's prototype chain remains pristine.
                     let prototype_clean =
-                        crate::expr::array_proto_guard::emit_array_default_prototype_chain(
+                        crate::expr::array_proto_guard::emit_array_method_admission(
                             blk, &obj_flags,
                         );
                     let clean = blk.and(I1, &clean, &prototype_clean);

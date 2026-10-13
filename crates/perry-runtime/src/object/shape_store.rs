@@ -1780,10 +1780,14 @@ unsafe fn try_array_store(
             if super::prototype_chain::object_static_prototype(proto_bag as usize)
                 != Some(object_proto.to_bits())
             {
-                super::prototype_chain::object_link_created_prototype(
-                    proto_bag as usize,
-                    object_proto.to_bits(),
-                );
+                // Internal construction of `%Array.prototype%`'s bag, not a
+                // modification of it (#11915, `builtin_proto`).
+                super::own_override::as_builtin_definition(|| {
+                    super::prototype_chain::object_link_created_prototype(
+                        proto_bag as usize,
+                        object_proto.to_bits(),
+                    )
+                });
             }
             crate::value::js_nanbox_pointer(proto_bag_root.get_raw_mut_ptr::<ObjectHeader>() as i64)
         } else if header.obj_type == crate::gc::GC_TYPE_OBJECT {

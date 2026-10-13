@@ -497,7 +497,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            Ok(blk.call(DOUBLE, "js_array_pop_f64", &[(I64, &arr_handle)]))
+            Ok(blk.call(DOUBLE, "js_array_pop_f64_site", &[(I64, &arr_handle)]))
         }
 
         // -------- arr.map(callback) (special variant) --------

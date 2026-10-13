@@ -574,6 +574,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    super::builtin_proto::note_write_addr(obj, "descriptor");
     let byte_edit = HolderEdit::new(obj);
     let obj = byte_edit.as_ref().map_or(obj, |edit| edit.bag as usize);
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
@@ -594,6 +595,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Each key updates the holder shape and the existing prototype guards.
 #[cfg(test)]
 pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAttrs)]) {
+    super::builtin_proto::note_write_addr(obj, "descriptor");
     for (key, _) in entries {
         crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     }
@@ -611,6 +613,7 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
+    super::builtin_proto::note_write_addr(obj, "descriptor");
     let bag = unsafe { descriptor_holder(obj) };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }
@@ -819,6 +822,7 @@ pub(crate) unsafe fn owner_key_is_accessor(owner: usize, key: &[u8]) -> bool {
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
+    super::builtin_proto::note_write_addr(obj, "descriptor");
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     crate::closure::shape::note_function_own_state_changed(obj);
     let function = HolderEdit::new(obj);
@@ -931,6 +935,7 @@ pub(crate) fn install_fresh_accessor_property(
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
+    super::builtin_proto::note_write_addr(obj, "descriptor");
     let bag = unsafe { descriptor_holder(obj) };
     if bag.is_null()
         || unsafe { super::key_attrs::object_key_entry(bag, key.as_bytes()) }

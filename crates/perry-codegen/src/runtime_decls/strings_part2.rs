@@ -160,6 +160,58 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #11915: `Object.prototype.<m>.call(x, …)` under the builtin-prototype
+    // proof (`perry-runtime/src/object/builtin_proto.rs`).
+    module.declare_function("js_borrowed_object_to_string", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_borrowed_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_borrowed_object_property_is_enumerable",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_borrowed_object_define_getter",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_borrowed_object_define_setter",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_borrowed_object_lookup_getter",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_borrowed_object_lookup_setter",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_builtin_proto_contract_check", VOID, &[I64]);
+    crate::builtin_proto::declare_entries(module);
+    module.declare_function("js_builtin_proto_generic_call0", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function(
+        "js_builtin_proto_generic_call1",
+        DOUBLE,
+        &[DOUBLE, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_builtin_proto_generic_call2",
+        DOUBLE,
+        &[DOUBLE, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_builtin_proto_generic_call3",
+        DOUBLE,
+        &[DOUBLE, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_builtin_proto_generic_call",
+        DOUBLE,
+        &[I32, DOUBLE, I64, PTR, I64],
+    );
     // #10943: the own-override guard condition; 0 takes the builtin, 1 the
     // universal dispatcher.
     module.declare_function("js_receiver_may_own_named_method", I32, &[DOUBLE, DOUBLE]);

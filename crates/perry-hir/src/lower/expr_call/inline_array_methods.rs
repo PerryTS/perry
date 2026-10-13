@@ -61,6 +61,7 @@ pub(super) fn try_inline_array_methods(
                             method: method_name.to_string(),
                             receiver: Box::new(array_expr),
                             args,
+                            source: crate::ir::ArrayLikeSource::Receiver,
                         }));
                     }
                     match method_name {

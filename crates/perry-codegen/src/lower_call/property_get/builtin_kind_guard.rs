@@ -70,6 +70,25 @@ impl ReceiverKind {
     fn can_own_properties(self) -> bool {
         !matches!(self, ReceiverKind::Number)
     }
+
+    /// The builtin prototype families a call on a receiver of this kind reads
+    /// its method through (#11915, `builtin_proto`).
+    fn pristine_families(self) -> &'static [crate::builtin_proto::BuiltinProto] {
+        use crate::builtin_proto::BuiltinProto;
+        match self {
+            ReceiverKind::Date => &[BuiltinProto::Date],
+            ReceiverKind::Number => &[BuiltinProto::Number],
+            ReceiverKind::Array => &[BuiltinProto::Array],
+            ReceiverKind::LocaleValue => &[
+                BuiltinProto::Date,
+                BuiltinProto::Number,
+                BuiltinProto::String,
+                BuiltinProto::Boolean,
+                BuiltinProto::Symbol,
+                BuiltinProto::BigInt,
+            ],
+        }
+    }
 }
 
 /// The runtime entry point the HIR `Expr::Date*` arms lower each name to.
@@ -363,9 +382,43 @@ fn guarded_call(
     let own_label = own_idx.map(|idx| ctx.block_label(idx));
     // A heap receiver of the right kind is still an object that may own the
     // method, so it takes the own-override test before the builtin.
+    //
+    // #11915: `Pristine(kind)`. A Date reaches the builtin only through the
+    // own-override test, whose gate every prototype modification arms and
+    // whose predicate answers for it: nothing to add. An array's test reads
+    // its own header, so the Array byte joins that test's branch. A
+    // primitive (a number, a `toLocaleString()` primitive or Symbol) has no
+    // own test, so the byte joins the kind test: the Number byte, or for
+    // `toLocaleString()` — six families — the one "anything modified" byte.
+    // A failed proof takes the generic arm, the universal dispatcher, which
+    // performs the real `Get` and call. No new block, no new arm.
     let heap_label = own_label.as_deref().unwrap_or(&builtin_label);
-    let time =
-        emit_receiver_kind_branch(ctx, kind, &recv, heap_label, &builtin_label, &generic_label);
+    let pristine = match kind {
+        ReceiverKind::Date | ReceiverKind::Array => None,
+        ReceiverKind::Number => {
+            let blk = ctx.block();
+            let patched = crate::builtin_proto::emit_patched_test(
+                blk,
+                crate::builtin_proto::BuiltinProto::Number,
+            );
+            Some(blk.xor(I1, &patched, "true"))
+        }
+        ReceiverKind::LocaleValue => {
+            let blk = ctx.block();
+            let patched = crate::builtin_proto::emit_any_patched_test(blk);
+            Some(blk.xor(I1, &patched, "true"))
+        }
+    };
+    let pristine = pristine.as_deref().unwrap_or("true");
+    let time = emit_receiver_kind_branch(
+        ctx,
+        kind,
+        &recv,
+        &pristine,
+        heap_label,
+        &builtin_label,
+        &generic_label,
+    );
 
     if let Some(own_idx) = own_idx {
         ctx.current_block = own_idx;
@@ -375,6 +428,7 @@ fn guarded_call(
             property,
             &recv,
             kind == ReceiverKind::Array,
+            (kind == ReceiverKind::Array).then_some(crate::builtin_proto::BuiltinProto::Array),
             &generic_label,
             &builtin_label,
         );
@@ -394,6 +448,7 @@ fn guarded_call(
     };
 
     ctx.current_block = builtin_idx;
+    crate::builtin_proto::emit_contract_check(ctx.block(), kind.pristine_families());
     let (builtin_recv, builtin_args) = reread(ctx)?;
     // `time` is a Number, not a heap reference, so it survives the test.
     let builtin_value = builtin(ctx, &builtin_recv, time.as_deref(), &builtin_args);
@@ -435,6 +490,7 @@ fn emit_receiver_kind_branch(
     ctx: &mut FnCtx<'_>,
     kind: ReceiverKind,
     recv: &str,
+    pristine: &str,
     heap_label: &str,
     builtin_label: &str,
     generic_label: &str,
@@ -452,6 +508,7 @@ fn emit_receiver_kind_branch(
             let time_bits = blk.bitcast_double_to_i64(&time);
             let recv_bits = blk.bitcast_double_to_i64(recv);
             let is_date = blk.icmp_ne(I64, &time_bits, &recv_bits);
+            let is_date = blk.and(I1, &is_date, pristine);
             blk.cond_br(&is_date, heap_label, generic_label);
             Some(time)
         }
@@ -477,11 +534,14 @@ fn emit_receiver_kind_branch(
             let is_null = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_NULL_I64);
             let is_nullish = blk.or(I1, &is_undefined, &is_null);
             let not_primitive = blk.or(I1, &is_pointer, &is_nullish);
-            blk.cond_br(&not_primitive, &heap_or_nullish_label, builtin_label);
+            let patched = blk.xor(I1, pristine, "true");
+            let leave = blk.or(I1, &not_primitive, &patched);
+            blk.cond_br(&leave, &heap_or_nullish_label, builtin_label);
 
             ctx.current_block = heap_or_nullish_idx;
-            ctx.block()
-                .cond_br(&is_pointer, &locale_heap_label, generic_label);
+            let blk = ctx.block();
+            let heap = blk.and(I1, &is_pointer, pristine);
+            blk.cond_br(&heap, &locale_heap_label, generic_label);
 
             ctx.current_block = heap_idx;
             let blk = ctx.block();
@@ -495,6 +555,7 @@ fn emit_receiver_kind_branch(
             let blk = ctx.block();
             let is_symbol = blk.call(I32, "js_is_symbol", &[(DOUBLE, recv)]);
             let is_symbol = blk.icmp_ne(I32, &is_symbol, "0");
+            let is_symbol = blk.and(I1, &is_symbol, pristine);
             blk.cond_br(&is_symbol, builtin_label, generic_label);
             None
         }
@@ -509,6 +570,7 @@ fn emit_receiver_kind_branch(
             let is_double = blk.xor(I1, &in_tag_band, "true");
             let is_int32 = blk.icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
             let is_number = blk.or(I1, &is_double, &is_int32);
+            let is_number = blk.and(I1, &is_number, pristine);
             blk.cond_br(&is_number, builtin_label, generic_label);
             None
         }
@@ -550,6 +612,7 @@ fn emit_receiver_kind_branch(
             let forwarded = blk.and(I8, &flags, GC_FLAG_FORWARDED_I8);
             let not_forwarded = blk.icmp_eq(I8, &forwarded, "0");
             let plain_array = blk.and(I1, &is_array, &not_forwarded);
+            let plain_array = blk.and(I1, &plain_array, pristine);
             blk.cond_br(&plain_array, heap_label, generic_label);
             None
         }

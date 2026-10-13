@@ -899,6 +899,20 @@ impl LlBlock {
         r
     }
 
+    /// Unordered atomic load of a monotone runtime latch (#11915): atomic (no
+    /// data race with the runtime's writer) but unordered, so the backend can
+    /// fold it into a compare with memory.
+    pub fn load_atomic_unordered(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::AtomicUnordered(alignment),
+        });
+        r
+    }
+
     /// Acquire atomic load for a sticky runtime gate whose publishing store is
     /// release-ordered. The explicit alignment is required by LLVM atomics.
     pub fn load_atomic_acquire(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {

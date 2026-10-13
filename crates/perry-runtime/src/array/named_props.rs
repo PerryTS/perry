@@ -708,6 +708,7 @@ pub(crate) unsafe fn array_named_property_set(
     if arr.is_null() {
         return arr;
     }
+    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "array named set");
     let flags = resolved_flags(arr);
     let Some(wanted) = string_header_bytes(key) else {
         return arr;
@@ -1051,6 +1052,7 @@ pub(crate) unsafe fn array_named_property_delete_by_name(
     arr: *const ArrayHeader,
     name: &str,
 ) -> bool {
+    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "array named delete");
     match resolve(arr) {
         (_, Reserve::Bag(bag)) => {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);

@@ -212,7 +212,14 @@ pub(super) unsafe fn dispatch_map_set(
                         crate::map::js_map_foreach(map, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
-                    _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+                    // #11915: any other name is an ordinary method call — the
+                    // receiver's real `Get` (its chain reaches
+                    // `Object.prototype`), never a silent `undefined`.
+                    _ => crate::object::builtin_proto::call_unknown_collection_method(
+                        object,
+                        method_name.as_bytes(),
+                        args,
+                    ),
                 });
             }
             if crate::set::is_registered_set(check_ptr) {
@@ -296,7 +303,14 @@ pub(super) unsafe fn dispatch_map_set(
                         JSValue::bool(crate::set::js_set_is_disjoint_from(set, args[0]) != 0)
                             .bits(),
                     ),
-                    _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+                    // #11915: any other name is an ordinary method call — the
+                    // receiver's real `Get` (its chain reaches
+                    // `Object.prototype`), never a silent `undefined`.
+                    _ => crate::object::builtin_proto::call_unknown_collection_method(
+                        object,
+                        method_name.as_bytes(),
+                        args,
+                    ),
                 });
             }
             // Buffer / Uint8Array dispatch — allocated raw, not behind a

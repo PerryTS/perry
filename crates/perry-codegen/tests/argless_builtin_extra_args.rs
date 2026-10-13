@@ -182,7 +182,7 @@ fn any_call_result_trim_emits_string_tag_dispatch() {
         ir.contains("lshr i64")
             && ir.contains("32767")
             && ir.contains("32761")
-            && ir.contains("call i64 @js_string_trim"),
+            && ir.contains("call double @js_string_m_trim0("),
         "the string arm must be guarded by heap and short-string tags:\n{ir}"
     );
     assert!(

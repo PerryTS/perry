@@ -46,12 +46,25 @@ pub(crate) unsafe fn map_set_instance_property(
                 return JSValue::from_bits(v.to_bits());
             }
         }
-        let proto = crate::object::builtin_prototype_value(if is_map { "Map" } else { "Set" });
-        let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
-        if !proto_ptr.is_null() {
-            if let Some(v) = own_data_field_by_name(proto_ptr, key) {
-                return v;
-            }
+        // #11915: the receiver's REAL inherited chain — its recorded
+        // `[[Prototype]]`, else `%Map.prototype%` / `%Set.prototype%` — and
+        // every hop above it (`Object.prototype.hasOwnProperty`, a relinked
+        // `Map.prototype`'s new parent), accessors included, with the
+        // instance as the receiver.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+        let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+        let recorded = crate::object::prototype_chain::object_static_prototype(obj as usize);
+        let proto = recorded.unwrap_or_else(|| {
+            crate::object::builtin_prototype_value(if is_map { "Map" } else { "Set" }).to_bits()
+        });
+        let obj = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+        let key =
+            crate::value::js_nanbox_get_pointer(key.get_nanbox_f64()) as *const crate::StringHeader;
+        if let Some(value) =
+            crate::object::prototype_chain::resolve_inherited_field_from_prototype(obj, proto, key)
+        {
+            return value;
         }
     }
     JSValue::undefined()

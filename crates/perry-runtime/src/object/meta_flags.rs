@@ -32,18 +32,34 @@ pub(crate) const OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: u64 = 1 << 6;
 /// Ordinary storage and prototype links, with native forwarding only after
 /// an ordinary read yields undefined. Projected into the shape kind.
 pub(crate) const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
+/// #11915: this object is a SEALED intrinsic prototype of the realm
+/// (`builtin_proto::seal_realm`); its `BuiltinProto` family is in bits 8..11
+/// ([`OBJECT_META_SEALED_FAMILY_SHIFT`]). Every mutation funnel reads it
+/// (`builtin_proto::note_write`) and withdraws that family's
+/// `Pristine` byte.
+///
+/// Bits 8..11 are the packed-numeric payload's on an Array-subclass
+/// instance, which a sealed prototype never is. The encoding is fail-safe:
+/// a cleared family field reads as family 0, `Object`, which withdraws every
+/// family.
+pub(crate) const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
+/// Shift of the sealed prototype's `BuiltinProto` family (4 bits).
+pub(crate) const OBJECT_META_SEALED_FAMILY_SHIFT: u32 = 8;
 //
 // `ObjectMeta::flags` bit map (u64), verified against #8690's comment in
 // `array/subclass.rs` and every reader in the tree:
 //   bit 0      native fallback after ordinary undefined
 //   bit 1      packed-numeric payload valid       (#8690)
 //   bit 2      packed-numeric u32 entity proof    (#8690)
-//   bit 3      free (was the user-override bit)   \ how a prototype was linked
-//   bit 4      free (was the class-evaluation bit) / is not a fact: its shape is
+//   bit 3      sealed intrinsic prototype         (here, #11915)
+//   bit 4      free (was the class-evaluation bit)  how a prototype was linked
+//                                                   is not a fact: its shape is
 //   bit 5      this object is a prototype         (here)
 //   bit 6      exotic read receiver               (here)
 //   bit 7      *** THE LAST FREE BIT IN THIS WORD ***
 //   bits 8..31 verified prefix bound              (#8690)
+//              — on a sealed prototype (bit 3), bits 8..11 are its
+//              `BuiltinProto` family instead (#11915; never both)
 //   bits 32..63 exact semantic ShapeId            (#8690)
 //
 // `PACKED_NUMERIC_META_MASK` clears only bits 1, 2 and 8..63, so bits 0 and

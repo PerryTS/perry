@@ -10,9 +10,17 @@ pub(crate) unsafe fn store_object_field_slot(
     field_index: usize,
     value_bits: u64,
 ) {
-    let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let slot = fields_ptr.add(field_index);
+    // #11915: a sealed builtin prototype, or a method replaced on any
+    // prototype (`builtin_proto::note_value_store`).
+    super::builtin_proto::note_value_store(
+        obj,
+        super::builtin_proto::StoredSlot::Inline(slot),
+        value_bits,
+        "slot store",
+    );
+    let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     crate::gc::runtime_store_object_jsvalue_slot(
         obj as usize,
         slot as usize,
@@ -29,9 +37,15 @@ pub(crate) unsafe fn store_object_field_slot_layout_deferred(
     field_index: usize,
     value_bits: u64,
 ) -> bool {
-    let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let slot = fields_ptr.add(field_index);
+    super::builtin_proto::note_value_store(
+        obj,
+        super::builtin_proto::StoredSlot::Inline(slot),
+        value_bits,
+        "slot store",
+    );
+    let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     crate::gc::runtime_store_jsvalue_slot_layout_deferred(
         obj as usize,
         slot as usize,

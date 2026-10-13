@@ -262,6 +262,15 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     if obj_ptr == 0 {
         return;
     }
+    // #11915: the program relinking a sealed builtin prototype's own
+    // [[Prototype]] (`Object.setPrototypeOf`, `__proto__`). Runtime wiring
+    // and internal construction (realm population, lazy intrinsics, the
+    // `%Array.prototype%` named-property bag linked to `%Object.prototype%`
+    // when the first array takes a named property) are the runtime's own
+    // definitions and do not count.
+    if matches!(link_kind, PrototypeLinkKind::UserOverride) {
+        super::builtin_proto::note_write_addr(obj_ptr, "[[Prototype]] link");
+    }
     crate::typedarray_named::note_prototype_mutation(obj_ptr, user_override);
     // Whatever else this link does, the TARGET is now somebody's prototype, so
     // a later structural mutation of it is invisible to everything below it.
@@ -320,6 +329,10 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                     as *mut crate::gc::GcHeader;
                 (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
             }
+            // #11915: this array no longer reads `%Array.prototype%`; the
+            // runtime dispatcher's one-load early exit must stop answering
+            // for it.
+            crate::object::builtin_proto::note_array_custom_proto();
             if array_prototype != 0 && array_prototype == obj_ptr {
                 crate::array::invalidate_array_index_fast_path();
             }
@@ -329,6 +342,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             // so keep the conservative process-wide invalidation here.
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             crate::array::invalidate_array_index_fast_path();
+            crate::object::builtin_proto::note_array_custom_proto();
         }
     }
     let obj_ptr = obj_ptr;

@@ -101,7 +101,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let plain = blk.icmp_eq(I16, &blocking, "0");
         // #10593: the process-wide byte AND this array's own custom-proto bit.
         let prototype_clean =
-            crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+            crate::expr::array_proto_guard::emit_array_method_admission(blk, &reserved);
         let mut ok = blk.and(I1, &not_fwd, &plain);
         ok = blk.and(I1, &ok, &prototype_clean);
         let array_ok = blk.and(I1, &ok, &is_array);
@@ -216,7 +216,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
     ctx.current_block = slow_idx;
     let slow = {
         let blk = ctx.block();
-        blk.call(DOUBLE, "js_array_pop_f64", &[(I64, &handle)])
+        blk.call(DOUBLE, "js_array_pop_f64_site", &[(I64, &handle)])
     };
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -420,11 +420,18 @@ mod tests {
             take.contains(&format!("store i64 {}", crate::nanbox::TAG_HOLE_I64)),
             "{what}: the vacated slot must be written with the hole sentinel:\n{take}"
         );
+        assert!(
+            hdr.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")
+                && !hdr.contains("@PERRY_BUILTIN_PROTO_PATCHED"),
+            "{what}: the header gate's summary byte, whole, proves `Pristine(Array)` \
+             (#11915, `ARRAY_METHODS_MODIFIED`) with no load of its own:\n{hdr}"
+        );
         let slow = super::super::class_field_barrier_tests::block_body(ir, "apop.slow.")
             .expect("slow block");
         assert!(
-            slow.contains("call double @js_array_pop_f64("),
-            "{what}: the runtime pop must remain the fallback:\n{slow}"
+            slow.contains("call double @js_array_pop_f64_site("),
+            "{what}: the runtime pop (behind the builtin-prototype proof) must remain \
+             the fallback:\n{slow}"
         );
         // An elements-backed Array subclass resolves its payload through the
         // meta record (`ObjectMeta.elements`, word 12) and pops from it with

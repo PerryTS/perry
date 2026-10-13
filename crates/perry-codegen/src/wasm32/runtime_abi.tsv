@@ -140,6 +140,7 @@ js_array_numeric_range_add_len	i64	f64,f64,f64
 js_array_numeric_set_f64_unboxed	i32s	ptr,i32u,f64
 js_array_numeric_value_to_raw_f64	f64	f64
 js_array_pop_f64	f64	ptr
+js_array_pop_f64_site	f64	ptr
 js_array_print	void	ptr
 js_array_push	ptr	ptr,i64
 js_array_push_f64	ptr	ptr,f64
@@ -380,6 +381,13 @@ js_bool_box_release	void	ptr
 js_bool_box_scope_release	void	ptr
 js_bool_box_set	void	ptr,i32s
 js_bootstrap_cjs_main_module_placeholder	void	
+js_borrowed_object_define_getter	f64	f64,f64,f64
+js_borrowed_object_define_setter	f64	f64,f64,f64
+js_borrowed_object_has_own	f64	f64,f64
+js_borrowed_object_lookup_getter	f64	f64,f64
+js_borrowed_object_lookup_setter	f64	f64,f64
+js_borrowed_object_property_is_enumerable	f64	f64,f64
+js_borrowed_object_to_string	f64	f64
 js_box_alloc	ptr	f64
 js_box_alloc_bits	ptr	i64
 js_box_get	f64	ptr
@@ -500,6 +508,12 @@ js_buffer_write_uint8	void	f64,f64,i32s
 js_buffer_write_uint_be	void	f64,f64,i32s,i32s
 js_buffer_write_uint_le	void	f64,f64,i32s,i32s
 js_build_class_keys_array	ptr	i32u,i32u,ptr,i32u,i64
+js_builtin_proto_contract_check	void	i64
+js_builtin_proto_generic_call	f64	i32s,f64,i64,ptr,usize
+js_builtin_proto_generic_call0	f64	f64,i64
+js_builtin_proto_generic_call1	f64	f64,i64,f64
+js_builtin_proto_generic_call2	f64	f64,i64,f64,f64
+js_builtin_proto_generic_call3	f64	f64,i64,f64,f64,f64
 js_builtin_prototype_method_value	f64	ptr,usize,ptr,usize
 js_builtin_subclass_construct	f64	i32u,ptr,usize,ptr,usize
 js_bun_ant_get_peer_pid	f64	f64

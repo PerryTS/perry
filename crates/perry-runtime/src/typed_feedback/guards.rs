@@ -375,6 +375,19 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
     if !pass {
         record_fallback_call(site_id);
     }
+    // #11915: the ONE generic path of a failed `Pristine` proof. A receiver
+    // whose builtin family's prototype was modified reads the method for
+    // real; only the builtin itself continues to the by-name natives below.
+    if !crate::object::builtin_proto::receiver_pristine(object)
+        && valid_method_name(method_name_ptr, method_name_len)
+    {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        if let Some(value) =
+            crate::object::builtin_proto::redirect_call(object, name, args_ptr, args_len)
+        {
+            return value;
+        }
+    }
     crate::object::js_native_call_method(
         object,
         method_name_ptr,
@@ -445,6 +458,16 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply(
     );
     if !pass {
         record_fallback_call(site_id);
+    }
+    if !crate::object::builtin_proto::receiver_pristine(object)
+        && valid_method_name(method_name_ptr, method_name_len)
+    {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        if let Some(value) =
+            crate::object::builtin_proto::redirect_call_array(object, name, args_array)
+        {
+            return value;
+        }
     }
     crate::object::js_native_call_method_apply(object, method_name_ptr, method_name_len, args_array)
 }

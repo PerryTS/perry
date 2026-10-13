@@ -25,7 +25,10 @@ pub unsafe extern "C-unwind" fn js_array_slice_method(
     end: f64,
     argc: usize,
 ) -> f64 {
-    if miss_entry::is_site_receiver(recv) {
+    // #11915: the direct body only while `%Array.prototype%` is pristine.
+    if miss_entry::is_site_receiver(recv)
+        && crate::object::builtin_proto::pristine(crate::object::builtin_proto::BuiltinProto::Array)
+    {
         let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
         if crate::value::addr_class::try_read_gc_header(addr)
             .is_some_and(|h| (*h).obj_type == crate::gc::GC_TYPE_ARRAY)
@@ -38,6 +41,13 @@ pub unsafe extern "C-unwind" fn js_array_slice_method(
         }
     }
     let args = [start, end];
+    if !crate::object::builtin_proto::receiver_pristine(recv) {
+        if let Some(value) =
+            crate::object::builtin_proto::redirect_call(recv, b"slice", args.as_ptr(), argc)
+        {
+            return value;
+        }
+    }
     crate::object::js_native_call_method(recv, b"slice".as_ptr().cast(), 5, args.as_ptr(), argc)
 }
 

@@ -120,9 +120,26 @@ per_test_global! {
     pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0)
 }
 
+/// [`PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED`] bit: an indexed property (or a
+/// retarget) on the default chain. Index fast paths test this bit.
+pub(crate) const INDEX_INVALIDATED: u8 = 1;
+/// [`PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED`] bit (#11915): `%Array.prototype%`
+/// or `%Object.prototype%` was modified — the mirror of `builtin_proto`'s
+/// Array byte in the byte the inline `push`/`pop` admission already loads,
+/// which therefore tests the whole byte and proves `Pristine(Array)` with no
+/// load of its own. Index fast paths mask it out.
+pub(crate) const ARRAY_METHODS_MODIFIED: u8 = 2;
+
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.fetch_or(INDEX_INVALIDATED, Ordering::Relaxed);
+}
+
+/// `%Array.prototype%` / `%Object.prototype%` modified (#11915): withdraw the
+/// inline array-method admission. Set-only.
+#[inline]
+pub(crate) fn note_array_methods_modified() {
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.fetch_or(ARRAY_METHODS_MODIFIED, Ordering::Relaxed);
 }
 
 /// Must an index fast path decline for the `GC_TYPE_ARRAY` whose header
@@ -138,7 +155,7 @@ pub(crate) fn invalidate_array_index_fast_path() {
 #[inline]
 pub(crate) fn array_index_fast_path_invalid_for(reserved: u16) -> bool {
     reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
-        || PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+        || PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) & INDEX_INVALIDATED != 0
 }
 
 /// Test-only companion to

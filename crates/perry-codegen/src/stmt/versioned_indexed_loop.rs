@@ -374,6 +374,11 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
     let array_invalidated = ctx
         .block()
         .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let array_invalidated = ctx.block().and(
+        I8,
+        &array_invalidated,
+        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
+    );
     let mut pass = ctx.block().icmp_eq(I8, &array_invalidated, "0");
     let mut live_handles = HashMap::new();
 

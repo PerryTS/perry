@@ -876,6 +876,7 @@ pub(super) fn try_array_only_methods(
                         method: method_name.to_string(),
                         receiver,
                         args,
+                        source: crate::ir::ArrayLikeSource::Receiver,
                     }));
                 }
                 // #5139: an Array-mutator name that a plain object can also own

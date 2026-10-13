@@ -36,6 +36,10 @@ pub enum LoadFlavor {
     Aligned(u32),
     Volatile,
     AtomicMonotonic(u32),
+    /// `load atomic … unordered`: a monotone runtime latch (#11915). Atomic,
+    /// so a concurrent writer is not a data race, but with no ordering, so the
+    /// backend may fold it into a compare with memory and merge repeats.
+    AtomicUnordered(u32),
     AtomicAcquire(u32),
     AtomicSeqCst(u32),
     /// `!invariant.load !0` tagged (issue #52).
@@ -254,6 +258,12 @@ impl LlInst {
                     let _ = write!(
                         out,
                         "  {dst} = load atomic {ty}, ptr {ptr} acquire, align {n}"
+                    );
+                }
+                LoadFlavor::AtomicUnordered(n) => {
+                    let _ = write!(
+                        out,
+                        "  {dst} = load atomic {ty}, ptr {ptr} unordered, align {n}"
                     );
                 }
                 LoadFlavor::AtomicSeqCst(n) => {

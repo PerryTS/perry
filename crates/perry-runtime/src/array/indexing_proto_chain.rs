@@ -273,7 +273,9 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
 pub(super) unsafe fn array_miss_index_get(arr: *const ArrayHeader, index: u32) -> f64 {
     let flags = array_object_flags_resolved(arr);
     if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_NAMED_PROPS) == 0
-        && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+        && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed)
+            & super::INDEX_INVALIDATED
+            == 0
     {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

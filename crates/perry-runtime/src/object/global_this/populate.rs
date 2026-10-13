@@ -899,6 +899,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // `globalThis.<Builtin>` still names its intrinsic — before any user code
     // can reassign the writable `globalThis.Function`.
     crate::array::prime_prototype_addr_cache();
+    // #11915: every runtime-owned install and link above is done; from here a
+    // mutation of an intrinsic prototype is the program's, and withdraws its
+    // family's `Pristine` fact.
+    crate::object::builtin_proto::seal_realm(singleton());
     if let Some(started) = bootstrap_started {
         eprintln!(
             "[gc-globalthis-bootstrap] elapsed_us={}",

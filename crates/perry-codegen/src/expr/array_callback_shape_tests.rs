@@ -248,7 +248,7 @@ fn lexical_this_some_callback_keeps_the_closure_path() {
     let ir = emit(&module_with_some_callback(true));
     assert!(
         !ir.contains("call double @js_array_some_captureless")
-            && ir.contains("call double @js_array_some("),
+            && ir.contains("call double @js_array_m_some1("),
         "a callback with lexical-this state must retain its real closure environment:\n{ir}"
     );
 }

@@ -761,11 +761,11 @@ fn char_code_at_on_a_proven_string_receiver_emits_the_inline_ascii_read() {
     // The slow arm is still emitted — it is what services SSO receivers,
     // non-ASCII payloads, out-of-range and non-numeric indices. Its presence
     // is the proof that the fast path did NOT replace the correct lowering,
-    // only shortcut it.
+    // only shortcut it. #11915: it is the checked entry, which also serves a
+    // modified `String.prototype`.
     assert!(
-        ir.contains("call double @js_string_char_code_at")
-            && ir.contains("call i32 @js_string_index_to_i32"),
-        "the inline path must keep the runtime helpers as its fallback \
+        ir.contains("call double @js_string_m_charCodeAt1"),
+        "the inline path must keep the runtime entry as its fallback \
          arm:\n{ir}"
     );
 }

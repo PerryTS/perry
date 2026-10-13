@@ -125,6 +125,13 @@ pub(super) fn call_line_of(ir: &str, callee: &str) -> usize {
         .unwrap_or_else(|| panic!("no call to {callee} in:\n{ir}"))
 }
 
+/// Line index of a call to `callee` that is not a `declare`, or `None`.
+fn call_line_of_opt(ir: &str, callee: &str) -> Option<usize> {
+    let needle = format!("@{callee}(");
+    ir.lines()
+        .position(|l| l.contains(&needle) && !l.trim_start().starts_with("declare"))
+}
+
 /// The `n`-th SSA operand of the call to `callee`.
 pub(super) fn call_operand_of(ir: &str, callee: &str, n: usize) -> String {
     let idx = call_line_of(ir, callee);
@@ -263,11 +270,14 @@ fn array_map_receiver_is_reread_below_the_callback_lowering() {
             }),
         ),
     );
+    // #11915: the fold is one call to the checked entry, which validates the
+    // callback and maps; the receiver it passes must still be re-read below
+    // the callback's (allocating) lowering.
     assert_reread_below_operand(
         &ir,
-        "js_array_map",
+        "js_array_m_map1",
         0,
-        "js_validate_array_map_callback",
+        "js_array_m_map1",
         1,
         "arr.map(cb) evaluates the receiver first and the callback second, and the \
          callback's lowering allocates",
@@ -290,11 +300,18 @@ fn array_map_validator_reads_the_same_reread_receiver() {
             }),
         ),
     );
+    // #11915: the validator now runs inside the checked entry, on the very
+    // operands the site passes — so the site emits no validator of its own,
+    // and the receiver it passes is the re-read one.
+    assert!(
+        call_line_of_opt(&ir, "js_validate_array_map_callback").is_none(),
+        "the validator moved into js_array_m_map1:\n{ir}"
+    );
     assert_reread_below_operand(
         &ir,
-        "js_validate_array_map_callback",
+        "js_array_m_map1",
         0,
-        "js_validate_array_map_callback",
+        "js_array_m_map1",
         1,
         "the non-callable validator dereferences the receiver as well",
     );
@@ -314,11 +331,11 @@ fn array_map_with_an_inert_callback_emits_no_rooting_traffic() {
             }),
         ),
     );
-    require_call_line(&ir, "js_array_map");
+    require_call_line(&ir, "js_array_m_map1");
     assert_eq!(
         temp_root_calls(&ir),
         0,
-        "an inert callback cannot collect between the receiver and js_array_map, so \
+        "an inert callback cannot collect between the receiver and js_array_m_map1, so \
          operand_protection must route the receiver to Reuse\n{ir}"
     );
 }

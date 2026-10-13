@@ -407,6 +407,13 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
         return;
     }
     if object_is_marked_prototype(obj) {
+        // #11915: a sealed builtin prototype is always marked, so its
+        // structural mutations (key add, delete, descriptor and attribute
+        // changes, `[[Prototype]]` relinks) all reach this branch.
+        crate::object::builtin_proto::note_write(
+            obj as *const crate::object::ObjectHeader,
+            "shape publication",
+        );
         bump_proto_validity();
     }
 }

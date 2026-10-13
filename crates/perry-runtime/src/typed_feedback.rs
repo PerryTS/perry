@@ -1799,6 +1799,10 @@ fn packed_u32_array_loop_guard(arr: *const ArrayHeader) -> bool {
 }
 
 fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
+    // #11915: the inline push stands for `Array.prototype.push`.
+    if !crate::object::builtin_proto::pristine(crate::object::builtin_proto::BuiltinProto::Array) {
+        return false;
+    }
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let Some(header) = gc_header_for_user_addr(raw_addr) else {
         return false;

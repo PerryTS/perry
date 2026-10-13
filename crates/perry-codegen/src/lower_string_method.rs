@@ -129,7 +129,40 @@ pub(crate) fn lower_string_method(
     }
 
     let recv_box = lower_expr(ctx, object)?;
-    lower_string_method_from_box(ctx, object, property, args, recv_box)
+    let proof = string_proof_for(ctx, property, args);
+    lower_string_method_from_box(ctx, object, property, args, recv_box, proof)
+}
+
+/// Where a string-method site proves `Pristine(String)` (#11915).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StringProof {
+    /// The callee proves it: the site calls the checked entry
+    /// `js_string_m_<method><argc>` (or, for `charCodeAt`, folds the byte into
+    /// its inline body's admission with that entry as the slow arm).
+    Entry,
+    /// The method has an entry, but an argument's evaluation could observe
+    /// WHEN the method is read (ECMA-262 reads it before them): the site
+    /// reads the byte before its arguments, evaluates them once, and calls
+    /// the unchecked body `js_string_b_<method><argc>` or the generic path.
+    EntryPreRead,
+    /// No entry for the method and arity: the site tests the byte before its
+    /// arguments and has a generic arm.
+    Guard,
+    /// The caller's branch already tested it.
+    Proven,
+}
+
+/// How a call with these arguments proves `Pristine(String)`: through the
+/// entry (`Entry` / `EntryPreRead`) when the method has one for this arity,
+/// else at the site (`Guard`).
+pub(crate) fn string_proof_for(ctx: &FnCtx<'_>, property: &str, args: &[Expr]) -> StringProof {
+    if crate::builtin_proto::string_entry(property, args.len()).is_none() {
+        StringProof::Guard
+    } else if crate::expr::method_site::args_may_observe_lookup(ctx, args) {
+        StringProof::EntryPreRead
+    } else {
+        StringProof::Entry
+    }
 }
 
 /// Lower a string method after a runtime tag guard has proved that the
@@ -144,8 +177,12 @@ pub(crate) fn lower_string_method_from_proven_box(
     property: &str,
     args: &[Expr],
     recv_box: String,
+    proof: StringProof,
 ) -> Result<String> {
-    lower_string_method_from_box(ctx, object, property, args, recv_box)
+    // `Proven`: the caller's tag guard already folded `Pristine(String)` into
+    // its test (#11915), so its generic arm is this call's generic path.
+    // `Entry`: the checked entry proves it.
+    lower_string_method_from_box(ctx, object, property, args, recv_box, proof)
 }
 
 fn lower_string_method_from_box(
@@ -154,6 +191,7 @@ fn lower_string_method_from_box(
     property: &str,
     args: &[Expr],
     recv_box: String,
+    proof: StringProof,
 ) -> Result<String> {
     // #6971: the receiver is lowered BEFORE the arguments, and an argument's
     // lowering can collect — `fresh(k).concat("|" + churn(N))` dropped the
@@ -183,7 +221,35 @@ fn lower_string_method_from_box(
     // twice: it never sees an index.
     let mut group = open_rooted_group(1);
     let recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, args_can_collect);
-    let result = lower_string_method_dispatch(ctx, object, property, args, &group, recv);
+    let result = match proof {
+        StringProof::Entry | StringProof::EntryPreRead => {
+            let patched_before = (proof == StringProof::EntryPreRead).then(|| {
+                crate::builtin_proto::emit_patched_test(
+                    ctx.block(),
+                    crate::builtin_proto::BuiltinProto::String,
+                )
+            });
+            let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
+            let recv_box = reread_recv(ctx, &group, recv);
+            let result = emit_string_entry_call(
+                ctx,
+                object,
+                property,
+                &recv_box,
+                &arg_values,
+                patched_before.as_deref(),
+                None,
+            );
+            arg_group.release(ctx);
+            result
+        }
+        StringProof::Guard => {
+            lower_string_method_pristine(ctx, object, property, args, &group, recv)
+        }
+        StringProof::Proven => {
+            lower_string_method_dispatch(ctx, object, property, args, &group, recv)
+        }
+    };
     // Released only after the dispatch's consuming runtime call has run: that
     // call allocates while it reads the receiver.
     //
@@ -214,6 +280,159 @@ fn lower_string_method_from_box(
         group.release(ctx);
     }
     result
+}
+
+/// #11915: a string receiver owns nothing, so the method it reads is
+/// `%String.prototype%`'s (or `%Object.prototype%`'s) while those are
+/// unmodified — `Pristine(String)`, one load and test before the arguments.
+/// A modified prototype takes the shared generic path with the same receiver
+/// and arguments; the direct dispatch below is emitted once, unchanged.
+fn lower_string_method_pristine(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    group: &RootedGroup<'_>,
+    recv: EmittedValue,
+) -> Result<String> {
+    use crate::builtin_proto::{emit_patched_test, BuiltinProto};
+    let direct_idx = ctx.new_block("strpristine.direct");
+    let generic_idx = ctx.new_block("strpristine.generic");
+    let merge_idx = ctx.new_block("strpristine.merge");
+    let direct_label = ctx.block_label(direct_idx);
+    let generic_label = ctx.block_label(generic_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    {
+        let blk = ctx.block();
+        let patched = emit_patched_test(blk, BuiltinProto::String);
+        blk.cond_br(&patched, &generic_label, &direct_label);
+    }
+
+    ctx.current_block = generic_idx;
+    let (arg_vals, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
+    let generic_recv = reread_recv(ctx, group, recv);
+    let generic_value = crate::builtin_proto::emit_generic_call(
+        ctx,
+        crate::builtin_proto::GenericRead::Receiver,
+        &generic_recv,
+        property,
+        &arg_vals,
+    );
+    arg_group.release(ctx);
+    let generic_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = direct_idx;
+    crate::builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::String]);
+    let direct_value = lower_string_method_dispatch(ctx, object, property, args, group, recv)?;
+    let mut incoming = vec![(generic_value, generic_end)];
+    if !ctx.block().is_terminated() {
+        let direct_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        incoming.push((direct_value, direct_end));
+    }
+    ctx.current_block = merge_idx;
+    let pairs: Vec<(&str, &str)> = incoming
+        .iter()
+        .map(|(v, l)| (v.as_str(), l.as_str()))
+        .collect();
+    Ok(ctx.block().phi(DOUBLE, &pairs))
+}
+
+/// The string method through its entries (#11915), on operands the caller
+/// has evaluated (each rooted across the next) and re-read.
+///
+/// * `patched_before == None` (the arguments cannot observe the method
+///   read): ONE call to the checked entry `js_string_m_<method><argc>`, which
+///   proves `Pristine(String)` itself.
+/// * `Some(p)`: `p` is the byte the site read BEFORE the arguments; set, it
+///   takes the generic path — `generic_label` when the caller has one (the
+///   tag guard's dispatcher arm, which reads the same rooted operands), else
+///   one `js_builtin_proto_generic_call*`; clear, the unchecked body
+///   `js_string_b_<method><argc>`.
+///
+/// `charCodeAt` keeps its inline body: the proof joins the index test the body
+/// already has, and the entry is its slow arm.
+pub(crate) fn emit_string_entry_call(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    recv_box: &str,
+    arg_values: &[String],
+    patched_before: Option<&str>,
+    generic_label: Option<&str>,
+) -> Result<String> {
+    let checked = crate::builtin_proto::string_entry(property, arg_values.len())
+        .expect("an entry proof is chosen only for a method with a checked entry");
+    let body = checked.replacen("js_string_m_", "js_string_b_", 1);
+    let callee = if patched_before.is_some() {
+        &body
+    } else {
+        &checked
+    };
+    let call = |ctx: &mut FnCtx<'_>| -> String {
+        if property == "charCodeAt" {
+            let idx_d = arg_values
+                .first()
+                .cloned()
+                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            if let Some(value) = char_code_at::lower_char_code_at_inline_entry(
+                ctx,
+                object,
+                recv_box,
+                &idx_d,
+                callee,
+                arg_values,
+                patched_before.is_none(),
+            ) {
+                return value;
+            }
+        }
+        let mut operands: Vec<(crate::types::LlvmType, &str)> = vec![(DOUBLE, recv_box)];
+        operands.extend(arg_values.iter().map(|a| (DOUBLE, a.as_str())));
+        ctx.block().call(DOUBLE, callee, &operands)
+    };
+    let Some(patched) = patched_before else {
+        return Ok(call(ctx));
+    };
+    let direct_idx = ctx.new_block("strentry.direct");
+    let direct_label = ctx.block_label(direct_idx);
+    match generic_label {
+        Some(generic_label) => {
+            ctx.block().cond_br(patched, generic_label, &direct_label);
+            ctx.current_block = direct_idx;
+            Ok(call(ctx))
+        }
+        None => {
+            let generic_idx = ctx.new_block("strentry.generic");
+            let merge_idx = ctx.new_block("strentry.merge");
+            let generic_label = ctx.block_label(generic_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(patched, &generic_label, &direct_label);
+            ctx.current_block = generic_idx;
+            let generic_value = crate::builtin_proto::emit_generic_call(
+                ctx,
+                crate::builtin_proto::GenericRead::Receiver,
+                recv_box,
+                property,
+                arg_values,
+            );
+            let generic_end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = direct_idx;
+            let direct_value = call(ctx);
+            let direct_end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge_idx;
+            Ok(ctx.block().phi(
+                DOUBLE,
+                &[
+                    (generic_value.as_str(), generic_end.as_str()),
+                    (direct_value.as_str(), direct_end.as_str()),
+                ],
+            ))
+        }
+    }
 }
 
 /// Re-read the string-method receiver out of its temp root (#6971).

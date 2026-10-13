@@ -110,6 +110,7 @@ pub(super) fn try_lower(
                     let capacity = blk.load(I32, &capacity_ptr);
                     let room = blk.icmp_ult(I32, &length, &capacity);
                     let clean = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+                    let clean = blk.and(I8, &clean, super::array_proto_guard::INDEX_INVALIDATED_I8);
                     let clean = blk.icmp_eq(I8, &clean, "0");
                     let admitted = blk.and(crate::types::I1, &append, &room);
                     let admitted = blk.and(crate::types::I1, &admitted, &clean);

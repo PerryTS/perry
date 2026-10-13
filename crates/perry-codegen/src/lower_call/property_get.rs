@@ -65,28 +65,53 @@ fn try_lower_tag_guarded_string_method(
     }
 
     let recv_box = lower_expr(ctx, object)?;
-    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
-    let tag = ctx.block().lshr(I64, &bits, "48");
-    let is_heap_string = ctx
-        .block()
-        .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
-    let is_short_string = ctx
-        .block()
-        .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
-    let is_string = ctx.block().or(I1, &is_heap_string, &is_short_string);
+    let proof = crate::lower_string_method::string_proof_for(ctx, property, args);
+    if proof != crate::lower_string_method::StringProof::Guard {
+        return lower_tag_guarded_string_entry(
+            ctx,
+            object,
+            property,
+            args,
+            call_byte_offset,
+            recv_box,
+            proof,
+        )
+        .map(Some);
+    }
 
     let string_idx = ctx.new_block("anystr.string");
     let generic_idx = ctx.new_block("anystr.generic");
     let merge_idx = ctx.new_block("anystr.merge");
+    let tag_idx = ctx.new_block("anystr.tag");
     let string_label = ctx.block_label(string_idx);
     let generic_label = ctx.block_label(generic_idx);
     let merge_label = ctx.block_label(merge_idx);
+    let tag_label = ctx.block_label(tag_idx);
+    // #11915: no entry for this method and arity, so the site proves it: a
+    // modified `%String.prototype%` sends every receiver to the generic arm
+    // below, whose runtime entry performs the real `Get` and call — one byte
+    // compare and an unlikely branch, ahead of the tag test and the arguments.
+    {
+        use crate::builtin_proto::{emit_patched_test, BuiltinProto};
+        let blk = ctx.block();
+        let patched = emit_patched_test(blk, BuiltinProto::String);
+        blk.cond_br(&patched, &generic_label, &tag_label);
+    }
+
+    ctx.current_block = tag_idx;
+    let is_string = emit_is_string_tag(ctx, &recv_box);
     ctx.block()
         .cond_br(&is_string, &string_label, &generic_label);
 
     ctx.current_block = string_idx;
-    let string_value =
-        lower_string_method_from_proven_box(ctx, object, property, args, recv_box.clone())?;
+    let string_value = lower_string_method_from_proven_box(
+        ctx,
+        object,
+        property,
+        args,
+        recv_box.clone(),
+        crate::lower_string_method::StringProof::Proven,
+    )?;
     let string_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -100,40 +125,14 @@ fn try_lower_tag_guarded_string_method(
     }
     let generic_recv = group.reread_emitted(ctx, rooted_recv);
     let generic_args = group.reread_all(ctx)?;
-    // The receiver tag already selected the guarded builtin arm. Its miss
-    // uses the same dispatcher-only fallback as the other builtin guards;
-    // an ordinary method site here duplicates lookup code and a `this` root.
-    let generic_value = if property == "slice"
-        && args.len() <= 2
-        && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
-        && !crate::expr::method_site::args_may_observe_lookup(ctx, args)
-    {
-        // Prototype patches have already selected the lookup-first path above.
-        // Share the remaining Array shape admission and native call out of line;
-        // this replaces the dispatcher call without a second inline kind tower.
-        let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        let start = generic_args.first().unwrap_or(&undefined);
-        let end = generic_args.get(1).unwrap_or(&undefined);
-        crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
-        ctx.block().call(
-            DOUBLE,
-            "js_array_slice_method",
-            &[
-                (DOUBLE, &generic_recv),
-                (DOUBLE, start),
-                (DOUBLE, end),
-                (I64, &args.len().to_string()),
-            ],
-        )
-    } else {
-        super::console_promise::emit_native_method_str_dispatch_plain(
-            ctx,
-            property,
-            call_byte_offset,
-            &generic_recv,
-            &generic_args,
-        )
-    };
+    let generic_value = emit_tag_guarded_generic(
+        ctx,
+        property,
+        args,
+        call_byte_offset,
+        &generic_recv,
+        &generic_args,
+    );
     group.release(ctx);
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -146,6 +145,137 @@ fn try_lower_tag_guarded_string_method(
             (generic_value.as_str(), generic_end.as_str()),
         ],
     )))
+}
+
+/// `recv` carries a heap or short string tag.
+fn emit_is_string_tag(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(recv_box);
+    let tag = blk.lshr(I64, &bits, "48");
+    let is_heap_string = blk.icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    let is_short_string = blk.icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    blk.or(I1, &is_heap_string, &is_short_string)
+}
+
+/// The tag guard's non-string arm: the universal dispatcher (or, for an
+/// order-free `slice`, the shared Array-slice entry).
+fn emit_tag_guarded_generic(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    args: &[Expr],
+    call_byte_offset: u32,
+    generic_recv: &str,
+    generic_args: &[String],
+) -> String {
+    // The receiver tag already selected the guarded builtin arm. Its miss
+    // uses the same dispatcher-only fallback as the other builtin guards;
+    // an ordinary method site here duplicates lookup code and a `this` root.
+    if property == "slice"
+        && args.len() <= 2
+        && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+        && !crate::expr::method_site::args_may_observe_lookup(ctx, args)
+    {
+        // Share the remaining Array shape admission and native call out of
+        // line; this replaces the dispatcher call without a second inline kind
+        // tower.
+        let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let start = generic_args.first().unwrap_or(&undefined);
+        let end = generic_args.get(1).unwrap_or(&undefined);
+        crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+        ctx.block().call(
+            DOUBLE,
+            "js_array_slice_method",
+            &[
+                (DOUBLE, generic_recv),
+                (DOUBLE, start),
+                (DOUBLE, end),
+                (I64, &args.len().to_string()),
+            ],
+        )
+    } else {
+        super::console_promise::emit_native_method_str_dispatch_plain(
+            ctx,
+            property,
+            call_byte_offset,
+            generic_recv,
+            generic_args,
+        )
+    }
+}
+
+/// The tag-guarded call for a method with string entries (#11915). The
+/// arguments are evaluated ONCE, before the tag test, and both arms read the
+/// same rooted operands: the string arm calls the entry, the other arm the
+/// dispatcher. With arguments whose evaluation could observe the method read
+/// (`StringProof::EntryPreRead`), the byte is read before them and a
+/// modified prototype sends a string receiver to the dispatcher too, which
+/// performs the real `Get` and call; the string arm then calls the unchecked
+/// body.
+fn lower_tag_guarded_string_entry(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    call_byte_offset: u32,
+    recv_box: String,
+    proof: crate::lower_string_method::StringProof,
+) -> Result<String> {
+    let patched_before =
+        (proof == crate::lower_string_method::StringProof::EntryPreRead).then(|| {
+            crate::builtin_proto::emit_patched_test(
+                ctx.block(),
+                crate::builtin_proto::BuiltinProto::String,
+            )
+        });
+    let mut group = open_rooted_group(args.len() + 1);
+    let recv_collects = any_operand_may_collect(ctx, args.iter());
+    let rooted_recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, recv_collects);
+    for (i, arg) in args.iter().enumerate() {
+        let collects = any_operand_may_collect(ctx, args[i + 1..].iter());
+        group.lower(ctx, arg, collects)?;
+    }
+    let recv = group.reread_emitted(ctx, rooted_recv);
+    let arg_vals = group.reread_all(ctx)?;
+
+    let string_idx = ctx.new_block("anystr.string");
+    let generic_idx = ctx.new_block("anystr.generic");
+    let merge_idx = ctx.new_block("anystr.merge");
+    let string_label = ctx.block_label(string_idx);
+    let generic_label = ctx.block_label(generic_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let is_string = emit_is_string_tag(ctx, &recv);
+    ctx.block()
+        .cond_br(&is_string, &string_label, &generic_label);
+
+    ctx.current_block = string_idx;
+    let string_value = crate::lower_string_method::emit_string_entry_call(
+        ctx,
+        object,
+        property,
+        &recv,
+        &arg_vals,
+        patched_before.as_deref(),
+        Some(&generic_label),
+    )?;
+    let string_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = generic_idx;
+    let generic_value =
+        emit_tag_guarded_generic(ctx, property, args, call_byte_offset, &recv, &arg_vals);
+    let generic_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let value = ctx.block().phi(
+        DOUBLE,
+        &[
+            (string_value.as_str(), string_end.as_str()),
+            (generic_value.as_str(), generic_end.as_str()),
+        ],
+    );
+    group.release(ctx);
+    Ok(value)
 }
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the

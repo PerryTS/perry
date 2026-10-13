@@ -97,7 +97,9 @@ unsafe extern "C" fn read_cold_entry(receiver: f64, key: f64, control: u64) -> f
     if source.is_null() && check_empty && (control > 15 || (control & 6 == 4 && key >= 0.0)) {
         let flags = array_object_flags_resolved(arr);
         if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_NAMED_PROPS) == 0
-            && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+            && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed)
+                & super::INDEX_INVALIDATED
+                == 0
         {
             return if coerce {
                 f64::NAN

@@ -23,7 +23,7 @@ const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.fetch_or(super::INDEX_INVALIDATED, Ordering::Relaxed);
 }
 
 #[cfg(test)]

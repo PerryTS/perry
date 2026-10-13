@@ -1667,6 +1667,7 @@ where
             method: _,
             receiver,
             args,
+            ..
         } => {
             f(receiver);
             for a in args {

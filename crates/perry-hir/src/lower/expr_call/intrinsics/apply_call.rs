@@ -579,9 +579,19 @@ pub(crate) fn try_builtin_prototype_method_apply_call(
     // dedicated generic helpers because they must write back to the original
     // receiver rather than a materialized clone. Unsupported mutators fall
     // through to the member call below (unchanged behavior).
-    if let Some(folded) =
-        try_arraylike_receiver_method(ctx, method_prop.sym.as_ref(), &this_arg.expr, &rest_args)?
-    {
+    // #11915: a member (`Array.prototype.m` / `[].m`) is read at the call; a
+    // tracked binding holds the value it captured.
+    let source = match outer.obj.as_ref() {
+        ast::Expr::Ident(_) => crate::ir::ArrayLikeSource::Binding,
+        _ => crate::ir::ArrayLikeSource::Prototype,
+    };
+    if let Some(folded) = try_arraylike_receiver_method(
+        ctx,
+        source,
+        method_prop.sym.as_ref(),
+        &this_arg.expr,
+        &rest_args,
+    )? {
         return Ok(Some(folded));
     }
 
@@ -612,6 +622,7 @@ pub(crate) fn try_builtin_prototype_method_apply_call(
 /// route through `normalize_array_receiver`.
 fn try_arraylike_receiver_method(
     ctx: &mut LoweringContext,
+    source: crate::ir::ArrayLikeSource,
     method: &str,
     receiver: &ast::Expr,
     rest_args: &[ast::ExprOrSpread],
@@ -732,6 +743,7 @@ fn try_arraylike_receiver_method(
             method: method.to_string(),
             receiver,
             args,
+            source,
         }));
     }
 

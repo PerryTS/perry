@@ -271,6 +271,7 @@ fn array_like_methods_keep_their_argument_buffer_in_the_entry_block() {
             method: method.to_string(),
             receiver: get(ARRAY_LIKE),
             args,
+            source: perry_hir::ArrayLikeSource::Prototype,
         })
     };
     assert_entry_block_allocas_only(

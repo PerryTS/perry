@@ -34,6 +34,10 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    super::builtin_proto::note_write_addr(
+        (obj as u64 & crate::value::POINTER_MASK) as usize,
+        "delete",
+    );
     if !key.is_null() {
         unsafe {
             let bytes = std::slice::from_raw_parts(
@@ -1100,6 +1104,10 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
+    super::builtin_proto::note_write_addr(
+        (obj as u64 & crate::value::POINTER_MASK) as usize,
+        "delete",
+    );
     if let Some(result) = unsafe { super::delete_last_key::try_delete_last_added_dynamic(obj, key) }
     {
         return result;

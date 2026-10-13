@@ -167,12 +167,34 @@ fn cases() -> Vec<(&'static str, Vec<Expr>, &'static str, &'static str)> {
 #[test]
 fn a_string_method_receiver_is_rooted_across_its_argument_coercion() {
     for target in NATIVE_TARGETS {
+        let mut inline_arms = 0;
         for (i, (property, args, coercion, consumer)) in cases().into_iter().enumerate() {
+            let argc = args.len();
             let name = format!("smc_{i}_{property}.ts");
             let module = method_module(&name, property, args);
             let ir = native_ir(&module, target, false);
             let symbol = probe_body_symbol(&ir, &name);
             let body = function_slice(&ir, &symbol);
+            // #11915: a method with a checked entry is ONE call that takes the
+            // receiver and the arguments boxed; no coercion and no unbox run in
+            // the emitted code at all. The entry coerces an object argument
+            // only on its rooted by-name path (`string_native_method` roots the
+            // receiver and the arguments before any `valueOf`), so the window
+            // this test pins does not exist at the site.
+            if let Some(entry) = crate::builtin_proto::string_entry(property, argc) {
+                assert!(
+                    body.contains(&format!("@{entry}(")),
+                    "[{target}] {property}: the call must go through {entry}:\n{body}"
+                );
+                for raw in [coercion, consumer, "js_get_string_pointer_unified"] {
+                    assert!(
+                        !body.contains(&format!("@{raw}(")),
+                        "[{target}] {property}: {raw} belongs inside {entry}:\n{body}"
+                    );
+                }
+                continue;
+            }
+            inline_arms += 1;
             assert!(
                 body.contains(&format!("@{consumer}(")),
                 "[{target}] {property}: the fixture must reach the string-method \
@@ -205,6 +227,11 @@ fn a_string_method_receiver_is_rooted_across_its_argument_coercion() {
                 );
             }
         }
+        assert!(
+            inline_arms >= 2,
+            "[{target}] the arms without an entry (anchor, the 2-argument \
+             localeCompare) must still be checked inline"
+        );
     }
 }
 

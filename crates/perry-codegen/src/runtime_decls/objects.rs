@@ -59,6 +59,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Array [[Prototype]] installation. Normal compiled programs read this
     // byte directly in the inline plain-array index guard.
     module.add_external_global("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED", I8);
+    // #11915: the inline `charCodeAt` heap-handle bound (`builtin_proto`).
+    module.add_external_global("PERRY_STRING_INLINE_MIN_HANDLE", I64);
     // #7760: set when `Array.prototype[Symbol.iterator]` is replaced.
     module.add_external_global("PERRY_ARRAY_ITERATION_NOT_PRISTINE", I8);
     // Process-wide count of threads with an active incremental marking
@@ -68,6 +70,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // The key-add hit's chain-verdict generation and the store census
     // (expr/put_value_store_ic.rs, expr/store_census.rs).
     module.add_external_global("PERRY_PROTO_VALIDITY", I64);
+    // #11915: `Pristine(mask)` for builtin prototypes (crate::builtin_proto).
+    module.add_external_global("PERRY_BUILTIN_PROTO_PATCHED", I8);
     // Sticky worker-start gate for process-global method sites. After it
     // becomes nonzero, emitted sites use ordinary dispatch without touching
     // primary-heap holder entries.
