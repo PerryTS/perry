@@ -89,12 +89,7 @@ pub fn apply_i18n(
             collect_keys_from_stmts(&func.body, &mut key_to_idx, &mut keys);
         }
         for class in &module.classes {
-            for method in &class.methods {
-                collect_keys_from_stmts(&method.body, &mut key_to_idx, &mut keys);
-            }
-            if let Some(ctor) = &class.constructor {
-                collect_keys_from_stmts(&ctor.body, &mut key_to_idx, &mut keys);
-            }
+            collect_class_function_keys(class, &mut key_to_idx, &mut keys);
         }
     }
 
@@ -236,24 +231,13 @@ pub fn apply_i18n(
             );
         }
         for class in &mut module.classes {
-            for method in &mut class.methods {
-                replace_in_stmts(
-                    &mut method.body,
-                    &key_to_idx,
-                    &plural_info,
-                    &plural_param_map,
-                    &anon_shape_fields,
-                );
-            }
-            if let Some(ctor) = &mut class.constructor {
-                replace_in_stmts(
-                    &mut ctor.body,
-                    &key_to_idx,
-                    &plural_info,
-                    &plural_param_map,
-                    &anon_shape_fields,
-                );
-            }
+            replace_class_function_keys(
+                class,
+                &key_to_idx,
+                &plural_info,
+                &plural_param_map,
+                &anon_shape_fields,
+            );
         }
     }
 
@@ -264,6 +248,82 @@ pub fn apply_i18n(
         locale_codes: config.locales.clone(),
         default_locale_idx,
         diagnostics,
+    }
+}
+
+fn collect_class_function_keys(
+    class: &perry_hir::ir::Class,
+    key_to_idx: &mut HashMap<String, u32>,
+    keys: &mut Vec<String>,
+) {
+    for function in &class.methods {
+        collect_keys_from_stmts(&function.body, key_to_idx, keys);
+    }
+    if let Some(constructor) = &class.constructor {
+        collect_keys_from_stmts(&constructor.body, key_to_idx, keys);
+    }
+    for function in &class.static_methods {
+        collect_keys_from_stmts(&function.body, key_to_idx, keys);
+    }
+    for (_, function) in class.getters.iter().chain(&class.setters) {
+        collect_keys_from_stmts(&function.body, key_to_idx, keys);
+    }
+    for member in &class.computed_members {
+        collect_keys_from_stmts(&member.function.body, key_to_idx, keys);
+    }
+}
+
+fn replace_class_function_keys(
+    class: &mut perry_hir::ir::Class,
+    key_to_idx: &HashMap<String, u32>,
+    plural_info: &HashMap<String, Vec<(u8, u32)>>,
+    plural_param_map: &HashMap<String, String>,
+    anon_shapes: &HashMap<String, Vec<String>>,
+) {
+    for function in &mut class.methods {
+        replace_in_stmts(
+            &mut function.body,
+            key_to_idx,
+            plural_info,
+            plural_param_map,
+            anon_shapes,
+        );
+    }
+    if let Some(constructor) = &mut class.constructor {
+        replace_in_stmts(
+            &mut constructor.body,
+            key_to_idx,
+            plural_info,
+            plural_param_map,
+            anon_shapes,
+        );
+    }
+    for function in &mut class.static_methods {
+        replace_in_stmts(
+            &mut function.body,
+            key_to_idx,
+            plural_info,
+            plural_param_map,
+            anon_shapes,
+        );
+    }
+    for (_, function) in class.getters.iter_mut().chain(&mut class.setters) {
+        replace_in_stmts(
+            &mut function.body,
+            key_to_idx,
+            plural_info,
+            plural_param_map,
+            anon_shapes,
+        );
+    }
+    for member in &mut class.computed_members {
+        replace_in_stmts(
+            &mut member.function.body,
+            key_to_idx,
+            plural_info,
+            plural_param_map,
+            anon_shapes,
+        );
     }
 }
 
@@ -752,6 +812,113 @@ mod tests {
             args.first(),
             Some(Expr::I18nString { key, .. }) if key == expected_key
         ));
+    }
+
+    fn class_function(name: &str, key: &str, id: u32) -> perry_hir::Function {
+        perry_hir::Function {
+            id,
+            name: name.into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: perry_hir::types::Type::Void,
+            body: vec![Stmt::Expr(t(key))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn class_function_key(function: &perry_hir::Function) -> &str {
+        let Stmt::Expr(Expr::NativeMethodCall { args, .. }) = &function.body[0] else {
+            panic!("expected localization call in function body")
+        };
+        let Some(Expr::I18nString { key, .. }) = args.first() else {
+            panic!("expected localized string in function body")
+        };
+        key
+    }
+
+    #[test]
+    fn apply_i18n_visits_all_class_function_containers() {
+        let class = perry_hir::ir::Class {
+            id: 1,
+            name: "Example".into(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: Vec::new(),
+            constructor: None,
+            methods: vec![class_function("method", "ordinary-method", 1)],
+            getters: vec![("value".into(), class_function("get value", "getter", 2))],
+            setters: vec![("value".into(), class_function("set value", "setter", 3))],
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: vec![class_function("staticMethod", "static-method", 4)],
+            computed_members: vec![perry_hir::ir::ClassComputedMember {
+                key_expr: Expr::String("computedName".into()),
+                function: class_function("computed", "computed-member", 5),
+                is_static: false,
+                kind: perry_hir::ir::ClassComputedMemberKind::Method,
+                source_order: 0,
+            }],
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        };
+        let expected = [
+            "ordinary-method",
+            "static-method",
+            "getter",
+            "setter",
+            "computed-member",
+        ];
+        let mut module = Module::new("test");
+        module.classes.push(class.clone());
+        let translations = BTreeMap::from([(
+            "en".into(),
+            expected
+                .iter()
+                .map(|key| ((*key).into(), format!("translated {key}")))
+                .collect(),
+        )]);
+        let config = I18nConfig {
+            locales: vec!["en".into()],
+            default_locale: "en".into(),
+            dynamic: false,
+            currencies: HashMap::new(),
+        };
+
+        let mut modules = BTreeMap::from([(std::path::PathBuf::from("test"), module)]);
+        let table = apply_i18n(&mut modules, &config, &translations);
+
+        assert_eq!(table.keys, expected);
+        let transformed = &modules.values().next().unwrap().classes[0];
+        assert_eq!(
+            class_function_key(&transformed.methods[0]),
+            "ordinary-method"
+        );
+        assert_eq!(
+            class_function_key(&transformed.static_methods[0]),
+            "static-method"
+        );
+        assert_eq!(class_function_key(&transformed.getters[0].1), "getter");
+        assert_eq!(class_function_key(&transformed.setters[0].1), "setter");
+        assert_eq!(
+            class_function_key(&transformed.computed_members[0].function),
+            "computed-member"
+        );
     }
 
     #[test]
