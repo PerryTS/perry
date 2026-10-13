@@ -262,8 +262,9 @@ pub(crate) mod prototype_chain;
 pub(crate) mod shape_carriers;
 // The MODULE is always compiled, so its unit tests always run and the
 // classifier cannot bit-rot behind a feature nobody builds. Every CALL SITE is
-// `#[cfg(feature = "shape-mint-diag")]`, so with the feature off nothing
-// reaches it and the linker drops it: the shipped runtime is unchanged.
+// `#[cfg(any(test, feature = "shape-mint-diag"))]` at the mint funnel (the
+// other hooks are feature-only), so a stock non-test build never
+// reaches it and the linker drops it: the shipped runtime pays nothing.
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
@@ -822,41 +823,14 @@ fn shape_cache_insert(
     // value it hands back to codegen), and a cache holding one array while
     // the caller holds another is exactly the divergence this stage exists to
     // remove.
-    let (live, keys) = {
-        // SAFETY: a live keys array or null; `canonicalize` allocates, roots
-        // its own operand, and `across` roots the caller's object.
-        if keys.count() == 0 {
-            // A class's empty backing is observable by generated code, so
-            // retain its non-null representation. Every cached backing,
-            // including an empty one supplied by a caller, must satisfy I3.
-            let stationary = keys.arr().is_null()
-                || unsafe {
-                    crate::arena::pointer_in_old_gen(keys.arr() as usize)
-                        && (*crate::gc::header_from_trusted_user_ptr(keys.arr().cast())).gc_flags
-                            & crate::gc::GC_FLAG_SHAPE_SHARED
-                            != 0
-                };
-            if stationary {
-                (live, keys)
-            } else {
-                live.across(|| {
-                    ObjectKeys::new(
-                        crate::array::js_array_alloc_canonical_keys(0, true, false),
-                        0,
-                    )
-                })
-            }
-        } else {
-            live.across(|| unsafe {
-                canonical_keys::canonicalize(
-                    &canonical_keys::SharedLayout::shape_cache_entry(),
-                    keys.arr(),
-                    keys.count(),
-                )
-                .view()
-            })
-        }
-    };
+    let (live, keys) = live.across(|| unsafe {
+        canonical_keys::canonicalize(
+            &canonical_keys::SharedLayout::shape_cache_entry(),
+            keys.arr(),
+            keys.count(),
+        )
+        .view()
+    });
     let keys_array = keys.arr();
     // Mark the array as shape-shared so `js_object_set_field_by_name`
     // knows it must clone before mutating. The clone path was firing

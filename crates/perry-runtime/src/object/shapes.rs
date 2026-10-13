@@ -2203,10 +2203,10 @@ fn shape_descriptor_intern_with_special_mode(
     // When it IS compiled in, both halves are gated on one relaxed atomic
     // load, and the key-list hash is resolved BEFORE the table borrow because
     // it reads the keys array and its key strings.
-    #[cfg(feature = "shape-mint-diag")]
+    #[cfg(any(test, feature = "shape-mint-diag"))]
     let census_on = crate::object::shape_mint_census::armed();
-    #[cfg(feature = "shape-mint-diag")]
-    let (census_list_hash, census_file, census_line) = if census_on {
+    #[cfg(any(test, feature = "shape-mint-diag"))]
+    let (census_list_hash, census_layout_hash, census_file, census_line) = if census_on {
         // `#[track_caller]` on this chain is part of the same feature, so
         // `Location::caller()` here names the runtime path that ASKED for a
         // shape rather than this line.
@@ -2216,11 +2216,14 @@ fn shape_descriptor_intern_with_special_mode(
             unsafe {
                 crate::object::shape_mint_census::key_list_content_hash(keys_id, logical_key_count)
             },
+            unsafe {
+                crate::object::shape_mint_census::key_layout_hash(keys_id, logical_key_count)
+            },
             loc.file(),
             loc.line(),
         )
     } else {
-        (0, "", 0)
+        (0, 0, "", 0)
     };
     let facts = shapes_store::integrity_facts_key(
         shapes_store::facts_key_proto_with_special(
@@ -2265,7 +2268,7 @@ fn shape_descriptor_intern_with_special_mode(
                     brands,
                 )
             {
-                #[cfg(feature = "shape-mint-diag")]
+                #[cfg(any(test, feature = "shape-mint-diag"))]
                 crate::object::shape_mint_census::note_memo_hit();
                 return Ok(id);
             }
@@ -2286,8 +2289,14 @@ fn shape_descriptor_intern_with_special_mode(
         infos,
         brands,
         requested,
-        #[cfg(feature = "shape-mint-diag")]
-        (census_on, census_list_hash, census_file, census_line),
+        #[cfg(any(test, feature = "shape-mint-diag"))]
+        (
+            census_on,
+            census_list_hash,
+            census_layout_hash,
+            census_file,
+            census_line,
+        ),
         integrity_flags,
     )
 }
@@ -2312,11 +2321,11 @@ fn shape_descriptor_mint_fresh(
     infos: &[shapes_store::ConstFnSlotInfo],
     brands: &[u64],
     requested: Option<u32>,
-    #[cfg(feature = "shape-mint-diag")] census: (bool, u64, &'static str, u32),
+    #[cfg(any(test, feature = "shape-mint-diag"))] census: (bool, u64, u64, &'static str, u32),
     integrity_flags: u16,
 ) -> Result<u32, ShapeDescriptorError> {
-    #[cfg(feature = "shape-mint-diag")]
-    let (census_on, census_list_hash, census_file, census_line) = census;
+    #[cfg(any(test, feature = "shape-mint-diag"))]
+    let (census_on, census_list_hash, census_layout_hash, census_file, census_line) = census;
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
     // A static id is adopted only for facts it can name (ordinary band,
@@ -2353,39 +2362,6 @@ fn shape_descriptor_mint_fresh(
         }
         .map_err(|_| ShapeDescriptorError::IdExhausted)?,
     };
-    #[cfg(feature = "shape-mint-diag")]
-    if census_on {
-        // Every descriptor already indexed under this keys ADDRESS, copied out
-        // so no slab reference is alive across `slab_mut()` below.
-        let mut family_facts: Vec<(u32, u32, u64, bool, u32)> = Vec::new();
-        if let Some(ids) = inner.families.get(&keys_id) {
-            let slab = table.slab();
-            for &fid in ids.as_slice() {
-                if let Some(record) = slab.get(fid) {
-                    family_facts.push((
-                        record.logical_key_count,
-                        record.live_inline_slot_count,
-                        record.semantic_generation,
-                        record.object_kind() == ShapeObjectKind::Class,
-                        record.hole_count,
-                    ));
-                }
-            }
-        }
-        crate::object::shape_mint_census::note_mint(
-            id,
-            keys_id,
-            census_list_hash,
-            logical_key_count,
-            live_inline_slot_count,
-            semantic_generation,
-            object_kind == ShapeObjectKind::Class,
-            hole_count,
-            &family_facts,
-            census_file,
-            census_line,
-        );
-    }
     let record = ShapeRecord::new(
         keys_id,
         logical_key_count,
@@ -2400,6 +2376,32 @@ fn shape_descriptor_mint_fresh(
     let mut record = record;
     if integrity_flags != 0 {
         record.set_integrity_flags(integrity_flags);
+    }
+    #[cfg(any(test, feature = "shape-mint-diag"))]
+    if census_on {
+        // Every descriptor already indexed under this keys ADDRESS, copied out
+        // so no slab reference is alive across `slab_mut()` below.
+        let mut family_facts: Vec<crate::object::shape_mint_census::MintFacts> = Vec::new();
+        if let Some(ids) = inner.families.get(&keys_id) {
+            let slab = table.slab();
+            for &fid in ids.as_slice() {
+                if let Some(record) = slab.get(fid) {
+                    family_facts.push(crate::object::shape_mint_census::MintFacts::of(
+                        &record.lift(std::ptr::null_mut()),
+                    ));
+                }
+            }
+        }
+        crate::object::shape_mint_census::note_mint(
+            id,
+            keys_id,
+            census_list_hash,
+            census_layout_hash,
+            &crate::object::shape_mint_census::MintFacts::of(&record.lift(std::ptr::null_mut())),
+            &family_facts,
+            census_file,
+            census_line,
+        );
     }
     if adopted.is_some() {
         record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
@@ -5491,7 +5493,7 @@ fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed
     let Some(record) = (unsafe { table.slab_mut().remove(id) }) else {
         return;
     };
-    #[cfg(feature = "shape-mint-diag")]
+    #[cfg(any(test, feature = "shape-mint-diag"))]
     crate::object::shape_mint_census::note_retire(id);
     if record.has(RECORD_FLAG_FACTS_INDEXED) {
         inner.facts_remove(record.facts_key_with_keys(indexed), id);

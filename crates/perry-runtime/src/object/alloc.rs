@@ -551,7 +551,10 @@ pub extern "C" fn js_build_class_keys_array(
         return cached.arr();
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
-        let arr = crate::array::js_array_alloc_canonical_keys(0, true, false);
+        let arr = unsafe {
+            canonical_keys::empty_backing(&canonical_keys::SharedLayout::shape_cache_entry())
+                .as_ptr()
+        };
         let (_, keys) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),

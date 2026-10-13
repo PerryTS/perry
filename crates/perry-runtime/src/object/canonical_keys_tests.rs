@@ -697,3 +697,37 @@ fn publishing_prefix_refreshes_pointer_layout() {
         }
     }
 }
+
+#[test]
+fn empty_root_backing_is_shared_weak_and_keeps_live_children() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let empty = empty_backing(&proof);
+        assert_eq!(empty, empty_backing(&proof));
+        assert!(!empty.as_ptr().is_null());
+        assert_eq!(empty.len(), 0);
+        assert_eq!((*empty.as_ptr()).length, 0);
+        assert!(crate::arena::pointer_in_old_gen(empty.addr()));
+        let child = extend_key(&proof, empty, key("empty_root_child"));
+        assert_ne!(empty.addr(), child.addr());
+        prune_dead_canonical_keys(&|addr| addr == empty.addr());
+        with_table_or((), |t| {
+            assert!(!t.nodes[ROOT_NODE as usize].published);
+            assert!(!t.by_addr.contains_key(&(empty.addr(), 0)));
+        });
+        assert_eq!(
+            extend_key(&proof, CanonicalKeys::EMPTY, key("empty_root_child")),
+            child
+        );
+        let renewed = empty_backing(&proof);
+        assert_eq!(renewed, empty_backing(&proof));
+        assert_ne!(
+            renewed.addr(),
+            empty.addr(),
+            "pruned backing is not retained"
+        );
+    }
+}

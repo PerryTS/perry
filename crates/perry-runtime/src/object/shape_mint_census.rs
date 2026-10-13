@@ -7,53 +7,20 @@
 //! rather than counting it — applied to the mint funnel instead of the miss
 //! handler.
 //!
-//! Armed by `PERRY_SHAPE_MINT_DIAG=<path|1>`; one relaxed atomic load when
-//! unset. Diagnostic only: nothing branches on it for behaviour.
+//! Armed by `PERRY_SHAPE_MINT_DIAG=<path|1>` in a build with
+//! `shape-mint-diag`. Production call sites and caller-location arguments are
+//! compiled out without that feature. Unit tests also compile the mint hooks,
+//! so the small census gate runs in ordinary CI's runtime lib-test target.
 //!
-//! The per-mint CALL SITE needs `#[track_caller]` on the shape-publication
-//! funnels, and that costs a hidden argument on every call whether or not
-//! anyone is measuring. That half sits behind the non-default
-//! `shape-mint-callsites` feature: a stock build pays nothing and still
-//! produces every count, and a measurement build adds
-//! `--features perry-runtime/shape-mint-callsites` to gain the site table.
+//! The layout census compares ordered key identities AND attribute entries,
+//! just as the canonical trie does. Name-only totals remain descriptive, not
+//! a duplicate-layout verdict: writable and readonly versions of the same
+//! names are different layouts. A null keys edge owns no backing.
 //!
-//! ## What each counter separates
-//!
-//! `shape_descriptor_ensure_with_holes` de-duplicates on the SIX identity
-//! facts (keys-array ADDRESS, logical key count, live inline slot count,
-//! semantic generation, object kind, hole count). A mint means no existing
-//! descriptor matched all six. Against the family already indexed under this
-//! keys address, exactly one of these is true, and they are very different
-//! bugs:
-//!
-//! * `fresh_keys_new_list` — the keys address is new AND its ordered key-NAME
-//!   list has never been seen. A genuinely new layout. This is the only class
-//!   that *should* scale with program size rather than with work done.
-//! * `fresh_keys_known_list` — the keys address is new but the exact ordered
-//!   key-name list has been seen before. **A semantically identical shape that
-//!   exists only because identity is keyed on the ARRAY ADDRESS, not on the
-//!   key list.** `intl/segmenter.rs` and `array/iter_object.rs` already name
-//!   this mechanism in their own comments ("a fresh ShapeId per record",
-//!   "shape id per call").
-//! * `gen_unique` — same keys, same counts, only `semantic_generation`
-//!   differs, and the generation came from the monotonic counter
-//!   (`transition_object_shape_semantics`, bit 63 clear). One mint per
-//!   OPERATION. This is #10287's failure shape.
-//! * `gen_deterministic` — the same, but bit 63 set, so the generation came
-//!   from `deterministic_semantic_generation`. Shared between receivers that
-//!   performed the same transition, so a mint here is a genuinely new
-//!   (predecessor, key, attrs) triple.
-//! * `key_count` / `slot_bound` / `holes` / `kind` — the keys address is
-//!   already known and a structural fact moved: an append, a bound change, a
-//!   delete, a class transition. Expected to be proportional to mutations.
-//! * `identical` — every fact matches a live sibling and the mint happened
-//!   anyway. That is a `facts_key`/`RECORD_FLAG_FACTS_INDEXED` memo failure
-//!   and should be ZERO. It is listed so that "it is zero" is a measurement
-//!   rather than an assumption.
-//!
-//! Plus: memo hits (the denominator), retirements and retirement age (churn on
-//! objects that die immediately), family-size histogram at mint, and the
-//! `#[track_caller]` call site of each mint.
+//! Mint causes compare the complete record identity used by the by-facts
+//! memo, including prototype, representation, ConstFn bodies, brands,
+//! integrity and the exact object kind. An `identical` mint is therefore a
+//! real memo failure rather than a sibling differing in an omitted fact.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -85,6 +52,12 @@ pub(crate) enum MintCause {
     Holes,
     Kind,
     Mixed,
+    Prototype,
+    Attributes,
+    Representation,
+    ConstFn,
+    Brands,
+    Integrity,
 }
 
 impl MintCause {
@@ -100,8 +73,69 @@ impl MintCause {
             MintCause::Holes => "holes",
             MintCause::Kind => "kind",
             MintCause::Mixed => "mixed",
+            MintCause::Prototype => "prototype",
+            MintCause::Attributes => "attributes",
+            MintCause::Representation => "representation",
+            MintCause::ConstFn => "constfn",
+            MintCause::Brands => "brands",
+            MintCause::Integrity => "integrity",
         }
     }
+}
+
+/// Owned diagnostic snapshot of the authoritative record's complete identity.
+/// Representation deprecation bits are storage state, as in the real memo.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MintFacts {
+    pub logical_key_count: u32,
+    pub live_inline_slot_count: u32,
+    pub semantic_generation: u64,
+    pub kind: super::shapes::ShapeObjectKind,
+    pub hole_count: u32,
+    pub proto_id: u64,
+    pub summary: u8,
+    pub rep: u64,
+    pub infos: Vec<super::shapes::ConstFnSlotInfo>,
+    pub brands: Vec<u64>,
+    pub integrity: u16,
+}
+
+impl MintFacts {
+    pub(crate) fn of(record: &super::shapes::ShapeDescriptor) -> Self {
+        Self {
+            logical_key_count: record.logical_key_count,
+            live_inline_slot_count: record.live_inline_slot_count,
+            semantic_generation: record.semantic_generation,
+            kind: record.object_kind,
+            hole_count: record.hole_count,
+            proto_id: record.proto_id,
+            summary: record.summary,
+            rep: super::field_rep::identity_with_special(record.rep),
+            infos: record.constfn_infos().to_vec(),
+            brands: record.brands().to_vec(),
+            integrity: record.integrity_flags,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LayoutOrigin {
+    keys: u64,
+    count: u32,
+    file: &'static str,
+    line: u32,
+}
+
+#[derive(Clone, Copy)]
+struct LayoutObservation {
+    hash: u64,
+    origin: LayoutOrigin,
+}
+
+struct DuplicateLayout {
+    hash: u64,
+    first: LayoutOrigin,
+    next: LayoutOrigin,
 }
 
 #[derive(Default)]
@@ -115,6 +149,14 @@ struct Census {
     /// A pair, not the address: the lists of one growth chain share a
     /// backing array, so the address alone names a chain.
     keys_addrs: HashSet<(u64, u32)>,
+    layout_lists: HashSet<u64>,
+    layout_addrs: HashSet<(u64, u32)>,
+    // Active observations follow record retirement; an expired weak backing
+    // can be published again. Every OVERLAP event is retained, so retirement
+    // cannot turn an earlier producer bypass into a passing census.
+    layout_by_id: HashMap<u32, LayoutObservation>,
+    layout_first: HashMap<u64, LayoutOrigin>,
+    duplicate_layouts: Vec<DuplicateLayout>,
     /// Family size at mint, bucketed: 0,1,2,3-4,5-8,9-16,17-64,65+.
     family_hist: [u64; 8],
     /// Per-key-list mint counts, for the worst offenders.
@@ -338,7 +380,17 @@ const BUCKET_LABELS: [&str; 8] = ["0", "1", "2", "3-4", "5-8", "9-16", "17-64", 
 /// `keys` is a live keys `ArrayHeader` (or 0) and no shape-table borrow is
 /// held: this reads the array and its key strings only.
 pub(crate) unsafe fn key_list_content_hash(keys: u64, key_count: u32) -> u64 {
-    if keys == 0 {
+    key_list_hash(keys, key_count, false)
+}
+
+/// The canonical trie compares slot identity AND each slot's attribute entry.
+/// Names alone collapse distinct descriptor layouts; symbols need identity.
+pub(crate) unsafe fn key_layout_hash(keys: u64, key_count: u32) -> u64 {
+    key_list_hash(keys, key_count, true)
+}
+
+unsafe fn key_list_hash(keys: u64, key_count: u32, attributes: bool) -> u64 {
+    if key_count == 0 {
         return 0;
     }
     let (slots, slot_len) = crate::object::keys_lookup::keys_array_dense_slots_resolved(
@@ -356,27 +408,26 @@ pub(crate) unsafe fn key_list_content_hash(keys: u64, key_count: u32) -> u64 {
             Some(bytes) => crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len()),
             // A non-string key slot (a hole, a symbol) still has to
             // participate, or two different lists could collide.
-            None => 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(i as u64 + 1),
+            None => v.bits(),
         };
         h ^= part;
+        if attributes {
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            h ^= u64::from(super::key_attrs::keys_entry(keys as *const _, i as u32));
+        }
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
 }
 
-/// Which of the six identity facts moved, against the CHEAPEST explanation the
+/// Which identity facts moved, against the CHEAPEST explanation the
 /// family offers — never the worst sibling that happens to be in the list.
 ///
 /// Split out of [`note_mint`] because this is the whole judgement the census
 /// makes, and it must be testable without a heap, a shape table or an env var.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn classify_mint(
-    family_facts: &[(u32, u32, u64, bool, u32)],
-    logical_key_count: u32,
-    live_inline_slot_count: u32,
-    semantic_generation: u64,
-    kind_is_class: bool,
-    hole_count: u32,
+    family_facts: &[MintFacts],
+    facts: &MintFacts,
     list_known: bool,
 ) -> MintCause {
     if family_facts.is_empty() {
@@ -387,36 +438,35 @@ pub(crate) fn classify_mint(
         };
     }
     let mut best = (usize::MAX, MintCause::Mixed);
-    for &(lkc, lisc, gen, is_class, holes) in family_facts {
-        let mut diffs = 0usize;
+    for sibling in family_facts {
+        let mut diffs = 0;
         let mut only = MintCause::Mixed;
-        if lkc != logical_key_count {
-            diffs += 1;
-            only = MintCause::KeyCount;
+        macro_rules! compare {
+            ($field:ident, $cause:expr) => {
+                if sibling.$field != facts.$field {
+                    diffs += 1;
+                    only = $cause;
+                }
+            };
         }
-        if lisc != live_inline_slot_count {
-            diffs += 1;
-            only = MintCause::SlotBound;
-        }
-        if gen != semantic_generation {
-            diffs += 1;
-            // Bit 63 is set by `deterministic_semantic_generation` (#10287) and
-            // clear for the `SHAPE_SEMANTIC_NEXT` counter. The two are very
-            // different findings: the counter mints once per OPERATION.
-            only = if semantic_generation & (1 << 63) != 0 {
+        compare!(logical_key_count, MintCause::KeyCount);
+        compare!(live_inline_slot_count, MintCause::SlotBound);
+        compare!(
+            semantic_generation,
+            if facts.semantic_generation & (1 << 63) != 0 {
                 MintCause::GenDeterministic
             } else {
                 MintCause::GenUnique
-            };
-        }
-        if is_class != kind_is_class {
-            diffs += 1;
-            only = MintCause::Kind;
-        }
-        if holes != hole_count {
-            diffs += 1;
-            only = MintCause::Holes;
-        }
+            }
+        );
+        compare!(kind, MintCause::Kind);
+        compare!(hole_count, MintCause::Holes);
+        compare!(proto_id, MintCause::Prototype);
+        compare!(summary, MintCause::Attributes);
+        compare!(rep, MintCause::Representation);
+        compare!(infos, MintCause::ConstFn);
+        compare!(brands, MintCause::Brands);
+        compare!(integrity, MintCause::Integrity);
         let label = match diffs {
             0 => MintCause::Identical,
             1 => only,
@@ -432,20 +482,15 @@ pub(crate) fn classify_mint(
     best.1
 }
 
-/// Record one mint. `family_facts` is every sibling already indexed under this
-/// keys address, as `(logical_key_count, live_inline_slot_count,
-/// semantic_generation, kind_is_class, hole_count)`.
+/// Record one mint against complete sibling facts under this keys address.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn note_mint(
     id: u32,
     keys: u64,
     key_list_hash: u64,
-    logical_key_count: u32,
-    live_inline_slot_count: u32,
-    semantic_generation: u64,
-    kind_is_class: bool,
-    hole_count: u32,
-    family_facts: &[(u32, u32, u64, bool, u32)],
+    layout_hash: u64,
+    facts: &MintFacts,
+    family_facts: &[MintFacts],
     site_file: &'static str,
     site_line: u32,
 ) {
@@ -458,18 +503,39 @@ pub(crate) fn note_mint(
     let Ok(mut c) = census().lock() else {
         return;
     };
+    let logical_key_count = facts.logical_key_count;
     c.keys_addrs.insert((keys, logical_key_count));
-    let list_known = !c.key_lists.insert(key_list_hash);
-
-    let cause = classify_mint(
-        family_facts,
-        logical_key_count,
-        live_inline_slot_count,
-        semantic_generation,
-        kind_is_class,
-        hole_count,
-        list_known,
-    );
+    c.key_lists.insert(key_list_hash);
+    // Null denotes no backing, not a second allocation for the empty list.
+    let list_known = c.layout_lists.contains(&layout_hash);
+    if keys != 0 {
+        let current = LayoutOrigin {
+            keys,
+            count: logical_key_count,
+            file: site_file,
+            line: site_line,
+        };
+        c.layout_by_id.insert(
+            id,
+            LayoutObservation {
+                hash: layout_hash,
+                origin: current,
+            },
+        );
+        if c.layout_addrs.insert((keys, logical_key_count)) {
+            if let Some(&first) = c.layout_first.get(&layout_hash) {
+                c.duplicate_layouts.push(DuplicateLayout {
+                    hash: layout_hash,
+                    first,
+                    next: current,
+                });
+            } else {
+                c.layout_first.insert(layout_hash, current);
+            }
+        }
+        c.layout_lists.insert(layout_hash);
+    }
+    let cause = classify_mint(family_facts, facts, list_known);
 
     *c.by_cause.entry(cause).or_insert(0) += 1;
     *c.by_site.entry(site).or_insert(0) += 1;
@@ -497,6 +563,27 @@ pub(crate) fn note_retire(id: u32) {
     let Ok(mut c) = census().lock() else {
         return;
     };
+    if let Some(retired) = c.layout_by_id.remove(&id) {
+        let origin = retired.origin;
+        if !c
+            .layout_by_id
+            .values()
+            .any(|v| (v.origin.keys, v.origin.count) == (origin.keys, origin.count))
+        {
+            c.layout_addrs.remove(&(origin.keys, origin.count));
+        }
+        let survivor = c
+            .layout_by_id
+            .values()
+            .find(|v| v.hash == retired.hash)
+            .copied();
+        if let Some(survivor) = survivor {
+            c.layout_first.insert(retired.hash, survivor.origin);
+        } else {
+            c.layout_lists.remove(&retired.hash);
+            c.layout_first.remove(&retired.hash);
+        }
+    }
     c.retires += 1;
     if let Some(born) = c.mint_index_of.remove(&id) {
         let b = bucket(now.saturating_sub(born));
@@ -526,19 +613,20 @@ pub(crate) fn dump() {
         c.keys_addrs.len(),
         c.key_lists.len()
     ));
+    out.push_str(&format!(
+        "  distinct live key layouts (names + attributes) {}\n  distinct live layout addresses {}\n",
+        c.layout_lists.len(),
+        c.layout_addrs.len()
+    ));
     if !c.key_lists.is_empty() {
         out.push_str(&format!(
             "  mints per distinct key-name list  {:.1}\n",
             mints as f64 / c.key_lists.len() as f64
         ));
     }
-    // #10868 step 2.5 stage 1b. `distinct keys ADDRESSES` above and `live`
-    // here answer the same question from opposite sides, which is the point:
-    // this census hashes CONTENT (`key_list_content_hash`) and knows nothing
-    // about the trie, so `addresses == distinct key-NAME lists` is an
-    // INDEPENDENT confirmation that one array now serves one layout. A
-    // producer that skips the funnel shows up here as addresses climbing
-    // above lists while `live` stays put — which is the census sabotage.
+    // An independent content census: no trie node ids participate. Compare
+    // allocated backings with layouts INCLUDING each key's attribute entry.
+    // Descriptive name-only totals above do not imply layout equivalence.
     {
         let (live, canon_minted, reaped) = crate::object::canonical_keys::canonical_stats();
         let words = crate::object::canonical_keys::canonical_element_words();
@@ -557,26 +645,33 @@ pub(crate) fn dump() {
             backing_slots * 8 / 1024,
             in_place
         ));
-        // The named witness for the funnel sabotage. One canonical array per
-        // ordered key list means a mint can only ever have seen as many
-        // ADDRESSES as it has seen distinct key-name LISTS; a producer that
-        // allocates around the funnel breaks that inequality and nothing else
-        // in the process notices, because a duplicate layout is a slow
-        // answer, not a wrong one.
-        let addrs = c.keys_addrs.len();
-        let lists = c.key_lists.len();
-        if addrs > lists {
+        // A producer allocating around the funnel increases backing identities
+        // without introducing a new layout, which the negative control detects.
+        let addrs = c.layout_addrs.len();
+        let lists = c.layout_lists.len();
+        if !c.duplicate_layouts.is_empty() {
             out.push_str(&format!(
-                "  FUNNEL BROKEN: {} keys ADDRESSES for {} distinct key-NAME lists \
-                 -- {} duplicate layouts; a producer is allocating around \
-                 canonical_keys\n",
+                "  FUNNEL BROKEN: {} duplicate layouts observed while indexed backings overlapped; \
+                 current {} keys addresses for {} live key layouts (names + attributes)\n",
+                c.duplicate_layouts.len(),
                 addrs,
-                lists,
-                addrs - lists
+                lists
             ));
         } else {
-            out.push_str("  FUNNEL OK: one keys address per distinct key-name list\n");
+            out.push_str(
+                "  FUNNEL OK: 0 duplicate layouts; one keys backing per live key layout (names + attributes)\n",
+            );
         }
+    }
+    out.push_str(&format!(
+        "  identical mints (complete facts) {}\n",
+        c.by_cause.get(&MintCause::Identical).copied().unwrap_or(0)
+    ));
+    for duplicate in &c.duplicate_layouts {
+        let first = duplicate.first;
+        let next = duplicate.next;
+        out.push_str(&format!("  duplicate layout {:#018x}: first keys={:#x} count={} {}:{}; next keys={:#x} count={} {}:{}\n",
+            duplicate.hash, first.keys, first.count, first.file, first.line, next.keys, next.count, next.file, next.line));
     }
     let tc_h = TC_HITS.load(Ordering::Relaxed);
     let tc_e = TC_MISS_EMPTY.load(Ordering::Relaxed);
@@ -689,11 +784,25 @@ mod tests {
 
     const DET: u64 = 1 << 63;
 
-    /// `(logical_key_count, live_inline_slot_count, semantic_generation,
-    /// kind_is_class, hole_count)` — the five facts a sibling contributes.
-    /// The sixth, the keys-array address, is what the family is keyed BY.
-    fn sib(lkc: u32, lisc: u32, gen: u64, class: bool, holes: u32) -> (u32, u32, u64, bool, u32) {
-        (lkc, lisc, gen, class, holes)
+    /// A fixture with default prototype, representation and receiver facts.
+    fn sib(lkc: u32, lisc: u32, gen: u64, class: bool, holes: u32) -> MintFacts {
+        MintFacts {
+            logical_key_count: lkc,
+            live_inline_slot_count: lisc,
+            semantic_generation: gen,
+            kind: if class {
+                super::super::shapes::ShapeObjectKind::Class
+            } else {
+                super::super::shapes::ShapeObjectKind::Ordinary
+            },
+            hole_count: holes,
+            proto_id: 0,
+            summary: 0,
+            rep: 0,
+            infos: vec![],
+            brands: vec![],
+            integrity: 0,
+        }
     }
 
     #[test]
@@ -702,11 +811,11 @@ mod tests {
         // ADDRESS whose ordered key-NAME list is already known is a
         // semantically identical shape, not a new layout.
         assert_eq!(
-            classify_mint(&[], 3, 3, 0, false, 0, true),
+            classify_mint(&[], &sib(3, 3, 0, false, 0), true),
             MintCause::FreshKeysKnownList
         );
         assert_eq!(
-            classify_mint(&[], 3, 3, 0, false, 0, false),
+            classify_mint(&[], &sib(3, 3, 0, false, 0), false),
             MintCause::FreshKeysNewList
         );
     }
@@ -719,7 +828,7 @@ mod tests {
         // reports 0 of these on every workload measured; that has to be a
         // MEASUREMENT, which means the classifier has to be able to say it.
         assert_eq!(
-            classify_mint(&[sib(3, 3, 7, false, 0)], 3, 3, 7, false, 0, true),
+            classify_mint(&[sib(3, 3, 7, false, 0)], &sib(3, 3, 7, false, 0), true),
             MintCause::Identical
         );
     }
@@ -727,11 +836,15 @@ mod tests {
     #[test]
     fn a_generation_only_difference_splits_on_bit_63() {
         assert_eq!(
-            classify_mint(&[sib(3, 3, 1, false, 0)], 3, 3, 2, false, 0, true),
+            classify_mint(&[sib(3, 3, 1, false, 0)], &sib(3, 3, 2, false, 0), true),
             MintCause::GenUnique
         );
         assert_eq!(
-            classify_mint(&[sib(3, 3, 1, false, 0)], 3, 3, DET | 9, false, 0, true),
+            classify_mint(
+                &[sib(3, 3, 1, false, 0)],
+                &sib(3, 3, DET | 9, false, 0),
+                true
+            ),
             MintCause::GenDeterministic
         );
     }
@@ -740,19 +853,19 @@ mod tests {
     fn each_single_structural_fact_gets_its_own_label() {
         let base = sib(3, 3, 0, false, 0);
         assert_eq!(
-            classify_mint(&[base], 4, 3, 0, false, 0, true),
+            classify_mint(&[base.clone()], &sib(4, 3, 0, false, 0), true),
             MintCause::KeyCount
         );
         assert_eq!(
-            classify_mint(&[base], 3, 4, 0, false, 0, true),
+            classify_mint(&[base.clone()], &sib(3, 4, 0, false, 0), true),
             MintCause::SlotBound
         );
         assert_eq!(
-            classify_mint(&[base], 3, 3, 0, true, 0, true),
+            classify_mint(&[base.clone()], &sib(3, 3, 0, true, 0), true),
             MintCause::Kind
         );
         assert_eq!(
-            classify_mint(&[base], 3, 3, 0, false, 1, true),
+            classify_mint(&[base.clone()], &sib(3, 3, 0, false, 1), true),
             MintCause::Holes
         );
     }
@@ -760,7 +873,7 @@ mod tests {
     #[test]
     fn two_facts_moving_at_once_is_mixed_not_the_first_one_found() {
         assert_eq!(
-            classify_mint(&[sib(3, 3, 0, false, 0)], 4, 4, 0, false, 0, true),
+            classify_mint(&[sib(3, 3, 0, false, 0)], &sib(4, 4, 0, false, 0), true),
             MintCause::Mixed
         );
     }
@@ -774,11 +887,11 @@ mod tests {
         let far = sib(9, 9, 5, true, 4);
         let near = sib(3, 3, 0, false, 0);
         assert_eq!(
-            classify_mint(&[far, near], 4, 3, 0, false, 0, true),
+            classify_mint(&[far.clone(), near.clone()], &sib(4, 3, 0, false, 0), true),
             MintCause::KeyCount
         );
         assert_eq!(
-            classify_mint(&[near, far], 4, 3, 0, false, 0, true),
+            classify_mint(&[near, far], &sib(4, 3, 0, false, 0), true),
             MintCause::KeyCount
         );
     }
@@ -790,7 +903,7 @@ mod tests {
         let one_off = sib(4, 3, 0, false, 0);
         let exact = sib(3, 3, 0, false, 0);
         assert_eq!(
-            classify_mint(&[one_off, exact], 3, 3, 0, false, 0, true),
+            classify_mint(&[one_off, exact], &sib(3, 3, 0, false, 0), true),
             MintCause::Identical
         );
     }
@@ -813,3 +926,7 @@ mod tests {
         assert_eq!(TC_INSERTS.load(Ordering::Relaxed), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "shape_mint_census_gate_tests.rs"]
+mod gate_tests;

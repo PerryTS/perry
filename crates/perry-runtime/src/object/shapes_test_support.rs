@@ -267,3 +267,12 @@ pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
         .get(id)
         .is_some_and(|record| record.cache_carrier())
 }
+
+/// Negative control for the census: remove only the memo accelerator while
+/// retaining the live authoritative record and its keys family.
+pub(crate) fn test_remove_facts_index(id: u32) {
+    let table = &crate::state::state().shapes;
+    let record = table.slab().get(id).unwrap();
+    let facts = record.facts_key_with_keys(record.keys);
+    table.inner.borrow_mut().facts_remove(facts, id);
+}

@@ -314,7 +314,7 @@ fn parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits() {
         let wide = vec![key; PARSE_SHAPE_CACHE_KEY_BUDGET + 1];
         let wide_a = parse_shape_keys_array(&wide);
         let wide_b = parse_shape_keys_array(&wide);
-        assert_ne!(wide_a, wide_b);
+        assert_eq!(wide_a, wide_b, "wide layouts use the canonical funnel too");
         assert_eq!((*wide_a).length as usize, wide.len());
         PARSE_SHAPE_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
         PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());

@@ -88,7 +88,7 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
 }
 
 #[test]
-fn json_cached_keys_ring_and_shape_follow_actual_movement() {
+fn json_cached_strings_move_in_a_stationary_canonical_backing() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuation = ForcedEvacuationTestGuard::on();
@@ -107,9 +107,10 @@ fn json_cached_keys_ring_and_shape_follow_actual_movement() {
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
         let keys_after = crate::object::object_keys(live.as_pointer()).arr();
         let key_after = crate::json::cached_parse_key_ptr(b"moving_property");
-        assert_ne!(
+        assert!(crate::arena::pointer_in_old_gen(keys_before as usize));
+        assert_eq!(
             keys_before, keys_after,
-            "the cached key array must actually move"
+            "canonical key backings stay stationary while their keys move"
         );
         assert_ne!(
             key_before, key_after,

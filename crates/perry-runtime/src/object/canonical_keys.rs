@@ -140,8 +140,8 @@ pub(crate) struct CanonicalKeys {
 }
 
 impl CanonicalKeys {
-    /// The empty ordered key list. A keyless shape's `keys` fact is 0, so the
-    /// root of the trie owns no array and costs nothing.
+    /// The empty list without a backing. Class globals use `empty_backing`
+    /// for their non-null ABI spelling; both lists extend from the trie root.
     pub(crate) const EMPTY: CanonicalKeys = CanonicalKeys {
         arr: std::ptr::null_mut(),
         count: 0,
@@ -288,14 +288,14 @@ impl SharedLayout {
 }
 
 const NO_NODE: u32 = u32::MAX;
-/// The empty list. Never freed, owns no array.
+/// The permanent empty node. Its optional backing follows the weak prune.
 const ROOT_NODE: u32 = 0;
 
 struct Node {
     /// Weak backing array. A published node's list is its first `len`
     /// entries; an unpublished prefix borrows a descendant's backing only for
-    /// edge validation and never exposes it as its keys. 0 denotes the root or
-    /// a free slot.
+    /// edge validation and never exposes it as its keys. 0 denotes an
+    /// unbacked root or a free slot.
     addr: usize,
     published: bool,
     parent: u32,
@@ -1363,8 +1363,11 @@ pub(crate) unsafe fn canonicalize(
     keys: *const ArrayHeader,
     len: u32,
 ) -> CanonicalKeys {
-    if keys.is_null() || len == 0 {
+    if keys.is_null() {
         return CanonicalKeys::EMPTY;
+    }
+    if len == 0 {
+        return empty_backing(_proof);
     }
     let already = with_table_or(false, |t| t.by_addr.contains_key(&(keys as usize, len)));
     if already {
@@ -1469,6 +1472,29 @@ pub(crate) unsafe fn canonicalize(
     })
 }
 
+/// The non-null spelling of the empty list required by class keys globals.
+/// It belongs to the trie's root, just as every nonempty backing belongs to
+/// its node. The root's backing is weak and is cleared by the same full-trace
+/// prune; there is no separate singleton cache or immortal allocation.
+pub(crate) unsafe fn empty_backing(_proof: &SharedLayout) -> CanonicalKeys {
+    if let Some(addr) = with_table_or(None, |t| {
+        let root = &t.nodes[ROOT_NODE as usize];
+        root.published.then_some(root.addr)
+    }) {
+        return CanonicalKeys::new(addr as *mut ArrayHeader, 0);
+    }
+    let fresh = crate::array::js_array_alloc_canonical_keys(0, true, false);
+    stamp_shared(fresh);
+    with_table_or(CanonicalKeys::new(fresh, 0), |t| {
+        // Allocation can collect, so resolve the root again after it.
+        if !t.nodes[ROOT_NODE as usize].published {
+            t.publish(ROOT_NODE, fresh as usize, true);
+            t.own_backing(ROOT_NODE, 0);
+        }
+        CanonicalKeys::new(t.nodes[ROOT_NODE as usize].addr as *mut ArrayHeader, 0)
+    })
+}
+
 /// The canonical list for `keys` without position `remove`, every other
 /// key's attribute entry carried: a delete from a shared list that carries
 /// attributes. The prefix below `remove` is shared as is.
@@ -1528,7 +1554,7 @@ pub(crate) fn prune_dead_canonical_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     let live: Vec<(u32, usize)> = CANONICAL_KEYS
         .try_with(|t| {
             let t = t.borrow();
-            (1..t.nodes.len())
+            (0..t.nodes.len())
                 .filter(|&id| t.nodes[id].addr != 0)
                 .map(|id| (id as u32, t.nodes[id].addr))
                 .collect()
@@ -1543,6 +1569,14 @@ pub(crate) fn prune_dead_canonical_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
         return;
     }
     try_with_table(|t| {
+        if dead.contains(&ROOT_NODE) {
+            let root = &mut t.nodes[ROOT_NODE as usize];
+            t.by_addr.remove(&(root.addr, 0));
+            root.addr = 0;
+            root.published = false;
+            CANON_PUBLISHED.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            CANON_BACKINGS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
         t.retire_dead(&dead);
     });
 }

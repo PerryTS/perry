@@ -571,9 +571,15 @@ unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut 
         );
     }
     let arr = array.finish(&mut batch);
-    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
-    arr
+    // Parse-cache entries publish shared layouts, including the uncached
+    // wide path. The construction array is only a source; returning it here
+    // would mint a second layout beside a class/literal with equal keys.
+    crate::object::canonical_keys::canonicalize(
+        &crate::object::canonical_keys::SharedLayout::shape_cache_entry(),
+        arr,
+        keys.len() as u32,
+    )
+    .as_ptr()
 }
 
 // ─── Stringify scratch / shape-cache lifecycle ───────────────────────────────
