@@ -1792,3 +1792,11 @@ pub(crate) fn test_external_side_live_bytes() -> usize {
 
 mod ephemeron;
 pub(crate) use ephemeron::weak_collection_store_barrier;
+
+/// Shared startup for standalone Rust fixtures, which have no emitted main.
+/// Run before a fixture allocates JS objects or enters a destructive GC window.
+#[doc(hidden)]
+pub fn initialize_runtime_fixture() {
+    gc_init();
+    crate::object::static_shapes::js_shape_run_static_seed();
+}

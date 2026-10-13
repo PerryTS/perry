@@ -184,7 +184,7 @@ pub(crate) use generator_state::{
     call_generator_symbol_method, fixed_generator_state, install_evaluation_generator_symbols,
     install_generator_symbol_method, GENERATOR_STATE_BRAND,
 };
-pub use generator_state::{js_generator_create, js_generator_set_slot};
+pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
 pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{
     builtin_species_getter_thunk, install_atomics_namespace_members,

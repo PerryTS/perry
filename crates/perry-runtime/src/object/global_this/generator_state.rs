@@ -399,47 +399,5 @@ pub unsafe extern "C" fn js_generator_set_slot(
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn js_generator_result(value: f64, done: i32) -> f64 {
-    // Use the ordinary literal's existing canonical shape cache and birth
-    // allocator. The generic iterator constructor installs keys after birth,
-    // which repeats canonicalization and shape transitions on every yield.
-    const KEYS: &[u8] = b"value\0done\0";
-    const SHAPE: u32 = {
-        let mut hash = 0x811c9dc5u32;
-        let mut i = 0;
-        while i < KEYS.len() {
-            hash = (hash ^ KEYS[i] as u32).wrapping_mul(0x01000193);
-            i += 1;
-        }
-        hash
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc_with_shape(
-        SHAPE,
-        2,
-        KEYS.as_ptr(),
-        KEYS.len() as u32,
-    ));
-    // This ordinary literal birth has two live Any slots and no published
-    // aliases, accessors or numeric-prefix proof. Initialize them through
-    // the existing newborn store funnel (string aliases and exact barriers).
-    // Keep the object refreshable across each exact barrier, including
-    // active native-handle tracing callbacks.
-    object.with_mut_ptr::<ObjectHeader, _>(|p| unsafe {
-        crate::gc::runtime_store_jsvalue_slot_layout_deferred(
-            p as usize,
-            p.add(1) as usize,
-            0,
-            value.get_nanbox_u64(),
-        );
-    });
-    object.with_mut_ptr::<ObjectHeader, _>(|p| unsafe {
-        crate::gc::runtime_store_jsvalue_slot_layout_deferred(
-            p as usize,
-            p.add(1).cast::<u64>().add(1) as usize,
-            1,
-            JSValue::bool(done != 0).bits(),
-        );
-    });
-    object.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64))
+    unsafe { crate::iter_result::make_iter_result(JSValue::from_bits(value.to_bits()), done != 0) }
 }

@@ -5,8 +5,7 @@ use super::runtime_layouts::{atom_hash, bind_builtin_prototype, layout_id};
 
 #[test]
 fn static_layout_real_abi_and_dynamic_atom_identity() {
-    crate::gc::js_gc_init();
-    static_shapes::js_shape_run_static_seed();
+    crate::gc::initialize_runtime_fixture();
     let descriptor = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(descriptor) });
@@ -40,8 +39,7 @@ fn static_layout_real_abi_and_dynamic_atom_identity() {
 
 #[test]
 fn static_layout_zero_slots_expand_without_an_inline_floor() {
-    crate::gc::js_gc_init();
-    static_shapes::js_shape_run_static_seed();
+    crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let prototype = scope.root_raw_mut_ptr(js_object_alloc_plain(1));
     let inherited = scope.root_string_ptr(crate::string::js_string_from_bytes(
@@ -106,8 +104,7 @@ fn static_layout_zero_slots_expand_without_an_inline_floor() {
 
 #[test]
 fn static_layout_state_views_have_no_fixed_field_spill() {
-    crate::gc::js_gc_init();
-    static_shapes::js_shape_run_static_seed();
+    crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let readable = scope.root_nanbox_f64(crate::node_stream::js_node_stream_readable_new(
         f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -132,6 +129,48 @@ fn static_layout_state_views_have_no_fixed_field_spill() {
             (*(*object).meta).spill,
             0,
             "fixed state fields belong to the declared slots"
+        );
+    }
+}
+
+#[test]
+fn static_layout_generator_results_share_iterator_descriptor() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_string_ptr(crate::string::js_string_from_bytes(b"yielded".as_ptr(), 7));
+    let result = scope.root_nanbox_f64(crate::object::global_this::js_generator_result(
+        f64::from_bits(JSValue::string_ptr(value.get_raw_mut_ptr()).bits()),
+        0,
+    ));
+    let desc = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+    let object =
+        crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
+    unsafe {
+        assert_eq!((*object).class_id, 0);
+        assert_eq!((*object).parent_class_id, layout_id(desc));
+        assert_eq!(object_live_slot_count(object), 2);
+        assert_eq!(
+            object_field_at_with_live(object, 1, 2).bits(),
+            crate::value::TAG_FALSE
+        );
+    }
+    crate::gc::js_gc_collect();
+    let object =
+        crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
+    unsafe {
+        assert_eq!(
+            object_field_at_with_live(object, 0, 2).bits(),
+            JSValue::string_ptr(value.get_raw_mut_ptr()).bits()
+        );
+    }
+    let done = crate::object::global_this::js_generator_result(37.0, 1);
+    let object = crate::value::js_nanbox_get_pointer(done) as *const ObjectHeader;
+    unsafe {
+        assert_eq!((*object).parent_class_id, layout_id(desc));
+        assert_eq!(object_field_at_with_live(object, 0, 2).as_number(), 37.0);
+        assert_eq!(
+            object_field_at_with_live(object, 1, 2).bits(),
+            crate::value::TAG_TRUE
         );
     }
 }

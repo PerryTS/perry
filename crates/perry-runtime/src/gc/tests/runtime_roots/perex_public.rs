@@ -38,7 +38,7 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::exception::scan_exception_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_current_new_target_root_mut);
-    crate::object::static_shapes::js_shape_run_static_seed();
+    crate::gc::initialize_runtime_fixture();
 }
 
 fn text<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> RuntimeHandle<'s> {

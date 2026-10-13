@@ -36,7 +36,7 @@ fn prepare() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    crate::object::static_shapes::js_shape_run_static_seed();
+    crate::gc::initialize_runtime_fixture();
     assert!(crate::object::iterator_prototype_for_class_id(
         crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID
     )

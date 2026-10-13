@@ -1,8 +1,4 @@
-//! Give isolated stdlib tests the same startup as an emitted program.
+//! Standalone stdlib fixtures use the runtime's shared startup path.
 pub(crate) fn initialize() {
-    perry_runtime::gc::gc_init();
-    unsafe extern "C" {
-        fn js_shape_run_static_seed();
-    }
-    unsafe { js_shape_run_static_seed() };
+    perry_runtime::gc::initialize_runtime_fixture();
 }
