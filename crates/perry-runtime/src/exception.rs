@@ -1415,18 +1415,23 @@ mod tests {
         all(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
-        )
+        ),
+        all(target_os = "windows", target_arch = "x86_64")
     ))]
     fn the_fast_walker_carries_a_throw_into_a_trap() {
         use std::sync::atomic::Ordering::Relaxed;
+        #[cfg(target_os = "windows")]
+        use crate::eh as transport;
+        #[cfg(not(target_os = "windows"))]
+        use crate::eh_walker as transport;
         // Warm the walker's caches and images once.
         let _ = catch_js_throw(|| -> u8 { js_throw(0.0) });
-        let fast = crate::eh_walker::FAST_TRANSPORTS.load(Relaxed);
-        let falls = crate::eh_walker::FALLBACKS.load(Relaxed);
+        let fast = transport::FAST_TRANSPORTS.load(Relaxed);
+        let falls = transport::FALLBACKS.load(Relaxed);
         assert_eq!(catch_js_throw(|| -> u8 { js_throw(1.0) }), Err(1.0));
         if std::env::var_os("PERRY_EH_WALKER").is_none() {
-            assert_eq!(crate::eh_walker::FALLBACKS.load(Relaxed), falls);
-            assert!(crate::eh_walker::FAST_TRANSPORTS.load(Relaxed) > fast);
+            assert_eq!(transport::FALLBACKS.load(Relaxed), falls);
+            assert!(transport::FAST_TRANSPORTS.load(Relaxed) > fast);
         }
     }
 
