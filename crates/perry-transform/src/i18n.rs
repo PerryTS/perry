@@ -308,6 +308,11 @@ fn collect_keys_from_stmt(
             collect_keys_from_expr(condition, key_to_idx, keys);
             collect_keys_from_stmts(body, key_to_idx, keys);
         }
+        Stmt::DoWhile { body, condition } => {
+            collect_keys_from_stmts(body, key_to_idx, keys);
+            collect_keys_from_expr(condition, key_to_idx, keys);
+        }
+        Stmt::Labeled { body, .. } => collect_keys_from_stmt(body, key_to_idx, keys),
         Stmt::For {
             init,
             condition,
@@ -350,7 +355,15 @@ fn collect_keys_from_stmt(
                 collect_keys_from_stmts(&case.body, key_to_idx, keys);
             }
         }
-        _ => {}
+        Stmt::Let { init: None, .. }
+        | Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -509,6 +522,19 @@ fn replace_in_stmt(
             );
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
+        Stmt::DoWhile { body, condition } => {
+            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+        }
+        Stmt::Labeled { body, .. } => {
+            replace_in_stmt(body, key_to_idx, plural_info, plural_param_map, anon_shapes)
+        }
         Stmt::For {
             init,
             condition,
@@ -581,7 +607,15 @@ fn replace_in_stmt(
                 );
             }
         }
-        _ => {}
+        Stmt::Let { init: None, .. }
+        | Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
     }
 }
 
@@ -703,6 +737,23 @@ mod tests {
         keys
     }
 
+    fn collect_stmts(stmts: &[Stmt]) -> Vec<String> {
+        let mut map = HashMap::new();
+        let mut keys = Vec::new();
+        collect_keys_from_stmts(stmts, &mut map, &mut keys);
+        keys
+    }
+
+    fn assert_localized(expr: &Expr, expected_key: &str) {
+        let Expr::NativeMethodCall { args, .. } = expr else {
+            panic!("expected localization call")
+        };
+        assert!(matches!(
+            args.first(),
+            Some(Expr::I18nString { key, .. }) if key == expected_key
+        ));
+    }
+
     #[test]
     fn collects_and_replaces_localization_calls_in_all_setter_values() {
         let mut expr = Expr::Sequence(set_exprs());
@@ -788,5 +839,67 @@ mod tests {
             is_strict: false,
         };
         assert_eq!(collect(&expr), ["default", "body"]);
+    }
+
+    #[test]
+    fn traverses_do_while_and_nested_labels_in_source_order_and_replaces_calls() {
+        let mut stmts = vec![
+            Stmt::DoWhile {
+                body: vec![Stmt::Expr(t("body"))],
+                condition: t("condition"),
+            },
+            Stmt::Labeled {
+                label: "outer".into(),
+                body: Box::new(Stmt::Labeled {
+                    label: "inner".into(),
+                    body: Box::new(Stmt::DoWhile {
+                        body: vec![Stmt::Expr(t("nested-body"))],
+                        condition: t("nested-condition"),
+                    }),
+                }),
+            },
+        ];
+        let keys = collect_stmts(&stmts);
+        assert_eq!(
+            keys,
+            ["body", "condition", "nested-body", "nested-condition"]
+        );
+
+        let key_to_idx = keys
+            .iter()
+            .enumerate()
+            .map(|(i, key)| (key.clone(), i as u32))
+            .collect::<HashMap<_, _>>();
+        replace_in_stmts(
+            &mut stmts,
+            &key_to_idx,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let Stmt::DoWhile { body, condition } = &stmts[0] else {
+            panic!("expected do-while")
+        };
+        let Stmt::Expr(body_expr) = &body[0] else {
+            panic!("expected do-while body expression")
+        };
+        assert_localized(body_expr, "body");
+        assert_localized(condition, "condition");
+
+        let Stmt::Labeled { body, .. } = &stmts[1] else {
+            panic!("expected outer label")
+        };
+        let Stmt::Labeled { body, .. } = body.as_ref() else {
+            panic!("expected inner label")
+        };
+        let Stmt::DoWhile { body, condition } = body.as_ref() else {
+            panic!("expected nested do-while")
+        };
+        let Stmt::Expr(nested_body) = &body[0] else {
+            panic!("expected nested body expression")
+        };
+        assert_localized(nested_body, "nested-body");
+        assert_localized(condition, "nested-condition");
     }
 }
