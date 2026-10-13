@@ -85,8 +85,8 @@
 //! keys: a second shape for one layout, and a static ShapeId (which names the
 //! one canonical list of its keys) refused by the mint of its own facts.
 
+use crate::fast_hash::{new_fast_key_hash_map, FastKeyHashMap};
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use crate::array::ArrayHeader;
 use crate::JSValue;
@@ -333,9 +333,9 @@ pub(crate) struct CanonicalTable {
     free: u32,
     /// `(backing address, count)` -> published node id. Many lists share one
     /// backing, so the address alone names a chain, not a list.
-    by_addr: HashMap<(usize, u32), u32>,
+    by_addr: FastKeyHashMap<(usize, u32), u32>,
     /// `(parent node, appended-slot hash)` -> first candidate node.
-    edges: HashMap<(u32, u64), u32>,
+    edges: FastKeyHashMap<(u32, u64), u32>,
     /// `(backing, count, node)` of the list the last append CREATED, for the
     /// publish that immediately follows it ([`take_unique_run`]).
     last_created: (usize, u32, u32),
@@ -364,8 +364,11 @@ impl CanonicalTable {
                 run: 0,
             }],
             free: NO_NODE,
-            by_addr: HashMap::new(),
-            edges: HashMap::new(),
+            // Both keys contain internal numeric identities, with slot text
+            // already hashed and content-validated by the trie. Use the
+            // existing composite-word fold, preserving both tuple fields.
+            by_addr: new_fast_key_hash_map(),
+            edges: new_fast_key_hash_map(),
             last_created: (0, 0, NO_NODE),
             minted: 0,
             reaped: 0,

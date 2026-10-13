@@ -16,8 +16,12 @@ pub(super) unsafe fn property_at(owner: *const ObjectHeader, slot: u32) -> Itera
     let entry = crate::object::key_attrs::keys_entry(keys.arr(), slot);
     let value = crate::object::js_object_get_field(owner, slot).bits();
     if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
-        let pair = js_nanbox_get_pointer(f64::from_bits(value)) as *const super::ArrayHeader;
-        return IteratorMethod::Getter(f64::from_bits(super::js_array_get(pair, 0).bits()));
+        let acc = crate::object::accessor_pair::pair_of_value(value).unwrap_or_default();
+        return IteratorMethod::Getter(f64::from_bits(if acc.get == 0 {
+            TAG_UNDEFINED
+        } else {
+            acc.get
+        }));
     }
     IteratorMethod::Data(f64::from_bits(value))
 }

@@ -166,17 +166,8 @@ pub(crate) unsafe fn accessor(addr: usize, symbol: usize) -> Option<(u64, u64)> 
     if entry(addr, symbol)? & key_attrs::ENTRY_ACCESSOR == 0 {
         return None;
     }
-    let pair =
-        (get(addr, symbol)? & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
-    let bits = |i| {
-        let bits = crate::array::js_array_get(pair, i).bits();
-        if bits == crate::value::TAG_UNDEFINED {
-            0
-        } else {
-            bits
-        }
-    };
-    Some((bits(0), bits(1)))
+    let acc = accessor_pair::pair_of_value(get(addr, symbol)?).unwrap_or_default();
+    Some((acc.get, acc.set))
 }
 
 pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: u64) -> bool {
@@ -200,15 +191,14 @@ pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: 
     } else {
         set
     });
-    let pair = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
-    let next = pair.with_mut_ptr(|ptr| {
-        crate::array::js_array_push(ptr, JSValue::from_bits(get.get_nanbox_u64()))
-    });
-    pair.set_raw_mut_ptr(next);
-    let next = pair.with_mut_ptr(|ptr| {
-        crate::array::js_array_push(ptr, JSValue::from_bits(set.get_nanbox_u64()))
-    });
-    pair.set_raw_mut_ptr(next);
+    // String and Symbol accessor entries own the same private pair. Its
+    // closure words are initialized once, rather than pushed through the
+    // public array API and later read as observable array properties.
+    let pair = scope.root_raw_mut_ptr(accessor_pair::pair_new(accessor_pair::Accessor {
+        get: get.get_nanbox_u64(),
+        set: set.get_nanbox_u64(),
+        ..Default::default()
+    }));
     obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
         let addr = ptr as usize;
         let symbol = (symbol.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;

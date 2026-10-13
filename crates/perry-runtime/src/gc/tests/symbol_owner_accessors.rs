@@ -50,6 +50,23 @@ fn check_owned_accessor(erase: bool) {
     }
     let (get_after, set_after) =
         unsafe { crate::object::shaped_symbols::accessor(moved, symbol) }.unwrap();
+    let lane = unsafe { crate::object::shaped_symbols::get(moved, symbol) }.unwrap();
+    let pair = (lane & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    assert_eq!(
+        unsafe { (*pair).length } as usize,
+        crate::object::accessor_pair::PAIR_LEN
+    );
+    let shared = unsafe { crate::object::accessor_pair::pair_of_value(lane) }.unwrap();
+    assert_eq!((shared.get, shared.set), (get_after, set_after));
+    assert_eq!(
+        (
+            shared.raw_get,
+            shared.raw_set,
+            shared.static_get,
+            shared.static_set
+        ),
+        (0, 0, 0, 0)
+    );
     assert_ne!(get_after & crate::value::POINTER_MASK, get as u64);
     assert_eq!(set_after, 0);
     assert_eq!(

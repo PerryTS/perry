@@ -17,12 +17,10 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
                 let keys = crate::object::object_keys(obj);
                 let lane = crate::object::js_object_get_field(obj, position).bits();
                 return if crate::object::key_attrs::key_is_accessor_at(keys.arr(), position) {
-                    let pair = (lane & POINTER_MASK) as *const crate::array::ArrayHeader;
-                    let get = crate::array::js_array_get(pair, 0).bits();
-                    let set = crate::array::js_array_get(pair, 1).bits();
+                    let acc = crate::object::accessor_pair::pair_of_value(lane).unwrap_or_default();
                     Some(OwnSymbolSlot::Accessor {
-                        get: if get == TAG_UNDEFINED { 0 } else { get },
-                        set: if set == TAG_UNDEFINED { 0 } else { set },
+                        get: acc.get,
+                        set: acc.set,
                     })
                 } else {
                     Some(OwnSymbolSlot::Data(lane))
@@ -46,18 +44,10 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
         & crate::object::key_attrs::ENTRY_ACCESSOR
         != 0
     {
-        let pair = (lane & POINTER_MASK) as *const crate::array::ArrayHeader;
-        let bits = |i| {
-            let bits = crate::array::js_array_get(pair, i).bits();
-            if bits == TAG_UNDEFINED {
-                0
-            } else {
-                bits
-            }
-        };
+        let acc = crate::object::accessor_pair::pair_of_value(lane).unwrap_or_default();
         return Some(OwnSymbolSlot::Accessor {
-            get: bits(0),
-            set: bits(1),
+            get: acc.get,
+            set: acc.set,
         });
     }
     Some(OwnSymbolSlot::Data(lane))
