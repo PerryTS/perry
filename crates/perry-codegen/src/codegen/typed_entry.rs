@@ -7,11 +7,19 @@
 //! the rare int32 case first: `addNum(a, b)` ran a 13-instruction combined
 //! guard plus two `scvtf`/`fcsel` normalizations before its `fadd`.
 //!
-//! Tier 1 admits plain doubles only (`bits <=s 0x7FF8_FFFF_FFFF_FFFF`, one
-//! compare per argument) and passes them through untouched. Only when a Number
-//! argument is not a plain double does tier 2 test for an int32 box and pass
-//! the converted double. Everything else takes the unchanged generic body.
-//! The routing decision per value is identical to the one-tier form.
+//! Tier 1 admits ordered doubles only (`fcmp ord`, which x86-64 lowers to
+//! `ucomisd; jnp`) and passes them through untouched. Every boxed tag is a NaN
+//! pattern, so an ordered value is always a plain number and no bit test is
+//! needed on the common path. Only a NaN-patterned argument reaches tier 2,
+//! which runs the sign-closed plain-number test (canonical and payload NaNs
+//! that are not tags) and the int32-box test, converting an int32 box to the
+//! equal double. Everything else takes the unchanged generic body. The routing
+//! decision per value is identical to the one-tier form.
+//!
+//! Tier 1 is a real branch, not a predicate folded into tier 2: LLVM rewrites
+//! `or(fcmp ord, masked compare)` and the shift/rotate forms of the
+//! sign-closed test back into the masked compare, which costs two more
+//! instructions per Number argument than the ordered branch.
 
 use crate::block::LlBlock;
 use crate::function::LlFunction;
@@ -40,6 +48,13 @@ pub(crate) fn emit_plain_number_test(blk: &mut LlBlock, value: &str) -> String {
     let bits = blk.bitcast_double_to_i64(value);
     let magnitude = blk.and(I64, &bits, "9223372036854775807");
     blk.icmp_ule(I64, &magnitude, PLAIN_NUMBER_MAX_I64)
+}
+
+/// Tier-1 Number test: the value is not a NaN pattern. Every tag (including
+/// HANDLE_TAG in negative-NaN space) is a NaN, so this alone proves a plain
+/// number; NaN-patterned numbers are left to [`emit_plain_number_test`].
+pub(crate) fn emit_ordered_number_test(blk: &mut LlBlock, value: &str) -> String {
+    blk.fcmp("ord", value, "0.0")
 }
 
 /// `JSValue::is_int32` — the INT32 tag with any 32-bit payload.
@@ -112,17 +127,12 @@ pub(crate) fn emit_tiered_entry_dispatch(
     debug_assert_eq!(args.len(), guards.len());
     let any_number = guards.iter().any(|g| g.number);
 
-    let (entry_label, plain_tests, tier1_guard) = {
+    let (entry_label, tier1_guard) = {
         let blk = wf.block_mut(0).unwrap();
-        let mut plain_tests: Vec<Option<String>> = Vec::with_capacity(args.len());
         let mut parts = Vec::new();
         for (arg, guard) in args.iter().zip(guards) {
             if guard.number {
-                let plain = emit_plain_number_test(blk, arg);
-                parts.push(plain.clone());
-                plain_tests.push(Some(plain));
-            } else {
-                plain_tests.push(None);
+                parts.push(emit_ordered_number_test(blk, arg));
             }
             if let Some(exact) = &guard.exact {
                 parts.push(exact.clone());
@@ -132,7 +142,7 @@ pub(crate) fn emit_tiered_entry_dispatch(
             parts.push(extra.clone());
         }
         let tier1 = and_all(blk, parts);
-        (blk.label.clone(), plain_tests, tier1)
+        (blk.label.clone(), tier1)
     };
 
     let Some(tier1_guard) = tier1_guard else {
@@ -176,18 +186,19 @@ pub(crate) fn emit_tiered_entry_dispatch(
         .unwrap()
         .cond_br(&tier1_guard, &fast_label, &miss_label);
 
-    // Tier 2: an int32 box where a plain double was expected. Convert and
-    // join the fast block.
+    // Tier 2: some Number argument is a NaN pattern. Admit the plain ones
+    // (canonical or payload NaN outside the tag band, either sign) and int32
+    // boxes; convert the boxes and join the fast block.
     let converted: Option<(String, Vec<String>)> = tier2.map(|(idx, _, norm_idx, norm_label)| {
         let mut int32_tests: Vec<Option<String>> = Vec::with_capacity(args.len());
         {
             let blk = wf.block_mut(idx).unwrap();
             let mut parts = Vec::new();
-            for ((arg, guard), plain) in args.iter().zip(guards).zip(&plain_tests) {
+            for (arg, guard) in args.iter().zip(guards) {
                 if guard.number {
+                    let plain = emit_plain_number_test(blk, arg);
                     let int32 = emit_int32_box_test(blk, arg);
-                    let plain = plain.as_ref().expect("number lane has a plain test");
-                    parts.push(blk.or(I1, plain, &int32));
+                    parts.push(blk.or(I1, &plain, &int32));
                     int32_tests.push(Some(int32));
                 } else {
                     int32_tests.push(None);
