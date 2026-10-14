@@ -397,10 +397,6 @@ pub(crate) unsafe fn define_class_object_own_properties(
             continue;
         }
         let f = scope.root_raw_mut_ptr(f);
-        let f_value = f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
-            crate::value::js_nanbox_pointer(f as i64)
-        });
-        crate::object::native_module::set_function_name_bytes(f_value, &name);
         f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f| {
             class.with_mut_ptr::<ObjectHeader, _>(|class| {
                 super::class_object_template::set_static_method_home(
@@ -409,6 +405,13 @@ pub(crate) unsafe fn define_class_object_own_properties(
                 )
             })
         });
+        // After the home: the name gives the closure its own-property bag,
+        // which ends its pointer-free birth state, and the home install is
+        // for a fresh birth only.
+        let f_value = f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
+            crate::value::js_nanbox_pointer(f as i64)
+        });
+        crate::object::native_module::set_function_name_bytes(f_value, &name);
         define_bytes(
             &name,
             f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {

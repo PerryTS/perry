@@ -646,17 +646,20 @@ unsafe fn class_object_in_template_shape(
                                 .map(|bytes| bytes.to_vec())
                         }
                     });
+                    // Home first: the name gives the closure its own-property
+                    // bag, ending the fresh pointer-free birth the home install
+                    // requires.
+                    f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f| {
+                        class.with_mut_ptr::<ObjectHeader, _>(|class| {
+                            set_static_method_home(f, crate::value::js_nanbox_pointer(class as i64))
+                        })
+                    });
                     if let Some(name) = name {
                         let f_value = f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
                             crate::value::js_nanbox_pointer(f as i64)
                         });
                         crate::object::native_module::set_function_name_bytes(f_value, &name);
                     }
-                    f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f| {
-                        class.with_mut_ptr::<ObjectHeader, _>(|class| {
-                            set_static_method_home(f, crate::value::js_nanbox_pointer(class as i64))
-                        })
-                    });
                     f.with_const_ptr::<crate::closure::ClosureHeader, _>(|f| {
                         crate::value::js_nanbox_pointer(f as i64).to_bits()
                     })
