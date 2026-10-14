@@ -733,6 +733,32 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     (ptr, data)
 }
 
+/// [`string_storage_alloc`] for a child of a producer's fresh container, born
+/// where [`crate::gc::ProducerChildBirth`] says. `Old` takes the old-generation
+/// birth a large string takes: old pages, `GC_FLAG_TENURED`, and the live
+/// allocate-black color.
+#[inline]
+pub(crate) fn string_storage_alloc_for(
+    birth: crate::gc::ProducerChildBirth,
+    capacity: u32,
+) -> (*mut StringHeader, *mut u8) {
+    match birth {
+        crate::gc::ProducerChildBirth::Young => string_storage_alloc(capacity),
+        crate::gc::ProducerChildBirth::Old => {
+            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+            let raw = crate::arena::arena_alloc_gc_old_born_tenured(
+                payload_size,
+                8,
+                crate::gc::GC_TYPE_STRING,
+            );
+            let ptr = raw as *mut StringHeader;
+            let data = string_data(ptr).cast_mut();
+            zero_alignment_padding_tail(raw, payload_size);
+            (ptr, data)
+        }
+    }
+}
+
 /// JSON results at or above this size use individually tracked storage.
 pub(crate) const JSON_MALLOC_OUTPUT_THRESHOLD: u32 = 512 * 1024;
 

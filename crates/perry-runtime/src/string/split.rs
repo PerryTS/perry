@@ -8,8 +8,17 @@ use crate::array::ArrayHeader;
 /// `length` after the write makes its initialized prefix visible to GC without
 /// a per-element layout-map update. The write barrier remains necessary if a
 /// collection has promoted the rooted result array while it is being built.
+///
+/// `birth` is the producer's one decision for `arr`. `Old` means `arr` was
+/// born old and `string` was allocated old for it, so the store is old→old
+/// and only the mark shade remains; `Young` keeps the full barrier.
 #[inline]
-unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut StringHeader) {
+unsafe fn store_split_string(
+    arr: *mut ArrayHeader,
+    index: usize,
+    string: *mut StringHeader,
+    birth: crate::gc::ProducerChildBirth,
+) {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
@@ -17,11 +26,16 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
     let value_bits = STRING_TAG | (string as u64 & POINTER_MASK);
     // GC_STORE_AUDIT(BARRIERED): split result string slot is followed by a runtime write barrier.
     std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
-    crate::gc::runtime_write_barrier_slot(
-        arr as usize,
-        elements_ptr.add(index) as usize,
-        value_bits,
-    );
+    match birth {
+        crate::gc::ProducerChildBirth::Old => {
+            crate::gc::fresh_old_container_store_barrier(value_bits);
+        }
+        crate::gc::ProducerChildBirth::Young => crate::gc::runtime_write_barrier_slot(
+            arr as usize,
+            elements_ptr.add(index) as usize,
+            value_bits,
+        ),
+    }
     // The all-pointer layout only covers the initialized prefix. Publish this
     // element after the write and barrier, before the next allocation can run
     // a collection.
@@ -464,7 +478,9 @@ pub extern "C" fn js_string_split_n(
                 }
             });
             unsafe {
-                store_split_string(arr_now, idx, sh);
+                // The parts come from the shared string constructors, born
+                // young: the full barrier stays.
+                store_split_string(arr_now, idx, sh, crate::gc::ProducerChildBirth::Young);
             }
         }
         arr_handle.get_raw_mut_ptr::<ArrayHeader>()
@@ -611,6 +627,10 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
     let (arr, _) = s_handle.across_const::<StringHeader, _>(|| {
         crate::array::js_array_alloc_pointer_elements(n as u32)
     });
+    // Decided once, before the first part allocation and before the result
+    // can escape: a result born old gets parts born old, and its stores owe
+    // the remembered set nothing (`crate::gc::ProducerChildBirth`).
+    let birth = crate::gc::ProducerChildBirth::for_fresh_container(arr as usize);
     let arr_handle = scope.root_raw_mut_ptr(arr);
 
     unsafe {
@@ -619,7 +639,9 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
             // re-read the source address before touching its bytes.
             let (((sh, data_ptr), s_now), arr_now) =
                 arr_handle.across_mut::<ArrayHeader, _>(|| {
-                    s_handle.across_const::<StringHeader, _>(|| string_storage_alloc(byte_len))
+                    s_handle.across_const::<StringHeader, _>(|| {
+                        string_storage_alloc_for(birth, byte_len)
+                    })
                 });
             let part_ptr = string_data(s_now).add(offset as usize);
             // Derive metadata from THIS PART's own bytes. The only shortcut
@@ -642,7 +664,7 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
             if byte_len > 0 {
                 ptr::copy_nonoverlapping(part_ptr, data_ptr, byte_len as usize);
             }
-            store_split_string(arr_now, i, sh);
+            store_split_string(arr_now, i, sh, birth);
         }
     }
 
