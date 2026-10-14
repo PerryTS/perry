@@ -478,3 +478,44 @@ fn named_layout_and_regex_results_keep_the_array_prototype() {
         }
     }
 }
+
+/// Object model step 4: once an array's named holder has an overflow, the
+/// overflow is its key-order authority and lists every own key, fixed or
+/// added after. The element-kind fact reads that list: named keys leave the
+/// elements plain, and an element descriptor recorded only in the overflow
+/// (the holder's layout never names it) arms the fact.
+#[test]
+fn element_descriptor_fact_reads_the_named_holders_overflow() {
+    let _global = crate::gc::global_side_table_test_lock();
+    crate::gc::initialize_runtime_fixture();
+    unsafe {
+        let arr = set(pushed(&[1.0, 2.0, 3.0]), "pos", 1.0);
+        let holder = (*arr).named;
+        assert!(crate::object::overflow::establish_order(holder));
+        let arr = set(arr, "end", 2.0);
+        assert_eq!((*arr).named, holder);
+        assert!(crate::object::overflow::has_overflow(holder));
+        assert!(
+            !array_has_element_descriptors(arr),
+            "default-attribute named keys in the overflow leave the elements plain"
+        );
+        crate::object::set_property_attrs(
+            arr as usize,
+            "0".to_string(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        let record = crate::object::shapes::object_shape_record((*arr).named).unwrap();
+        assert!(
+            !named_props::keys_hold_element_descriptors(
+                record.keys() as usize as *const ArrayHeader,
+                record.logical_key_count(),
+            ),
+            "premise: the holder's layout does not name the descriptor"
+        );
+        assert!(
+            array_has_element_descriptors(arr),
+            "an element descriptor in the overflow arms the fact"
+        );
+        assert_elements(arr, &[1.0, 2.0, 3.0]);
+    }
+}

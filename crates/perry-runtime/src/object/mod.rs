@@ -131,13 +131,10 @@ pub(crate) mod date_proto_thunks;
 pub(crate) mod delete_last_key;
 mod delete_rest;
 pub(crate) mod descriptors;
-pub(crate) mod dictionary;
-mod dictionary_counters;
-#[cfg(test)]
-mod dictionary_tests;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
 pub(crate) mod field_get_set;
+pub(crate) mod overflow;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod gc_slots;
@@ -1602,6 +1599,11 @@ pub(crate) unsafe fn object_keys_from_shape_record(
     obj: *const ObjectHeader,
     record: shapes::ShapeRecordRef,
 ) -> ObjectKeys {
+    let overflow = overflow::keys_array(obj);
+    if !overflow.is_null() {
+        return ObjectKeys::owned(overflow);
+    }
+
     if record.keys() != 0 {
         let keys = ObjectKeys::new(
             record.keys() as usize as *mut ArrayHeader,
@@ -1609,9 +1611,7 @@ pub(crate) unsafe fn object_keys_from_shape_record(
         );
         return keys;
     }
-    // A dictionary shape's ordered list belongs to its receiver. Its header
-    // supplies the count; normal shapes use their immutable prefix above.
-    ObjectKeys::owned(dictionary::keys_array(obj))
+    ObjectKeys::NONE
 }
 
 /// Return the two shape facts needed together by callback-free serializers.
@@ -1621,6 +1621,10 @@ pub(crate) unsafe fn object_keys_from_shape_record(
 pub(crate) unsafe fn object_keys_and_live_slots(
     obj: *const ObjectHeader,
 ) -> Option<(ObjectKeys, u32)> {
+    if overflow::has_overflow(obj) {
+        return None;
+    }
+
     shapes::object_shape_record(obj).map(|record| {
         (
             ObjectKeys::new(
@@ -1738,20 +1742,6 @@ unsafe fn set_object_keys_with_live_rep(
     // `is_shape_id` says so, for class instances too, so an instance still
     // carrying its allocation-time `parent_class_id` (never in the ShapeId
     // range) is left alone.
-    // #10868 step 2.5 stage 1: a dictionary-mode receiver absorbs the
-    // publication into its own record and mints nothing. That is the bound
-    // the mode exists to provide; see `object/dictionary.rs`.
-    if dictionary::is_dictionary(obj) {
-        // A dictionary receiver's list is its own, so its length is its count.
-        debug_assert!(
-            keys_array.is_null()
-                || crate::array::keys_array_len_capped_to_capacity(keys_array) as u32
-                    == keys.count(),
-            "a dictionary receiver publishes an owned list"
-        );
-        dictionary::publish_keys(obj, keys_array, live_inline_slot_count);
-        return;
-    }
     let predecessor = shapes::object_shape_descriptor(obj);
     // #8067/#8113: every visible ShapeId resolves to the exact rooted
     // ordered-keys/live-slot descriptor. Same-pointer appends are versioned
@@ -1762,16 +1752,17 @@ unsafe fn set_object_keys_with_live_rep(
     // `publish_object_shape_from` and every other post-birth publish now
     // route through — this call site no longer needs to remember the note.
     shapes::publish_object_shape_from_rep(obj, predecessor, keys, live_inline_slot_count, rep);
-    // #10868 step 2.5: this is where a receiver whose key list is unique to
-    // it stops interning (`dictionary::should_latch_to_dictionary`). The run
-    // is nonzero only when the append that produced `keys` created the list.
-    if !keys_array.is_null() {
-        let unique_run = canonical_keys::take_unique_run(keys);
-        if dictionary::should_latch_to_dictionary(unique_run)
-            && dictionary::latch_object_to_dictionary(obj)
-        {
-            canonical_keys::note_latched_away(keys);
-        }
+    // A receiver whose key list grows unique to it stops minting layouts:
+    // its overflow becomes the order authority and takes every later key.
+    // The run is nonzero only when the append that produced `keys` created
+    // the list.
+    if !keys_array.is_null()
+        && canonical_keys::take_unique_run(keys) >= overflow::UNIQUE_RUN_TO_OVERFLOW
+        && object_is_regular(obj)
+        && shapes::object_shape_descriptor(obj).is_some_and(|d| d.hole_count == 0)
+    {
+        overflow::ensure(obj);
+        canonical_keys::note_latched_away(keys);
     }
 }
 

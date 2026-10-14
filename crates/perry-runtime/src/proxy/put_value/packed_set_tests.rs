@@ -4,6 +4,7 @@
 //! data slot, and each one must show up as a ShapeId the published word can no
 //! longer match — or as a refusal to publish at all.
 use super::*;
+use crate::proxy::put_value::record_fixture::{json, record};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -19,15 +20,6 @@ fn interned(name: &[u8]) -> *const crate::StringHeader {
 
 fn boxed_string(key: *const crate::StringHeader) -> f64 {
     f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits())
-}
-
-/// A JSON-parsed object: class-less, birth-marked ordinary, stamped with a
-/// real ShapeId, and sharing it with every other parse of the same text.
-fn parsed(src: &[u8]) -> f64 {
-    let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
-    let value = unsafe { crate::json::js_json_parse(text) };
-    assert!(value.is_pointer(), "JSON.parse must yield an object");
-    f64::from_bits(value.bits())
 }
 
 fn object_of(value: f64) -> *mut crate::ObjectHeader {
@@ -85,7 +77,7 @@ fn pooled_runtime_key_names_prime_static_overwrites() {
             key
         })
         .collect();
-    let target = parsed(br#"{"name":0,"nam":0,"E":0,"X":0,"length":0,"len":0,"now":0,"later":0}"#);
+    let target = record(br#"{"name":0,"nam":0,"E":0,"X":0,"length":0,"len":0,"now":0,"later":0}"#);
     for (index, (name, pooled_key)) in names.into_iter().zip(keys).enumerate() {
         assert_eq!(
             pooled_key as *const _,
@@ -114,7 +106,7 @@ fn packed_set_empty_matches_codegen() {
 
 #[test]
 fn an_ordinary_receiver_publishes_its_shape_and_inline_slot() {
-    let target = parsed(SRC);
+    let target = record(SRC);
     let key = interned(b"n");
     let (stored, word) = store_fresh(target, key, 7.0);
     assert_eq!(stored, 7.0, "the miss performs the store");
@@ -159,7 +151,7 @@ fn per_object_facts_the_hit_retests_are_refused_at_publication() {
         ("the Array-subclass numeric proof", &numeric_proof),
     ];
     for (what, write) in writers {
-        let target = parsed(SRC);
+        let target = record(SRC);
         write(target);
         let packed = AtomicU64::new(PACKED_SET_EMPTY);
         unsafe { prime_packed_set(target, key, std::ptr::null_mut(), &packed) };
@@ -169,7 +161,7 @@ fn per_object_facts_the_hit_retests_are_refused_at_publication() {
             "a receiver carrying {what} must not publish"
         );
     }
-    let target = parsed(SRC);
+    let target = record(SRC);
     unsafe {
         (*object_of(target)).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
         crate::object::shapes::store_kind::restamp_object_store_kind(object_of(target));
@@ -322,7 +314,7 @@ fn real_numeric_proof_shape_cannot_prime_packed_set_or_add() {
 #[test]
 fn integrity_operations_leave_the_published_shape() {
     let key = interned(b"n");
-    let primer = parsed(SRC);
+    let primer = record(SRC);
     let (_, word) = store_fresh(primer, key, 1.0);
     assert_eq!(word as u32, stamp(primer));
     for (what, op) in [
@@ -336,7 +328,7 @@ fn integrity_operations_leave_the_published_shape() {
             crate::object::js_object_prevent_extensions,
         ),
     ] {
-        let sibling = parsed(SRC);
+        let sibling = record(SRC);
         assert_eq!(
             stamp(sibling),
             word as u32,
@@ -374,12 +366,12 @@ fn integrity_operations_leave_the_published_shape() {
 #[test]
 fn a_descriptor_on_the_key_leaves_the_published_shape() {
     let key = interned(b"n");
-    let primer = parsed(SRC);
+    let primer = record(SRC);
     let (_, word) = store_fresh(primer, key, 1.0);
 
-    let receiver = parsed(SRC);
+    let receiver = record(SRC);
     assert_eq!(stamp(receiver), word as u32);
-    let desc = parsed(br#"{"value":5,"writable":false}"#);
+    let desc = json(br#"{"value":5,"writable":false}"#);
     crate::object::js_object_define_property(receiver, boxed_string(key), desc);
     assert_ne!(
         stamp(receiver),
@@ -407,9 +399,9 @@ fn a_descriptor_on_the_key_leaves_the_published_shape() {
 #[test]
 fn delete_leaves_the_published_shape() {
     let key = interned(b"n");
-    let primer = parsed(SRC);
+    let primer = record(SRC);
     let (_, word) = store_fresh(primer, key, 1.0);
-    let receiver = parsed(SRC);
+    let receiver = record(SRC);
     assert_eq!(stamp(receiver), word as u32);
     crate::object::js_object_delete_field(object_of(receiver), key);
     assert_ne!(
@@ -423,8 +415,8 @@ fn delete_leaves_the_published_shape() {
 /// comparisons miss and route to the shared proxy helper.
 #[test]
 fn proxies_cannot_match_an_ordinary_receiver_shape() {
-    let target = parsed(SRC);
-    let handler = parsed(b"{}");
+    let target = record(SRC);
+    let handler = json(b"{}");
     let proxy = crate::proxy::js_proxy_new(target, handler);
     let receiver = (proxy.to_bits() & POINTER_MASK) as *const u8;
     assert!(crate::proxy::canonical_address(proxy).is_some());
@@ -436,8 +428,8 @@ fn proxies_cannot_match_an_ordinary_receiver_shape() {
 /// is below the ShapeId floor on every supported target.
 #[test]
 fn a_forwarded_cell_cannot_match_a_shape_id() {
-    let target = parsed(SRC);
-    let other = parsed(SRC);
+    let target = record(SRC);
+    let other = record(SRC);
     unsafe {
         let obj = object_of(target);
         let saved = *(obj as *const u64);
@@ -458,8 +450,8 @@ fn a_forwarded_cell_cannot_match_a_shape_id() {
 #[test]
 fn a_second_shape_is_kept_in_the_ways_without_moving_the_word() {
     let key = interned(b"n");
-    let first = parsed(SRC);
-    let second = parsed(br#"{"n":2,"z":0}"#);
+    let first = record(SRC);
+    let second = record(br#"{"n":2,"z":0}"#);
     assert_ne!(stamp(first), stamp(second));
     let packed_site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
     let packed = &packed_site.set;
@@ -511,7 +503,7 @@ fn saturated_named_store_uses_each_receivers_own_binding() {
                 source.push_str(&format!("\"extra{i}\":0,"));
             }
             source.push_str("\"n\":1}");
-            parsed(source.as_bytes())
+            record(source.as_bytes())
         })
         .collect();
     let site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
@@ -552,7 +544,7 @@ fn saturated_named_store_uses_each_receivers_own_binding() {
 #[test]
 fn a_fresh_way_cache_is_born_empty_not_zero() {
     let key = interned(b"n");
-    let target = parsed(SRC);
+    let target = record(SRC);
     let packed_site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
     let packed = &packed_site.set;
     let mut slot: PackedSetWaysSlot = std::ptr::null_mut();
@@ -586,7 +578,7 @@ fn packed_set_inline_ways_matches_codegen() {
 #[test]
 fn a_store_fact_change_leaves_the_published_shape() {
     let key = interned(b"n");
-    let marked = parsed(SRC);
+    let marked = record(SRC);
     let (_, word) = store_fresh(marked, key, 1.0);
     assert_eq!(word as u32, stamp(marked));
     let ways: [AtomicU64; PACKED_SET_WAYS] =
@@ -594,7 +586,7 @@ fn a_store_fact_change_leaves_the_published_shape() {
     ways[0].store(word, Ordering::Relaxed);
 
     let served = |target: f64, v: f64| unsafe { packed_ways_store(&ways, 0, target, v) };
-    let other = parsed(SRC);
+    let other = record(SRC);
     assert_eq!(stamp(other), word as u32, "premise: a shape twin");
     assert_eq!(
         served(other, 5.0),
@@ -605,7 +597,7 @@ fn a_store_fact_change_leaves_the_published_shape() {
     let restamp = |target: f64| unsafe {
         crate::object::shapes::store_kind::restamp_object_store_kind(object_of(target))
     };
-    let unmarked = parsed(SRC);
+    let unmarked = record(SRC);
     unsafe { (*header(unmarked))._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY };
     restamp(unmarked);
     assert_ne!(
@@ -619,7 +611,7 @@ fn a_store_fact_change_leaves_the_published_shape() {
         "an UNMARKED class-less receiver must not be served"
     );
 
-    let proto = parsed(SRC);
+    let proto = record(SRC);
     unsafe { (*header(proto))._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO };
     restamp(proto);
     assert_ne!(stamp(proto), word as u32);
@@ -629,7 +621,7 @@ fn a_store_fact_change_leaves_the_published_shape() {
         "a typed-array prototype must not be served"
     );
 
-    let proof = parsed(SRC);
+    let proof = record(SRC);
     assert!(unsafe {
         crate::object::shapes::store_kind::stamp_numeric_proof_twin(object_of(proof)).is_some()
     });
@@ -644,7 +636,7 @@ fn a_store_fact_change_leaves_the_published_shape() {
         "a receiver carrying the numeric proof must not be served"
     );
 
-    let native = parsed(SRC);
+    let native = record(SRC);
     unsafe { (*object_of(native)).class_id = crate::object::NATIVE_MODULE_CLASS_ID };
     restamp(native);
     assert_ne!(stamp(native), word as u32);
@@ -660,7 +652,7 @@ fn a_store_fact_change_leaves_the_published_shape() {
 /// publishes too — only the pointer-keyed read-plan memo is skipped for it.
 #[test]
 fn a_non_interned_key_publishes_by_content() {
-    let target = parsed(SRC);
+    let target = record(SRC);
     let key = crate::string::js_string_from_bytes(b"n".as_ptr(), 1);
     let gc =
         unsafe { crate::value::addr_class::try_read_gc_header(key as usize) }.expect("a heap key");
@@ -724,19 +716,17 @@ fn a_key_adding_static_store_is_served_by_the_shape_verdict() {
     );
 }
 
-/// S6 on the store side: a dictionary-mode receiver must never publish a store
-/// site word. Its ShapeId survives appends and in-place deletes, so no
-/// `(ShapeId, slot)` is a fact of that id. The control is the same receiver
-/// before the latch, which does publish. Two independent facts refuse it: the
-/// dictionary shape publishes no key list (so the prime finds no slot), and the
-/// prime admits only a matchable ShapeId. This pins the outcome; it goes red
-/// only if BOTH are removed, which is why the band check is not the only
-/// guard here.
+/// S6 on the store side, object model step 4: a receiver with an overflow
+/// never publishes a store site word (store-site memos do not serve it until
+/// step 5). The control is the same receiver before its overflow, which does
+/// publish. The overflow sets the shadow bit in the layout word, which puts
+/// the full word outside the matchable band; the miss still performs the
+/// store, and the generic read sees it.
 #[test]
-fn a_dictionary_receiver_never_publishes_a_store_site_word() {
+fn an_overflow_receiver_never_publishes_a_store_site_word() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let target = parsed(SRC);
+    let target = record(SRC);
     let key = interned(b"n");
     let (_, word) = store_fresh(target, key, 7.0);
     assert_eq!(
@@ -744,18 +734,41 @@ fn a_dictionary_receiver_never_publishes_a_store_site_word() {
         stamp(target),
         "control: an ordinary receiver publishes"
     );
-    assert!(unsafe { crate::object::dictionary::latch_object_to_dictionary(object_of(target)) });
+    assert!(unsafe { crate::object::overflow::establish_order(object_of(target)) });
     let id = stamp(target);
     assert!(
         !crate::object::shapes::is_site_matchable_shape_id(id),
-        "premise: the dictionary id is outside the matchable band: {id:#x}"
+        "premise: the shadowed word is outside the matchable band: {id:#x}"
     );
     let (stored, word) = store_fresh(target, key, 8.0);
     assert_eq!(stored, 8.0, "the miss still performs the store");
     assert_eq!(
         word, PACKED_SET_EMPTY,
-        "a dictionary receiver must not publish"
+        "an overflow receiver must not publish"
     );
+    let n = crate::object::js_object_get_field_by_name(object_of(target), key);
+    assert_eq!(f64::from_bits(n.bits()), 8.0);
+}
+
+/// A `JSON.parse` record is born with an overflow (object model step 4,
+/// §3.4): a store through the miss entry is performed and read back by the
+/// generic Get, for an existing key and for an added one, and the site word
+/// stays empty.
+#[test]
+fn a_json_record_is_stored_through_its_overflow_and_never_published() {
+    let target = json(SRC);
+    assert!(unsafe { crate::object::overflow::has_overflow(object_of(target)) });
+    for (name, value) in [(b"n".as_slice(), 7.0), (b"json_added", 9.0)] {
+        let key = interned(name);
+        let (stored, word) = store_fresh(target, key, value);
+        assert_eq!(stored, value, "the miss performs the store");
+        assert_eq!(
+            word, PACKED_SET_EMPTY,
+            "an overflow receiver must not publish"
+        );
+        let read = crate::object::js_object_get_field_by_name(object_of(target), key);
+        assert_eq!(f64::from_bits(read.bits()), value);
+    }
 }
 
 /// An `Object.create(proto)` receiver is an ORDINARY object whose prototype is
@@ -766,7 +779,7 @@ fn a_dictionary_receiver_never_publishes_a_store_site_word() {
 /// walk (the acceptance matrix's ocreate column went 293 -> 1,588 instr/op).
 #[test]
 fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
-    let proto = parsed(br#"{"pa":32}"#);
+    let proto = record(br#"{"pa":32}"#);
     let target = crate::object::js_object_create(proto);
     let obj = object_of(target);
     assert_eq!(
@@ -808,7 +821,7 @@ fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
 #[test]
 fn an_f64_lane_publishes_the_store_check_flag() {
     let key_x = interned(b"p2c_f64_x");
-    let target = parsed(br#"{"p2c_a":1}"#);
+    let target = record(br#"{"p2c_a":1}"#);
     crate::object::js_object_set_field_by_name(object_of(target), key_x as *mut _, 2.5);
     assert!(
         !crate::object::field_rep_store::shape_slot_is_any(stamp(target), 1),
@@ -822,7 +835,7 @@ fn an_f64_lane_publishes_the_store_check_flag() {
     assert_eq!(
         any_word & PACKED_SET_F64_SLOT,
         0,
-        "a JSON birth lane is Any"
+        "a record's birth lane is Any"
     );
     assert_eq!(any_word >> 32, 0);
 }

@@ -1862,6 +1862,11 @@ fn object_key_matches_field(
     }
     unsafe {
         let obj = object_addr as *mut ObjectHeader;
+        // A layout slot of an object with an overflow may hold a deleted
+        // key's hole; the layout alone proves no field (object model step 4).
+        if crate::object::overflow::has_overflow(obj) {
+            return false;
+        }
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };

@@ -64,8 +64,15 @@ unsafe fn parse_records() -> crate::JSValue {
     crate::json::js_json_parse(source)
 }
 
+/// A named field of a `JSON.parse` record. Object model step 4: the record's
+/// keys and values live in its overflow (§3.4), not at fixed positions.
+fn json_field(object: crate::JSValue, name: &str) -> crate::JSValue {
+    let key = crate::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_get_field_by_name(object.as_pointer(), key)
+}
+
 unsafe fn first_child(value: crate::JSValue) -> crate::JSValue {
-    let records = crate::object::js_object_get_field(value.as_pointer(), 0);
+    let records = json_field(value, "records");
     crate::array::js_array_get(records.as_pointer(), 0)
 }
 
@@ -161,10 +168,7 @@ fn json_deferral_returns_then_discards_siblings_before_actual_moving_collection(
             "retained child must actually move"
         );
         let child = crate::JSValue::from_bits(child.get_nanbox_u64());
-        assert_eq!(
-            crate::object::js_object_get_field(child.as_pointer(), 0).as_number(),
-            0.0
-        );
+        assert_eq!(json_field(child, "id").as_number(), 0.0);
         assert_eq!(JSON_DEFERRAL.with(Cell::get), Deferral::Available);
     }
 }

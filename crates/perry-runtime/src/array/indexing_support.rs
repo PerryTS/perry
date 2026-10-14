@@ -244,8 +244,10 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
     // `length <= capacity` is exactly the well-formed case; the sparse and
     // corrupted shapes this cap exists for fall through unchanged.
     if let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) {
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
-            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        if matches!(
+            header.obj_type,
+            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+        ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && (*arr).length <= (*arr).capacity
         {
             return (*arr).length as usize;

@@ -8,7 +8,7 @@ fn collection_count() -> u64 {
 
 unsafe fn with_record(text: &str, test: impl FnOnce(*const crate::ObjectHeader, &ShapeTemplate)) {
     let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    let value = crate::json::test_json_parse_direct(source);
+    let value = crate::json::test_json_record_direct(source);
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
     // Deliberately warm the potentially allocating first prototype lookup
@@ -96,7 +96,7 @@ fn shared_shape_proof_does_not_skip_an_own_to_json_key() {
     unsafe {
         let text = b"{\"toJSON\":1,\"tags\":[1,2]}";
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_parse_direct(source);
+        let value = crate::json::test_json_record_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>();
         let template =
             super::super::stringify_shape_template::build_shape_prefix_template(value.bits())

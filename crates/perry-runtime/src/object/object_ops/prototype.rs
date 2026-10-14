@@ -259,7 +259,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // decline without consulting their registries on this arm.
                 let id = unsafe { (*addr).parent_class_id };
                 if id.wrapping_sub(crate::object::shapes::SHAPE_ID_BASE)
-                    < crate::object::shapes::DICTIONARY_SHAPE_ID_BASE
+                    < crate::object::shapes::SITE_SHAPE_ID_END
                         - crate::object::shapes::SHAPE_ID_BASE
                 {
                     if let Some(proto) = unsafe { shape_link_prototype(addr, false) } {

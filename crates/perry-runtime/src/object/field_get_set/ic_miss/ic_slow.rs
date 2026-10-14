@@ -242,6 +242,11 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
     // This is the one collecting read entry used by emitted sites; only a
     // declined holder proof pays the full operation's dispatch and rooting.
     let obj = obj_handle as usize as *const ObjectHeader;
+    // The site's layout compare missed. A receiver with an overflow holds
+    // own keys past its layout, and one atom-keyed probe answers them.
+    if let Some(value) = unsafe { crate::object::overflow::site_miss_own_get(obj, key) } {
+        return f64::from_bits(value.bits());
+    }
     let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
     let accessor = !cache.is_null()
         && unsafe {
@@ -357,7 +362,15 @@ fn ic_slow_body(
                 // `length` is excluded (UTF-16 length word first, so the byte
                 // compare runs only for 6-unit keys): an Array-subclass receiver serves it
                 // from its elements store, not from a key position.
-                if plain && !key.is_null() && !key_is_length(key) {
+                // The position answer reads the layout alone: a receiver with
+                // an overflow (the shadow bit) holds holes where its layout
+                // keys were deleted, and its own keys were asked above
+                // (`site_miss_own_get`), so it takes the miss handler.
+                if plain
+                    && !key.is_null()
+                    && !key_is_length(key)
+                    && !crate::object::overflow::shadowed(obj)
+                {
                     let cache = crate::object::pic_slot_peek(cache_slot);
                     if !cache.is_null()
                         && (*cache)[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] < 0
@@ -770,12 +783,10 @@ mod tests {
         assert!(n >= 47, "the shape answers by bytes: {n}");
     }
 
-    /// Dictionary receivers keep their ShapeId across layout changes, so the
-    /// shape can never answer for one by position: a latched site reading
-    /// half-dictionary receivers answers every read correctly, and not one
-    /// dictionary read is counted as shape-answered.
+    /// A latched site reading receivers half of which have an overflow
+    /// answers every read with the receiver's own value.
     #[test]
-    fn a_dictionary_receiver_is_never_answered_by_position() {
+    fn an_overflow_receiver_reads_its_fixed_slots_by_position() {
         let _lock = crate::gc::global_side_table_test_lock();
         let scope = crate::gc::RuntimeHandleScope::new();
         let text = b"s3b_dict_kind";
@@ -788,25 +799,25 @@ mod tests {
         );
         let mut dict = 0;
         for o in objs.iter().step_by(2) {
+            // Object model step 4: the receiver keeps its layout (and its
+            // position bound) under the shadow bit; the invariant below is
+            // what matters, that no such receiver is shape-answered.
             if o.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
-                crate::object::dictionary::latch_object_to_dictionary(p)
+                crate::object::overflow::establish_order(p)
             }) {
                 dict += 1;
-                let bound = o.with_const_ptr(|p: *const ObjectHeader| {
-                    crate::object::shapes::test_position_bound_of(p)
-                });
-                assert_eq!(bound, Some(0), "a dictionary shape has no position bound");
             }
         }
         assert_eq!(
             dict, 24,
             "premise: every other receiver latched to dictionary"
         );
+        // Object model step 4: an overflow receiver keeps its layout and its
+        // fixed slots (the overflow references them), so its fixed keys are
+        // answered by position under the masked layout id like any other;
+        // every read is still the receiver's own value (asserted inside).
         let n = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
-        assert!(
-            n <= 24,
-            "INVARIANT: at most the 24 ordinary receivers are shape-answered, got {n}"
-        );
+        assert!(n <= 48, "at most every receiver is shape-answered, got {n}");
     }
 
     /// Tombstones: a receiver whose list carries a HOLE (a tombstone delete)
@@ -814,7 +825,7 @@ mod tests {
     /// and every read still returns the receiver's own value; the deleted key
     /// reads undefined.
     #[test]
-    fn a_receiver_with_a_tombstoned_key_is_never_answered_by_position() {
+    fn a_receiver_with_a_deleted_key_answers_every_read() {
         struct Restore;
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -841,24 +852,16 @@ mod tests {
                     k.with_const_ptr(|kp| crate::object::js_object_delete_field(p, kp))
                 });
             }
-            let (holes, bound) = o.with_const_ptr(|p: *const ObjectHeader| unsafe {
-                (
-                    crate::object::shapes::object_shape_hole_count(p),
-                    crate::object::shapes::test_position_bound_of(p),
-                )
-            });
-            if holes > 0 {
+            // Object model step 4: a delete gives the receiver an overflow.
+            if o.with_const_ptr(|p: *const ObjectHeader| unsafe {
+                crate::object::overflow::has_overflow(p)
+            }) {
                 tombstoned += 1;
-                assert_eq!(
-                    bound,
-                    Some(0),
-                    "INVARIANT: a tombstoned shape has no position bound"
-                );
             }
         }
         assert_eq!(
             tombstoned, 16,
-            "premise: every third receiver carries a tombstone"
+            "premise: every third receiver deleted through its overflow"
         );
         let _ = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
         let _ = latched_pass(&objs, &end, |i| {
@@ -943,7 +946,7 @@ mod tests {
     /// The slot-guess confirm on dictionary and tombstoned receivers: declines,
     /// whatever the guess.
     #[test]
-    fn the_slot_guess_never_matches_a_dictionary_or_tombstoned_receiver() {
+    fn the_slot_guess_never_matches_an_overflow_receiver() {
         struct Restore;
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -963,7 +966,7 @@ mod tests {
         let dict = &objs[0];
         assert!(
             dict.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
-                crate::object::dictionary::latch_object_to_dictionary(p)
+                crate::object::overflow::establish_order(p)
             }),
             "premise: the receiver latched to dictionary"
         );
@@ -982,10 +985,12 @@ mod tests {
                 k.with_const_ptr(|kp| crate::object::js_object_delete_field(p, kp))
             });
         }
-        let holes = tomb.with_const_ptr(|p: *const ObjectHeader| unsafe {
-            crate::object::shapes::object_shape_hole_count(p)
-        });
-        assert!(holes > 0, "premise: the receiver carries a tombstone");
+        assert!(
+            tomb.with_const_ptr(|p: *const ObjectHeader| unsafe {
+                crate::object::overflow::has_overflow(p)
+            }),
+            "premise: the delete gave the receiver an overflow"
+        );
         for guess in 0..4 {
             assert_eq!(
                 unsafe { guess_walk(stamp_of(tomb), guess, site) },
@@ -1154,7 +1159,7 @@ mod tests {
         // Dictionaries.
         for o in objs.iter().skip(1).step_by(3) {
             o.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
-                crate::object::dictionary::latch_object_to_dictionary(p)
+                crate::object::overflow::establish_order(p)
             });
         }
         // Keep the tombstoned receivers growing: re-adds take the cached

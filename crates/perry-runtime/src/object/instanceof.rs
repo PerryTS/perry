@@ -442,7 +442,7 @@ fn terminal_prototype_id(value: f64) -> Option<u64> {
     }
     if !matches!(
         record.object_kind(),
-        ShapeObjectKind::Ordinary | ShapeObjectKind::OrdinaryUnmarked | ShapeObjectKind::Dictionary
+        ShapeObjectKind::Ordinary | ShapeObjectKind::OrdinaryUnmarked
     ) || record.weak_collection_brand().is_some()
     {
         return None;

@@ -752,14 +752,6 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Explicit build-identity override already hashed in the object key build_id field.",
     ),
     (
-        "PERRY_OBJECT_DICTIONARY_LAYOUT_ID_BUDGET",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
-    ),
-    (
-        "PERRY_OBJECT_DICTIONARY_MIN_KEYS",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
-    ),
-    (
         "PERRY_OBJECT_TOMBSTONES",
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),

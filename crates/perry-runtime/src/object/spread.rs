@@ -511,7 +511,9 @@ unsafe fn birth_slow(
         let mut words = Vec::with_capacity((prefix_count + count) as usize);
         if let Some((_, r)) = prefix {
             let slots = crate::array::array_elements_ptr(r.keys() as usize as *const ArrayHeader);
-            words.extend_from_slice(std::slice::from_raw_parts(slots, prefix_count as usize));
+            for i in 0..prefix_count as usize {
+                words.push(*slots.add(i));
+            }
         }
         let slots = crate::array::array_elements_ptr(record.keys() as usize as *const ArrayHeader);
         for slot in 0..count as usize {

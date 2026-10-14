@@ -588,7 +588,7 @@ fn own_data_slot(
         {
             return None;
         }
-        if crate::object::dictionary::is_dictionary(obj) {
+        if crate::object::overflow::has_overflow(obj) {
             return None;
         }
         let shape = crate::object::shapes::object_shape_descriptor(obj)?;

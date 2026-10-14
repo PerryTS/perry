@@ -125,6 +125,14 @@ unsafe fn read_site_front(
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     let shape_id = (*obj).parent_class_id;
+    // The layout id without the shadow bit. A key the layout holds lives in
+    // its fixed slot whether or not the object has an overflow (the overflow
+    // records a slot reference, §3.4), so the own-slot answers below (ways,
+    // spill, latched confirm) compare the layout id; a deleted fixed key
+    // leaves the hole marker there, which reads as a miss. Answers about keys
+    // that are NOT own (the holder entries) keep the full word: an overflow
+    // entry may shadow an inherited key, and the shadow bit makes them miss.
+    let layout_id = shape_id & !crate::object::overflow::SHADOW_BIT;
     // `pic_slot_peek` without its null test: the slot is the site's global.
     let cache = (*(cache_slot as *const std::sync::atomic::AtomicPtr<crate::object::PicCache>))
         .load(Ordering::Acquire);
@@ -152,7 +160,7 @@ unsafe fn read_site_front(
         // No spill re-test: a way never holds a spill or overflow entry
         // (`pic_prime_get` publishes a spill entry only to the compact word,
         // and refuses to cascade an overflow-encoded slot into a way).
-        let token = (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64;
+        let token = (layout_id as u64 | PIC_ID_TOKEN_BIT) as i64;
         for w in 0..PIC_WAYS {
             if (*cache)[PIC_WAY_BASE + 2 * w] == token {
                 return inline_slot(obj, (*cache)[PIC_WAY_BASE + 2 * w + 1] as usize);
@@ -166,7 +174,7 @@ unsafe fn read_site_front(
     // from matching an unstamped receiver. Nested, not `&&`: the common miss
     // leaves on the first compare.
     let spill_id = (word as u32) ^ PACKED_SPILL_FLIP;
-    if shape_id == spill_id {
+    if layout_id == spill_id {
         if !is_shape_id(spill_id) {
             return hole();
         }
@@ -178,7 +186,7 @@ unsafe fn read_site_front(
     }
     if state < 0 {
         // 3. Latched.
-        let own = confirm_in(dir, obj, shape_id, packed, word, key_bits);
+        let own = confirm_in(dir, obj, layout_id, packed, word, key_bits);
         if own.to_bits() != crate::value::TAG_HOLE || cache.is_null() {
             return own;
         }

@@ -152,7 +152,7 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
     // #10868 step 2.5 stage 1: a dictionary-mode receiver's own fields are in
     // its `ObjectMeta`, so a null `keys` word would make this shadowing scan
     // vacuously true and let a prototype method win over an own field.
-    if crate::object::dictionary::is_dictionary(obj) {
+    if crate::object::overflow::has_overflow(obj) {
         return None;
     }
     let keys = descriptor.keys as usize as *mut ArrayHeader;

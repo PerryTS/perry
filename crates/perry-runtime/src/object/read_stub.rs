@@ -98,7 +98,7 @@ fn read_stub_probe(token: u64, key_bits: u64) -> Option<u64> {
 #[inline(always)]
 fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     // A stub entry answers for a shape like a site word does: never for a
-    // dictionary shape (`shapes::DICTIONARY_SHAPE_ID_BASE`).
+    // dictionary shape (`shapes::SITE_SHAPE_ID_END`).
     if !crate::object::shapes::is_site_matchable_token(token) || key_bits == 0 {
         return;
     }

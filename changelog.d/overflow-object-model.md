@@ -1,0 +1,1 @@
+Replace dictionary-mode transitions with an object-owned ordered overflow table. Dynamic writes probe the current fixed key list first, and table entries can reference fixed slots so deletion and re-addition preserve insertion order. Property atoms carry creation hashes; table keys and values are traced by the collector.

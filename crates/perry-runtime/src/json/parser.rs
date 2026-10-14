@@ -303,6 +303,18 @@ pub(crate) struct DirectParser<'a> {
     record_estimate_spent: bool,
 }
 
+/// The property atom a parsed key is stored under (§3.4: JSON.parse builds
+/// the overflow with interned keys): the agent's atom when one exists, which
+/// allocates nothing; otherwise one minted from the parse-key cache's string.
+#[inline]
+unsafe fn parse_key_atom(bytes: &[u8]) -> *const StringHeader {
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    if let Some(atom) = crate::string::atom_lookup(bytes, hash) {
+        return atom;
+    }
+    crate::string::property_atom(cached_parse_key_ptr(bytes))
+}
+
 impl<'a> DirectParser<'a> {
     pub(crate) fn new(input: &'a [u8]) -> Self {
         Self {
@@ -817,139 +829,7 @@ impl<'a> DirectParser<'a> {
     /// expected (but not required) to arrive in declared order.
     #[inline]
     pub(crate) unsafe fn parse_object_shaped(&mut self, shape: &ObjectShapeHint) -> JSValue {
-        self.advance(); // past `{`
-        self.skip_whitespace();
-
-        let saved_roots = parse_root_save_len();
-
-        // Pre-allocate with the known keys_array + field count. No
-        // shape cache lookup — the shape is already in the cache from
-        // the one-time build at parse entry.
-        // #8098: parsed records are ordinary plain objects — no class, but an
-        // authoritative ShapeId and no per-object [[Set]] semantics — so they
-        // are born marked eligible for the object-write fast paths, BEFORE
-        // their stamp (charter step 3: the mark is a shape fact).
-        let mut js_obj = crate::object::alloc_plain::alloc_plain_record_with_keys(
-            shape.field_count,
-            #[allow(unused_unsafe)]
-            unsafe {
-                crate::object::ObjectKeys::owned(shape.keys_array)
-            },
-        );
-        // Initialize all fields to undefined so JSON with missing
-        // fields returns `undefined` for absent properties (matches
-        // spec: access to absent own property returns undefined).
-        let alloc_field_count =
-            std::cmp::max(shape.field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-        for i in 0..alloc_field_count {
-            let fields_ptr =
-                (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
-            // GC_STORE_AUDIT(INIT): shaped JSON object fields are initialized before parse publication.
-            std::ptr::write(fields_ptr.add(i), JSValue::undefined());
-        }
-        let obj_slot = parse_root_push(JSValue::object_ptr(js_obj as *mut u8));
-
-        // Fast path: track the expected next-field index. Each
-        // iteration: if the incoming key matches `expected_keys[idx]`,
-        // write to fields[idx] directly and bump. Otherwise fall
-        // through to the generic named-setter (which handles
-        // out-of-order, extra, or renamed fields).
-        let mut fast_idx: usize = 0;
-        let field_count = shape.expected_keys.len();
-
-        if self.peek() == Some(b'}') {
-            self.advance();
-            parse_root_restore(saved_roots);
-            return JSValue::object_ptr(js_obj as *mut u8);
-        }
-
-        loop {
-            self.skip_whitespace();
-            let key = match self.parse_string_bytes() {
-                Some(k) => k,
-                None => break,
-            };
-            if !self.expect(b':') {
-                break;
-            }
-            // Use `parse_value_generic` — nested values inside a
-            // shaped record are NOT themselves expected to match the
-            // shape (shape is one-level deep by design in Step 1b).
-            let value = self.parse_value_generic();
-            if !self.valid {
-                break;
-            }
-            // JSON.parse suppresses GC for the whole parse, so there is
-            // no collection point between `parse_value_generic` and the
-            // direct/slow-path field write below.
-            js_obj = parse_root_object_ptr(obj_slot);
-
-            let key_bytes = key.as_bytes();
-
-            // Fast path: matches expected next field?
-            let mut took_fast = false;
-            if fast_idx < field_count {
-                let expected = shape.expected_keys[fast_idx];
-                if !expected.is_null() {
-                    let expected_len = (*expected).byte_len as usize;
-                    if expected_len == key_bytes.len() {
-                        let expected_data =
-                            (expected as *const u8).add(std::mem::size_of::<StringHeader>());
-                        let expected_slice =
-                            std::slice::from_raw_parts(expected_data, expected_len);
-                        if expected_slice == key_bytes {
-                            // Match — direct field write.
-                            let alloc_limit = alloc_field_count;
-                            if fast_idx < alloc_limit {
-                                let slot_idx = fast_idx;
-                                let value_bits = value.bits();
-                                // GC_STORE_AUDIT(BARRIERED): newborn owner store;
-                                // ShapeId rep determines tracing.
-                                crate::object::store_object_field_slot_layout_deferred(
-                                    js_obj, slot_idx, value_bits,
-                                );
-                                fast_idx += 1;
-                                took_fast = true;
-                            }
-                        }
-                    }
-                }
-            }
-            if !took_fast {
-                // Slow path: might be an out-of-order field, an extra
-                // field not in the declared shape, or a shape mismatch.
-                // Use the generic named setter which handles all three
-                // via transition cache + overflow map. This also
-                // pins `fast_idx` — once we slow-path, we stay slow
-                // for the rest of the object because the field-index
-                // assumption is broken.
-                //
-                // Key interning: check PARSE_KEY_CACHE first (same
-                // path as generic parse_object).
-                let key_ptr = cached_parse_key_ptr(key_bytes);
-                js_obj = parse_root_object_ptr(obj_slot);
-                // The by-name path updates the object shape as needed.
-                crate::object::js_object_set_field_by_name(
-                    js_obj,
-                    key_ptr as *mut StringHeader,
-                    f64::from_bits(value.bits()),
-                );
-                // Force slow path for the rest of this object.
-                fast_idx = field_count;
-            }
-
-            self.skip_whitespace();
-            if self.peek() == Some(b',') {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        self.expect(b'}');
-        js_obj = parse_root_object_ptr(obj_slot);
-        // Object fields are traced by the shape stamped during construction.
-        parse_root_restore(saved_roots);
-        JSValue::object_ptr(js_obj as *mut u8)
+        self.parse_object_table(Some(shape))
     }
 
     /// Issue #179 typed-parse entry: expects `[{…}, {…}, …]` where
@@ -1067,213 +947,69 @@ impl<'a> DirectParser<'a> {
     }
 
     pub(crate) unsafe fn parse_object_untyped(&mut self) -> JSValue {
+        self.parse_object_table(None)
+    }
+
+    /// Data records establish their ordered table at birth. An optional fixed
+    /// layout only changes routing; input order always belongs to the table.
+    unsafe fn parse_object_table(&mut self, shape: Option<&ObjectShapeHint>) -> JSValue {
         self.advance();
         self.skip_whitespace();
-
-        // The parse-boundary hint seeds the first root record. After any
-        // object establishes a small shape, let the next object speculate on
-        // that parser-local shape too. Homogeneous record arrays then compare
-        // key bytes directly against six cached pointers instead of entering
-        // the TLS key cache for every field of every record. Any mismatch
-        // drops back to the content-keyed path below.
-        let warm_shape = if self.warm_record_shape_pending {
-            self.warm_record_shape_pending = false;
-            Some((
-                self.hot_shape_len,
-                self.hot_shape_keys,
-                self.hot_shape_array,
-                self.hot_shape_id,
-            ))
-        } else if self.hot_shape_len != 0 && !self.hot_shape_array.is_null() {
-            Some((
-                self.hot_shape_len,
-                self.hot_shape_keys,
-                self.hot_shape_array,
-                self.hot_shape_id,
-            ))
-        } else {
-            None
-        };
-        let mut warm_shape_slot = 0usize;
-        let mut warm_shape_matches = warm_shape.is_some();
-
         let saved_roots = parse_root_save_len();
-
-        if self.peek() == Some(b'}') {
-            self.advance();
-            let keys: [*const StringHeader; 0] = [];
-            let (keys_arr, shape_id) = self.parse_shape_keys_array_hot(&keys);
-            let js_obj = crate::object::object_from_json_fields_preinstalled(
-                &mut self.batch,
-                keys_arr,
-                shape_id,
-                &[],
-            );
-            parse_root_restore(saved_roots);
-            return JSValue::object_ptr(js_obj as *mut u8);
-        }
-
-        let mut inline_keys: [*const StringHeader; 8] = [std::ptr::null(); 8];
-        let mut inline_values: [JSValue; 8] = [JSValue::undefined(); 8];
-        let mut inline_len: usize = 0;
-        // Keep small-object searches linear, including modest spills past
-        // the eight inline slots. Wide objects index interned key identities
-        // so new keys do not scan every prior key. The vectors retain order;
-        // a duplicate only replaces its value. GC is suppressed for the parse,
-        // exactly as for the raw key pointers already held in these vectors.
-        type HeapFields = (
-            Vec<*const StringHeader>,
-            Vec<JSValue>,
-            Option<ParsedObjectIndex>,
-        );
-        let mut heap_fields: Option<HeapFields> = None;
-
-        loop {
-            self.skip_whitespace();
-            let expected_key = warm_shape.as_ref().and_then(|(len, keys, _, _)| {
-                if warm_shape_matches && warm_shape_slot < *len {
-                    Some(keys[warm_shape_slot])
-                } else {
-                    None
+        let object = match shape {
+            Some(shape) => {
+                let object = crate::object::alloc_plain::alloc_plain_record_with_keys(
+                    shape.field_count,
+                    crate::object::ObjectKeys::owned(shape.keys_array),
+                );
+                let slots = object
+                    .cast::<u8>()
+                    .add(std::mem::size_of::<crate::ObjectHeader>())
+                    .cast::<u64>();
+                for i in 0..shape.field_count as usize {
+                    slots.add(i).write(crate::value::TAG_HOLE);
                 }
-            });
-            let (key, matched_expected_spelling) = match expected_key {
-                Some(expected) => match self.parse_string_bytes_expected(expected) {
+                object
+            }
+            None => crate::object::alloc_plain::alloc_plain_record_with_keys(
+                0,
+                crate::object::ObjectKeys::NONE,
+            ),
+        };
+        let obj_slot = parse_root_push(JSValue::object_ptr(object.cast()));
+        crate::object::overflow::ensure(object);
+        if self.peek() != Some(b'}') {
+            loop {
+                self.skip_whitespace();
+                let key = match self.parse_string_bytes() {
                     Some(key) => key,
                     None => break,
-                },
-                None => match self.parse_string_bytes() {
-                    Some(key) => (key, false),
-                    None => break,
-                },
-            };
-
-            if !self.expect(b':') {
-                break;
-            }
-
-            let value = self.parse_value();
-            if !self.valid {
-                break;
-            }
-            // JSON.parse suppresses GC for the whole parse, so key
-            // interning cannot collect before `value` is copied into
-            // the temporary values vector below.
-
-            let key_bytes = key.as_bytes();
-            if let Some((keys, values, indices)) = heap_fields.as_mut() {
-                // Linear lookup wins for modest objects. Build the index only
-                // when another field arrives after 128 unique keys, so an
-                // object ending at that size never pays to build an unused map.
-                if indices.is_none() && keys.len() == 128 {
-                    // From here this object's content index owns duplicate
-                    // detection. Defer clearing the shared cache until finish:
-                    // a nested wide object must not change key identity while
-                    // its enclosing object is still recognizing duplicates.
-                    self.saw_wide_object = true;
-                    *indices = Some(ParsedObjectIndex::from_keys(keys));
-                }
-                if let Some(index) = indices {
-                    let hash = index.hash_bytes(key_bytes);
-                    if let Some(existing) = index.find_hashed(hash, key_bytes, keys) {
-                        values[existing] = value;
-                    } else {
-                        // The object-local content index already proves this
-                        // key is new. Avoid duplicating every wide key in the
-                        // global interning table only to clear it at return.
-                        let key_ptr =
-                            crate::string::string_from_json_bytes(&mut self.batch, key_bytes);
-                        index.insert_hash(hash, keys.len());
-                        keys.push(key_ptr);
-                        values.push(value);
-                    }
-                } else {
-                    let key_ptr = cached_parse_key_ptr(key_bytes);
-                    let warm_prefix_uses_old_key_identity =
-                        warm_shape_slot != 0 && !warm_shape_matches;
-                    if let Some(existing) = keys.iter().position(|&ptr| {
-                        ptr == key_ptr
-                            || (warm_prefix_uses_old_key_identity
-                                && json_key_bytes_equal(ptr, key_bytes))
-                    }) {
-                        values[existing] = value;
-                    } else {
-                        keys.push(key_ptr);
-                        values.push(value);
-                    }
-                }
-            } else {
-                let key_ptr = if warm_shape_matches {
-                    let (expected_len, expected_keys, _, _) = warm_shape.as_ref().unwrap();
-                    if warm_shape_slot < *expected_len
-                        && (matched_expected_spelling
-                            || json_key_bytes_equal(expected_keys[warm_shape_slot], key_bytes))
-                    {
-                        let ptr = expected_keys[warm_shape_slot];
-                        warm_shape_slot += 1;
-                        ptr
-                    } else {
-                        warm_shape_matches = false;
-                        cached_parse_key_ptr(key_bytes)
-                    }
-                } else {
-                    cached_parse_key_ptr(key_bytes)
                 };
-                let warm_prefix_uses_old_key_identity = warm_shape_slot != 0 && !warm_shape_matches;
-                if let Some(existing) = inline_keys[..inline_len].iter().position(|&ptr| {
-                    ptr == key_ptr
-                        || (warm_prefix_uses_old_key_identity
-                            && json_key_bytes_equal(ptr, key_bytes))
-                }) {
-                    inline_values[existing] = value;
-                } else if inline_len < inline_keys.len() {
-                    inline_keys[inline_len] = key_ptr;
-                    inline_values[inline_len] = value;
-                    inline_len += 1;
-                } else {
-                    let mut keys = Vec::with_capacity(16);
-                    let mut values = Vec::with_capacity(16);
-                    keys.extend_from_slice(&inline_keys);
-                    values.extend_from_slice(&inline_values);
-                    keys.push(key_ptr);
-                    values.push(value);
-                    heap_fields = Some((keys, values, None));
+                if !self.expect(b':') {
+                    break;
                 }
-            }
-
-            self.skip_whitespace();
-            if self.peek() == Some(b',') {
+                let value = if shape.is_some() {
+                    self.parse_value_generic()
+                } else {
+                    self.parse_value()
+                };
+                if !self.valid {
+                    break;
+                }
+                let key = parse_key_atom(key.as_bytes());
+                let object = parse_root_object_ptr(obj_slot);
+                crate::object::overflow::store_routed(object, key, f64::from_bits(value.bits()));
+                self.skip_whitespace();
+                if self.peek() != Some(b',') {
+                    break;
+                }
                 self.advance();
-            } else {
-                break;
             }
         }
         self.expect(b'}');
-        let (keys_arr, shape_id) = if let Some((keys, _, _)) = heap_fields.as_ref() {
-            self.parse_shape_keys_array_hot(keys)
-        } else if warm_shape_matches
-            && warm_shape
-                .as_ref()
-                .is_some_and(|(len, _, _, _)| *len == inline_len && warm_shape_slot == *len)
-        {
-            let (_, _, keys_array, shape_id) = warm_shape.unwrap();
-            (keys_array, shape_id)
-        } else {
-            self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
-        };
-        let values = heap_fields
-            .as_ref()
-            .map_or(&inline_values[..inline_len], |(_, values, _)| {
-                values.as_slice()
-            });
-        let js_obj = crate::object::object_from_json_fields_preinstalled(
-            &mut self.batch,
-            keys_arr,
-            shape_id,
-            values,
-        );
+        let object = parse_root_object_ptr(obj_slot);
         parse_root_restore(saved_roots);
-        JSValue::object_ptr(js_obj as *mut u8)
+        JSValue::object_ptr(object.cast())
     }
 
     pub(crate) unsafe fn parse_array(&mut self) -> JSValue {

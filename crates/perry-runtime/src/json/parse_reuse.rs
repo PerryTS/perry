@@ -178,7 +178,11 @@ pub(crate) unsafe fn remember_parse_object_template(
         .cast::<u8>()
         .sub(crate::gc::GC_HEADER_SIZE)
         .cast::<crate::gc::GcHeader>());
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    // The plan rebuilds fixed slots under one layout. A record with an
+    // overflow (every JSON.parse record since object model step 4, §3.4)
+    // keeps its keys and values in that table, which no plan describes.
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT || crate::object::overflow::has_overflow(object)
+    {
         return;
     }
     let len = crate::object::object_live_slot_count(object) as usize;

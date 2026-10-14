@@ -199,7 +199,7 @@ mod tests {
             assert_eq!(own.token as u32, object_shape_stamp(recv));
             assert_eq!(own.depth, 0);
             assert!(!own.absent, "only own-positive proofs reach the inline way");
-            assert!(crate::object::dictionary::latch_object_to_dictionary(recv));
+            assert!(crate::object::overflow::establish_order(recv));
             crate::object::js_object_delete_field(recv, key);
             assert_eq!(
                 presence_at_site(boxed, boxed_key, &mut slot).to_bits(),

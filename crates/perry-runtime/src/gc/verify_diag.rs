@@ -136,6 +136,7 @@ fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
         GcRewriteDescriptorKind::Proxy => "ProxyFields",
         GcRewriteDescriptorKind::NativePodView => "NativePodViewFields",
         GcRewriteDescriptorKind::ObjectMeta => "ObjectMeta",
+        GcRewriteDescriptorKind::Overflow => "Overflow",
         GcRewriteDescriptorKind::MetaOnly => "MetaOnlyFields",
         GcRewriteDescriptorKind::NativeHandle => "NativeHandleOwner",
         GcRewriteDescriptorKind::Buffer => "BufferBacking",

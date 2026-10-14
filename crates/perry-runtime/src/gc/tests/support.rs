@@ -324,6 +324,9 @@ impl ScopedRootScannerRegistryGuard {
         // state, not a root the test chose, so every window heals it exactly
         // as `gc_init` does.
         crate::gc::register_prototype_addr_cache_scanner();
+        // The property atom table is the same kind of runtime state: weak,
+        // address-keyed, filled by any key interned inside the window.
+        crate::gc::register_property_atom_scanner();
         // An explicit gc_init inside the fixture must install the production
         // scanner set into the newly empty registry. Restore the matching
         // initialization state together with the saved registry on drop.

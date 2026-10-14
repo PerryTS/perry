@@ -510,7 +510,7 @@ fn the_invariant_check_fires_on_a_non_number_under_an_f64_lane() {
 /// `publish_object_shape_from` (`REP_ANY`); an owned list only exists after
 /// such a fork, and its in-place re-adds keep the fork's `Any` record.
 #[test]
-fn delete_publishes_any_lanes_before_its_raw_moves() {
+fn delete_generalizes_the_holed_lane_before_its_store() {
     unsafe {
         let obj = crate::object::js_object_alloc(0, 4);
         crate::object::js_object_set_field_by_name(obj, key("a"), 1.5);
@@ -525,18 +525,19 @@ fn delete_publishes_any_lanes_before_its_raw_moves() {
         );
         assert_eq!(slot_rep(before, 2), REP_F64, "and at c");
         assert_eq!(crate::object::js_object_delete_field(obj, key("a")), 1);
-        assert_eq!(
-            super::field_rep_store::shape_rep(object_shape_stamp(obj)),
-            REP_ANY,
-            "the delete successor carries no lane"
-        );
+        // Object model step 4: a delete moves no slot; it writes the hole
+        // marker into the deleted key's slot, and that store generalizes the
+        // slot's lane first (the hole is not a double). Other lanes keep.
+        let after = super::field_rep_store::shape_rep(object_shape_stamp(obj));
+        assert_eq!(slot_rep(after, 0), REP_ANY, "the holed slot's lane is Any");
+        assert_eq!(slot_rep(after, 2), REP_F64, "c keeps its lane");
         super::field_rep_store::assert_field_rep_lanes(
             obj,
             super::shapes::object_shape_record(obj),
             3,
         );
         let b = crate::object::js_object_get_field_by_name_f64(obj, key("b"));
-        assert_eq!(b.to_bits(), s.to_bits(), "b moved down intact");
+        assert_eq!(b.to_bits(), s.to_bits(), "b stays intact");
     }
 }
 

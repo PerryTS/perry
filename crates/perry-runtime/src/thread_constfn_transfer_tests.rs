@@ -377,7 +377,7 @@ fn constfn_worker_seed_owns_names_across_source_key_relocation() {
         );
         assert!(!slots.is_null());
         assert_eq!(len, 2);
-        let bits = (*slots).to_bits();
+        let bits = (*slots.add(0)).to_bits();
         assert_eq!(bits & TAG_MASK, STRING_TAG, "long key must be heap encoded");
         assert!(JSValue::from_bits((*slots.add(1)).to_bits()).is_short_string());
         (bits & POINTER_MASK) as usize

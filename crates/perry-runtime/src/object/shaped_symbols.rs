@@ -47,6 +47,24 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
     let symbol = scope.root_nanbox_u64(crate::value::POINTER_TAG | symbol as u64);
     let value = scope.root_nanbox_u64(bits);
     obj.with_mut_ptr::<ObjectHeader, _>(|current| {
+        // Once the object has an overflow it is the order authority: a new
+        // symbol key is an entry there, after every key created before it.
+        // A symbol the layout names keeps meeting its fixed slot (§3.3), also
+        // when it is defined again after a delete.
+        if super::overflow::has_overflow(current) {
+            super::overflow::reattach_fixed(current, symbol.get_nanbox_u64());
+            super::overflow::insert_key_bits(
+                current,
+                symbol.get_nanbox_u64(),
+                value.get_nanbox_u64(),
+                entry,
+            );
+            crate::symbol::symbol_property_ic_epoch_bump();
+            return true;
+        }
+        // Otherwise a symbol key is a key of the object's layout, as a
+        // defined string key is: builtin prototypes keep their symbol
+        // methods in fixed slots that method sites and shape proofs read.
         let existing = position(
             current,
             (symbol.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
@@ -146,6 +164,12 @@ pub(crate) unsafe fn set_entry(addr: usize, symbol: usize, entry: u8) {
     let Some(pos) = position(obj, symbol) else {
         return;
     };
+    let table = super::overflow::table(obj);
+    if !table.is_null() {
+        super::overflow::set_entry_attrs(obj as *mut ObjectHeader, table, pos, entry);
+        crate::symbol::symbol_property_ic_epoch_bump();
+        return;
+    }
     let _no_move = crate::gc::GcSuppressScope::new();
     let keys = object_keys(obj);
     if key_attrs::keys_entry(keys.arr(), pos) == entry {
@@ -239,44 +263,33 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
     let Some(obj) = owner(addr) else {
         return false;
     };
-    let Some(pos) = position(obj, symbol) else {
-        return true;
-    };
-    let _no_move = crate::gc::GcSuppressScope::new();
-    if pos == crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT
-        && crate::value::addr_class::try_read_tracked_gc_header(addr)
-            .is_some_and(|header| header.as_ref().obj_type == crate::gc::GC_TYPE_ARRAY)
-    {
-        set_entry(addr, symbol, 0);
-        store(obj, pos, crate::value::TAG_HOLE);
-        return true;
-    }
-    let keys = object_keys(obj);
-    let count = keys.count();
-    let mut next = crate::array::js_array_alloc(count.saturating_sub(1));
-    let (slots, _) = keys.dense_slots();
-    for i in 0..count {
-        if i == pos {
-            continue;
+    // Array.prototype's @@iterator is a fixed slot that array iteration
+    // reads (object model step 7): while the object has no overflow, a delete
+    // leaves the layout key and holes that slot, so a redefine refills it.
+    // Deleting an absent key changes nothing, so it establishes no overflow.
+    if !super::overflow::has_overflow(obj) {
+        let Some(pos) = position(obj, symbol) else {
+            return true;
+        };
+        // A refused delete changes nothing either.
+        if key_attrs::keys_entry(object_keys(obj).arr(), pos) & key_attrs::ENTRY_NON_CONFIGURABLE
+            != 0
+        {
+            return false;
         }
-        let index = if i < pos { i } else { i - 1 };
-        next = crate::array::js_array_push(
-            next,
-            JSValue::from_bits((*slots.add(i as usize)).to_bits()),
-        );
-        next = key_attrs::owned_note_append(next, index, key_attrs::keys_entry(keys.arr(), i));
-        if i > pos {
-            let value = js_object_get_field(obj, i);
-            store(obj, index, value.bits());
+        if pos == crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT
+            && crate::value::addr_class::try_read_tracked_gc_header(addr)
+                .is_some_and(|header| header.as_ref().obj_type == crate::gc::GC_TYPE_ARRAY)
+        {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            set_entry(addr, symbol, 0);
+            store(obj, pos, crate::value::TAG_HOLE);
+            return true;
         }
     }
-    store(obj, count - 1, crate::value::TAG_UNDEFINED);
-    let next = if let Some(proof) = canonical_keys::SharedLayout::of_receiver(obj) {
-        canonical_keys::canonicalize(&proof, next, count - 1).view()
-    } else {
-        ObjectKeys::owned(next)
-    };
-    set_object_keys(obj, next);
+    if !super::overflow::delete_key_bits(obj, crate::value::POINTER_TAG | symbol as u64) {
+        return false;
+    }
     crate::symbol::symbol_property_ic_epoch_bump();
     true
 }

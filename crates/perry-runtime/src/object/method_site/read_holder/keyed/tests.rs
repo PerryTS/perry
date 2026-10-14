@@ -79,10 +79,12 @@ fn keyed_read_matches_get_across_mutations() {
         read(&mut slot, &o, k.get_nanbox_f64()).to_bits(),
         crate::value::TAG_UNDEFINED
     );
-    assert_eq!(
-        hit(slot, &o, k.get_nanbox_f64()),
-        Some(crate::value::TAG_UNDEFINED)
-    );
+    // Object model step 4: the delete gave `o` an overflow (its order
+    // authority from then on), and keyed sites do not serve a receiver with
+    // an overflow until step 5. Every read above and below is the complete
+    // Get; the memo declines rather than answer.
+    assert!(o.with_mut_ptr(|p| unsafe { crate::object::overflow::has_overflow(p) }));
+    assert_eq!(hit(slot, &o, k.get_nanbox_f64()), None);
     put(&mid, k.get_nanbox_f64(), 21.0);
     assert_eq!(
         read(&mut slot, &o, k.get_nanbox_f64()),
@@ -96,7 +98,8 @@ fn keyed_read_matches_get_across_mutations() {
             (key_now.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader,
         )
     });
-    assert_eq!(hit(slot, &o, key_now), Some(generic.to_bits()));
+    assert_eq!(read(&mut slot, &o, key_now).to_bits(), generic.to_bits());
+    assert_eq!(hit(slot, &o, key_now), None);
     let mut marked = Vec::new();
     let mut mark = |v: f64| marked.push(v.to_bits() & crate::value::POINTER_MASK);
     unsafe {
@@ -184,7 +187,13 @@ fn keyed_symbol_read_matches_get_across_mutations() {
             crate::symbol::js_object_get_symbol_property(boxed(p), key)
         });
         assert_eq!(read(slot, obj, key).to_bits(), generic.to_bits());
-        assert_eq!(hit(*slot, obj, key), Some(generic.to_bits()));
+        // Object model step 4: a receiver with an overflow (a delete gives
+        // one) is not served by the memo until step 5; it declines.
+        let overflow = obj.with_mut_ptr(|p| unsafe { crate::object::overflow::has_overflow(p) });
+        assert_eq!(
+            hit(*slot, obj, key),
+            (!overflow).then_some(generic.to_bits())
+        );
         obj.with_mut_ptr(|p| unsafe {
             assert_eq!(
                 js_dyn_index_get_site(slot, boxed(p), key).to_bits(),

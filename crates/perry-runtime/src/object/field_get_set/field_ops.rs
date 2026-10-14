@@ -124,6 +124,39 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         // js_object_alloc_class_with_keys use exactly field_count slots.
         // We use a generous limit of max(field_count, 8) to avoid false positives from
         // js_object_alloc_with_shape's extra padding while still catching real overflows.
+        if crate::object::overflow::has_overflow(obj)
+            && field_index >= crate::object::object_live_slot_count(obj)
+        {
+            crate::object::overflow::store_index(obj, field_index, value.bits());
+            return;
+        }
+        if crate::object::overflow::has_overflow(obj)
+            && field_index < crate::object::object_live_slot_count(obj)
+        {
+            let old = crate::object::field_get_set::object_field_at_with_live(
+                obj,
+                field_index,
+                crate::object::object_live_slot_count(obj),
+            );
+            if old.bits() == crate::value::TAG_HOLE && value.bits() != crate::value::TAG_HOLE {
+                let shape = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+                let key = crate::object::ObjectKeys::new(
+                    shape.keys as usize as *mut ArrayHeader,
+                    shape.logical_key_count,
+                )
+                .get(field_index);
+                if key.is_any_string() {
+                    let raw =
+                        crate::value::js_get_string_pointer_unified(f64::from_bits(key.bits()));
+                    crate::object::overflow::store_routed(
+                        obj,
+                        raw as *const crate::StringHeader,
+                        f64::from_bits(value.bits()),
+                    );
+                    return;
+                }
+            }
+        }
         let stored_field_count = crate::object::object_live_slot_count(obj);
         let alloc_limit = crate::object::object_inline_capacity(obj);
         if field_index >= alloc_limit {

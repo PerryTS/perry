@@ -233,6 +233,14 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "high 32 of prototype NaN-box",
         Rule3Word::NotPointerTagged,
     ),
+    // Object model step 4: an object's overflow table hangs off its
+    // `ObjectMeta` and serves as its key view; it is never a JavaScript value.
+    (
+        gc::GC_TYPE_OVERFLOW,
+        "overflow::Table",
+        "capacity: u32 (entries, the ArrayHeader-shaped prefix)",
+        Rule3Word::NotPointerTagged,
+    ),
     (
         gc::GC_TYPE_REGEXP,
         "RegExpData",

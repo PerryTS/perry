@@ -8,15 +8,14 @@ impl ShapeRecord {
         match code {
             0 => ShapeObjectKind::Ordinary,
             1 => ShapeObjectKind::Class,
-            2 => ShapeObjectKind::Dictionary,
-            3 => ShapeObjectKind::Function,
-            4 => ShapeObjectKind::FunctionDictionary,
-            5 => ShapeObjectKind::OrdinaryUnmarked,
-            6 => ShapeObjectKind::OrdinaryNumericProof,
-            7 => ShapeObjectKind::NativeNamespace,
-            8 => ShapeObjectKind::FunctionBoundCall,
-            9 => ShapeObjectKind::FunctionBoundApply,
-            10 => ShapeObjectKind::FunctionBound,
+            2 => ShapeObjectKind::Function,
+            3 => ShapeObjectKind::FunctionDictionary,
+            4 => ShapeObjectKind::OrdinaryUnmarked,
+            5 => ShapeObjectKind::OrdinaryNumericProof,
+            6 => ShapeObjectKind::NativeNamespace,
+            7 => ShapeObjectKind::FunctionBoundCall,
+            8 => ShapeObjectKind::FunctionBoundApply,
+            9 => ShapeObjectKind::FunctionBound,
             _ => ShapeObjectKind::OrdinaryNativeAlias,
         }
     }

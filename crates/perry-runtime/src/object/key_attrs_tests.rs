@@ -169,7 +169,7 @@ fn a_dictionary_delete_shifts_the_attributes_with_the_keys() {
             crate::object::js_object_set_field_by_name(obj, key(&format!("dk{i}")), i as f64);
         }
         assert!(
-            crate::object::dictionary::latch_object_to_dictionary(obj),
+            crate::object::overflow::establish_order(obj),
             "premise: the receiver latches to dictionary mode"
         );
         crate::object::set_property_attrs(
@@ -178,7 +178,7 @@ fn a_dictionary_delete_shifts_the_attributes_with_the_keys() {
             crate::object::PropertyAttrs::new(false, true, true),
         );
         assert!(
-            crate::object::dictionary::is_dictionary(obj),
+            crate::object::overflow::has_overflow(obj),
             "premise: still a dictionary"
         );
         crate::object::js_object_delete_field(obj, key("dk1"));

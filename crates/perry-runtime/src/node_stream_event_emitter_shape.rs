@@ -584,30 +584,24 @@ mod method_body_tests {
         // A scalar suffices to test the storage operation; the public add
         // operation validates callability before entering this helper.
         let event = name_key(b"x");
-        // The existing key-add helper handles learned transitions only.
-        // Warm its edge on another map, as the public slow path does.
+        // Object model step 4: a listener map's event keys are computed keys,
+        // which the map's overflow takes (§3.3); no key-add transition is
+        // learned for the fast helper, which declines and leaves the map and
+        // the count untouched until step 5's probe serves it.
         set_key(new_events_object(), event, 17.0);
-        assert!(add_first_listener_fast(target, event, 17.0));
-        assert_eq!(
-            state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
-            1.0
-        );
-        assert_eq!(get_key(events, event), 17.0);
-        assert!(remove_only_listener_fast(target, event, 17.0));
+        assert!(!add_first_listener_fast(target, event, 17.0));
         assert_eq!(
             state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
             0.0
         );
-        assert_ne!(
-            state_get(target, crate::runtime_state_key!(EVENTS_KEY)).to_bits(),
-            events.to_bits()
-        );
         assert_eq!(
-            get_key(events, event),
-            17.0,
-            "reset preserves a retained old map"
+            get_key(events, event).to_bits(),
+            crate::value::TAG_UNDEFINED
         );
-        assert!(add_first_listener_fast(target, event, 17.0));
+        // The generic add the public path takes, then the count it keeps.
+        set_key(events, event, 17.0);
+        state_set(target, crate::runtime_state_key!(EVENTS_COUNT_KEY), 1.0);
+        assert_eq!(get_key(events, event), 17.0);
         // A memo hit must stop answering after this key's attributes change.
         let descriptor = crate::object::js_object_alloc(0, 2);
         let descriptor = crate::value::js_nanbox_pointer(descriptor as i64);
@@ -662,8 +656,16 @@ mod method_body_tests {
         let other_id = crate::value::JSValue::try_short_string(b"other")
             .unwrap()
             .bits() as i64;
-        set_named(proto, crate::runtime_state_key!(b"alias"), emit);
-        set_named(proto, crate::runtime_state_key!(b"other"), 42.0);
+        // Static keys of the prototype's layout: a runtime-state write of a
+        // NEW key is an ordinary computed-key Set, which object model step 4
+        // routes to the overflow, and the shape method proof reads layouts.
+        for (name, value) in [(b"alias".as_slice(), emit), (b"other".as_slice(), 42.0)] {
+            crate::object::js_object_set_field_by_name(
+                ordinary_object(proto).unwrap().0,
+                crate::string::intern_ascii_literal(name),
+                value,
+            );
+        }
         let args = [f64::from_bits(
             crate::value::JSValue::try_short_string(b"none")
                 .unwrap()
@@ -676,9 +678,9 @@ mod method_body_tests {
             );
             assert_eq!(shape_method(target, other_id, b"other"), Some(42.0));
             let obj = ordinary_object(target).unwrap().0;
-            set_named(
-                proto,
-                crate::runtime_state_key!(b"non_static_method_id"),
+            crate::object::js_object_set_field_by_name(
+                ordinary_object(proto).unwrap().0,
+                crate::string::intern_ascii_literal(b"non_static_method_id"),
                 emit,
             );
             let holder = ordinary_object(proto).unwrap().0;

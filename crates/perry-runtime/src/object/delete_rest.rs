@@ -50,9 +50,6 @@ pub extern "C" fn js_object_delete_field(
             crate::typedarray_named::note_named_mutation(owner, bytes);
         }
     }
-    if let Some(result) = unsafe { super::delete_last_key::try_delete_last_added_field(obj, key) } {
-        return result;
-    }
     if let Some(result) = crate::process::process_env_delete_field(obj, key) {
         return result;
     }
@@ -348,6 +345,9 @@ pub extern "C" fn js_object_delete_field(
                 }
             }
         }
+        let bytes = crate::string::OwnedStringBytes::copy_of_key(key);
+        return super::overflow::delete(obj, bytes.as_bytes()) as i32;
+        #[allow(unreachable_code)]
         let mut keys_view = crate::object::object_keys(obj);
         let mut keys = keys_view.arr();
         if keys.is_null() {
@@ -1460,7 +1460,7 @@ mod shape_transition_tests_6759 {
     /// facts install a genuinely fresh id rather than reviving the old one.
     /// Ids are never reused, so "different" is the whole property.
     #[test]
-    fn delete_mints_a_fresh_shape_id_for_a_plain_object() {
+    fn delete_keeps_the_layout_and_holes_the_slot_for_a_plain_object() {
         // This test is specifically about the identity transition caused by
         // slot compaction. Default-on tombstones intentionally preserve slot
         // placement, so pin the compacting lane instead of making the shape
@@ -1480,35 +1480,51 @@ mod shape_transition_tests_6759 {
             );
 
             assert_eq!(js_object_delete_field(obj, key("del6759_a")), 1);
-            assert_eq!(
-                f64::from_bits(js_object_get_field(obj, 1).bits()),
-                3.0,
-                "test premise: the delete did not compact the slots"
-            );
-
-            // The compacted descriptor is installed before delete returns.
-            let after = (*obj).parent_class_id;
+            assert_step4_delete(obj, before, 0, &[("del6759_b", 2.0), ("del6759_c", 3.0)]);
             assert!(
-                is_shape_id(after),
-                "no shape id re-minted after the delete (got {after:#x})"
-            );
-            assert_ne!(
-                after, before,
-                "the delete re-used the pre-delete ShapeId — a shape-id compare \
-                 would accept a compacted object as its own class's shape"
-            );
-            let descriptor = crate::object::shapes::shape_descriptor_by_id(after)
-                .expect("delete must publish a by-id descriptor");
-            assert_eq!(
-                descriptor.keys,
-                crate::object::object_keys(obj).arr() as u64
-            );
-            assert_eq!(descriptor.logical_key_count, 2);
-            assert_eq!(
-                descriptor.live_inline_slot_count,
-                crate::object::object_live_slot_count(obj)
+                crate::object::js_object_get_field_by_name(obj, key("del6759_a")).is_undefined()
             );
         }
+    }
+
+    /// Object model step 4 (§3.2/§3.4): a delete keeps every slot where it is
+    /// (the deleted key's slot holds the hole marker) and sets the shadow bit,
+    /// so the full layout word moves (a full-word compare misses); the
+    /// overflow becomes the key view.
+    unsafe fn assert_step4_delete(
+        obj: *mut crate::object::ObjectHeader,
+        before: u32,
+        deleted_slot: u32,
+        survivors: &[(&str, f64)],
+    ) {
+        assert!(crate::object::overflow::has_overflow(obj));
+        assert_eq!(
+            js_object_get_field(obj, deleted_slot).bits(),
+            crate::value::TAG_HOLE,
+            "the deleted key's slot holds the hole marker"
+        );
+        for (name, value) in survivors {
+            assert_eq!(
+                crate::object::js_object_get_field_by_name(obj, key(name)).as_number(),
+                *value,
+                "a delete compacts nothing: {name} keeps its value"
+            );
+        }
+        let after = (*obj).parent_class_id;
+        assert_ne!(after, before, "the full layout word moves (the shadow bit)");
+        assert!(is_shape_id(crate::object::layout_desc::layout_id_of_word(
+            after
+        )));
+        assert_eq!(
+            crate::object::shapes::object_shape_descriptor(obj)
+                .unwrap()
+                .logical_key_count,
+            3,
+            "the layout keeps every key's slot"
+        );
+        assert!(crate::object::overflow::is_table(
+            crate::object::object_keys(obj).arr()
+        ));
     }
 
     /// #6759 C3 rung 1 — the replacement the pre-rung-1 test named.
@@ -1524,7 +1540,7 @@ mod shape_transition_tests_6759 {
     /// POINTER moves — is kept below, because both are still true and both are
     /// still what `class_field_inline_guard` compares until rung 3.
     #[test]
-    fn delete_mints_a_fresh_shape_id_for_a_class_instance() {
+    fn delete_keeps_the_layout_and_holes_the_slot_for_a_class_instance() {
         // Keep the compacting precondition explicit: the default tombstone
         // path also mints a successor id for class instances, but deliberately
         // leaves surviving fields in their original slots.
@@ -1567,41 +1583,13 @@ mod shape_transition_tests_6759 {
             );
 
             assert_eq!(js_object_delete_field(obj, key("del6759_x")), 1);
-
-            // The compaction really happened: `z` moved from slot 2 to slot 1.
-            assert_eq!(
-                f64::from_bits(js_object_get_field(obj, 1).bits()),
-                30.0,
-                "test premise: the delete did not compact the slots"
-            );
-            // The compacted descriptor is installed before delete returns.
-            let after = (*obj).parent_class_id;
-            assert!(
-                is_shape_id(after),
-                "no shape id re-minted after the delete (got {after:#x})"
-            );
-            assert_ne!(
-                after, before,
-                "the delete re-used the pre-delete ShapeId — a shape-id compare \
-                 would accept a compacted class instance as its own class's shape"
-            );
-            let descriptor = crate::object::shapes::shape_descriptor_by_id(after)
-                .expect("class delete must publish a by-id descriptor");
-            assert_eq!(
-                descriptor.keys,
-                crate::object::object_keys(obj).arr() as u64
-            );
-            assert_eq!(descriptor.logical_key_count, 2);
-            assert_eq!(
-                descriptor.live_inline_slot_count,
-                crate::object::object_live_slot_count(obj)
-            );
+            assert_step4_delete(obj, before, 0, &[("del6759_y", 20.0), ("del6759_z", 30.0)]);
 
             // Still true, and still what the guard compares until rung 3.
             assert_ne!(
                 crate::object::object_keys(obj).arr(),
                 keys_before,
-                "the keys pointer is the guard's compaction evidence and it did not change"
+                "the key view moved to the overflow; the guard's pointer compare must miss"
             );
             assert_eq!(
                 (*obj).class_id,

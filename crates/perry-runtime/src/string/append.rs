@@ -53,7 +53,10 @@ pub extern "C" fn js_string_append(
                 (*new_ptr).utf16_len = (*src).utf16_len;
                 // Preserve the lone-surrogate flag on the duplicate so later
                 // concats/appends still canonicalize correctly. (#6728)
-                (*new_ptr).flags = (*src).flags;
+                (*new_ptr).flags = (*src).flags
+                    & (STRING_FLAG_HAS_LONE_SURROGATES
+                        | STRING_FLAG_JSON_ESCAPE_FREE
+                        | STRING_FLAG_WTF8_VALIDATED);
             }
         }
         return new_ptr;

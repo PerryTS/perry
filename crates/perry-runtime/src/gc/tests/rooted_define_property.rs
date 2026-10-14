@@ -695,10 +695,17 @@ fn descriptor_snapshot_public_raw_and_tagged_operands_move_during_key_conversion
                         scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
                     // A descriptor FIELD is already a JSValue. Even bits equal
                     // to a live heap address are a Number, never a raw operand.
+                    // The bag holds it under a static key: its layout slot is a
+                    // number lane. (Object model step 4 puts a computed-key
+                    // write in the bag's overflow, whose value words the
+                    // collector decodes like any JSValue slot, which admits
+                    // untagged addresses; that decoding is not what this test
+                    // pins.)
                     let numeric_bits = addr_of(payload.get_nanbox_f64()) as u64;
-                    crate::object::js_object_set_property_key(
-                        bag.get_nanbox_f64(),
-                        string_value("value"),
+                    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+                    crate::object::js_object_set_field_by_name(
+                        addr_of(bag.get_nanbox_f64()) as *mut crate::object::ObjectHeader,
+                        value_key,
                         f64::from_bits(numeric_bits),
                     );
                     let key =

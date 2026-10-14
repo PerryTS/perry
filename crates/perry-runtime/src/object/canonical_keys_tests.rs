@@ -92,7 +92,7 @@ fn image_adoption_preserves_shared_prefix_and_gc_layout() {
         backing.with_mut_ptr(|a| {
             let (slots, _) = crate::object::keys_array_dense_slots_resolved(a);
             assert_ne!(
-                (*slots).to_bits(),
+                (*slots.add(0)).to_bits(),
                 JSValue::string_ptr(image as *mut _).bits()
             );
             adopt_image_key(a, 0, image);
@@ -107,7 +107,7 @@ fn image_adoption_preserves_shared_prefix_and_gc_layout() {
             let (slots, len) = crate::object::keys_array_dense_slots_resolved(a as *mut _);
             assert_eq!(len, 2);
             assert_eq!(
-                (*slots).to_bits(),
+                (*slots.add(0)).to_bits(),
                 JSValue::string_ptr(image as *mut _).bits()
             );
             let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
@@ -518,9 +518,8 @@ fn published_prefix_survives_object_and_reflection_writers() {
                     });
                     assert_prefix(prefix);
                     if dictionary {
-                        assert!(object.with_mut_ptr(|o| {
-                            crate::object::dictionary::latch_object_to_dictionary(o)
-                        }));
+                        assert!(object
+                            .with_mut_ptr(|o| { crate::object::overflow::establish_order(o) }));
                         object.with_const_ptr(|o| {
                             full.with_mut_ptr(|a| {
                                 assert_ne!(crate::object::object_keys(o).arr(), a)
@@ -590,10 +589,13 @@ fn published_prefix_survives_object_and_reflection_writers() {
     }
 }
 
+/// A published canonical prefix survives every writer on an object holding
+/// the full list. Object model step 4: deletes, and the computed-key adds and
+/// deletes that follow, go through the object's overflow (§3.4), which never
+/// writes the shared list.
 #[test]
-fn published_prefix_survives_stable_sso_append_grow_and_squeeze() {
+fn published_prefix_survives_deletes_and_overflow_appends() {
     let _lock = crate::gc::global_side_table_test_lock();
-    let _mode = crate::object::delete_rest::test_scope_tombstone_deletes(true);
     reset_for_test();
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -618,20 +620,18 @@ fn published_prefix_survives_stable_sso_append_grow_and_squeeze() {
                 obj.with_mut_ptr(|o| crate::object::js_object_delete_field(o, k)),
                 1
             );
+            assert_prefix(prefix);
         }
-        assert_eq!(
-            obj.with_const_ptr(|o| crate::object::shapes::object_shape_hole_count(o)),
-            3
-        );
+        assert!(obj.with_const_ptr(|o| crate::object::overflow::has_overflow(o)));
+        let target = || {
+            obj.with_mut_ptr(|o: *mut crate::ObjectHeader| {
+                crate::value::js_nanbox_pointer(o as i64)
+            })
+        };
         for n in 0..13 {
             let name = format!("k{n}");
             let sso = JSValue::try_short_string(name.as_bytes()).unwrap();
-            let (_, moved, _) = obj
-                .with_mut_ptr(|o| {
-                    crate::object::try_readd_stable_tombstone(o, f64::from_bits(sso.bits()), 1.0)
-                })
-                .expect("must exercise the stable SSO append, including capacity growth");
-            obj.set_raw_mut_ptr(moved);
+            crate::object::js_object_set_property_key(target(), f64::from_bits(sso.bits()), 1.0);
             assert_prefix(prefix);
             assert_eq!(
                 obj.with_mut_ptr(|o| crate::object::js_object_delete_dynamic(
@@ -642,21 +642,18 @@ fn published_prefix_survives_stable_sso_append_grow_and_squeeze() {
             );
             assert_prefix(prefix);
         }
-        obj.with_const_ptr(|o| {
+        obj.with_mut_ptr(|o| {
             assert_eq!(
-                crate::array::js_array_length(crate::object::object_keys(o).arr()),
+                crate::array::js_array_length(crate::object::js_object_keys(o)),
                 0
             );
-            assert_eq!(crate::object::shapes::object_shape_hole_count(o), 0);
         });
-        let k = key("heap_key_after_squeeze");
-        assert!(obj
-            .with_mut_ptr(|o| crate::object::try_readd_stable_tombstone(
-                o,
-                crate::value::js_nanbox_string(k as i64),
-                2.0
-            ))
-            .is_some());
+        let k = key("heap_key_after_overflow");
+        crate::object::js_object_set_property_key(
+            target(),
+            crate::value::js_nanbox_string(k as i64),
+            2.0,
+        );
         assert_prefix(prefix);
     }
 }

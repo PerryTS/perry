@@ -35,7 +35,7 @@ fn wide_inline_reads_use_the_published_slot_bound() {
 }
 
 #[test]
-fn parsed_wide_objects_keep_computed_reads_and_entries() {
+fn parsed_wide_records_keep_computed_reads_and_entries() {
     for count in [10_000, 10_001] {
         let mut input = String::from("{");
         for index in 0..count {
@@ -50,11 +50,11 @@ fn parsed_wide_objects_keep_computed_reads_and_entries() {
         assert!(parsed.is_pointer());
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = scope.root_raw_const_ptr(parsed.as_pointer::<ObjectHeader>());
-        assert_eq!(
-            object.with_const_ptr(|o: *const ObjectHeader| unsafe { object_live_slot_count(o) }),
-            count,
-            "the parser must exercise the wide inline representation"
-        );
+        // Object model step 4: a parsed record's fields are overflow entries
+        // (§3.4), however wide.
+        assert!(object.with_const_ptr(|o: *const ObjectHeader| unsafe {
+            crate::object::overflow::has_overflow(o)
+        }));
         for index in [0, 5, count / 2, count - 1] {
             let name = format!("k{index}");
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);

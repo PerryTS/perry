@@ -433,7 +433,7 @@ pub(crate) unsafe fn publish_key_add_edge(
 ) -> u32 {
     let rep = key_add_rep(pred_rep, slot, value_bits, inline);
     // A ConstFn birth may be minted only for an executable-image body.
-    let candidate = if inline && slot < REP_SLOTS && !super::dictionary::is_dictionary(obj) {
+    let candidate = if inline && slot < REP_SLOTS && !super::overflow::has_overflow(obj) {
         value_bits.and_then(|bits| unsafe { constfn_store_info(bits) })
     } else {
         None
@@ -489,7 +489,7 @@ pub(crate) unsafe fn publish_key_add_edge(
         .map(|root| root.get_nanbox_f64().to_bits())
         .or(value_bits);
     receiver.with_mut_ptr(|obj| match value_bits {
-        Some(bits) if inline && id != 0 && !crate::object::dictionary::is_dictionary(obj) => {
+        Some(bits) if inline && id != 0 && !crate::object::overflow::has_overflow(obj) => {
             converge_key_add(obj, id, slot, bits)
         }
         _ => id,
@@ -511,7 +511,7 @@ unsafe fn publish_key_add_rep(
     constfn_info: Option<u64>,
 ) -> u32 {
     let id = object_shape_stamp(obj);
-    if id == 0 || crate::object::dictionary::is_dictionary(obj) {
+    if id == 0 || crate::object::overflow::has_overflow(obj) {
         return id;
     }
     let Some(d) = shape_descriptor_by_id(id) else {
@@ -569,7 +569,7 @@ pub(crate) unsafe fn private_field_lanes_target(
     slot: u32,
     pred_rep: u64,
 ) -> Option<(u32, u32, u64)> {
-    if super::dictionary::is_dictionary(obj) {
+    if super::overflow::has_overflow(obj) {
         return None;
     }
     let id = object_shape_stamp(obj);

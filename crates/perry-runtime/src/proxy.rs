@@ -1048,9 +1048,13 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     let indexed_owner = unsafe {
         match crate::value::addr_class::try_read_gc_header(addr) {
             Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+                // The indexed answer reads the layout alone; a prototype with
+                // an overflow keeps keys and attributes in its entries (object
+                // model step 4), which the complete lookup below reads.
                 let meta = (*(addr as *const crate::ObjectHeader)).meta;
                 (!meta.is_null()
-                    && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0)
+                    && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0
+                    && (*meta).overflow == 0)
                     .then_some(addr)
             }
             Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => {
@@ -2670,18 +2674,30 @@ mod tests {
     /// `DirectParser` (`json/parse_api.rs`) — no lazy tape stands between this
     /// probe and the objects it inspects (#7635).
     #[test]
-    fn json_parse_receivers_are_admitted_to_the_whole_loop_write_clone() {
+    fn record_receivers_are_admitted_to_the_whole_loop_write_clone() {
         // This proof honours the process-wide class-field inline gate, and any
         // earlier test that ran `js_gc_init` (typed feedback is always on in
         // test builds) leaves that gate disabled. Establish the premise.
 
         let src = br#"{"x":0,"y":0}"#;
+        let key_ptr = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+        let key_y = f64::from_bits(crate::value::STRING_TAG | (key_ptr as u64 & POINTER_MASK));
+        // Object model step 4: a JSON.parse record keeps its fields in its
+        // overflow (§3.4), which this layout proof does not serve until step
+        // 5; the nest goes to ordinary [[Set]].
+        let parsed: Vec<f64> = (0..4)
+            .map(|_| put_value::record_fixture::json(src))
+            .collect();
+        let parsed_array = crate::array::js_array_from_f64(parsed.as_ptr(), parsed.len() as u32);
+        assert_eq!(
+            object_array_numeric_write_guard(boxed_object(parsed_array.cast()), &[key_y], 4),
+            0,
+            "JSON.parse records (overflow receivers) take ordinary [[Set]]"
+        );
+        // The admission itself, on the same records built with fixed slots.
         let mut receivers = Vec::new();
         for _ in 0..4 {
-            let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
-            let value = unsafe { crate::json::js_json_parse(text) };
-            assert!(value.is_pointer(), "JSON.parse must yield an object");
-            receivers.push(f64::from_bits(value.bits()));
+            receivers.push(put_value::record_fixture::record(src));
         }
         let array = crate::array::js_array_from_f64(receivers.as_ptr(), receivers.len() as u32);
         let array_box = boxed_object(array.cast());
@@ -2705,17 +2721,15 @@ mod tests {
                 assert_eq!(
                     crate::object::shapes::object_shape_stamp(*object),
                     crate::object::shapes::object_shape_stamp(objects[0]),
-                    "repeated parses share one keys array, hence one ShapeId"
+                    "records of one key sequence share one ShapeId"
                 );
             }
         }
 
-        let key_ptr = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
-        let key_y = f64::from_bits(crate::value::STRING_TAG | (key_ptr as u64 & POINTER_MASK));
         assert_eq!(
             object_array_numeric_write_guard(array_box, &[key_y], 4),
             2,
-            "the whole-loop clone must publish slot 1 for a parsed receiver prefix"
+            "the whole-loop clone must publish slot 1 for a record receiver prefix"
         );
 
         // The discriminating quantity: clear the ordinary mark on ONE receiver
@@ -2729,7 +2743,7 @@ mod tests {
             assert_ne!(
                 saved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY,
                 0,
-                "the parser must mark what it allocates"
+                "the record is born marked ordinary"
             );
             (*header)._reserved = saved & !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
             crate::object::shapes::store_kind::restamp_object_store_kind(objects[2]);
@@ -2754,16 +2768,23 @@ mod tests {
     /// covers a constant-counted nest). A miss that refuses to prime leaves the
     /// site on the runtime path forever.
     #[test]
-    fn json_parse_receivers_prime_the_static_write_pic() {
-        let src = br#"{"n":1}"#;
-        let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
-        let value = unsafe { crate::json::js_json_parse(text) };
-        assert!(value.is_pointer());
-        let target = f64::from_bits(value.bits());
-        let object = (value.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-
-        let key_ptr = crate::string::js_string_from_bytes(b"n".as_ptr(), 1);
-        let key_ptr = crate::string::js_string_intern(key_ptr, fnv1a(b"n"));
+    fn record_receivers_prime_the_static_write_pic() {
+        // Object model step 4: a JSON.parse record keeps its fields in its
+        // overflow and primes no site until step 5; this pins the admission
+        // on the same record built with fixed slots.
+        // The key is interned before anything mints an atom for its spelling
+        // (a JSON.parse or a canonical key list would): only an interned
+        // string is admitted as a write site's key.
+        let name: &[u8] = b"n8098";
+        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key_ptr = crate::string::js_string_intern(key_ptr, fnv1a(name));
+        let plain_record = || {
+            let obj = crate::object::js_object_alloc_plain(0);
+            crate::object::js_object_set_field_by_name(obj, key_ptr, 1.0);
+            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits())
+        };
+        let target = plain_record();
+        let object = (target.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
 
         let mut cache: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
         let mut cache_slot: put_value::WritePicCacheSlot = &mut cache;
@@ -2782,9 +2803,8 @@ mod tests {
 
         // Discriminating half: an otherwise identical parsed receiver with the
         // ordinary mark cleared must NOT prime.
-        let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
-        let value = unsafe { crate::json::js_json_parse(text) };
-        let unmarked = (value.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        let value = plain_record();
+        let unmarked = (value.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
         unsafe {
             let header =
                 (unmarked as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
@@ -2793,14 +2813,8 @@ mod tests {
         }
         let mut cache2: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
         let mut cache2_slot: put_value::WritePicCacheSlot = &mut cache2;
-        let stored = put_value::js_put_value_set_ic_miss(
-            f64::from_bits(value.bits()),
-            key_ptr,
-            9.0,
-            0,
-            &mut cache2_slot,
-            0,
-        );
+        let stored =
+            put_value::js_put_value_set_ic_miss(value, key_ptr, 9.0, 0, &mut cache2_slot, 0);
         assert_eq!(stored, 9.0, "the write itself still succeeds");
         assert_eq!(
             cache2[0], 0,

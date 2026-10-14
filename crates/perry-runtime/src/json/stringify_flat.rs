@@ -246,6 +246,9 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         return None;
     }
     let keys_view = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys_view.arr()) {
+        return None;
+    }
     let keys = keys_view.arr();
     let fields = if keys.is_null() {
         0
@@ -302,6 +305,9 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
 #[inline]
 unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSValue> {
     let keys_view = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys_view.arr()) {
+        return None;
+    }
     let keys = keys_view.arr();
     let key_bits = slot(crate::array::array_elements_ptr(keys).cast(), 0, 0);
     let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0);
@@ -320,6 +326,9 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
     let (result, output) = string_storage_alloc(bytes);
     input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let keys_view = crate::object::object_keys(obj);
+        if crate::object::overflow::is_table(keys_view.arr()) {
+            return None;
+        }
         let keys = keys_view.arr();
         init_string_header(result, units, bytes, bytes, 0, 0);
         // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -379,6 +388,9 @@ unsafe fn emit_two_field_parsed_string_object(
     proven_value: Piece,
 ) -> Option<JSValue> {
     let keys_view = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys_view.arr()) {
+        return None;
+    }
     let keys = keys_view.arr();
     let empty = Piece::String { bytes: 0, units: 0 };
     let mut key_plan = [empty; 2];
@@ -423,6 +435,9 @@ unsafe fn emit_two_field_parsed_string_object(
     let (result, output, malloc_tracked) = json_output_storage_alloc(bytes);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let keys_view = crate::object::object_keys(obj);
+        if crate::object::overflow::is_table(keys_view.arr()) {
+            return None;
+        }
         let keys = keys_view.arr();
         init_string_header(result, units, bytes, bytes, 0, 0);
         // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
@@ -486,6 +501,9 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let mut key_plan = [empty; MAX_FIELDS];
     let mut value_plan = [empty; MAX_FIELDS];
     let keys_view = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys_view.arr()) {
+        return None;
+    }
     let keys = keys_view.arr();
     let mut bytes = 2u32;
     let mut units = 2u32;
@@ -521,6 +539,9 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let (result, output) = string_storage_alloc(bytes);
     input.with_const_ptr(|obj: *const crate::ObjectHeader| {
         let keys_view = crate::object::object_keys(obj);
+        if crate::object::overflow::is_table(keys_view.arr()) {
+            return None;
+        }
         let keys = keys_view.arr();
         init_string_header(result, units, bytes, bytes, 0, 0);
         // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.

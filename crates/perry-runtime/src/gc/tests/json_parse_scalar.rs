@@ -2,6 +2,25 @@ use super::super::*;
 use super::support::*;
 use crate::gc::policy::{GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING, GC_TRIGGER_ARMED};
 
+/// A named own property of a `JSON.parse` record. Object model step 4: the
+/// record keeps its keys and values in its overflow (§3.4), so a test reads
+/// them by name and counts the overflow and metadata cells with the record.
+unsafe fn named(object: *const crate::ObjectHeader, name: &[u8]) -> crate::JSValue {
+    let key = crate::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_get_field_by_name(object, key)
+}
+
+/// The record's own bytes: the object, its metadata and its overflow.
+unsafe fn record_bytes(object: *const crate::ObjectHeader) -> usize {
+    let size = |user: *const u8| (*(user.sub(GC_HEADER_SIZE) as *const GcHeader)).size as usize;
+    let table = crate::object::overflow::table(object);
+    assert!(
+        !table.is_null(),
+        "a JSON.parse record carries its overflow from birth"
+    );
+    size(object.cast()) + size((*object).meta.cast()) + size(table.cast())
+}
+
 struct ParseStateGuard {
     pending: bool,
     flags: u8,
@@ -10,7 +29,7 @@ struct ParseStateGuard {
 }
 
 #[test]
-fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
+fn json_inline_object_parse_allocates_only_fresh_output() {
     let _isolation = GcTestIsolationGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let text = r#"{"a":1,"b":true,"c":"é"}"#.as_bytes();
@@ -24,6 +43,7 @@ fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
     let collections = gc_collection_count();
     let mut previous = 0usize;
     let mut allocated = 0usize;
+    let mut probe_bytes = 0usize;
     for i in 0..1000 {
         let value = unsafe {
             if i % 2 == 0 {
@@ -37,23 +57,28 @@ fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
         previous = object as usize;
         unsafe {
             let header = (object as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-            allocated += (*header).size as usize;
+            allocated += record_bytes(object);
             assert_eq!((*header).obj_type, GC_TYPE_OBJECT);
             assert_ne!((*header)._reserved & OBJ_FLAG_PLAIN_ORDINARY, 0);
-            assert_eq!(crate::object::object_live_slot_count(object), 3);
-            let keys = crate::object::object_keys(object).arr();
-            assert_eq!((*keys).length, 3);
-            let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
-                as *const crate::JSValue;
-            assert_eq!((*fields).as_number(), 1.0);
-            assert!((*fields.add(1)).as_bool());
-            assert!((*fields.add(2)).is_short_string());
+            // The by-name reads allocate their probe key strings; those
+            // bytes are the test's, not the parse's.
+            let probes = crate::arena::arena_in_use_bytes();
+            assert_eq!(named(object, b"a").as_number(), 1.0);
+            assert!(named(object, b"b").as_bool());
+            assert!(named(object, b"c").is_short_string());
+            probe_bytes += crate::arena::arena_in_use_bytes() - probes;
         }
     }
-    assert_eq!(crate::arena::arena_in_use_bytes() - before, allocated);
+    assert_eq!(
+        crate::arena::arena_in_use_bytes() - before - probe_bytes,
+        allocated
+    );
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_eq!(gc_collection_count(), collections);
-    assert_eq!(GC_PRE_SUPPRESS_BYTES.with(|c| c.get()), 123);
+    // Object model step 4: a record is born with its overflow (§3.4), which
+    // the direct parser builds inside its suppression window; the inline
+    // object lane that built fixed-slot records without suppression no
+    // longer applies, so the pre-suppression byte mark is the parser's.
 }
 
 #[test]
@@ -100,8 +125,8 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
             .as_pointer::<crate::ObjectHeader>();
         assert_ne!(output_address, moved as usize);
         unsafe {
-            let keys = crate::object::object_keys(moved).arr();
-            assert_eq!((*keys).length, 2);
+            let keys = crate::object::js_object_keys(moved);
+            assert_eq!(crate::array::js_array_length(keys), 2);
             assert!(crate::string::js_string_key_matches_bytes(
                 crate::array::js_array_get(keys, 0),
                 b"a"
@@ -110,10 +135,8 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
                 crate::array::js_array_get(keys, 1),
                 b"b"
             ));
-            let fields = (moved as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
-                as *const crate::JSValue;
-            assert_eq!((*fields).as_number(), 1.0);
-            assert!((*fields.add(1)).as_bool());
+            assert_eq!(named(moved, b"a").as_number(), 1.0);
+            assert!(named(moved, b"b").as_bool());
         }
     }
 }
@@ -163,7 +186,7 @@ fn json_repeated_string_cache_survives_source_evacuation() {
 }
 
 #[test]
-fn json_small_object_template_survives_evacuation() {
+fn json_small_object_parse_is_not_templated_and_survives_evacuation() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -185,32 +208,22 @@ fn json_small_object_template_survives_evacuation() {
     let first = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
     let first = scope.root_nanbox_u64(first.bits());
 
-    // The bounded parse-shape cache usually carries the same descriptor as
-    // the reusable object template. Remove that redundant owner and rebuild
-    // transient carrier bits as a full trace does: the template must retain
-    // its own ShapeId even when it is the sole metadata publisher.
+    // Object model step 4: the record keeps its keys and values in its
+    // overflow, which no fixed-slot plan describes, so no object template is
+    // remembered for it; the repeated parse after the evacuation builds the
+    // record again and must still serialize to its source.
     let first_object =
         crate::JSValue::from_bits(first.get_nanbox_u64()).as_pointer::<crate::ObjectHeader>();
-    let template_shape = unsafe { crate::object::shapes::object_shape_stamp(first_object) };
-    crate::json::PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
-    crate::object::shape_carriers::recompute_after_full_trace();
-    assert!(
-        crate::object::shapes::shape_descriptor_by_id(template_shape)
-            .is_some_and(|descriptor| descriptor.cache_carrier),
-        "the reusable object template must rebuild ownership of its ShapeId"
-    );
+    assert!(unsafe { crate::object::overflow::has_overflow(first_object) });
+    assert!(!input.with_const_ptr(|input| {
+        crate::json::test_parse_object_template_matches(input, text.len())
+    }));
 
     let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
     assert_ne!(
         input_before,
         input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
-        "the test must exercise template-key rewriting"
-    );
-    assert!(
-        input.with_const_ptr(|input| {
-            crate::json::test_parse_object_template_matches(input, text.len())
-        }),
-        "the template source slot must be rewritten with its rooted input"
+        "the test must exercise source evacuation"
     );
     let second = input.with_const_ptr(|input| unsafe { crate::json::js_json_parse(input) });
     assert_ne!(first.get_nanbox_u64(), second.bits());

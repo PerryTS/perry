@@ -65,9 +65,13 @@ impl NamedStateKey {
         let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
             return false;
         };
+        // An object with an overflow keeps its keys' attributes and any key
+        // added after it there, not in its layout (object model step 4): the
+        // ordinary Set decides.
         if header._reserved & crate::gc::OBJ_FLAG_FROZEN != 0
             || (header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
                 && !crate::object::key_attrs::attrs_live_in_keys(obj as usize))
+            || crate::object::overflow::has_overflow(obj)
         {
             return false;
         }
@@ -143,6 +147,21 @@ impl NamedStateKey {
 
     /// Runtime-private state keeps own-only semantics, through the same word.
     pub(crate) unsafe fn read_own(self, obj: *mut ObjectHeader) -> Option<f64> {
+        // An object with an overflow lists every own key there; a deleted
+        // layout key's slot holds the hole marker (object model step 4).
+        let table = crate::object::overflow::table(obj);
+        if !table.is_null() {
+            let entry = crate::object::overflow::find_bytes(table, self.bytes)?;
+            if crate::object::overflow::entry_attrs(table.cast(), entry)
+                & crate::object::key_attrs::ENTRY_ACCESSOR
+                != 0
+            {
+                return None;
+            }
+            return crate::object::overflow::get_from(table, obj, entry)
+                .filter(|&bits| bits != crate::value::TAG_HOLE)
+                .map(f64::from_bits);
+        }
         self.memo.with(|site| {
             let slot = if let Some(slot) = site.own_slot(obj) {
                 slot

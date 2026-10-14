@@ -175,9 +175,13 @@ pub(crate) unsafe fn bag_born_with_attrs(
 /// Own data lookup in an ordinary (or dictionary-mode) bag by key bytes.
 unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     // One shape lookup for an ordinary bag: keys, count and inline bound all
-    // come from the same descriptor.
+    // come from the same descriptor. The layout answers alone unless the
+    // shadow bit says the bag's own keys extend past it (§3.6).
     if let Some(d) = crate::object::shapes::object_shape_descriptor(obj) {
-        if d.object_kind.is_ordinary_layout() && d.keys != 0 {
+        if d.object_kind.is_ordinary_layout()
+            && d.keys != 0
+            && !crate::object::overflow::shadowed(obj)
+        {
             let keys = d.keys as usize as *const crate::array::ArrayHeader;
             let slot =
                 crate::object::keys_find_property_slot_by_bytes(keys, d.logical_key_count, key)?;
@@ -195,6 +199,20 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
             }
             return Some(f64::from_bits(value.bits()));
         }
+    }
+    // With an overflow, the entry's position is not a field slot: the entry
+    // holds the value or a reference to its fixed slot (§3.4).
+    let t = crate::object::overflow::table(obj);
+    if !t.is_null() {
+        let i = crate::object::overflow::find_bytes(t, key)?;
+        if crate::object::key_attrs::key_is_accessor_at(t.cast(), i) {
+            return None;
+        }
+        let bits = crate::object::overflow::get_from(t, obj, i)?;
+        if bits == crate::value::TAG_HOLE {
+            return None;
+        }
+        return Some(f64::from_bits(bits));
     }
     let keys = crate::object::object_keys(obj);
     let arr = keys.arr();

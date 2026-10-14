@@ -33,7 +33,7 @@
 //! same information at a fraction of the bytes.
 
 use super::{
-    ShapeDescriptor, ShapeObjectKind, DICTIONARY_SHAPE_ID_BASE, EXOTIC_SHAPE_ID_BASE, SHAPE_ID_BASE,
+    ShapeDescriptor, ShapeObjectKind, EXOTIC_SHAPE_ID_BASE, SHAPE_ID_BASE, SITE_SHAPE_ID_END,
 };
 use std::cell::UnsafeCell;
 
@@ -176,7 +176,7 @@ const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0xF << RECORD_KIND_SHIFT;
 /// The frequently decoded kind is one contiguous field.
 /// `kind_codes_round_trip` pins the encoding independently of record width.
-const RECORD_KIND_MAX_CODE: u32 = 11;
+const RECORD_KIND_MAX_CODE: u32 = 10;
 const _: () = assert!(RECORD_KIND_MAX_CODE <= 15);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
@@ -1004,7 +1004,7 @@ type Page = Slot<PageSlots>;
 
 /// Band-relative starts: the dictionary band, the exotic band, and the end of
 /// the ShapeId range, each relative to `SHAPE_ID_BASE`.
-const DICT_REL: u32 = DICTIONARY_SHAPE_ID_BASE - SHAPE_ID_BASE;
+const DICT_REL: u32 = SITE_SHAPE_ID_END - SHAPE_ID_BASE;
 const EXOTIC_REL: u32 = EXOTIC_SHAPE_ID_BASE - SHAPE_ID_BASE;
 const END_REL: u32 = super::SHAPE_ID_END - SHAPE_ID_BASE;
 
@@ -1032,7 +1032,8 @@ fn band_of(rel: u32) -> usize {
 /// band 3's index is meaningless and its directory empty.
 #[inline(always)]
 fn locate(id: u32) -> (usize, usize) {
-    let rel = id.wrapping_sub(SHAPE_ID_BASE);
+    // A header word may carry the shadow bit; the record is the layout's.
+    let rel = (id & !crate::object::overflow::SHADOW_BIT).wrapping_sub(SHAPE_ID_BASE);
     let band = band_of(rel);
     (band, rel.wrapping_sub(BAND_BASE_REL[band]) as usize)
 }
@@ -1092,7 +1093,7 @@ pub static PERRY_EMPTY_SHAPE_DIR: SharedEmpty<BandDir> = SharedEmpty(BandDir::em
 
 /// The by-id descriptor store. See the module docs.
 /// Two page directories: ordinary ShapeIds index from `SHAPE_ID_BASE`, and the
-/// dictionary band (`shapes::DICTIONARY_SHAPE_ID_BASE`) from its own base. One
+/// dictionary band (`shapes::SITE_SHAPE_ID_END`) from its own base. One
 /// directory indexed from `SHAPE_ID_BASE` would grow to ~24,577 page slots the
 /// moment the first dictionary id is minted; measured on `ts.transpileModule`,
 /// that one ~196 KB allocation moved the GC arena's pages relative to the
@@ -1158,7 +1159,7 @@ impl ShapeSlab {
     fn id_of(band: u8, index: usize) -> u32 {
         match band {
             0 => SHAPE_ID_BASE + index as u32,
-            1 => DICTIONARY_SHAPE_ID_BASE + index as u32,
+            1 => SITE_SHAPE_ID_END + index as u32,
             _ => EXOTIC_SHAPE_ID_BASE + index as u32,
         }
     }
@@ -1484,7 +1485,8 @@ impl ShapeSlab {
     /// removed.
     #[inline(always)]
     pub(super) fn agent_record(id: u32) -> *mut ShapeRecord {
-        let rel = id.wrapping_sub(SHAPE_ID_BASE);
+        // A header word may carry the shadow bit; the record is the layout's.
+        let rel = (id & !crate::object::overflow::SHADOW_BIT).wrapping_sub(SHAPE_ID_BASE);
         let band = band_of(rel);
         debug_assert!(band < AGENT_SHAPE_DIR.len());
         // SAFETY: `band_of` is at most 3; the published pair is the agent slab's page vector,

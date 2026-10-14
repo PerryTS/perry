@@ -347,10 +347,10 @@ unsafe fn stringify_object_walk(
     // it moves, and user code can move the object to another shape).
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_const_ptr(obj);
-    let current_key_slots = || -> *const f64 {
+    let current_key_slots = || -> crate::object::KeySlots {
         obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
             let keys_arr = crate::object::object_keys(obj).arr();
-            crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64
+            crate::object::keys_array_dense_slots(keys_arr).0
         })
     };
     // Closes #307: iterate up to keys_len, not min(num_fields, keys_len).
@@ -505,9 +505,7 @@ unsafe fn stringify_object_walk(
         keys_stale = true;
     }
     // Only dereferenced once the loop has refreshed it, if `keys_stale`.
-    let mut key_slots =
-        crate::array::array_elements_ptr(keys_view.arr() as *const crate::ArrayHeader)
-            as *const f64;
+    let mut key_slots = crate::object::keys_array_dense_slots(keys_view.arr()).0;
 
     // Only own ENUMERABLE keys are serialized; gated on the process-wide
     // atomic AND the per-object `OBJ_FLAG_HAS_DESCRIPTORS` header flag

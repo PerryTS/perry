@@ -206,7 +206,7 @@ unsafe fn positional_assign_target_is_safe(
     target_is_array: bool,
     plan: PositionalPlan,
 ) -> bool {
-    if target_is_array {
+    if target_is_array || super::overflow::has_overflow(target) {
         return false;
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(target as usize) else {
@@ -298,9 +298,12 @@ unsafe fn positional_prototype_shape_keys(
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return None;
         };
+        // A hop with an overflow holds keys and attributes its layout does
+        // not list (object model step 4): no positional proof.
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+            || super::overflow::has_overflow(addr as *const ObjectHeader)
         {
             return None;
         }
@@ -391,7 +394,7 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     }
     let class_id = (*src).class_id;
     if (class_id != 0 && !super::class_registry::is_anon_shape_class_id(class_id))
-        || super::dictionary::is_dictionary(src)
+        || super::overflow::has_overflow(src)
         || super::string_wrapper::length(src_raw).is_some()
         || (class_id == 0 && crate::url::is_url_object_shape(src as *mut ObjectHeader))
     {
@@ -446,7 +449,7 @@ unsafe fn positional_entry(
     // This is an internal key list, not a JavaScript array read: stores can
     // replace the source's list, but cannot edit this rooted snapshot.
     debug_assert!(i < key_count);
-    let key_val = crate::JSValue::from_bits(*crate::array::array_elements_ptr(keys).add(i));
+    let key_val = crate::object::ObjectKeys::new(keys.cast_mut(), key_count as u32).get(i as u32);
     if !key_val.is_any_string()
         || (hide_private && crate::object::field_get_set::own_slot_hidden(src, i as u32, key_val))
     {
@@ -908,7 +911,8 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     };
     let strict_set_is_shape_equivalent =
         !define && positional_assign_target_is_safe(target, target_is_array, positional_plan);
-    if !define
+    if (!define
+        || (source_obj_type == crate::gc::GC_TYPE_OBJECT && super::overflow::has_overflow(src)))
         && !strict_set_is_shape_equivalent
         && matches!(
             source_obj_type,
@@ -921,7 +925,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         // symbol keys before any string-keyed setter can change the source.
         let scope = crate::gc::RuntimeHandleScope::new();
         let tgt_h = scope.root_raw_mut_ptr(target);
-        object_assign_enumerated_source(false, target, target_is_array, source_f64);
+        object_assign_enumerated_source(define, target, target_is_array, source_f64);
         return tgt_h
             .with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64));
     }

@@ -195,6 +195,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         return unsafe { crate::symbol::js_object_get_symbol_property(value, index) };
     }
     if jsval.is_pointer() && JSValue::from_bits(index.to_bits()).is_any_string() {
+        // An object with an overflow answers an own key with one atom-keyed
+        // hit (§3.4); anything else takes the complete Get below.
+        if let Some(value) = unsafe {
+            crate::object::overflow::own_get_key(
+                (bits & POINTER_MASK) as *const crate::object::ObjectHeader,
+                index.to_bits(),
+            )
+        } {
+            return f64::from_bits(value.bits());
+        }
         let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(bytes) = unsafe {
             crate::string::js_string_key_bytes(JSValue::from_bits(index.to_bits()), &mut scratch)

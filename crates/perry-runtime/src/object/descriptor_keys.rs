@@ -113,6 +113,10 @@ pub(crate) unsafe fn ordinary_data_shape(
     {
         return None;
     }
+    // A shadowed object's own keys are its overflow's, not the layout's.
+    if super::overflow::shadowed(object) {
+        return None;
+    }
     let shape = shapes::object_shape_descriptor(object)?;
     (matches!(
         shape.object_kind,

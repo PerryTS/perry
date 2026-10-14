@@ -246,6 +246,7 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
         crate::object::shapes::rotate_old_carrier_epoch_after_full_trace();
     }
     let probe = PostTraceProbe::new(full_trace);
+    crate::string::prune_property_atoms(&|addr| probe.owner_is_dead(addr, Some(GC_TYPE_STRING)));
     // #9754: a minor can only find a physically young owner dead
     // (`owner_is_dead` refuses old-generation owners on a minor), so the
     // young-logged tables prune from their logs instead of walking.
@@ -270,6 +271,9 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
 /// before the flip destroys their headers. Nursery-only by construction, so
 /// the tenured/malloc caveat cannot mis-fire here.
 pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
+    crate::string::prune_property_atoms(&|addr| {
+        owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_STRING))
+    });
     let mut detail = String::new();
     let diag = super::gc_diag_enabled();
     if diag {

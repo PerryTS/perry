@@ -44,12 +44,18 @@ fn strings(names: &[&str]) -> Vec<String> {
 }
 
 /// A plain object whose keys were added one at a time, in `names` order.
+/// The values are strings: no slot earns a number lane, so a writer's store
+/// (object model step 4: a delete stores the hole marker into the deleted
+/// key's slot, which generalizes a number lane for the layout's family)
+/// cannot move later objects of these keys to a rep-sibling layout, which is
+/// a lane fact, not a key-list one.
 unsafe fn object_with(names: &[&str]) -> *mut crate::object::ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, names.len() as u32));
-    for (i, name) in names.iter().enumerate() {
+    for name in names {
         let k = key(name);
-        obj.with_mut_ptr(|o| crate::object::js_object_set_field_by_name(o, k, i as f64));
+        let v = crate::value::js_nanbox_string(k as i64);
+        obj.with_mut_ptr(|o| crate::object::js_object_set_field_by_name(o, k, v));
     }
     obj.with_mut_ptr(|o| o)
 }
@@ -176,8 +182,16 @@ fn every_writer_leaves_the_other_lists_on_a_backing_unchanged() {
                         short.with_const_ptr(|o| crate::object::object_keys(o)),
                         target.with_const_ptr(|o| crate::object::object_keys(o)),
                     );
-                    assert_eq!(tip_keys.arr(), short_keys.arr(), "premise: one backing");
-                    assert_eq!(target_keys.arr(), tip_keys.arr(), "premise: one backing");
+                    assert_eq!(
+                        tip_keys.arr(),
+                        short_keys.arr(),
+                        "premise: one backing (writer {name} tip={mutate_tip} tomb={tombstones})"
+                    );
+                    assert_eq!(
+                        target_keys.arr(),
+                        tip_keys.arr(),
+                        "premise: one backing (writer {name} tip={mutate_tip} tomb={tombstones})"
+                    );
                     assert_eq!((tip_keys.count(), short_keys.count()), (3, 2));
                     assert!(
                         (*tip_keys.arr()).capacity > 3,
@@ -246,7 +260,7 @@ unsafe fn run_writer(writer: usize, obj: crate::gc::RuntimeHandle<'_>) {
             });
         }
         5 => {
-            assert!(obj.with_mut_ptr(|o| crate::object::dictionary::latch_object_to_dictionary(o)));
+            assert!(obj.with_mut_ptr(|o| crate::object::overflow::establish_order(o)));
             set("z", 1.0);
             delete("a");
         }
@@ -312,7 +326,8 @@ fn a_shorter_list_on_an_indexed_backing_is_absent_past_its_count() {
             "the short object must not read the tip's k38"
         );
         let got = long.with_const_ptr(|o| crate::object::js_object_get_field_by_name(o, k38));
-        assert_eq!(got.as_number(), 38.0);
+        // `object_with` stores each key's own name as its value.
+        assert!(crate::string::js_string_key_matches_bytes(got, b"k38"));
     }
 }
 

@@ -901,7 +901,7 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
     // publisher would stamp an ordinary-namespace generation over it. Decline,
     // and both callers take the compacting delete, which republishes through
     // `dictionary::publish_keys`.
-    if crate::object::dictionary::is_dictionary(obj) {
+    if crate::object::overflow::has_overflow(obj) {
         return 0;
     }
     let predecessor = super::object_shape_stamp(obj);
@@ -1341,17 +1341,16 @@ mod tests {
                 Some(39),
                 "deleting a sibling stole the shared source index"
             );
+            // Object model step 4: the deleting object's key view is its
+            // overflow, which keeps every survivor at its own position (the
+            // deleted key's entry is a tombstone, no slot shifts).
+            assert!(crate::object::overflow::is_table(private_keys));
+            let table = private_keys as *const crate::object::overflow::Table;
             assert_eq!(
-                shape_slot_lookup(
-                    private_keys,
-                    survivor,
-                    survivor_hash,
-                    (KEY_COUNT - 1) as u32,
-                    false,
-                ),
-                Some(38),
-                "the deleting object did not receive the shifted index"
+                crate::object::overflow::find_bytes(table, survivor),
+                Some(39)
             );
+            assert_eq!(crate::object::overflow::find_bytes(table, victim), None);
         }
     }
 }

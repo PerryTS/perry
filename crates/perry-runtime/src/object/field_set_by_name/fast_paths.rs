@@ -127,10 +127,10 @@ unsafe fn existing_own_data_overwrite(
     if !shape.object_kind.is_ordinary_layout() {
         return false;
     }
-    // #10868 step 2.5 stage 1: this path takes its bound from the descriptor
-    // and its keys pointer from `object_keys_array`; for a dictionary-mode
-    // receiver those name different arrays.
-    if crate::object::dictionary::is_dictionary(obj) {
+    // This path takes its bound from the layout descriptor and its keys
+    // pointer from `object_keys`; for an object with an overflow those name
+    // different lists.
+    if crate::object::overflow::has_overflow(obj) {
         return false;
     }
     let live_slots = shape.live_inline_slot_count;

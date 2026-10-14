@@ -215,6 +215,17 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         // `Object.defineProperty(handle, …)`. Consult the expando table rather
         // than reporting a flat false. Proxies are heap cells, served by the
         // trap branch below.
+        // An object with an overflow holds every own key in it: one
+        // atom-keyed probe answers (§3.4), unless indexed elements or an
+        // exotic receiver make a miss inconclusive.
+        if obj_js.is_pointer() && crate::JSValue::from_bits(key_value.to_bits()).is_any_string() {
+            if let Some(present) = crate::object::overflow::own_has_key(
+                obj_js.as_pointer::<super::super::ObjectHeader>(),
+                key_value.to_bits(),
+            ) {
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
+        }
         if obj_js.is_handle() {
             let addr = obj_js.as_handle();
             {

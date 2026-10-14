@@ -135,6 +135,60 @@ fn prototype_data_mutation_shadow_delete_and_freeze_match_forced_slow() {
     differential(child, "value", 17.0);
 }
 
+/// Object model §3.7 case 3: a receiver with an overflow that does not hold
+/// the key continues with its prototype chain; a hop with an overflow is
+/// answered by its table. Inherited data and a definite miss both come from
+/// the layouts, and both match the complete read.
+#[test]
+fn an_overflow_miss_walks_the_prototype_layouts() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    // A null-prototype holder ends the chain, so a miss is a definite answer.
+    let prototype = js_object_create(f64::from_bits(crate::value::TAG_NULL));
+    let prototype = crate::value::js_nanbox_get_pointer(prototype) as *mut ObjectHeader;
+    js_object_set_field_by_name(prototype, key("value"), 7.0);
+    let child = js_object_create(boxed(prototype));
+    let child_ptr = crate::value::js_nanbox_get_pointer(child) as *mut ObjectHeader;
+    js_object_set_field_by_name(child_ptr, key("own"), 3.0);
+    unsafe {
+        crate::object::overflow::establish_order(child_ptr);
+        assert!(crate::object::overflow::shadowed(child_ptr));
+        assert_eq!(
+            try_data_lookup_by_name(child_ptr, key("own")).map(|v| v.map(|v| v.bits())),
+            Some(Some(3.0f64.to_bits()))
+        );
+        assert_eq!(
+            try_data_lookup_by_name(child_ptr, key("value")).map(|v| v.map(|v| v.bits())),
+            Some(Some(7.0f64.to_bits()))
+        );
+        assert!(matches!(
+            try_data_lookup_by_name(child_ptr, key("overflow_walk_absent")),
+            Some(None)
+        ));
+    }
+    differential(child, "value", 7.0);
+    // A hop with an overflow answers from its table, a key added there too.
+    unsafe { crate::object::overflow::establish_order(prototype) };
+    js_object_set_field_by_name(prototype, key("added"), 5.0);
+    unsafe {
+        assert_eq!(
+            try_data_lookup_by_name(child_ptr, key("added")).map(|v| v.map(|v| v.bits())),
+            Some(Some(5.0f64.to_bits()))
+        );
+        assert_eq!(
+            try_data_lookup_by_name(child_ptr, key("value")).map(|v| v.map(|v| v.bits())),
+            Some(Some(7.0f64.to_bits()))
+        );
+    }
+    differential(child, "added", 5.0);
+    assert_eq!(js_object_delete_field(prototype, key("added")), 1);
+    unsafe {
+        assert!(matches!(
+            try_data_lookup_by_name(child_ptr, key("added")),
+            Some(None)
+        ));
+    }
+}
+
 #[test]
 fn an_own_absence_proof_is_not_searched_again_before_the_holder() {
     let _no_gc = crate::gc::GcSuppressScope::new();

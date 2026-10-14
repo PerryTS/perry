@@ -719,7 +719,6 @@ pub(crate) fn report_exit_summary() {
     // `armed=true candidates=0` is "armed and NEVER REACHED", the bug shape;
     // `armed=true candidates>0 latches=0` is "reached and declined". One
     // number could not tell those apart.
-    eprintln!("{}", crate::object::dictionary::dictionary_counters_line());
 }
 
 /// Async-signal-safety is irrelevant on the panic path, so this half can format

@@ -1130,10 +1130,10 @@ pub(crate) unsafe fn keys_contain_array_index(keys_view: crate::object::ObjectKe
         }
     }
     // Fallback for anything that doesn't look like a plain dense keys array.
-    let len = keys_view.count().min(crate::array::js_array_length(keys));
+    let len = keys_view.count();
     let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for i in 0..len {
-        let key_val = crate::array::js_array_get(keys, i);
+        let key_val = keys_view.get(i);
         let is_idx = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
             .and_then(|b| std::str::from_utf8(b).ok())
             .and_then(canonical_array_index)

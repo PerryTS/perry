@@ -202,15 +202,21 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
             return ChainMethod::Get { holder };
         };
         let keys = record.keys() as usize as *const ArrayHeader;
-        if keys.is_null() {
-            // No key list: an empty object, or a dictionary-mode one whose
-            // properties live in its meta record, which the shape does not
-            // describe.
-            let meta = (*holder).meta;
-            if !meta.is_null() && (*meta).dictionary_keys != 0 {
+        // A layout key lives in its fixed slot, and the hole marker there is
+        // its absence (§3.2); any other own key of a shadowed holder is in
+        // its overflow.
+        let shadowed = crate::object::overflow::shadowed(holder);
+        let position = if keys.is_null() {
+            None
+        } else {
+            key_position(keys, record.logical_key_count(), key)
+        };
+        if shadowed && position.is_none() {
+            let t = crate::object::overflow::table(holder);
+            if !t.is_null() && crate::object::overflow::find_bytes(t, key.bytes).is_some() {
                 return ChainMethod::Get { holder };
             }
-        } else if let Some(pos) = key_position(keys, record.logical_key_count(), key) {
+        } else if let Some(pos) = position {
             // An ordinary object's key list says whether a key is an accessor
             // (its slot holds the pair); the descriptor tables hold nothing
             // more for it.
@@ -230,23 +236,26 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
                 crate::object::js_object_get_field(holder, pos).bits()
             };
             if value == crate::value::TAG_HOLE {
-                return ChainMethod::Get { holder };
-            }
-            let body = if pos < crate::object::field_rep::REP_SLOTS
-                && record.special_constfn_mask() & (1 << pos) != 0
-            {
-                record.constfn_info(pos).and_then(|info| {
-                    (info as usize as *const crate::closure::JsFunctionInfo).as_ref()
-                })
+                if !shadowed {
+                    return ChainMethod::Get { holder };
+                }
             } else {
-                None
-            };
-            return ChainMethod::Data {
-                value,
-                body,
-                holder,
-                slot: inline.then_some(pos),
-            };
+                let body = if pos < crate::object::field_rep::REP_SLOTS
+                    && record.special_constfn_mask() & (1 << pos) != 0
+                {
+                    record.constfn_info(pos).and_then(|info| {
+                        (info as usize as *const crate::closure::JsFunctionInfo).as_ref()
+                    })
+                } else {
+                    None
+                };
+                return ChainMethod::Data {
+                    value,
+                    body,
+                    holder,
+                    slot: inline.then_some(pos),
+                };
+            }
         }
         match next_holder(holder) {
             Ok(Some(next)) if next != holder => holder = next,

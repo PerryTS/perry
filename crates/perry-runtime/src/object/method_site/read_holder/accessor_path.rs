@@ -46,7 +46,7 @@ pub(crate) unsafe fn accessor_walk(
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-            || crate::object::dictionary::is_dictionary(holder)
+            || crate::object::overflow::has_overflow(holder)
         {
             return None;
         }

@@ -152,7 +152,7 @@ fn json_nested_record_integer_shortcut_preserves_number_spelling() {
 
 unsafe fn with_array(text: &str, f: impl FnOnce(*const crate::ArrayHeader)) {
     let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    let value = crate::json::test_json_parse_direct(source);
+    let value = crate::json::test_json_record_direct(source);
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ArrayHeader>());
     let first = input.with_const_ptr(|arr| crate::array::js_array_get(arr, 0));

@@ -55,7 +55,7 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
         let Some(obj) = crate::object::prototype_chain::meta_capable_object(addr) else {
             return false;
         };
-        if !crate::object::object_is_regular(obj) || crate::object::dictionary::is_dictionary(obj) {
+        if !crate::object::object_is_regular(obj) || crate::object::overflow::has_overflow(obj) {
             return false;
         }
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {

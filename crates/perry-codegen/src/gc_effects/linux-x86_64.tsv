@@ -1472,7 +1472,7 @@ js_ge	Reenters	yes
 js_generator_attach_closure_prototype	Reenters	yes
 js_generator_attach_prototype	Reenters	yes
 js_generator_create	Reenters	yes
-js_generator_result	Reenters	no
+js_generator_result	Reenters	yes
 js_generator_set_slot	Leaf	no
 js_get_async_iterator	Reenters	yes
 js_get_cjs_main_module	Leaf	no
@@ -2273,14 +2273,14 @@ js_object_record_get_by_bytes	Reenters	yes
 js_object_record_set_by_bytes	Reenters	yes
 js_object_rest	Reenters	yes
 js_object_seal	Reenters	yes
-js_object_set_field	Reenters	no
+js_object_set_field	Reenters	yes
 js_object_set_field_by_index	Reenters	yes
 js_object_set_field_by_name	Reenters	yes
 js_object_set_field_by_name_nonconfigurable	Reenters	yes
 js_object_set_field_by_name_nonenum	Reenters	yes
 js_object_set_field_by_name_transition_fast	Reenters	yes
 js_object_set_field_by_property_id	Reenters	yes
-js_object_set_field_f64	Reenters	no
+js_object_set_field_f64	Reenters	yes
 js_object_set_index_polymorphic	Reenters	yes
 js_object_set_keys	Reenters	yes
 js_object_set_method_by_name	Reenters	yes
@@ -3470,6 +3470,8 @@ js_string_pool_atom	Reenters	yes
 js_string_position_to_index	Leaf	no
 js_string_print	Leaf	no
 js_string_raw	Reenters	yes
+js_string_register_property_atom	Leaf	no
+js_string_register_property_atoms	Leaf	no
 js_string_repeat	Reenters	yes
 js_string_replace_all_js	Reenters	yes
 js_string_replace_all_regex	Reenters	yes
@@ -3954,7 +3956,7 @@ js_v8_deserialize	Reenters	yes
 js_v8_deserializer_new	Reenters	yes
 js_v8_gc_profiler_new	Reenters	yes
 js_v8_gc_profiler_report	Reenters	yes
-js_v8_gc_profiler_start	Reenters	no
+js_v8_gc_profiler_start	Reenters	yes
 js_v8_gc_profiler_stop	Reenters	yes
 js_v8_get_heap_code_statistics	Reenters	yes
 js_v8_get_heap_snapshot	Reenters	yes
@@ -4304,6 +4306,9 @@ perry_macos_bundle_chdir	Leaf	no
 perry_memory_profile_allow_thp	Leaf	no
 perry_next_wake_ms	Reenters	yes
 perry_object_header_abi_revision	Leaf	no
+perry_overflow_delete	Reenters	yes
+perry_overflow_get	AllocOnly	no
+perry_overflow_set	Reenters	yes
 perry_plugin_count	Leaf	no
 perry_plugin_discover	Reenters	yes
 perry_plugin_emit	Reenters	yes

@@ -5,7 +5,7 @@ fn shape_template_declines_element_descriptors_before_output() {
     unsafe {
         let text = b"{\"id\":1,\"tags\":[1,2]}";
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_parse_direct(source);
+        let value = crate::json::test_json_record_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>() as *mut crate::ObjectHeader;
         let template = build_shape_prefix_template(value.bits()).unwrap();
         // Charter step 3: the attribute lives with the keys, so the receiver
@@ -42,7 +42,7 @@ fn callback_free_record_does_not_publish_its_array_index_key() {
     unsafe {
         let text = b"{\"id\":1,\"tags\":[\"a\",2]}";
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_parse_direct(source);
+        let value = crate::json::test_json_record_direct(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
         invalidate_object_proto_tojson_state();

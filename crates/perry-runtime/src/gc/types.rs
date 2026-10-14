@@ -153,6 +153,7 @@ pub const GC_TYPE_PROXY: u8 = 37;
 pub const GC_TYPE_INTERP_FUNCTION: u8 = 38;
 /// Object-owned async-hooks metadata in a collecting nonmoving holder.
 pub const GC_TYPE_ASYNC_RESOURCE_STATE: u8 = 39;
+pub const GC_TYPE_OVERFLOW: u8 = 40;
 pub const GC_TYPE_MAX: u8 = 0x7f;
 
 /// Is `obj_type` a `BufferHeader` cell of any flavor (Buffer, Uint8Array,
@@ -389,6 +390,7 @@ pub(crate) enum GcAllocationPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteDescriptorKind {
     WeakStorage,
+    Overflow,
     Box,
     Scope,
     Leaf,
@@ -1033,6 +1035,21 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcFinalizeHookKind::AsyncResourceState,
     )),
     Some(gc_type_info_entry(
+        GC_TYPE_OVERFLOW,
+        "object_overflow",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Overflow,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
         GC_TYPE_SET_STORE,
         "set_store",
         GcAllocationPolicy::Arena,
@@ -1427,6 +1444,7 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
             }
         }
         GcRewriteDescriptorKind::WeakStorage
+        | GcRewriteDescriptorKind::Overflow
         | GcRewriteDescriptorKind::Box
         | GcRewriteDescriptorKind::Scope
         | GcRewriteDescriptorKind::Buffer

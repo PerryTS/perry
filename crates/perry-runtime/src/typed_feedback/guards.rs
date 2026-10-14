@@ -11,6 +11,11 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
     }
     unsafe {
         let obj = object_addr as *const ObjectHeader;
+        // An object with an overflow lists every own key there; its layout
+        // does not (object model step 4).
+        if let Some(present) = crate::object::overflow::own_has_bytes(obj, key_bytes) {
+            return present;
+        }
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };
@@ -784,7 +789,9 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
         return 0;
     }
     let meta = (*object).meta;
-    if !meta.is_null() && ((*meta).flags != 0 || (*meta).private_evaluation_brand != 0) {
+    if !meta.is_null()
+        && ((*meta).flags != 0 || (*meta).private_evaluation_brand != 0 || (*meta).overflow != 0)
+    {
         return 0;
     }
     let Some(shape) = crate::object::shapes::object_shape_descriptor(object) else {

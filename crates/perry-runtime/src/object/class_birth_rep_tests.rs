@@ -235,7 +235,7 @@ fn a_region_word_refuses_a_boxed_store_into_an_f64_lane() {
             k as usize as *const crate::array::ArrayHeader,
         );
         assert!(len >= 2);
-        ((*slots).to_bits(), (*slots.add(1)).to_bits())
+        ((*slots.add(0)).to_bits(), (*slots.add(1)).to_bits())
     };
     let pack = |id: u32, key: u64, stored: u32, boxed: u32| {
         js_region_loop_pack(id, 1, key, 0, 0, 0, 0, stored, boxed)
@@ -283,7 +283,7 @@ fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
             k as usize as *const crate::array::ArrayHeader,
         );
         assert!(len >= 2);
-        ((*slots).to_bits(), (*slots.add(1)).to_bits())
+        ((*slots.add(0)).to_bits(), (*slots.add(1)).to_bits())
     };
     let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);
     let prime = |id, key, stored, boxed, r_mask| unsafe {
@@ -504,7 +504,7 @@ fn a_region_constfn_shape_keeps_numeric_admission_and_refuses_special_stores() {
             k as usize as *const crate::array::ArrayHeader,
         );
         assert!(len >= 2);
-        ((*slots).to_bits(), (*slots.add(1)).to_bits())
+        ((*slots.add(0)).to_bits(), (*slots.add(1)).to_bits())
     };
     let pack = |stored_mask| js_region_loop_pack(completed, 2, method, x, 0, 0, 0, stored_mask, 0);
     assert_ne!(

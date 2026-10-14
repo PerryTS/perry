@@ -112,6 +112,12 @@ pub(crate) unsafe fn array_iterator_method(
         if value != crate::value::TAG_HOLE {
             return iterator_method_from_slot(own, slot, value);
         }
+        // A hole is absence only for a holder without an overflow; with one
+        // (the shadow bit), the member may be an overflow entry (an accessor
+        // moves out of its fixed slot), so the complete GetMethod decides.
+        if crate::object::overflow::has_overflow(own) {
+            return IteratorMethod::Generic;
+        }
     }
     prototype_iterator_method(proto)
 }

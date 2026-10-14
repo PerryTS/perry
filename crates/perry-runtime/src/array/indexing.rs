@@ -571,6 +571,23 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         if crate::value::addr_class::is_above_handle_band(raw_ptr as usize) {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_OVERFLOW {
+                // An object's overflow read as its key list: a tombstone (and
+                // an unnamed fixed slot of the prefix) is the hole marker,
+                // which reads back as undefined exactly as a key array's hole
+                // does (#323), so every key-list reader skips it.
+                let t = raw_ptr as *const crate::object::overflow::Table;
+                let key = if index < (*t).length {
+                    *crate::object::overflow::key_at(t, index)
+                } else {
+                    crate::value::TAG_UNDEFINED
+                };
+                return f64::from_bits(if key == crate::value::TAG_HOLE {
+                    crate::value::TAG_UNDEFINED
+                } else {
+                    key
+                });
+            }
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = raw_ptr as *mut crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {

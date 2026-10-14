@@ -103,9 +103,7 @@ fn resolved_own_slots_observe_accessor_edits_in_narrow_wide_and_dictionary_holde
                 );
             }
             if dictionary {
-                assert!(crate::object::dictionary::latch_object_to_dictionary(
-                    object
-                ));
+                assert!(crate::object::overflow::establish_order(object));
             }
             let lane = key("resolved_holder_1");
             let neighbor = key("resolved_holder_2");

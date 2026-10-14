@@ -100,8 +100,7 @@ unsafe fn receiver_facts(bits: u64) -> Option<(u64, u64)> {
                 }
                 let shape = super::super::shapes::object_shape_stamp(bag);
                 // Dictionaries do not carry an immutable key-absence proof.
-                if !(super::super::shapes::SHAPE_ID_BASE
-                    ..super::super::shapes::DICTIONARY_SHAPE_ID_BASE)
+                if !(super::super::shapes::SHAPE_ID_BASE..super::super::shapes::SITE_SHAPE_ID_END)
                     .contains(&shape)
                 {
                     return None;

@@ -1749,9 +1749,9 @@ pub(crate) unsafe fn try_payload_method_fast_dispatch(
     // (charter step 3): the instance owning no key of this name has no own
     // descriptor for it, and the prototype's key entry says whether it is an
     // accessor.
-    if crate::object::dictionary::is_dictionary(obj)
+    if crate::object::overflow::has_overflow(obj)
         || shape_key_index(obj, name).is_some()
-        || crate::object::dictionary::is_dictionary(proto)
+        || crate::object::overflow::has_overflow(proto)
         || crate::object::key_attrs::object_key_is_accessor(proto, name)
     {
         return None;

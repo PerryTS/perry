@@ -39,7 +39,7 @@ pub(super) unsafe fn prime_get(
     let stamp = token as u32;
     // Only an ORDINARY-band ShapeId may enter a site word: a dictionary
     // shape's id is outside the matchable band by construction
-    // (`shapes::DICTIONARY_SHAPE_ID_BASE`), so no emitted compare can equal a
+    // (`shapes::SITE_SHAPE_ID_END`), so no emitted compare can equal a
     // dictionary receiver's word.
     if !crate::object::shapes::is_site_matchable_token(token as u64)
         || !(0..=0x7fff_ffff).contains(&slot)
@@ -134,7 +134,7 @@ mod tests {
         );
         for stamp in [
             crate::object::shapes::SHAPE_ID_BASE,
-            crate::object::shapes::DICTIONARY_SHAPE_ID_BASE - 1,
+            crate::object::shapes::SITE_SHAPE_ID_END - 1,
         ] {
             // Spill indices stay below `SPILL_MAX_FIELD_INDEX`: past it
             // nothing is published (see the test above).
@@ -201,7 +201,7 @@ mod tests {
     /// band — the compact word then holds the receiver's id and the simulated
     /// hit below matches it.
     #[test]
-    fn a_dictionary_receiver_can_never_hit_a_site_entry() {
+    fn an_overflow_receiver_can_never_hit_a_site_entry() {
         use crate::object::shapes;
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_gc = crate::gc::GcSuppressScope::new();
@@ -218,16 +218,17 @@ mod tests {
                 "test premise: an ordinary receiver's id IS matchable"
             );
             assert!(
-                crate::object::dictionary::latch_object_to_dictionary(obj),
+                crate::object::overflow::establish_order(obj),
                 "test premise: the receiver latches"
             );
             let id = shapes::object_shape_stamp(obj);
             assert!(
-                shapes::is_shape_id(id),
-                "every reader still sees a ShapeId: {id:#x}"
+                shapes::is_shape_id(crate::object::layout_desc::layout_id_of_word(id)),
+                "every reader still resolves the layout id under the shadow bit: {id:#x}"
             );
             assert!(
-                shapes::is_dictionary_shape_id(id) && !shapes::is_site_matchable_shape_id(id),
+                id & crate::object::overflow::SHADOW_BIT != 0
+                    && !shapes::is_site_matchable_shape_id(id),
                 "a dictionary shape must be minted in the unmatchable band: {id:#x}"
             );
 

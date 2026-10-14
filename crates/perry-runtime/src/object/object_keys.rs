@@ -50,7 +50,11 @@ impl ObjectKeys {
         }
         ObjectKeys {
             arr,
-            count: crate::array::keys_array_len_capped_to_capacity(arr) as u32,
+            count: if super::overflow::is_table(arr) {
+                (*arr).length
+            } else {
+                crate::array::keys_array_len_capped_to_capacity(arr) as u32
+            },
         }
     }
 
@@ -77,9 +81,9 @@ impl ObjectKeys {
     /// # Safety
     /// The array is live, and nothing allocates while the slots are read.
     #[inline]
-    pub(crate) unsafe fn dense_slots(self) -> (*const f64, usize) {
+    pub(crate) unsafe fn dense_slots(self) -> (super::keys_lookup::KeySlots, usize) {
         if self.arr.is_null() {
-            return (std::ptr::null(), 0);
+            return (super::keys_lookup::KeySlots::null(), 0);
         }
         let (slots, len) = keys_array_dense_slots(self.arr);
         (slots, len.min(self.count as usize))

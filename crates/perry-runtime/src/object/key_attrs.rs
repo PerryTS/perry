@@ -367,6 +367,10 @@ unsafe fn prefix_word(attrs: *const ArrayHeader, count: u32) -> Word {
 /// As [`keys_attrs`].
 #[inline]
 pub(crate) unsafe fn keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
+    if crate::object::overflow::is_table(keys) {
+        return crate::object::overflow::entry_attrs(keys, pos);
+    }
+
     let attrs = keys_attrs(keys);
     if attrs.is_null() {
         return 0;
@@ -390,6 +394,11 @@ pub(crate) unsafe fn keys_find_accessor_slot_resolved(
     count: u32,
     key: &[u8],
 ) -> Option<u32> {
+    if crate::object::overflow::is_table(keys) {
+        let pos = crate::object::overflow::find_bytes(keys.cast(), key)?;
+        return (keys_entry(keys, pos) & ENTRY_ACCESSOR != 0).then_some(pos);
+    }
+
     let attrs = keys_attrs(keys);
     if attrs.is_null() {
         return None;
@@ -516,6 +525,10 @@ pub(crate) unsafe fn keys_may_carry(
     key: &[u8],
     accessor: bool,
 ) -> bool {
+    if crate::object::overflow::is_table(keys) {
+        return true;
+    }
+
     let attrs = keys_attrs(keys);
     if attrs.is_null() {
         return false;
@@ -535,6 +548,10 @@ pub(crate) unsafe fn keys_may_carry(
 /// As [`keys_attrs`].
 #[inline]
 pub(crate) unsafe fn keys_have_entries(keys: *const ArrayHeader, count: u32) -> bool {
+    if crate::object::overflow::is_table(keys) {
+        return (0..count).any(|i| crate::object::overflow::entry_attrs(keys, i) != 0);
+    }
+
     let attrs = keys_attrs(keys);
     if attrs.is_null() {
         return false;
@@ -809,6 +826,11 @@ pub(crate) unsafe fn attrs_live_in_keys_for_install(addr: usize) -> bool {
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_summary(obj: *const crate::object::ObjectHeader) -> u8 {
+    let t = crate::object::overflow::table(obj);
+    if !t.is_null() {
+        return (*t).summary as u8;
+    }
+
     crate::object::shapes::object_shape_record(obj)
         .map(|r| r.summary())
         .unwrap_or(0)
@@ -858,7 +880,7 @@ pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, k
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return 0;
     };
-    if record.summary() & SUMMARY_KEY_BITS == 0 {
+    if record.summary() & SUMMARY_KEY_BITS == 0 && !crate::object::overflow::has_overflow(obj) {
         return 0;
     }
     object_key_entry_filtered(
@@ -881,7 +903,7 @@ pub(crate) unsafe fn object_key_is_accessor(
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return false;
     };
-    if record.summary() & SUMMARY_ACCESSOR == 0 {
+    if record.summary() & SUMMARY_ACCESSOR == 0 && !crate::object::overflow::has_overflow(obj) {
         return false;
     }
     object_key_entry_filtered(
@@ -923,7 +945,7 @@ pub(crate) unsafe fn object_key_entry_for_string(
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return 0;
     };
-    if record.summary() & SUMMARY_KEY_BITS == 0 {
+    if record.summary() & SUMMARY_KEY_BITS == 0 && !crate::object::overflow::has_overflow(obj) {
         return 0;
     }
     if key.is_null() {
@@ -985,7 +1007,9 @@ pub(crate) unsafe fn object_key_blocks_plain_store(
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return false;
     };
-    let summary = record.summary();
+    // An object with an overflow records its keys' attributes in its
+    // entries, whose summary the overflow keeps (object model step 4).
+    let summary = object_summary(obj);
     if summary & SUMMARY_BLOCKS_STORE == 0 {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("read.store_check_summary_clear");
@@ -1209,7 +1233,7 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         crate::object::attr_census::note_global("edit.no_change");
         return;
     };
-    if crate::object::dictionary::is_dictionary(obj) {
+    if crate::object::overflow::has_overflow(obj) {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("edit.dictionary_in_place");
         edit_private_list(obj, keys.arr(), from, count as u32, edits);
@@ -1234,28 +1258,13 @@ unsafe fn edit_private_list(
     count: u32,
     edits: &[AttrsEdit<'_>],
 ) {
-    let mut keys = ensure_owned_attrs(keys, count);
-    if count > 0 {
-        // Cover every position, whatever appended to the list before.
-        let last = keys_entry(keys, count - 1);
-        keys = owned_note_append(keys, count - 1, last);
-    }
-    crate::object::dictionary::replace_private_keys(obj, keys);
-    let attrs = keys_attrs(keys);
-    let (slots, _) = crate::object::keys_array_dense_slots(keys);
-    let (w, _) = words(attrs);
+    let table = keys as *mut crate::object::overflow::Table;
     for pos in from..count {
-        let slot = crate::JSValue::from_bits((*slots.add(pos as usize)).to_bits());
-        let old = Word::decode(*w.add(pos as usize)).entry;
-        let new = fold_edits(edits, slot, old);
-        // GC_STORE_AUDIT(POINTER_FREE): an INT32 box into a pointer-free array.
-        *w.add(pos as usize) = Word {
-            entry: new,
-            ..Word::EMPTY
-        }
-        .encode();
+        let key = crate::JSValue::from_bits(*crate::object::overflow::key_at(table, pos));
+        let word = crate::object::overflow::attrs_at(table, pos);
+        let attrs = fold_edits(edits, key, *word as u8);
+        crate::object::overflow::set_entry_attrs(obj, table, pos, attrs);
     }
-    recompute_cumulative(keys, attrs, from);
 }
 
 /// Give an OWNED key list (a dictionary receiver's private list) an

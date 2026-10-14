@@ -41,10 +41,7 @@ pub(crate) unsafe fn transition_object_integrity(
     obj: *mut crate::object::ObjectHeader,
     requested_flags: u16,
 ) -> bool {
-    if obj.is_null()
-        || !shape_word_is_writable(obj)
-        || crate::object::dictionary::is_dictionary(obj)
-    {
+    if obj.is_null() || !shape_word_is_writable(obj) || crate::object::overflow::has_overflow(obj) {
         return false;
     }
     let _no_move = crate::gc::GcSuppressScope::new();

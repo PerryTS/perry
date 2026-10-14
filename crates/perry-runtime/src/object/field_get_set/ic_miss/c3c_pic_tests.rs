@@ -125,18 +125,13 @@ fn a_class_instance_primes_an_id_token_after_rung1() {
     }
 }
 
-/// ★ #6759 C3 rung 1 opens a NEW correctness surface, and this is it.
-///
-/// A delete-compacted class instance receives a semantic successor ShapeId,
-/// so the emitted hit path can serve it without confusing it with a
-/// pristine sibling. A token that failed to move across the
-/// compaction would therefore be read as a pristine sibling's shape at a
-/// site that has both — the one-slot shift the whole ladder is about.
-///
-/// Pins: the compacted instance's primed token differs from a pristine
-/// sibling's, AND the slot it primes is the post-compaction slot.
+/// ★ #6759 C3 rung 1's surface under object model step 4: a delete on a
+/// class instance shifts no slot (the deleted key's slot holds the hole
+/// marker and the instance gains an overflow), so a pristine sibling's slot
+/// for a surviving key is still the instance's slot, and the instance itself
+/// primes no site memo (step 5 serves overflow receivers).
 #[test]
-fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
+fn a_deleted_class_instance_keeps_its_slots_and_primes_nothing() {
     // Preserve the compacted fixture under default-on tombstones. The
     // tombstone lane already produces a distinct class-instance token,
     // but it keeps `c` in slot 2 and therefore cannot exercise the
@@ -186,24 +181,23 @@ fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
         let mut c_compacted_slot: crate::object::PicCacheSlot = &mut c_compacted;
         let vc =
             super::js_object_get_field_ic_miss(compacted, key("picdel_c"), &mut c_compacted_slot);
+        assert_eq!(vc, 3.0, "a delete moves no slot: `c` still reads 3");
+        // Object model step 4: the delete gave the instance an overflow; a
+        // site memo does not serve such a receiver until step 5, and the
+        // deleted key reads absent.
+        assert!(unsafe { crate::object::overflow::has_overflow(compacted) });
         assert_eq!(
-            vc, 3.0,
-            "compacted `c` shifted to slot 1 and must still read 3"
-        );
-
-        assert_ne!(
             c_compacted[0], 0,
-            "the compacted instance primed nothing — rung 1's new surface is inert"
+            "an overflow receiver primes no site memo"
         );
-        assert_ne!(
-            c_compacted[0], c_pristine[0],
-            "the compacted instance primed its pristine sibling's token — an \
-             id-comparing PIC would read slot {} for a receiver whose `c` is \
-             at slot {}",
-            c_pristine[1], c_compacted[1]
+        let mut a_slot_cache = [0i64; super::PIC_CACHE_WORDS];
+        let mut a_slot: crate::object::PicCacheSlot = &mut a_slot_cache;
+        assert_eq!(
+            super::js_object_get_field_ic_miss(compacted, key("picdel_a"), &mut a_slot).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "the deleted key reads undefined"
         );
         assert_eq!(c_pristine[1], 2, "pristine `c` slot");
-        assert_eq!(c_compacted[1], 1, "compacted `c` slot");
     }
 }
 

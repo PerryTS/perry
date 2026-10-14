@@ -54,7 +54,7 @@ impl PrivateStorageKey {
         {
             return None;
         }
-        if unsafe { crate::object::dictionary::is_dictionary(object) } {
+        if unsafe { crate::object::overflow::has_overflow(object) } {
             let keys = unsafe { crate::object::object_keys(object) };
             let index = unsafe {
                 crate::object::keys_find_private_slot_by_bytes(
@@ -277,7 +277,7 @@ mod private_storage_cache_tests {
         assert_eq!(storage.get_cached(receiver()), Some(22.0));
         assert_eq!(site.read(receiver()), Some(22.0));
         object.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-            assert!(crate::object::dictionary::latch_object_to_dictionary(obj));
+            assert!(crate::object::overflow::establish_order(obj));
         });
         assert_eq!(site.read(receiver()), Some(22.0));
         assert!(storage.set_cached(receiver(), 33.0));
@@ -518,7 +518,9 @@ impl IntrinsicPrivateReadSite {
             return Some(value);
         }
         // Honest tags reject unshaped cells without private-name lookup.
-        if !crate::object::shapes::is_shape_id(unsafe { (*object).parent_class_id }) {
+        if !crate::object::shapes::is_shape_id(crate::object::layout_desc::layout_id_of_word(
+            unsafe { (*object).parent_class_id },
+        )) {
             return None;
         }
         self.read_miss(receiver)

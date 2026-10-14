@@ -22,18 +22,8 @@ use super::*;
 /// `visit` removed the key list is never evacuated and the "must itself
 /// move" assertion below reddens.
 #[test]
-fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
+fn test_object_meta_overflow_survive_copied_minor_move() {
     let _guard = CopyingNurseryTestGuard::new(2);
-    let _restore = {
-        struct Restore;
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                crate::object::dictionary::test_arm_latch(None);
-            }
-        }
-        Restore
-    };
-
     // EIGHT slots, not zero. `alloc_nursery_test_object(0)` allocates a
     // payload of exactly `size_of::<ObjectHeader>()` with no inline slots and
     // leaves the header unstamped; every sibling fixture only ever sets a
@@ -43,7 +33,7 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
     // zero-slot allocation is the NEXT CELL. That corrupted the heap and
     // SIGSEGV'd a later read, with a backtrace deep inside an unrelated
     // URLSearchParams shape probe.
-    let (owner, _) = unsafe { alloc_nursery_test_object(8) };
+    let owner = crate::object::js_object_alloc(0, 0);
     let old_owner = owner as usize;
     unsafe {
         for i in 0..6 {
@@ -52,14 +42,14 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
             crate::object::js_object_set_field_by_name(owner, key, i as f64);
         }
         assert!(
-            crate::object::dictionary::latch_object_to_dictionary(owner),
+            crate::object::overflow::establish_order(owner),
             "test premise: the receiver must latch"
         );
     }
     let old_keys = unsafe { crate::object::object_keys(owner).arr() } as usize;
     assert_ne!(old_keys, 0, "test premise: the private key list exists");
     assert_eq!(
-        crate::array::js_array_length(old_keys as *mut crate::array::ArrayHeader),
+        unsafe { (*(old_keys as *const crate::object::overflow::Table)).length },
         6,
         "test premise: it holds the receiver's six keys"
     );
@@ -77,7 +67,7 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
         );
     }
     assert!(
-        unsafe { crate::object::dictionary::is_dictionary(owner) },
+        unsafe { crate::object::overflow::has_overflow(owner) },
         "test premise: READING a dictionary receiver must not un-latch it. \
          The by-name read path stamps the receiver's shape to key its field \
          cache, and for a dictionary receiver that republishes the private \
@@ -94,13 +84,13 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
     let new_owner = new_owner as *mut crate::object::ObjectHeader;
 
     assert!(
-        unsafe { crate::object::dictionary::is_dictionary(new_owner) },
+        unsafe { crate::object::overflow::has_overflow(new_owner) },
         "the moved receiver must still be in dictionary mode"
     );
     let new_keys = unsafe { crate::object::object_keys(new_owner).arr() } as usize;
     assert_ne!(
         new_keys, 0,
-        "the meta record's dictionary_keys slot was not marked: the key list \
+        "the meta record's overflow slot was not marked: the key list \
          was collected out from under a live object"
     );
     assert_ne!(
@@ -109,7 +99,7 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
          distinguish a marked edge from a REWRITTEN one"
     );
     assert_eq!(
-        crate::array::js_array_length(new_keys as *mut crate::array::ArrayHeader),
+        unsafe { (*(new_keys as *const crate::object::overflow::Table)).length },
         6,
         "the rewritten key list must still hold the receiver's six keys"
     );

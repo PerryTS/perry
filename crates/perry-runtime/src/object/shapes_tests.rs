@@ -501,7 +501,7 @@ mod descriptor_tests_8067 {
     }
 
     #[test]
-    fn delete_compaction_never_compares_equal_to_the_predelete_layout() {
+    fn delete_never_compares_equal_to_the_predelete_layout_word() {
         // This is a compaction identity test, not a tombstone-layout test.
         // Force the legacy structural operation so `after != before` still
         // proves that shifted slots cannot inherit their predecessor token.
@@ -515,13 +515,17 @@ mod descriptor_tests_8067 {
             crate::object::js_object_set_field_by_name(obj, a, 1.0);
             crate::object::js_object_set_field_by_name(obj, b, 2.0);
             crate::object::js_object_set_field_by_name(obj, c, 3.0);
-            let before = object_shape_id(obj);
+            let before = (*obj).parent_class_id;
             assert_eq!(crate::object::js_object_delete_field(obj, a), 1);
-            let after = object_shape_id(obj);
+            // Object model step 4: a delete compacts nothing; it keeps the
+            // layout (and its slot mapping) and sets the shadow bit, so the
+            // full word still never compares equal to the pre-delete one.
+            let after = (*obj).parent_class_id;
             assert_ne!(after, before);
+            assert!(crate::object::overflow::has_overflow(obj));
             let facts = object_shape_descriptor(obj).unwrap();
-            assert_eq!(facts.logical_key_count, 2);
-            assert_eq!(facts.live_inline_slot_count, 2);
+            assert_eq!(facts.logical_key_count, 3);
+            assert!(crate::object::js_object_get_field_by_name(obj, a).is_undefined());
             assert_eq!(
                 crate::object::js_object_get_field_by_name_f64(obj, b),
                 2.0,
@@ -552,7 +556,6 @@ mod descriptor_tests_8067 {
             for _ in 0..3 {
                 for id in [
                     alloc_shape_id(proto_id).unwrap(),
-                    alloc_dictionary_shape_id(proto_id).unwrap(),
                     alloc_exotic_shape_id(proto_id).unwrap(),
                 ] {
                     assert_eq!(shape_word_kind(id), kind, "{id:#x}");

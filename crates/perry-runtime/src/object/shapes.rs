@@ -336,12 +336,6 @@ impl ShapeRecordRef {
     ) -> Option<Option<usize>> {
         let r = &*self.0.as_ptr();
         if r.logical_key_count == 0 {
-            // A dictionary's own keys belong to the receiver, not this record.
-            // Its generation namespace distinguishes it from an empty shape.
-            let tag = super::dictionary::DICTIONARY_GENERATION_TAG;
-            if r.semantic_generation & ((1u64 << 63) | tag) == tag {
-                return None;
-            }
             return Some(None);
         }
         // The complete key index answers a binding after a descriptor or
@@ -1108,14 +1102,6 @@ pub(crate) enum ShapeObjectKind {
     /// (charter step 3, `shapes_store_kind`).
     Ordinary,
     Class,
-    /// #10868: the receiver's keys live per-object, not in a shared keys
-    /// array. Held as a KIND rather than a side-table predicate so that
-    /// `object_is_regular` declines the fast lanes by construction: a keyless
-    /// shape otherwise reads as "this receiver has no own properties" to a
-    /// long tail of consumers, four of which return wrong values and one of
-    /// which writes out of bounds (#10942). A set whose membership is partly
-    /// accidental cannot be secured by enumerating it.
-    Dictionary,
     /// A function object (`GC_TYPE_CLOSURE`) whose own properties are exactly
     /// the intrinsic ones (`name`, `length`, `prototype`) and whose
     /// [[Prototype]] is the intrinsic its body kind names (the shape's
@@ -1124,7 +1110,7 @@ pub(crate) enum ShapeObjectKind {
     Function,
     /// A function object that carries anything else (a user property, a
     /// deleted or redefined intrinsic, an accessor, a recorded
-    /// [[Prototype]]): the answer lives on the object, as for `Dictionary`.
+    /// [[Prototype]]): the answer lives on the object.
     FunctionDictionary,
     /// The ordinary layout of [`ShapeObjectKind::Ordinary`], on a receiver
     /// whose own slots are NOT proven plain data: a class-less receiver no
@@ -1202,16 +1188,15 @@ impl ShapeObjectKind {
         match self {
             ShapeObjectKind::Ordinary => 0,
             ShapeObjectKind::Class => 1,
-            ShapeObjectKind::Dictionary => 2,
-            ShapeObjectKind::Function => 3,
-            ShapeObjectKind::FunctionDictionary => 4,
-            ShapeObjectKind::OrdinaryUnmarked => 5,
-            ShapeObjectKind::OrdinaryNumericProof => 6,
-            ShapeObjectKind::NativeNamespace => 7,
-            ShapeObjectKind::FunctionBoundCall => 8,
-            ShapeObjectKind::FunctionBoundApply => 9,
-            ShapeObjectKind::FunctionBound => 10,
-            ShapeObjectKind::OrdinaryNativeAlias => 11,
+            ShapeObjectKind::Function => 2,
+            ShapeObjectKind::FunctionDictionary => 3,
+            ShapeObjectKind::OrdinaryUnmarked => 4,
+            ShapeObjectKind::OrdinaryNumericProof => 5,
+            ShapeObjectKind::NativeNamespace => 6,
+            ShapeObjectKind::FunctionBoundCall => 7,
+            ShapeObjectKind::FunctionBoundApply => 8,
+            ShapeObjectKind::FunctionBound => 9,
+            ShapeObjectKind::OrdinaryNativeAlias => 10,
         }
     }
 }
@@ -1492,32 +1477,9 @@ const _: () = assert!(SHAPE_ID_BASE == crate::codegen_abi::SHAPE_ID_BASE);
 /// unreachable in practice).
 pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
 
-/// # The dictionary band: ShapeIds no site can ever hold
-///
-/// The top quarter of the ShapeId range, `[DICTIONARY_SHAPE_ID_BASE,
-/// SHAPE_ID_END)`, holds dictionary-mode shapes and nothing else, and ordinary
-/// shapes are minted strictly below it. Membership is a fact of the id's
-/// VALUE, fixed when the shape is minted from its generation namespace
-/// ([`crate::object::dictionary::DICTIONARY_GENERATION_TAG`]) — not a check any
-/// site makes.
-///
-/// Why a band: a dictionary shape describes no keys (`keys = NULL`), and its
-/// receiver KEEPS the id across layout changes — an in-place append or
-/// tombstone publishes nothing (`object/dictionary.rs`). A per-site memo
-/// `(ShapeId, slot)` is sound only because a ShapeId names ONE immutable key
-/// list forever; a dictionary id names none. So every site word is written
-/// with an id from the [`is_site_matchable_shape_id`] band, which excludes this
-/// one — the same way a spill entry's word is flipped out of the id range by
-/// `PACKED_SPILL_FLIP` — and no emitted compare (the compact word, the ways,
-/// a region word, a presence or store cache) can equal a dictionary receiver's
-/// `+4` word. Everything that reads a shape from an object (`is_shape_id`,
-/// the descriptor table, the collector) still sees an ordinary ShapeId.
-///
-/// A quarter of the range (2^28 ids) is a floor, not an estimate: a
-/// dictionary draws one id at its latch and one per compacting delete or
-/// inline-bound change, O(1) per object, against the ordinary band's one per
-/// shape birth.
-pub(crate) const DICTIONARY_SHAPE_ID_BASE: u32 = 0xB000_0000;
+/// End of the ordinary site-matchable ids. The following range is reserved;
+/// object-owned overflow never allocates a separate shape identity.
+pub(crate) const SITE_SHAPE_ID_END: u32 = 0xB000_0000;
 
 /// The EXOTIC band, `[EXOTIC_SHAPE_ID_BASE, SHAPE_ID_END)`: ShapeIds of
 /// receivers that are not `GC_TYPE_OBJECT` (function objects today; arrays,
@@ -1544,7 +1506,7 @@ pub(crate) const EXOTIC_SHAPE_ID_BASE: u32 = 0xB800_0000;
 /// structure every later mint probes.
 pub(crate) const STATIC_SHAPE_ID_END: u32 =
     SHAPE_ID_BASE + crate::codegen_abi::STATIC_SHAPE_ID_COUNT;
-const _: () = assert!(STATIC_SHAPE_ID_END < DICTIONARY_SHAPE_ID_BASE);
+const _: () = assert!(STATIC_SHAPE_ID_END < SITE_SHAPE_ID_END);
 
 /// Is `v` in the compiler-assigned band ([`STATIC_SHAPE_ID_END`])? A fact of
 /// the value alone.
@@ -1553,11 +1515,11 @@ pub(crate) fn is_static_shape_id(v: u32) -> bool {
     (SHAPE_ID_BASE..STATIC_SHAPE_ID_END).contains(&v)
 }
 
-const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < EXOTIC_SHAPE_ID_BASE);
+const _: () = assert!(SITE_SHAPE_ID_END < EXOTIC_SHAPE_ID_BASE);
 const _: () = assert!(EXOTIC_SHAPE_ID_BASE < SHAPE_ID_END);
 
-const _: () = assert!(SHAPE_ID_BASE < DICTIONARY_SHAPE_ID_BASE);
-const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < SHAPE_ID_END);
+const _: () = assert!(SHAPE_ID_BASE < SITE_SHAPE_ID_END);
+const _: () = assert!(SITE_SHAPE_ID_END < SHAPE_ID_END);
 
 /// #6759 C3c: PROCESS-GLOBAL allocator (supersedes the per-thread counter
 /// C3a landed with). Global uniqueness matters because the worker
@@ -1569,15 +1531,6 @@ static SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
-];
-
-/// The dictionary band's own monotonic counters (see
-/// [`DICTIONARY_SHAPE_ID_BASE`]), one per identity kind
-/// ([`SHAPE_ID_KIND_SHIFT`]); never reused, each parks at the band's end.
-static DICTIONARY_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
-    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE),
-    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE),
-    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE),
 ];
 
 /// The exotic band's own monotonic counters ([`EXOTIC_SHAPE_ID_BASE`]).
@@ -1625,7 +1578,7 @@ pub(crate) const SHAPE_ID_KIND_NULL: u32 = 2;
 const SHAPE_ID_KIND_GROUP: u32 = 4 << SHAPE_ID_KIND_SHIFT;
 const _: () = assert!(STATIC_SHAPE_ID_END - SHAPE_ID_BASE <= 1 << SHAPE_ID_KIND_SHIFT);
 const _: () = assert!(SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
-const _: () = assert!(DICTIONARY_SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
+const _: () = assert!(SITE_SHAPE_ID_END % SHAPE_ID_KIND_GROUP == 0);
 const _: () = assert!(EXOTIC_SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
 const _: () = assert!(SHAPE_ID_END % SHAPE_ID_KIND_GROUP == 0);
 
@@ -1669,12 +1622,12 @@ pub(crate) fn is_shape_id(v: u32) -> bool {
 }
 
 /// May a per-site cache word hold this id? True exactly for an ORDINARY-band
-/// ShapeId: never for a dictionary shape ([`DICTIONARY_SHAPE_ID_BASE`]), never
+/// ShapeId: never for a dictionary shape ([`SITE_SHAPE_ID_END`]), never
 /// for a class id, never for 0. Every site-word writer publishes only ids this
 /// accepts, so an emitted compare can never equal a dictionary receiver's word.
 #[inline]
 pub(crate) fn is_site_matchable_shape_id(v: u32) -> bool {
-    (SHAPE_ID_BASE..DICTIONARY_SHAPE_ID_BASE).contains(&v)
+    (SHAPE_ID_BASE..SITE_SHAPE_ID_END).contains(&v)
 }
 
 /// [`is_site_matchable_shape_id`] for a per-site PIC TOKEN
@@ -1683,14 +1636,6 @@ pub(crate) fn is_site_matchable_shape_id(v: u32) -> bool {
 pub(crate) fn is_site_matchable_token(token: u64) -> bool {
     token == (PIC_ID_TOKEN_BIT | u64::from(token as u32))
         && is_site_matchable_shape_id(token as u32)
-}
-
-/// Is this a dictionary-mode ShapeId? A fact of the value alone. (The
-/// production writers ask the complement, [`is_site_matchable_shape_id`].)
-#[cfg(test)]
-#[inline]
-pub(crate) fn is_dictionary_shape_id(v: u32) -> bool {
-    (DICTIONARY_SHAPE_ID_BASE..EXOTIC_SHAPE_ID_BASE).contains(&v)
 }
 
 /// Is this an exotic-receiver ShapeId ([`EXOTIC_SHAPE_ID_BASE`])? A fact of
@@ -1777,21 +1722,7 @@ fn alloc_shape_id_of_kind(
 /// mint except a dictionary or exotic shape's.
 fn alloc_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
     let kind = proto_id_kind(proto_id);
-    alloc_shape_id_of_kind(
-        &SHAPE_ID_NEXT[kind as usize],
-        DICTIONARY_SHAPE_ID_BASE,
-        kind,
-    )
-}
-
-/// A dictionary-band ShapeId ([`DICTIONARY_SHAPE_ID_BASE`]).
-fn alloc_dictionary_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
-    let kind = proto_id_kind(proto_id);
-    alloc_shape_id_of_kind(
-        &DICTIONARY_SHAPE_ID_NEXT[kind as usize],
-        EXOTIC_SHAPE_ID_BASE,
-        kind,
-    )
+    alloc_shape_id_of_kind(&SHAPE_ID_NEXT[kind as usize], SITE_SHAPE_ID_END, kind)
 }
 
 /// An exotic-band ShapeId ([`EXOTIC_SHAPE_ID_BASE`]).
@@ -1800,21 +1731,11 @@ fn alloc_exotic_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
     alloc_shape_id_of_kind(&EXOTIC_SHAPE_ID_NEXT[kind as usize], SHAPE_ID_END, kind)
 }
 
-/// The band a new shape's id is drawn from is decided by its generation
-/// namespace: a dictionary generation (bit 62 set, bit 63 clear —
-/// `dictionary::next_generation`) mints in the dictionary band, everything
-/// else in the ordinary band. Its identity decides the kind.
 fn alloc_shape_id_for_generation(
-    semantic_generation: u64,
+    _semantic_generation: u64,
     proto_id: u64,
 ) -> Result<u32, ShapeIdExhausted> {
-    const DETERMINISTIC_BIT: u64 = 1 << 63;
-    let tag = crate::object::dictionary::DICTIONARY_GENERATION_TAG;
-    if semantic_generation & (DETERMINISTIC_BIT | tag) == tag {
-        alloc_dictionary_shape_id(proto_id)
-    } else {
-        alloc_shape_id(proto_id)
-    }
+    alloc_shape_id(proto_id)
 }
 
 /// The ordinary-band ids this process has handed out, as a counter.
@@ -2679,11 +2600,8 @@ pub(crate) fn shape_brands_by_id(id: u32) -> Option<&'static [u64]> {
 /// # Safety
 /// `obj` is null or a live `ObjectHeader`.
 #[inline]
-pub(crate) unsafe fn receiver_extra_summary(obj: *const crate::object::ObjectHeader) -> u8 {
-    if obj.is_null() || !crate::object::dictionary::is_dictionary(obj) {
-        return 0;
-    }
-    crate::object::dictionary::private_list_summary(obj)
+pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHeader) -> u8 {
+    0
 }
 
 #[cold]
@@ -2967,7 +2885,7 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     store_kind::retire_proof_before_stamp(obj, id);
     let previous = (*obj).parent_class_id;
     debug_assert_brands_carried(previous, id);
-    (*obj).parent_class_id = id;
+    (*obj).parent_class_id = super::overflow::stamped_word(obj, id);
     // A structural change to an object somebody INHERITS from is invisible to
     // every instance below it: no instance is touched, no epoch moves, and the
     // instances' own ShapeIds are unchanged. This is the one place every such
@@ -3321,7 +3239,7 @@ pub extern "C" fn js_region_guard_pack(
     k4: u64,
 ) -> u64 {
     // A region word is a site word: only an ORDINARY-band id may enter it
-    // (see `DICTIONARY_SHAPE_ID_BASE`).
+    // (see `SITE_SHAPE_ID_END`).
     if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
         return REGION_GUARD_WORD_EMPTY;
     }
@@ -3735,7 +3653,7 @@ pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHea
 #[inline]
 pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
     let word = (*obj).parent_class_id;
-    if is_shape_id(word) {
+    if is_shape_id(word & !super::overflow::SHADOW_BIT) {
         word
     } else {
         0
@@ -3863,7 +3781,7 @@ unsafe fn install_cached_object_shape_version_impl(
         // descriptor probe (see the function doc above). The proof retire
         // (R5) is not skipped: it is one header load without a proof.
         store_kind::retire_proof_before_stamp(obj, target_shape_id);
-        (*obj).parent_class_id = target_shape_id;
+        (*obj).parent_class_id = super::overflow::stamped_word(obj, target_shape_id);
     } else {
         stamp_object_shape_id_with_carrier_note(obj, target_shape_id);
     }
@@ -4106,7 +4024,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         }
         return false;
     }
-    (*obj).parent_class_id = runtime_shape_id;
+    (*obj).parent_class_id = super::overflow::stamped_word(obj, runtime_shape_id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
         note_old_generation_carrier(descriptor.record_ref());
     }
@@ -4446,7 +4364,7 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
-    if crate::object::dictionary::is_dictionary(obj) {
+    if crate::object::overflow::has_overflow(obj) {
         return transition_object_shape_semantics(obj);
     }
     let prev = object_shape_stamp(obj);
@@ -4501,11 +4419,7 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     let key_count = current.logical_key_count;
     // A dictionary receiver's identity lives in its own namespace, disjoint
     // from both ordinary ones (see `object/dictionary.rs`).
-    let generation = if crate::object::dictionary::is_dictionary(obj) {
-        crate::object::dictionary::next_generation()
-    } else {
-        SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    };
+    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if generation == 0 {
         shape_id_exhausted_abort();
     }
@@ -4538,10 +4452,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     obj: *mut crate::object::ObjectHeader,
     claims: impl Fn(u32, u64) -> bool,
 ) -> bool {
-    if obj.is_null()
-        || !shape_word_is_writable(obj)
-        || crate::object::dictionary::is_dictionary(obj)
-    {
+    if obj.is_null() || !shape_word_is_writable(obj) || crate::object::overflow::has_overflow(obj) {
         return false;
     }
     let Some(current) = object_shape_descriptor(obj) else {
@@ -4646,10 +4557,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
 pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
-    if obj.is_null()
-        || !shape_word_is_writable(obj)
-        || crate::object::dictionary::is_dictionary(obj)
-    {
+    if obj.is_null() || !shape_word_is_writable(obj) || crate::object::overflow::has_overflow(obj) {
         return transition_object_shape_semantics(obj);
     }
     let Some(current) = object_shape_descriptor(obj) else {
@@ -4751,8 +4659,8 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         return object_shape_stamp(obj);
     }
     crate::array::clear_array_subclass_named_prefix_token(obj);
-    let generation = if crate::object::dictionary::is_dictionary(obj) {
-        crate::object::dictionary::next_generation()
+    let generation = if crate::object::overflow::has_overflow(obj) {
+        SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     } else {
         current.semantic_generation
     };
@@ -4831,7 +4739,7 @@ pub(crate) unsafe fn class_object_first_key_is(
             );
             len > 0
                 && crate::string::js_string_key_matches_bytes(
-                    crate::value::JSValue::from_bits((*keys).to_bits()),
+                    crate::value::JSValue::from_bits((*keys.add(0)).to_bits()),
                     key,
                 )
         }
@@ -5177,7 +5085,7 @@ pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHead
     }
     // A default, class or per-object identity answers 0 from the id alone,
     // and a null link from the header.
-    let word = (*obj).parent_class_id;
+    let word = (*obj).parent_class_id & !super::overflow::SHADOW_BIT;
     match shape_word_kind(word) {
         SHAPE_ID_KIND_PLAIN => 0,
         SHAPE_ID_KIND_NULL if is_shape_id(word) => null_linked_prototype_word(obj),
@@ -5592,8 +5500,7 @@ pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
     // list in its `ObjectMeta`, so the comparison below is false by
     // construction for it. Its invariant is stricter, and lives with the mode
     // that owns it.
-    if crate::object::dictionary::is_dictionary(obj) {
-        crate::object::dictionary::debug_assert_dictionary_parity(obj);
+    if crate::object::overflow::has_overflow(obj) {
         return;
     }
     let id = object_shape_stamp(obj);

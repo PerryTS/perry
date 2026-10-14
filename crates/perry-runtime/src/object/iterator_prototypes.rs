@@ -977,6 +977,11 @@ pub(crate) unsafe fn shape_member_body_is(
 /// atom, so re-interning the same bytes need not reproduce the shape's key.
 #[inline(always)]
 pub(crate) unsafe fn array_iterator_next_is_intrinsic(owner: *const ObjectHeader) -> bool {
+    // The proof reads the layout alone; an overflow (the shadow bit) means the
+    // layout no longer lists every own key or its slot's current binding.
+    if super::overflow::has_overflow(owner) {
+        return false;
+    }
     let Some(shape) = super::shapes::object_shape_record(owner) else {
         return false;
     };
@@ -1023,7 +1028,9 @@ unsafe fn iterator_family_owner(
     let Some(own) = super::shapes::object_shape_record(obj) else {
         return None;
     };
-    if own.logical_key_count() != 0 || own.summary() != 0 {
+    // An overflow holds own keys the layout does not list (an own `next`
+    // written through a computed key, say): no layout-only proof applies.
+    if own.logical_key_count() != 0 || own.summary() != 0 || super::overflow::has_overflow(obj) {
         return None;
     }
     let proto_bits = super::shapes::object_prototype_word(obj);
@@ -1061,6 +1068,11 @@ unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
     let Some((proto, canonical)) = iterator_family_owner(obj) else {
         return None;
     };
+    // The family and shared-parent proofs below read layouts alone; a holder
+    // with an overflow has keys (and deletes) its layout does not show.
+    if super::overflow::has_overflow(proto) {
+        return None;
+    }
     let Some(family) = super::shapes::object_shape_record(proto) else {
         return None;
     };
@@ -1093,6 +1105,7 @@ unsafe fn iterator_step_builtin_info(obj: *const ObjectHeader) -> Option<u64> {
         crate::value::js_nanbox_get_pointer(f64::from_bits(parent_bits)) as *const ObjectHeader;
     if !crate::value::addr_class::try_read_gc_header(parent as usize)
         .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        || super::overflow::has_overflow(parent)
     {
         return None;
     }
@@ -1556,6 +1569,34 @@ mod native_step_tests {
         }
     }
 
+    /// An iterator whose own keys moved into an overflow may hold an own
+    /// `next` its (empty) layout does not list; the native step must not
+    /// skip it.
+    #[test]
+    fn an_own_key_in_the_receivers_overflow_requires_protocol() {
+        unsafe {
+            let _stable = crate::gc::GcSuppressScope::new();
+            let iter = fixture(crate::array::ARRAY_ITERATOR_CLASS_ID);
+            let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
+            assert!(iterator_step_is_builtin(obj), "pristine premise");
+            let next = crate::array::js_iterator_next_method(iter);
+            assert!(super::super::overflow::establish_order(obj));
+            let key = crate::string::intern_ascii_literal(b"next");
+            super::super::js_object_set_field_by_name(obj, key, next);
+            assert!(super::super::overflow::has_overflow(obj));
+            assert_eq!(
+                super::super::shapes::object_shape_record(obj).map(|s| s.logical_key_count()),
+                Some(0),
+                "premise: the layout lists no own key"
+            );
+            assert!(
+                !iterator_step_is_builtin(obj),
+                "an own next in the overflow requires the protocol"
+            );
+            build_iterator_prototypes();
+        }
+    }
+
     extern "C" fn hole_value_getter(
         _c: *const crate::closure::ClosureHeader,
         _this: crate::closure::JsThis,
@@ -1830,7 +1871,7 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
     }
     let mut obj = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
     for _ in 0..64 {
-        if super::dictionary::is_dictionary(obj) {
+        if super::overflow::has_overflow(obj) {
             return false;
         }
         let Some(shape) = super::shapes::object_shape_record(obj) else {

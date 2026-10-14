@@ -202,10 +202,40 @@ static GENERIC: unsafe extern "C" fn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::put_value::record_fixture::{json, record};
     fn receiver() -> f64 {
-        let bytes = br#"{"x":5}"#;
-        let text = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-        f64::from_bits(unsafe { crate::json::js_json_parse(text) }.bits())
+        record(br#"{"x":5}"#)
+    }
+    /// Object model step 4: a `JSON.parse` record has an overflow, which the
+    /// shared store memo does not serve until step 5. Every RMW is answered
+    /// by the generic path, with the right old and new values.
+    #[test]
+    fn an_overflow_receiver_declines_the_memo_and_computes_generically() {
+        unsafe {
+            let target = json(br#"{"x":5}"#);
+            let obj = (target.to_bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+            assert!(crate::object::overflow::has_overflow(obj));
+            let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+            let site = super::super::super::packed_add::PackedSetSite::empty();
+            let mut cache = std::ptr::null_mut();
+            assert_eq!(
+                js_property_rmw(target, key, 0.0, 1, &mut cache, &site.set),
+                5.0,
+                "postfix increment yields the old value"
+            );
+            assert_eq!(
+                js_property_rmw_fast(target, 0.0, 3, &site.set).to_bits(),
+                crate::value::TAG_HOLE,
+                "the memo stays empty for an overflow receiver"
+            );
+            assert_eq!(
+                js_property_rmw(target, key, 3.0, 21, &mut cache, &site.set),
+                7.0,
+                "6 | 3"
+            );
+            let x = crate::object::js_object_get_field_by_name(obj, key);
+            assert_eq!(f64::from_bits(x.bits()), 7.0);
+        }
     }
     #[test]
     fn shared_store_memo_updates_and_shape_mutations_decline() {

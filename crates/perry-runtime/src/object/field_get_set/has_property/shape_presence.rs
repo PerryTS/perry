@@ -22,9 +22,8 @@ pub(crate) unsafe fn own_position(
     {
         return None;
     }
-    let dictionary = (shapes::DICTIONARY_SHAPE_ID_BASE..shapes::EXOTIC_SHAPE_ID_BASE)
-        .contains(&shapes::object_shape_stamp(obj));
-    if (!dictionary && !shape.object_kind.is_ordinary_layout())
+    let table_owned = crate::object::overflow::has_overflow(obj);
+    if (!table_owned && !shape.object_kind.is_ordinary_layout())
         || matches!(
             shape.object_kind,
             ShapeObjectKind::NativeNamespace | ShapeObjectKind::OrdinaryNativeAlias
@@ -50,14 +49,16 @@ pub(crate) unsafe fn own_position(
     {
         return None;
     }
-    let view = if dictionary {
+    let view = if table_owned {
         crate::object::object_keys(obj)
     } else {
         shape.keys_view()
     };
-    let position = if view.count() >= crate::object::KEYS_INDEX_THRESHOLD {
+    let position = if table_owned {
+        crate::object::keys_find_slot_by_bytes_resolved(view.arr(), view.count(), name)
+    } else if view.count() >= crate::object::KEYS_INDEX_THRESHOLD {
         // Presence may build the owner's existing key index once. A complete
-        // miss is authoritative, including on a mutable dictionary list.
+        // miss is authoritative, including on a mutable table_owned list.
         let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
         match shapes::shape_slot_lookup_verdict(view.arr(), name, hash, view.count(), true) {
             shapes::KeysIndexVerdict::Found(slot) => Some(slot),
@@ -100,7 +101,7 @@ pub(crate) unsafe fn own_position(
         // Declared prototype methods/constructor can be virtual own keys.
         return None;
     }
-    let reusable = !dictionary
+    let reusable = !table_owned
         && shape.hole_count == 0
         && shapes::is_site_matchable_shape_id(shapes::object_shape_stamp(obj));
     Some((position, shape.proto_id, shape.object_kind, reusable))
@@ -117,7 +118,7 @@ pub(crate) struct PresenceProof {
 }
 
 /// The ordinary walk uses one prototype cell per hop. Its short proof can be
-/// published in the existing keyed holder record; longer/dictionary/class
+/// published in the existing keyed holder record; longer/table_owned/class
 /// links still answer directly, without introducing invalidation state.
 #[inline(always)]
 pub(crate) unsafe fn presence_proof(receiver: f64, key: f64) -> Option<PresenceProof> {
@@ -199,7 +200,7 @@ pub(crate) unsafe fn try_shape_has_property(receiver: f64, key: f64) -> Option<b
         let stamp = shapes::object_shape_stamp(obj);
         // The ordinary boolean operation needs membership, not a slot or a
         // holder proof. Reuse hasOwn's existing shape consumer; it declines
-        // private, dictionary, holey and per-object-prototype records.
+        // private, table_owned, holey and per-object-prototype records.
         let ordinary = shapes::shape_record_by_id(stamp)
             .filter(|record| {
                 let kind = record.object_kind();
@@ -342,8 +343,14 @@ mod tests {
                 crate::value::TAG_TRUE
             );
             crate::object::js_object_delete_field(obj, key);
+            // Object model step 4: the delete went through the overflow; the
+            // public entry is a tombstone and only the private element is
+            // still a key.
+            let (slots, len) = crate::object::object_keys(obj).dense_slots();
             assert_eq!(
-                crate::object::object_keys(obj).count(),
+                (0..len)
+                    .filter(|&i| (*slots.add(i)).to_bits() != crate::value::TAG_HOLE)
+                    .count(),
                 1,
                 "only the private element remains"
             );
@@ -356,28 +363,26 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_presence_uses_owned_keys_without_shape_memo() {
+    fn table_owned_presence_uses_owned_keys_without_shape_memo() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_gc = crate::gc::GcSuppressScope::new();
         unsafe {
             crate::object::ensure_object_intrinsics();
             let obj = crate::object::object_alloc_plain(0);
             for i in 0..6 {
-                let name = format!("dictionary_presence_{i}");
+                let name = format!("table_owned_presence_{i}");
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                 crate::object::js_object_set_field_by_name(obj, key, i as f64);
             }
             let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             crate::object::js_object_set_field_by_name(obj, key, undefined);
-            assert!(crate::object::dictionary::latch_object_to_dictionary(obj));
-            assert_eq!(
-                crate::object::shapes::object_shape_descriptor(obj)
-                    .unwrap()
-                    .keys,
-                0,
-                "the dictionary shape omits its private key list"
-            );
+            assert!(crate::object::overflow::establish_order(obj));
+            // Object model step 4: the layout keeps its keys; the overflow
+            // is the receiver's key view and answers presence.
+            assert!(crate::object::overflow::is_table(
+                crate::object::object_keys(obj).arr()
+            ));
             let receiver = crate::value::js_nanbox_pointer(obj as i64);
             let boxed_key = crate::value::js_nanbox_string(key as i64);
             let child = crate::object::object_alloc_plain(0);

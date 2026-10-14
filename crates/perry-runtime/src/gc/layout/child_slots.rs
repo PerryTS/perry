@@ -399,7 +399,7 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
             // authoritative meta enumerator is layout_slot_visit ObjectMeta
             // rewrite arm, which does not delegate here. This iterator has
             // four edge sources and the record has seven pointer words, so
-            // expando, dictionary_keys and arguments are absent below.
+            // expando, overflow and arguments are absent below.
             // Prototype and the private-evaluation brand are explicit prefix
             // edges. Keep the brand out of the payload selection: its class
             // object can be reachable only through this metadata record, so

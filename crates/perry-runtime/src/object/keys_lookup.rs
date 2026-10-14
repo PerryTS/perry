@@ -1,8 +1,32 @@
-//! Keys-array slot lookup helpers, in a sibling file.
-//!
-//! Extracted from `object/mod.rs` to keep it under the repo's 2000-line cap.
-//! A child module, so these still reach the parent's private items through
-//! `use super::*`. Moved verbatim apart from sharing one payload-offset helper.
+//! Key views over a dense key list: an ordinary keys array's elements, or
+//! the ordered table's keys column (both one `u64` key per position).
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub(crate) struct KeySlots(*const f64);
+impl KeySlots {
+    #[inline(always)]
+    pub(crate) fn dense(base: *const f64) -> Self {
+        Self(base)
+    }
+    #[inline(always)]
+    pub(crate) fn null() -> Self {
+        Self(std::ptr::null())
+    }
+    #[inline(always)]
+    pub(crate) fn is_null(self) -> bool {
+        self.0.is_null()
+    }
+    #[inline(always)]
+    pub(crate) unsafe fn add(self, i: usize) -> *const f64 {
+        self.0.add(i)
+    }
+}
+
+// Keys-array slot lookup helpers, in a sibling file.
+//
+// Extracted from `object/mod.rs` to keep it under the repo's 2000-line cap.
+// A child module, so these still reach the parent's private items through
+// `use super::*`. Moved verbatim apart from sharing one payload-offset helper.
 
 use super::*;
 
@@ -25,7 +49,15 @@ pub(crate) unsafe fn string_header_payload(key: *const crate::StringHeader) -> *
 #[inline]
 pub(crate) unsafe fn keys_array_dense_slots(
     keys: *const crate::array::ArrayHeader,
-) -> (*const f64, usize) {
+) -> (KeySlots, usize) {
+    if super::overflow::is_table(keys) {
+        let t = keys as *const super::overflow::Table;
+        return (
+            KeySlots::dense(super::overflow::keys_ptr(t).cast()),
+            (*t).length as usize,
+        );
+    }
+
     // A shape's keys array is a GC array by construction: its header needs
     // no address admission (only forwarding/laziness take the resolver).
     let arr = if keys.is_null() || (keys as u64) >> 48 != 0 {
@@ -35,11 +67,11 @@ pub(crate) unsafe fn keys_array_dense_slots(
         crate::array::clean_headed_arr_ptr(keys, header)
     };
     if arr.is_null() {
-        return (std::ptr::null(), 0);
+        return (KeySlots::null(), 0);
     }
     let len = (*arr).length.min((*arr).capacity) as usize;
     (
-        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const f64,
+        KeySlots::dense(crate::array::array_elements_ptr(arr) as *const f64),
         len,
     )
 }
@@ -79,6 +111,10 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
     key_count: u32,
     key_bytes: &[u8],
 ) -> Option<u32> {
+    if super::overflow::is_table(keys) {
+        return super::overflow::find_bytes(keys.cast(), key_bytes);
+    }
+
     if key_count >= KEYS_INDEX_THRESHOLD {
         let h = key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
         // build=false — consult-only. These call sites run on delete-churn
@@ -153,12 +189,23 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
 #[inline]
 pub(crate) unsafe fn keys_array_dense_slots_resolved(
     keys: *const crate::array::ArrayHeader,
-) -> (*const f64, usize) {
+) -> (KeySlots, usize) {
+    if super::overflow::is_table(keys) {
+        let t = keys as *const super::overflow::Table;
+        return (
+            KeySlots::dense(super::overflow::keys_ptr(t).cast()),
+            (*t).length as usize,
+        );
+    }
+
     if keys.is_null() {
-        return (std::ptr::null(), 0);
+        return (KeySlots::null(), 0);
     }
     let len = (*keys).length.min((*keys).capacity) as usize;
-    (crate::array::array_elements_ptr(keys) as *const f64, len)
+    (
+        KeySlots::dense(crate::array::array_elements_ptr(keys) as *const f64),
+        len,
+    )
 }
 
 /// [`keys_find_slot_by_bytes`] for a keys array obtained from a live
@@ -173,6 +220,10 @@ pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
     key_count: u32,
     key_bytes: &[u8],
 ) -> Option<u32> {
+    if super::overflow::is_table(keys) {
+        return super::overflow::find_bytes(keys.cast(), key_bytes);
+    }
+
     if key_count >= KEYS_INDEX_THRESHOLD {
         // The indexed path owns its own receiver handling; hand it the
         // unresolved entry so its behaviour is bit-for-bit what it was.
@@ -283,6 +334,10 @@ pub(crate) unsafe fn keys_index_lookup(
     key_bytes: &[u8],
     key_hash: u64,
 ) -> Option<u32> {
+    if super::overflow::is_table(keys.arr()) {
+        return super::overflow::find_bytes(keys.arr().cast(), key_bytes);
+    }
+
     let key_count = keys.count();
     if key_count < KEYS_INDEX_THRESHOLD {
         return None;
@@ -425,6 +480,10 @@ pub(crate) unsafe fn keys_find_private_slot_by_bytes(
     count: u32,
     bytes: &[u8],
 ) -> Option<u32> {
+    // The overflow's hash index holds the property namespace only.
+    if super::overflow::is_table(keys) {
+        return keys_find_slot_in_namespace(keys, count, bytes, true);
+    }
     let slot = keys_find_slot_by_bytes(keys, count, bytes)?;
     if super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);

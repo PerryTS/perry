@@ -513,6 +513,26 @@ pub(super) fn emit_string_pool(
         ops_per_chunk,
     );
 
+    if image_literals && strings.iter().next().is_some() {
+        let atoms: Vec<String> = strings
+            .iter()
+            .map(|entry| format!("ptr {}", image::pointer(entry)))
+            .collect();
+        let name = format!("perry_property_atoms_{module_prefix}");
+        let count = atoms.len();
+        chunker.module().add_raw_global(format!(
+            "@{name} = private constant [{count} x ptr] [{}]",
+            atoms.join(", ")
+        ));
+        chunker
+            .module()
+            .declare_function("js_string_register_property_atoms", VOID, &[PTR, I32]);
+        chunker.roll_if_full();
+        chunker.current_block().call_void(
+            "js_string_register_property_atoms",
+            &[(PTR, &format!("@{name}")), (I32, &count.to_string())],
+        );
+    }
     for entry in strings
         .iter()
         .filter(|_| !image_literals || runtime_boxed_images)
@@ -554,7 +574,7 @@ pub(super) fn emit_string_pool(
         llmod,
         &agent_strings_name,
         module_prefix,
-        !image_literals || runtime_boxed_images,
+        true,
         agent_strings_tls,
         &string_chunks,
     );

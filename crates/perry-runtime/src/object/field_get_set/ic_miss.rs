@@ -440,7 +440,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     // A token hit must prove a nonzero ShapeId, including in polymorphic ways.
     // Keyless/unstamped receivers require the full prototype lookup. And only
     // an ORDINARY-band id may be written: a dictionary shape's id can never be
-    // held by a site (`shapes::DICTIONARY_SHAPE_ID_BASE`).
+    // held by a site (`shapes::SITE_SHAPE_ID_END`).
     if !crate::object::shapes::is_site_matchable_token(token as u64) {
         return;
     }
@@ -1110,9 +1110,22 @@ pub(super) fn get_field_ic_miss_impl(
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             };
-            // A dictionary-mode receiver stores its key list in ObjectMeta;
-            // the no-keys-array shortcut cannot classify it as empty.
-            if crate::object::dictionary::is_dictionary(obj) {
+            // A receiver with an overflow: its overflow holds every own key,
+            // so one atom-keyed hit answers an own data read (§3.4), and a
+            // miss there continues with the prototype chain, each hop answered
+            // by its layout's key index or its own overflow (§3.7 case 3): an
+            // inherited value, or undefined when the chain ends without the
+            // key. An accessor takes `own_get`, which calls it; anything the
+            // layouts cannot prove takes the complete read.
+            if crate::object::overflow::has_overflow(obj) {
+                match crate::object::native_get::try_data_lookup_by_name(obj, key) {
+                    Some(Some(value)) => return f64::from_bits(value.bits()),
+                    Some(None) => return f64::from_bits(crate::value::TAG_UNDEFINED),
+                    None => {}
+                }
+                if let Some(value) = crate::object::overflow::own_get(obj, key) {
+                    return f64::from_bits(value.bits());
+                }
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }

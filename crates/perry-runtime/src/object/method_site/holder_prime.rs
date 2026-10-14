@@ -254,7 +254,7 @@ pub(super) unsafe fn prime_holder(
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-            || super::super::dictionary::is_dictionary(next)
+            || super::super::overflow::has_overflow(next)
         {
             refuse(8);
             return HolderPrime::Refused;

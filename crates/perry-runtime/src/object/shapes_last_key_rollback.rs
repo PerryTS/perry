@@ -102,7 +102,7 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
                 | crate::gc::OBJ_FLAG_SEALED
                 | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
             != 0
-        || crate::object::dictionary::is_dictionary(obj)
+        || crate::object::overflow::has_overflow(obj)
     {
         return 0;
     }

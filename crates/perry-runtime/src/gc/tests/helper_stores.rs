@@ -120,22 +120,27 @@ fn json_large_object_materialization_preserves_young_string_fields() {
     let obj = (parsed.bits() & POINTER_MASK) as *mut crate::object::ObjectHeader;
     js_shadow_slot_set(0, parsed.bits());
 
-    assert!(crate::arena::pointer_in_old_gen(obj as usize));
-    let fields = unsafe {
-        (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64
+    // Object model step 4: the record keeps its fields in its overflow
+    // (§3.4); with this many entries the overflow is the large, old-born
+    // container whose young string values the minor must rewrite.
+    let entry_slot = |obj: *mut crate::object::ObjectHeader| unsafe {
+        let table = crate::object::overflow::table(obj);
+        assert!(!table.is_null(), "a JSON.parse record carries its overflow");
+        let entry = crate::object::overflow::find_bytes(table, b"k0").expect("the first key");
+        (table, crate::object::overflow::value_at(table, entry))
     };
-    let first_child = unsafe { (*fields & POINTER_MASK) as usize };
+    let (table, slot) = entry_slot(obj);
+    assert!(crate::arena::pointer_in_old_gen(table as usize));
+    let first_child = unsafe { (*slot & POINTER_MASK) as usize };
     assert!(crate::arena::pointer_in_nursery(first_child));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
-    let fields_after = unsafe {
-        (obj_after as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64
-    };
+    let (_, slot_after) = entry_slot(obj_after);
 
     assert_verified_copied_minor(&trace);
     unsafe {
-        assert_slot_rewritten_to_nursery(fields_after, first_child);
+        assert_slot_rewritten_to_nursery(slot_after, first_child);
     }
 }
 

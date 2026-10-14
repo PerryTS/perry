@@ -1019,6 +1019,16 @@ pub(crate) fn register_prototype_addr_cache_scanner() {
     reg_scanner!(crate::array::scan_prototype_addr_cache_roots_mut);
 }
 
+/// The agent's property atom table (`string::intern`, §3.5) is weak runtime
+/// state keyed by atom address: every heap that can move an atom must rewrite
+/// its entry, or a data key stops meeting its atom after the move (an
+/// object's overflow keys then answer no lookup). `gc_init` registers this
+/// for a program, and a GC test window that starts from an empty scanner
+/// registry registers it too (`ScopedRootScannerRegistryGuard`).
+pub(crate) fn register_property_atom_scanner() {
+    reg_scanner!(crate::string::scan_property_atoms);
+}
+
 /// The realm's prototypes are born old (I1, `gc::never_move`), and a minor
 /// never traces an old object: the young parts of a realm prototype a test
 /// window builds (its identity words and key lists) are rooted only by the
@@ -1228,6 +1238,7 @@ pub fn gc_init() {
     // keeps a dead holder alive. Copied-minor liveness/prune is driven by
     // `process_weak_targets_from_registry`; this covers full-cycle currency.
     reg_scanner!(crate::weakref::scan_weak_holders_roots_mut);
+    register_property_atom_scanner();
     reg_scanner!(ephemeron::scan_ephemeron_seeds_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by

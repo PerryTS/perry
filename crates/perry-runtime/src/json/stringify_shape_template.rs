@@ -58,6 +58,9 @@ pub(crate) struct ShapeTemplate {
 pub(crate) unsafe fn shape_template_for(obj_ptr: *const u8) -> Option<*const ShapeTemplate> {
     let obj = obj_ptr as *const crate::ObjectHeader;
     let keys_arr_view = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys_arr_view.arr()) {
+        return None;
+    }
     let keys_arr = keys_arr_view.arr();
     if keys_arr.is_null() {
         return None;
@@ -162,6 +165,9 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         return None;
     }
     let keys_arr_view = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys_arr_view.arr()) {
+        return None;
+    }
     let keys_arr = keys_arr_view.arr();
     if keys_arr.is_null() {
         return None;

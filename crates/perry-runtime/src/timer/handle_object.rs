@@ -246,13 +246,13 @@ pub(crate) unsafe fn try_timer_method_fast_dispatch(object: f64, name: &[u8]) ->
         return None;
     }
     let name_str = std::str::from_utf8_unchecked(name);
-    if crate::object::dictionary::is_dictionary(obj)
+    if crate::object::overflow::has_overflow(obj)
         || crate::object::shapes::object_shape_descriptor(obj)?.logical_key_count != 0
         || crate::object::descriptor_state::may_have_descriptor_entry(obj as usize, name_str, true)
     {
         return None;
     }
-    if crate::object::dictionary::is_dictionary(proto)
+    if crate::object::overflow::has_overflow(proto)
         || crate::object::descriptor_state::may_have_descriptor_entry(
             proto as usize,
             name_str,

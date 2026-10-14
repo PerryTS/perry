@@ -352,6 +352,13 @@ fn validated_object_receiver_for_value(value: f64) -> Option<ValidatedObjectRece
 /// descriptor, hole, or prototype case returns `None`.
 #[inline]
 fn dense_layout_for_validated_object(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
+    // The dense layout is read off the receiver's layout alone. A receiver
+    // with an overflow (a delete of an element gives one) keeps that layout
+    // while its slots hold holes and its keys live in the overflow, so no
+    // layout proof applies to it (object model step 4).
+    if unsafe { crate::object::overflow::has_overflow(obj) } {
+        return None;
+    }
     // `Object.setPrototypeOf` moves the receiver to another ShapeId, so a
     // layout cached for the old one (owner word or `(class, ShapeId)` key)
     // cannot be borrowed afterwards.
@@ -413,6 +420,7 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || crate::object::overflow::has_overflow(obj)
     {
         return 0;
     }

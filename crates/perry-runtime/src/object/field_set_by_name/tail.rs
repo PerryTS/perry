@@ -527,6 +527,7 @@ pub(crate) fn set_field_by_name_object_tail(
         if !key.is_null()
             && !is_frozen
             && !is_sealed_or_no_extend
+            && !crate::object::overflow::has_overflow(obj)
             // #10287: per-KEY, not per receiver — see `own_descriptors_skip_key`.
             && desc_gate_ok
             && (plan_fast
@@ -642,22 +643,14 @@ pub(crate) fn set_field_by_name_object_tail(
             // reaches the SAME array — which is the whole of the mint fix at
             // this site, because a fresh 4-slot allocation per receiver was a
             // fresh identity per receiver.
-            let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
-                Some(proof) => crate::object::canonical_keys::extend_key(
-                    &proof,
-                    crate::object::canonical_keys::CanonicalKeys::EMPTY,
-                    key,
-                )
-                .view(),
-                // A latched receiver owns its list from its first key.
-                None => {
-                    let fresh = crate::array::js_array_alloc(4);
-                    refresh_roots_after_alloc!();
-                    let grown =
-                        crate::array::js_array_push(fresh, JSValue::string_ptr(key as *mut _));
-                    crate::object::ObjectKeys::owned(grown)
-                }
-            };
+            let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
+                .expect("an object with an overflow appends through it, never here");
+            let new_keys = crate::object::canonical_keys::extend_key(
+                &proof,
+                crate::object::canonical_keys::CanonicalKeys::EMPTY,
+                key,
+            )
+            .view();
             refresh_roots_after_alloc!();
 
             // The first key follows the same allocation-capacity rule as
@@ -693,13 +686,9 @@ pub(crate) fn set_field_by_name_object_tail(
             // that starts with `{}` and sets the same first key hits the
             // fast path above instead of allocating a fresh 4-elem
             // keys_array here.
-            // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
-            // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
-            // it caches — which makes the very next append clone the array instead of
-            // extending it, i.e. O(k) copying per append, the cost this mode exists to
-            // remove. A dictionary receiver publishes no shape transitions, so the
-            // entry could never be hit by anyone else either.
-            if !crate::object::dictionary::is_dictionary(obj) {
+            // An object whose overflow took over at this append (the unique-run
+            // limit) records no edge: its later keys go to the overflow.
+            if !crate::object::overflow::has_overflow(obj) {
                 transition_cache_insert(
                     if record_array_tail {
                         obj as *const ObjectHeader
@@ -718,9 +707,7 @@ pub(crate) fn set_field_by_name_object_tail(
             // #6759 C3 rung 1: no `class_id == 0` gate — a keyless class
             // instance gaining its first by-name property is stamped like
             // any other receiver.
-            // #10868 step 2.5 stage 1: same un-latch hazard as the read
-            // path's field-cache stamp — this publishes an explicit keys edge.
-            if !crate::object::dictionary::is_dictionary(obj)
+            if !crate::object::overflow::has_overflow(obj)
                 && !super::shapes::shape_descriptor_by_id(super::shapes::object_shape_stamp(obj))
                     .is_some_and(|d| d.special_constfn_mask != 0)
             {
@@ -795,6 +782,32 @@ pub(crate) fn set_field_by_name_object_tail(
             }
         }
 
+        // An object with an overflow (§3.4) is its own order authority:
+        // every write, of a new key or an old one, goes through the routed
+        // writer, which meets the layout's slot or the overflow entry.
+        if crate::object::overflow::has_overflow(obj) {
+            let own = super::object_ops::own_key_present(obj, key);
+            if own || is_frozen || is_sealed_or_no_extend {
+                let name = key_to_str_for_diag(key);
+                if own {
+                    if is_frozen {
+                        crate::error::throw_frozen_write(obj, &name);
+                    }
+                    if let Some(attrs) = get_property_attrs(obj as usize, &name) {
+                        if !attrs.writable() {
+                            crate::error::throw_immutable_write(0, &name);
+                        }
+                    }
+                } else {
+                    crate::error::throw_immutable_write(1, &name);
+                }
+            }
+            super::super::overflow::store_routed(obj, key, value);
+            refresh_roots_after_alloc!();
+            mirror_class_object_static_write(obj, key, value);
+            return;
+        }
+
         // Search through the keys array for a match
         let key_count = keys_view.count() as usize;
         let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
@@ -860,34 +873,17 @@ pub(crate) fn set_field_by_name_object_tail(
             // owned any more, so the arm it served does not exist rather than
             // being guarded (L8.3.15c).
             let new_index = key_count;
-            // #10868 step 2.5: TWO MODES, chosen by a fact on the shape —
-            // which is what dictionary mode IS. This is not a fast path
-            // beside a slow one inside one mode; an ordinary receiver's key
-            // list is a SHARED LAYOUT and interns, a latched receiver's list
-            // is its OWN and appends in place. `SharedLayout::of_receiver` is
-            // the kind check, and `canonicalize`/`extend_key` cannot be
-            // called without what it returns.
-            let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
-                Some(proof) => {
-                    let canonical_parent =
-                        crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
-                    refresh_roots_after_alloc!();
-                    crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view()
-                }
-                None => {
-                    // The parent's owned arm, unchanged: a dictionary's array
-                    // carries no `GC_FLAG_SHAPE_SHARED`, so this is the
-                    // in-place O(1)-amortized append that mode exists for.
-                    let owned = scope.root_raw_mut_ptr(keys);
-                    let grown =
-                        crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
-                    let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
-                    // Its attributes, if it carries any, grow with it.
-                    let grown =
-                        crate::object::key_attrs::owned_note_append(grown, key_count as u32, 0);
-                    crate::object::ObjectKeys::owned(grown)
-                }
-            };
+            // A layout's key list is a SHARED LAYOUT and interns; an object
+            // with an overflow never reaches here (it appends through the
+            // overflow above). `canonicalize`/`extend_key` cannot be called
+            // without the `SharedLayout` proof.
+            let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
+                .expect("an object with an overflow appends through it, never here");
+            let canonical_parent =
+                crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+            refresh_roots_after_alloc!();
+            let new_keys =
+                crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();
             refresh_roots_after_alloc!();
             if new_index >= alloc_limit {
                 // Charter step 5 (T2): carry the predecessor's lanes; an overflow
@@ -907,13 +903,9 @@ pub(crate) fn set_field_by_name_object_tail(
                 overflow_set(obj as usize, new_index, vbits);
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
-                // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
-                // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
-                // it caches — which makes the very next append clone the array instead of
-                // extending it, i.e. O(k) copying per append, the cost this mode exists to
-                // remove. A dictionary receiver publishes no shape transitions, so the
-                // entry could never be hit by anyone else either.
-                if !crate::object::dictionary::is_dictionary(obj) {
+                // An object whose overflow took over at this append (the unique-run
+                // limit) records no edge: its later keys go to the overflow.
+                if !crate::object::overflow::has_overflow(obj) {
                     transition_cache_insert(
                         if record_array_tail {
                             obj as *const ObjectHeader
@@ -955,13 +947,9 @@ pub(crate) fn set_field_by_name_object_tail(
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
-            // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
-            // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
-            // it caches — which makes the very next append clone the array instead of
-            // extending it, i.e. O(k) copying per append, the cost this mode exists to
-            // remove. A dictionary receiver publishes no shape transitions, so the
-            // entry could never be hit by anyone else either.
-            if !crate::object::dictionary::is_dictionary(obj) {
+            // An object whose overflow took over at this append (the unique-run
+            // limit) records no edge: its later keys go to the overflow.
+            if !crate::object::overflow::has_overflow(obj) {
                 transition_cache_insert(
                     if record_array_tail {
                         obj as *const ObjectHeader
@@ -1076,23 +1064,13 @@ pub(crate) fn set_field_by_name_object_tail(
         // tail.rs:1044/1102 `key_count` 3,676 + 5,416. `keys_shared` is not
         // tested because it is now true of every keys array by construction.
         let new_index = key_count;
-        // Two modes, as above the linear scan.
-        let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
-            Some(proof) => {
-                let canonical_parent =
-                    crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
-                refresh_roots_after_alloc!();
-                crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view()
-            }
-            None => {
-                let owned = scope.root_raw_mut_ptr(keys);
-                let grown = crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
-                let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
-                // Its attributes, if it carries any, grow with it.
-                let grown = crate::object::key_attrs::owned_note_append(grown, key_count as u32, 0);
-                crate::object::ObjectKeys::owned(grown)
-            }
-        };
+        let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
+            .expect("an object with an overflow appends through it, never here");
+        let canonical_parent =
+            crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+        refresh_roots_after_alloc!();
+        let new_keys =
+            crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();
         refresh_roots_after_alloc!();
 
         // Check if we have a spare physical slot (js_object_alloc_with_shape allocates max(N,8) slots).
@@ -1140,13 +1118,9 @@ pub(crate) fn set_field_by_name_object_tail(
             // The cached target is stamped `GC_FLAG_SHAPE_SHARED` by
             // `transition_cache_insert`, which triggers clone-on-extend
             // on either object if someone later appends past this key.
-            // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
-            // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
-            // it caches — which makes the very next append clone the array instead of
-            // extending it, i.e. O(k) copying per append, the cost this mode exists to
-            // remove. A dictionary receiver publishes no shape transitions, so the
-            // entry could never be hit by anyone else either.
-            if !crate::object::dictionary::is_dictionary(obj) {
+            // An object whose overflow took over at this append (the unique-run
+            // limit) records no edge: its later keys go to the overflow.
+            if !crate::object::overflow::has_overflow(obj) {
                 transition_cache_insert(
                     if record_array_tail {
                         obj as *const ObjectHeader
@@ -1187,13 +1161,9 @@ pub(crate) fn set_field_by_name_object_tail(
         refresh_roots_after_alloc!();
         mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
-        // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
-        // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
-        // it caches — which makes the very next append clone the array instead of
-        // extending it, i.e. O(k) copying per append, the cost this mode exists to
-        // remove. A dictionary receiver publishes no shape transitions, so the
-        // entry could never be hit by anyone else either.
-        if !crate::object::dictionary::is_dictionary(obj) {
+        // An object whose overflow took over at this append (the unique-run
+        // limit) records no edge: its later keys go to the overflow.
+        if !crate::object::overflow::has_overflow(obj) {
             transition_cache_insert(
                 if record_array_tail {
                     obj as *const ObjectHeader

@@ -208,6 +208,11 @@ unsafe fn set_property_key_resolved(obj_value: f64, key: f64, value: f64) -> f64
     }
     let obj = extract_obj_ptr(obj_value);
     if !obj.is_null() {
+        // §3.3: a key the layout does not name is appended to the overflow.
+        let key_value = crate::value::js_nanbox_string(key_str as i64);
+        if let Some(stored) = super::shape_store::try_dynamic_store(obj, key_value, value) {
+            return stored;
+        }
         js_object_set_field_by_name(obj, key_str, value);
     }
     value

@@ -634,26 +634,29 @@ fn transition_cache_carrier_bits_follow_live_occupancy_across_full_trace_recompu
         "a full-trace recompute must release descriptors no live entry names"
     );
 
-    // Relearning an edge marks its descriptors again, and a recompute keeps
-    // them. The cleared cache has no reverse edge for the fast pop, so the
-    // generic pop runs; it may mint a different predecessor shape, so the
-    // relearned pair is read back from the object rather than assumed.
+    // The cleared cache has no reverse edge for the fast pop, so the generic
+    // pop runs. Object model step 4: its delete of the last index key goes
+    // through the receiver's overflow (no rollback edge, §3.2), so no tail
+    // transition is learned again for this receiver; its elements stay right.
     assert_eq!(
         crate::array::js_array_pop_f64(obj as *mut ArrayHeader),
         11.0
     );
-    let relearned_predecessor = unsafe { (*obj).parent_class_id };
+    assert!(unsafe { crate::object::overflow::has_overflow(obj) });
     assert_eq!(
         js_array_push_f64(obj as *mut ArrayHeader, 11.0),
         obj as *mut ArrayHeader
     );
-    let relearned_successor = unsafe { (*obj).parent_class_id };
-    assert_ne!(relearned_predecessor, relearned_successor);
-    crate::object::array_tail_transition::recompute_cache_carriers_after_full_trace();
-    assert!(
-        carrier(relearned_predecessor) && carrier(relearned_successor),
-        "a recompute must keep descriptors that a live entry still names"
+    assert_eq!(array_subclass_fast_index_get(receiver, 0), None);
+    assert_eq!(
+        crate::array::js_array_get_f64(obj as *mut ArrayHeader, 0),
+        11.0
     );
+    assert_eq!(
+        crate::array::js_array_pop_f64(obj as *mut ArrayHeader),
+        11.0
+    );
+    assert_eq!(array_subclass_fast_length(receiver), None);
 }
 
 /// The spec push entry (the typed field-push lowering's complete fallback)

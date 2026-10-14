@@ -1,0 +1,10 @@
+const left: any = { a: 1, b: 2 };
+const right: any = {};
+for (const k of ['c', 'a', '8', '1']) right[k] = k;
+const out = Object.assign(left, right);
+console.log(Object.keys(out).join(','), JSON.stringify(out));
+const both = { ...right, tail: 9, ...left };
+console.log(Object.keys(both).join(','), JSON.stringify(both));
+delete both.c;
+both.c = 11;
+console.log(Object.keys(both).join(','), JSON.stringify(both));

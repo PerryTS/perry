@@ -296,7 +296,12 @@ pub(crate) unsafe fn slot_accessor_with_live(
     pos: u32,
     live: u32,
 ) -> Accessor {
-    let value = crate::object::field_get_set::object_field_at_with_live(obj, pos, live).bits();
+    let table = crate::object::overflow::table(obj);
+    let value = if table.is_null() {
+        crate::object::field_get_set::object_field_at_with_live(obj, pos, live).bits()
+    } else {
+        crate::object::overflow::get_from(table, obj, pos).unwrap_or(crate::value::TAG_UNDEFINED)
+    };
     pair_of_value(value).unwrap_or_default()
 }
 
@@ -308,7 +313,9 @@ pub(crate) unsafe fn slot_accessor_with_live(
 pub(crate) unsafe fn own_accessor(obj: usize, key: &[u8]) -> Option<Accessor> {
     let obj = obj as *const crate::object::ObjectHeader;
     let record = crate::object::shapes::object_shape_record(obj)?;
-    if record.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR == 0 {
+    if crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_ACCESSOR
+        == 0
+    {
         return None;
     }
     let keys = crate::object::object_keys_from_shape_record(obj, record);

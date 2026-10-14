@@ -21,23 +21,6 @@ unsafe fn layout_state_of(user_ptr: usize) -> u16 {
     (*header_from_user_ptr(user_ptr as *const u8))._reserved & GC_LAYOUT_STATE_MASK
 }
 
-/// Addresses of the slots the collector says it will visit inside `user_ptr`.
-/// ShapeId Any lanes contribute visited child slots; F64 lanes do not.
-unsafe fn enumerated_slot_addrs(user_ptr: usize) -> Vec<usize> {
-    test_heap_child_slots_for_user(user_ptr as *mut u8)
-        .into_iter()
-        .filter_map(|slot| match slot {
-            HeapChildSlot::Child(p, _) => Some(p as usize),
-            HeapChildSlot::PointerFreeRange(_) => None,
-        })
-        .collect()
-}
-
-unsafe fn field_slot_addr(obj: *mut ObjectHeader, index: usize) -> usize {
-    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-    fields.add(index) as usize
-}
-
 /// Construct a record with deferred slot stores. ShapeId rep determines tracing.
 unsafe fn materialise_record() -> *mut ObjectHeader {
     let obj = crate::object::js_object_alloc(0, FIELD_VALUES.len() as u32);
@@ -179,9 +162,20 @@ fn json_parse_record_keeps_its_string_values_traced_and_rewritten_7635() {
     };
     js_shadow_slot_set(0, parsed.bits());
 
+    // Object model step 4: a JSON.parse record keeps its values in its
+    // overflow (§3.4), so the values are the overflow's entries, reached
+    // through the record's metadata.
+    unsafe fn entry_bits(obj: *mut ObjectHeader, name: &[u8]) -> u64 {
+        let table = crate::object::overflow::table(obj);
+        assert!(!table.is_null(), "a JSON.parse record carries its overflow");
+        let entry = crate::object::overflow::find_bytes(table, name).expect("the parsed key");
+        *crate::object::overflow::value_at(table, entry)
+    }
+    const NAMES: [&[u8]; 2] = [b"alpha", b"bravo"];
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
-    let before: Vec<usize> = (0..FIELD_VALUES.len())
-        .map(|index| unsafe { (field_bits(obj, index) & POINTER_MASK) as usize })
+    let before: Vec<usize> = NAMES
+        .iter()
+        .map(|name| unsafe { (entry_bits(obj, name) & POINTER_MASK) as usize })
         .collect();
     unsafe {
         assert_eq!(
@@ -191,19 +185,11 @@ fn json_parse_record_keeps_its_string_values_traced_and_rewritten_7635() {
         );
         for (index, bytes) in FIELD_VALUES.iter().enumerate() {
             assert_eq!(
-                field_bits(obj, index) & TAG_MASK,
+                entry_bits(obj, NAMES[index]) & TAG_MASK,
                 STRING_TAG,
-                "test premise: field {index} must hold a HEAP string"
+                "test premise: entry {index} must hold a HEAP string"
             );
             assert_string_bytes(before[index] as *const crate::StringHeader, bytes);
-        }
-        let enumerated = enumerated_slot_addrs(obj as usize);
-        for index in 0..FIELD_VALUES.len() {
-            assert!(
-                enumerated.contains(&field_slot_addr(obj, index)),
-                "the collector must enumerate parsed field {index} as a child \
-                 edge; it reported {enumerated:?}"
-            );
         }
     }
 
@@ -218,10 +204,10 @@ fn json_parse_record_keeps_its_string_values_traced_and_rewritten_7635() {
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
     unsafe {
         for (index, bytes) in FIELD_VALUES.iter().enumerate() {
-            let child = (field_bits(moved, index) & POINTER_MASK) as usize;
+            let child = (entry_bits(moved, NAMES[index]) & POINTER_MASK) as usize;
             assert_ne!(
                 child, before[index],
-                "parsed field {index} must have been relocated and its slot \
+                "parsed entry {index} must have been relocated and its slot \
                  rewritten"
             );
             assert_string_bytes(child as *const crate::StringHeader, bytes);

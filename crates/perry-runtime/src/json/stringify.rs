@@ -76,6 +76,9 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     }
     let obj = ptr as *const crate::ObjectHeader;
     let potential_keys_ptr = crate::object::object_keys(obj).arr() as u64;
+    if crate::object::overflow::is_table(potential_keys_ptr as *const crate::ArrayHeader) {
+        return true;
+    }
     // `ptr` being GC-tracked only proves the *allocation* is real — not that it is
     // an `ObjectHeader`. A Promise / WeakMap / ArrayBuffer / any other GC layout
     // reaches here too (e.g. via a static TYPE_OBJECT hint), and then this slot is
@@ -136,6 +139,11 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     {
         return false;
     }
+    let table = crate::object::overflow::table(ptr.cast());
+    if !table.is_null() {
+        return (0..(*table).length)
+            .all(|i| *crate::object::overflow::key_at(table, i) == crate::value::TAG_HOLE);
+    }
     let keys_view = crate::object::object_keys(ptr as *const crate::ObjectHeader);
     let keys = keys_view.arr();
     if keys.is_null() {
@@ -171,6 +179,9 @@ pub(super) unsafe fn tracked_keys(
     view: crate::object::ObjectKeys,
 ) -> Option<crate::object::ObjectKeys> {
     let keys = view.arr() as *const crate::ArrayHeader;
+    if crate::object::overflow::is_table(keys) {
+        return Some(view);
+    }
     if keys.is_null()
         || crate::value::addr_class::try_read_tracked_gc_header_of_type(
             keys as usize,

@@ -104,7 +104,7 @@ fn json_escaped_output_handles_every_ascii_byte_in_keys_values_and_arrays() {
                 let expected = format!("{{{quoted}:{field},\"id\":1}}");
                 let source =
                     crate::string::js_string_from_bytes(expected.as_ptr(), expected.len() as u32);
-                let input = crate::json::test_json_parse_direct(source);
+                let input = crate::json::test_json_record_direct(source);
                 let result = if array {
                     super::super::stringify_record_output::try_object(input.bits())
                 } else {

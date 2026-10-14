@@ -270,7 +270,7 @@ impl SharedLayout {
     /// `obj` is a live object header, or null.
     #[inline]
     pub(crate) unsafe fn of_receiver(obj: *mut crate::object::ObjectHeader) -> Option<Self> {
-        if obj.is_null() || crate::object::dictionary::is_dictionary(obj) {
+        if obj.is_null() || crate::object::overflow::has_overflow(obj) {
             return None;
         }
         Some(SharedLayout { _private: () })
@@ -1415,7 +1415,9 @@ pub(crate) unsafe fn canonicalize(
     let dst = crate::array::array_elements_ptr(fresh) as *mut f64;
     // GC_STORE_AUDIT(INIT): fresh is unpublished; publish length only after
     // all elements are initialized, with no intervening GC allocation.
-    std::ptr::copy_nonoverlapping(slots, dst, len as usize);
+    for i in 0..len as usize {
+        dst.add(i).write(*slots.add(i));
+    }
     // Every heap key of the new list is its text's atom where one exists (see
     // `Appended::atomized`). Heap string to heap string, so `all_ptr` holds.
     for i in 0..len as usize {

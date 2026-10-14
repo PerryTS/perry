@@ -36,7 +36,7 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
         }
         // Some dictionary publishers retain an ordinary kind on their keyless
         // shape. The existing private-list edge still proves receiver ownership.
-        if record.keys() == 0 && !(*obj).meta.is_null() && (*(*obj).meta).dictionary_keys != 0 {
+        if super::super::overflow::has_overflow(obj) {
             return None;
         }
         let keys = crate::object::object_keys_from_shape_record(obj, record);
@@ -156,7 +156,7 @@ mod tests {
             );
             let dict = crate::object::js_object_alloc(0, 4);
             crate::object::js_object_set_field_by_name(dict, key(b"dict_key"), 1.0);
-            assert!(crate::object::dictionary::latch_object_to_dictionary(dict));
+            assert!(crate::object::overflow::establish_order(dict));
             assert!(
                 try_keys(dict).is_none(),
                 "receiver-owned keys keep their path"

@@ -2,7 +2,7 @@ use super::*;
 
 unsafe fn parse(text: &str) -> JSValue {
     let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    super::super::test_json_parse_direct(source)
+    super::super::test_json_record_direct(source)
 }
 
 fn output(value: JSValue) -> Vec<u8> {
@@ -197,6 +197,13 @@ fn flat_output_reuses_only_a_matching_object_prototype_signature() {
 
 #[test]
 fn flat_output_observes_object_prototype_tojson_install_and_delete() {
+    // The delete leaves the realm's Object.prototype with an overflow for the
+    // rest of the process (object model step 4): run it in its own process.
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "flat_output_observes_object_prototype_tojson_install_and_delete",
+    ) {
+        return;
+    }
     unsafe {
         let value = parse("{}");
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -230,10 +237,14 @@ fn flat_output_observes_object_prototype_tojson_install_and_delete() {
         let proto = (proto_bits & POINTER_MASK) as *mut crate::ObjectHeader;
         let deleted = key.with_const_ptr(|key| crate::object::js_object_delete_field(proto, key));
         assert_eq!(deleted, 1);
-        assert!(
-            try_object(input.get_nanbox_f64().to_bits()).is_some(),
-            "the semantic delete epoch must retire the present verdict"
-        );
+        // Object model step 4: the delete gave the prototype an overflow,
+        // whose keys the prototype verdict does not read (step 5's probe
+        // will); the flat emitter keeps declining, and the general
+        // serializer sees the deletion.
+        assert!(crate::object::overflow::has_overflow(proto));
+        assert!(try_object(input.get_nanbox_f64().to_bits()).is_none());
+        let output = crate::json::js_json_stringify(input.get_nanbox_f64(), 0);
+        assert_eq!(crate::json::str_from_header(output), Some("{}"));
     }
 }
 

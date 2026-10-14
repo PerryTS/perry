@@ -71,7 +71,7 @@ fn metadata_12015_key_get_observes_front_offset_and_holes() {
         let (slots, len) = view.dense_slots();
         assert_eq!(len, 2);
         // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE contains no heap pointer.
-        (slots as *mut f64)
+        (slots.add(0) as *mut f64)
             .add(1)
             .write(f64::from_bits(crate::value::TAG_HOLE));
         assert!(view.get(1).is_undefined());
@@ -79,7 +79,7 @@ fn metadata_12015_key_get_observes_front_offset_and_holes() {
 }
 
 #[test]
-fn metadata_12015_dictionary_keys_are_owned_by_the_receiver() {
+fn metadata_12015_overflow_are_owned_by_the_receiver() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let object = js_object_alloc(0, 4);
@@ -90,17 +90,21 @@ fn metadata_12015_dictionary_keys_are_owned_by_the_receiver() {
             js_object_set_field_by_name(object, key(spelling), i as f64);
         }
         assert!(
-            dictionary::latch_object_to_dictionary(object),
-            "premise: dictionary transition"
+            overflow::establish_order(object),
+            "premise: the receiver's overflow is established"
         );
-        assert_eq!(
-            shapes::object_shape_descriptor(object).unwrap().keys,
-            0,
-            "premise: the shape delegates keys to the receiver"
-        );
+        // Object model step 4: the layout keeps its keys; the receiver's own
+        // key view is its overflow (the order authority), whose fixed prefix
+        // also covers the layout's unnamed slots as holes.
         let (view, live) = object_keys_and_live_slot_count(object);
-        assert_eq!(view.arr(), dictionary::keys_array(object));
-        assert_eq!(view.count(), 2);
+        assert_eq!(view.arr(), overflow::keys_array(object));
+        let (slots, len) = view.dense_slots();
+        assert_eq!(
+            (0..len)
+                .filter(|&i| (*slots.add(i)).to_bits() != crate::value::TAG_HOLE)
+                .count(),
+            2
+        );
         assert_eq!(live, object_live_slot_count(object));
         assert_eq!(name(view.get(1)), "meta_dictionary_b");
     }

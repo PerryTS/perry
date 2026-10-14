@@ -2,7 +2,7 @@ use super::*;
 
 unsafe fn parse(text: &str) -> JSValue {
     let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    super::super::test_json_parse_direct(source)
+    super::super::test_json_record_direct(source)
 }
 
 unsafe fn check(text: &str) {

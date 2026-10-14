@@ -626,7 +626,7 @@ unsafe fn prime_packed_set(
     }
     let stamp = crate::object::shapes::object_shape_stamp(obj);
     // Only an ORDINARY-band ShapeId may enter a site word: a dictionary
-    // shape's id is outside it (`shapes::DICTIONARY_SHAPE_ID_BASE`), so no
+    // shape's id is outside it (`shapes::SITE_SHAPE_ID_END`), so no
     // emitted store compare can equal a dictionary receiver's word.
     if !crate::object::shapes::is_site_matchable_shape_id(stamp) {
         return;

@@ -50,18 +50,14 @@ pub extern "C" fn js_object_get_field(obj: *const ObjectHeader, field_index: u32
 /// # Safety
 /// `obj` must be a live, non-null `GC_TYPE_OBJECT` and `live` its published
 /// live inline-slot bound.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn object_field_at_with_live(
     obj: *const ObjectHeader,
     field_index: u32,
     live: u32,
 ) -> JSValue {
     if field_index >= live {
-        // Check overflow map for fields that didn't fit in inline storage
-        return match overflow_get(obj as usize, field_index as usize) {
-            Some(bits) => JSValue::from_bits(bits),
-            None => JSValue::undefined(),
-        };
+        return object_field_past_live(obj, field_index);
     }
     // The published shape bound already proves this slot is inline. JSON
     // objects can legitimately have more than 10,000 slots (#10175); their
@@ -70,16 +66,31 @@ pub(crate) unsafe fn object_field_at_with_live(
     let val = *fields_ptr.add(field_index as usize);
     // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
     if val.bits() == 0x7FFD_0000_0000_0000 {
-        eprintln!(
-            "[NULL_PTR_FIELD_GET] obj={:p} field_index={} class_id={} field_count={}",
-            obj,
-            field_index,
-            (*obj).class_id,
-            live
-        );
-        return JSValue::undefined();
+        return null_pointer_field(obj, field_index, live);
     }
     val
+}
+
+/// A field past the inline bound: the spill.
+#[inline(never)]
+unsafe fn object_field_past_live(obj: *const ObjectHeader, field_index: u32) -> JSValue {
+    match overflow_get(obj as usize, field_index as usize) {
+        Some(bits) => JSValue::from_bits(bits),
+        None => JSValue::undefined(),
+    }
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn null_pointer_field(obj: *const ObjectHeader, field_index: u32, live: u32) -> JSValue {
+    eprintln!(
+        "[NULL_PTR_FIELD_GET] obj={:p} field_index={} class_id={} field_count={}",
+        obj,
+        field_index,
+        (*obj).class_id,
+        live
+    );
+    JSValue::undefined()
 }
 
 /// An own DATA property of `obj` named `key`, private-name entries skipped.
@@ -209,7 +220,10 @@ unsafe fn own_property_slot(
         return None;
     }
     let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if !matches!(
+        (*keys_gc).obj_type,
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+    ) {
         return None;
     }
 
@@ -234,6 +248,12 @@ unsafe fn own_property_slot(
             return Some(OwnSlot::Accessor {
                 getter: accessor.get,
             });
+        }
+        if crate::object::overflow::is_table(keys) {
+            return Some(OwnSlot::Data(JSValue::from_bits(
+                crate::object::overflow::get_from(keys.cast(), obj, islot)
+                    .unwrap_or(crate::value::TAG_UNDEFINED),
+            )));
         }
         if i < alloc_limit {
             return Some(OwnSlot::Data(js_object_get_field(obj, i as u32)));

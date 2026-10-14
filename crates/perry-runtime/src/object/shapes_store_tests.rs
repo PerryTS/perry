@@ -40,7 +40,6 @@ fn kind_codes_round_trip() {
     for kind in [
         ShapeObjectKind::Ordinary,
         ShapeObjectKind::Class,
-        ShapeObjectKind::Dictionary,
         ShapeObjectKind::Function,
         ShapeObjectKind::FunctionDictionary,
         ShapeObjectKind::OrdinaryUnmarked,
@@ -82,8 +81,8 @@ fn locate_names_the_band_and_index_at_every_boundary() {
     use super::super::SHAPE_ID_END;
     let cases = [
         (SHAPE_ID_BASE, 0, 0),
-        (DICTIONARY_SHAPE_ID_BASE - 1, 0, (DICT_REL - 1) as usize),
-        (DICTIONARY_SHAPE_ID_BASE, 1, 0),
+        (SITE_SHAPE_ID_END - 1, 0, (DICT_REL - 1) as usize),
+        (SITE_SHAPE_ID_END, 1, 0),
         (
             EXOTIC_SHAPE_ID_BASE - 1,
             1,
@@ -95,9 +94,20 @@ fn locate_names_the_band_and_index_at_every_boundary() {
     for (id, band, index) in cases {
         assert_eq!(locate(id), (band, index), "{id:#x}");
     }
-    for id in [0, 1, SHAPE_ID_BASE - 1, SHAPE_ID_END, 0xF000_0000, u32::MAX] {
+    for id in [0, 1, SHAPE_ID_BASE - 1] {
         assert_eq!(locate(id).0, 3, "{id:#x}");
     }
+    // Object model step 4: bit 30 is the layout word's shadow bit, which no
+    // ShapeId uses; `locate` reads the layout id under it.
+    let shadow = crate::object::overflow::SHADOW_BIT;
+    for (id, _, _) in cases {
+        assert_eq!(
+            locate(id | shadow),
+            locate(id),
+            "{id:#x} under the shadow bit"
+        );
+    }
+    assert_eq!(locate(SHAPE_ID_END - 1).0, 2);
 }
 
 /// The agent directory ([`AGENT_SHAPE_DIR`]) is the agent slab's, entry
@@ -110,8 +120,7 @@ fn locate_names_the_band_and_index_at_every_boundary() {
 #[test]
 fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
     use super::super::{
-        alloc_dictionary_shape_id, alloc_exotic_shape_id, alloc_shape_id, shape_record_by_id,
-        shape_rep_by_id, SHAPE_ID_END,
+        alloc_exotic_shape_id, alloc_shape_id, shape_record_by_id, shape_rep_by_id, SHAPE_ID_END,
     };
     fn absent(id: u32) {
         // SAFETY: `agent_record` never returns null.
@@ -128,7 +137,7 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         1,
         0x7FFF_FF00,
         SHAPE_ID_BASE - 1,
-        DICTIONARY_SHAPE_ID_BASE - 1,
+        SITE_SHAPE_ID_END - 1,
         EXOTIC_SHAPE_ID_BASE - 1,
         SHAPE_ID_END - 1,
         SHAPE_ID_END,
@@ -143,10 +152,9 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         let table = &crate::state::state().shapes;
         let ids = [
             alloc_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
-            alloc_dictionary_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
             alloc_exotic_shape_id(super::super::PROTO_ID_DEFAULT).unwrap(),
         ];
-        let reps = [0b01u64, 0b01 << 2, 0b10 << 4];
+        let reps = [0b01u64, 0b10 << 4];
         for (&id, &rep) in ids.iter().zip(&reps) {
             // Keyless: nothing here ever dereferences a keys word.
             let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(rep);
@@ -174,7 +182,7 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         }
         // Growing a band's page vector moves its buffer: the directory
         // follows, and the records already there are still found.
-        let far = DICTIONARY_SHAPE_ID_BASE - 2;
+        let far = SITE_SHAPE_ID_END - 2;
         let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(0b01);
         // SAFETY: no slab reference is held.
         unsafe { table.slab_mut().insert(far, record) };
@@ -328,13 +336,13 @@ fn every_object_kind_reaches_the_facts_fold() {
     let w: u64 = 0x1234_5678;
     let o = facts_key(w, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
     let c = facts_key(w, 3, 4, 7, ShapeObjectKind::Class, 0);
-    let d = facts_key(w, 3, 4, 7, ShapeObjectKind::Dictionary, 0);
+    let d = facts_key(w, 3, 4, 7, ShapeObjectKind::OrdinaryUnmarked, 0);
     assert_ne!(o, c, "Ordinary and Class collide");
     assert_ne!(
         o, d,
-        "Ordinary and Dictionary collide -- the bool fold is back"
+        "Ordinary and OrdinaryUnmarked collide -- the bool fold is back"
     );
-    assert_ne!(c, d, "Class and Dictionary collide");
+    assert_ne!(c, d, "Class and OrdinaryUnmarked collide");
 }
 
 /// A record must report the kind it was built with. Storing the kind in a
@@ -346,7 +354,7 @@ fn a_record_round_trips_all_three_kinds_beside_its_flags() {
     for kind in [
         ShapeObjectKind::Ordinary,
         ShapeObjectKind::Class,
-        ShapeObjectKind::Dictionary,
+        ShapeObjectKind::OrdinaryUnmarked,
     ] {
         let mut r = ShapeRecord::new(0x4000, 2, 2, 11, kind, 1);
         assert_eq!(r.object_kind(), kind, "kind did not round-trip");
@@ -766,7 +774,7 @@ fn a_short_spilled_list_builds_no_index() {
 fn a_dictionary_band_id_does_not_grow_the_ordinary_directory() {
     let mut slab = ShapeSlab::new();
     let ordinary = super::super::SHAPE_ID_BASE + 3;
-    let dict = super::super::DICTIONARY_SHAPE_ID_BASE + 5;
+    let dict = super::super::SITE_SHAPE_ID_END + 5;
     slab.insert(ordinary, ShapeRecord::EMPTY);
     slab.insert(dict, ShapeRecord::EMPTY);
     assert_eq!(
@@ -787,11 +795,7 @@ fn weak_collection_summary_agrees_with_shape_brands() {
         crate::weakref::CLASS_ID_WEAKMAP as u64,
         crate::weakref::CLASS_ID_WEAKSET as u64,
     ] {
-        for kind in [
-            ShapeObjectKind::Ordinary,
-            ShapeObjectKind::Dictionary,
-            ShapeObjectKind::Class,
-        ] {
+        for kind in [ShapeObjectKind::Ordinary, ShapeObjectKind::Class] {
             let mut record =
                 ShapeRecord::new(0, 0, 0, 0, kind, 0).with_special_facts(0, &[], &[brand]);
             let expected = if brand == 17 {
@@ -842,7 +846,7 @@ fn weak_collection_header_brand_preserves_map_precedence() {
 }
 
 #[test]
-fn symbol_absence_follows_the_published_immutable_prefix() {
+fn symbol_absence_follows_the_layout_and_the_overflow() {
     let _gc = crate::gc::GcSuppressScope::new();
     unsafe {
         let object = crate::object::object_alloc_plain(0);
@@ -867,9 +871,14 @@ fn symbol_absence_follows_the_published_immutable_prefix() {
             object as usize,
             symbol
         ));
-        assert!(
-            proof(),
-            "the surviving immutable string prefix proves absence again"
+        // Object model step 4: the delete goes through the object's overflow;
+        // the layout keeps naming the symbol, so it proves no absence, and the
+        // symbol reads absent.
+        assert!(crate::object::overflow::has_overflow(object));
+        assert!(!proof(), "the layout still names the deleted symbol");
+        assert_eq!(
+            crate::object::shaped_symbols::get(object as usize, symbol),
+            None
         );
     }
 }
@@ -935,7 +944,6 @@ fn plain_birth_validation_checks_presence_kind_and_width() {
     for kind in [
         ShapeObjectKind::Ordinary,
         ShapeObjectKind::Class,
-        ShapeObjectKind::Dictionary,
         ShapeObjectKind::Function,
         ShapeObjectKind::FunctionDictionary,
         ShapeObjectKind::OrdinaryUnmarked,
@@ -970,7 +978,7 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
     for id in [
         0,
         SHAPE_ID_BASE - 1,
-        DICTIONARY_SHAPE_ID_BASE,
+        SITE_SHAPE_ID_END,
         EXOTIC_SHAPE_ID_BASE,
         super::super::SHAPE_ID_END,
         u32::MAX,

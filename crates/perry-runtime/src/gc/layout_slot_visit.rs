@@ -489,6 +489,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             let view = user_ptr as *mut crate::native_arena::NativePodViewHeader;
             visit(pointer_slot(&mut (*view).owner as *mut _ as *mut usize));
         }
+        GcRewriteDescriptorKind::Overflow => {
+            crate::object::overflow::visit_slots(user_ptr.cast(), |slot| visit(fixed_slot(slot)));
+        }
         GcRewriteDescriptorKind::ObjectMeta => {
             // #6759 Phase B: the recorded custom `[[Prototype]]` is a live
             // reference (NaN-boxed pointer, raw pointer, or the TAG_NULL /
@@ -522,13 +525,13 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             // — the same shape as the spill hazard above (#6812). This single
             // `visit` is mark, evacuation-rewrite and dirty-slot-rescan
             // coverage at once, because this function is the one enumerator
-            // all three drive; `dictionary_keys_survive_a_moving_collection`
+            // all three drive; `overflow_survive_a_moving_collection`
             // reddens if it is removed.
-            visit(fixed_slot(&mut (*meta).dictionary_keys as *mut u64));
+            visit(fixed_slot(&mut (*meta).overflow as *mut u64));
             // #11506: a sloppy mapped `arguments` object's alias array (a
             // NaN-boxed pointer; the unmapped states are scalars the slot
             // visitor skips). Reachable ONLY through this record, like
-            // `dictionary_keys`; `arguments_mapping_survives_a_moving_collection`
+            // `overflow`; `arguments_mapping_survives_a_moving_collection`
             // reddens if this visit is removed.
             visit(fixed_slot(&mut (*meta).arguments as *mut u64));
             // A fresh class object stored as an instance's private evaluation

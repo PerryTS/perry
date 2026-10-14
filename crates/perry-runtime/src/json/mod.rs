@@ -86,6 +86,8 @@ pub use stringify_api::{
 #[cfg(test)]
 pub(crate) use parse_api::test_json_parse_direct;
 #[cfg(test)]
+pub(crate) use parse_api::test_json_record_direct;
+#[cfg(test)]
 pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
     stringify_record_output::try_object(bits)
 }
@@ -1029,18 +1031,20 @@ mod tests {
         let key_a = js_string_from_bytes(b"a".as_ptr(), 1);
         let key_b = js_string_from_bytes(b"b".as_ptr(), 1);
 
-        unsafe {
-            assert_eq!(crate::object::object_keys(obj).count(), 2);
-        }
+        assert_eq!(
+            crate::array::js_array_length(crate::object::js_object_keys(obj)),
+            2
+        );
         let a = crate::object::js_object_get_field_by_name(obj, key_a);
         assert_eq!(f64::from_bits(a.bits()), 2.0);
 
         let b = crate::object::js_object_get_field_by_name(obj, key_b);
         assert!(b.is_pointer());
         let nested = (b.bits() & POINTER_MASK) as *const crate::ObjectHeader;
-        unsafe {
-            assert_eq!(crate::object::object_keys(nested).count(), 1);
-        }
+        assert_eq!(
+            crate::array::js_array_length(crate::object::js_object_keys(nested)),
+            1
+        );
     }
 
     /// #7792 / #7817 — deeply nested input must not take the process out.

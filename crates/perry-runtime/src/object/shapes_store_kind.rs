@@ -205,7 +205,9 @@ unsafe fn report_disagreement(obj: *const ObjectHeader) -> ! {
 /// # Safety
 /// `obj` is a live shaped `ObjectHeader`; `id` names a live descriptor.
 unsafe fn stamp_twin(obj: *mut ObjectHeader, id: u32) {
-    (*obj).parent_class_id = id;
+    // A twin keeps the layout word's shadow bit: the object's overflow is
+    // not a shape fact, and a word without the bit hides it (§6a).
+    (*obj).parent_class_id = crate::object::overflow::stamped_word(obj, id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
         let record = shape_record_by_id(id);
         super::note_old_generation_carrier(record);

@@ -1472,7 +1472,9 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             let keys_gc_type = (*keys_gc).obj_type;
             // keys_array must be GC_TYPE_ARRAY (arena-allocated array)
-            if keys_gc_type != crate::gc::GC_TYPE_ARRAY {
+            if keys_gc_type != crate::gc::GC_TYPE_ARRAY
+                && keys_gc_type != crate::gc::GC_TYPE_OVERFLOW
+            {
                 return JSValue::undefined();
             }
         }
@@ -1490,6 +1492,18 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // reading a 56-byte retired-from-space `GC_TYPE_STRING`.
         let key_copy = crate::object::field_get_set::HeapKeyBytes::copy_of_key(key);
         let key_bytes = key_copy.as_bytes();
+        let table_owned = super::super::overflow::has_overflow(obj);
+        if table_owned {
+            if let Some(slot) = super::super::overflow::find_bytes(keys.cast(), key_bytes) {
+                if let Some(value) = object_accessor_at_with_live(obj, keys, slot, live_slots) {
+                    return value;
+                }
+                return JSValue::from_bits(
+                    super::super::overflow::get_from(keys.cast(), obj, slot)
+                        .unwrap_or(crate::value::TAG_UNDEFINED),
+                );
+            }
+        }
         let key_hash = {
             let mut h: u32 = 0x811c9dc5;
             for &b in key_bytes {
@@ -1518,7 +1532,11 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // drive the wide-key map build or the linear scan below into unbounded
         // work (see `keys_array_len_capped_to_capacity`). No-op for well-formed
         // arrays.
-        let key_count = keys_view.count() as usize;
+        let key_count = if table_owned {
+            0
+        } else {
+            keys_view.count() as usize
+        };
 
         // Per-thread inline cache (`state().field_lookup.field_cache`):
         // fixed-size direct-mapped cache (no allocation, no HashMap).
@@ -1527,7 +1545,9 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // validate the key slot before returning a field.
         let st = crate::state::state();
         let cache_idx = (shape_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;
-        let cached = {
+        let cached = if table_owned {
+            None
+        } else {
             let cache = &*st.field_lookup.field_cache.get();
             let entry = cache[cache_idx];
             if entry.0 == shape_key && entry.1 == key_hash {
@@ -1620,7 +1640,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     // fallback below instead: the entry is then keyed on the
                     // keys-array address, which for a dictionary receiver is
                     // per-object by construction.
-                    let id = if crate::object::dictionary::is_dictionary(obj as *const _) {
+                    let id = if crate::object::overflow::has_overflow(obj as *const _) {
                         0
                     } else {
                         super::super::shapes::stamp_object_shape(

@@ -412,6 +412,13 @@ unsafe fn miss(
     obj_box: f64,
     dynamic: bool,
 ) -> f64 {
+    // A receiver with an overflow answers an own key with one atom-keyed hit
+    // on its overflow (§3.4); any other key takes the complete Get below.
+    if let Some(recv) = receiver(obj_box.to_bits()) {
+        if let Some(value) = crate::object::overflow::own_get_key(recv, key.to_bits()) {
+            return f64::from_bits(value.bits());
+        }
+    }
     if let Some(value) = shape_read(slot, obj_box.to_bits(), key.to_bits()) {
         return f64::from_bits(value);
     }

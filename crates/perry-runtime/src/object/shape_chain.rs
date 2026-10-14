@@ -254,8 +254,7 @@ impl ShapeChain {
         let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };
-        if !shape.object_kind.is_ordinary_layout() || crate::object::dictionary::is_dictionary(obj)
-        {
+        if !shape.object_kind.is_ordinary_layout() || crate::object::overflow::has_overflow(obj) {
             return false;
         }
         let meta = (*obj).meta;

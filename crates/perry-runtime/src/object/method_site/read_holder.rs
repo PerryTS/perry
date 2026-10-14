@@ -554,7 +554,7 @@ unsafe fn hop_admitted(addr: usize) -> bool {
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-        || crate::object::dictionary::is_dictionary(obj)
+        || crate::object::overflow::has_overflow(obj)
     {
         return false;
     }
@@ -915,6 +915,12 @@ pub(crate) unsafe fn dynamic_own_or_absent(
         return None;
     }
     let recv = ordinary_receiver(obj as usize)?;
+    // The verdicts below read the layout alone. A receiver with an overflow
+    // holds own keys the layout does not list, and holes where it deleted
+    // listed ones (object model step 4): the complete read decides.
+    if crate::object::overflow::has_overflow(recv) {
+        return None;
+    }
     let shape = object_shape_descriptor(recv)?;
     if shape.object_kind == crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias {
         return None;

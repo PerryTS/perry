@@ -294,11 +294,17 @@ pub extern "C" fn perry_runtime_image_result(handle: i64, width: f64, height: f6
 #[used(linker)]
 static KEEP_IMAGE_RESULT: extern "C" fn(i64, f64, f64) -> i64 = perry_runtime_image_result;
 
+/// The same object codegen emits for a program literal of this spelling
+/// (`string_pool/image.rs`), and under the same symbol, so the program's
+/// weak image of a spelling the runtime also names resolves to this one: a
+/// property atom (its hash after the NUL-terminated bytes, 8-aligned) that
+/// is also program-named, as the program's own image would have been.
 #[repr(C, align(8))]
 struct ImageString<const N: usize> {
     gc: GcHeader,
     string: StringHeader,
     bytes: [u8; N],
+    hash: u64,
 }
 
 const fn image<const N: usize>(bytes: [u8; N]) -> ImageString<N> {
@@ -310,23 +316,28 @@ const fn image<const N: usize>(bytes: [u8; N]) -> ImageString<N> {
                 | crate::gc::GC_FLAG_PINNED
                 | crate::gc::GC_FLAG_INTERNED,
             _reserved: crate::string::STRING_IMAGE_MARKER,
-            size: 28 + N as u32,
+            size: ((28 + N + 7) / 8 * 8 + 8) as u32,
         },
         string: StringHeader {
             utf16_len: len,
             byte_len: len,
             capacity: len,
             refcount: 0,
-            flags: crate::string::STRING_FLAG_WTF8_VALIDATED,
+            flags: crate::string::STRING_FLAG_WTF8_VALIDATED | crate::string::IMAGE_ATOM_FLAGS,
         },
         bytes,
+        hash: atom_hash_prefix(&bytes, N - 1),
     }
 }
 
 pub(crate) const fn atom_hash(bytes: &[u8]) -> u64 {
+    atom_hash_prefix(bytes, bytes.len())
+}
+
+const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let mut i = 0;
-    while i < bytes.len() {
+    while i < len {
         hash = (hash ^ bytes[i] as u64).wrapping_mul(0x0100_0000_01b3);
         i += 1;
     }

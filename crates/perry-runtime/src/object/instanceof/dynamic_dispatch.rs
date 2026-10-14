@@ -113,11 +113,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     let symbols_absent = rhs.closure.is_some_and(|(closure, _)| unsafe {
         let bag = (*closure).props;
         bag.is_null()
-            || crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
-                // A legacy dictionary can have an ordinary keyless shape;
-                // its private key list carries no immutable absence proof.
-                record.keys() != 0 && record.proves_no_symbols()
-            })
+            || !crate::object::overflow::shadowed(bag)
+                && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
+                    // A legacy dictionary can have an ordinary keyless shape;
+                    // its private key list carries no immutable absence proof.
+                    record.keys() != 0 && record.proves_no_symbols()
+                })
     });
     if !symbols_absent {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");

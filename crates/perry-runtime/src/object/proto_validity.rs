@@ -425,6 +425,23 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
     }
 }
 
+/// An own-key change that publishes no new layout word: an overflow entry
+/// appended or deleted. On a marked prototype it is the same structural
+/// mutation as a shape change, and invalidates the same verdicts.
+///
+/// # Safety
+/// `obj` is a live object with a `GcHeader`.
+#[inline]
+pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
+    if any_prototype_marked() && object_is_marked_prototype(obj) {
+        crate::object::builtin_proto::note_write(
+            obj as *const crate::object::ObjectHeader,
+            "overflow key change",
+        );
+        bump_proto_validity();
+    }
+}
+
 #[cfg(test)]
 #[path = "proto_validity_tests.rs"]
 mod tests;

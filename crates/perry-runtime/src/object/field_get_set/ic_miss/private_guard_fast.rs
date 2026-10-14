@@ -400,8 +400,7 @@ unsafe fn private_field_site_word(
     class_id: u32,
     name: &'static str,
 ) -> u64 {
-    if (*object).class_id == NATIVE_MODULE_CLASS_ID
-        || crate::object::dictionary::is_dictionary(object)
+    if (*object).class_id == NATIVE_MODULE_CLASS_ID || crate::object::overflow::has_overflow(object)
     {
         return 0;
     }

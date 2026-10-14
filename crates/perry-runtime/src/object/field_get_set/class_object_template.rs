@@ -1144,12 +1144,15 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
     if let Some(template) = template {
         // The template's prototype keys, all still there: marking the
         // prototype (its first instance) restamps its shape but keeps them.
+        // A holder with an overflow (a delete gives one) keeps its layout
+        // while its own keys change, so the layout alone proves nothing.
         let intact = |o: *const ObjectHeader| {
-            crate::object::shapes::object_shape_descriptor(o).is_some_and(|d| {
-                d.keys == template.keys
-                    && d.logical_key_count == template.logical_key_count
-                    && d.hole_count == 0
-            })
+            !crate::object::overflow::has_overflow(o)
+                && crate::object::shapes::object_shape_descriptor(o).is_some_and(|d| {
+                    d.keys == template.keys
+                        && d.logical_key_count == template.logical_key_count
+                        && d.hole_count == 0
+                })
         };
         if intact(obj) {
             return false;

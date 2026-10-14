@@ -245,8 +245,10 @@ pub use html::{
     js_string_strike, js_string_sub, js_string_sup,
 };
 pub(crate) use intern::discard_weak_interns;
+pub(crate) use intern::existing_property_atom;
 pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
+pub(crate) use intern::IMAGE_ATOM_FLAGS;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
 pub(crate) use intern::{atom_for_key, atom_lookup, seed_static_atom};
 #[cfg(test)]
@@ -946,7 +948,10 @@ pub(crate) unsafe fn init_string_header(
     (*ptr).refcount = refcount;
     // `flags` is the producer's proof for THIS payload. Byte copies preserve
     // it only on code-unit boundaries; concat/append intersect their inputs.
-    (*ptr).flags = flags;
+    (*ptr).flags = flags
+        & (STRING_FLAG_HAS_LONE_SURROGATES
+            | STRING_FLAG_JSON_ESCAPE_FREE
+            | STRING_FLAG_WTF8_VALIDATED);
 }
 
 #[inline]
@@ -1370,3 +1375,8 @@ pub(crate) fn intern_table_census() -> (usize, usize) {
 }
 
 pub(crate) use iter_object::dispatch_string_iterator_step;
+
+pub(crate) use intern::{
+    property_atom, property_atom_from_value, property_atom_hash, property_atom_is_program_named,
+    prune_property_atoms, scan_property_atoms,
+};

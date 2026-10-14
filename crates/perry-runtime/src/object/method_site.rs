@@ -1088,6 +1088,14 @@ fn addr_of(v: f64) -> usize {
 
 /// Does the ordinary object `obj`'s shape list `name` as an own DATA key?
 unsafe fn own_data_key(obj: *const ObjectHeader, name: &[u8]) -> bool {
+    // An object with an overflow lists every own key, and its attributes,
+    // there (object model step 4).
+    let table = super::overflow::table(obj);
+    if !table.is_null() {
+        return super::overflow::find_bytes(table, name).is_some_and(|i| {
+            super::overflow::entry_attrs(table.cast(), i) & super::key_attrs::ENTRY_ACCESSOR == 0
+        });
+    }
     let Some(shape) = super::shapes::object_shape_descriptor(obj) else {
         return false;
     };
@@ -1557,7 +1565,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
             None => {
                 let dict = crate::value::addr_class::try_read_gc_header(addr)
                     .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
-                    && super::dictionary::is_dictionary(addr as *const ObjectHeader);
+                    && super::overflow::has_overflow(addr as *const ObjectHeader);
                 refuse(if dict { 2 } else { 1 });
                 return;
             }
@@ -1700,7 +1708,7 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     }
     let obj = addr as *const ObjectHeader;
     if !super::object_is_regular(obj)
-        || super::dictionary::is_dictionary(obj)
+        || super::overflow::has_overflow(obj)
         || (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID
         || super::class_registry::is_class_object_ptr(obj.cast())
         || crate::array::object_prototype_addr_matches(addr)
@@ -1744,7 +1752,7 @@ unsafe fn class_object_receiver(addr: usize) -> Option<*const ObjectHeader> {
     // A class object is not `object_is_regular` (its kind is `Class`), but
     // its own keys live in inline slots exactly as an ordinary object's do.
     let obj = addr as *const ObjectHeader;
-    if super::dictionary::is_dictionary(obj)
+    if super::overflow::has_overflow(obj)
         || !super::shapes::is_shape_id(super::shapes::object_shape_stamp(obj))
     {
         return None;

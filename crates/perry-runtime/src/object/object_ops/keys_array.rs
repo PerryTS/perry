@@ -86,10 +86,19 @@ unsafe fn ensure_key_in_keys_array_inner(
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
     }
-    // A property list retains the spelling even when transition-cache
+    // A property list (or the overflow) retains the spelling even when transition-cache
     // admission declines it (symbols, tombstones, long keys or private lists).
     // Apply the ordinary string ownership rule before publishing that edge.
     crate::string::js_string_addref(key.cast_mut());
+    if crate::object::overflow::has_overflow(obj) {
+        let keys = crate::object::object_keys(obj);
+        if crate::object::keys_find_property_slot_by_key_ptr(keys.arr(), keys.count(), key)
+            .is_none()
+        {
+            crate::object::overflow::insert(obj, key, crate::value::TAG_UNDEFINED, entry);
+        }
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);
@@ -848,6 +857,16 @@ unsafe fn own_key_via_index(
         return Some(true);
     }
     let keys = crate::object::object_keys(obj);
+    if crate::object::overflow::is_table(keys.arr()) {
+        // Object model step 4: an object's overflow is its complete, hashed
+        // key index (§3.4), so its answer is authoritative either way.
+        let found = if properties_only {
+            super::super::keys_find_property_slot_by_key_ptr(keys.arr(), keys.count(), key)
+        } else {
+            super::super::keys_find_slot_by_key_ptr(keys.arr(), keys.count(), key)
+        };
+        return Some(found.is_some());
+    }
     match crate::value::addr_class::try_read_gc_header(keys.arr() as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         _ => return None,
@@ -950,7 +969,10 @@ unsafe fn own_key_lookup(
     }
     // Validate keys_array GC header
     let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if !matches!(
+        (*keys_gc).obj_type,
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+    ) {
         return false;
     }
     let key_count = keys_view.count();

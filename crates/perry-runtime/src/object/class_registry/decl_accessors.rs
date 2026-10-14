@@ -210,7 +210,11 @@ fn prototype_accessor(start: f64, name: &[u8]) -> Option<(usize, Accessor)> {
             return None;
         }
         let obj = js.as_pointer::<ObjectHeader>();
-        if !ka::attrs_live_in_keys_of_bits(value.to_bits()) {
+        // An object with an overflow keeps accessor pairs in its entries, not
+        // in layout slots (object model step 4): the answer declines.
+        if !ka::attrs_live_in_keys_of_bits(value.to_bits())
+            || unsafe { crate::object::overflow::has_overflow(obj) }
+        {
             return None;
         }
         // The holder shape owns the logical key count, slot and attributes.
@@ -254,6 +258,17 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[
         let obj = value.as_pointer::<ObjectHeader>();
         if obj == holder {
             return false;
+        }
+        // An object with an overflow lists every own key there.
+        if let Some(present) = crate::object::overflow::own_has_bytes(obj, name) {
+            if present {
+                return true;
+            }
+            let Some(next) = accessor_prototype(obj) else {
+                return true;
+            };
+            cur = next;
+            continue;
         }
         let Some(shape) = crate::object::shapes::object_shape_record(obj) else {
             return true;

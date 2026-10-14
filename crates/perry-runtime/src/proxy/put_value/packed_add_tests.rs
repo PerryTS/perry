@@ -1,5 +1,6 @@
 //! The key-add memo: its ABI with the emitted hit, and the rules it rests on.
 use super::*;
+use crate::proxy::put_value::record_fixture::record;
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -136,15 +137,6 @@ fn interned(name: &[u8]) -> *const crate::StringHeader {
     crate::string::js_string_intern(key, fnv1a(name))
 }
 
-/// A JSON-parsed object: class-less, birth-marked ordinary, and sharing its
-/// ShapeId with every other parse of the same key list.
-fn parsed(src: &[u8]) -> f64 {
-    let text = crate::string::js_string_from_bytes(src.as_ptr(), src.len() as u32);
-    let value = unsafe { crate::json::js_json_parse(text) };
-    assert!(value.is_pointer(), "JSON.parse must yield an object");
-    f64::from_bits(value.bits())
-}
-
 fn stamp(value: f64) -> u32 {
     let obj = (value.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
     unsafe { crate::object::shapes::object_shape_stamp(obj) }
@@ -172,8 +164,8 @@ fn miss(
 #[test]
 fn a_key_add_publishes_a_memo_that_serves_the_next_receiver() {
     let key = interned(b"added_key");
-    let first = parsed(b"{\"a\":1}");
-    let second = parsed(b"{\"a\":2}");
+    let first = record(b"{\"a\":1}");
+    let second = record(b"{\"a\":2}");
     let pre = stamp(first);
     assert_eq!(pre, stamp(second), "one key list, one ShapeId");
     let site = leaked_site();
@@ -241,14 +233,14 @@ fn a_class_key_add_publishes_after_its_clear_chain_verdict() {
 #[test]
 fn unrelated_generation_keeps_the_memo_but_a_changed_holder_refuses_it() {
     let key = interned(b"added_gen");
-    let first = parsed(b"{\"g\":1}");
-    let second = parsed(b"{\"g\":2}");
+    let first = record(b"{\"g\":1}");
+    let second = record(b"{\"g\":2}");
     let site = leaked_site();
     miss(site, first, key, 1.0);
     assert_ne!(site.add_shapes.load(Ordering::Relaxed), PACKED_SET_EMPTY);
     crate::object::proto_validity::bump_proto_validity();
     assert_eq!(unsafe { packed_add_try(site, second, 2.0) }, Some(2.0));
-    let third = parsed(b"{\"g\":3}");
+    let third = record(b"{\"g\":3}");
     let proto = crate::array::object_prototype_addr_if_resolved() as *mut crate::ObjectHeader;
     assert!(!proto.is_null());
     let changed_key = interned(b"__missread2_chain_mutation");
@@ -265,7 +257,7 @@ fn unrelated_generation_keeps_the_memo_but_a_changed_holder_refuses_it() {
 #[test]
 fn a_published_memo_owns_both_shapes_across_a_full_trace() {
     let key = interned(b"added_own");
-    let first = parsed(b"{\"o\":1}");
+    let first = record(b"{\"o\":1}");
     let site = leaked_site();
     let pre = stamp(first);
     miss(site, first, key, 1.0);
@@ -306,7 +298,7 @@ fn a_displaced_memo_sits_at_its_home_way() {
     let site = leaked_site();
     let mut pres = Vec::new();
     for src in srcs {
-        let first = parsed(src);
+        let first = record(src);
         pres.push(stamp(first));
         miss(site, first, key, 1.0);
     }
@@ -322,7 +314,7 @@ fn a_displaced_memo_sits_at_its_home_way() {
         );
     }
     for (i, src) in srcs.iter().enumerate() {
-        let next = parsed(src);
+        let next = record(src);
         assert_eq!(stamp(next), pres[i]);
         let served = if pres[i] == primary {
             Some(2.0)
@@ -394,7 +386,7 @@ fn a_far_memo_moves_into_the_inline_ways() {
 #[test]
 fn a_number_key_add_memo_carries_the_store_check_flag() {
     let key = interned(b"p2c_added_number");
-    let first = parsed(b"{\"p2c_q\":1}");
+    let first = record(b"{\"p2c_q\":1}");
     let site = leaked_site();
     miss(site, first, key, 5.5);
     assert!(
@@ -407,7 +399,7 @@ fn a_number_key_add_memo_carries_the_store_check_flag() {
     assert_eq!(unsafe { js_packed_add_chain_valid(guard) }, 1);
 
     let other = interned(b"p2c_added_string");
-    let second = parsed(b"{\"p2c_q\":1}");
+    let second = record(b"{\"p2c_q\":1}");
     let text = crate::string::js_string_from_bytes(b"s".as_ptr(), 1);
     let boxed = f64::from_bits(crate::value::js_nanbox_string(text as i64).to_bits());
     let site2 = leaked_site();
@@ -418,8 +410,8 @@ fn a_number_key_add_memo_carries_the_store_check_flag() {
 #[test]
 fn a_deprecated_successor_refuses_the_emitted_chain_guard() {
     let key = interned(b"add_deprecated_successor");
-    let first = parsed(b"{\"representation\":1}");
-    let second = parsed(b"{\"representation\":2}");
+    let first = record(b"{\"representation\":1}");
+    let second = record(b"{\"representation\":2}");
     let site = leaked_site();
     miss(site, first, key, 5.0);
     let guard = site.add_guard.load(Ordering::Relaxed);
@@ -457,7 +449,7 @@ fn a_worker_with_seeded_ids_cannot_consume_a_primary_add_proof() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     crate::object::builtin_prototype_value("Object");
-    let first = parsed(b"{\"worker_source\":1}");
+    let first = record(b"{\"worker_source\":1}");
     let pre = stamp(first);
     let key = interned(b"worker_added");
     let site = leaked_site();

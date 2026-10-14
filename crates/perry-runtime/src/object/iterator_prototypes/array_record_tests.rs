@@ -339,7 +339,10 @@ fn array_record_prototype_symbol_identity_guard() {
         );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
         crate::symbol::js_object_set_symbol_property(proto, sym, original);
-        assert_eq!(crate::symbol::js_object_delete_symbol_property(proto, other), 1);
+        assert_eq!(
+            crate::symbol::js_object_delete_symbol_property(proto, other),
+            1
+        );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
     }
 }
@@ -633,11 +636,11 @@ fn array_record_dictionary_next_keeps_generic_iteration() {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
         let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
-        assert!(super::super::dictionary::latch_object_to_dictionary(next));
+        assert!(super::super::overflow::establish_order(next));
         assert_eq!(
             crate::array::js_array_record_needs_iterator(array),
             0,
-            "dictionary storage does not change the actual builtin next"
+            "overflow storage does not change the actual builtin next"
         );
         let original = super::super::js_object_get_field(next, 0);
         super::super::js_object_set_field(next, 0, JSValue::number(3.0));

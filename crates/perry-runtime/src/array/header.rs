@@ -135,6 +135,12 @@ pub(crate) unsafe fn array_has_element_descriptors_resolved(live: *const ArrayHe
 unsafe fn named_layout_holds_element_descriptors(
     named: *const crate::object::ObjectHeader,
 ) -> bool {
+    // Once the holder has an overflow it is the key-order authority (object
+    // model step 4): its keys column lists every own key, fixed or not.
+    let table = crate::object::overflow::keys_array(named);
+    if !table.is_null() {
+        return super::named_props::keys_hold_element_descriptors(table, (*table).length);
+    }
     let word = crate::object::layout_desc::layout_id_of_word((*named).parent_class_id);
     let Some(record) = crate::object::shapes::layout_record(word) else {
         return true;
@@ -147,19 +153,13 @@ unsafe fn named_layout_holds_element_descriptors(
             // JS array-like value. ObjectKeys::owned would ask the generic
             // js_array_length reader (Proxy/string provenance callbacks),
             // falsely making this read and its numeric guards Reenters.
-            let keys = if record.keys() != 0 {
-                record.keys() as usize as *const ArrayHeader
-            } else {
-                crate::object::dictionary::keys_array(named)
-            };
-            let count = if record.keys() != 0 {
-                record.logical_key_count()
-            } else if keys.is_null() {
-                0
-            } else {
-                (*keys).length.min((*keys).capacity)
-            };
-            super::named_props::keys_hold_element_descriptors(keys, count)
+            if record.keys() == 0 {
+                return false;
+            }
+            super::named_props::keys_hold_element_descriptors(
+                record.keys() as usize as *const ArrayHeader,
+                record.logical_key_count(),
+            )
         }
     }
 }
