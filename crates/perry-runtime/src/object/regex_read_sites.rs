@@ -132,7 +132,7 @@ unsafe fn prove_builtin_behavior(
     use super::shapes;
     if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
         || super::field_get_set::accessor_receiver_override_armed()
-        || super::prototype_chain::resolution_stack_savepoint() != 0
+        || super::prototype_chain::resolution_stack_depth() != 0
     {
         return None;
     }

@@ -40,15 +40,26 @@ pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce(
 
 /// Enter an existing provider's captured AsyncLocalStorage and execution-id
 /// scope for one native callback phase.
+///
+/// The scope's restore guards belong to the calling frame (or, called from a
+/// helper the owner calls directly, the owner's: `crate::exception::frame_mark`).
+#[inline(always)]
 pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), f64> {
+    try_enter_resource_scope_at(crate::exception::frame_mark(), ids)
+}
+
+/// [`try_enter_resource_scope`] for the scope owned by the frame `mark` names.
+pub fn try_enter_resource_scope_at(mark: usize, ids: AsyncResourceIds) -> Result<(), f64> {
     let context = super::resource_state::get(ids.async_id)
         .map(|meta| unsafe { (*meta).context.clone() })
         .unwrap_or_default();
     let previous = crate::async_context::enter_context(&context);
-    crate::async_context::push_context_guard(
+    crate::async_context::push_context_guard_at(
+        mark,
         crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
     );
-    crate::async_context::push_context_guard(
+    crate::async_context::push_context_guard_at(
+        mark,
         crate::async_context::ContextGuardAction::RestoreExecutionIds,
     );
     let outcome = crate::exception::js_call_catching(|| {
@@ -69,6 +80,7 @@ pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), f64> {
     Ok(())
 }
 
+#[inline(always)]
 pub fn enter_resource_scope(ids: AsyncResourceIds) {
     if let Err(error) = try_enter_resource_scope(ids) {
         crate::exception::js_throw(error);

@@ -64,7 +64,7 @@ def main():
         assert actual == expected, name
         jobs.append((name, [str(binary)]))
     if args.micro:
-        for mode in ["plain", "catch", "unwind"]:
+        for mode in ["plain", "catch"]:
             jobs.append((mode, [str(args.micro), mode, "1000000"]))
     for name, command in jobs:
         stat = args.output / (name + ".stat")

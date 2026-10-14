@@ -279,7 +279,7 @@ pub(super) unsafe fn run_constructor_body(
     let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_nanbox_f64(instance);
     let prev_new_target = crate::object::js_new_target_get();
-    let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
+    let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     crate::object::js_new_target_set(func_value);
     let prev_current_new_target =
         CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));

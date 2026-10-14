@@ -4,9 +4,7 @@ crate::perry_thread_local! {
     static PRIVATE_METHOD_OWNER_HINT: std::cell::RefCell<Option<(u32, &'static str)>> =
         std::cell::RefCell::new(None);
     static PRIVATE_MEMBER_ACCESS_HINTS: std::cell::RefCell<crate::exception::CatchStack<PrivateMemberAccessHint>> =
-        std::cell::RefCell::new(crate::exception::CatchStack::new(
-            crate::exception::catch_subsystem::PRIVATE_MEMBER_ACCESS_HINTS,
-        ));
+        std::cell::RefCell::new(crate::exception::CatchStack::new());
 }
 
 #[derive(Clone)]
@@ -20,13 +18,25 @@ struct PrivateMemberAccessHint {
     brand_owner: Option<u64>,
 }
 
-#[inline]
-pub(crate) fn private_member_access_hints_savepoint() -> usize {
-    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow().len())
+pub(crate) fn private_member_access_hints_unwind_to(sp: usize) {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
+        hints.borrow_mut().unwind_to(sp);
+    });
 }
 
-pub(crate) fn private_member_access_hints_restore(depth: usize) {
-    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow_mut().truncate(depth));
+pub(crate) fn private_member_access_hints_check_marks(sp: usize) {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
+        crate::exception::marks::check_marks(
+            hints.borrow().marks(),
+            sp,
+            "private_member_access_hints",
+        )
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn private_member_access_hints_depth() -> usize {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow().len())
 }
 
 pub(crate) fn take_private_method_owner_hint(method_name: &str) -> Option<u32> {
@@ -448,16 +458,19 @@ fn throw_private_type_error(msg: &str) -> ! {
 }
 
 #[cfg(test)]
-pub(crate) fn test_push_catch_private_hint(marker: u32) {
+pub(crate) fn test_push_catch_private_hint(marker: u32, mark: usize) {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
-        hints.borrow_mut().push(PrivateMemberAccessHint {
-            class_id: marker,
-            name: intern_private_name(format!("catch-savepoint-{marker}").as_bytes()).unwrap(),
-            kind: 0,
-            is_static: false,
-            is_write: true,
-            brand_owner: None,
-        });
+        hints.borrow_mut().push(
+            mark,
+            PrivateMemberAccessHint {
+                class_id: marker,
+                name: intern_private_name(format!("catch-savepoint-{marker}").as_bytes()).unwrap(),
+                kind: 0,
+                is_static: false,
+                is_write: true,
+                brand_owner: None,
+            },
+        );
     });
 }
 
@@ -531,9 +544,13 @@ pub extern "C" fn js_private_lexical_brand_capture(receiver: f64, is_static: i32
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+/// Compiled code (a generator continuation's prologue) opens the lexical
+/// environment for its whole body; the entry belongs to the caller's frame
+/// (`caller_frame_mark`), which pops it in a `finally`.
 #[no_mangle]
+#[inline(never)]
 pub extern "C" fn js_private_lexical_brand_push(brand: f64) -> f64 {
-    private_lexical_brand_push(brand);
+    private_lexical_brand_push_at(crate::exception::caller_frame_mark(), brand);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -742,7 +759,7 @@ mod repeated_evaluation_tests {
             // A direct static call has no lexical stack entry. Its guard's
             // owner must survive until the field read, rather than selecting
             // the receiver's most-derived evaluation again.
-            let depth = private_member_access_hints_savepoint();
+            let depth = private_member_access_hints_depth();
             object.with_mut_ptr::<ObjectHeader, _>(|object| {
                 js_private_guard(
                     crate::value::js_nanbox_pointer(object as i64),
@@ -755,7 +772,7 @@ mod repeated_evaluation_tests {
                 )
             });
             assert_eq!(field_get(), Some(33.0));
-            assert_eq!(private_member_access_hints_savepoint(), depth);
+            assert_eq!(private_member_access_hints_depth(), depth);
 
             // Generic assignment must consume the guard's owner hint too.
             for value in [44.0, 55.0, 66.0] {
@@ -772,7 +789,7 @@ mod repeated_evaluation_tests {
                         1,
                     )
                 });
-                assert_eq!(private_member_access_hints_savepoint(), depth + 1);
+                assert_eq!(private_member_access_hints_depth(), depth + 1);
                 object.with_mut_ptr::<ObjectHeader, _>(|object| {
                     request.with_mut_ptr::<crate::StringHeader, _>(|request| {
                         let receiver = crate::value::js_nanbox_pointer(object as i64);
@@ -786,7 +803,7 @@ mod repeated_evaluation_tests {
                     })
                 });
                 assert_eq!(
-                    private_member_access_hints_savepoint(),
+                    private_member_access_hints_depth(),
                     depth,
                     "PutValue must consume a private field write hint"
                 );

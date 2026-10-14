@@ -60,7 +60,7 @@ unsafe fn construct_class_object_entry(
     // to give a replacement receiver the evaluation-specific
     // prototype and private brand (#9503).
     let prev_new_target = crate::object::js_new_target_get();
-    let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
+    let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     let active_new_target = new_target.get_nanbox_f64();
     crate::object::js_new_target_set(active_new_target);
     let prev_current_new_target =

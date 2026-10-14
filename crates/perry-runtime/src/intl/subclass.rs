@@ -152,8 +152,9 @@ pub(crate) unsafe fn intl_subclass_super(
     // which is passed as the receiver and consumed again after the call.
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let this_h = this_scope.root_nanbox_f64(this_box);
-    // #10490: the displaced `new.target` crosses the same call.
-    let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
+    // #10490: the displaced `new.target` crosses the same call. Its save
+    // also tells a landing pad what to put back if the call throws.
+    let prev_nt = this_scope.root_new_target_save(crate::object::js_new_target_set(parent_val));
     let instance = crate::closure::native_call_value_this(
         parent_val,
         crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),

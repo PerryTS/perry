@@ -442,7 +442,6 @@ fn timer_handle_value(id: i64) -> f64 {
 }
 
 fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
-    crate::exception::trap_push();
     let mut f = Some(f);
     // The body runs under the trap shim (`exception::trap`). Loop shape: a
     // throw from the timer callback lands in the trap, and the uncaught path
@@ -462,7 +461,6 @@ fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
             break;
         }
     }
-    crate::exception::js_try_end();
 }
 
 fn call_timer_callback(

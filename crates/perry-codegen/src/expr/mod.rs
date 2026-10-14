@@ -481,7 +481,8 @@ pub(crate) struct FnCtx<'a> {
     ///
     /// The third field is `ctx.try_depth` at loop entry, so a `break`/`continue`
     /// out of open `try` frames emits a matching `js_try_end` per exited frame
-    /// (like `Stmt::Return`), keeping the runtime TRY_DEPTH balanced. Without
+    /// on WASI (like `Stmt::Return`), keeping its setjmp handler stack
+    /// balanced; landing-pad targets emit nothing. Without
     /// it, a state-machine suspend (lowered to a `break` out of the dispatch
     /// loop's real `try`) leaked a slot per awaited try/catch (panic at 128).
     pub loop_targets: Vec<(String, String, usize)>,
@@ -946,13 +947,20 @@ pub(crate) struct FnCtx<'a> {
     pub imported_class_original_names: &'a std::collections::HashMap<String, String>,
     /// Number of currently-open `try { ... }` blocks at the current
     /// lowering position. Incremented before lowering a try body,
-    /// decremented after. `Stmt::Return` emits `js_try_end()` this many
-    /// times before the actual `ret` so the runtime's TRY_DEPTH counter
-    /// stays balanced — without this, an early `return` inside a try
-    /// body leaks one slot in the runtime's handler stack
-    /// per call. Once 128 leaks accumulate the runtime panics with
-    /// "Try block nesting too deep".
+    /// decremented after. A compile-time fact on every target: the fast
+    /// tiers refuse to keep state outside the real slots under a handler of
+    /// this function, and an async function's `throw` rejects only outside
+    /// one. On WASI (setjmp transport) `Stmt::Return`/`break`/`continue` also
+    /// emit `js_try_end()` this many times before leaving, so the runtime's
+    /// handler stack stays balanced; a landing-pad `try` has nothing to pop
+    /// (`stmt::try_stmt::emit_try_end`).
     pub try_depth: usize,
+
+    /// Action scopes of the derived-constructor `super()` binding brackets
+    /// this function opened inside one of its own handlers, innermost last
+    /// (`stmt::eh_actions`; one entry per open bracket, `none()` when the
+    /// bracket needed no scope).
+    pub derived_super_closes: Vec<crate::stmt::eh_actions::EhActionScope>,
 
     /// Stack of in-flight inline-constructor return targets. When a class
     /// constructor body is inlined at a `new C(...)` site (see

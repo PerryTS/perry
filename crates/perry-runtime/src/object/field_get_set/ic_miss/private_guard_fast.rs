@@ -650,7 +650,7 @@ pub extern "C" fn js_private_method_guard(
         unsafe { private_site_publish(declaring_class_id, site, proof) };
         return obj;
     }
-    private_guard_checked(obj, brand_owner, declaring_class_id, name, 1, 0, false)
+    private_guard_checked(obj, brand_owner, declaring_class_id, name, 1, 0, false, 0)
 }
 
 /// `site` layout for [`js_private_method_call`]: the vtable entry's function
@@ -708,6 +708,7 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
                 owner,
                 args_ptr,
                 args_len,
+                crate::exception::frame_mark(),
             );
         };
         func_ptr = ptr;
@@ -772,8 +773,9 @@ unsafe fn private_method_call_by_storage_name(
     owner: Option<u64>,
     args_ptr: *const f64,
     args_len: usize,
+    mark: usize,
 ) -> f64 {
-    private_guard_record_access(declaring_class_id, name, 1, false, false, owner, true);
+    private_guard_record_access(declaring_class_id, name, 1, false, false, owner, true, mark);
     let storage = format!("#<perry:private-member:{declaring_class_id}:{name}>");
     crate::object::js_native_call_method(
         receiver,
@@ -796,6 +798,7 @@ fn private_guard_record_access(
     is_write: bool,
     access_owner: Option<u64>,
     record_hints: bool,
+    mark: usize,
 ) {
     match (is_write, kind) {
         // [[Get]] of an accessor without a getter.
@@ -810,14 +813,17 @@ fn private_guard_record_access(
     }
     if kind != 0 || (!is_static && access_owner.is_some()) {
         PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
-            hints.borrow_mut().push(PrivateMemberAccessHint {
-                class_id: declaring_class_id,
-                name,
-                kind,
-                is_static,
-                is_write,
-                brand_owner: access_owner,
-            });
+            hints.borrow_mut().push(
+                mark,
+                PrivateMemberAccessHint {
+                    class_id: declaring_class_id,
+                    name,
+                    kind,
+                    is_static,
+                    is_write,
+                    brand_owner: access_owner,
+                },
+            );
         });
     }
     if kind == 1 && !is_write {

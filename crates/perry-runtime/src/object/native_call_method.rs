@@ -51,10 +51,10 @@ use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
 #[cfg(test)]
+pub(crate) use namespace_override::namespace_override_depth;
+#[cfg(test)]
 pub(crate) use namespace_override::test_push_catch_namespace_override;
-pub(crate) use namespace_override::{
-    namespace_override_stack_restore, namespace_override_stack_savepoint,
-};
+pub(crate) use namespace_override::{namespace_override_check_marks, namespace_override_unwind_to};
 pub use object_proto::js_value_to_locale_string;
 use object_proto::{call_builtin_object_proto_method, is_ordinary_object_receiver};
 pub(crate) use object_proto::{

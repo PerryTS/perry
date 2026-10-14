@@ -736,7 +736,7 @@ unsafe fn construct_registered_class_ref_entry(
     let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_raw_mut_ptr(inst);
     let prev_new_target = crate::object::js_new_target_get();
-    let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
+    let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     crate::object::js_new_target_set(new_target);
     let prev_current_new_target =
         CURRENT_NEW_TARGET.with(|value| value.replace(new_target.to_bits()));
@@ -1017,7 +1017,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_nanbox_f64(nan_boxed);
     let prev_new_target = crate::object::js_new_target_get();
-    let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
+    let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     crate::object::js_new_target_set(nt);
     let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
     let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);

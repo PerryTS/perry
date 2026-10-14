@@ -2,22 +2,35 @@
 //! (#7302), one shape on every target.
 //!
 //! The CFG pattern:
-//!   1. `js_eh_try_push()` arms the handler (savepoint recording only — no
-//!      jmp_buf; the runtime's `js_throw` raises through the unwinder and
-//!      the frame's unwind tables carry the rest).
-//!   2. Branch into the try body. While the body lowers, its landing-pad
-//!      label is the active EH scope: every potentially-throwing call the
-//!      body emits becomes an `invoke` unwinding there
+//!   1. Branch into the try body. No handler is registered anywhere on
+//!      entry or exit (ehfree slice 1). While the body lowers, its
+//!      landing-pad label is the active EH scope: every potentially-throwing
+//!      call the body emits becomes an `invoke` unwinding there
 //!      (`LlBlock::eh_invoke_suffix`).
+//!   2. Entering a handler scope reads the runtime-handle stack's height
+//!      (`js_eh_handle_height`, one call). The landing pad's first call is
+//!      `js_eh_pad_enter(llvm.stacksave(), handle height)`: the runtime pops
+//!      the managed-stack entries of every frame the throw abandoned (frame
+//!      marks below this frame's stack pointer; see perry-runtime
+//!      `exception/marks.rs`) and truncates the runtime-handle stack to the
+//!      height the scope read (handles are pushed far more often than a
+//!      `try` is entered, so they carry no mark). Brackets this frame opened
+//!      inside the region are closed by action pads (`stmt::eh_actions`). On
+//!      shadow-stack targets the function's own shadow frame is made the top
+//!      frame again (`LlFunction` rewrites the pad, as it rewrites `ret`).
 //!   3. The landing pad funnels into the catch entry, which runs
-//!      `js_try_end` → `js_get_exception` → `js_clear_exception` (one call,
-//!      `js_catch_enter`, when the handler was armed) and binds the catch
-//!      parameter.
+//!      `js_catch_enter` (`js_get_exception` + `js_clear_exception`) and
+//!      binds the catch parameter.
 //!   4. Catch/finally bodies lower under the *enclosing* scope, so a throw
 //!      escaping them wires to the outer handler — or leaves the function
 //!      when there is none. Re-raise sites (`js_throw` after a finally copy)
 //!      go through the same call chokepoint and pick up the correct edge
 //!      automatically.
+//!
+//! WASI keeps setjmp transport (no landing pads without wasm EH): a WASI
+//! `try` arms a jump buffer with `js_try_push(frame sp)` and pops it with
+//! `js_try_end` on every exit ([`emit_try_end`]); the runtime restores the
+//! managed stacks to the frame's mark before the `longjmp`.
 //!
 //! History: until #7302 this was setjmp/longjmp-based, which required
 //! `returns_twice` + `noinline` on every try-containing function plus a
@@ -26,16 +39,58 @@
 //! statepoint relocation write-back — the motivating defect, #7174).
 
 use super::*;
-use crate::types::{I32, PTR};
+use crate::block::EhScope;
+use crate::types::{I32, I64, PTR};
 
-/// Arm the handler and materialize the unwind-target block(s) that funnel
-/// the exception into `exc_label`. Returns the unwind label; the caller
-/// pushes it as the EH scope around the protected body.
+/// Does this target lower `try` with setjmp transport (WASI)?
+pub(crate) fn sjlj_try(ctx: &FnCtx<'_>) -> bool {
+    ctx.target_triple.starts_with("wasm32")
+}
+
+/// Pop one WASI setjmp handler; nothing on targets whose handlers are landing
+/// pads (entering and leaving a `try` costs nothing there).
+pub(crate) fn emit_try_end(ctx: &mut FnCtx<'_>) {
+    if sjlj_try(ctx) {
+        ctx.block().call_void("js_try_end", &[]);
+    }
+}
+
+/// The first instructions of every Perry landing pad after its
+/// `landingpad`: `js_eh_pad_enter(llvm.stacksave(), handle_height)` restores
+/// the runtime's managed stacks to this frame. The unwinder installed this
+/// frame's stack pointer, so `stacksave` names exactly the catching frame;
+/// `handle_height` is the scope's [`EhScope::handle_height`].
+pub(crate) fn emit_pad_enter(blk: &mut crate::block::LlBlock, handle_height: &str) {
+    let sp = blk.call(PTR, "llvm.stacksave.p0", &[]);
+    blk.call_void("js_eh_pad_enter", &[(PTR, &sp), (I64, handle_height)]);
+}
+
+/// The runtime-handle stack's height for a handler scope about to be
+/// entered at the current block: one `js_eh_handle_height` call.
 ///
-/// One shape on every target: a single landing-pad block —
-/// `landingpad {ptr,i32} catch ptr null` → `br %exc_label`. The pair is
-/// ignored; the thrown value is read back from the runtime's rooted TLS slot
-/// via `js_get_exception`.
+/// Everything above it when a pad of the scope runs was pushed after the
+/// scope was entered: by frames the throw abandoned, or by this frame's own
+/// `new.target` bracket around a call or an inlined constructor body inside
+/// the scope, which the throw left as well. Every pad is reached only
+/// through a call inside its scope, which the read dominates. Generator and
+/// async resumes are separate activations, and a `try` never spans a resume
+/// point (the generator linearizer turns a `try` that contains a `yield`
+/// into a dispatch-loop `try` that every resume enters). An enclosing
+/// scope's value is not reused: an inlined constructor body can open a
+/// bracket between the two entries.
+fn scope_handle_height(ctx: &mut FnCtx<'_>) -> String {
+    ctx.block().call(I64, "js_eh_handle_height", &[])
+}
+
+/// Materialize the unwind-target block that funnels the exception into
+/// `exc_label`. Returns the handler's EH scope (its pad, and `exc_label` as the
+/// block an inner action scope continues at); the caller pushes it around the
+/// protected body.
+///
+/// One shape on every native target: a single landing-pad block —
+/// `landingpad {ptr,i32} catch ptr null` → `js_eh_pad_enter(sp)` →
+/// `br %exc_label`. The pair is ignored; the thrown value is read back from
+/// the runtime's rooted TLS slot via `js_get_exception`.
 ///
 /// windows-msvc used to get a second, SEH shape here (`catchswitch` →
 /// `catchpad [ptr @perry_seh_filter]` → `catchret`). It was removed because it
@@ -53,48 +108,43 @@ use crate::types::{I32, PTR};
 /// ELF/Mach-O path already parses. The x64 unwinder calls whatever handler
 /// `.xdata` names, so a custom personality is a first-class citizen there.
 ///
-/// Savepoint restores run at throw time (`js_throw`), which is sound
-/// because the unwinder skips Rust cleanups exactly like `longjmp` did (the
-/// runtime is built panic=abort with forced unwind tables; see
-/// `perry-runtime/src/eh.rs`).
+/// The restore of the runtime's managed state runs at the pad
+/// (`js_eh_pad_enter`), which is sound because no code runs between the
+/// raise and the first pad: the unwinder skips Rust cleanups (the runtime is
+/// built panic=abort with forced unwind tables; see `perry-runtime/src/eh.rs`).
 ///
 /// Also used by the async rejection boundary in `stmt/mod.rs`
 /// (`lower_async_rejecting_stmts_inner`) — same dispatch, different
 /// exception continuation.
-pub(super) fn emit_eh_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) -> String {
-    emit_eh_dispatch_inner(ctx, exc_label, normal_label, true)
-}
-
-fn emit_eh_dispatch_inner(
+pub(super) fn emit_eh_dispatch(
     ctx: &mut FnCtx<'_>,
     exc_label: &str,
     normal_label: &str,
-    registered: bool,
-) -> String {
-    if ctx.target_triple.starts_with("wasm32") {
+) -> EhScope {
+    if sjlj_try(ctx) {
         // WASI uses wasm SjLj. The jump target is this generated frame,
-        // never a Rust frame; the wasm backend rewrites setjmp into EH.
-        let env = ctx.block().call(PTR, "js_try_push", &[]);
+        // never a Rust frame; the wasm backend rewrites setjmp into EH. The
+        // handler records this frame's stack pointer: a throw restores the
+        // managed stacks to it before the longjmp, as a pad here would. There
+        // is no pad, so no action scope can chain to this handler.
+        let sp = ctx.block().call(PTR, "llvm.stacksave.p0", &[]);
+        let env = ctx.block().call(PTR, "js_try_push", &[(PTR, &sp)]);
         let status = ctx.block().call(I32, "setjmp", &[(PTR, &env)]);
         let thrown = ctx.block().next_reg();
         ctx.block()
             .emit_raw(format!("{thrown} = icmp ne i32 {status}, 0"));
         ctx.block().cond_br(&thrown, exc_label, normal_label);
-        return String::new();
+        return EhScope::handler(String::new(), None);
     }
-    // One personality for every pad. An unregistered (entry-free) iterator
-    // cleanup pad needs no boundary check: runtime traps are landing pads
-    // too (perry-runtime `exception::trap`), so the unwinder stops at
-    // whichever handler is innermost.
+    // One personality for every pad; runtime traps are landing pads too
+    // (perry-runtime `exception::trap`), so the unwinder stops at whichever
+    // handler is innermost.
     ctx.func.personality = Some("perry_eh_personality");
-
-    if registered {
-        ctx.block().call_void("js_eh_try_push", &[]);
-    }
 
     let lpad_idx = ctx.new_block("eh.lpad");
     let lpad_label = ctx.block_label(lpad_idx);
 
+    let handle_height = scope_handle_height(ctx);
     ctx.block().br(normal_label);
 
     let saved = ctx.current_block;
@@ -102,9 +152,13 @@ fn emit_eh_dispatch_inner(
     let lp = ctx.block().next_reg();
     ctx.block()
         .emit_raw(format!("{} = landingpad {{ ptr, i32 }} catch ptr null", lp));
+    emit_pad_enter(ctx.block(), &handle_height);
     ctx.block().br(exc_label);
     ctx.current_block = saved;
-    lpad_label
+    EhScope {
+        handle_height: Some(handle_height),
+        ..EhScope::handler(lpad_label, Some(exc_label.to_string()))
+    }
 }
 
 fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
@@ -166,6 +220,11 @@ pub(crate) fn lower_try(
     catch: Option<&perry_hir::CatchClause>,
     finally: Option<&[perry_hir::Stmt]>,
 ) -> Result<()> {
+    // An iterator-cleanup `try` (linux x86_64) catches only to close the
+    // iterator and rethrow: its catch reads no frame state, so it does not
+    // count as a handler of this function for the fast-tier gates
+    // (`ctx.try_depth`), and its catch+finally pair may be outlined
+    // (`arrayRecordAbrupt`).
     let registered = !unregistered_iterator_cleanup(ctx.target_triple, catch);
     let try_body_idx = ctx.new_block("try.body");
     let catch_idx = ctx.new_block("try.catch");
@@ -175,22 +234,22 @@ pub(crate) fn lower_try(
     let catch_label = ctx.block_label(catch_idx);
     let finally_label = ctx.block_label(finally_idx);
 
-    // --- current block: arm handler, enter body; landing pad → catch ---
-    let lpad_label = emit_eh_dispatch_inner(ctx, &catch_label, &try_body_label, registered);
+    // --- current block: enter body; landing pad → catch ---
+    let scope = emit_eh_dispatch(ctx, &catch_label, &try_body_label);
 
     // --- try body (scope active) ---
     ctx.current_block = try_body_idx;
-    // Return/break/continue inside the body pop the handler via js_try_end
-    // before leaving (see `Stmt::Return` in stmt/mod.rs).
-    ctx.try_depth += usize::from(registered);
-    ctx.func.push_eh_scope(lpad_label);
+    // Return/break/continue inside the body pop a WASI handler via
+    // `emit_try_end` before leaving (see `Stmt::Return` in stmt/mod.rs).
+    // WASI registers every `try` (setjmp), so there every one counts.
+    let counted = registered || sjlj_try(ctx);
+    ctx.try_depth += usize::from(counted);
+    ctx.func.push_eh_scope_entry(scope);
     lower_stmts(ctx, body)?;
     ctx.func.pop_eh_scope();
-    ctx.try_depth -= usize::from(registered);
+    ctx.try_depth -= usize::from(counted);
     if !ctx.block().is_terminated() {
-        if registered {
-            ctx.block().call_void("js_try_end", &[]);
-        }
+        emit_try_end(ctx);
         ctx.block().br(&finally_label);
     }
 
@@ -212,13 +271,7 @@ pub(crate) fn lower_try(
             },
         )?;
     } else if let Some(clause) = catch {
-        let exc = if registered {
-            ctx.block().call(DOUBLE, "js_catch_enter", &[])
-        } else {
-            let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
-            ctx.block().call_void("js_clear_exception", &[]);
-            exc
-        };
+        let exc = ctx.block().call(DOUBLE, "js_catch_enter", &[]);
         // Bind the catch param (if any) to the exception value.
         if let Some((id, _name)) = &clause.param {
             // Slot lives in the entry block — a closure inside the catch
@@ -248,21 +301,21 @@ pub(crate) fn lower_try(
             let cfail_idx = ctx.new_block("try.catch.fail");
             let cbody_label = ctx.block_label(cbody_idx);
             let cfail_label = ctx.block_label(cfail_idx);
-            let cfail_lpad = emit_eh_dispatch(ctx, &cfail_label, &cbody_label);
+            let cfail_scope = emit_eh_dispatch(ctx, &cfail_label, &cbody_label);
 
             ctx.current_block = cbody_idx;
             ctx.try_depth += 1;
-            ctx.func.push_eh_scope(cfail_lpad);
+            ctx.func.push_eh_scope_entry(cfail_scope);
             lower_stmts(ctx, &clause.body)?;
             ctx.func.pop_eh_scope();
             ctx.try_depth -= 1;
             if !ctx.block().is_terminated() {
-                ctx.block().call_void("js_try_end", &[]);
+                emit_try_end(ctx);
                 ctx.block().br(&finally_label);
             }
 
             ctx.current_block = cfail_idx;
-            ctx.block().call_void("js_try_end", &[]);
+            emit_try_end(ctx);
             let exc2 = ctx.block().call(DOUBLE, "js_get_exception", &[]);
             lower_stmts(ctx, f)?;
             if !ctx.block().is_terminated() {
@@ -285,9 +338,7 @@ pub(crate) fn lower_try(
         // exception path, then re-raise via js_throw — unless the finally
         // itself completed abruptly (a `return`/`throw` inside finally
         // overrides the pending exception, per spec).
-        if registered {
-            ctx.block().call_void("js_try_end", &[]);
-        }
+        emit_try_end(ctx);
         let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
         if let Some(f) = finally {
             lower_stmts(ctx, f)?;
@@ -428,5 +479,51 @@ mod tests {
         assert!(main.contains("@js_iterator_close_on_throw"));
         assert!(!main.contains("@js_eh_try_push"));
         assert!(!main.contains("@js_try_end"));
+    }
+
+    /// ehfree slice 1: an ordinary `try`/`catch` records nothing on entry or
+    /// exit; its landing pad's first call restores the managed stacks to the
+    /// catching frame (`js_eh_pad_enter(llvm.stacksave())`), and the catch
+    /// entry only takes the exception.
+    #[test]
+    fn try_entry_is_free_and_the_pad_restores_by_stack_pointer() {
+        let _pin = crate::codegen::helpers::NativeRootsPin::native();
+        let mut module = perry_hir::Module::new("free_try");
+        module.init.push(perry_hir::Stmt::Try {
+            body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
+            catch: Some(perry_hir::CatchClause {
+                param: Some((1, "e".into())),
+                body: vec![],
+            }),
+            finally: None,
+        });
+        for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
+            let opts = crate::CompileOptions {
+                emit_ir_only: true,
+                is_entry_module: true,
+                target: Some(target.into()),
+                ..Default::default()
+            };
+            let ir = String::from_utf8(crate::compile_module(&module, opts).unwrap()).unwrap();
+            let main = ir
+                .split("define i32 @main()")
+                .nth(1)
+                .unwrap()
+                .split("\n}\n")
+                .next()
+                .unwrap();
+            assert!(!main.contains("@js_eh_try_push"), "{target}: {main}");
+            assert!(!main.contains("@js_try_end"), "{target}: {main}");
+            let pad = main
+                .split("landingpad")
+                .nth(1)
+                .unwrap_or_else(|| panic!("{target}: no landing pad: {main}"));
+            let save = pad.find("@llvm.stacksave.p0()").expect("pad reads its sp");
+            let enter = pad
+                .find("call void @js_eh_pad_enter(ptr")
+                .expect("pad restores the managed stacks");
+            assert!(save < enter, "{target}: {pad}");
+            assert!(main.contains("@js_catch_enter"), "{target}");
+        }
     }
 }

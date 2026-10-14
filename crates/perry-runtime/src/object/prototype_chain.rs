@@ -37,11 +37,8 @@ crate::perry_thread_local! {
     /// recursive property lookup bounded and stop on a repeated owner. These
     /// are NaN-boxed root slots, not raw addresses: an accessor or Proxy trap
     /// can collect and move an owner before re-entering property resolution.
-    static PROTOTYPE_RESOLUTION_STACK: RefCell<crate::exception::CatchStack<u64>> = const {
-        RefCell::new(crate::exception::CatchStack::new(
-            crate::exception::catch_subsystem::PROTOTYPE_RESOLUTION,
-        ))
-    };
+    static PROTOTYPE_RESOLUTION_STACK: RefCell<crate::exception::CatchStack<u64>> =
+        const { RefCell::new(crate::exception::CatchStack::new()) };
 }
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
 
@@ -54,7 +51,14 @@ struct PrototypeResolutionGuard {
 }
 
 impl PrototypeResolutionGuard {
+    /// Enter one resolution step owned by the calling frame
+    /// (`#[inline(always)]`: the frame mark must be read in the owner).
+    #[inline(always)]
     fn enter(owner: usize) -> Option<Self> {
+        Self::enter_at(crate::exception::frame_mark(), owner)
+    }
+
+    fn enter_at(mark: usize, owner: usize) -> Option<Self> {
         let owner_bits = crate::value::js_nanbox_pointer(owner as i64).to_bits();
         PROTOTYPE_RESOLUTION_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
@@ -65,13 +69,17 @@ impl PrototypeResolutionGuard {
                 .iter()
                 .rposition(|&bits| bits == USER_CODE_BOUNDARY)
                 .map_or(0, |i| i + 1);
-            let segment = &stack[segment_start..];
-            if segment.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || segment.contains(&owner_bits) {
+            if stack.len() - segment_start >= MAX_PROTOTYPE_RESOLUTION_DEPTH
+                || stack
+                    .iter()
+                    .skip(segment_start)
+                    .any(|&bits| bits == owner_bits)
+            {
                 return None;
             }
             let depth_before = stack.len();
             crate::gc::runtime_write_barrier_root_nanbox(owner_bits);
-            stack.push(owner_bits);
+            stack.push(mark, owner_bits);
             Some(Self { depth_before })
         })
     }
@@ -81,9 +89,9 @@ impl Drop for PrototypeResolutionGuard {
     fn drop(&mut self) {
         PROTOTYPE_RESOLUTION_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
-            // js_throw restores this stack before choosing the direct or
-            // system-unwinder transport. Cleanup after that restore must not
-            // pop a still-live outer resolution entry.
+            // A landing pad may already have popped this entry (its frame
+            // was abandoned). Cleanup after that restore must not pop a
+            // still-live outer resolution entry.
             if stack.len() > self.depth_before {
                 stack.truncate(self.depth_before);
             }
@@ -96,19 +104,20 @@ impl Drop for PrototypeResolutionGuard {
 /// treated them as a prototype cycle: `Object.create(new C())` with
 /// `get g() { return this.x }` read `x` as `undefined` (#11201). Free when no
 /// resolution is in progress. An exception that unwinds past it is covered by
-/// the resolution-stack savepoint, which truncates the boundary away.
+/// the catching landing pad, which pops the boundary by its frame mark.
 pub(crate) struct UserCodeResolutionBoundary {
     depth_before: Option<usize>,
 }
 
 impl UserCodeResolutionBoundary {
-    #[inline]
+    #[inline(always)]
     pub(crate) fn enter() -> Self {
+        let mark = crate::exception::frame_mark();
         let depth_before = PROTOTYPE_RESOLUTION_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
             let depth = stack.len();
             (depth != 0).then(|| {
-                stack.push(USER_CODE_BOUNDARY);
+                stack.push(mark, USER_CODE_BOUNDARY);
                 depth
             })
         });
@@ -129,13 +138,20 @@ impl Drop for UserCodeResolutionBoundary {
     }
 }
 
-#[inline]
-pub(crate) fn resolution_stack_savepoint() -> usize {
+pub(crate) fn resolution_stack_depth() -> usize {
     PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow().len())
 }
 
-pub(crate) fn resolution_stack_restore(depth: usize) {
-    PROTOTYPE_RESOLUTION_STACK.with(|stack| stack.borrow_mut().truncate(depth));
+pub(crate) fn resolution_stack_unwind_to(sp: usize) {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+        stack.borrow_mut().unwind_to(sp);
+    });
+}
+
+pub(crate) fn resolution_stack_check_marks(sp: usize) {
+    PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+        crate::exception::marks::check_marks(stack.borrow().marks(), sp, "prototype_resolution")
+    });
 }
 
 /// GC scanner for owners held across recursive inherited-property resolution.
@@ -154,8 +170,8 @@ pub(crate) fn scan_prototype_resolution_stack_roots_mut(
 }
 
 #[cfg(test)]
-pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
-    let Some(guard) = PrototypeResolutionGuard::enter(owner) else {
+pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize, mark: usize) -> bool {
+    let Some(guard) = PrototypeResolutionGuard::enter_at(mark, owner) else {
         return false;
     };
     std::mem::forget(guard);
@@ -1049,37 +1065,35 @@ mod tests {
     }
 
     #[test]
-    fn exception_unwind_restores_resolution_stack_savepoint() {
-        let base_depth = resolution_stack_savepoint();
-        let _jump_buffer = crate::exception::js_try_push();
+    fn a_landing_pad_restores_the_resolution_stack() {
+        let base_depth = resolution_stack_depth();
+        let here = crate::exception::frame_mark();
         let first = PrototypeResolutionGuard::enter(usize::MAX - 1).unwrap();
         let second = PrototypeResolutionGuard::enter(usize::MAX).unwrap();
-        assert_eq!(resolution_stack_savepoint(), base_depth + 2);
+        assert_eq!(resolution_stack_depth(), base_depth + 2);
 
-        // A real longjmp skips these drops. Forget the guards to model that
-        // behavior, then replay js_throw's savepoint restoration.
+        // A throw skips these drops. Forget the guards to model that, then
+        // replay the restore of a landing pad in this frame's caller.
         std::mem::forget(first);
         std::mem::forget(second);
-        crate::exception::test_unwind_innermost_shadow_restore();
-        crate::exception::js_try_end();
+        resolution_stack_unwind_to(here + 1);
 
-        assert_eq!(resolution_stack_savepoint(), base_depth);
+        assert_eq!(resolution_stack_depth(), base_depth);
     }
 
     #[test]
     fn system_unwind_drop_is_idempotent_after_resolution_restore() {
-        let base_depth = resolution_stack_savepoint();
-        let _jump_buffer = crate::exception::js_try_push();
+        let base_depth = resolution_stack_depth();
+        let here = crate::exception::frame_mark();
         let first = PrototypeResolutionGuard::enter(usize::MAX - 1).unwrap();
         let second = PrototypeResolutionGuard::enter(usize::MAX).unwrap();
-        assert_eq!(resolution_stack_savepoint(), base_depth + 2);
+        assert_eq!(resolution_stack_depth(), base_depth + 2);
 
-        crate::exception::test_unwind_innermost_shadow_restore();
+        resolution_stack_unwind_to(here + 1);
         drop(second);
         drop(first);
-        crate::exception::js_try_end();
 
-        assert_eq!(resolution_stack_savepoint(), base_depth);
+        assert_eq!(resolution_stack_depth(), base_depth);
     }
 }
 

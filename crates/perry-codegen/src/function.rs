@@ -504,8 +504,23 @@ impl LlFunction {
         self.reg_counter.push_eh_scope(lpad_label);
     }
 
-    pub fn pop_eh_scope(&self) {
-        self.reg_counter.pop_eh_scope();
+    /// Enter an EH scope with its chaining information (`block::EhScope`).
+    pub fn push_eh_scope_entry(&self, scope: crate::block::EhScope) {
+        self.reg_counter.push_eh_scope_entry(scope);
+    }
+
+    pub fn pop_eh_scope(&self) -> Option<crate::block::EhScope> {
+        self.reg_counter.pop_eh_scope()
+    }
+
+    /// The innermost active EH scope of this function, if any.
+    pub fn innermost_eh_scope(&self) -> Option<crate::block::EhScope> {
+        self.reg_counter.innermost_eh_scope()
+    }
+
+    /// Number of active EH scopes (handlers and action scopes).
+    pub fn eh_scope_depth(&self) -> usize {
+        self.reg_counter.eh_scope_depth()
     }
 
     /// The function's one `i64` slot for a split method site's code address
@@ -1261,7 +1276,39 @@ impl LlFunction {
                 self.yield_ret_prologue(seq, sink)?;
             }
         }
-        sink(FinalItem::Inst(inst))
+        sink(FinalItem::Inst(inst))?;
+        self.yield_pad_shadow_restore(inst, seq, sink)
+    }
+
+    /// Shadow-stack targets: a landing pad of a function that pushed a shadow
+    /// frame makes that frame the top frame again, right after the pad's
+    /// `js_eh_pad_enter` (which restores every managed stack whose entries
+    /// carry frame marks). The frame handle lives in this frame, like the one
+    /// every `ret` pops with; the frame may be created after the pad was
+    /// emitted (`reserve_shadow_slot`), which is why this is a final rewrite.
+    fn yield_pad_shadow_restore<E>(
+        &self,
+        inst: &crate::inst::LlInst,
+        seq: &mut u32,
+        sink: &mut dyn FnMut(FinalItem<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let Some(handle_slot) = &self.shadow_frame_slot else {
+            return Ok(());
+        };
+        if !matches!(inst, crate::inst::LlInst::Call { callee, .. } if callee == "js_eh_pad_enter")
+        {
+            return Ok(());
+        }
+        let load_reg = format!("%shadow_restore_l_{}", seq);
+        *seq += 1;
+        sink(FinalItem::Text(&format!(
+            "  {} = load i64, ptr {}",
+            load_reg, handle_slot
+        )))?;
+        sink(FinalItem::Text(&format!(
+            "  call void @js_shadow_frame_restore_to(i64 {})",
+            load_reg
+        )))
     }
 
     /// Return-site rewrite, streamed: before every `ret` (except `ret ptr`),

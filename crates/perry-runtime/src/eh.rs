@@ -11,11 +11,13 @@
 //!
 //! The unwinder steps *through* runtime Rust frames without running any
 //! cleanup (the runtime is built `panic=abort` + forced unwind tables — see
-//! `docs/invoke-eh-experiment.md`), which is exactly the `longjmp` semantics
-//! the savepoint-restore system in `exception.rs` was built for. Rust-side
-//! catches (`js_call_catching`, `exception::trap`) are landing pads too: the
-//! trap shim `ffi/perry_trap.ll` invokes the body under a catch-all pad with
-//! this personality, so the walk lands in whichever handler is innermost.
+//! `docs/invoke-eh-experiment.md`). The managed state those frames held is
+//! restored by the catching pad itself (`exception::js_eh_pad_enter`, by
+//! frame marks). Rust-side catches (`js_call_catching`, `exception::trap`)
+//! are landing pads too: the trap shim `ffi/perry_trap.ll` invokes the body
+//! under a catch-all pad with this personality, so the walk lands in
+//! whichever handler is innermost. With no handler at all, phase 1 returns
+//! `_URC_END_OF_STACK` without unwinding: that is the uncaught path.
 //!
 //! The personality routine and LSDA walk are a port of Rust std's
 //! `rust_eh_personality` / `sys::personality::dwarf` (MIT OR Apache-2.0),
@@ -81,11 +83,12 @@ extern "C" {
 /// runtime is built `panic=abort` (no tables by default) plus
 /// `-C force-unwind-tables=yes` — and that flag rides on RUSTFLAGS, which a
 /// stray environment override silently drops. A runtime built that way
-/// strands EVERY throw that crosses a helper frame. This check runs once, on
-/// the first `js_eh_try_push` of the process: `_Unwind_Backtrace` uses the
-/// same CFI the raise path does, so if it cannot see past this module's own
-/// nested Rust frames, the raise path is broken too — abort loudly at the
-/// first `try` instead of stranding the first cross-helper throw.
+/// strands EVERY throw that crosses a helper frame, and since a handler is
+/// found by the walk alone, a stranded throw would look uncaught. This check
+/// runs once, on the first `js_throw` of the process: `_Unwind_Backtrace`
+/// uses the same CFI the raise path does, so if it cannot see past this
+/// module's own nested Rust frames, the raise path is broken too — abort
+/// loudly instead of reporting an uncaught exception.
 ///
 /// WASI has no unwinder to check yet: `try` blocks lower to plain calls and a
 /// throw ends the program (#11378), so there is nothing to verify.
@@ -137,6 +140,36 @@ fn selfcheck_frame_b() -> usize {
         _Unwind_Backtrace(count, &mut n as *mut usize as *mut core::ffi::c_void);
     }
     std::hint::black_box(n)
+}
+
+/// The raise returned `_URC_END_OF_STACK`: no frame had a handler, or a frame
+/// without CFI ended the walk early. `PERRY_EH_TRACE=1` tells the two apart:
+/// a `_Unwind_Backtrace` from here reports how many frames it stepped and why
+/// it stopped (`5` = it reached the outermost frame).
+#[cfg(not(target_os = "wasi"))]
+pub(crate) fn diagnose_end_of_stack() {
+    if !eh_trace_enabled() {
+        return;
+    }
+    unsafe extern "C" fn count(
+        _ctx: *mut UnwindContext,
+        arg: *mut core::ffi::c_void,
+    ) -> UnwindReasonCode {
+        unsafe { *(arg as *mut usize) += 1 };
+        0
+    }
+    let mut n: usize = 0;
+    let reason =
+        unsafe { _Unwind_Backtrace(count, &mut n as *mut usize as *mut core::ffi::c_void) };
+    eprintln!(
+        "[perry-eh] uncaught: no handler in {n} frame(s); walk ended with reason {reason} \
+         ({})",
+        if reason == 5 {
+            "reached the outermost frame"
+        } else {
+            "a frame without unwind tables stopped the walk"
+        }
+    );
 }
 
 // DWARF register numbers for the exception-pointer / exception-selector

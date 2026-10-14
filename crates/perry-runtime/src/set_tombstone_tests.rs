@@ -83,14 +83,14 @@ fn foreach_survives_delete_compaction_threshold() {
 #[test]
 fn caught_throw_restores_set_foreach_compaction_state() {
     let set = js_set_alloc(4);
-    let base = set_foreach_stack_savepoint();
-    let _ = crate::exception::js_try_push();
+    let base = set_foreach_depth();
+    let here = crate::exception::frame_mark();
     set_foreach_enter(set);
     assert!(set_foreach_is_active(set));
-    crate::exception::test_unwind_innermost_shadow_restore();
-    assert_eq!(set_foreach_stack_savepoint(), base);
+    // The restore of a landing pad in this frame's caller.
+    set_foreach_unwind_to(here + 1);
+    assert_eq!(set_foreach_depth(), base);
     assert!(!set_foreach_is_active(set));
-    crate::exception::js_try_end();
 }
 
 #[test]

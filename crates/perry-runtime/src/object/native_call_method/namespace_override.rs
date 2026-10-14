@@ -4,29 +4,39 @@
 //! Every READ of `console.error` already returns the replacement; the call
 //! used to go straight to the native implementation and ignore it.
 
-use crate::exception::{catch_subsystem, CatchStack};
+use crate::exception::CatchStack;
 
 crate::perry_thread_local! {
     /// `(module, method)` pairs whose user override is executing on this
-    /// thread. A JS throw crossing the override skips the pop below, so the
-    /// catch savepoint truncates this back (see `exception/savepoints.rs`).
+    /// thread. A JS throw crossing the override skips the pop below; the
+    /// catching landing pad pops the entry by its frame mark
+    /// (`crate::exception::marks`).
     static RUNNING: std::cell::RefCell<CatchStack<(String, String)>> =
-        const { std::cell::RefCell::new(CatchStack::new(catch_subsystem::NAMESPACE_OVERRIDE)) };
+        const { std::cell::RefCell::new(CatchStack::new()) };
 }
 
-pub(crate) fn namespace_override_stack_savepoint() -> usize {
-    RUNNING.with(|r| r.borrow().len())
+pub(crate) fn namespace_override_unwind_to(sp: usize) {
+    RUNNING.with(|r| {
+        r.borrow_mut().unwind_to(sp);
+    });
 }
 
-pub(crate) fn namespace_override_stack_restore(len: usize) {
-    RUNNING.with(|r| r.borrow_mut().truncate(len));
+pub(crate) fn namespace_override_check_marks(sp: usize) {
+    RUNNING.with(|r| {
+        crate::exception::marks::check_marks(r.borrow().marks(), sp, "namespace_override")
+    });
 }
 
 #[cfg(test)]
-pub(crate) fn test_push_catch_namespace_override(marker: u32) {
+pub(crate) fn namespace_override_depth() -> usize {
+    RUNNING.with(|r| r.borrow().len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_push_catch_namespace_override(marker: u32, mark: usize) {
     RUNNING.with(|r| {
         r.borrow_mut()
-            .push(("catch-savepoint".to_string(), marker.to_string()))
+            .push(mark, ("catch-savepoint".to_string(), marker.to_string()))
     });
 }
 
@@ -78,7 +88,8 @@ pub(super) unsafe fn call_native_namespace_override(
             });
         }
     }
-    RUNNING.with(|r| r.borrow_mut().push((module, method_name.to_string())));
+    let mark = crate::exception::frame_mark();
+    RUNNING.with(|r| r.borrow_mut().push(mark, (module, method_name.to_string())));
     let _running = Running;
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args_handles);
     Some(crate::closure::native_call_value_this(

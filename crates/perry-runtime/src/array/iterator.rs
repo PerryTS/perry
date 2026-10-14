@@ -469,9 +469,8 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         true
     };
 
-    crate::exception::trap_push();
-    // Runs under the trap shim (`exception::trap`); everything between the landing
-    // and `js_try_end` below is pure TLS bookkeeping.
+    // Runs under the trap shim (`exception::trap`); everything after the
+    // landing below is pure TLS bookkeeping.
     let outcome = crate::exception::trap(|| {
         let args_ptr = if args.is_empty() {
             std::ptr::null()
@@ -507,7 +506,6 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
             Err(exc)
         }
     };
-    crate::exception::js_try_end();
     result
 }
 
@@ -528,7 +526,6 @@ fn async_from_sync_call_cached_raw(
             b"Async-from-sync iterator method is not callable",
         ));
     }
-    crate::exception::trap_push();
     let outcome = crate::exception::trap(|| {
         let args_ptr = if args.is_empty() {
             std::ptr::null()
@@ -552,7 +549,6 @@ fn async_from_sync_call_cached_raw(
             Err(exc)
         }
     };
-    crate::exception::js_try_end();
     result
 }
 
@@ -1155,12 +1151,10 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             // receiver from the call, so pass it — mirroring `js_get_iterator`.
             // Without it the wrapper saw a stale `this` and the generator
             // yielded nothing (empty spread).
-            crate::exception::trap_push();
-            // `trap_push` captured the handle-stack depth AFTER these roots
-            // were pushed, so the throw-time restore leaves them intact and
-            // reading them here is sound. Runs under the trap shim
-            // (`exception::trap`); the rethrow below runs after `js_try_end` pops this
-            // trap, so it targets the enclosing handler.
+            // These roots belong to this frame, so the trap pad's restore
+            // leaves them intact and reading them here is sound. Runs under
+            // the trap shim (`exception::trap`); the rethrow below runs after
+            // the trap returned, so it targets the enclosing handler.
             let outcome = crate::exception::trap(|| {
                 crate::closure::js_closure_call0(
                     js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
@@ -1171,17 +1165,13 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             let iter = match outcome {
                 Some(iter) => iter,
                 None => {
-                    // Factory threw: unwind the trap frame before
-                    // re-propagating (mirrors `async_from_sync_call_cached_raw`
-                    // above).
+                    // Factory threw: re-propagate to the enclosing handler.
                     let exc = crate::exception::js_get_exception();
                     crate::exception::js_clear_exception();
-                    crate::exception::js_try_end();
                     crate::exception::js_throw(exc)
                 }
             };
             let iter_h = scope.root_nanbox_f64(iter);
-            crate::exception::js_try_end();
             if crate::array::js_array_is_array(iter_h.get_nanbox_f64()).to_bits()
                 == crate::value::TAG_TRUE
             {

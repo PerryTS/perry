@@ -44,6 +44,13 @@ impl TransientRootScope {
 
     /// Root a raw heap address (an ext table's `i64` closure pointer). A zero
     /// address is accepted and reads back as zero.
+    ///
+    /// `#[inline(always)]`, like [`Self::root_nanbox`]: the runtime marks each
+    /// root with the frame that called its push entry point, and a throw that
+    /// abandons that frame drops the root at the catching landing pad
+    /// (perry-runtime `exception::marks`). Inlined, that frame is the caller
+    /// that owns this scope.
+    #[inline(always)]
     pub fn root_addr(&self, addr: i64) -> TransientRootedAddr {
         TransientRootedAddr {
             index: unsafe { js_ffi_root_push_heap_addr(addr as u64) },
@@ -56,6 +63,7 @@ impl TransientRootScope {
     }
 
     /// Root a NaN-boxed value handed to callbacks (string/buffer/object).
+    #[inline(always)]
     pub fn root_nanbox(&self, value: f64) -> TransientRootedNanbox {
         TransientRootedNanbox {
             index: unsafe { js_ffi_root_push_nanbox(value.to_bits()) },

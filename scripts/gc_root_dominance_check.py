@@ -532,6 +532,10 @@ NONCOLLECTING = {
     "js_object_get_class_id", "js_object_get_own_field_or_undef",
     "js_object_mark_class", "js_class_object_pin_parent",
     "js_new_target_get", "js_new_target_set",
+    # object/this_binding.rs -- the compiled `new` bridge: swaps the cell and
+    # pushes/pops the displaced value on a Rust Vec (the bridge stack, a
+    # scanned root). No Perry allocation, no user code, no poll.
+    "js_new_target_enter", "js_new_target_leave",
     # closure/unbox.rs:25 -- a tag check on the NaN-boxed callee and a low-48
     # mask. No allocation, no user code, no poll. It sits between every
     # dynamic call's last argument and its `js_closure_callN`, so leaving it

@@ -108,7 +108,7 @@ fn temp_rooted_value_survives_a_real_collection() {
     }
 
     js_gc_temp_root_truncate(bare);
-    assert_eq!(temp_root_depth(), 0);
+    assert_eq!(crate::gc::temp_root_len(), 0);
 }
 
 /// Truncation is a stack cut, not a pop: releasing a base slot must drop every
@@ -122,10 +122,10 @@ fn truncate_drops_every_slot_above_the_base() {
     let base = js_gc_temp_root_push(0x1000);
     js_gc_temp_root_push(0x2000);
     js_gc_temp_root_push(0x3000);
-    assert_eq!(temp_root_depth(), 3);
+    assert_eq!(crate::gc::temp_root_len(), 3);
 
     js_gc_temp_root_truncate(base);
-    assert_eq!(temp_root_depth(), 0);
+    assert_eq!(crate::gc::temp_root_len(), 0);
 
     // Out-of-range accesses are release-safe no-ops, the same discipline
     // `js_shadow_slot_set` follows: a malformed index from generated code must
@@ -133,7 +133,7 @@ fn truncate_drops_every_slot_above_the_base() {
     assert_eq!(js_gc_temp_root_get(99), 0);
     js_gc_temp_root_set(99, 0x4000);
     js_gc_temp_root_truncate(99);
-    assert_eq!(temp_root_depth(), 0);
+    assert_eq!(crate::gc::temp_root_len(), 0);
 }
 
 /// `js_array_push_f64_temp_rooted` is the fused accumulator push: it must read
@@ -167,30 +167,30 @@ fn fused_array_push_writes_the_reallocated_pointer_back() {
     js_gc_temp_root_truncate(idx);
 }
 
-/// A `longjmp` unwind past an argument list skips its
-/// `js_gc_temp_root_truncate`. The shadow-stack savepoint the exception path
-/// already takes carries the temp-root depth, so the orphaned slots are
-/// dropped with the orphaned frames rather than retained forever.
+/// A throw past an argument list skips its `js_gc_temp_root_truncate`. Every
+/// slot carries the frame mark of its owner, so the catching landing pad drops
+/// the slots of the frames the throw abandoned and keeps the rest.
 #[test]
-fn shadow_savepoint_restores_the_temp_root_depth() {
+fn a_landing_pad_drops_the_temp_roots_of_abandoned_frames() {
     let _guard = GcTestIsolationGuard::new();
     reset_temp_roots();
-    reset_shadow_stack();
 
+    // Owned by this frame (the caller of the push).
     let outer = js_gc_temp_root_push(0x1000);
-    let savepoint = frame_root_savepoint();
-    js_gc_temp_root_push(0x2000);
-    js_gc_temp_root_push(0x3000);
-    assert_eq!(temp_root_depth(), 3);
+    // Owned by a frame far below it, which the throw abandons.
+    let abandoned = 0x1000;
+    crate::gc::temp_root_push_at(0x2000, abandoned);
+    crate::gc::temp_root_push_at(0x3000, abandoned);
+    assert_eq!(crate::gc::temp_root_len(), 3);
 
-    frame_root_restore(savepoint);
+    // The pad of a frame between the two.
+    crate::gc::temp_roots_unwind_to(abandoned + 1);
     assert_eq!(
-        temp_root_depth(),
+        crate::gc::temp_root_len(),
         1,
-        "the unwind must drop the slots pushed inside the protected region"
+        "the pad must drop the slots of the abandoned frame"
     );
     assert_eq!(js_gc_temp_root_get(outer), 0x1000);
-
     js_gc_temp_root_truncate(outer);
 }
 
@@ -279,5 +279,5 @@ fn rewriting_a_slot_roots_the_new_value_and_releases_the_replaced_one() {
     );
 
     js_gc_temp_root_truncate(slot);
-    assert_eq!(temp_root_depth(), 0);
+    assert_eq!(crate::gc::temp_root_len(), 0);
 }

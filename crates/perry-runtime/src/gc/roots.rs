@@ -2,8 +2,6 @@ use super::*;
 use std::any::Any;
 
 mod mutable_slot;
-#[cfg(all(not(test), perry_native_stack_maps))]
-mod native_savepoint;
 mod rooted_values;
 pub(super) use mutable_slot::{mark_mutable_slot, MutableRootSlot, MutableRootSlotKind};
 mod runtime_handles;
@@ -29,7 +27,8 @@ pub(super) use runtime_handles::{
     scan_runtime_handle_roots_mut_step,
 };
 pub(crate) use runtime_handles::{
-    runtime_handle_stack_hot_addr, runtime_handle_stack_restore, runtime_handle_stack_savepoint,
+    new_target_save_pop_top, new_target_save_push, runtime_handle_stack_hot_addr,
+    runtime_handle_stack_len, runtime_handle_stack_restore_to,
 };
 pub use runtime_handles::{RuntimeHandle, RuntimeHandleScope};
 pub use scanner_shims::{
@@ -62,8 +61,6 @@ pub(crate) use shadow_stack::shadow_stack_has_active_frame;
 pub(crate) fn shadow_stack_has_active_frame() -> bool {
     false
 }
-#[cfg(all(not(test), perry_native_stack_maps))]
-pub(crate) use native_savepoint::{frame_root_restore, frame_root_savepoint, FrameRootSavepoint};
 #[allow(unused_imports)]
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_layout::{ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
@@ -82,15 +79,20 @@ pub(crate) use shadow_stack::SHADOW;
 pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint, FrameRootSavepoint};
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub use shadow_stack::{
-    js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind,
-    js_shadow_slot_get, js_shadow_slot_set, js_shadow_state_addr, shadow_stack_depth,
+    js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_frame_restore_to,
+    js_shadow_slot_bind, js_shadow_slot_get, js_shadow_slot_set, js_shadow_state_addr,
+    shadow_stack_depth,
 };
 #[cfg(test)]
 pub(crate) use temp_roots::reset_temp_roots;
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) use temp_roots::temp_root_len;
 #[cfg(test)]
-pub(super) use temp_roots::temp_root_depth;
+pub(crate) use temp_roots::temp_root_push_at;
 /// #7469: consumed by `crate::tls_hot::fill`, which lives outside `gc`.
 pub(crate) use temp_roots::temp_roots_hot_addr;
+#[cfg(target_os = "wasi")]
+pub(crate) use temp_roots::temp_roots_truncate_to;
 pub use temp_roots::{
     js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
     js_gc_temp_root_truncate,
@@ -98,6 +100,7 @@ pub use temp_roots::{
 pub(super) use temp_roots::{
     new_temp_root_scan_state, scan_temp_roots_mut, scan_temp_roots_mut_step,
 };
+pub(crate) use temp_roots::{temp_roots_check_marks, temp_roots_unwind_to};
 
 pub type MutableRootScanner = for<'a> fn(&mut RuntimeRootVisitor<'a>);
 pub(crate) type BudgetedMutableRootScanner =
@@ -125,6 +128,11 @@ pub(super) struct MutableRootScannerEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeHandleSlot {
     Nanbox(u64),
+    /// A `new.target` value displaced for the duration of one call
+    /// (`RuntimeHandleScope::root_new_target_save`, `js_new_target_enter`):
+    /// rooted like `Nanbox`, and put back into the cell by the landing pad
+    /// that truncates past it.
+    NewTargetSave(u64),
     NanboxCell(usize),
     RawPointer(usize),
     RawString(usize),

@@ -259,7 +259,7 @@ fn t4_t5_throw_identity_first_throw_wins_and_c_returns() {
         crate::value::js_nanbox_pointer(p as i64)
     });
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
-    let depth = crate::exception::current_try_depth();
+    let handles = crate::gc::runtime_handle_stack_len();
     let guard = np::enter(value.get_nanbox_f64(), &FAMILY).unwrap();
     let returned = crate::exception::catch_js_throw(|| unsafe {
         assert_eq!(
@@ -285,7 +285,7 @@ fn t4_t5_throw_identity_first_throw_wins_and_c_returns() {
     assert_eq!(returned, Ok(true), "throw must never cross C");
     assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(thrown(guard.finish()).to_bits(), err_value.to_bits());
-    assert_eq!(crate::exception::current_try_depth(), depth);
+    assert_eq!(crate::gc::runtime_handle_stack_len(), handles);
     assert_eq!(unsafe { (*cell(link)).busy }, 0);
     let guard = np::enter(value.get_nanbox_f64(), &FAMILY).unwrap();
     let cb = closure(crate::fn_info!(returns, 0));
@@ -513,7 +513,7 @@ fn t12_caught_nested_throw_leaves_busy_zero() {
     let value = scope.root_nanbox_f64(owner());
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
     let cb = closure(crate::fn_info!(nested, 0));
-    let depth = crate::exception::current_try_depth();
+    let handles = crate::gc::runtime_handle_stack_len();
     let guard = np::enter(value.get_nanbox_f64(), &FAMILY).unwrap();
     assert_eq!(
         unsafe { np::call_from_native(value.get_nanbox_f64(), cb, value.get_nanbox_f64(), &[]) },
@@ -521,7 +521,7 @@ fn t12_caught_nested_throw_leaves_busy_zero() {
     );
     assert_eq!(guard.finish(), Ok(()));
     assert_eq!(unsafe { (*cell(link)).busy }, 0);
-    assert_eq!(crate::exception::current_try_depth(), depth);
+    assert_eq!(crate::gc::runtime_handle_stack_len(), handles);
 }
 
 #[test]
@@ -700,12 +700,16 @@ extern "C" fn clears_new_target_and_throws(
     _: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,
 ) -> f64 {
-    crate::object::js_new_target_set(f64::from_bits(TAG_UNDEFINED));
+    // An abandoned new.target save: the displaced (moved) target is a GC
+    // root on the handle stack until the callback trap's pad puts it back.
+    crate::object::js_new_target_enter(f64::from_bits(TAG_UNDEFINED));
+    let trace = collect_minor_trace(GcTriggerKind::MallocCount);
+    assert!(trace.copying_nursery.eligible);
     crate::exception::js_throw(43.0)
 }
 
 #[test]
-fn native_call_reuses_catch_refreshes_roots_and_pops() {
+fn native_call_callback_throw_keeps_the_roots_of_live_frames() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let scope = RuntimeHandleScope::new();
@@ -713,7 +717,6 @@ fn native_call_reuses_catch_refreshes_roots_and_pops() {
     let returns = scope.root_nanbox_f64(closure(crate::fn_info!(returns, 0)));
     let throws = scope.root_nanbox_f64(closure(crate::fn_info!(throws, 1)));
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
-    let depth = crate::exception::current_try_depth();
     let guard = unsafe { np::enter_link(link) }.unwrap();
     let ((), end) = unsafe {
         guard.call(|| {
@@ -721,46 +724,26 @@ fn native_call_reuses_catch_refreshes_roots_and_pops() {
                 np::call_from_link(link, returns.get_nanbox_f64(), &[]),
                 Ok(19.0)
             );
-            assert_eq!(crate::exception::current_try_depth(), depth + 1);
-            // The second trampoline has argument-conversion roots absent from the
-            // first. A throw must retain them instead of restoring the old depth.
-            // Two roots: the first callback's own capture (inside its pending-slot
-            // scope) sits one root above the guard, so one root here would
-            // coincide with it and hide a missing refresh.
+            // Roots the native frame pushed between callbacks belong to it:
+            // the throwing callback's trap pad must keep them and drop only
+            // what the callback's own frames pushed. Two roots: one would
+            // coincide with the first callback's capture slot.
             let extra = RuntimeHandleScope::new();
             let object = extra.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
             let _second = extra.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-            let handles = crate::gc::runtime_handle_stack_savepoint();
+            let handles = crate::gc::runtime_handle_stack_len();
             assert_eq!(
                 np::call_from_link(link, throws.get_nanbox_f64(), &[43.0]),
                 Err(())
             );
-            assert_eq!(crate::gc::runtime_handle_stack_savepoint(), handles);
+            assert_eq!(crate::gc::runtime_handle_stack_len(), handles);
             assert!(!object
                 .get_raw_mut_ptr::<crate::object::ObjectHeader>()
                 .is_null());
-            let cached = &*(*(cell(link) as *mut np::NativeCallbackCell)).catch;
-            assert_eq!(
-                cached.captures(),
-                1,
-                "many callbacks share one full savepoint"
-            );
         })
     };
     assert_eq!(end, Err(CallEnd::Threw(43.0)));
-    assert_eq!(crate::exception::current_try_depth(), depth);
     assert_eq!(unsafe { (*cell(link)).busy }, 0);
-    assert!(unsafe {
-        (*(cell(link) as *mut np::NativeCallbackCell))
-            .catch
-            .is_null()
-    });
-    // Native calls with no callback never push a handler.
-    let guard = unsafe { np::enter_link(link) }.unwrap();
-    assert_eq!(
-        unsafe { guard.call(|| crate::exception::current_try_depth()) },
-        (depth, Ok(()))
-    );
 }
 
 #[test]
@@ -786,22 +769,22 @@ fn native_call_cached_new_target_moves_before_later_throw() {
                 np::call_from_link(link, returns.get_nanbox_f64(), &[]),
                 Ok(19.0)
             );
-            let trace = collect_minor_trace(GcTriggerKind::MallocCount);
-            assert!(trace.copying_nursery.eligible);
-            let moved = crate::value::js_nanbox_pointer(
-                target.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
-            );
-            assert_ne!(before.to_bits(), moved.to_bits());
-            // The live new.target cell need not be registered in this fixture:
-            // restore it to its correct moved value before the second callback.
-            crate::object::js_new_target_set(moved);
+            // The live new.target cell need not be registered in this
+            // fixture; the bridge's save is a runtime handle, which the
+            // collector scans like every handle.
+            gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
             assert_eq!(
                 np::call_from_link(link, throws.get_nanbox_f64(), &[]),
                 Err(())
             );
+            let moved = crate::value::js_nanbox_pointer(
+                target.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+            );
+            assert_ne!(before.to_bits(), moved.to_bits());
             assert_eq!(
                 crate::object::js_new_target_get().to_bits(),
-                moved.to_bits()
+                moved.to_bits(),
+                "the pad must restore the bridge's displaced value as the GC rewrote it"
             );
         })
     };
@@ -844,7 +827,6 @@ fn native_call_reentrant_catch_restores_outer_then_defers_close() {
     let cb = scope.root_nanbox_f64(closure(crate::fn_info!(reenters_cached_then_closes, 0)));
     let guard = np::enter(value.get_nanbox_f64(), &FAMILY).unwrap();
     let link = guard.owner_link();
-    let depth = crate::exception::current_try_depth();
     let (result, end) = unsafe {
         guard.call(|| {
             let result = np::call_from_native(
@@ -853,20 +835,11 @@ fn native_call_reentrant_catch_restores_outer_then_defers_close() {
                 value.get_nanbox_f64(),
                 &[],
             );
-            assert_eq!(crate::exception::current_try_depth(), depth + 1);
-            let outer_ptr = (*(cell(link) as *mut np::NativeCallbackCell)).catch;
-            assert!(
-                !outer_ptr.is_null(),
-                "nested call must restore the outer catch token"
-            );
-            let outer = &*outer_ptr;
-            assert_eq!(outer.captures(), 1);
             result
         })
     };
     assert_eq!(result, Ok(23.0));
     assert_eq!(end, Err(CallEnd::Closed));
-    assert_eq!(crate::exception::current_try_depth(), depth);
     assert_eq!(unsafe { (*cell(link)).busy }, 0);
     assert_eq!(DROPS.load(Ordering::SeqCst), 1);
 }
@@ -942,19 +915,7 @@ fn every_sabotage_makes_its_runtime_witness_red() {
             "callback_cell_slot_resolves_array_growth_before_gc_rewrite",
         ),
         (
-            "catch_reentry",
-            "native_call_reentrant_catch_restores_outer_then_defers_close",
-        ),
-        (
-            "catch_refresh",
-            "native_call_reuses_catch_refreshes_roots_and_pops",
-        ),
-        (
-            "catch_pop",
-            "native_call_reuses_catch_refreshes_roots_and_pops",
-        ),
-        (
-            "catch_new_target_trace",
+            "new_target_bridge_trace",
             "native_call_cached_new_target_moves_before_later_throw",
         ),
         (

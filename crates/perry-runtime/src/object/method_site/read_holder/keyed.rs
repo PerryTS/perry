@@ -442,7 +442,7 @@ unsafe fn shape_read(slot: *mut *mut KeyedCache, obj_bits: u64, bits: u64) -> Op
         || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
         || slot.is_null()
         || crate::object::field_get_set::accessor_receiver_override_armed()
-        || crate::object::prototype_chain::resolution_stack_savepoint() != 0
+        || crate::object::prototype_chain::resolution_stack_depth() != 0
     {
         return None;
     }

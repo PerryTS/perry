@@ -29,7 +29,7 @@ pub(crate) unsafe fn accessor_walk(
 ) -> Option<HolderAccessor> {
     if !holder_name_admitted(name)
         || crate::object::field_get_set::accessor_receiver_override_armed()
-        || crate::object::prototype_chain::resolution_stack_savepoint() != 0
+        || crate::object::prototype_chain::resolution_stack_depth() != 0
     {
         return None;
     }

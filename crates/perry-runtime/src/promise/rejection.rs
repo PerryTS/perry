@@ -387,18 +387,14 @@ fn emit_rejection_handled(promise: *mut Promise) {
 /// `timer::with_timer_uncaught_trap`, which does the same for timer callbacks
 /// fired from the same drain.
 fn with_listener_uncaught_trap<F: FnOnce()>(f: F) {
-    crate::exception::trap_push();
     // The body runs under the trap shim (`exception::trap`). The
-    // uncaught path below runs only after `js_try_end` pops this trap, so
-    // a throw out of the `uncaughtException` listener targets the OUTER
-    // trap — same as the raw shape, which also popped before emitting.
+    // uncaught path below runs after the trap returned, so a throw out of
+    // the `uncaughtException` listener targets the OUTER handler.
     if crate::exception::trap(f).is_some() {
-        crate::exception::js_try_end();
         return;
     }
     let exc = crate::exception::js_get_exception();
     crate::exception::js_clear_exception();
-    crate::exception::js_try_end();
     if !crate::os::emit_process_event("uncaughtException", &[exc]) {
         crate::exception::exit_on_uncaught(exc);
     }

@@ -451,6 +451,41 @@ fn frame_chain_survives_buffer_growth() {
     assert_eq!(shadow_stack_depth(), 0);
 }
 
+/// A compiled frame's landing pad makes its own shadow frame the top frame
+/// again (`js_shadow_frame_restore_to`, emitted after `js_eh_pad_enter` on
+/// shadow-stack targets): the frames its abandoned callees pushed are
+/// dropped, its own slots stay rooted, and the restore is idempotent.
+#[test]
+fn landing_pad_restore_to_drops_the_callee_frames_and_keeps_its_own() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_shadow_stack();
+    let outer = js_shadow_frame_push(1);
+    js_shadow_slot_set(0, 0x7FFD_0000_0000_0011);
+    let catching = js_shadow_frame_push(2);
+    js_shadow_slot_set(0, 0x7FFD_0000_0000_0022);
+    let _callee_a = js_shadow_frame_push(1);
+    js_shadow_slot_set(0, 0x7FFD_0000_0000_0033);
+    let _callee_b = js_shadow_frame_push(3);
+    js_shadow_slot_set(2, 0x7FFD_0000_0000_0044);
+    assert_eq!(shadow_stack_depth(), 4);
+
+    js_shadow_frame_restore_to(catching);
+    assert_eq!(shadow_stack_depth(), 2);
+    // The scanner walks frames innermost first.
+    assert_eq!(
+        scanner_slot_values(),
+        vec![0x7FFD_0000_0000_0022, 0x7FFD_0000_0000_0011]
+    );
+    // The catch body still addresses the catching frame's slots.
+    assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_0000_0022);
+    js_shadow_frame_restore_to(catching);
+    assert_eq!(shadow_stack_depth(), 2);
+
+    js_shadow_frame_pop(catching);
+    js_shadow_frame_pop(outer);
+    assert_eq!(shadow_stack_depth(), 0);
+}
+
 /// A savepoint/restore pair (the `longjmp` unwind path) must drop the orphaned
 /// frames *and* leave the buffer in a state where the next push still starts
 /// from cleared entries.

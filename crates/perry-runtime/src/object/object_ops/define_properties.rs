@@ -8,9 +8,9 @@ use super::*;
 /// before any per-key callback. Each collected definition is a contiguous
 /// record of rooted handles in this operation's own scope
 /// (`DescView::collected_words`), so the operation owns no Rust-heap buffer:
-/// an abrupt completion leaves nothing to release, and the thrower's
-/// savepoint truncates the records with the rest of the handle stack. No
-/// protected frame is needed.
+/// an abrupt completion leaves nothing to release, and the catching landing
+/// pad drops the records with the rest of this frame's handles (by frame
+/// mark). No protected frame is needed.
 #[no_mangle]
 pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f64 {
     #[cfg(feature = "contract-checks")]
@@ -71,7 +71,7 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         let key_count = name_count + symbols.as_ref().map(length_of).unwrap_or(0);
         // Per-key work runs in its own scope; only the finished record is
         // pushed into `scope`, so records sit back to back from `base`.
-        let base = crate::gc::runtime_handle_stack_savepoint();
+        let base = crate::gc::runtime_handle_stack_len();
         let mut entries = 0usize;
         for index in 0..key_count {
             let words = {

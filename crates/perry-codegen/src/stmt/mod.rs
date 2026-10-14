@@ -29,6 +29,7 @@ mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
 mod counter_range;
+pub(crate) mod eh_actions;
 mod element_shape_carried;
 mod element_shape_loop;
 #[cfg(test)]
@@ -151,21 +152,21 @@ fn lower_async_rejecting_stmts_inner(
     // (Itanium landing pad vs SEH funclet) is decided in exactly one place.
     // The landing pad reads no locals; the unwind edges keep SSA values live
     // where LLVM's ordinary EH liveness says so.
-    let lpad = try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label);
+    let scope = try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label);
 
     ctx.current_block = body_idx;
     ctx.try_depth += 1;
-    ctx.func.push_eh_scope(lpad);
+    ctx.func.push_eh_scope_entry(scope);
     lower_stmts_inner(ctx, stmts, emit_shadow_clears)?;
     ctx.func.pop_eh_scope();
     ctx.try_depth -= 1;
     if !ctx.block().is_terminated() {
-        ctx.block().call_void("js_try_end", &[]);
+        try_stmt::emit_try_end(ctx);
         ctx.block().br(&merge_label);
     }
 
     ctx.current_block = catch_idx;
-    ctx.block().call_void("js_try_end", &[]);
+    try_stmt::emit_try_end(ctx);
     let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
     let handle = ctx
         .block()
@@ -483,7 +484,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 // Pop any open try frames before leaving the body (mirrors the
                 // ordinary `return` path below).
                 for _ in 0..ctx.try_depth {
-                    ctx.block().call_void("js_try_end", &[]);
+                    try_stmt::emit_try_end(ctx);
                 }
                 ctx.block().br(&target.after_label);
                 return Ok(());
@@ -502,13 +503,12 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             } else {
                 v
             };
-            // Pop any currently-open try frames before returning so the
-            // runtime's TRY_DEPTH counter stays balanced. Otherwise an
-            // early `return` inside `try { ... }` leaks one frame per
-            // call — at 128 the runtime panics with "Try block nesting
-            // too deep".
+            // Pop any currently-open try frames before returning so WASI's
+            // setjmp handler stack stays balanced (a landing-pad `try` on
+            // native targets has nothing to pop; `emit_try_end` emits
+            // nothing there).
             for _ in 0..ctx.try_depth {
-                ctx.block().call_void("js_try_end", &[]);
+                try_stmt::emit_try_end(ctx);
             }
             if ctx.shared_super_scope_active {
                 ctx.block().call_void("js_derived_super_scope_pop", &[]);
@@ -526,7 +526,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // does not rewrite, so it must never carry an instance address).
             if let Some(target) = ctx.inline_ctor_return.last().cloned() {
                 for _ in 0..ctx.try_depth {
-                    ctx.block().call_void("js_try_end", &[]);
+                    try_stmt::emit_try_end(ctx);
                 }
                 ctx.block().br(&target.after_label);
                 return Ok(());
@@ -545,7 +545,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
                 // Pop open try frames first (see above).
                 for _ in 0..ctx.try_depth {
-                    ctx.block().call_void("js_try_end", &[]);
+                    try_stmt::emit_try_end(ctx);
                 }
                 if ctx.shared_super_scope_active {
                     ctx.block().call_void("js_derived_super_scope_pop", &[]);
@@ -554,7 +554,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             } else {
                 // Pop open try frames first (see above).
                 for _ in 0..ctx.try_depth {
-                    ctx.block().call_void("js_try_end", &[]);
+                    try_stmt::emit_try_end(ctx);
                 }
                 if ctx.shared_super_scope_active {
                     ctx.block().call_void("js_derived_super_scope_pop", &[]);
@@ -621,12 +621,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 .last()
                 .map(|(_c, b, d)| (b.clone(), *d))
                 .ok_or_else(|| anyhow!("break statement outside any loop"))?;
-            // Pop any `try` frames this break jumps OUT of so the runtime's
-            // TRY_DEPTH stays balanced. The loop recorded the try_depth at
-            // its entry; any frames opened since (the difference) are escaped
-            // by the branch and must be closed first (mirrors Stmt::Return).
+            // Pop any `try` frames this break jumps OUT of so WASI's setjmp
+            // handler stack stays balanced. The loop recorded the try_depth
+            // at its entry; any frames opened since (the difference) are
+            // escaped by the branch and must be closed first (mirrors
+            // Stmt::Return).
             for _ in target_depth..ctx.try_depth {
-                ctx.block().call_void("js_try_end", &[]);
+                try_stmt::emit_try_end(ctx);
             }
             ctx.block().br(&break_label);
             Ok(())
@@ -650,7 +651,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // Pop try frames escaped by jumping back to the loop header
             // (see Stmt::Break / Stmt::Return for the balancing rationale).
             for _ in target_depth..ctx.try_depth {
-                ctx.block().call_void("js_try_end", &[]);
+                try_stmt::emit_try_end(ctx);
             }
             ctx.block().br(&cont_label);
             Ok(())
@@ -727,7 +728,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // e.g. a state-machine suspend `break`s out of the dispatch
             // loop's real try). See Stmt::Break for the rationale.
             for _ in target_depth..ctx.try_depth {
-                ctx.block().call_void("js_try_end", &[]);
+                try_stmt::emit_try_end(ctx);
             }
             ctx.block().br(&target);
             Ok(())
@@ -747,7 +748,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
                 };
             for _ in target_depth..ctx.try_depth {
-                ctx.block().call_void("js_try_end", &[]);
+                try_stmt::emit_try_end(ctx);
             }
             ctx.block().br(&target);
             Ok(())

@@ -76,6 +76,7 @@ pub extern "C" fn js_private_static_field_get(
         0,
         2,
         false,
+        0,
     );
     let name = intern_private_name(name).unwrap();
     static_private_field_key(class_id, name).get(receiver.get_nanbox_f64())
@@ -104,6 +105,7 @@ pub extern "C" fn js_private_static_field_set(
         0,
         3,
         false,
+        0,
     );
     let name = intern_private_name(name).unwrap();
     assert!(static_private_field_key(class_id, name)
@@ -307,16 +309,20 @@ fn take_private_field_owner(class_id: u32, name: &str, is_write: bool) -> Option
 
 pub(crate) struct PrivateHintBrandScope(usize);
 impl PrivateHintBrandScope {
+    /// A scope owned by the calling frame (`#[inline(always)]`: the frame
+    /// mark must be read in the owner).
+    #[inline(always)]
     pub(crate) fn new(owner: Option<u64>) -> Self {
-        let depth = private_lexical_brand_stack_savepoint();
+        let mark = crate::exception::frame_mark();
+        let depth = private_lexical_brand_depth();
         if let Some(owner) = owner {
-            private_lexical_brand_push(f64::from_bits(owner));
+            private_lexical_brand_push_at(mark, f64::from_bits(owner));
         }
         Self(depth)
     }
 }
 impl Drop for PrivateHintBrandScope {
     fn drop(&mut self) {
-        private_lexical_brand_stack_restore(self.0);
+        private_lexical_brand_truncate(self.0);
     }
 }

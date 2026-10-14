@@ -41,9 +41,20 @@ pub(crate) fn push_shared_super_called_slot(ctx: &mut FnCtx<'_>) {
         .expect("shared super binding slot");
     ctx.block()
         .call_void("js_derived_super_scope_push", &[(PTR, &slot)]);
+    // The binding belongs to this frame. Opened inside one of this
+    // function's handlers (an inlined constructor in a `try`), its pop must
+    // run on that handler's unwind edge too: the frame's own pad keeps the
+    // frame's entries (perry-runtime `exception::marks`).
+    let close = crate::stmt::eh_actions::push_close(ctx, "derived_super", |blk| {
+        blk.call_void("js_derived_super_scope_pop", &[]);
+    });
+    ctx.derived_super_closes.push(close);
 }
 
 pub(crate) fn pop_shared_super_called_slot(ctx: &mut FnCtx<'_>) {
+    if let Some(close) = ctx.derived_super_closes.pop() {
+        close.pop(ctx);
+    }
     ctx.block().call_void("js_derived_super_scope_pop", &[]);
     pop_super_called_slot(ctx);
 }

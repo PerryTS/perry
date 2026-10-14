@@ -1152,7 +1152,8 @@ js_dynamic_string_equals	Leaf	no
 js_dynamic_string_or_number_add	Reenters	yes
 js_dynamic_sub	Reenters	yes
 js_dynamic_ushr	Reenters	yes
-js_eh_try_push	Leaf	no
+js_eh_handle_height	Leaf	no
+js_eh_pad_enter	Leaf	no
 js_encode_uri	Reenters	yes
 js_encode_uri_component	Reenters	yes
 js_encoding_tag_from_value	Reenters	yes
@@ -1941,7 +1942,9 @@ js_new_function_construct_apply	Reenters	yes
 js_new_function_construct_site	Reenters	yes
 js_new_function_construct_with_new_target	Reenters	yes
 js_new_instance	Reenters	yes
+js_new_target_enter	Leaf	no
 js_new_target_get	Leaf	no
+js_new_target_leave	Leaf	no
 js_new_target_set	Leaf	no
 js_new_target_value	Leaf	no
 js_nm_enable_install_all	Leaf	no
@@ -3685,8 +3688,6 @@ js_transition_ic_note_hit	Leaf	no
 js_transition_ic_probe_report	Leaf	no
 js_transition_ic_spill_append	Reenters	yes
 js_trap_call	Reenters	yes
-js_try_end	Leaf	no
-js_try_push	Leaf	no
 js_tty_isatty	Leaf	no
 js_tty_read_stream_new	Reenters	yes
 js_tty_read_stream_set_raw_mode	Reenters	yes

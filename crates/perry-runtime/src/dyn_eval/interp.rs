@@ -335,8 +335,37 @@ fn interp_thunk_impl(
 
 /// Run one interpreted call: fresh scope chained to the defining env, params
 /// bound (destructuring + defaults), vars hoisted, function declarations
-/// hoisted, body executed.
+/// hoisted, body executed. An interpreter entry (`interp_entry`): a throw
+/// out of the call restores the interpreter's state before it propagates.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn invoke_interp_fn(
+    fn_id: f64,
+    def_env: f64,
+    this: f64,
+    global: f64,
+    intrinsics: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+    is_arrow: bool,
+    args: &[f64],
+) -> f64 {
+    super::interp_entry(|| {
+        invoke_interp_fn_entered(
+            fn_id,
+            def_env,
+            this,
+            global,
+            intrinsics,
+            strings_allowed,
+            wasm_allowed,
+            is_arrow,
+            args,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_interp_fn_entered(
     fn_id: f64,
     def_env: f64,
     this: f64,
@@ -1019,11 +1048,10 @@ fn exec_switch(ctx: &Ctx, sw: &ast::SwitchStmt, env_idx: usize) -> Flow {
 
 // ── try/catch/finally ──────────────────────────────────────────────────────
 
-/// Interpreted `try`: Rust-side setjmp landing pads through the runtime's
-/// exception machinery — the same idiom as the microtask pump
-/// (`promise/microtasks.rs`). Each setjmp stays in its frame for the whole
-/// protected region; `js_throw` restores the interpreter's rooted stack from
-/// the per-try-depth savepoint before the longjmp lands.
+/// Interpreted `try`: the protected region runs under a runtime trap (the
+/// landing-pad shim), the same idiom as the microtask pump
+/// (`promise/microtasks.rs`). When a throw lands, the interpreter's rooted
+/// stack and call depth are put back to the `try`'s entry state first.
 ///
 /// Structure: the try+catch pair runs under `exec_try_catch`; when a
 /// finalizer exists, a SECOND outer trap wraps that whole pair so `finally`
@@ -1033,12 +1061,14 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     let Some(finalizer) = &t.finalizer else {
         return exec_try_catch(ctx, t, env_idx);
     };
-    crate::exception::trap_push();
     // Runs under the trap shim (`exception::trap`). Both continuations below run
-    // after `js_try_end` pops this trap, so a throw out of the finalizer
-    // (or the rethrow) targets the enclosing handler — as before.
+    // after the trap returned, so a throw out of the finalizer (or the
+    // rethrow) targets the enclosing handler.
+    let saved = super::interp_savepoint();
     let outcome = crate::exception::trap(|| exec_try_catch(ctx, t, env_idx));
-    crate::exception::js_try_end();
+    if outcome.is_none() {
+        super::interp_restore(saved);
+    }
     match outcome {
         Some(flow) => match exec_block_scope(ctx, finalizer, env_idx) {
             Flow::Normal => flow,
@@ -1070,17 +1100,17 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
 /// The try-block + catch-handler pair (no finalizer handling).
 #[inline(never)]
 fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
-    crate::exception::trap_push();
     // Runs under the trap shim (`exception::trap`); the catch handler runs after
-    // `js_try_end`, so its own throws target the enclosing trap.
+    // the trap returned, so its own throws target the enclosing handler.
+    let saved = super::interp_savepoint();
     let outcome = crate::exception::trap(|| protected_block(ctx, t, env_idx));
-    crate::exception::js_try_end();
     if let Some(flow) = outcome {
         return flow;
     }
     // A throw from the try block landed in the trampoline. The pending
-    // exception is live; the interpreter savepoint has already restored the
-    // rooted stack + call depth to this try's entry state.
+    // exception is live (in the rooted TLS slot); put the rooted stack + call
+    // depth back to this try's entry state.
+    super::interp_restore(saved);
     let exc = crate::exception::js_get_exception();
     crate::exception::js_clear_exception();
 

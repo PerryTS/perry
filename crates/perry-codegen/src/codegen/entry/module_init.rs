@@ -372,6 +372,7 @@ pub(super) fn compile_module_init(
         imported_class_original_names: &cross_module.imported_class_original_names,
         interfaces: &cross_module.interfaces,
         try_depth: 0,
+        derived_super_closes: Vec::new(),
         pending_declares: Vec::new(),
         pending_helpers: Vec::new(),
         array_record_length_local: None,

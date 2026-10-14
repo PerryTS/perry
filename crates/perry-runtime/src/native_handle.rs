@@ -265,7 +265,6 @@ unsafe fn native_handle_new(
     if callbacks {
         (*handle).flags |= crate::native_payload::CALLBACK_STORAGE;
         (*(handle as *mut crate::native_payload::NativeCallbackCell)).callbacks = 0;
-        (*(handle as *mut crate::native_payload::NativeCallbackCell)).catch = std::ptr::null_mut();
     }
     (*handle)._pad1 = Default::default();
     (*handle).external_bytes = 0;

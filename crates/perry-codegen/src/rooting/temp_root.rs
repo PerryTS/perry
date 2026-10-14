@@ -87,6 +87,12 @@ pub(crate) struct TempRootPool {
     slots: Vec<(String, u32)>,
     /// Stack watermark: the number of live handles.
     active: usize,
+    /// FFI-fallback handles still open, in acquisition order, each with the
+    /// action scope that truncates it on an unwind edge to one of this
+    /// function's own handlers (`stmt::eh_actions`; the frame's own pad keeps
+    /// the frame's temp roots). Truncation is a stack cut, so releasing a
+    /// handle pops its scope and every scope above it.
+    ffi_open: Vec<(String, crate::stmt::eh_actions::EhActionScope)>,
     /// `Some(true)` — this function lowers temps onto frame-rooted allocas.
     /// `Some(false)` — shadow-stack emission is off for this build (
     /// `reserve_shadow_slot` returned `None`); every temp uses the runtime
@@ -175,8 +181,22 @@ pub(in crate::rooting) fn temp_root_push_i64(ctx: &mut FnCtx<'_>, value_i64: &st
     let bits = ctx
         .block()
         .or(I64, value_i64, &crate::nanbox::POINTER_TAG.to_string());
-    ctx.block()
-        .call(I32, "js_gc_temp_root_push", &[(I64, &bits)])
+    ffi_push(ctx, &bits)
+}
+
+/// The FFI-fallback push: `js_gc_temp_root_push`, plus the action scope that
+/// truncates the slot when a handler of this function catches a throw from
+/// inside the bracket.
+fn ffi_push(ctx: &mut FnCtx<'_>, bits: &str) -> String {
+    let idx = ctx
+        .block()
+        .call(I32, "js_gc_temp_root_push", &[(I64, bits)]);
+    let close_idx = idx.clone();
+    let close = crate::stmt::eh_actions::push_close(ctx, "temp_root", move |blk| {
+        blk.call_void("js_gc_temp_root_truncate", &[(I32, &close_idx)]);
+    });
+    ctx.temp_roots.ffi_open.push((idx.clone(), close));
+    idx
 }
 
 /// Push a NaN-boxed `double` temporary and return the slot-index register.
@@ -186,8 +206,7 @@ pub(in crate::rooting) fn temp_root_push_double(ctx: &mut FnCtx<'_>, value: &str
         return handle;
     }
     let bits = ctx.block().bitcast_double_to_i64(value);
-    ctx.block()
-        .call(I32, "js_gc_temp_root_push", &[(I64, &bits)])
+    ffi_push(ctx, &bits)
 }
 
 /// Re-read slot `idx` as a raw `i64`.
@@ -266,6 +285,19 @@ pub(in crate::rooting) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
             crate::expr::shadow_slot::emit_shadow_slot_clear(ctx, slot_idx);
         }
         return;
+    }
+    // Close the action scopes of `idx` and everything acquired above it (a
+    // repeated release finds nothing, like the runtime's `base < len` guard).
+    if let Some(pos) = ctx
+        .temp_roots
+        .ffi_open
+        .iter()
+        .position(|(handle, _)| handle == idx)
+    {
+        let released = ctx.temp_roots.ffi_open.split_off(pos);
+        for (_, close) in released.into_iter().rev() {
+            close.pop(ctx);
+        }
     }
     ctx.block()
         .call_void("js_gc_temp_root_truncate", &[(I32, idx)]);

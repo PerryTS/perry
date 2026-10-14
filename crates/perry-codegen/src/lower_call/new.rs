@@ -646,10 +646,9 @@ fn lower_new_impl_inner<'a>(
         // observes the same cell — `new Child()` where only `Base` reads
         // `new.target` would otherwise see `undefined` instead of `Child`.
         // A runtime parent is an unknown reader, so it also needs the cell.
-        // A throw inside the ctor skips this restore; the `new.target` catch
-        // savepoint (`exception/savepoints.rs`) replays the cell at the
-        // nearest enclosing JS `try`, so only a throw that no `try` catches
-        // leaves it set.
+        // A throw inside the ctor skips this restore; the bridge
+        // (`js_new_target_enter`) is restored by the landing pad that
+        // catches it, in this frame or further out.
         // #7664: `prev` is saved across the WHOLE constructor body, and the
         // cell it comes out of is a registered mutable root that evacuation
         // rewrites — so it goes in a temp root, not a bare register.

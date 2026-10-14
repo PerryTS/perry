@@ -77,7 +77,7 @@ fn flush_left_label(line: &str) -> Option<&str> {
 /// (`gc_call_effects::runtime_throws`, one solve over the linked archives; a
 /// symbol no table proves, such as user code, counts as throwing). That column
 /// is the only source of truth for runtime calls: there is no hand list of
-/// names behind it. The EH bookkeeping helpers (`js_eh_try_push`, `js_try_end`,
+/// names behind it. The EH bookkeeping helpers (`js_eh_pad_enter`, `js_catch_enter`,
 /// ...) and the GC entry points are in the table like any other symbol and are
 /// plain calls because the graph proves them `no`.
 ///
@@ -137,14 +137,15 @@ mod tests {
     fn eh_bookkeeping_gc_polls_and_intrinsics_stay_plain_calls() {
         // The names the deleted hand list carried: the table proves them.
         for name in [
-            "js_eh_try_push",
-            "js_try_end",
+            "js_eh_pad_enter",
             "js_get_exception",
             "js_clear_exception",
             "js_catch_enter",
             "js_has_exception",
             "js_derived_super_scope_push",
             "js_derived_super_scope_pop",
+            "js_new_target_enter",
+            "js_new_target_leave",
             "js_gc_safepoint",
             "js_gc_loop_safepoint",
             "js_shadow_slot_bind",

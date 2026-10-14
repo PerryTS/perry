@@ -1,5 +1,5 @@
 //! Instruction-count probe: compare `catch` with its `plain` loop control.
-use perry_runtime::exception::{catch_js_throw, js_eh_try_push, js_try_end};
+use perry_runtime::exception::catch_js_throw;
 use std::hint::black_box;
 
 fn main() {
@@ -12,14 +12,8 @@ fn main() {
     for i in 0..count {
         sum += match mode.as_str() {
             "catch" => catch_js_throw(|| black_box(i)).unwrap(),
-            "unwind" => {
-                js_eh_try_push();
-                let value = black_box(i);
-                js_try_end();
-                value
-            }
             "plain" => black_box(i),
-            _ => panic!("expected catch, unwind or plain"),
+            _ => panic!("expected catch or plain"),
         };
     }
     println!("{sum}");

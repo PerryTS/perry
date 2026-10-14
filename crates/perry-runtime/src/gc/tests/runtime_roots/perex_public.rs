@@ -32,8 +32,7 @@ pub(super) fn register_host_roots() {
         crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut,
     );
     gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
-    // PR #10564 review finding: the new_target savepoint in exception.rs is
-    // a second root for whatever a throw displaces. gc_init registers this in
+    // The pending exception is a root. gc_init registers this in
     // production; the isolation guard clears that registry too.
     gc_register_mutable_root_scanner(crate::exception::scan_exception_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);

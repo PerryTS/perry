@@ -355,10 +355,10 @@ pub fn enter_with(token: i64, store: f64) {
 
 /// Deferred context-restore action for a scope (`AsyncLocalStorage#run`/
 /// `#exit`, `AsyncResource#runInAsyncScope`) whose callback may throw.
-/// `js_throw` longjmps past the normal restore code, so each scope records
-/// its restore action here (tagged with the `try` depth at entry) and
-/// `js_throw` applies every action belonging to frames it is about to
-/// unwind past (#788, differential cases 10/25).
+/// A throw skips the normal restore code, so each scope records its restore
+/// action here (tagged with the frame mark of the scope's owner) and the
+/// catching landing pad applies every action belonging to frames the throw
+/// abandoned (#788, differential cases 10/25; `crate::exception::marks`).
 pub enum ContextGuardAction {
     /// `run()`: pop the one store slot the scope pushed for its handle.
     PopStore(AsyncLocalStoragePayload),
@@ -367,31 +367,43 @@ pub enum ContextGuardAction {
     /// `runInAsyncScope()` / snapshot trampoline: restore the full snapshot.
     RestoreSnapshot(AsyncContextSnapshot),
     /// Silently pop one async_hooks execution-id frame (no `after` hook
-    /// callbacks: arbitrary JS must not run mid-`js_throw`).
+    /// callbacks: arbitrary JS must not run in a landing pad).
     RestoreExecutionIds,
-}
-
-struct ContextGuard {
-    try_depth: usize,
-    action: ContextGuardAction,
+    /// Test witness: an action with no effect.
+    #[cfg(test)]
+    TestNoop,
 }
 
 thread_local! {
-    static CONTEXT_GUARDS: RefCell<Vec<ContextGuard>> = const { RefCell::new(Vec::new()) };
+    static CONTEXT_GUARDS: RefCell<crate::exception::CatchStack<ContextGuardAction>> =
+        const { RefCell::new(crate::exception::CatchStack::new()) };
 }
 
+/// Register `action` for the scope the calling frame owns (or, called from a
+/// helper the owner calls directly, the owner's: see
+/// `crate::exception::frame_mark`).
+#[inline(always)]
 pub fn push_context_guard(action: ContextGuardAction) {
-    let try_depth = crate::exception::current_try_depth();
+    push_context_guard_at(crate::exception::frame_mark(), action);
+}
+
+/// Register `action` for the scope owned by the frame `mark` names.
+pub fn push_context_guard_at(mark: usize, action: ContextGuardAction) {
     CONTEXT_GUARDS.with(|guards| {
-        guards.borrow_mut().push(ContextGuard { try_depth, action });
+        guards.borrow_mut().push(mark, action);
     });
+}
+
+#[cfg(test)]
+pub(crate) fn context_guard_depth() -> usize {
+    CONTEXT_GUARDS.with(|guards| guards.borrow().len())
 }
 
 /// Pop the most recent guard without applying it. The caller either applies
 /// it (normal scope exit) or discards it (the restore already happened by
 /// other means).
 pub fn pop_context_guard() -> Option<ContextGuardAction> {
-    CONTEXT_GUARDS.with(|guards| guards.borrow_mut().pop().map(|guard| guard.action))
+    CONTEXT_GUARDS.with(|guards| guards.borrow_mut().pop())
 }
 
 pub fn apply_context_guard(action: ContextGuardAction) {
@@ -400,24 +412,21 @@ pub fn apply_context_guard(action: ContextGuardAction) {
         ContextGuardAction::RestoreStores(lease, stores) => restore_store(lease.token(), stores),
         ContextGuardAction::RestoreSnapshot(snapshot) => restore_context(snapshot),
         ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
+        #[cfg(test)]
+        ContextGuardAction::TestNoop => {}
     }
 }
 
-/// Called from `js_throw` just before the longjmp: apply (newest-first) every
-/// guard registered at a `try` depth greater than the depth of the handler
-/// being jumped to — those scopes' normal restore code is being unwound past.
-/// Guards registered at or below the handler's depth belong to still-live
-/// scopes and stay.
-pub(crate) fn unwind_context_guards(target_try_depth: usize) {
+/// Called from a landing pad at stack pointer `sp`: apply (newest-first)
+/// every guard owned by a frame below `sp` — those scopes' normal restore
+/// code was abandoned by the throw. Guards of the catching frame and its
+/// callers belong to still-live scopes and stay.
+pub(crate) fn unwind_context_guards(sp: usize) {
     loop {
         let action = CONTEXT_GUARDS.with(|guards| {
             let mut guards = guards.borrow_mut();
-            match guards.last() {
-                Some(guard) if guard.try_depth > target_try_depth => {
-                    guards.pop().map(|guard| guard.action)
-                }
-                _ => None,
-            }
+            let keep = guards.unwound_len(sp);
+            (guards.len() > keep).then(|| guards.pop()).flatten()
         });
         match action {
             Some(action) => apply_context_guard(action),
@@ -426,11 +435,19 @@ pub(crate) fn unwind_context_guards(target_try_depth: usize) {
     }
 }
 
+pub(crate) fn check_context_guard_marks(sp: usize) {
+    CONTEXT_GUARDS.with(|guards| {
+        crate::exception::marks::check_marks(guards.borrow().marks(), sp, "async_context")
+    });
+}
+
 fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     CONTEXT_GUARDS.with(|guards| {
-        for guard in guards.borrow_mut().iter_mut() {
-            match &mut guard.action {
+        for action in guards.borrow_mut().iter_mut() {
+            match action {
                 ContextGuardAction::PopStore(_) | ContextGuardAction::RestoreExecutionIds => {}
+                #[cfg(test)]
+                ContextGuardAction::TestNoop => {}
                 ContextGuardAction::RestoreStores(_, stores) => {
                     if let Some((_, stores)) = stores {
                         for store in stores.iter_mut() {
@@ -458,9 +475,9 @@ pub fn clear_store(token: i64) {
             .iter()
             .any(|entry| Arc::as_ptr(&entry.token) as i64 == token)
     }) || CONTEXT_GUARDS.with(|guards| {
-        guards.borrow().iter().any(|guard| {
+        guards.borrow().iter().any(|action| {
             matches!(
-                &guard.action,
+                action,
                 ContextGuardAction::RestoreStores(saved_token, Some(_))
                     if saved_token.token() == token
             )

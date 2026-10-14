@@ -386,7 +386,6 @@ extern "C" fn outer_thunk(
     // Trap synchronous throws so the wrapper can reject the promise
     // instead of crashing the process. Mirrors the timer / microtask
     // runners' guard shape.
-    crate::exception::trap_push();
     let mut called = false;
     // Runs under the trap shim (`exception::trap`). Loop shape: the rejection
     // handler runs under the next `trap`, so a throw out of it (promise hooks
@@ -423,7 +422,6 @@ extern "C" fn outer_thunk(
             break;
         }
     }
-    crate::exception::js_try_end();
 
     nanbox_promise(promise_handle.get_raw_mut_ptr())
 }
@@ -526,7 +524,6 @@ extern "C" fn gkp_outer_thunk(
     combined = js_array_push_f64(combined, cb_value_handle.get_nanbox_f64());
     let combined_handle = scope.root_raw_mut_ptr(combined);
 
-    crate::exception::trap_push();
     let mut called = false;
     // Runs under the trap shim (`exception::trap`). Loop shape: the rejection
     // handler runs under the next `trap`, so a throw out of it (promise hooks
@@ -563,7 +560,6 @@ extern "C" fn gkp_outer_thunk(
             break;
         }
     }
-    crate::exception::js_try_end();
 
     nanbox_promise(promise_handle.get_raw_mut_ptr())
 }

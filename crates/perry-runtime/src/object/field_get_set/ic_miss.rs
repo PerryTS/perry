@@ -1667,15 +1667,20 @@ crate::perry_thread_local! {
     /// method function. Each vtable call pushes one entry, including an
     /// `undefined` delimiter for ordinary classes, so a nested call never
     /// inherits its caller's private-name environment by accident.
-    static PRIVATE_LEXICAL_BRAND_STACK: std::cell::RefCell<crate::exception::CatchStack<u64>> = const {
-        std::cell::RefCell::new(crate::exception::CatchStack::new(
-            crate::exception::catch_subsystem::PRIVATE_LEXICAL_BRAND,
-        ))
-    };
+    static PRIVATE_LEXICAL_BRAND_STACK: std::cell::RefCell<crate::exception::CatchStack<u64>> =
+        const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
 }
 
+/// Push the lexical brand for the calling frame's dispatch.
+#[inline(always)]
 pub(crate) fn private_lexical_brand_push(value: f64) {
-    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow_mut().push(value.to_bits()));
+    private_lexical_brand_push_at(crate::exception::frame_mark(), value);
+}
+
+/// Push the lexical brand for the dispatch the frame `mark` names.
+#[inline]
+pub(crate) fn private_lexical_brand_push_at(mark: usize, value: f64) {
+    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow_mut().push(mark, value.to_bits()));
 }
 
 pub(crate) fn private_lexical_brand_pop() {
@@ -1684,12 +1689,25 @@ pub(crate) fn private_lexical_brand_pop() {
     });
 }
 
-#[inline]
-pub(crate) fn private_lexical_brand_stack_savepoint() -> usize {
+pub(crate) fn private_lexical_brand_unwind_to(sp: usize) {
+    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| {
+        stack.borrow_mut().unwind_to(sp);
+    });
+}
+
+pub(crate) fn private_lexical_brand_check_marks(sp: usize) {
+    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| {
+        crate::exception::marks::check_marks(stack.borrow().marks(), sp, "private_lexical_brand")
+    });
+}
+
+pub(crate) fn private_lexical_brand_depth() -> usize {
     PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow().len())
 }
 
-pub(crate) fn private_lexical_brand_stack_restore(depth: usize) {
+/// Drop the brands at or above `depth` (a scope's own exit; idempotent after
+/// a landing pad already popped them).
+pub(crate) fn private_lexical_brand_truncate(depth: usize) {
     PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
@@ -2143,6 +2161,9 @@ pub extern "C" fn js_private_guard(
     }
     let field_name =
         unsafe { std::slice::from_raw_parts(_field_name_ptr, _field_name_len as usize) };
+    // The member hint belongs to the compiled frame's access sequence: the
+    // mark of this entry point lies just below that frame, so the frame's own
+    // landing pad drops a hint whose access a throw skipped.
     private_guard_checked(
         obj,
         brand_owner,
@@ -2151,6 +2172,7 @@ pub extern "C" fn js_private_guard(
         kind,
         op,
         true,
+        crate::exception::frame_mark(),
     )
 }
 
@@ -2165,6 +2187,7 @@ fn private_guard_checked(
     kind: u32,
     op: u32,
     record_hints: bool,
+    mark: usize,
 ) -> f64 {
     let is_static = op >= 2;
     let is_write = op & 1 != 0;
@@ -2185,6 +2208,7 @@ fn private_guard_checked(
                 is_write,
                 None,
                 record_hints,
+                mark,
             );
             return obj;
         }
@@ -2269,6 +2293,7 @@ fn private_guard_checked(
         is_write,
         access_owner,
         record_hints,
+        mark,
     );
     obj_root.get_nanbox_f64()
 }

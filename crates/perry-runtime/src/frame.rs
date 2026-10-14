@@ -51,7 +51,6 @@ fn next_frame_id() -> i64 {
 }
 
 fn with_frame_uncaught_trap<F: FnOnce()>(f: F) {
-    crate::exception::trap_push();
     let mut f = Some(f);
     // Runs under the trap shim (`exception::trap`); loop shape so the uncaught
     // path runs under the next `trap` — see `timer::with_timer_uncaught_trap`.
@@ -69,7 +68,6 @@ fn with_frame_uncaught_trap<F: FnOnce()>(f: F) {
             break;
         }
     }
-    crate::exception::js_try_end();
 }
 
 /// Register a one-shot frame callback. Returns an id usable with

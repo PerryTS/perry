@@ -175,6 +175,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
     module.declare_function("js_shadow_frame_push", I64, &[I32]);
     module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
+    // A landing pad of a function with a shadow frame makes that frame the
+    // top frame again (`LlFunction` emits it after `js_eh_pad_enter`).
+    module.declare_function("js_shadow_frame_restore_to", VOID, &[I64]);
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
     module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
     module.declare_function("js_gc_write_barriers_emitted", VOID, &[I32]);

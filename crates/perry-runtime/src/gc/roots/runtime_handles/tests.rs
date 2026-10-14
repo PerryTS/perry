@@ -110,7 +110,7 @@ fn ffi_indices_and_kind_checks_survive_growth_and_restore() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { root.get_nanbox_u64() }))
             .is_err()
     );
-    runtime_handle_stack_restore(base);
+    js_ffi_root_scope_exit(base);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { root.get_nanbox_f64() }))
             .is_err()

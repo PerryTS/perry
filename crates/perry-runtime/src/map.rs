@@ -17,7 +17,7 @@ crate::perry_thread_local! {
     /// Backing Maps whose `forEach` raw-entry walk is currently active. A
     /// compaction would move entries behind those cursors (#9082).
     static MAP_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
-        const { RefCell::new(crate::exception::CatchStack::new(crate::exception::catch_subsystem::MAP_FOREACH)) };
+        const { RefCell::new(crate::exception::CatchStack::new()) };
 }
 
 #[inline]
@@ -26,8 +26,15 @@ fn map_foreach_is_active(map: *const MapHeader) -> bool {
     MAP_FOREACH_STACK.with(|stack| stack.borrow().contains(&addr))
 }
 
+/// Open a walk owned by the calling frame (`#[inline(always)]`: the frame
+/// mark must be read in the walk's owner).
+#[inline(always)]
 fn map_foreach_enter(map: *const MapHeader) {
-    MAP_FOREACH_STACK.with(|stack| stack.borrow_mut().push(map as usize));
+    map_foreach_enter_at(crate::exception::frame_mark(), map);
+}
+
+fn map_foreach_enter_at(mark: usize, map: *const MapHeader) {
+    MAP_FOREACH_STACK.with(|stack| stack.borrow_mut().push(mark, map as usize));
 }
 
 /// Pop one completed walk. Returns true when this was the outermost walk of
@@ -42,13 +49,23 @@ fn map_foreach_leave(map: *const MapHeader) -> bool {
     })
 }
 
-#[inline]
-pub(crate) fn map_foreach_stack_savepoint() -> usize {
-    MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
+/// Landing pad at stack pointer `sp`: abandoned walks no longer inhibit
+/// compaction (#9082).
+pub(crate) fn map_foreach_unwind_to(sp: usize) {
+    MAP_FOREACH_STACK.with(|stack| {
+        stack.borrow_mut().unwind_to(sp);
+    });
 }
 
-pub(crate) fn map_foreach_stack_restore(depth: usize) {
-    MAP_FOREACH_STACK.with(|stack| stack.borrow_mut().truncate(depth));
+pub(crate) fn map_foreach_check_marks(sp: usize) {
+    MAP_FOREACH_STACK.with(|stack| {
+        crate::exception::marks::check_marks(stack.borrow().marks(), sp, "map_foreach")
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn map_foreach_depth() -> usize {
+    MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
 
 /// One squeeze of the entries buffer, as a raw-index cursor needs to see it:
@@ -3731,6 +3748,6 @@ mod tests {
 mod map_tombstone_tests;
 
 #[cfg(test)]
-pub(crate) fn test_enter_catch_foreach() {
-    map_foreach_enter(js_map_alloc(4));
+pub(crate) fn test_enter_catch_foreach(mark: usize) {
+    map_foreach_enter_at(mark, js_map_alloc(4));
 }

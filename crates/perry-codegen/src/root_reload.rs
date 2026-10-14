@@ -263,6 +263,8 @@ const NON_COLLECTING: &[&str] = &[
     "js_object_mark_class",
     "js_new_target_get",
     "js_new_target_set",
+    "js_new_target_enter",
+    "js_new_target_leave",
     "js_ctor_return_override",
 ];
 

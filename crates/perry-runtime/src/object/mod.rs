@@ -401,27 +401,33 @@ pub(crate) use descriptor_state::{
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
 };
+#[cfg(test)]
+pub(crate) use field_get_set::private_member_access_hints_depth;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
     class_object_default_to_string, class_object_registry_serves_static,
-    private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
-    private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
-    private_member_access_hints_restore, private_member_access_hints_savepoint,
+    private_evaluation_brand_value, private_lexical_brand_check_marks, private_lexical_brand_pop,
+    private_lexical_brand_push, private_lexical_brand_push_at, private_lexical_brand_unwind_to,
+    private_member_access_hints_check_marks, private_member_access_hints_unwind_to,
     scan_private_lexical_brand_roots_mut,
 };
-#[cfg(test)]
-pub(crate) use this_binding::js_derived_super_scope_push;
-pub(crate) use this_binding::SuperNewTargetScope;
+pub(crate) use field_get_set::{private_lexical_brand_depth, private_lexical_brand_truncate};
 pub(crate) use this_binding::{
-    derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
-    new_target_trap_restore, new_target_trap_savepoint, scan_dispatch_binding_roots_mut,
+    derived_super_binding_check_marks, derived_super_binding_len, derived_super_binding_truncate,
+    derived_super_binding_unwind_to, new_target_restore_after_throw,
+    scan_dispatch_binding_roots_mut, static_private_owner_check_marks,
     static_private_owner_current, static_private_owner_pop, static_private_owner_push,
-    static_private_owner_stack_restore, static_private_owner_stack_savepoint, static_this_arm,
-    static_this_arm_if_unarmed, static_this_disarm,
+    static_private_owner_push_at, static_private_owner_unwind_to, static_this_arm,
+    static_this_arm_if_unarmed, static_this_disarm, SuperNewTargetScope,
+};
+#[cfg(test)]
+pub(crate) use this_binding::{
+    derived_super_scope_push_at, static_private_owner_depth,
 };
 pub use this_binding::{
-    js_new_target_get, js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve, js_static_this_resolve_class, js_this_coerce_sloppy,
+    js_new_target_enter, js_new_target_get, js_new_target_leave, js_new_target_set,
+    js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
+    js_static_this_resolve_class, js_this_coerce_sloppy,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
@@ -729,10 +735,10 @@ pub(crate) use keys_lookup::*;
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
 #[cfg(test)]
-pub(crate) use call_method_depth::test_enter_catch_method;
+pub(crate) use call_method_depth::{call_method_depth, test_enter_catch_method};
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
-pub(crate) use call_method_depth::{call_method_depth_restore, call_method_depth_savepoint};
+pub(crate) use call_method_depth::{call_method_depth_check_marks, call_method_depth_unwind_to};
 pub(crate) use meta_accessors::*;
 
 /// Fast direct-mapped inline cache for class shape keys arrays.

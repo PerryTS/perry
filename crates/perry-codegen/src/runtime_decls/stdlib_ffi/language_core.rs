@@ -449,6 +449,10 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_ctor_return_override", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_new_target_get", DOUBLE, &[]);
     module.declare_function("js_new_target_set", DOUBLE, &[DOUBLE]);
+    // Compiled `new`: publish new.target around the constructor call; a
+    // landing pad restores the displaced value if the call throws.
+    module.declare_function("js_new_target_enter", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_new_target_leave", VOID, &[]);
     module.declare_function("js_derived_super_scope_push", VOID, &[PTR]);
     module.declare_function("js_derived_super_scope_pop", VOID, &[]);
     module.declare_function("js_derived_super_bind_current", DOUBLE, &[]);

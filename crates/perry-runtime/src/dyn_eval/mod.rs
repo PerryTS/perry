@@ -38,12 +38,15 @@
 //! (null-proto, chained through a non-identifier key), so closure captures
 //! keep whole scope chains alive through the normal object graph.
 //!
-//! Exception discipline: throws use the runtime's setjmp/longjmp machinery.
-//! Interpreted `try` installs a Rust-side landing pad with the same
-//! `crate::ffi::setjmp` idiom the microtask pump uses; a throw that escapes
-//! the interpreter entirely unwinds to the caller's compiled `try`. The
-//! roots stack is restored via a per-try-depth savepoint recorded by
-//! `js_try_push` (see `exception.rs`), mirroring the shadow-stack savepoint.
+//! Exception discipline: throws use the runtime's landing-pad transport.
+//! Interpreted `try` runs its protected block under a runtime trap
+//! (`crate::exception::trap`); a throw that escapes the interpreter entirely
+//! unwinds to the caller's handler. The interpreter keeps its own state
+//! balanced across that (design §1.1, "dyn_eval"): every entry into
+//! interpreted code ([`interp_entry`]) and every interpreted `try` records
+//! the rooted-stack length and call depth, and restores them when a throw
+//! lands, before it rethrows or handles it. Nothing is recorded by a
+//! compiled `try`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -89,8 +92,9 @@ thread_local! {
     /// The interpreter's rooted value stack. Every JSValue an interpreter
     /// frame holds across a potential allocation lives here; the GC scanner
     /// below marks and REWRITES the slots, so moving collections can't
-    /// invalidate interpreter state. Truncated on frame exit and restored
-    /// from the per-try-depth savepoint on caught throws.
+    /// invalidate interpreter state. Truncated on frame exit; a throw is
+    /// restored by the interpreter entry or interpreted `try` it lands in
+    /// ([`interp_entry`]).
     static ROOTS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 
     /// Interpreter call depth (native recursion guard — each interpreted
@@ -249,7 +253,6 @@ fn interp_safepoints_enabled() -> bool {
 /// Push a value onto the rooted stack; returns its index. The index stays
 /// valid until the owning frame truncates back past it.
 pub(crate) fn root_push(value: f64) -> usize {
-    crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::DYN_EVAL);
     ROOTS.with(|r| {
         let mut v = r.borrow_mut();
         v.push(value.to_bits());
@@ -283,12 +286,10 @@ pub(crate) fn roots_truncate(len: usize) {
 
 // ── exception-machinery integration ────────────────────────────────────────
 
-/// Savepoint recorded by `js_try_push` for every `try` block (compiled OR
-/// interpreted): packs the roots length and the interpreter call depth. A
-/// throw `longjmp`s past interpreter Rust frames without running their
-/// epilogues, so `js_throw` restores both from the savepoint of the catching
-/// `try` — exactly like the shadow-stack savepoint (#1830) and the
-/// method-depth savepoint (#5591).
+/// The interpreter's state at an entry or an interpreted `try`: the roots
+/// length and the call depth, packed. A throw skips the epilogues of the
+/// interpreter Rust frames it abandons, so the entry (or `try`) that catches
+/// it puts both back.
 #[inline]
 pub(crate) fn interp_savepoint() -> u64 {
     let len = roots_len() as u64;
@@ -303,8 +304,24 @@ pub(crate) fn interp_restore(savepoint: u64) {
     CALL_DEPTH.with(|c| c.set(depth));
 }
 
+/// Run interpreted code entered from outside the interpreter (an
+/// interpreted function call, a script, a direct eval). A throw that leaves
+/// `f` restores the interpreter's rooted stack and call depth to the entry
+/// state and is rethrown to the caller's handler.
+pub(crate) fn interp_entry<R>(f: impl FnOnce() -> R) -> R {
+    let saved = interp_savepoint();
+    match crate::exception::catch_js_throw(f) {
+        Ok(r) => r,
+        Err(err) => {
+            // The exception value is a plain f64 here; nothing below
+            // allocates before `js_throw` roots it again.
+            interp_restore(saved);
+            crate::exception::js_throw(err)
+        }
+    }
+}
+
 pub(crate) fn call_depth_enter() -> Result<(), ()> {
-    crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::DYN_EVAL);
     CALL_DEPTH.with(|c| {
         let d = c.get();
         if d >= MAX_INTERP_CALL_DEPTH {
@@ -491,6 +508,26 @@ pub(crate) fn eval_script_in_with_codegen(
 ) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    interp_entry(|| {
+        eval_script_in_entered(
+            source,
+            global_this,
+            intrinsics,
+            lexical_env,
+            strings_allowed,
+            wasm_allowed,
+        )
+    })
+}
+
+fn eval_script_in_entered(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    lexical_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
@@ -527,6 +564,29 @@ pub(crate) fn eval_direct_in(
 ) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
+    interp_entry(|| {
+        eval_direct_in_entered(
+            source,
+            global_this,
+            intrinsics,
+            caller_env,
+            caller_variable_env,
+            strings_allowed,
+            wasm_allowed,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn eval_direct_in_entered(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    caller_env: f64,
+    caller_variable_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+) -> f64 {
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);

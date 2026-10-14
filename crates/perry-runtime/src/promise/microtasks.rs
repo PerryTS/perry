@@ -321,12 +321,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     // promise context out of a thread-local set just before invoking the
     // callback, reject its `next`, and continue the loop.
     //
-    // The body runs under the trap shim (`exception::trap`, a landing pad).
-    // One `trap_push` for the whole drain, one `trap` per caught throw; the
-    // recovery itself runs inside the NEXT protected invocation, so a throw
-    // out of the rejection plumbing (promise hooks can run JS) still lands
-    // in a live trap.
-    crate::exception::trap_push();
+    // The body runs under the trap shim (`exception::trap`, a landing pad),
+    // one `trap` per caught throw; the recovery itself runs inside the NEXT
+    // protected invocation, so a throw out of the rejection plumbing (promise
+    // hooks can run JS) still lands in a live trap.
     let mut landed = false;
     loop {
         let completed =
@@ -334,14 +332,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         if completed.is_some() {
             break;
         }
-        // A JS throw landed in the trap's pad. The entry has no live catch
-        // region until `trap` runs again above, and nothing between here
-        // and there can throw (this assignment is all there is).
+        // A JS throw landed in the trap's pad. Nothing between here and the
+        // next `trap` above can throw (this assignment is all there is).
         // `landed` stays true for the rest of the drain: every re-entry
         // recovers before draining further.
         landed = true;
     }
-    crate::exception::js_try_end();
     crate::node_submodules::diagnostics_channel_drain_uncaught();
 
     finish_gc_boundary();
@@ -408,9 +404,8 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
         crate::builtins::restore_queued_microtask_contexts();
         // A microtask's callback threw and unwound here. Read the
         // exception, clear it, and reject the `next` promise of the
-        // microtask that was running. The try frame stays pushed — the
-        // caller re-arms it for the rest of the drain (js_try_end runs
-        // after the pump loop completes).
+        // microtask that was running. The caller runs this recovery under
+        // the next trap of the drain.
         let exc = crate::exception::js_get_exception();
         crate::exception::js_clear_exception();
         let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));

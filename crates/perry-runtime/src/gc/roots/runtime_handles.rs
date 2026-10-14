@@ -106,7 +106,11 @@ fn runtime_handle_stack() -> StackRef {
 ///
 /// Handles are mutable GC roots for values that live only in a runtime
 /// helper's local variables while that helper may allocate. Dropping the
-/// scope removes every handle created from it.
+/// scope removes every handle created from it. A throw that abandons the
+/// scope's frame skips the drop; the catching landing pad truncates the stack
+/// to the height its frame read when it entered its handler scope
+/// (`js_eh_handle_height`, `crate::exception`). Handles carry no frame mark:
+/// a push is a slot write and a length bump.
 pub struct RuntimeHandleScope {
     pub(super) base: usize,
     stack: StackRef,
@@ -156,6 +160,16 @@ impl RuntimeHandleScope {
         }
     }
 
+    /// Root the `new.target` value a call displaces (`previous`, read
+    /// before the caller published its own target). Read it back with
+    /// `get_nanbox_f64` to restore the cell after the call returns; if the
+    /// call throws instead, the landing pad that truncates past this handle
+    /// puts it back (`runtime_handle_stack_restore_to`).
+    #[inline]
+    pub(crate) fn root_new_target_save(&self, previous: f64) -> RuntimeHandle<'_> {
+        self.push(RuntimeHandleSlot::NewTargetSave(previous.to_bits()))
+    }
+
     #[inline]
     pub fn root_nanbox_f64<'scope>(&'scope self, value: f64) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
@@ -179,7 +193,7 @@ impl RuntimeHandleScope {
     ///
     /// # Safety
     /// The cell must remain allocated until this scope is dropped or restored
-    /// by the exception savepoint. Do not read a copied pointer across a call.
+    /// by a landing pad. Do not read a copied pointer across a call.
     pub(crate) unsafe fn root_nanbox_cell(
         &self,
         cell: &std::cell::UnsafeCell<f64>,
@@ -264,17 +278,64 @@ impl RuntimeHandleScope {
     }
 }
 
-/// Snapshot the transient-handle stack before a callback may throw across
-/// Rust frames. `longjmp` skips `RuntimeHandleScope::drop`, so exception
-/// unwinding restores this depth explicitly.
+/// The handle stack's height: what a handler scope reads on entry
+/// (`js_eh_handle_height`) and its landing pad restores.
 #[inline]
-pub(crate) fn runtime_handle_stack_savepoint() -> usize {
+pub(crate) fn runtime_handle_stack_len() -> usize {
     runtime_handle_stack().len()
 }
 
-/// Discard transient roots owned by Rust frames skipped by a JS exception.
-pub(crate) fn runtime_handle_stack_restore(savepoint: usize) {
-    runtime_handle_stack().truncate(savepoint);
+/// Landing pad: drop the handles of every frame the throw abandoned (their
+/// scopes' drops never run). `height` is what the catching activation read
+/// when it entered its handler scope; every handle above it was pushed after
+/// that point, by a frame the throw left, because a compiled frame owns no
+/// handles across its own code (a compiled `new` keeps a `new.target` save
+/// only for the duration of its call). Never grows the stack (`truncate`
+/// semantics).
+///
+/// The abandoned range may hold `new.target` saves; the oldest one holds the
+/// value the cell had before the first abandoned call replaced it, and the
+/// cell gets it back.
+pub(crate) fn runtime_handle_stack_restore_to(height: usize) {
+    let stack = runtime_handle_stack();
+    let oldest_new_target = (height..stack.len()).find_map(|index| match stack.get(index) {
+        Some(RuntimeHandleSlot::NewTargetSave(bits)) => Some(bits),
+        _ => None,
+    });
+    if let Some(bits) = oldest_new_target {
+        crate::object::new_target_restore_after_throw(bits);
+    }
+    if crate::exception::marks::eh_check_enabled() && height > stack.len() {
+        eprintln!(
+            "perry: FATAL: PERRY_EH_CHECK: a landing pad restores the runtime-handle stack to \
+             height {height}, above its top {}: the catching frame's saved height is stale",
+            stack.len()
+        );
+        std::process::abort();
+    }
+    stack.truncate(height);
+}
+
+/// Save the displaced `new.target` value `previous_bits` for the duration of
+/// a compiled `new` (`js_new_target_enter`).
+#[inline]
+pub(crate) fn new_target_save_push(previous_bits: u64) {
+    let slot = RuntimeHandleSlot::NewTargetSave(previous_bits);
+    runtime_handle_slot_write_barrier(slot);
+    runtime_handle_stack().push(slot);
+}
+
+/// End the innermost save (a compiled `new` after its call returned): pop it
+/// and answer the displaced value as the collector last rewrote it.
+#[inline]
+pub(crate) fn new_target_save_pop_top() -> Option<u64> {
+    let stack = runtime_handle_stack();
+    let index = stack.len().checked_sub(1)?;
+    let Some(RuntimeHandleSlot::NewTargetSave(bits)) = stack.get(index) else {
+        return None;
+    };
+    stack.truncate(index);
+    Some(bits)
 }
 
 #[inline(always)]
@@ -291,7 +352,9 @@ fn runtime_handle_slot_write_barrier(slot: RuntimeHandleSlot) {
 #[inline(never)]
 fn runtime_handle_slot_write_barrier_active(slot: RuntimeHandleSlot) {
     match slot {
-        RuntimeHandleSlot::Nanbox(bits) => runtime_write_barrier_root_nanbox(bits),
+        RuntimeHandleSlot::Nanbox(bits) | RuntimeHandleSlot::NewTargetSave(bits) => {
+            runtime_write_barrier_root_nanbox(bits)
+        }
         RuntimeHandleSlot::NanboxCell(address) => unsafe {
             runtime_write_barrier_root_nanbox((address as *const u64).read())
         },
@@ -499,7 +562,7 @@ impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub fn get_nanbox_u64(&self) -> u64 {
         self.with_slot(|slot| match slot {
-            RuntimeHandleSlot::Nanbox(bits) => bits,
+            RuntimeHandleSlot::Nanbox(bits) | RuntimeHandleSlot::NewTargetSave(bits) => bits,
             RuntimeHandleSlot::NanboxCell(address) => unsafe { (address as *const u64).read() },
             _ => handle_kind_mismatch("NaN-boxed value"),
         })
@@ -567,6 +630,13 @@ fn visit_runtime_handle_slot(stack: StackRef, index: usize, visitor: &mut Runtim
     };
     let rewritten = match &mut slot {
         RuntimeHandleSlot::Nanbox(bits) => visitor.visit_nanbox_u64_slot(bits),
+        RuntimeHandleSlot::NewTargetSave(bits) => {
+            #[cfg(test)]
+            if crate::native_payload::callback_sabotage("new_target_bridge_trace") {
+                return;
+            }
+            visitor.visit_nanbox_u64_slot(bits)
+        }
         RuntimeHandleSlot::NanboxCell(address) => unsafe {
             visitor.visit_nanbox_u64_slot(&mut *(*address as *mut u64))
         },
@@ -624,8 +694,8 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
 // pump. These entry points let FFI code park such copies in slots the
 // existing runtime-handle scanner marks AND rewrites, then re-read the
 // post-collection values. Scopes must strictly nest: `enter` snapshots the
-// depth, `exit` truncates back to it (the JS-exception savepoint machinery
-// above already restores this stack across throws).
+// depth, `exit` truncates back to it. A throw that abandons the scope's frame
+// is restored by the catching landing pad (`runtime_handle_stack_restore_to`).
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_scope_enter() -> usize {

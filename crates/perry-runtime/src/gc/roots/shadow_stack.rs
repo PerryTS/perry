@@ -77,19 +77,12 @@ impl ShadowStackState {
 // # Why `perry_thread_local!` only on Apple aarch64
 //
 // Until #10619, `SHADOW` was unconditionally a raw `thread_local!`: every
-// `try`/`catch` paid this exact resolution once per entry, through
-// `frame_root_savepoint()` — and `SHADOW_FRAMES` (the latch that lets most
-// other savepoint fields skip their own thread-local read, see
-// `crate::exception::savepoints`) is set by the FIRST shadow-frame push
-// anywhere in the process, which for real programs is essentially
-// "immediately" (any function with a pointer-typed local pushes one, and a
-// caught exception's own binding needs a slot). So the latch does not make
-// this read rare in practice, and profiling a `try`/`catch` loop
-// (`node --experimental-strip-types`-verified against `test-files/`) showed
-// it as a genuine leaf `_tlv_get_addr` call, ~6% of total instructions
-// retired per non-throwing `try` entry — the one savepoint field NOT already
-// routed through `tls_hot`'s cache (`EXCEPTION_STATE`, `CALL_METHOD_DEPTH`
-// and the named `runtime_handle_stack`/`temp_roots` fields all were).
+// `try`/`catch` paid this exact resolution once per entry, through the
+// shadow-frame savepoint a `try` used to capture. Profiling a `try`/`catch`
+// loop showed it as a genuine leaf `_tlv_get_addr` call, ~6% of total
+// instructions retired per non-throwing `try` entry. (Since ehfree slice 1 a
+// `try` captures nothing; the hot shadow paths are frame push/pop and slot
+// stores.)
 //
 // But that fast path is itself Darwin-aarch64-specific: `tls_hot.rs`'s own
 // module docs say the published-cache shortcut only exists there, and
@@ -201,9 +194,6 @@ thread_local! {
 #[cold]
 #[inline(never)]
 fn grow_for(s: &mut ShadowStackState, need: usize) {
-    // Before the first frame can exist on any thread: exception savepoints
-    // stop assuming the idle shadow state from here on.
-    crate::exception::note_catch_subsystem_used(crate::exception::catch_subsystem::SHADOW_FRAMES);
     // Arm the thread-exit free the first time this thread allocates.
     let _ = SHADOW_BUFFER_GUARD.try_with(|_| ());
     let want = s
@@ -642,71 +632,44 @@ pub(crate) fn shadow_stack_has_active_frame() -> bool {
     SHADOW.with(|cell| unsafe { (*cell.get()).frame_top != usize::MAX })
 }
 
-/// A snapshot of the shadow stack's depth at a point in time. Captured
-/// when a `try` block is established and replayed on the exception
-/// unwind path (issue #1830).
+/// A snapshot of the shadow stack's depth at a point in time (issue #1830).
 ///
-/// Why this exists: exception unwinding uses `longjmp` (see
-/// `crate::exception`), which restores the native SP/registers to the
-/// `setjmp` site WITHOUT running the epilogues of the functions being
-/// unwound past. Those functions emitted `js_shadow_frame_pop` before
-/// their `ret`, so on a normal return the shadow stack stays balanced —
-/// but a `longjmp` jumps straight over every skipped pop. The shadow
-/// stack's `frame_top` is then left pointing at the deepest (now-dead)
-/// callee frame. Until the unwinding function eventually returns, any GC
-/// that scans roots (`visit_shadow_stack_root_slots`) would walk those
-/// orphaned frames, reading — and, on the copying/evacuating path,
-/// *writing back into* — bound slot pointers that point into stack memory
-/// that has already been unwound and is being reused by the catch body.
+/// A throw skips the `js_shadow_frame_pop` every abandoned compiled frame
+/// would have run before its `ret`. The shadow stack's `frame_top` would
+/// then keep pointing at the deepest (now-dead) callee frame, and any GC that
+/// scans roots (`visit_shadow_stack_root_slots`) would walk those orphaned
+/// frames, reading — and, on the copying/evacuating path, *writing back
+/// into* — bound slot pointers into stack memory that the catch body reuses.
 ///
-/// The same reasoning applies to the temp-root stack (#6951): generated code
-/// pushes an expression temporary, evaluates something that throws, and never
-/// reaches its `js_gc_temp_root_truncate`. That depth is therefore recorded
-/// here and restored with the frames, so one savepoint covers both precise
-/// root stacks and `crate::exception` needs no separate hook.
+/// A shadow frame is restored by the frame that holds its handle: a compiled
+/// frame's landing pad calls [`js_shadow_frame_restore_to`] with its own
+/// handle, and a runtime trap (`crate::exception`) keeps this snapshot of the
+/// stack it was entered with. The temp-root stack is not part of it: its
+/// slots carry frame marks (`crate::exception::marks`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrameRootSavepoint {
     frame_top: usize,
     len: usize,
-    temp_roots: usize,
 }
 
-/// Capture the current shadow-stack depth so it can be restored after a
-/// non-local exit. Call at `js_try_push` time, before the protected
-/// region can push any callee frames.
+/// Capture the current shadow-stack depth.
 #[inline]
 pub(crate) fn frame_root_savepoint() -> FrameRootSavepoint {
-    let temp_roots = super::temp_roots::temp_root_depth();
-    // Every frame push first reserves room through `grow_for`, which latches
-    // the subsystem. Until then each thread's state is the const initializer,
-    // so the (out-of-line on Darwin) thread-local read can be skipped.
-    if !crate::exception::catch_subsystem_used(crate::exception::catch_subsystem::SHADOW_FRAMES) {
-        return FrameRootSavepoint {
-            frame_top: usize::MAX,
-            len: 0,
-            temp_roots,
-        };
-    }
     SHADOW.with(|cell| unsafe {
         let s = &*cell.get();
         FrameRootSavepoint {
             frame_top: s.frame_top,
             len: s.len,
-            temp_roots,
         }
     })
 }
 
 /// Restore the shadow stack to a previously-captured savepoint, dropping
-/// any frames pushed after it. Called on the exception unwind path
-/// (before `longjmp`) so the orphaned shadow frames of the functions
-/// being unwound past are never scanned by a later GC (issue #1830).
-///
-/// A `longjmp` can only have *added* frames relative to the savepoint
-/// (the protected region runs strictly deeper than the `try`), so the
-/// saved length is `<=` the current length in the well-formed case. The
-/// `<=` guard is purely defensive against a corrupted savepoint; we
-/// always reset `frame_top` because it is the value the scanner reads.
+/// any frames pushed after it. A throw can only have *added* frames
+/// relative to the savepoint (the protected region runs strictly deeper),
+/// so the saved length is `<=` the current length in the well-formed case;
+/// the guard is defensive. `frame_top` is always reset because it is the
+/// value the scanner reads.
 pub(crate) fn frame_root_restore(sp: FrameRootSavepoint) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
@@ -715,5 +678,25 @@ pub(crate) fn frame_root_restore(sp: FrameRootSavepoint) {
         }
         s.frame_top = sp.frame_top;
     });
-    super::temp_roots::temp_roots_restore(sp.temp_roots);
+}
+
+/// A compiled frame's landing pad: make the frame whose handle (the value
+/// `js_shadow_frame_push` returned) is `frame_handle` the top frame again,
+/// dropping every frame its abandoned callees pushed. Idempotent. A
+/// malformed handle is skipped, like [`js_shadow_frame_pop`] skips one.
+#[no_mangle]
+pub extern "C" fn js_shadow_frame_restore_to(frame_handle: u64) {
+    SHADOW.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        let base = frame_handle as usize;
+        if base >= s.len {
+            return;
+        }
+        let slots = (*s.ptr.add(base)).meta;
+        let end = base + SHADOW_STACK_HEADER_SLOTS + slots;
+        if end <= s.len {
+            s.set_slots_len(end);
+        }
+        s.frame_top = base + SHADOW_STACK_HEADER_SLOTS;
+    });
 }

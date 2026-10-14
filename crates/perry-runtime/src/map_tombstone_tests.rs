@@ -99,14 +99,14 @@ fn foreach_survives_delete_compaction_threshold() {
 #[test]
 fn caught_throw_restores_map_foreach_compaction_state() {
     let map = js_map_alloc(4);
-    let base = map_foreach_stack_savepoint();
-    let _ = crate::exception::js_try_push();
+    let base = map_foreach_depth();
+    let here = crate::exception::frame_mark();
     map_foreach_enter(map);
     assert!(map_foreach_is_active(map));
-    crate::exception::test_unwind_innermost_shadow_restore();
-    assert_eq!(map_foreach_stack_savepoint(), base);
+    // The restore of a landing pad in this frame's caller.
+    map_foreach_unwind_to(here + 1);
+    assert_eq!(map_foreach_depth(), base);
     assert!(!map_foreach_is_active(map));
-    crate::exception::js_try_end();
 }
 
 #[test]

@@ -425,7 +425,7 @@ fn test_runtime_root_visitor_marks_and_rewrites_nanbox_slot() {
 
 #[test]
 fn test_prototype_resolution_stack_rewrites_owner_for_gc_reentry() {
-    let base_depth = crate::object::prototype_chain::resolution_stack_savepoint();
+    let here = crate::exception::frame_mark();
     let nursery_owner = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let valid_ptrs = build_valid_pointer_set();
     let relocated_owner = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
@@ -439,6 +439,7 @@ fn test_prototype_resolution_stack_rewrites_owner_for_gc_reentry() {
     assert!(
         crate::object::prototype_chain::test_resolution_stack_enter_and_forget(
             nursery_owner as usize,
+            here,
         )
     );
     crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut(
@@ -447,8 +448,9 @@ fn test_prototype_resolution_stack_rewrites_owner_for_gc_reentry() {
     let reentry_was_blocked =
         !crate::object::prototype_chain::test_resolution_stack_enter_and_forget(
             relocated_owner as usize,
+            here,
         );
-    crate::object::prototype_chain::resolution_stack_restore(base_depth);
+    crate::object::prototype_chain::resolution_stack_unwind_to(here + 1);
 
     assert!(
         reentry_was_blocked,

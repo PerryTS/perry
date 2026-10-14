@@ -845,28 +845,35 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_throw", VOID, &[DOUBLE]);
 
     // Exception handling: invoke/landingpad-based try/catch (#7302).
-    // js_eh_try_push() arms a handler (savepoint recording).
-    // js_try_end() pops the try depth (no return value).
+    // Entering a `try` costs nothing (ehfree slice 1): every landing pad
+    // first calls js_eh_pad_enter(llvm.stacksave(), handle height), which
+    // restores the runtime's managed stacks to the catching frame: by frame
+    // marks, and the runtime-handle stack to the height the scope read with
+    // js_eh_handle_height() when it was entered.
     // js_get_exception() returns the thrown NaN-boxed value.
     // js_clear_exception() resets the exception state.
     // js_has_exception() returns i32 (1 if exception is active, 0 otherwise).
     // js_enter_finally() / js_leave_finally() bracket finally blocks.
-    // Invoke-EH (#7302): handlers are armed by js_eh_try_push (savepoints
-    // only, no jmp_buf) and entered through landing pads. One shape on every
-    // target, windows-msvc included — the SEH/catchpad variant was removed in
-    // #7354 because funclet EH cannot coexist with rewrite-statepoints-for-gc
-    // (see `stmt/try_stmt.rs::emit_eh_dispatch`).
-    module.declare_function("js_eh_try_push", VOID, &[]);
+    // One shape on every native target, windows-msvc included — the
+    // SEH/catchpad variant was removed in #7354 because funclet EH cannot
+    // coexist with rewrite-statepoints-for-gc (see
+    // `stmt/try_stmt.rs::emit_eh_dispatch`). WASI keeps setjmp transport:
+    // js_try_push(frame sp) arms a handler, js_try_end() pops it.
+    module.declare_function("js_eh_pad_enter", VOID, &[PTR, I64]);
+    if !module.target_triple.starts_with("wasm32") {
+        // A handler scope's runtime-handle height (`stmt/try_stmt.rs`).
+        module.declare_function("js_eh_handle_height", I64, &[]);
+    }
     if module.target_triple.starts_with("wasm32") {
-        module.declare_function("js_try_push", PTR, &[]);
+        module.declare_function("js_try_push", PTR, &[PTR]);
         module.declare_function("setjmp", I32, &[PTR]);
+        module.declare_function("js_try_end", VOID, &[]);
     }
     module.declare_personality();
-    module.declare_function("js_try_end", VOID, &[]);
     module.declare_function("js_get_exception", DOUBLE, &[]);
     module.declare_function("js_clear_exception", VOID, &[]);
-    // A catch entry's `js_try_end` + `js_get_exception` + `js_clear_exception`
-    // as one call (`stmt/try_stmt.rs`).
+    // A catch entry's `js_get_exception` + `js_clear_exception` as one call
+    // (`stmt/try_stmt.rs`; on WASI it also pops the setjmp handler).
     module.declare_function("js_catch_enter", DOUBLE, &[]);
     module.declare_function("js_has_exception", I32, &[]);
     module.declare_function("js_enter_finally", VOID, &[]);

@@ -86,7 +86,7 @@ pub(crate) unsafe fn prime(
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
         || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
         || crate::object::field_get_set::accessor_receiver_override_armed()
-        || crate::object::prototype_chain::resolution_stack_savepoint() != 0
+        || crate::object::prototype_chain::resolution_stack_depth() != 0
     {
         return None;
     }

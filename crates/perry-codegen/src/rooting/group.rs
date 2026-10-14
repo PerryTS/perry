@@ -430,37 +430,23 @@ pub(crate) fn open_rooted_group<'a>(capacity: usize) -> RootedGroup<'a> {
     RootedGroup::new(capacity)
 }
 
-/// The `new.target` cell's saved previous value (#7664).
+/// An open `new.target` bridge around a constructor call (#7664, ehfree
+/// slice 1).
 ///
-/// The cell is a registered mutable root — `scan_current_new_target_root_mut`,
-/// `gc/mod.rs` — so an evacuating cycle inside the constructor rewrites it and
-/// a register saved beforehand names from-space. The RUNTIME's own construct
-/// paths have always rooted their `prev_new_target`
-/// (`object/class_registry/construct.rs`, `scope.root_nanbox_f64`); the
-/// generated `new` path saved it into a bare SSA register across the whole
-/// constructor body, which is #7226's `prev_this` bug for `new.target`.
-///
-/// Re-reading the cell instead of rooting it would be the wrong repair, and for
-/// the reason `operand_is_reloadable` states: `js_new_target_set` has already
-/// overwritten it with THIS class's ref, so a re-read returns the new value,
-/// not the saved one. Only a root gives both a rewritten location and the value
-/// the save observed.
-pub(crate) struct NewTargetSave {
-    slot: RootedSlot,
-}
+/// `js_new_target_enter` publishes the target and saves the value it
+/// displaced on the runtime-handle stack, which is a GC root (an evacuating
+/// cycle inside the constructor rewrites it there): when the constructor
+/// throws, the catching landing pad — this function's own, or one further
+/// out — truncates the handle stack past the save and puts the displaced
+/// value back. `js_new_target_leave` ends the bridge after a normal return.
+/// Nothing about the displaced value lives in this frame.
+pub(crate) struct NewTargetSave;
 
-/// Set `new.target` to `new_target` and root the value it displaced.
+/// Set `new.target` to `new_target` for the call that follows.
 pub(crate) fn new_target_save(ctx: &mut FnCtx<'_>, new_target: &str) -> NewTargetSave {
-    let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
-    let idx = temp_root::temp_root_push_double(ctx, &prev);
     ctx.block()
-        .call(DOUBLE, "js_new_target_set", &[(DOUBLE, new_target)]);
-    NewTargetSave {
-        slot: RootedSlot {
-            idx,
-            repr: Repr::Boxed,
-        },
-    }
+        .call(DOUBLE, "js_new_target_enter", &[(DOUBLE, new_target)]);
+    NewTargetSave
 }
 
 /// Publish an inlined constructor's lexical target around a runtime super call.
@@ -472,19 +458,12 @@ pub(crate) fn new_target_save_for_super(ctx: &mut FnCtx<'_>) -> Option<NewTarget
     Some(new_target_save(ctx, &target))
 }
 
-/// Restore the saved `new.target`, re-read from its root.
+/// End the bridge: restore the `new.target` the save displaced.
 ///
-/// Takes the save by REFERENCE, and does not release, which is forced by the
-/// caller. `new.rs` emits
-/// this restore on several exits from one save, and its slot is cut by the
-/// enclosing expression scope (`temp_root_scope_begin`/`temp_root_scope_end`,
-/// which that module already opens precisely because its ~20 return paths make
-/// per-path releases the thing that gets missed, #6969). A release here would
-/// be a stack cut on one of those paths only.
-pub(crate) fn new_target_restore(ctx: &mut FnCtx<'_>, save: &NewTargetSave) {
-    let prev = read_slot(ctx, &save.slot);
-    ctx.block()
-        .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &prev)]);
+/// Takes the save by REFERENCE: `new.rs` emits this restore on several
+/// mutually exclusive exits from one save, and each path runs exactly one.
+pub(crate) fn new_target_restore(ctx: &mut FnCtx<'_>, _save: &NewTargetSave) {
+    ctx.block().call_void("js_new_target_leave", &[]);
 }
 
 /// A GC-managed value that generated code keeps **updating** while it lowers

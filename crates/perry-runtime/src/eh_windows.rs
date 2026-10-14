@@ -34,8 +34,8 @@
 //! MSVC x64 unwind tables (.pdata/.xdata) are mandatory for all functions, so
 //! the cross-Rust-frame story needs no `force-unwind-tables` analogue: the
 //! dispatcher steps runtime helper frames unconditionally, running no Rust
-//! cleanups under panic=abort — the longjmp-equivalent semantics the savepoint
-//! restores in `exception.rs` assume.
+//! cleanups under panic=abort; the catching pad restores the managed state
+//! those frames held (`exception::js_eh_pad_enter`).
 
 use crate::eh_lsda::find_landing_pad_in_lsda;
 use core::ffi::c_void;
@@ -64,9 +64,10 @@ unsafe extern "system" {
     ) -> !;
 }
 
-/// Raise the Perry SEH exception. Returns only if the exception came back
-/// (no handler accepted it and something continued execution) — the caller
-/// treats that as transport failure and aborts loudly.
+/// Raise the Perry SEH exception. With no handler, the top-level filter
+/// ([`perry_uncaught_filter`]) ends the process before this returns; it
+/// returns only if something continued execution — the caller treats that as
+/// transport failure and aborts loudly.
 pub(crate) fn raise_perry_exception() -> i32 {
     crate::gc::allocation_pacing::forbid_throw_in_collection();
     unsafe {
@@ -78,6 +79,61 @@ pub(crate) fn raise_perry_exception() -> i32 {
         );
     }
     -1
+}
+
+// ---------------------------------------------------------------------------
+// Uncaught throws.
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+struct ExceptionPointers {
+    record: *mut ExceptionRecord,
+    context: *mut c_void,
+}
+
+type TopLevelFilter = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
+
+unsafe extern "system" {
+    fn SetUnhandledExceptionFilter(filter: Option<TopLevelFilter>) -> Option<TopLevelFilter>;
+}
+
+/// `EXCEPTION_CONTINUE_SEARCH` as a top-level filter answers it (the
+/// `ExceptionDisposition` constant above is a different enumeration).
+const FILTER_CONTINUE_SEARCH: i32 = 0;
+
+static PREVIOUS_FILTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The uncaught path on Windows. A Perry throw that no frame's language
+/// handler accepted reaches the thread's top-level filter with the stack
+/// still intact — the counterpart of `_URC_END_OF_STACK` on Itanium targets.
+/// The filter runs the same uncaught sequence (exit listeners, report,
+/// exit). Every other exception goes to the filter that was installed
+/// before Perry's.
+unsafe extern "system" fn perry_uncaught_filter(info: *mut ExceptionPointers) -> i32 {
+    if !info.is_null()
+        && !(*info).record.is_null()
+        && (*(*info).record).exception_code == PERRY_SEH_CODE
+    {
+        crate::exception::exit_uncaught_pending();
+    }
+    let previous = PREVIOUS_FILTER.load(std::sync::atomic::Ordering::Acquire);
+    if previous == 0 {
+        return FILTER_CONTINUE_SEARCH;
+    }
+    // SAFETY: only `SetUnhandledExceptionFilter`'s previous value is stored.
+    let previous: TopLevelFilter = std::mem::transmute(previous);
+    previous(info)
+}
+
+/// Install [`perry_uncaught_filter`] once, before the first raise.
+pub(crate) fn install_uncaught_filter_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let previous = SetUnhandledExceptionFilter(Some(perry_uncaught_filter));
+        if let Some(previous) = previous {
+            PREVIOUS_FILTER.store(previous as usize, std::sync::atomic::Ordering::Release);
+        }
+    });
 }
 
 #[repr(C)]

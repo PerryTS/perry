@@ -1146,24 +1146,9 @@ impl NativeCallGuard {
     /// GC root scopes; callback argument conversion may add those scopes.
     #[inline]
     pub unsafe fn call<R>(self, f: impl FnOnce() -> R) -> (R, Result<(), CallEnd>) {
-        let cell = self.link.0 as *mut NativeHandleHeader;
-        let mut catch = crate::exception::NativeCatch::new();
-        if (*cell).flags & CALLBACK_STORAGE == 0 {
-            let value = f();
-            return (value, self.finish());
-        }
-        let extended = cell as *mut NativeCallbackCell;
-        let previous = (*extended).catch;
-        (*extended).catch = &mut catch;
+        // Each callback runs under its own trap (`catch_native_callback`),
+        // so nothing is armed for the call as a whole.
         let value = f();
-        catch.finish();
-        #[cfg(test)]
-        let previous = if callback_sabotage("catch_reentry") {
-            std::ptr::null_mut()
-        } else {
-            previous
-        };
-        (*extended).catch = previous;
         (value, self.finish())
     }
 
@@ -1489,7 +1474,6 @@ pub unsafe fn call_from_native(
         ));
     }
     match crate::exception::catch_native_callback(
-        callback_slots::catch_from_cell(cell),
         callee.get_nanbox_f64(),
         this.get_nanbox_f64(),
         &args,
@@ -1580,12 +1564,7 @@ unsafe fn call_open_link(
             args.len(),
         ));
     }
-    match crate::exception::catch_native_callback(
-        callback_slots::catch_from_cell(cell),
-        callee,
-        this,
-        args,
-    ) {
+    match crate::exception::catch_native_callback(callee, this, args) {
         Ok(value) => Ok(value),
         Err(err) => {
             let _ = set_pending_exception(f64::from_bits((*cell).owner), err);

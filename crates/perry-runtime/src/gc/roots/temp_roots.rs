@@ -37,9 +37,11 @@
 //!
 //! `js_gc_temp_root_truncate(base)` drops `base` and everything above it, so a
 //! missed truncate is bounded by the next one rather than leaking forever.
-//! Non-local exits are covered too: [`super::shadow_stack::FrameRootSavepoint`]
-//! carries the temp-root depth, so the `longjmp` unwind that already restores
-//! the shadow stack (`crate::exception`) restores this stack with it.
+//! Non-local exits are covered too: every slot carries the frame mark of the
+//! frame that pushed it (`crate::exception::marks`), and the catching landing
+//! pad drops the slots of every frame the throw abandoned. A compiled frame
+//! that catches its own throw closes its own open slots with a pad action
+//! (perry-codegen `stmt::eh_actions`).
 
 use super::*;
 
@@ -52,8 +54,16 @@ thread_local! {
     /// compiled code on this thread and from GC scanner/rewriter passes, and
     /// the two never overlap (GC is stop-the-world relative to this TLS, and
     /// the scanner allocates nothing).
-    pub(crate) static TEMP_ROOTS: std::cell::UnsafeCell<Vec<u64>> =
+    pub(crate) static TEMP_ROOTS: std::cell::UnsafeCell<Vec<TempRoot>> =
         std::cell::UnsafeCell::new(Vec::with_capacity(TEMP_ROOT_RESERVE));
+}
+
+/// One temp-root slot: the rooted JSValue word and the frame mark of its
+/// owner.
+#[derive(Clone, Copy)]
+pub(crate) struct TempRoot {
+    value: u64,
+    mark: usize,
 }
 
 // --- #7469 hot-TLS address provider. See `crate::tls_hot`. ---
@@ -72,8 +82,8 @@ pub(crate) fn temp_roots_hot_addr() -> *mut u8 {
 /// times per temporary: 144 of the 653 attributed `_tlv_get_addr` samples on
 /// `churn.ts`.
 #[inline(always)]
-fn hot_temp_roots() -> *mut Vec<u64> {
-    crate::tls_hot::hot().temp_roots as *mut Vec<u64>
+fn hot_temp_roots() -> *mut Vec<TempRoot> {
+    crate::tls_hot::hot().temp_roots as *mut Vec<TempRoot>
 }
 
 /// Report a temp-root stack overflow without unwinding.
@@ -99,8 +109,17 @@ a live slot. Reported once per process."
 
 /// Push `value` and return the index generated code must pass to
 /// `js_gc_temp_root_get` / `js_gc_temp_root_set` / `js_gc_temp_root_truncate`.
+/// The slot belongs to the caller's frame (`caller_frame_mark`): a compiled
+/// frame's own landing pads keep it (the frame closes its open brackets with
+/// a pad action), every pad above the frame drops it.
 #[no_mangle]
+#[inline(never)]
 pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
+    temp_root_push_at(value, crate::exception::caller_frame_mark())
+}
+
+/// [`js_gc_temp_root_push`] for a slot owned by the frame `mark` names.
+pub(crate) fn temp_root_push_at(value: u64, mark: usize) -> u32 {
     unsafe {
         let s = &mut *hot_temp_roots();
         let idx = s.len();
@@ -111,7 +130,7 @@ pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
             report_temp_root_overflow(idx);
             return (idx - 1) as u32;
         }
-        s.push(value);
+        s.push(TempRoot { value, mark });
         if value != 0 {
             crate::gc::runtime_write_barrier_root_nanbox(value);
         }
@@ -125,7 +144,7 @@ pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
 pub extern "C" fn js_gc_temp_root_get(idx: u32) -> u64 {
     unsafe {
         let s = &*hot_temp_roots();
-        s.get(idx as usize).copied().unwrap_or(0)
+        s.get(idx as usize).map_or(0, |r| r.value)
     }
 }
 
@@ -136,7 +155,7 @@ pub extern "C" fn js_gc_temp_root_set(idx: u32, value: u64) {
     unsafe {
         let s = &mut *hot_temp_roots();
         if let Some(slot) = s.get_mut(idx as usize) {
-            *slot = value;
+            slot.value = value;
             if value != 0 {
                 crate::gc::runtime_write_barrier_root_nanbox(value);
             }
@@ -171,21 +190,40 @@ pub extern "C" fn js_array_push_f64_temp_rooted(idx: u32, value: f64) {
     js_gc_temp_root_set(idx, POINTER_TAG | arr as u64);
 }
 
-/// Current depth — the value a savepoint records.
+/// Current depth.
+#[cfg(any(test, target_os = "wasi"))]
 #[inline]
-pub(crate) fn temp_root_depth() -> usize {
+pub(crate) fn temp_root_len() -> usize {
     unsafe { (*hot_temp_roots()).len() }
 }
 
-/// Restore a previously-recorded depth. Used by the exception unwind path via
-/// [`super::shadow_stack::FrameRootSavepoint`]; a `longjmp` can only have added
-/// slots relative to the savepoint, so the `<=` guard is defensive.
-pub(crate) fn temp_roots_restore(depth: usize) {
+/// Drop every slot at or above `depth` (WASI handlers restore compiled
+/// slots by depth; see `crate::exception`).
+#[cfg(target_os = "wasi")]
+pub(crate) fn temp_roots_truncate_to(depth: usize) {
     TEMP_ROOTS.with(|cell| unsafe {
         let s = &mut *cell.get();
         if depth <= s.len() {
             s.truncate(depth);
         }
+    });
+}
+
+/// Landing pad at stack pointer `sp`: drop the slots of every frame the
+/// throw abandoned (`crate::exception::marks`).
+pub(crate) fn temp_roots_unwind_to(sp: usize) {
+    TEMP_ROOTS.with(|cell| unsafe {
+        let s = &mut *cell.get();
+        while s.last().is_some_and(|r| r.mark < sp) {
+            s.pop();
+        }
+    });
+}
+
+pub(crate) fn temp_roots_check_marks(sp: usize) {
+    TEMP_ROOTS.with(|cell| unsafe {
+        let marks: Vec<usize> = (*cell.get()).iter().map(|r| r.mark).collect();
+        crate::exception::marks::check_marks(&marks, sp, "temp_roots");
     });
 }
 
@@ -201,7 +239,7 @@ pub(crate) fn reset_temp_roots() {
 pub(crate) fn scan_temp_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
     TEMP_ROOTS.with(|cell| unsafe {
         for slot in (*cell.get()).iter_mut() {
-            visitor.visit_nanbox_u64_slot(slot);
+            visitor.visit_nanbox_u64_slot(&mut slot.value);
         }
     });
 }
@@ -226,7 +264,7 @@ pub(crate) fn scan_temp_roots_mut_step(
     TEMP_ROOTS.with(|cell| unsafe {
         let s = &mut *cell.get();
         while *remaining > 0 && state.cursor < s.len() {
-            visitor.visit_nanbox_u64_slot(&mut s[state.cursor]);
+            visitor.visit_nanbox_u64_slot(&mut s[state.cursor].value);
             state.cursor += 1;
             *remaining -= 1;
         }

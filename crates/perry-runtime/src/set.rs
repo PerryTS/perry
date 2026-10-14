@@ -21,7 +21,7 @@ crate::perry_thread_local! {
     /// names the old raw layout (#9082). Nested walks are kept as a stack so
     /// exception savepoints can discard precisely the frames a throw skips.
     static SET_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
-        const { RefCell::new(crate::exception::CatchStack::new(crate::exception::catch_subsystem::SET_FOREACH)) };
+        const { RefCell::new(crate::exception::CatchStack::new()) };
 }
 
 #[inline]
@@ -30,8 +30,15 @@ fn set_foreach_is_active(set: *const SetHeader) -> bool {
     SET_FOREACH_STACK.with(|stack| stack.borrow().contains(&addr))
 }
 
+/// Open a walk owned by the calling frame (`#[inline(always)]`: the frame
+/// mark must be read in the walk's owner).
+#[inline(always)]
 fn set_foreach_enter(set: *const SetHeader) {
-    SET_FOREACH_STACK.with(|stack| stack.borrow_mut().push(set as usize));
+    set_foreach_enter_at(crate::exception::frame_mark(), set);
+}
+
+fn set_foreach_enter_at(mark: usize, set: *const SetHeader) {
+    SET_FOREACH_STACK.with(|stack| stack.borrow_mut().push(mark, set as usize));
 }
 
 /// Pop one completed walk. Returns true when this was the outermost walk of
@@ -46,13 +53,23 @@ fn set_foreach_leave(set: *const SetHeader) -> bool {
     })
 }
 
-#[inline]
-pub(crate) fn set_foreach_stack_savepoint() -> usize {
-    SET_FOREACH_STACK.with(|stack| stack.borrow().len())
+/// Landing pad at stack pointer `sp`: abandoned walks no longer inhibit
+/// compaction (#9082).
+pub(crate) fn set_foreach_unwind_to(sp: usize) {
+    SET_FOREACH_STACK.with(|stack| {
+        stack.borrow_mut().unwind_to(sp);
+    });
 }
 
-pub(crate) fn set_foreach_stack_restore(depth: usize) {
-    SET_FOREACH_STACK.with(|stack| stack.borrow_mut().truncate(depth));
+pub(crate) fn set_foreach_check_marks(sp: usize) {
+    SET_FOREACH_STACK.with(|stack| {
+        crate::exception::marks::check_marks(stack.borrow().marks(), sp, "set_foreach")
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn set_foreach_depth() -> usize {
+    SET_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
 
 pub fn is_registered_set_iterator(addr: usize) -> bool {
@@ -2997,8 +3014,8 @@ mod ordered_delete_repair_tests {
 mod set_tombstone_tests;
 
 #[cfg(test)]
-pub(crate) fn test_enter_catch_foreach() {
-    set_foreach_enter(js_set_alloc(4));
+pub(crate) fn test_enter_catch_foreach(mark: usize) {
+    set_foreach_enter_at(mark, js_set_alloc(4));
 }
 
 #[cfg(test)]

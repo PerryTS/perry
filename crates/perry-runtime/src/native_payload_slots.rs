@@ -8,7 +8,6 @@ use super::*;
 pub(crate) struct NativeCallbackCell {
     pub header: NativeHandleHeader,
     pub callbacks: u64,
-    pub catch: *mut crate::exception::NativeCatch,
 }
 
 #[inline]
@@ -182,15 +181,6 @@ unsafe fn is_callback_array(value: crate::JSValue) -> bool {
     value.is_pointer()
         && crate::value::addr_class::try_read_gc_header(value.as_pointer::<u8>() as usize)
             .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-}
-
-pub(super) unsafe fn catch_from_cell(
-    cell: *mut NativeHandleHeader,
-) -> *mut crate::exception::NativeCatch {
-    if (*cell).flags & CALLBACK_STORAGE == 0 {
-        return std::ptr::null_mut();
-    }
-    (*(cell as *mut NativeCallbackCell)).catch
 }
 
 #[cold]

@@ -5,19 +5,20 @@ use super::*;
 
 #[test]
 fn call_method_depth_drop_is_idempotent_after_exception_restore() {
-    let base = call_method_depth_savepoint();
+    let base = call_method_depth();
+    let here = crate::exception::frame_mark();
     let outer = CallMethodDepthGuard::enter("outer").unwrap();
     let inner = CallMethodDepthGuard::enter("inner").unwrap();
-    assert_eq!(call_method_depth_savepoint(), base + 2);
+    assert_eq!(call_method_depth(), base + 2);
 
-    // Generated exceptions restore at throw time because the fast transport
-    // skips cleanup frames. Its system-unwinder fallback then drops the Rust
-    // guards as well; those drops must not decrement below the savepoint.
-    call_method_depth_restore(base);
+    // A landing pad in this frame's caller pops both levels. A system-unwinder
+    // fallback may then drop the Rust guards as well; those drops must not
+    // decrement below the restored depth.
+    call_method_depth_unwind_to(here + 1);
     drop(inner);
     drop(outer);
 
-    assert_eq!(call_method_depth_savepoint(), base);
+    assert_eq!(call_method_depth(), base);
 }
 
 fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
