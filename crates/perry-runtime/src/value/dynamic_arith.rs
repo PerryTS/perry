@@ -720,11 +720,27 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 /// This is the single out-of-line slow path for numeric `%`: generated code
 /// keeps only its inline i32 check and calls here instead of emitting
 /// `frem` (a libm `fmod` call on every target).
+///
+/// Tiers, cheapest first: the exact u32 domain (a nonnegative dividend and
+/// divisor, a 32-bit divide; this is where index arithmetic lives and what
+/// `js_dynamic_mod` already did before this helper existed), then exact i53,
+/// then `fmod`.
 #[no_mangle]
+#[inline]
 pub extern "C" fn js_number_mod(a: f64, b: f64) -> f64 {
     const EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0; // 2^53
-    // Ordered comparisons are false for NaN, so NaN never enters the
-    // integer path; the bound also excludes ±Infinity.
+    // u32 tier. Rejects negative zero, so every signed, fractional or
+    // exceptional case falls through; cast round trips also reject infinity
+    // and NaN, and a negative divisor saturates to 0 and is refused.
+    if !a.is_sign_negative() {
+        let dividend = a as u32;
+        let divisor = b as u32;
+        if divisor != 0 && dividend as f64 == a && divisor as f64 == b {
+            return (dividend % divisor) as f64;
+        }
+    }
+    // i53 tier. Ordered comparisons are false for NaN, so NaN never enters
+    // the integer path; the bound also excludes ±Infinity.
     if a.abs() <= EXACT_INT_LIMIT && b.abs() <= EXACT_INT_LIMIT {
         let dividend = a as i64;
         let divisor = b as i64;
