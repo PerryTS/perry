@@ -669,16 +669,25 @@ pub fn has_deferred_dynamic_code_sites() -> bool {
             .unwrap_or(false)
 }
 
-/// What the lowering site should do with a classified call (#5206).
+/// The recorded `eval`/`Function` sites whose source is left to the
+/// interpreter (not the constructor reached as a value: that only links it).
+pub fn interpreted_source_sites() -> Vec<DeferredEvalSite> {
+    EVAL_DEFERRED_SITES
+        .lock()
+        .map(|v| {
+            v.iter()
+                .filter(|s| s.kind.contains("eval") || s.kind.contains("Function"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Constant source folds ahead of this decision; unknown source executes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalDecision {
-    /// Const-foldable / known-library site: proceed with the existing
-    /// (placeholder / native-fold) lowering unchanged.
     Proceed,
-    /// Runtime-unknown site under the default (defer) mode, or a tree-shake
-    /// deferral: compile it to a value that throws this descriptive [`Error`]
-    /// message only when reached.
-    DeferToRuntimeError(String),
+    Interpret,
 }
 
 fn env_flag(name: &str) -> bool {
@@ -698,26 +707,8 @@ pub fn report(classification: &EvalClassification) {
     }
 }
 
-/// The single decision point both lowering sites (`new Function` in
-/// `expr_new`, `Function(...)`/`eval(...)` in `expr_call`) funnel through.
-///
-/// Classifies the site, logs it under `PERRY_EVAL_DIAG`, and decides what the
-/// caller does with it (#5206):
-///
-/// - const-foldable / known-library buckets → [`EvalDecision::Proceed`]
-///   (existing lowering unchanged).
-/// - runtime-unknown bucket in **strict** mode → `Err` (a span-tagged
-///   [`crate::error::LowerError`]) — the historical hard refusal.
-/// - runtime-unknown bucket in the **default** (defer) mode → records the
-///   site for the end-of-compile notice and returns
-///   [`EvalDecision::DeferToRuntimeError`] with the message the caller should
-///   compile to a throw-on-reach value.
-///
-/// The tree-shake deferral sink (#2309) still short-circuits in either mode:
-/// when armed for a `node_modules` module under tree-shaking, the refusal is
-/// recorded and deferred (the module may be pruned), and the call lowers to
-/// the throw-on-reach value so a *surviving* module still behaves correctly
-/// while the driver re-raises (strict) or notices (defer) it.
+/// Classify source for AOT lowering versus interpretation. Legacy strict-eval
+/// settings do not refuse runtime source: its reach disables program proofs.
 pub fn check_site(
     surface: EvalSurface,
     body_arg: Option<&ast::Expr>,
@@ -730,31 +721,12 @@ pub fn check_site(
         return Ok(EvalDecision::Proceed);
     }
 
-    let strict = eval_strict_mode();
+    // Runtime source is supported by the interpreter. Source reach, rather
+    // than a strict/refusal flag, determines which closed-world proofs survive.
 
-    // #2309: tree-shake deferral. When the sink is armed (a node_modules
-    // module lowered under tree-shaking), record the refusal and compile to
-    // the throw-on-reach value instead of erroring — the module may be pruned
-    // as unreachable. The driver re-raises any deferred refusal that survives
-    // the prune (strict), or surfaces it in the notice (defer).
-    if crate::deferral::try_defer_refusal(classification.refusal_message(), span.lo.0) {
-        return Ok(EvalDecision::DeferToRuntimeError(
-            classification.deferred_runtime_error_message(),
-        ));
-    }
-
-    if strict {
-        return Err(anyhow::Error::new(crate::error::LowerError::new(
-            classification.refusal_message(),
-            span,
-        )));
-    }
-
-    // Default (defer) mode: throw-on-reach + visible end-of-compile notice.
+    // Retain the source-site record for diagnostics and interpreter selection.
     record_deferred_site(&classification);
-    Ok(EvalDecision::DeferToRuntimeError(
-        classification.deferred_runtime_error_message(),
-    ))
+    Ok(EvalDecision::Interpret)
 }
 
 #[cfg(test)]
@@ -961,13 +933,7 @@ mod tests {
         let span = Span::new(BytePos(0), BytePos(0));
         let body = non_const();
         let decision = check_site(EvalSurface::Eval, Some(&body), path, span).expect("no error");
-        match decision {
-            EvalDecision::DeferToRuntimeError(msg) => {
-                assert!(msg.contains("eval()"));
-                assert!(msg.contains(path));
-            }
-            other => panic!("expected defer, got {other:?}"),
-        }
+        assert_eq!(decision, EvalDecision::Interpret);
         let sites = take_deferred_eval_sites();
         let mine: Vec<_> = sites.iter().filter(|s| s.location.contains(path)).collect();
         assert_eq!(mine.len(), 1, "exactly one recorded site for {path}");
@@ -982,9 +948,9 @@ mod tests {
         assert!(has_deferred_dynamic_code_sites());
     }
 
-    /// Strict-eval mode: a runtime-unknown site is a hard compile-time error.
+    /// Legacy strict-eval settings must not refuse executable source.
     #[test]
-    fn strict_mode_refuses_runtime_unknown() {
+    fn legacy_strict_mode_interprets_runtime_unknown() {
         let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_EVAL would force non-strict; only assert when unset.
         if eval_override_enabled() {
@@ -995,14 +961,10 @@ mod tests {
         let body = non_const();
         let path = "/app/strict_refuses_fixture.ts";
         let res = check_site(EvalSurface::Eval, Some(&body), path, span);
-        assert!(res.is_err(), "strict mode must refuse runtime-unknown");
-        // No notice site recorded for this path in strict mode.
-        assert!(
-            !take_deferred_eval_sites()
-                .iter()
-                .any(|s| s.location.contains(path)),
-            "strict mode must not record a notice site"
-        );
+        assert_eq!(res.unwrap(), EvalDecision::Interpret);
+        assert!(take_deferred_eval_sites()
+            .iter()
+            .any(|s| s.location.contains(path)));
         set_eval_strict_mode(false); // restore for sibling tests on this thread
     }
 

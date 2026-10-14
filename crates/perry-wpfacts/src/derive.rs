@@ -255,7 +255,9 @@ fn template_facts(
     if unsummarized_native {
         chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
     }
-    let escape = if m.objproto_accessor && escape.is_none() {
+    let escape = if let Some(reason) = global {
+        Some(reason.clone())
+    } else if m.objproto_accessor && escape.is_none() {
         Some("E23 accessor installed on Object.prototype".to_string())
     } else {
         escape

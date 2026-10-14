@@ -46,7 +46,40 @@ pub mod proto_census;
 pub const ANY_MEMBER: &str = "*";
 
 /// The set of patched `(namespace, member)` pairs.
-pub type PatchedBuiltins = BTreeSet<(String, String)>;
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PatchedBuiltins {
+    entries: BTreeSet<(String, String)>,
+    pub dynamic_code_reach: crate::dynamic_code::DynamicCodeReach,
+}
+impl PatchedBuiltins {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Dynamic code that can name the global scope can replace any builtin
+    /// namespace or prototype member: record that as a write of every member.
+    pub fn apply_dynamic_code_reach(&mut self) {
+        if !self.dynamic_code_reach.disables_builtin_constants() {
+            return;
+        }
+        for ns in BUILTIN_NAMESPACES {
+            self.insert((ns.to_string(), ANY_MEMBER.to_string()));
+        }
+        for ns in PROTOTYPE_OWNERS {
+            self.insert((format!("{ns}.prototype"), ANY_MEMBER.to_string()));
+        }
+    }
+}
+impl std::ops::Deref for PatchedBuiltins {
+    type Target = BTreeSet<(String, String)>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+impl std::ops::DerefMut for PatchedBuiltins {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
 
 /// Global namespace objects whose direct member calls lowering devirtualizes.
 /// A patch to any other global object's member is already honored, because
@@ -459,6 +492,13 @@ pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
         proto_aliases,
         ns_aliases,
     });
+    // Constant `eval`/`Function` source (any spelling of the evaluator) is
+    // program code: its builtin writes are program writes.
+    for source in crate::dynamic_code::constant_source_bodies(module) {
+        if let Ok(parsed) = perry_parser::parse_typescript(&source, "<static source>.cjs") {
+            scan_module(&parsed, out);
+        }
+    }
 }
 
 thread_local! {
@@ -483,7 +523,8 @@ fn with_set<R>(f: impl FnOnce(&PatchedBuiltins) -> R) -> Option<R> {
 /// Was `ns.member` (for a builtin namespace `ns`) replaced anywhere?
 pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
     with_set(|s| {
-        s.contains(&(ns.to_string(), member.to_string()))
+        s.dynamic_code_reach.disables_builtin_constants()
+            || s.contains(&(ns.to_string(), member.to_string()))
             || s.contains(&(ns.to_string(), ANY_MEMBER.to_string()))
     })
     .unwrap_or(false)

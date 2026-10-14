@@ -64,6 +64,7 @@ pub struct FactsConfig {
     /// The driver knows the program can run interpreted code (a deferred
     /// `new Function`/`eval` site or `node:vm`): E14, program-wide.
     pub dynamic_code: Option<String>,
+    pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
 }
@@ -102,6 +103,7 @@ pub struct ProgramFacts {
     pub stats: Stats,
     /// A program-wide kill (E14 interpreted code), if any.
     pub global: Option<String>,
+    pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     /// Report-only what-if run (unsound): never feed codegen from it.
     pub whatif_no_e14: bool,
@@ -120,6 +122,8 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
+    let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
+    g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
     if cfg.whatif_no_e14 {
         g.m.rel(|| "whatif 1".to_string());
@@ -163,6 +167,21 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 ))
             ));
         }
+    }
+    // Source the interpreter evaluates can name the global scope, so it can
+    // install an accessor under any key on Object.prototype: every family's
+    // chain runs unknown code with the receiver (the E23 rule, for any key).
+    if cfg.dynamic_code_reach.globals && !cfg.whatif_no_e14 {
+        let first = cfg
+            .dynamic_code_reach
+            .sites
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_default();
+        g.global_hard = Some(format!(
+            "E14 dynamic_code_reach: non-constant source names Object.prototype ({first})"
+        ));
     }
     let t2 = std::time::Instant::now();
     let (mut templates, mut sites) = if g.m.aborted {
@@ -224,6 +243,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         sites,
         stats,
         global,
+        dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
         whatif_no_e14: cfg.whatif_no_e14,
         relations: g.m.relations.take(),

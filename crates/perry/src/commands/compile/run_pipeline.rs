@@ -1310,6 +1310,9 @@ pub fn run_with_parse_cache(
     perry_codegen::set_program_proto_census(Some(ctx.proto_census.clone()));
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
+    for site in &ctx.patched_builtins.dynamic_code_reach.sites {
+        eprintln!("perry: dynamic code {site}: builtin prototype/namespace members are treated as replaceable, and Object.prototype accessors disable the whole-program field facts{}", if site.contains("lexical") { "; the classes it names keep prototype lookups" } else { "" });
+    }
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
         &ctx.patched_builtins,
     ));
@@ -5975,6 +5978,7 @@ pub fn run_with_parse_cache(
             || perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
     );
     // Step 5b: closure class parameters as typed-body receiver proofs, once
@@ -6074,6 +6078,8 @@ pub fn run_with_parse_cache(
             }
             opts.program_facts =
                 super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
+            opts.program_facts.dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
+            std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry

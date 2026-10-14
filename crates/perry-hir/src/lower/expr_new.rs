@@ -911,7 +911,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         // SyntaxError / named unsupported-construct
                         // TypeError) if the generated source is beyond it —
                         // still catchable, still located, never a crash.
-                        crate::eval_classifier::EvalDecision::DeferToRuntimeError(_message) => {}
+                        crate::eval_classifier::EvalDecision::Interpret => {}
                     }
                     // #10421: whichever bucket the body landed in (a
                     // known-library body, or constant strings the fold could

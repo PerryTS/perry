@@ -546,6 +546,28 @@ pub fn lower_fn_body_block_stmt(
     span: swc_common::Span,
     stmts: &[ast::Stmt],
 ) -> Result<Vec<Stmt>> {
+    // An arrow shares its enclosing function's variable scope; any other
+    // function body may have a dynamic one (`lower::dynamic_eval`).
+    if std::mem::take(&mut ctx.lowering_arrow_body) {
+        return lower_fn_body_block_stmt_inner(ctx, span, stmts);
+    }
+    let strict =
+        ctx.current_strict || crate::lower::stmt_list_starts_with_use_strict_directive(stmts);
+    let scope = crate::lower::dynamic_eval::enter_function(ctx, stmts, strict);
+    let body = lower_fn_body_block_stmt_inner(ctx, span, stmts);
+    crate::lower::dynamic_eval::exit_function(ctx);
+    let mut body = body?;
+    if let Some(scope) = scope {
+        body.insert(0, scope);
+    }
+    Ok(body)
+}
+
+fn lower_fn_body_block_stmt_inner(
+    ctx: &mut LoweringContext,
+    span: swc_common::Span,
+    stmts: &[ast::Stmt],
+) -> Result<Vec<Stmt>> {
     use std::collections::HashSet;
 
     let parent_strict = ctx.current_strict;

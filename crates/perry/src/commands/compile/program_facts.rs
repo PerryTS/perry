@@ -44,6 +44,7 @@ pub(crate) fn contracts_requested() -> bool {
 pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     dynamic_code: bool,
+    dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
@@ -87,6 +88,7 @@ pub(crate) fn run(
                 .unwrap_or(400_000_000),
         ),
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1"),
+        dynamic_code_reach: dynamic_code_reach.clone(),
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
@@ -215,6 +217,7 @@ pub(crate) fn view_for(
     };
     perry_codegen::ProgramFactsView {
         digest,
+        dynamic_code_reach: pf.dynamic_code_reach.clone(),
         contract_section: Arc::new(section),
         elision: Arc::new(elision),
     }

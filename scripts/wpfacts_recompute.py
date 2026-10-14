@@ -131,6 +131,7 @@ class Solver:
         self.objproto_accessor = False
         self.top_calls = 0
         self.interp = None
+        self.dynamic_reach = False
         self.whatif = False
         self.stopped = defaultdict(list)
         self.widened = set()
@@ -1040,6 +1041,8 @@ def run(s, rel_lines):
                 s.acc_keys[h].append(k)
         elif rel == "whatif":
             s.whatif = True
+        elif rel == "dynamicreach":
+            s.dynamic_reach = a[0] == "1"
         elif rel == "interp":
             s.interp = None if a[0] == "-" else unesc(" ".join(a))
         elif rel == "accstar":
@@ -1112,7 +1115,9 @@ def derive(s, objproto_hard):
                 star_on_chain = True
         if star_on_chain:
             escape = True
-        e14 = (not s.whatif) and s.interp is not None and (s.dyn_eval is not None or s.top_calls > 0)
+        e14 = (not s.whatif) and (s.dynamic_reach or (s.interp is not None and (s.dyn_eval is not None or s.top_calls > 0)))
+        if e14:
+            escape = True
         if objproto_hard or e14 or s.objproto_accessor:
             chain_bad = True
         if star in acc or (tp["computed"] and not tp["birth"] and tp["kind"] != "fninst"):

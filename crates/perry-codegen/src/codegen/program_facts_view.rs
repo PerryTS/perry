@@ -19,6 +19,7 @@ use crate::module::LlModule;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProgramFactsView {
     pub digest: u64,
+    pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub contract_section: std::sync::Arc<Vec<u8>>,
     pub elision: std::sync::Arc<ElisionFacts>,
 }
@@ -60,6 +61,7 @@ pub struct FactsClass {
 /// The slice-2 elision inputs of one module.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ElisionFacts {
+    pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Local id → receiver facts.
     pub locals: std::collections::BTreeMap<u32, FactsRecv>,
     /// HIR function id → receiver facts of its `this`.

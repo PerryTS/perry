@@ -480,7 +480,41 @@ pub(crate) fn lower_ident_assignment(
     name: String,
     value: Box<Expr>,
 ) -> Result<Expr> {
-    if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+    let with_envs = ctx.active_with_envs_for_ident(&name);
+    if !with_envs.is_empty()
+        && !ctx.current_strict
+        && with_envs
+            .iter()
+            .all(|env| ctx.dynamic_eval_scopes.iter().any(|(id, _)| id == env))
+        && ctx.lookup_local(&name).is_none()
+        && ctx.lookup_class(&name).is_none()
+        && !ctx.forward_class_shadows_local(&name)
+        && ctx.lookup_func(&name).is_none()
+    {
+        // Only dynamic eval scopes (`lower::dynamic_eval`) can bind the
+        // name: the nearest one that owns it takes the write, otherwise it is
+        // a sloppy global, a property of the global object. The reference is
+        // resolved before the value is evaluated, as in the spec.
+        let global = Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::GlobalGet(0)),
+            property: "globalThis".to_string(),
+        };
+        let target = with_envs.iter().rev().fold(global, |outer, env| Expr::Conditional {
+            condition: Box::new(Expr::ObjectHasOwn(
+                Box::new(Expr::LocalGet(*env)),
+                Box::new(Expr::String(name.clone())),
+            )),
+            then_expr: Box::new(Expr::LocalGet(*env)),
+            else_expr: Box::new(outer),
+        });
+        return Ok(Expr::PropertySet {
+            object: Box::new(target),
+            property: name,
+            value,
+        });
+    }
+    if let Some(env_id) = with_envs.into_iter().next() {
         let fallback = with_set_fallback_for_ident(ctx, &name);
         return Ok(Expr::WithSet {
             object: Box::new(Expr::LocalGet(env_id)),

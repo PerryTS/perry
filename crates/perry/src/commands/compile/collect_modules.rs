@@ -736,11 +736,24 @@ fn collect_module_one(
     // set before lowering it. A patch first seen after other modules were
     // already lowered forces a re-walk (`rerun_collect_with_class_field_types`)
     // so those modules' direct calls see it too.
+    let specialized_dynamic_code =
+        perry_hir::static_dynamic_code::specialize(solid_module.as_ref().unwrap_or(ast_module));
+    let dynamic_ast = specialized_dynamic_code
+        .as_ref()
+        .unwrap_or(solid_module.as_ref().unwrap_or(ast_module));
     let patched_before = ctx.patched_builtins.len();
-    perry_hir::scan_patched_builtins(
-        solid_module.as_ref().unwrap_or(ast_module),
-        &mut ctx.patched_builtins,
+    perry_hir::dynamic_code::scan(
+        dynamic_ast,
+        &source_file_path,
+        &mut ctx.patched_builtins.dynamic_code_reach,
     );
+    // Every non-constant source site (eval, Function, vm, a runtime or
+    // data: import) is evaluated by the interpreter, so it must be linked.
+    if !ctx.patched_builtins.dynamic_code_reach.is_empty() {
+        perry_hir::eval_classifier::note_dynamic_function_reachable();
+    }
+    ctx.patched_builtins.apply_dynamic_code_reach();
+    perry_hir::scan_patched_builtins(dynamic_ast, &mut ctx.patched_builtins);
     if ctx.patched_builtins.len() != patched_before && ctx.patched_builtins_lowered_modules > 0 {
         ctx.patched_builtins_grew_after_lower = true;
     }

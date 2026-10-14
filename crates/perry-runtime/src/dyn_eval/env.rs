@@ -161,7 +161,7 @@ fn own_value(env: f64, name: &str) -> Option<f64> {
     })
 }
 
-fn env_parent(env: f64) -> Option<f64> {
+pub(crate) fn env_parent(env: f64) -> Option<f64> {
     own_value(env, PARENT_KEY)
 }
 

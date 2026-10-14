@@ -143,6 +143,8 @@ impl LoweringContext {
             unresolved_ident_as_global: false,
             global_intrinsic_new_once: false,
             with_env_stack: Vec::new(),
+            dynamic_eval_scopes: Vec::new(),
+            lowering_arrow_body: false,
             var_hoisted_ids: HashSet::new(),
             tdz_forward_ids: HashSet::new(),
             module_lexical_ids: HashSet::new(),

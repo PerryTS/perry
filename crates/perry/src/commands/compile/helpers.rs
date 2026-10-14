@@ -187,7 +187,15 @@ pub(crate) fn object_cache_project_root(input: &Path, fallback_project_root: &Pa
 /// starts fresh) and prints a single stand-out block. No-op when there are no
 /// such sites or for JSON output.
 pub(crate) fn print_deferred_eval_notice(format: OutputFormat) {
-    let sites = perry_hir::take_deferred_eval_sites();
+    let sites: Vec<_> = perry_hir::take_deferred_eval_sites()
+        .into_iter()
+        .filter(|s| {
+            !matches!(
+                s.kind.as_str(),
+                "eval(...)" | "Function(...)" | "new Function(...)"
+            )
+        })
+        .collect();
     if sites.is_empty() || !matches!(format, OutputFormat::Text) {
         return;
     }
@@ -254,7 +262,7 @@ pub(crate) fn print_deferred_eval_notice(format: OutputFormat) {
         eprintln!("  {y}{remedy}{r}");
     }
     eprintln!(
-        "  Pass {b}--strict-eval{r}/{b}--strict-dynamic-import{r} (or set {b}perry.strict = true{r}) to make these a compile-time error instead."
+        "  Pass {b}--strict-unimplemented{r}/{b}--strict-dynamic-import{r} (or set {b}perry.strict = true{r}) to make these a compile-time error instead."
     );
     eprintln!();
 }

@@ -100,6 +100,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     let mut out = String::new();
     out.push_str("# wpfacts v1\n");
     out.push_str(&format!(
+        "# dynamic_code_reach {:?}\n",
+        pf.dynamic_code_reach
+    ));
+    out.push_str(&format!(
         "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
@@ -226,6 +230,7 @@ pub fn module_digests(pf: &ProgramFacts) -> Vec<u64> {
             let mut h = FNV_OFFSET;
             fnv(&mut h, "wpfacts-v1");
             fnv(&mut h, &global);
+            fnv(&mut h, &format!("{:?}", pf.dynamic_code_reach));
             fnv(&mut h, &sab);
             for i in ids {
                 fnv(&mut h, &format!("{:016x}", per_tmpl[i]));

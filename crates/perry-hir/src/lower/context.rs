@@ -863,12 +863,27 @@ impl LoweringContext {
         });
     }
 
+    /// A frame whose own bindings start at `local_mark` (a function scope).
+    pub(crate) fn push_with_env_at(&mut self, local_id: LocalId, local_mark: usize) {
+        self.with_env_stack.push(WithEnvFrame {
+            local_id,
+            local_mark,
+        });
+    }
+
     pub(crate) fn pop_with_env(&mut self) {
         self.with_env_stack.pop();
     }
 
     pub(crate) fn active_with_envs_for_ident(&self, name: &str) -> Vec<LocalId> {
-        let nearest_local_index = self.lookup_local_index(name);
+        // A sloppy implicit global minted by a with-set fallback is pushed
+        // where the assignment was lowered, but it is a global binding: the
+        // object environments still come first for it.
+        let nearest_local_index = self.lookup_local_index(name).filter(|_| {
+            !self
+                .lookup_local(name)
+                .is_some_and(|id| self.sloppy_implicit_global_ids.contains(&id))
+        });
         let mut envs = Vec::new();
         for frame in self.with_env_stack.iter().rev() {
             if nearest_local_index.is_some_and(|idx| idx >= frame.local_mark) {

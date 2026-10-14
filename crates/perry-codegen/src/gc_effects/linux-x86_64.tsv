@@ -1190,6 +1190,7 @@ js_ethers_get_address	Reenters	yes
 js_ethers_parse_ether	Reenters	yes
 js_ethers_parse_units	Reenters	yes
 js_ethers_wallet_create_random	Reenters	yes
+js_eval_in_scope	Reenters	yes
 js_evalerror_new	Reenters	yes
 js_event_emitter_async_resource_call	Reenters	yes
 js_event_emitter_async_resource_object_new	Reenters	yes

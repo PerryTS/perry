@@ -6,20 +6,9 @@ use swc_ecma_ast as ast;
 
 use super::super::super::{lower_expr, LoweringContext};
 
-/// #1678 (Phase 0 of #1677) — classify a bare `Function(...)` /
-/// `eval(...)` call. The `Function('return this')()` globalThis fold runs
-/// before this (in `lower_call_inner`) and short-circuits, so its inner
-/// `Function('return this')` never reaches here.
-///
-/// In strict-eval mode returns `Err` (span-tagged) for the runtime-unknown
-/// bucket — const-foldable (string-literal body) and known-codegen-library
-/// sites log under `PERRY_EVAL_DIAG` and fall through (`Ok(None)`) to the
-/// existing lowering, to be picked up by later phases. Under the default
-/// (defer) mode a runtime-unknown site returns `Ok(Some(throw_value))`
-/// (#5206): the caller uses that expression in place of the call so it
-/// throws a descriptive `Error` only if reached. `Ok(None)` means proceed.
-/// #10422: that throw-on-reach value is `eval`'s only; every unfolded
-/// `Function(...)` spelling builds its function at runtime instead.
+/// Constant source folds before this point. Remaining eval/Function calls
+/// reach the linked interpreter; the program write summary disables proofs
+/// over their reach instead of refusing source through a strict flag.
 pub(crate) fn check_eval_function_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -142,14 +131,9 @@ pub(crate) fn check_eval_function_call(
         }
         return Ok(None);
     }
-    match decision {
-        crate::eval_classifier::EvalDecision::Proceed => Ok(None),
-        crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => Ok(Some(
-            super::super::super::const_fold_fn::synth_deferred_eval_value(
-                ctx, surface, &message, call.span,
-            )?,
-        )),
-    }
+    let _ = decision;
+    crate::eval_classifier::note_dynamic_function_reachable();
+    super::super::super::dynamic_eval::lower(ctx, call).map(Some)
 }
 
 pub(crate) fn try_strict_eval_arguments_assignment(

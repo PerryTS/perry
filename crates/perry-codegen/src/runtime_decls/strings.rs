@@ -1661,6 +1661,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, PTR, I64, PTR],
     );
     module.declare_function("js_function_ctor_from_strings", DOUBLE, &[PTR, I64]);
+    module.declare_function("js_eval_in_scope", DOUBLE, &[DOUBLE; 6]);
     // `new <callee>(...spread)` — codegen folds every argument (regular +
     // spread-expanded) into one JS array and hands it here; the runtime
     // materialises a flat buffer and forwards to `js_new_function_construct`.

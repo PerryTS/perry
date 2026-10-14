@@ -234,3 +234,22 @@ fn write_dump_for_checker() {
     std::fs::write(dir.join("t.facts"), pf.dump_text()).unwrap();
     std::fs::write(dir.join("t.facts.rel"), pf.relations_text().unwrap()).unwrap();
 }
+
+#[test]
+fn dynamic_code_reach_kills_facts_without_an_unknown_call() {
+    let mut reach = perry_hir::dynamic_code::DynamicCodeReach::default();
+    reach.record_global("new Function(...) @ t.ts:4".into());
+    let pf = facts_with(
+        "class P { x = 1; m() { return this.x; } } console.log(new P().m());",
+        FactsConfig {
+            dynamic_code_reach: reach,
+            relations: true,
+            ..Default::default()
+        },
+    );
+    assert!(pf.dynamic_code_reach.disables_builtin_constants());
+    assert!(pf.relations_text().unwrap().contains("dynamicreach 1"));
+    assert!(pf.global.as_deref().unwrap().contains("dynamic_code_reach"));
+    assert!(!tmpl(&pf, "P").prefix_stable);
+    assert!(!field(tmpl(&pf, "P"), "x").readonly);
+}

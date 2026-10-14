@@ -162,8 +162,10 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 // implicit globals are runtime globalThis properties
                 // (#3575), so `g = 5; typeof g` must observe the live
                 // binding. Non-throwing lookup per the spec's
-                // GetValue-skips-on-typeof rule.
-                return Ok(Expr::TypeOf(Box::new(Expr::Call {
+                // GetValue-skips-on-typeof rule. A `with` object or a
+                // function's dynamic eval scope (`lower::dynamic_eval`) may
+                // bind the name first, so it is consulted before the global.
+                let global = Expr::Call {
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_global_get_optional".to_string(),
                         param_types: vec![Type::Any],
@@ -172,7 +174,11 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     args: vec![Expr::String(n.to_string())],
                     type_args: Vec::new(),
                     byte_offset: 0,
-                })));
+                };
+                let with_envs = ctx.active_with_envs_for_ident(n);
+                return Ok(Expr::TypeOf(Box::new(
+                    super::helpers::wrap_with_gets(n, global, with_envs),
+                )));
             }
         }
         // #1395: `typeof process.memoryUsage.rss` is a nested member

@@ -285,3 +285,12 @@ fn symbol_iterator_patch_is_not_any_member() {
     assert!(!s.contains(&pair("Array.prototype", "*")), "{s:?}");
     assert!(!s.contains(&pair("Array.prototype", "push")), "{s:?}");
 }
+
+#[test]
+fn parsed_constant_sources_contribute_static_prototype_writes() {
+    let set = scan("eval(\"Array.prototype.join = function () { return 'changed'; }\");");
+    assert!(set.contains(&("Array.prototype".into(), "join".into())));
+    assert!(set.dynamic_code_reach.is_empty());
+    let set = scan("Function(\"Map.prototype.get = function () {};\");");
+    assert!(set.contains(&("Map.prototype".into(), "get".into())));
+}

@@ -637,6 +637,13 @@ pub struct LoweringContext {
     /// the frame was entered, so declarations inside the block/function can
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
+    /// One entry per function body being lowered: its dynamic eval scope
+    /// object and the locals mark of its own bindings, or `(LocalId::MAX, _)`
+    /// when it has none (`lower::dynamic_eval`).
+    pub(crate) dynamic_eval_scopes: Vec<(LocalId, usize)>,
+    /// Set by arrow lowering for its block body: an arrow shares the
+    /// enclosing function's variable scope.
+    pub(crate) lowering_arrow_body: bool,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
     /// LocalIds of lexical let/const bindings that are forward-referenced
     /// (read before their declaration, directly or via a closure) in the

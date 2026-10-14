@@ -160,7 +160,37 @@ pub(super) fn rerun_collect_with_class_field_types(
     mut parse_cache: Option<&mut ParseCache>,
     format: OutputFormat,
 ) -> Result<()> {
-    if ctx.native_modules.len() <= 1 {
+    // Backstop for the pre-lowering scan: a source site that lowering left to
+    // the interpreter but the scan did not record has the same reach.
+    for site in perry_hir::interpreted_source_sites() {
+        let reach = &mut ctx.patched_builtins.dynamic_code_reach;
+        let module = site
+            .location
+            .rsplit_once(':')
+            .map_or(site.location.as_str(), |(m, _)| m)
+            .to_string();
+        let direct = site.kind == "eval(...)";
+        let covered = if direct {
+            reach.reaches_module_bindings(&module)
+        } else {
+            reach.globals && reach.sites.iter().any(|s| s.contains(module.as_str()))
+        };
+        if covered {
+            continue;
+        }
+        let newly_global = !reach.globals;
+        let name = format!("{} @ {} (found by lowering)", site.kind, site.location);
+        if direct {
+            reach.record_direct(&module, name);
+        } else {
+            reach.record_global(name);
+        }
+        if newly_global {
+            ctx.patched_builtins.apply_dynamic_code_reach();
+            ctx.patched_builtins_grew_after_lower = true;
+        }
+    }
+    if ctx.native_modules.len() <= 1 && !ctx.patched_builtins_grew_after_lower {
         return Ok(());
     }
     let mut field_map: HashMap<String, Vec<(String, perry_hir::types::Type)>> = HashMap::new();

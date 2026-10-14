@@ -42,6 +42,18 @@ pub(crate) fn pre_scan_function_ctor_reach(ast_module: &ast::Module) {
     }
     if module_reaches_function_ctor_value(ast_module) {
         crate::eval_classifier::note_dynamic_function_reachable();
+        return;
+    }
+    // Constant `Function`/`eval` source is compiled as program code
+    // (get-intrinsic's `(async function () {}).constructor`), so its value
+    // uses count too.
+    for source in crate::dynamic_code::constant_source_bodies(ast_module) {
+        if let Ok(parsed) = perry_parser::parse_typescript(&source, "<static source>.cjs") {
+            if module_reaches_function_ctor_value(&parsed) {
+                crate::eval_classifier::note_dynamic_function_reachable();
+                return;
+            }
+        }
     }
 }
 
@@ -137,7 +149,7 @@ impl Visit for Scan {
             return;
         }
         if let ast::Expr::Ident(id) = expr {
-            if id.sym.as_ref() == "Function" {
+            if matches!(id.sym.as_ref(), "Function" | "eval") {
                 self.found = true;
             }
             return;
@@ -149,6 +161,7 @@ impl Visit for Scan {
         if let ast::Callee::Expr(callee) = &call.callee {
             let callee = peel(callee);
             let literal_ctor_call = is_ident(callee, "Function")
+                || is_ident(callee, "eval")
                 || matches!(callee, ast::Expr::Member(m)
                     if is_ident(&m.obj, "Function")
                         && matches!(member_prop_name(m), Some("call" | "apply")));
@@ -176,7 +189,7 @@ impl Visit for Scan {
 
     fn visit_member_expr(&mut self, m: &ast::MemberExpr) {
         match member_prop_name(m) {
-            Some("Function") => {
+            Some("Function" | "eval") => {
                 self.found = true;
                 return;
             }
@@ -211,7 +224,9 @@ impl Visit for Scan {
     }
 
     fn visit_unary_expr(&mut self, u: &ast::UnaryExpr) {
-        if u.op == ast::UnaryOp::TypeOf && is_ident(&u.arg, "Function") {
+        if u.op == ast::UnaryOp::TypeOf
+            && (is_ident(&u.arg, "Function") || is_ident(&u.arg, "eval"))
+        {
             return;
         }
         u.visit_children_with(self);
@@ -244,7 +259,7 @@ impl Visit for Scan {
 
     fn visit_prop(&mut self, p: &ast::Prop) {
         if let ast::Prop::Shorthand(id) = p {
-            if id.sym.as_ref() == "Function" {
+            if matches!(id.sym.as_ref(), "Function" | "eval") {
                 self.found = true;
                 return;
             }

@@ -562,6 +562,30 @@ pub(crate) fn eval_direct_in(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    eval_direct_in_context(
+        source,
+        global_this,
+        intrinsics,
+        caller_env,
+        caller_variable_env,
+        strings_allowed,
+        wasm_allowed,
+        false,
+        global_this,
+    )
+}
+
+fn eval_direct_in_context(
+    source: &str,
+    global_this: f64,
+    intrinsics: f64,
+    caller_env: f64,
+    caller_variable_env: f64,
+    strings_allowed: bool,
+    wasm_allowed: bool,
+    inherited_strict: bool,
+    this_value: f64,
+) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
     interp_entry(|| {
@@ -588,13 +612,21 @@ fn eval_direct_in_entered(
     wasm_allowed: bool,
 ) -> f64 {
     let base = roots_len();
+    let this_idx = root_push(this_value);
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
     let caller_env_idx = root_push(caller_env);
     let caller_variable_env_idx = root_push(caller_variable_env);
+    let strict_source;
+    let source = if inherited_strict {
+        strict_source = format!("\"use strict\";\n{source}");
+        strict_source.as_str()
+    } else {
+        source
+    };
     let (script_id, script) = register_script(parse_script_statements(source));
     let statements = script_statements(&script);
-    let strict = script.strict;
+    let strict = inherited_strict || script.strict;
     let lexical_env_idx = root_push(env::env_new(root_get(caller_env_idx)));
     let ret_idx = root_push(bridge::undefined());
     let variable_env_idx = if strict {
@@ -603,7 +635,7 @@ fn eval_direct_in_entered(
         caller_variable_env_idx
     };
     let ctx = interp::Ctx {
-        this_idx: global_idx,
+        this_idx,
         ret_idx,
         global_idx,
         intrinsics_idx,
@@ -789,4 +821,68 @@ fn extract_wrapper_fn(module: ast::Module) -> Option<ast::Function> {
             _ => return None,
         }
     }
+}
+
+/// Direct eval from compiled code. The binding objects hold native
+/// getter/setter closures, so reads, writes and retained eval closures share
+/// live cells. `scope` is the calling function's eval scope object when it has
+/// a dynamic scope (`perry_hir::lower::dynamic_eval`): the eval's `var`s and
+/// functions are declared there, between the function's own bindings and the
+/// enclosing ones. Otherwise it is undefined and `outer` is unused.
+#[no_mangle]
+pub extern "C" fn js_eval_in_scope(
+    source: f64,
+    own: f64,
+    outer: f64,
+    scope: f64,
+    this_value: f64,
+    strict: f64,
+) -> f64 {
+    let value = crate::value::JSValue::from_bits(source.to_bits());
+    if !value.is_string() {
+        return source;
+    }
+    let roots = crate::gc::RuntimeHandleScope::new();
+    let source = roots.root_nanbox_f64(source);
+    let own = roots.root_nanbox_f64(own);
+    let outer = roots.root_nanbox_f64(outer);
+    let scope = roots.root_nanbox_f64(scope);
+    let this_value = roots.root_nanbox_f64(this_value);
+    let text = bridge::read_string(source.get_nanbox_f64()).expect("string source");
+    let global = roots.root_nanbox_f64(crate::object::js_get_global_this());
+    let has_scope =
+        !crate::value::JSValue::from_bits(scope.get_nanbox_f64().to_bits()).is_undefined();
+    let (env, variable_env) = if has_scope {
+        let env = roots.root_nanbox_f64(script_environment(
+            global.get_nanbox_f64(),
+            &[
+                outer.get_nanbox_f64(),
+                scope.get_nanbox_f64(),
+                own.get_nanbox_f64(),
+            ],
+        ));
+        // lexical → own bindings → the scope object's environment.
+        let own_env = env::env_parent(env.get_nanbox_f64()).expect("own bindings env");
+        let scope_env = env::env_parent(own_env).expect("eval scope env");
+        let scope_env = roots.root_nanbox_f64(scope_env);
+        (env, scope_env)
+    } else {
+        let env = roots.root_nanbox_f64(script_environment(
+            global.get_nanbox_f64(),
+            &[own.get_nanbox_f64()],
+        ));
+        let variable_env = roots.root_nanbox_f64(env::variable_environment(env.get_nanbox_f64()));
+        (env, variable_env)
+    };
+    eval_direct_in_context(
+        &text,
+        global.get_nanbox_f64(),
+        global.get_nanbox_f64(),
+        env.get_nanbox_f64(),
+        variable_env.get_nanbox_f64(),
+        true,
+        true,
+        crate::value::js_is_truthy(strict) != 0,
+        this_value.get_nanbox_f64(),
+    )
 }

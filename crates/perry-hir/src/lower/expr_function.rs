@@ -383,6 +383,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     crate::lower::unrebound_params::note(ctx, &params, arrow.params.iter(), Some(&*arrow.body));
     let mut body = match &*arrow.body {
         ast::ArrowFunctionBody::FunctionBody(block) => {
+            ctx.lowering_arrow_body = true;
             crate::lower_decl::lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
         }
         ast::ArrowFunctionBody::Expr(expr) => {
@@ -1191,83 +1192,100 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         ctx,
         fn_expr.function.body.iter().flat_map(|block| &block.stmts),
     )?;
-    let mut body = if let Some(ref block) = fn_expr.function.body {
-        // #4795: a `using` / `await using` declaration in a function-expression
-        // body must be desugared (scope-exit disposal + declaration-time
-        // disposability check). The hand-rolled per-statement loop below routes
-        // through `lower_body_stmt`, which lowers `using` as a plain `const`
-        // with no disposal — so route the whole body through the using-aware
-        // lowering (the same path arrow/fn-decl bodies use) when any top-level
-        // `using` is present. Forward references stay resolvable via the
-        // FnDecl/var pre-registration done above.
-        let has_using = block
-            .stmts
-            .iter()
-            .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Using(_))));
-        if has_using {
-            crate::lower_decl::lower_stmts_using_aware(ctx, &block.stmts)?
-        } else {
-            let mut func_decls = Vec::new();
-            let mut exec_stmts = Vec::new();
-            for stmt in &block.stmts {
-                let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
-                match stmt {
-                    ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
-                    _ => exec_stmts.extend(lowered),
+    let dynamic_scope = crate::lower::dynamic_eval::enter_function(
+        ctx,
+        fn_expr
+            .function
+            .body
+            .as_ref()
+            .map_or(&[][..], |b| &b.stmts[..]),
+        ctx.current_strict,
+    );
+    let body = (|| -> Result<Vec<Stmt>> {
+        Ok(if let Some(ref block) = fn_expr.function.body {
+            // #4795: a `using` / `await using` declaration in a function-expression
+            // body must be desugared (scope-exit disposal + declaration-time
+            // disposability check). The hand-rolled per-statement loop below routes
+            // through `lower_body_stmt`, which lowers `using` as a plain `const`
+            // with no disposal — so route the whole body through the using-aware
+            // lowering (the same path arrow/fn-decl bodies use) when any top-level
+            // `using` is present. Forward references stay resolvable via the
+            // FnDecl/var pre-registration done above.
+            let has_using = block
+                .stmts
+                .iter()
+                .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Using(_))));
+            if has_using {
+                crate::lower_decl::lower_stmts_using_aware(ctx, &block.stmts)?
+            } else {
+                let mut func_decls = Vec::new();
+                let mut exec_stmts = Vec::new();
+                for stmt in &block.stmts {
+                    let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
+                    match stmt {
+                        ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
+                        _ => exec_stmts.extend(lowered),
+                    }
                 }
-            }
-            let mut combined: Vec<Stmt> =
-                Vec::with_capacity(nested_var_prologue.len() + func_decls.len() + exec_stmts.len());
-            // Nested-var undefined slots first so every later read/write —
-            // including from hoisted function-declaration closures — sees
-            // initialised storage (#4950).
-            combined.extend(std::mem::take(&mut nested_var_prologue));
-            combined.extend(func_decls);
-            combined.extend(exec_stmts);
-            // Issue #633: prealloc-box for sibling/forward captures. Merge the
-            // forward-captured `let`/`const` boxes (kept out of `hoisted_id_set`
-            // to avoid hoist-reordering their non-hoistable declarations) so
-            // their boxes exist before the earlier capturing closure literal.
-            if !hoisted_id_set.is_empty() || !forward_boxed_ids.is_empty() {
-                let mut prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
-                    &combined,
-                    &hoisted_id_set,
+                let mut combined: Vec<Stmt> = Vec::with_capacity(
+                    nested_var_prologue.len() + func_decls.len() + exec_stmts.len(),
                 );
-                prealloc.retain(|id| !ctx.nested_forward_scope_ids.contains(id));
-                for id in &forward_boxed_ids {
-                    if !prealloc.contains(id) {
-                        prealloc.push(*id);
+                // Nested-var undefined slots first so every later read/write —
+                // including from hoisted function-declaration closures — sees
+                // initialised storage (#4950).
+                combined.extend(std::mem::take(&mut nested_var_prologue));
+                combined.extend(func_decls);
+                combined.extend(exec_stmts);
+                // Issue #633: prealloc-box for sibling/forward captures. Merge the
+                // forward-captured `let`/`const` boxes (kept out of `hoisted_id_set`
+                // to avoid hoist-reordering their non-hoistable declarations) so
+                // their boxes exist before the earlier capturing closure literal.
+                if !hoisted_id_set.is_empty() || !forward_boxed_ids.is_empty() {
+                    let mut prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
+                        &combined,
+                        &hoisted_id_set,
+                    );
+                    prealloc.retain(|id| !ctx.nested_forward_scope_ids.contains(id));
+                    for id in &forward_boxed_ids {
+                        if !prealloc.contains(id) {
+                            prealloc.push(*id);
+                        }
+                    }
+                    prealloc.sort();
+                    // Split TDZ-seeded lexical `let`/`const` boxes from ordinary
+                    // boxes (see block.rs Phase 5 for the rationale).
+                    let mut tdz_prealloc: Vec<LocalId> = Vec::new();
+                    let mut plain_prealloc: Vec<LocalId> = Vec::new();
+                    for id in prealloc {
+                        if ctx.tdz_forward_ids.contains(&id) {
+                            tdz_prealloc.push(id);
+                        } else {
+                            plain_prealloc.push(id);
+                        }
+                    }
+                    if !plain_prealloc.is_empty() || !tdz_prealloc.is_empty() {
+                        let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 2);
+                        if !plain_prealloc.is_empty() {
+                            with_prealloc.push(Stmt::PreallocateBoxes(plain_prealloc));
+                        }
+                        if !tdz_prealloc.is_empty() {
+                            with_prealloc.push(Stmt::PreallocateTdzBoxes(tdz_prealloc));
+                        }
+                        with_prealloc.extend(combined);
+                        combined = with_prealloc;
                     }
                 }
-                prealloc.sort();
-                // Split TDZ-seeded lexical `let`/`const` boxes from ordinary
-                // boxes (see block.rs Phase 5 for the rationale).
-                let mut tdz_prealloc: Vec<LocalId> = Vec::new();
-                let mut plain_prealloc: Vec<LocalId> = Vec::new();
-                for id in prealloc {
-                    if ctx.tdz_forward_ids.contains(&id) {
-                        tdz_prealloc.push(id);
-                    } else {
-                        plain_prealloc.push(id);
-                    }
-                }
-                if !plain_prealloc.is_empty() || !tdz_prealloc.is_empty() {
-                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 2);
-                    if !plain_prealloc.is_empty() {
-                        with_prealloc.push(Stmt::PreallocateBoxes(plain_prealloc));
-                    }
-                    if !tdz_prealloc.is_empty() {
-                        with_prealloc.push(Stmt::PreallocateTdzBoxes(tdz_prealloc));
-                    }
-                    with_prealloc.extend(combined);
-                    combined = with_prealloc;
-                }
+                combined
             }
-            combined
-        }
-    } else {
-        Vec::new()
-    };
+        } else {
+            Vec::new()
+        })
+    })();
+    crate::lower::dynamic_eval::exit_function(ctx);
+    let mut body = body?;
+    if let Some(scope) = dynamic_scope {
+        body.insert(0, scope);
+    }
 
     crate::lower_decl::exit_interface_scope(ctx, interfaces);
 

@@ -383,6 +383,10 @@ fn compute_object_cache_key_with_env(
             section_hash(&opts.program_facts.contract_section)
         ),
     );
+    h.field(
+        "dynamic_code_reach",
+        &format!("{:?}", opts.program_facts.dynamic_code_reach),
+    );
     // #11394: a module's method calls lower differently when ANY module in the
     // program writes that method name onto a builtin prototype.
     h.field(

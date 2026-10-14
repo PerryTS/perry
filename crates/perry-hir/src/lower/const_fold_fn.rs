@@ -11,11 +11,7 @@
 //! `function (a, b) { return a + b }`.
 //!
 //! `new Function` has no access to the enclosing lexical scope (globals
-//! only), so the realistic const-foldable body references only its own
-//! parameters plus globals and lowers to a capture-free closure. (A body
-//! that happens to reference an enclosing local will capture it — a benign
-//! deviation from strict `new Function` global-only scope, and the literal
-//! function-equivalent lowering #1679 asks for.)
+//! only). The fold hides caller bindings while lowering the parsed body.
 //!
 //! Out of scope here (→ Phase 3, #1681): library-generated *non-literal*
 //! body strings. Those stay in the classifier's runtime-unknown /
@@ -111,54 +107,6 @@ pub(crate) fn synth_deferred_throw_value(
     let lit = json_string_literal(message);
     let throw_stmt = format!("throw new Error({lit});");
     synth_throwing_iife(ctx, &throw_stmt, span)
-}
-
-/// #5206: synthesize the throw-on-reach value for a runtime-unknown `eval`
-/// / `Function` / `new Function` site under the default (defer) mode. The
-/// `message` is the descriptive
-/// [`crate::eval_classifier::EvalClassification::deferred_runtime_error_message`].
-///
-/// - For `eval(...)` the value is a throwing IIFE — the throw happens when
-///   the `eval(...)` call evaluates (it is "reached" the moment control
-///   reaches the eval).
-/// - For `Function(...)` / `new Function(...)` the value is a *function* that
-///   throws when called — constructing it is fine; invoking the result is
-///   what's "reached". The site replaces the whole `new Function(...)` /
-///   `Function(...)` expression, so it must evaluate to that function value.
-pub(crate) fn synth_deferred_eval_value(
-    ctx: &mut LoweringContext,
-    surface: EvalSurface,
-    message: &str,
-    span: swc_common::Span,
-) -> Result<Expr> {
-    // JSON-encode the message so embedded quotes / newlines are safe inside
-    // the synthesized source string literal.
-    let lit = json_string_literal(message);
-    let throw_stmt = format!("throw new Error({lit});");
-    match surface {
-        EvalSurface::Eval => synth_throwing_iife(ctx, &throw_stmt, span),
-        EvalSurface::FunctionCall | EvalSurface::NewFunction => {
-            // A function value that throws on invocation.
-            let src = format!("(function () {{ {throw_stmt} }});\n");
-            let module = perry_parser::parse_typescript(&src, "<deferred eval value>.cjs")
-                .map_err(|e| anyhow::Error::new(LowerError::new(format!("internal: {e}"), span)))?;
-            let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) =
-                module.body.into_iter().next().ok_or_else(|| {
-                    anyhow::Error::new(LowerError::new("internal: empty synth".to_string(), span))
-                })?
-            else {
-                return Err(anyhow::Error::new(LowerError::new(
-                    "internal: synth shape".to_string(),
-                    span,
-                )));
-            };
-            let outer_strict = ctx.current_strict;
-            ctx.current_strict = false;
-            let lowered = lower_expr(ctx, &expr_stmt.expr);
-            ctx.current_strict = outer_strict;
-            lowered
-        }
-    }
 }
 
 /// Minimal JSON string-literal encoder for embedding a message into
@@ -397,8 +345,23 @@ pub(crate) fn try_const_fold_function_construct_kind(
     ctx.current_strict = false;
     // A Function constructor body has its own strict context; it does not
     // inherit the enclosing source's strict-mode stack or module default.
+    // Function constructors close over the global environment, never the
+    // caller's lexical bindings. Preserve those bindings for the caller after
+    // lowering; generated functions remain on the normal pending-functions list.
+    let saved_locals = std::mem::take(&mut ctx.locals);
+    let saved_globals = std::mem::take(&mut ctx.globals);
+    let saved_functions = std::mem::take(&mut ctx.functions);
+    let saved_classes = std::mem::take(&mut ctx.classes);
+    let saved_functions_index = std::mem::take(&mut ctx.functions_index);
+    let saved_classes_index = std::mem::take(&mut ctx.classes_index);
     ctx.enter_strict_mode(false);
     let lowered_result = lower_fn_expr(ctx, fn_expr);
+    ctx.locals = saved_locals;
+    ctx.globals = saved_globals;
+    ctx.functions = saved_functions;
+    ctx.classes = saved_classes;
+    ctx.functions_index = saved_functions_index;
+    ctx.classes_index = saved_classes_index;
     ctx.exit_strict_mode();
     ctx.current_strict = outer_strict;
     let lowered = match lowered_result {
