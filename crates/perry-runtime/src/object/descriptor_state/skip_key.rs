@@ -14,10 +14,13 @@
 #[inline(always)]
 pub(crate) unsafe fn own_descriptors_skip_key(addr: usize, key: f64) -> bool {
     // An Ordinary shape proves the store layout, including numeric keys.
-    // Unmarked native layouts still take the synthetic-property checks.
+    // Unmarked native layouts still take the synthetic-property checks. An
+    // object with an overflow keeps its attributes in the overflow's entries
+    // (`overflow::set_entry_attrs`), not in its layout's summary.
     if super::shapes::object_shape_record(addr as *const ObjectHeader).is_some_and(|shape| {
         shape.object_kind() == super::shapes::ShapeObjectKind::Ordinary && shape.summary() == 0
-    }) && crate::value::JSValue::from_bits(key.to_bits()).is_any_string()
+    }) && !super::overflow::has_overflow(addr as *const ObjectHeader)
+        && crate::value::JSValue::from_bits(key.to_bits()).is_any_string()
     {
         return true;
     }
