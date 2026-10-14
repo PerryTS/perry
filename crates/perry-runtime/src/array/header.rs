@@ -69,47 +69,98 @@ pub(crate) unsafe fn array_object_flags_resolved(arr: *const ArrayHeader) -> u16
 }
 
 /// Whether the resolved live head has the canonical ordinary-Array shape:
-/// `%Array.prototype%` and no own non-index keys or descriptors.
+/// `%Array.prototype%` and no own property beyond its elements.
 ///
-/// This is the runtime spelling of the one-word array admission guards emitted
-/// by codegen: the array's receiver-local shape facts live in `_reserved`, and
-/// both facts that leave the canonical shape are monotone for the allocation.
-/// `OBJ_FLAG_ARRAY_DESCRIPTORS` is armed by every own named/symbol key install;
-/// `GC_ARRAY_CUSTOM_PROTO` is armed when the receiver is re-parented. Keep the
-/// test as one masked load/compare so callers do not rediscover those facts in
-/// the side tables they guard.
+/// Every own property of an array other than its plain elements (a named or
+/// symbol key, an index-key descriptor, a non-writable `length`) lives in its
+/// named layout object (`ArrayHeader.named`, object model §6a), so a null
+/// `named` is the absence proof; `GC_ARRAY_CUSTOM_PROTO` is armed when the
+/// receiver is re-parented.
 ///
 /// # Safety
 ///
 /// `arr` must satisfy [`array_object_flags_resolved`]'s contract.
 #[inline(always)]
 pub(crate) unsafe fn array_has_plain_shape_resolved(arr: *const ArrayHeader) -> bool {
-    const NON_PLAIN_SHAPE: u16 =
-        crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS | crate::gc::GC_ARRAY_CUSTOM_PROTO;
-    array_object_flags_resolved(arr) & NON_PLAIN_SHAPE == 0
+    array_object_flags_resolved(arr) & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+        && (*arr).named.is_null()
 }
 
-/// Publish that `owner` gained an own non-index key, moving a real Array off
-/// its canonical shape. The descriptor bit is the existing array-shape fact
-/// used by generated element/method guards; no separate symbol registry fact
-/// is needed on their hit paths.
+/// Does the array own any property beyond its elements? Its named layout
+/// object (`ArrayHeader.named`, §6a) holds every one: named and symbol keys,
+/// index-key descriptors and a non-writable `length`. Resolves a growth alias.
 ///
-/// Arbitrary non-array owners are accepted and ignored. Symbol-property
-/// installation funnels call this before publishing their side-table entry.
+/// `arr` is an array head or a growth alias of one, as for
+/// [`array_object_flags`].
 #[inline]
-pub(crate) fn note_array_own_non_index_key(owner: usize) {
-    let is_array = unsafe { crate::value::addr_class::try_read_gc_header(owner) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
-    if !is_array {
-        return;
+pub(crate) fn array_has_named_layout(arr: *const ArrayHeader) -> bool {
+    let live = clean_arr_ptr(arr);
+    // SAFETY: `clean_arr_ptr` returned the live head or null.
+    !live.is_null() && unsafe { !(*live).named.is_null() }
+}
+
+/// The element-kind fact of an array's layout (object model step 7): do its
+/// elements or `length` carry a descriptor — an accessor or non-default
+/// attributes on an index key, or on `length`? Those live as keys of the
+/// array's named layout object, so the fact is that layout's attribute
+/// summary in its shape record. A layout with only named keys (tsc's
+/// `pos`/`end`, including named accessors) leaves the elements plain. (A sparse index past the
+/// dense part is a default-attribute layout key too; every reader consults it
+/// only at `index >= capacity`, `array_sparse_index_property_get`.) Resolves a
+/// growth alias; `arr` is an array head or a growth alias of one, as for
+/// [`array_object_flags`].
+#[inline]
+pub(crate) fn array_has_element_descriptors(arr: *const ArrayHeader) -> bool {
+    let live = clean_arr_ptr(arr);
+    // SAFETY: `clean_arr_ptr` returned the live head or null.
+    !live.is_null() && unsafe { array_has_element_descriptors_resolved(live) }
+}
+
+/// [`array_has_element_descriptors`] for a head the caller already resolved
+/// (not a growth stub).
+///
+/// # Safety
+/// `live` is a live, non-forwarded `GC_TYPE_ARRAY` head; nothing below
+/// allocates.
+#[inline(always)]
+pub(crate) unsafe fn array_has_element_descriptors_resolved(live: *const ArrayHeader) -> bool {
+    if super::array_iteration_facts() & super::indexing_support::ELEMENT_DESCRIPTORS_REACHABLE == 0
+    {
+        return false;
     }
-    let owner = clean_arr_ptr_mut(owner as *mut ArrayHeader);
-    if owner.is_null() {
-        return;
-    }
-    unsafe {
-        let header = (owner as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*header)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    let named = (*live).named;
+    !named.is_null() && named_layout_holds_element_descriptors(named)
+}
+
+unsafe fn named_layout_holds_element_descriptors(
+    named: *const crate::object::ObjectHeader,
+) -> bool {
+    let word = crate::object::layout_desc::layout_id_of_word((*named).parent_class_id);
+    let Some(record) = crate::object::shapes::layout_record(word) else {
+        return true;
+    };
+    match record.element_kind() {
+        0 => false,
+        1 => true,
+        _ => {
+            // This is the named holder's real keys array, not an arbitrary
+            // JS array-like value. ObjectKeys::owned would ask the generic
+            // js_array_length reader (Proxy/string provenance callbacks),
+            // falsely making this read and its numeric guards Reenters.
+            let keys = if record.keys() != 0 {
+                record.keys() as usize as *const ArrayHeader
+            } else {
+                crate::object::dictionary::keys_array(named)
+            };
+            let count = if record.keys() != 0 {
+                record.logical_key_count()
+            } else if keys.is_null() {
+                0
+            } else {
+                (*keys).length.min((*keys).capacity)
+            };
+            super::named_props::keys_hold_element_descriptors(keys, count)
+        }
     }
 }
 
@@ -368,7 +419,6 @@ pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     });
     // Named properties of arrays that were full when they gained their first
     // one (`array/named_props.rs`, `FULL_ARRAY_NAMED_PROPS`).
-    super::named_props::scan_full_array_named_property_roots_mut(visitor);
 }
 
 /// The payload bytes of a heap string, or `None` for a null pointer.
@@ -906,13 +956,15 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
 }
 
 /// Array header - precedes the elements in memory
-#[repr(C)]
+#[repr(C, align(8))]
 pub struct ArrayHeader {
     /// Number of elements in the array
     pub length: u32,
     /// Available slots from logical element zero to the end of the allocation.
     /// Dense shift advances that start by reducing this value. See storage.rs.
     pub capacity: u32,
+    /// Ordinary own-property layout, independent of the element backing.
+    pub named: *mut crate::object::ObjectHeader,
 }
 
 #[inline]
@@ -1593,7 +1645,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_get(arr: *mut ArrayHeader, index: u32
     }
     // An index converted to an accessor (or given custom attrs) via
     // `Object.defineProperty` must dispatch through the slow path.
-    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    if array_has_element_descriptors_resolved(arr) {
         return None;
     }
     if index >= (*arr).length {
@@ -1617,7 +1669,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
         return false;
     }
     // Accessor setters / non-writable attrs on indices need the slow path.
-    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    if array_has_element_descriptors_resolved(arr) {
         return false;
     }
     let original_bits = value.to_bits();
@@ -1746,7 +1798,8 @@ pub extern "C" fn js_array_clear_numeric_layout(arr: *mut ArrayHeader) {
 #[inline(never)]
 unsafe fn demote_probed_raw_f64_array(arr: *mut ArrayHeader) {
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (*header)._reserved &= !(crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES);
+    (*header)._reserved &=
+        !(crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES);
     crate::typed_feedback::invalidate_representation_change(arr as usize);
 }
 

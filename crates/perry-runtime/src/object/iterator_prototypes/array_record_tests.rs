@@ -419,10 +419,7 @@ fn array_record_bootstrap_entry_has_current_shape_facts() {
         let _ = crate::object::builtin_prototype_value("Array");
         let a = js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
         assert_eq!(crate::array::js_array_record_needs_iterator(a), 0);
-        assert_eq!(
-            crate::array::js_array_record_literal_needs_iterator(std::ptr::null()),
-            0
-        );
+        assert_eq!(crate::array::js_array_record_literal_needs_iterator(1), 0);
     }
 }
 
@@ -435,7 +432,7 @@ fn array_record_entry_repairs_only_its_private_source() {
         let live = crate::array::js_array_grow(old, 100);
         let mut record = f64::from_bits(crate::value::TAG_UNDEFINED);
         assert_eq!(
-            crate::array::js_array_record_enter(alias, &mut record, std::ptr::null()),
+            crate::array::js_array_record_enter(alias, &mut record, 1),
             0
         );
         assert_eq!(crate::value::js_nanbox_get_pointer(record), live as i64);
@@ -443,10 +440,7 @@ fn array_record_entry_repairs_only_its_private_source() {
         assert_eq!(crate::array::js_array_record_needs_iterator(record), 0);
         crate::symbol::js_object_set_symbol_property(record, symbol, 33.0);
         assert_eq!(crate::array::js_array_record_needs_iterator(record), 1);
-        assert_eq!(
-            crate::array::js_array_record_enter(42.0, &mut record, std::ptr::null()),
-            1
-        );
+        assert_eq!(crate::array::js_array_record_enter(42.0, &mut record, 1), 1);
         assert_eq!(record, 42.0);
     }
 }
@@ -495,13 +489,13 @@ fn array_record_counted_entry_admits_only_packed_numeric_heads() {
         } as i64);
         let mut out = 0.0;
         assert_eq!(
-            crate::array::js_array_record_enter_counted(numbers, &mut out, std::ptr::null()),
+            crate::array::js_array_record_enter_counted(numbers, &mut out, 1),
             2,
             "a packed numeric head is admitted beside the shape proof"
         );
         assert_eq!(out.to_bits(), numbers.to_bits());
         assert_eq!(
-            crate::array::js_array_record_enter(numbers, &mut out, std::ptr::null()),
+            crate::array::js_array_record_enter(numbers, &mut out, 1),
             0,
             "the plain entry reports only the shape verdict"
         );
@@ -510,13 +504,13 @@ fn array_record_counted_entry_admits_only_packed_numeric_heads() {
             crate::array::js_array_push_f64(a, f64::from_bits(crate::value::TAG_UNDEFINED))
         } as i64);
         assert_eq!(
-            crate::array::js_array_record_enter_counted(mixed, &mut out, std::ptr::null()),
+            crate::array::js_array_record_enter_counted(mixed, &mut out, 1),
             0,
             "a non-numeric head keeps the indexed record without admission"
         );
         crate::symbol::js_object_set_symbol_property(numbers, sym, 1.0);
         assert_eq!(
-            crate::array::js_array_record_enter_counted(numbers, &mut out, std::ptr::null()),
+            crate::array::js_array_record_enter_counted(numbers, &mut out, 1),
             1,
             "an own iterator member is never admitted"
         );
@@ -539,45 +533,24 @@ fn array_record_absent_close_proof_reads_the_whole_chain() {
     }
 }
 
-/// Warm one entry site: the full proof publishes the owners' pair, and a
-/// second entry hits on the ShapeId compare alone.
-unsafe fn warm_site(array: f64) -> crate::array::ArrayRecordSite {
-    let site = crate::array::ArrayRecordSite::new(0);
-    let mut out = 0.0;
-    assert_eq!(
-        crate::array::js_array_record_enter(array, &mut out, &site),
-        0
-    );
-    assert_ne!(
-        site.load(Ordering::Relaxed),
-        0,
-        "the full proof publishes the pair"
-    );
-    assert_eq!(
-        crate::array::js_array_record_enter(array, &mut out, &site),
-        0
-    );
-    site
-}
-
-unsafe fn enter_at(array: f64, site: &crate::array::ArrayRecordSite) -> i32 {
-    let mut out = 0.0;
-    crate::array::js_array_record_enter(array, &mut out, site)
-}
-
 #[test]
-fn array_record_site_memo_refuses_after_iteration_member_store() {
+fn array_record_slot_semantics_after_iteration_member_store() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_slot_semantics_after_iteration_member_store",
+    ) {
+        return;
+    }
+
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, proto, sym) = fixture();
-        let site = warm_site(array);
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
         let next_proto =
             ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
         let wrong = f64::from_bits(super::super::js_object_get_field(next_proto, 0).bits());
         crate::symbol::js_object_set_symbol_property(proto, sym, wrong);
         assert_eq!(
-            enter_at(array, &site),
+            crate::array::js_array_record_needs_iterator(array),
             1,
             "a store over the @@iterator lane moves the bag's ShapeId"
         );
@@ -586,16 +559,21 @@ fn array_record_site_memo_refuses_after_iteration_member_store() {
 }
 
 #[test]
-fn array_record_site_memo_refuses_after_next_store() {
+fn array_record_slot_semantics_after_next_store() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_slot_semantics_after_next_store",
+    ) {
+        return;
+    }
+
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
-        let site = warm_site(array);
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
         super::super::js_object_set_field(proto, 0, super::super::js_object_get_field(other, 0));
         assert_eq!(
-            enter_at(array, &site),
+            crate::array::js_array_record_needs_iterator(array),
             1,
             "a store over the next lane moves the owner's ShapeId"
         );
@@ -603,11 +581,16 @@ fn array_record_site_memo_refuses_after_next_store() {
 }
 
 #[test]
-fn array_record_site_memo_refuses_after_next_accessor() {
+fn array_record_slot_semantics_after_next_accessor() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_slot_semantics_after_next_accessor",
+    ) {
+        return;
+    }
+
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
-        let fresh = warm_site(array);
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let original = super::super::js_object_get_field(proto, 0);
         let key = crate::string::intern_ascii_literal(b"next");
@@ -618,7 +601,7 @@ fn array_record_site_memo_refuses_after_next_accessor() {
             f64::from_bits(crate::value::TAG_UNDEFINED),
         );
         assert_eq!(
-            enter_at(array, &fresh),
+            crate::array::js_array_record_needs_iterator(array),
             1,
             "an accessor next moves the owner's ShapeId"
         );
@@ -626,17 +609,22 @@ fn array_record_site_memo_refuses_after_next_accessor() {
 }
 
 #[test]
-fn array_record_site_memo_refuses_after_iteration_member_delete() {
+fn array_record_slot_semantics_after_iteration_member_delete() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_slot_semantics_after_iteration_member_delete",
+    ) {
+        return;
+    }
+
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, proto, sym) = fixture();
-        let site = warm_site(array);
         let addr = crate::value::js_nanbox_get_pointer(proto) as usize;
         let symbol = crate::value::js_nanbox_get_pointer(sym) as usize;
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
         super::super::shaped_symbols::delete(addr, symbol);
         assert_eq!(
-            enter_at(array, &site),
+            crate::array::js_array_record_needs_iterator(array),
             1,
             "deleting @@iterator moves the bag's ShapeId"
         );
@@ -645,89 +633,43 @@ fn array_record_site_memo_refuses_after_iteration_member_delete() {
 }
 
 #[test]
-fn array_record_site_memo_publishes_refusal_and_revalidates_both_owners() {
-    unsafe {
-        let _stable = crate::gc::GcSuppressScope::new();
-        let (array, proto, sym) = fixture();
-        let site = warm_site(array);
-        let proven = site.load(Ordering::Relaxed);
-        let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-        let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
-        let original_next = super::super::js_object_get_field(next, 0);
-        let wrong = f64::from_bits(original_next.bits());
-        crate::symbol::js_object_set_symbol_property(proto, sym, wrong);
-        assert_eq!(enter_at(array, &site), 1);
-        let refused = site.load(Ordering::Relaxed);
-        assert_ne!(refused, proven, "a patched owner publishes a new verdict");
-        assert_ne!(refused & (1 << 62), 0);
-        let proof_calls = crate::array::array_record_full_proof_calls();
-        assert_eq!(enter_at(array, &site), 1, "warm refusal stays refused");
-        assert_eq!(
-            crate::array::array_record_full_proof_calls(),
-            proof_calls,
-            "a warm refusal must bypass every full owner proof"
-        );
-        assert_eq!(site.load(Ordering::Relaxed), refused);
-        crate::symbol::js_object_set_symbol_property(proto, sym, original);
-        let bag = crate::object::shaped_symbols::owner(
-            crate::value::js_nanbox_get_pointer(proto) as usize
-        )
-        .unwrap();
-        super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
-        assert_eq!(
-            enter_at(array, &site),
-            0,
-            "restoration revalidates instead of retaining refusal"
-        );
-        let restored = site.load(Ordering::Relaxed);
-        assert_eq!(restored & (1 << 62), 0);
-        assert_ne!(restored, refused);
-        assert_eq!(
-            crate::array::array_record_full_proof_calls(),
-            proof_calls + 1,
-            "restoration must receive a fresh full proof"
-        );
-        let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
-        super::super::js_object_set_field(next, 0, super::super::js_object_get_field(other, 0));
-        assert_eq!(enter_at(array, &site), 1);
-        let refused_next = site.load(Ordering::Relaxed);
-        assert_ne!(refused_next & (1 << 62), 0);
-        assert_eq!(enter_at(array, &site), 1);
-        assert_eq!(site.load(Ordering::Relaxed), refused_next);
-        super::super::js_object_set_field(next, 0, original_next);
-        super::super::shapes::learn_object_constfn_lanes(next, |_, bits| {
-            bits == original_next.bits()
-        });
-        assert_eq!(enter_at(array, &site), 0);
-        assert_eq!(site.load(Ordering::Relaxed) & (1 << 62), 0);
+fn array_record_dictionary_next_keeps_generic_iteration() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_dictionary_next_keeps_generic_iteration",
+    ) {
+        return;
     }
-}
 
-#[test]
-fn array_record_site_memo_never_caches_a_dictionary_refusal() {
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
-        let site = warm_site(array);
-        let old = site.load(Ordering::Relaxed);
         let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         assert!(super::super::dictionary::latch_object_to_dictionary(next));
-        assert_eq!(enter_at(array, &site), 1);
         assert_eq!(
-            site.load(Ordering::Relaxed),
-            old,
-            "dictionary keys are mutable under their ShapeId"
+            crate::array::js_array_record_needs_iterator(array),
+            0,
+            "dictionary storage does not change the actual builtin next"
         );
         let original = super::super::js_object_get_field(next, 0);
         super::super::js_object_set_field(next, 0, JSValue::number(3.0));
-        assert_eq!(enter_at(array, &site), 1);
-        assert_eq!(site.load(Ordering::Relaxed), old);
+        assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
         super::super::js_object_set_field(next, 0, original);
+        assert_eq!(
+            crate::array::js_array_record_needs_iterator(array),
+            0,
+            "restoring next restores intrinsic iteration"
+        );
     }
 }
 
 #[test]
 fn array_record_shared_finish_preserves_done_and_throw_completion() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_shared_finish_preserves_done_and_throw_completion",
+    ) {
+        return;
+    }
+
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
@@ -747,5 +689,46 @@ fn array_record_shared_finish_preserves_done_and_throw_completion() {
                 assert_eq!(error, 42.0);
             }
         }
+    }
+}
+
+#[test]
+fn array_record_slot_restoration_rechecks_iterator_and_next_without_a_site_word() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "array_record_slot_restoration_rechecks_iterator_and_next_without_a_site_word",
+    ) {
+        return;
+    }
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (array, proto, sym) = fixture();
+        let original = crate::symbol::js_object_get_symbol_property(proto, sym);
+        let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
+        let original_next = super::super::js_object_get_field(next, 0);
+        crate::symbol::js_object_set_symbol_property(
+            proto,
+            sym,
+            f64::from_bits(original_next.bits()),
+        );
+        for _ in 0..2 {
+            assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
+        }
+        crate::symbol::js_object_set_symbol_property(proto, sym, original);
+        let bag = crate::object::shaped_symbols::owner(
+            crate::value::js_nanbox_get_pointer(proto) as usize
+        )
+        .unwrap();
+        super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
+        assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
+        let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+        super::super::js_object_set_field(next, 0, super::super::js_object_get_field(other, 0));
+        for _ in 0..2 {
+            assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
+        }
+        super::super::js_object_set_field(next, 0, original_next);
+        super::super::shapes::learn_object_constfn_lanes(next, |_, bits| {
+            bits == original_next.bits()
+        });
+        assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
     }
 }

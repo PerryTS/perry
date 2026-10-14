@@ -258,7 +258,9 @@ impl GuardState<'_> {
         let header = crate::value::addr_class::try_read_gc_header(address)?;
         if header.obj_type != crate::gc::GC_TYPE_ARRAY
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            || crate::array::array_has_element_descriptors(
+                address as *const crate::array::ArrayHeader,
+            )
         {
             return None;
         }

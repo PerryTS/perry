@@ -7,7 +7,7 @@
 //! metadata slot, header word, side table, or survivor copy is needed.
 //!
 //! The same slack carries an array's named properties (`named_props.rs`): a
-//! `GC_ARRAY_NAMED_PROPS` array permanently reserves its first physical slots
+//! `GC_ARRAY_KEY_ATTRS` array permanently reserves its first physical slots
 //! (one, or one per inline key plus a header word), so its front offset is at
 //! least that reserve and an empty-queue reset gives back everything else.
 //!
@@ -88,7 +88,7 @@ pub(super) unsafe fn shift_dense(arr: *mut ArrayHeader) -> f64 {
         // Return the consumed front to `capacity` — all of it except the
         // named-property reserve, which stays in front of logical slot 0
         // (`named_props.rs`).
-        let reserve = super::named_props::array_named_props_reserve(arr);
+        let reserve = super::named_props::key_attrs_reserve(arr);
         (*arr).capacity += (front - reserve) as u32;
         super::rebuild_array_layout(arr);
     } else {

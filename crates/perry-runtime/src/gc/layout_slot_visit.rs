@@ -317,18 +317,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {
             layout_descriptors!();
-            // #10166 (brief 4): an array's named properties live in reserve
-            // slots in front of logical element 0 (`array/named_props.rs`):
-            // a pairs pointer, or inline exec-result values. Those words sit
-            // outside every layout range, so emit them as fixed child slots:
-            // marking retains the values, evacuation and compaction rewrite
-            // them, and the remembered-set scan finds them through the pages
-            // the store barriers dirtied.
-            if (*header)._reserved & crate::gc::GC_ARRAY_NAMED_PROPS != 0 {
-                crate::array::visit_array_named_props_slots(
-                    user_ptr as *const crate::array::ArrayHeader,
-                    |slot| visit(fixed_slot(slot)),
-                );
+            let array = user_ptr as *mut crate::array::ArrayHeader;
+            if (*header)._reserved & crate::gc::GC_ARRAY_KEY_ATTRS != 0 {
+                visit(fixed_slot(crate::array::key_attrs_slot(array)));
             }
         }
         GcRewriteDescriptorKind::Object => {

@@ -60,11 +60,11 @@ fn fresh_string(bytes: &[u8]) -> usize {
 const ELEMENTS: [&[u8]; 4] = [b"elem_zero", b"elem_one", b"elem_two", b"elem_three"];
 
 /// The exact predicate `expr/array_push.rs` emits before taking the elided
-/// store: `(_reserved & 0xF487) == 0xA000`. Duplicated numerically on purpose —
+/// store: `(_reserved & 0xF087) == 0xA000` (plus a null named layout). Duplicated numerically on purpose —
 /// [`codegen_admission_test_matches_the_runtime_bit_names`] pins the two
 /// spellings together, so a bit that moves in `gc/types.rs` fails here instead
 /// of silently un-gating generated code in another crate.
-const CODEGEN_ADMISSION_MASK: u16 = 62599;
+const CODEGEN_ADMISSION_MASK: u16 = 61575;
 const CODEGEN_ADMISSION_EXPECT: u16 = 40960;
 
 unsafe fn codegen_would_take_the_elided_store(arr: *mut ArrayHeader) -> bool {
@@ -79,7 +79,6 @@ fn codegen_admission_test_matches_the_runtime_bit_names() {
         OBJ_FLAG_FROZEN
             | OBJ_FLAG_SEALED
             | OBJ_FLAG_NO_EXTEND
-            | OBJ_FLAG_ARRAY_DESCRIPTORS
             | GC_ARRAY_RAW_F64_LAYOUT
             | GC_ARRAY_RAW_F64_HOLES
             | GC_LAYOUT_ALL_POINTERS

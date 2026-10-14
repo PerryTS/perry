@@ -573,6 +573,7 @@ fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set()
     clear_mark_seeds();
     CONS_PINNED.with(|s| s.borrow_mut().clear());
 
+    isolate_runtime_layout_blocks();
     let (parent, fields) = unsafe { alloc_old_test_object(1) };
     let parent_user = parent as usize;
     let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
@@ -793,6 +794,7 @@ fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
     clear_mark_seeds();
     CONS_PINNED.with(|s| s.borrow_mut().clear());
 
+    isolate_runtime_layout_blocks();
     let (parent, fields) = unsafe { alloc_old_test_object(1) };
     let parent_user = parent as usize;
     let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };

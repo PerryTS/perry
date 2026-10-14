@@ -13,6 +13,7 @@
 //! The record types below mirror the runtime's `#[repr(C)]` structs, whose
 //! sizes and offsets the runtime pins with const asserts.
 
+pub(crate) mod array_families;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
@@ -26,8 +27,8 @@ use crate::strings::StringPool;
 pub const DESC_TY: &str = "{ i32, i16, i8, i8, i32, i32, i64, i64, ptr, i32, i32, ptr }";
 /// `%PerryLayoutKey`: atom, slot, attrs, pad (16 bytes).
 pub const KEY_TY: &str = "{ ptr, i32, i8, [3 x i8] }";
-/// `%StaticAtom`: hash, string (16 bytes).
-pub const ATOM_TY: &str = "{ i64, ptr }";
+/// `%StaticAtom`: hash, string, kind, pad, index (24 bytes; §6a).
+pub const ATOM_TY: &str = "{ i64, ptr, i8, [3 x i8], i32 }";
 /// Byte offset of `layout_id` in a descriptor.
 pub const DESC_LAYOUT_ID_OFFSET: u32 = 12;
 
@@ -62,6 +63,7 @@ pub(crate) struct FamilyLayout {
     pub keys: Vec<String>,
     pub slot_count: u32,
     pub rep: u64,
+    pub array_named: bool,
 }
 
 #[derive(Default)]
@@ -180,8 +182,9 @@ fn atom(
         ".perryatm$m",
     );
     llmod.add_raw_global(format!(
-        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image} }}, section \"{sect}\", align 8",
-        fnv1a(key.as_bytes()) as i64
+        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] zeroinitializer, i32 0 }}, section \"{sect}\", align 8",
+        fnv1a(key.as_bytes()) as i64,
+        crate::runtime_abi::ATOM_KIND_STRING
     ));
     emitted.insert(key.to_string(), name.clone());
     Some(name)
@@ -369,7 +372,8 @@ pub(crate) fn emit_module_layouts(
     let mut n = 0usize;
     // Step 1: the carried family states first (generated code references
     // them by name), then every literal family as static data.
-    let carried: Vec<FamilyLayout> = MODULE_FAMILIES.with(|m| m.borrow().layouts.clone());
+    let mut carried: Vec<FamilyLayout> = MODULE_FAMILIES.with(|m| m.borrow().layouts.clone());
+
     for (ordinal, fam) in carried.iter().enumerate() {
         let mut atom_names = Vec::with_capacity(fam.keys.len());
         for k in &fam.keys {
@@ -378,18 +382,45 @@ pub(crate) fn emit_module_layouts(
                     .expect("a family key is an atom (`key_is_atom`)"),
             );
         }
+        let mut keys = fam.keys.clone();
+        let first_hash = if fam.array_named {
+            let name = "perry_atom_well_known_iterator";
+            let atom_sect = section(
+                &llmod.target_triple,
+                "perry_atoms",
+                "__DATA,__perry_atoms",
+                ".perryatm$m",
+            );
+            let hash = crate::runtime_abi::well_known_symbol_atom_hash(
+                crate::runtime_abi::WELL_KNOWN_SYMBOL_ITERATOR,
+            );
+            // weak_odr coalesces one well-known atom across modules.
+            if !atoms.contains_key(name) {
+                llmod.add_raw_global(format!(
+                    "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 {} }}, section \"{atom_sect}\", align 8",
+                    hash as i64, crate::runtime_abi::ATOM_KIND_WELL_KNOWN_SYMBOL,
+                    crate::runtime_abi::WELL_KNOWN_SYMBOL_ITERATOR));
+                atoms.insert(name.into(), name.into());
+            }
+            keys.insert(0, String::new());
+            atom_names.insert(0, name.into());
+            Some(hash)
+        } else {
+            None
+        };
         let family = (fnv1a(format!("{}#fam{ordinal}", hir.name).as_bytes()) as u32) & 0x7FFF_FFFF;
         emit_descriptor(
             llmod,
             &sect,
             &fam.desc_global,
             &format!("{}_fam", fam.desc_global),
-            &fam.keys,
+            &keys,
             &atom_names,
             family,
-            fam.slot_count,
+            fam.slot_count + u32::from(fam.array_named),
             fam.rep,
             LAYOUT_ID_CARRIED,
+            first_hash,
         );
         // The id word on its own, so a function loads it once at entry.
         llmod.add_raw_global(format!(
@@ -421,6 +452,7 @@ pub(crate) fn emit_module_layouts(
             count,
             0,
             0,
+            None,
         );
         n += 1;
     }
@@ -440,13 +472,19 @@ fn emit_descriptor(
     slot_count: u32,
     rep: u64,
     layout_id: u32,
+    first_hash: Option<u64>,
 ) {
     {
         let count = keys.len();
         let cap = (count * 2).next_power_of_two().max(2);
         let mut index = vec![u32::MAX; cap];
         for (pos, k) in keys.iter().enumerate() {
-            let mut at = (fnv1a(k.as_bytes()) as usize) & (cap - 1);
+            let hash = if pos == 0 {
+                first_hash.unwrap_or_else(|| fnv1a(k.as_bytes()))
+            } else {
+                fnv1a(k.as_bytes())
+            };
+            let mut at = (hash as usize) & (cap - 1);
             while index[at] != u32::MAX {
                 at = (at + 1) & (cap - 1);
             }

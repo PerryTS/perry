@@ -234,6 +234,11 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
         let _roots = ShadowAndGlobalRootResetGuard;
         let frame = js_shadow_frame_push(1);
 
+        // Retain permanent startup shape metadata before the destructive
+        // sweep, so promotion cannot reuse holes on its stationary block.
+        gc_init();
+        isolate_runtime_layout_blocks();
+
         // Fill the current old block so the evacuated Map opens a fresh one,
         // then leave a dead neighbour behind it: a fragmented page for the
         // forced defrag policy to select.
@@ -259,6 +264,12 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
             (*header_from_user_ptr(test_map_store_word(old_map) as *const u8)).gc_flags |=
                 GC_FLAG_MARKED;
         }
+        // This fixture drives the sweep directly, so perform the permanent
+        // layout metadata root visit that a real full trace would do first.
+        let valid = build_valid_pointer_set();
+        crate::object::shapes::scan_shape_table_rekey_mut(&mut RuntimeRootVisitor::for_mark(
+            &valid,
+        ));
         let _ = sweep_with_age_bump(false);
         let selected = select_old_page_defrag_pages(true);
         assert!(
@@ -266,6 +277,18 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
             "the test must seed an old-page defrag candidate holding the Map"
         );
 
+        let blocks = crate::arena::old_arena_source_blocks_for_pages(&selected.pages);
+        let mut immovable = Vec::new();
+        crate::arena::old_arena_walk_objects_on_pages(&blocks.pages, |header| {
+            let header = header as *mut GcHeader;
+            let flags = unsafe { (*header).gc_flags };
+            if flags & (GC_FLAG_FORWARDED | GC_FLAG_PINNED | GC_FLAG_SHAPE_SHARED) != 0
+                || !gc_type_is_movable(unsafe { (*header).obj_type })
+                || unsafe { super::super::never_move::blocks_evacuation(header) }
+            {
+                immovable.push((header as usize, unsafe { (*header).obj_type }, flags));
+            }
+        });
         let before = test_thread_map_side_deallocation_snapshot();
         // Defrag runs in the non-copying minor's evacuation phase.
         let trace = {
@@ -273,7 +296,10 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
             collect_minor_trace(GcTriggerKind::Direct)
         };
         let moved = ptr_from_slot(0);
-        assert_ne!(moved, old_map, "old-page defrag must actually move the Map");
+        assert_ne!(
+            moved, old_map,
+            "old-page defrag must actually move the Map; source refusals: {immovable:?}"
+        );
         assert!(trace.evacuation.released_original_objects > 0);
         assert!(trace.evacuation.old_page_moved_objects > 0);
         assert_eq!(

@@ -547,9 +547,6 @@ impl Writer<'_> {
     // retain the descriptor walk.
     #[optimize(size)]
     unsafe fn data_array_layout(&self, arr: *const crate::array::ArrayHeader) -> bool {
-        if crate::array::array_has_plain_shape_resolved(arr) {
-            return true;
-        }
         let holder = crate::array::array_property_bag(arr);
         if holder.is_null() {
             return !crate::array::array_has_named_properties_resolved(arr);

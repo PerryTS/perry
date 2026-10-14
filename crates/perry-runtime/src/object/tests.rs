@@ -869,8 +869,9 @@ fn spill_layout_matches_codegen() {
     );
     assert_eq!(
         std::mem::size_of::<crate::array::ArrayHeader>(),
-        8,
-        "perry-codegen's ARRAY_HEADER_SIZE_BYTES is 8; update both sides together"
+        16,
+        "perry-codegen's ARRAY_HEADER_SIZE_BYTES is 16 (length, capacity, named); \
+         update both sides together"
     );
 }
 

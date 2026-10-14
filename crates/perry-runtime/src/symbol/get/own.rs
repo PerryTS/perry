@@ -16,6 +16,9 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
                 let position = crate::object::shaped_symbols::position(obj, symbol)?;
                 let keys = crate::object::object_keys(obj);
                 let lane = crate::object::js_object_get_field(obj, position).bits();
+                if lane == crate::value::TAG_HOLE {
+                    return None;
+                }
                 return if crate::object::key_attrs::key_is_accessor_at(keys.arr(), position) {
                     let acc = crate::object::accessor_pair::pair_of_value(lane).unwrap_or_default();
                     Some(OwnSymbolSlot::Accessor {
@@ -40,6 +43,9 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     let position = crate::object::shaped_symbols::position(holder, sym_key)?;
     let keys = crate::object::object_keys(holder);
     let lane = crate::object::js_object_get_field(holder, position).bits();
+    if lane == crate::value::TAG_HOLE {
+        return None;
+    }
     if crate::object::key_attrs::keys_entry(keys.arr(), position)
         & crate::object::key_attrs::ENTRY_ACCESSOR
         != 0

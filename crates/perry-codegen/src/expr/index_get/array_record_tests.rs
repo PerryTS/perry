@@ -277,7 +277,7 @@ fn array_record_index_retains_boxed_cold_forwarding_custody() {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(2)])),
     });
-    assert!(ll.contains("array_record_index.guard.deref") && ll.contains("67141887"));
+    assert!(ll.contains("array_record_index.guard.deref") && ll.contains("33023"));
     assert!(ll.contains("call double @perry_array_read_cold_shared"));
     assert!(
         !ll.contains("guard.follow") && !ll.contains("guard.repair"),
@@ -294,7 +294,7 @@ fn ordinary_index_read_preserves_its_existing_forwarding_custody() {
         index: Box::new(Expr::LocalGet(2)),
     });
     assert!(
-        ll.contains("67141887") && ll.contains("js_typed_feedback_array_index_get_fallback_boxed"),
+        ll.contains("33023") && ll.contains("js_typed_feedback_array_index_get_fallback_boxed"),
         "ordinary read rejects forwarding into its shared fallback"
     );
     assert!(
@@ -716,7 +716,9 @@ fn array_stack_record_entry_publishes_its_sole_source_home() {
             .lines()
             .find(|l| l.contains("call i32 @js_array_record_stack_enter("))
             .unwrap();
-        assert!(entry.contains(&format!("(ptr {record}, ptr @")) && entry.ends_with("i32 0)"),
+        // The record and the program's iteration facts (object model step 7);
+        // no per-site memo word.
+        assert!(entry.contains(&format!("(ptr {record}, i32 ")) && entry.ends_with("i32 0)"),
             "entry must publish into the whole record range, without a scratch source or output home");
     }
     assert!(consumers > 0);

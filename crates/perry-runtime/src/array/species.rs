@@ -105,17 +105,17 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
                 let hdr =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
-                    && crate::object::get_accessor_descriptor(raw, "constructor").is_none()
+                    && (*hdr)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+                    && !super::named_props::array_named_property_has_by_name(arr, "constructor")
                     && crate::object::get_accessor_descriptor(
-                        crate::array::array_prototype_addr(),
+                        crate::array::array_prototype_addr_if_resolved(),
                         "constructor",
                     )
                     .is_none()
                     && !crate::object::descriptor_state::owner_key_is_accessor(
-                        crate::array::object_prototype_addr(),
+                        crate::array::object_prototype_addr_if_resolved(),
                         b"constructor",
                     )
-                    && crate::array::array_named_property_get_by_name(arr, "constructor").is_none()
                 {
                     return SpeciesChoice::Default;
                 }

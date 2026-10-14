@@ -23,6 +23,9 @@ macro_rules! atom {
         static $atom: StaticAtom = StaticAtom {
             hash: atom_hash($name),
             string: std::ptr::addr_of!($string.string),
+            kind: crate::codegen_abi::ATOM_KIND_STRING,
+            _pad: [0; 3],
+            index: 0,
         };
     };
 }

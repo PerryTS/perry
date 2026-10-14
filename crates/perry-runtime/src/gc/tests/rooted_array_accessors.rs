@@ -52,7 +52,7 @@ impl Drop for ClosureCountGuard {
 unsafe fn leave_rebind_space(clones: usize) -> usize {
     let bytes = (GC_HEADER_SIZE + crate::closure::closure_payload_size(2) + 7) & !7;
     let cycles = copying_minor_cycles();
-    crate::array::js_array_alloc(0); // Ordinary birth synchronizes inline/bump state.
+    crate::arena::sync_inline_arena_state();
     let remaining = {
         let arena = &*crate::arena::hot_arena();
         let block = &arena.blocks[arena.current];
@@ -74,6 +74,7 @@ unsafe fn leave_rebind_space(clones: usize) -> usize {
         let capacity = (payload - std::mem::size_of::<crate::array::ArrayHeader>()) / 8;
         (*arr).length = 0;
         (*arr).capacity = capacity as u32;
+        (*arr).named = std::ptr::null_mut();
         let slots = arr.add(1) as *mut u64;
         for index in 0..capacity {
             slots.add(index).write(crate::value::TAG_HOLE);
@@ -86,6 +87,7 @@ unsafe fn leave_rebind_space(clones: usize) -> usize {
         cycles,
         "padding is outside the clone window"
     );
+    crate::arena::sync_inline_arena_state();
     let arena = &*crate::arena::hot_arena();
     let block = &arena.blocks[arena.current];
     assert_eq!(block.size - block.offset, clones * bytes);

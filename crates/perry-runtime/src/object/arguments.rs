@@ -590,7 +590,7 @@ pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 
         if let Some(header) = crate::value::addr_class::try_read_gc_header(raw as usize) {
             if header.obj_type == crate::gc::GC_TYPE_ARRAY
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                && !crate::array::array_has_element_descriptors_resolved(raw)
                 && (*raw).length <= (*raw).capacity
                 && (*raw).capacity as usize <= crate::array::array_physical_capacity(raw)
             {

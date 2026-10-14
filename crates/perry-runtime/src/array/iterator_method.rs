@@ -26,36 +26,94 @@ pub(super) unsafe fn property_at(owner: *const ObjectHeader, slot: u32) -> Itera
     IteratorMethod::Data(f64::from_bits(value))
 }
 
-pub(super) unsafe fn iterator_method_at(owner: *const ObjectHeader, slot: u32) -> IteratorMethod {
-    // ConstFn is a data lane: accessor edits revoke it. Check the shape body
-    // before reading a value or descriptor that the intrinsic does not need.
-    if crate::object::shapes::object_shape_record(owner).is_some_and(|shape| {
-        shape.constfn_info(slot).is_some_and(|info| {
-            (*(info as *const crate::closure::JsFunctionInfo)).code
-                == crate::object::array_prototype_values_thunk as *const u8
-        })
-    }) {
-        return IteratorMethod::Intrinsic;
-    }
-    property_at(owner, slot)
+// Every array named family declares this inline slot, including absent
+// properties. Its address is a layout fact; the generic object-field reader
+// need not re-prove the bound or search overflow for each iterator entry.
+#[inline(always)]
+unsafe fn iterator_slot_value(owner: *const ObjectHeader, slot: u32) -> u64 {
+    *owner
+        .cast::<u8>()
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>()
+        .add(slot as usize)
 }
 
-/// Own absence was established by entry; read the prototype's actual slot.
-/// An absent member continues the ordinary prototype walk.
+pub(super) unsafe fn iterator_method_at(owner: *const ObjectHeader, slot: u32) -> IteratorMethod {
+    iterator_method_from_slot(owner, slot, iterator_slot_value(owner, slot))
+}
+
+unsafe fn iterator_method_from_slot(
+    owner: *const ObjectHeader,
+    slot: u32,
+    value: u64,
+) -> IteratorMethod {
+    let keys = crate::object::object_keys(owner);
+    let entry = crate::object::key_attrs::keys_entry(keys.arr(), slot);
+    if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+        let acc = crate::object::accessor_pair::pair_of_value(value).unwrap_or_default();
+        return IteratorMethod::Getter(f64::from_bits(if acc.get == 0 {
+            TAG_UNDEFINED
+        } else {
+            acc.get
+        }));
+    }
+    let value = f64::from_bits(value);
+    let raw = js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
+    if crate::closure::closure_info(raw)
+        .is_some_and(|info| info.code == crate::object::array_prototype_values_thunk as *const u8)
+    {
+        return IteratorMethod::Intrinsic;
+    }
+    IteratorMethod::Data(value)
+}
+
+/// Does `%Array.prototype%`'s (`proto`'s) iteration member hold the
+/// intrinsic? One fixed slot of its layout
+/// (`runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT`): the layout's key there is
+/// still `Symbol.iterator` (a delete may have reordered the keys) and the slot
+/// holds the builtin `values` function as a data value (an accessor pair or
+/// any other value is not it). Reads only.
+#[inline]
+pub(super) unsafe fn prototype_iterator_is_intrinsic(proto: usize) -> bool {
+    matches!(prototype_iterator_method(proto), IteratorMethod::Intrinsic)
+}
+
+/// Every array named holder declares iterator slot 0. A hole means absent;
+/// deleting a property cannot relocate this slot.
 pub(super) unsafe fn prototype_iterator_method(proto: usize) -> IteratorMethod {
-    // A standalone runtime caller can precede globalThis materialization.
-    // The ordinary resolver owns that intrinsic bootstrap; 0 is no owner.
     if proto == 0 {
+        return IteratorMethod::Intrinsic;
+    }
+    let named = super::array_property_bag(proto as *const super::ArrayHeader);
+    if named.is_null() {
         return IteratorMethod::Generic;
     }
-    let bag = super::array_property_bag(proto as *const super::ArrayHeader);
-    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-    if !bag.is_null() {
-        if let Some(slot) = crate::object::shaped_symbols::position(bag, symbol) {
-            return iterator_method_at(bag, slot);
+    let slot = crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT;
+    let value = iterator_slot_value(named, slot);
+    if value == crate::value::TAG_HOLE {
+        // A deleted own member continues on the prototype chain.
+        IteratorMethod::Generic
+    } else {
+        iterator_method_from_slot(named, slot, value)
+    }
+}
+
+pub(crate) unsafe fn array_iterator_method(
+    array: *const super::ArrayHeader,
+    proto: usize,
+) -> IteratorMethod {
+    if super::array_object_flags_resolved(array) & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+        return IteratorMethod::Generic;
+    }
+    let own = super::array_property_bag_resolved(array);
+    let slot = crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT;
+    if !own.is_null() {
+        let value = iterator_slot_value(own, slot);
+        if value != crate::value::TAG_HOLE {
+            return iterator_method_from_slot(own, slot, value);
         }
     }
-    IteratorMethod::Generic
+    prototype_iterator_method(proto)
 }
 
 /// Resolve a descriptor with the receiver already in custody. The caller
@@ -130,21 +188,7 @@ pub(crate) unsafe fn array_shape_iterator(value: f64) -> f64 {
 unsafe fn array_shape_iterator_resolved(value: f64, proto: usize) -> f64 {
     let array = super::clean_arr_ptr(js_nanbox_get_pointer(value) as *const super::ArrayHeader);
     let value = crate::value::js_nanbox_pointer(array as i64);
-    let flags = super::array_object_flags_resolved(array);
-    let method = if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
-        IteratorMethod::Generic
-    } else {
-        let own = super::array_property_bag(array);
-        let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-        if let Some(slot) = (!own.is_null())
-            .then(|| crate::object::shaped_symbols::position(own, symbol))
-            .flatten()
-        {
-            iterator_method_at(own, slot)
-        } else {
-            prototype_iterator_method(proto)
-        }
-    };
+    let method = array_iterator_method(array, proto);
     iterator_from_method(value, method)
 }
 

@@ -17,6 +17,8 @@ use super::*;
 ///   our number ABI)
 pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_alloc", I64, &[I32]);
+    module.declare_function("perry_array_attach_layout", DOUBLE, &[DOUBLE, PTR]);
+    module.declare_function("perry_array_element_kind", I32, &[I64]);
     // Tagged-template `.raw` side-table helpers (per ECMA-262 §13.2.8.3
     // TaggedTemplate Evaluation step 5: `template[Symbol.raw]` returns
     // an array of raw strings).
@@ -361,12 +363,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Array whose iteration is unobservable (read it by index), 1 otherwise.
     module.declare_function("js_array_destructure_needs_iterator", I32, &[DOUBLE]);
     module.declare_function("js_array_record_stack_dispatch", DOUBLE, &[PTR, I32]);
-    module.declare_function("js_array_record_stack_enter", I32, &[PTR, PTR, I32]);
+    module.declare_function("perry_array_iteration_init", crate::types::VOID, &[I32]);
+    module.declare_function("js_array_record_stack_enter", I32, &[PTR, I32, I32]);
     module.declare_function("js_array_record_literal", DOUBLE, &[PTR, I32]);
-    module.declare_function("js_array_record_enter", I32, &[DOUBLE, PTR, PTR]);
-    module.declare_function("js_array_record_enter_counted", I32, &[DOUBLE, PTR, PTR]);
+    module.declare_function("js_array_record_enter", I32, &[DOUBLE, PTR, I32]);
+    module.declare_function("js_array_record_enter_counted", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_array_record_needs_iterator", I32, &[DOUBLE]);
-    module.declare_function("js_array_record_literal_needs_iterator", I32, &[PTR]);
+    module.declare_function("js_array_record_literal_needs_iterator", I32, &[I32]);
     module.declare_function("js_array_record_close_absent", I32, &[]);
     module.declare_function(
         "js_array_record_finish",

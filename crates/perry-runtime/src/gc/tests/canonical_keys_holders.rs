@@ -717,13 +717,12 @@ fn immortal_atom_keeps_its_identity_while_its_receiver_moves() {
             atom_bits(moved),
             "INVARIANT: the stationary list retains the image atom"
         );
-        // After the move: minting again returns the same image atom — never a third
-        // string. Interning a copy does NOT: an atom is identity, not
-        // eligibility (`string::intern::AtomTable`).
-        assert_ne!(
+        // Static-atom seeding routes a key from data to the same image atom.
+        // Moving the receiver does not change either key's identity (§6a).
+        assert_eq!(
             crate::string::js_string_intern(nursery_key("atom_mv_kind"), hash) as usize,
             moved,
-            "INVARIANT: the intern cache never hands out an atom"
+            "INVARIANT: data keys and program keys meet at the same atom"
         );
         assert_eq!(
             crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize,
@@ -787,7 +786,10 @@ fn list_written_across_old_backing_collection(with_atom: bool) {
         assert!(crate::arena::pointer_in_nursery(before));
         // Fill a whole old block before arming the trigger. Clear available
         // holes so the backing allocation must enter the old-block slow path.
-        let full_capacity = (crate::arena::BLOCK_SIZE / 8 - 2) as u32;
+        let full_capacity = ((crate::arena::BLOCK_SIZE
+            - crate::gc::GC_HEADER_SIZE
+            - std::mem::size_of::<crate::array::ArrayHeader>())
+            / 8) as u32;
         let _ = crate::array::js_array_alloc_canonical_keys(full_capacity, true, false);
         old_free::old_free_reset_for_test();
         arm_collection_on_next_block(&trigger);

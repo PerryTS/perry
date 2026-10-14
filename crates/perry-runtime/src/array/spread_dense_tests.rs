@@ -120,10 +120,9 @@ fn an_own_symbol_iterator_sends_the_spread_back_to_the_protocol() {
     unsafe {
         crate::symbol::js_object_set_symbol_property(value, sym, 1.0);
     }
-    assert_ne!(
-        array_object_flags(src) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-        0,
-        "an own Symbol key must move the array off its canonical shape"
+    assert!(
+        crate::array::array_has_named_layout(src),
+        "an own Symbol key must give the array a named layout (off its canonical shape)"
     );
     assert!(!unsafe { array_has_plain_shape_resolved(src) });
     assert!(
@@ -234,10 +233,9 @@ fn a_grown_arrays_forwarding_header_is_followed_not_copied() {
     unsafe {
         crate::symbol::js_object_set_symbol_property(stale, sym, 1.0);
     }
-    assert_ne!(
-        array_object_flags(cleaned) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-        0,
-        "installing through a stale pointer must mark the live array shape"
+    assert!(
+        crate::array::array_has_named_layout(cleaned),
+        "installing through a stale pointer must give the live array its named layout"
     );
     assert!(
         dense_spread_source(stale).is_none(),

@@ -235,6 +235,12 @@ impl Scanner<'_> {
 
     /// A write of property `member` (None = dynamic key) onto `target`.
     fn record_write(&mut self, target: &ast::Expr, member: Option<String>) {
+        // Array iteration reads one member (object model step 7): a write that
+        // may reach any `Symbol.iterator` (or re-parent an array) makes the
+        // program check it at run time.
+        if matches!(member.as_deref(), None | Some("@@iterator" | "__proto__")) {
+            self.out.insert((ARRAY_ITERATION.into(), "write".into()));
+        }
         if let Some(ns) = namespace_receiver(target).or_else(|| match peel(target) {
             ast::Expr::Ident(id) => self.ns_aliases.get(id.sym.as_ref()).cloned(),
             _ => None,
@@ -293,6 +299,53 @@ impl Scanner<'_> {
 }
 
 impl Visit for Scanner<'_> {
+    fn visit_ident(&mut self, id: &ast::Ident) {
+        // Dynamic code can obtain every writer, including through aliases.
+        if matches!(id.sym.as_ref(), "eval" | "Function") {
+            for fact in ["write", "proto", "elements"] {
+                self.out.insert((ARRAY_ITERATION.into(), fact.into()));
+            }
+        }
+    }
+
+    fn visit_member_expr(&mut self, m: &ast::MemberExpr) {
+        // Taking a descriptor-producing builtin as a value is enough: a
+        // call through any alias can install indexed accessors later.
+        if matches!(
+            static_member_name(&m.prop).as_deref(),
+            Some("defineProperty" | "defineProperties" | "__defineGetter__" | "__defineSetter__")
+        ) || static_member_name(&m.prop).is_none() && namespace_receiver(&m.obj).is_some()
+        {
+            self.out.insert((ARRAY_ITERATION.into(), "elements".into()));
+        }
+        let name = static_member_name(&m.prop);
+        if matches!(name.as_deref(), Some("getPrototypeOf")) {
+            self.out.insert((ARRAY_ITERATION.into(), "proto".into()));
+        }
+        if matches!(
+            name.as_deref(),
+            Some("setPrototypeOf" | "defineProperty" | "defineProperties" | "set" | "assign")
+        ) || name.is_none() && (namespace_receiver(&m.obj).is_some() || is_global_object(&m.obj))
+        {
+            self.out.insert((ARRAY_ITERATION.into(), "write".into()));
+        }
+        if name.is_none() && (namespace_receiver(&m.obj).is_some() || is_global_object(&m.obj)) {
+            self.out.insert((ARRAY_ITERATION.into(), "proto".into()));
+            self.out.insert((ARRAY_ITERATION.into(), "elements".into()));
+        }
+        m.visit_children_with(self);
+    }
+
+    fn visit_prop_name(&mut self, name: &ast::PropName) {
+        if let ast::PropName::Computed(key) = name {
+            let symbol = well_known_symbol_key(&ast::MemberProp::Computed(key.clone()));
+            if symbol.as_deref() == Some("@@iterator") || symbol.is_none() {
+                self.out.insert((ARRAY_ITERATION.into(), "write".into()));
+            }
+        }
+        name.visit_children_with(self);
+    }
+
     fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
         match &a.left {
             ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m)) => {
@@ -349,6 +402,15 @@ impl Visit for Scanner<'_> {
             return;
         };
         match (owner.as_str(), method.as_str()) {
+            ("Object" | "Reflect", "setPrototypeOf") => {
+                self.out.insert((ARRAY_ITERATION.into(), "write".into()));
+            }
+            // The only way to name `%ArrayIteratorPrototype%` (and so to
+            // replace its `next`) is to ask an iterator for its prototype.
+            ("Object" | "Reflect", "getPrototypeOf") => {
+                self.out.insert((ARRAY_ITERATION.into(), "proto".into()));
+            }
+
             ("Object" | "Reflect", "defineProperty") | ("Reflect", "set") => {
                 let key = match arg(1) {
                     Some((false, k)) => str_arg(k),
@@ -436,6 +498,17 @@ pub fn prototype_method_patched(member: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// The scanner's pseudo-namespace for array-iteration facts.
+const ARRAY_ITERATION: &str = "$ArrayIteration";
+/// Reported by [`patched_prototype_methods`]: a write may reach a
+/// `Symbol.iterator` member (or re-parent an array).
+pub const ARRAY_ITERATOR_WRITABLE: &str = "$array_iterator_writable";
+/// Array elements may receive non-default property descriptors.
+pub const ARRAY_ELEMENT_DESCRIPTORS: &str = "$array_element_descriptors";
+/// Reported by [`patched_prototype_methods`]: `%ArrayIteratorPrototype%` may
+/// be named, so its `next` may be replaced.
+pub const ARRAY_ITERATOR_PROTO_REACHABLE: &str = "$array_iterator_proto_reachable";
+
 /// The method names [`prototype_method_patched`] answers for, as the sorted
 /// list codegen is handed ([`ANY_MEMBER`] when a write's key was dynamic).
 pub fn patched_prototype_methods(set: &PatchedBuiltins) -> Vec<String> {
@@ -444,7 +517,17 @@ pub fn patched_prototype_methods(set: &PatchedBuiltins) -> Vec<String> {
         .filter(|(ns, _)| ns.ends_with(PROTOTYPE_SUFFIX))
         .map(|(_, m)| m.as_str())
         .collect();
-    names.into_iter().map(str::to_string).collect()
+    let mut names: Vec<String> = names.into_iter().map(str::to_string).collect();
+    if set.contains(&(ARRAY_ITERATION.into(), "write".into())) {
+        names.push(ARRAY_ITERATOR_WRITABLE.into());
+    }
+    if set.contains(&(ARRAY_ITERATION.into(), "elements".into())) {
+        names.push(ARRAY_ELEMENT_DESCRIPTORS.into());
+    }
+    if set.contains(&(ARRAY_ITERATION.into(), "proto".into())) {
+        names.push(ARRAY_ITERATOR_PROTO_REACHABLE.into());
+    }
+    names
 }
 
 #[cfg(test)]

@@ -451,6 +451,10 @@ impl ShapeRecordRef {
     /// The record's attribute summary (`key_attrs::SUMMARY_*`): one load,
     /// asked before any per-key attribute lookup.
     #[inline]
+    pub(crate) fn element_kind(self) -> u64 {
+        unsafe { (*self.0.as_ptr()).element_kind }
+    }
+
     pub(crate) fn summary(self) -> u8 {
         // SAFETY: a live slab record (type docs).
         unsafe { (*self.0.as_ptr()).summary() }
@@ -2775,6 +2779,31 @@ pub(crate) fn plain_birth_rep_by_id(shape_id: u32, field_count: u32) -> Option<u
         // SAFETY: a present record, read before any collection point.
         unsafe { ShapeRecordRef(std::ptr::NonNull::from(record)).rep() }
     })
+}
+
+/// The attribute summary (`key_attrs::SUMMARY_*`) of an ordinary-band layout
+/// with a shared key list, read from this agent's ordinary directory with no
+/// band select: `None` for any other id (a dictionary or exotic layout, or a
+/// layout whose keys live with its object), which the caller answers from the
+/// object's keys.
+#[inline(always)]
+pub(crate) fn ordinary_layout_summary(shape_id: u32) -> Option<u8> {
+    // SAFETY: the directory is this agent's live published ordinary band.
+    let record =
+        unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) }?;
+    (record.present() && record.keys != 0).then(|| record.summary())
+}
+
+/// The record of an ordinary-band layout, read from this agent's ordinary
+/// directory with no band select; any other id answers through
+/// [`shape_record_by_id`].
+#[inline(always)]
+pub(crate) fn layout_record(shape_id: u32) -> Option<ShapeRecordRef> {
+    // SAFETY: the directory is this agent's live published ordinary band.
+    match unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) } {
+        Some(record) if record.present() => Some(ShapeRecordRef(std::ptr::NonNull::from(record))),
+        _ => shape_record_by_id(shape_id),
+    }
 }
 
 /// Whether a previously published ShapeId no longer names a live record in

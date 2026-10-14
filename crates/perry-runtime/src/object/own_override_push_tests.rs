@@ -41,7 +41,7 @@ fn a_plain_array_takes_the_builtin_exit() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let arr = pushed(&[1.0]);
-        assert_eq!(reserved(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS, 0);
+        assert!(!crate::array::array_has_named_layout(arr));
         assert!(array_owning_push_for_test(arr).is_none());
         let (bits, own) = push_or_own(arr, 2.0);
         assert_eq!(own, 0, "a plain array must take the builtin exit");
@@ -56,10 +56,9 @@ fn an_unrelated_named_property_arms_the_flag_and_still_pushes() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let arr = set_named(pushed(&[1.0]), "foo", 1.0);
-        assert_ne!(
-            reserved(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-            0,
-            "the absence proof: installing a named property must arm the admission bit"
+        assert!(
+            crate::array::array_has_named_layout(arr),
+            "the absence proof: installing a named property gives the array its named layout"
         );
         assert!(array_owning_push_for_test(arr).is_none());
         let (bits, own) = push_or_own(arr, 2.0);
@@ -81,10 +80,9 @@ fn an_own_push_is_seen_in_both_named_property_storages() {
         roomy = js_array_push_f64(roomy, 1.0);
         let roomy = set_named(roomy, "push", 5.0);
         for (label, arr) in [("full", full), ("roomy", roomy)] {
-            assert_ne!(
-                reserved(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-                0,
-                "{label}: an own `push` must arm the admission bit"
+            assert!(
+                crate::array::array_has_named_layout(arr),
+                "{label}: an own `push` lives in the array's named layout"
             );
             assert!(
                 array_owning_push_for_test(arr).is_some(),

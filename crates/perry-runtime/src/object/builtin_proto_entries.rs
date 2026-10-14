@@ -504,7 +504,7 @@ mod tests;
 //
 // `Pristine(Array)` alone is not the receiver's proof: an array may own a
 // property of the method's name, or carry its own `[[Prototype]]`. Both are
-// recorded on the cell (`GC_ARRAY_NAMED_PROPS`, the descriptor flag,
+// recorded on the cell (`GC_ARRAY_KEY_ATTRS`, the descriptor flag,
 // `GC_ARRAY_CUSTOM_PROTO`) — the same bits the emitted own-override guard
 // reads — and every other receiver kind answers from the own-override
 // predicate's global gate. A miss takes the real `Get`; a builtin found
@@ -547,11 +547,9 @@ extern "C" {
 }
 
 /// Cell bits that say an array may not read `name` from
-/// `%Array.prototype%`: a named property (bit-flagged or in the descriptor
-/// table) or its own `[[Prototype]]`.
-const ARRAY_NOT_DEFAULT: u16 = crate::gc::GC_ARRAY_NAMED_PROPS
-    | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
-    | crate::gc::GC_ARRAY_CUSTOM_PROTO;
+/// `%Array.prototype%`: its own `[[Prototype]]`. A named property lives in the
+/// array's named layout (`ArrayHeader.named`), tested beside these bits.
+const ARRAY_NOT_DEFAULT: u16 = crate::gc::GC_ARRAY_KEY_ATTRS | crate::gc::GC_ARRAY_CUSTOM_PROTO;
 
 /// Does the receiver own a property named `name`? The own-override
 /// predicate takes the method's interned key, and interning a name the

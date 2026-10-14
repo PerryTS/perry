@@ -110,7 +110,6 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
     // `delete Array.prototype[Symbol.iterator]` — the builtin iterator is
     // virtual (native dispatch, not in the side table), so the delete must
     // still flip the modified flag for `js_get_iterator` to throw per spec.
-    crate::array::note_array_proto_iterator_write(obj_key, sym_key);
     crate::object::map_set_subclass::note_iterator_symbol_write(obj_key, sym_key);
 
     if crate::object::shaped_symbols::delete(obj_key, sym_key) {
@@ -332,7 +331,6 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     }
     // `Array.prototype[Symbol.iterator] = fn` disables the array fast path in
     // `js_get_iterator` so destructuring / GetIterator see the patched method.
-    crate::array::note_array_proto_iterator_write(obj_key, sym_key);
     crate::object::map_set_subclass::note_iterator_symbol_write(obj_key, sym_key);
     let has_own_data = object_symbol_data_property_exists(obj_key, sym_key);
     // #10481: an INHERITED symbol accessor's setter runs even on a

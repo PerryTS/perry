@@ -35,9 +35,9 @@
 //!   BigInt, string, or native handle;
 //! * `OBJECT_TYPE_REGULAR` ⇒ not an Error host and not a per-evaluation class
 //!   object (whose statics resolve through the class registry);
-//! * no `OBJ_FLAG_HAS_DESCRIPTORS` / `OBJ_FLAG_ARRAY_DESCRIPTORS` /
-//!   `OBJ_FLAG_TYPED_ARRAY_PROTO` ⇒ no own accessor or non-default descriptor
-//!   can shadow the answer;
+//! * no `OBJ_FLAG_HAS_DESCRIPTORS` / `OBJ_FLAG_STABLE_TOMBSTONES` /
+//!   `OBJ_FLAG_TYPED_ARRAY_PROTO` ⇒ no own accessor, non-default descriptor
+//!   or deleted slot can shadow the answer;
 //! * an ADMISSIBLE class id ([`class_id_admissible`]): `0` (a plain object
 //!   literal), or an anonymous SHAPE id that the class registries provably
 //!   know nothing about — an empty CLASS identity word and no parent edge. That excludes every class instance, every
@@ -349,7 +349,7 @@ unsafe fn own_then_scan(obj: *const ObjectHeader) -> OwnScan {
     };
     if header.obj_type != crate::gc::GC_TYPE_ARRAY
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || crate::array::array_has_named_layout(keys as *const crate::array::ArrayHeader)
     {
         return OwnScan::Unknown;
     }
@@ -495,7 +495,7 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
     // Any own descriptor / accessor, or the TypedArray-prototype host shape,
     // means the answer can come from somewhere this module does not look.
     const BLOCKING: u16 = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     if flags & BLOCKING != 0 {
         return Outcome::HasDescriptors;

@@ -169,6 +169,7 @@ fn an_incremental_reclaim_step_advances_the_heap_generation() {
 }
 
 fn forced_evacuating_minor() -> GcCycleTrace {
+    isolate_runtime_layout_blocks();
     let _defrag = super::super::oldgen_defrag::OldDefragTestEnable::new();
     let (parent, fields) = unsafe { alloc_old_test_object(1) };
     let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };

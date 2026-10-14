@@ -54,7 +54,7 @@ mod math_temporal;
 mod object_intrinsic;
 mod populate;
 mod proto_methods;
-mod proto_room;
+pub(crate) mod proto_room;
 mod typed_array;
 pub(crate) use typed_array::typed_array_uint8_intrinsic_prototype_value;
 

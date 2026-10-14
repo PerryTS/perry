@@ -1041,10 +1041,7 @@ pub extern "C" fn js_array_some_captureless(
         // SAFETY: `normalize_array_receiver` returned this live plain-array
         // head and the registry exits above excluded Buffer/TypedArray
         // receivers; nothing allocates before the flag read.
-        let exotic = crate::array::array_iteration_is_exotic_resolved(
-            arr,
-            crate::array::array_object_flags_resolved(arr),
-        );
+        let exotic = crate::array::array_iteration_is_exotic_resolved(arr);
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
 

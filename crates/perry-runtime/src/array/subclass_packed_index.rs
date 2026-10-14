@@ -95,11 +95,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
                     if unsafe { (*arr).length <= (*arr).capacity } {
                         // SAFETY: the header proved a live dense array.
                         return unsafe {
-                            crate::array::indexing::array_get_resolved(
-                                arr,
-                                index_u32,
-                                header._reserved,
-                            )
+                            crate::array::indexing::array_get_resolved(arr, index_u32)
                         };
                     }
                 }

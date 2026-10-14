@@ -8,11 +8,10 @@
 //!
 //! # Why the inline tier needs no new test
 //!
-//! Every inline push tier admits its receiver through a mask over
-//! `GcHeader::_reserved` that already contains `OBJ_FLAG_ARRAY_DESCRIPTORS`
-//! (0x400), and every path that gives an array an own named property arms that
-//! bit: both storages of `array_named_property_set` (the pairs reserve and the
-//! full-array fallback table) and every `Object.defineProperty` route. It is
+//! Every inline push tier admits its receiver only with a null named layout
+//! (`ArrayHeader.named`, object model §6a), and every own named property of an
+//! array — `array_named_property_set` and every `Object.defineProperty` route —
+//! lives in that layout. It is
 //! monotone and survives growth. So an array that owns `push` can never reach
 //! the inline store — it fails admission and lands in a slow arm — and the hot
 //! path pays nothing: the absence proof rides the instructions it already

@@ -51,10 +51,6 @@ pub unsafe extern "C-unwind" fn js_array_slice_method(
     crate::object::js_native_call_method(recv, b"slice".as_ptr().cast(), 5, args.as_ptr(), argc)
 }
 
-// Below the allocated ShapeId band: legacy named-property storage has no
-// immutable key list, so this shape needs a key-absence read on every hit.
-const LEGACY_ARRAY_SHAPE: u32 = 1;
-
 /// Kind plus canonical receiver-local shape. Array growth can leave the
 /// caller holding a forwarding alias; validate the live head, whose header
 /// carries the receiver facts, just as the builtin body resolves its input.
@@ -96,20 +92,21 @@ unsafe fn receiver_facts(bits: u64) -> Option<(u64, u64)> {
                 if (*h)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
                     return None;
                 }
+                // Off the plain shape with the default prototype: the array
+                // owns a named layout, whose immutable shape is the word.
                 let bag = crate::array::array_property_bag(array);
                 if bag.is_null() {
-                    LEGACY_ARRAY_SHAPE
-                } else {
-                    let shape = super::super::shapes::object_shape_stamp(bag);
-                    // Dictionaries do not carry an immutable key-absence proof.
-                    if !(super::super::shapes::SHAPE_ID_BASE
-                        ..super::super::shapes::DICTIONARY_SHAPE_ID_BASE)
-                        .contains(&shape)
-                    {
-                        return None;
-                    }
-                    shape
+                    return None;
                 }
+                let shape = super::super::shapes::object_shape_stamp(bag);
+                // Dictionaries do not carry an immutable key-absence proof.
+                if !(super::super::shapes::SHAPE_ID_BASE
+                    ..super::super::shapes::DICTIONARY_SHAPE_ID_BASE)
+                    .contains(&shape)
+                {
+                    return None;
+                }
+                shape
             }
         }
         crate::gc::GC_TYPE_OBJECT => generator::shared_protocol_family(addr)?,
@@ -178,13 +175,7 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
     let Some((word, live)) = receiver_facts(recv.to_bits()) else {
         return;
     };
-    if word_kind(word) == crate::gc::GC_TYPE_ARRAY
-        && word as u32 == LEGACY_ARRAY_SHAPE + 1
-        && !legacy_lacks_name(live, name)
-    {
-        return;
-    }
-    if word_kind(word) == crate::gc::GC_TYPE_ARRAY && word as u32 > LEGACY_ARRAY_SHAPE + 1 {
+    if word_kind(word) == crate::gc::GC_TYPE_ARRAY && word as u32 > 1 {
         // The receiver's immutable bag shape must lack this site's key.
         let array = (live & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
         let bag = crate::array::array_property_bag(array);
@@ -282,20 +273,6 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
     }
 }
 
-/// Own data presence only: this reads storage, never invokes an accessor or
-/// migrates it. The method body still declares its identity independently of
-/// the property key. `live` is the Array head proved by `receiver_facts`.
-unsafe fn legacy_lacks_name(live: u64, name: &[u8]) -> bool {
-    let Ok(name) = std::str::from_utf8(name) else {
-        return false;
-    };
-    crate::array::array_named_property_get_by_name(
-        (live & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader,
-        name,
-    )
-    .is_none()
-}
-
 #[inline(never)]
 pub(super) unsafe fn lookup_hit(
     slot: *mut MethodSiteSlot,
@@ -316,20 +293,6 @@ pub(super) unsafe fn lookup_hit(
         let holder = e.closure as *const ObjectHeader;
         if !holder_word_matches(e) {
             return None;
-        }
-        if word_kind(word) == crate::gc::GC_TYPE_ARRAY && word as u32 == LEGACY_ARRAY_SHAPE + 1 {
-            // The holder shape pins this site's key as well as its slot.
-            // Legacy receiver keys can change without a ShapeId transition.
-            let keys = super::super::object_keys(holder);
-            let index = (e.slot & METHOD_SITE_INDEX_MASK) as u32;
-            if index >= keys.count() {
-                return None;
-            }
-            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let name = crate::string::js_string_key_bytes(keys.get(index), &mut scratch)?;
-            if !legacy_lacks_name(live, name) {
-                return None;
-            }
         }
         let value = holder_bits(
             holder,
@@ -651,6 +614,7 @@ mod tests {
             return;
         }
         let _lock = crate::gc::global_side_table_test_lock();
+        crate::gc::initialize_runtime_fixture();
         unsafe {
             let _stable = crate::gc::GcSuppressScope::new();
             let mut array = crate::array::js_array_alloc(16);
@@ -739,11 +703,17 @@ mod tests {
             );
             let header = crate::gc::header_from_trusted_user_ptr(array.cast()).cast_mut();
             let saved = (*header)._reserved;
-            (*header)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-            assert_eq!(call_hit(&mut pop_slot, recv, std::ptr::null(), 0), None);
             (*header)._reserved = saved | crate::gc::GC_ARRAY_CUSTOM_PROTO;
             assert_eq!(call_hit(&mut pop_slot, recv, std::ptr::null(), 0), None);
             (*header)._reserved = saved;
+            // An own property beyond the elements lives in the array's named
+            // layout, which leaves the plain-array receiver word.
+            crate::object::set_property_attrs(
+                array as usize,
+                "0".to_string(),
+                crate::object::PropertyAttrs::new(false, true, true),
+            );
+            assert_eq!(call_hit(&mut pop_slot, recv, std::ptr::null(), 0), None);
             let frozen = crate::array::js_array_alloc(4);
             let frozen = crate::array::js_array_push_f64(frozen, 1.0);
             let frozen = crate::array::js_array_push_f64(frozen, 2.0);
@@ -900,6 +870,9 @@ mod tests {
                 "forwarded alias must validate the live head's override fact"
             );
 
+            // An own named key lives in the array's named layout (§6a): the
+            // receiver word is that layout's immutable shape, so an unrelated
+            // own field still primes.
             let described = crate::array::js_array_alloc(8);
             let described_recv = crate::value::js_nanbox_pointer(described as i64);
             crate::object::js_object_set_field_by_name(
@@ -907,35 +880,7 @@ mod tests {
                 crate::string::canonical_key(b"pos"),
                 2.0,
             );
-            assert!(crate::array::array_property_bag(described).is_null());
-            let mut legacy_slot = std::ptr::null_mut();
-            prime(&mut legacy_slot, described_recv, b"push");
-            assert!(!legacy_slot.is_null(), "legacy own-key absence can prime");
-            assert_eq!(
-                call_hit(&mut legacy_slot, described_recv, [3.0].as_ptr(), 1),
-                Some(1.0)
-            );
-            crate::object::js_object_set_field_by_name(
-                described.cast(),
-                crate::string::canonical_key(b"push"),
-                crate::value::js_nanbox_pointer(replacement as i64),
-            );
-            assert_eq!(
-                call_hit(&mut legacy_slot, described_recv, [4.0].as_ptr(), 1),
-                None,
-                "legacy storage must recheck this key after an own override"
-            );
-            crate::array::array_named_property_delete_by_name(described, "push");
-            assert_eq!(
-                call_hit(&mut legacy_slot, described_recv, [4.0].as_ptr(), 1),
-                Some(2.0),
-                "deleting the override restores the per-use absence proof"
-            );
-            // Priming must leave the indexed storage representation intact.
-            assert!(crate::array::array_property_bag(described).is_null());
-            crate::array::js_array_set_length(described, 0.0);
-            // This is existing descriptor storage, not a site-induced migration.
-            crate::array::array_property_bag_ensure(described);
+            assert!(!crate::array::array_property_bag(described).is_null());
             let mut described_slot = std::ptr::null_mut();
             prime(&mut described_slot, described_recv, b"push");
             assert!(!described_slot.is_null(), "unrelated own fields can prime");

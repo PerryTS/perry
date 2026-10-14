@@ -47,9 +47,11 @@ pub(crate) use iterator_brand::{has_materialized_iterator_brand, mark_materializ
 mod join;
 mod jsvalue_api;
 /// Own named (non-index) properties stored with the array (#10166 brief 4).
-mod named_props;
+pub(crate) mod named_props;
 #[cfg(test)]
 mod named_props_tests;
+#[cfg(test)]
+pub(crate) use self::named_props::test_named_props_state;
 mod numeric_range;
 mod prototype_addr;
 mod push_pop;
@@ -206,11 +208,11 @@ pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 #[cfg(test)]
 pub(crate) use self::indexing_support::ARRAY_METHODS_MODIFIED;
 pub(crate) use self::indexing_support::{
-    array_index_fast_path_invalid_for, array_iteration_not_pristine,
-    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
-    note_array_index_write, note_array_iteration_not_pristine, note_array_methods_modified,
-    note_array_proto_iterator_write, note_object_prototype_index_write,
-    object_prototype_has_index_flag, INDEX_INVALIDATED, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
+    array_index_fast_path_invalid_for, array_iteration_facts, invalidate_array_index_fast_path,
+    keys_array_len_capped_to_capacity, keys_array_slot, note_array_index_write,
+    note_array_methods_modified, note_object_prototype_index_write,
+    object_prototype_has_index_flag, INDEX_INVALIDATED, ITERATION_MEMBER_WRITABLE,
+    ITERATION_NEXT_REACHABLE, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -234,11 +236,7 @@ pub use self::iterator::{
     js_iterator_delegate_throw, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
-#[cfg(test)]
-pub(crate) use self::named_props::{
-    test_clear_full_array_named_property_roots, test_full_array_named_property_owner_exists,
-    test_named_props_inline_set, test_named_props_state,
-};
+
 pub use self::numeric_range::{
     js_array_fill_range_strided_tagged, js_array_numeric_range_add, js_array_numeric_range_add_len,
 };
@@ -318,8 +316,9 @@ pub(crate) use self::flat_clone::{
     dense_spread_copy, dense_spread_source, flattenable_array_ptr, plain_call_spread_source,
 };
 pub(crate) use self::header::{
-    array_byte_size, array_has_plain_shape_resolved, array_is_frozen, array_is_sealed_or_no_extend,
-    array_numeric_layout_resolved, array_numeric_raw_f64_get,
+    array_byte_size, array_has_element_descriptors, array_has_element_descriptors_resolved,
+    array_has_named_layout, array_has_plain_shape_resolved, array_is_frozen,
+    array_is_sealed_or_no_extend, array_numeric_layout_resolved, array_numeric_raw_f64_get,
     array_numeric_raw_f64_push_inbounds_resolved, array_numeric_raw_f64_set_inbounds,
     array_object_flags, array_object_flags_from_tag, array_object_flags_resolved,
     array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
@@ -327,31 +326,26 @@ pub(crate) use self::header::{
     clean_arr_ptr, clean_arr_ptr_mut, clean_headed_arr_ptr, clear_array_numeric_layout,
     clear_array_numeric_layout_ptr, finish_array_dense_move_layout, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
-    note_array_own_non_index_key, note_array_slot, note_array_slot_layout_only,
-    note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
-    reclassify_array_numeric_layout_from_slots, refresh_array_numeric_layout,
-    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
-    store_array_slot_resolved, typed_array_receiver, value_bits_to_number, NumericArrayLayout,
-    MIN_ARRAY_CAPACITY,
+    note_array_slot, note_array_slot_layout_only, note_array_slot_resolved_flags,
+    rebuild_array_layout, rebuild_array_layout_exact, reclassify_array_numeric_layout_from_slots,
+    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
+    store_array_slot, store_array_slot_resolved, typed_array_receiver, value_bits_to_number,
+    NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,
     array_named_property_delete, array_named_property_delete_by_name,
     array_named_property_enumeration_names, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_named_props_reserve, array_named_props_slot,
-    array_property_bag, array_property_bag_ensure, array_property_bag_resolved,
-    array_prototype_property_bag_ensure, carry_named_props_reserve, ensure_named_props_slot,
-    prune_dead_full_array_named_property_owners, store_named_props_word,
-    transfer_full_array_named_props_owner, visit_array_named_props_slots,
+    array_named_property_set, array_property_bag, array_property_bag_ensure,
+    array_property_bag_resolved, array_prototype_property_bag_ensure, carry_key_attrs_reserve,
+    ensure_key_attrs_slot, key_attrs_reserve, key_attrs_slot, store_key_attrs_word,
 };
 
 // Sole caller is the regex-engine-gated `regex::perex_results`, so the helpers
 // and these re-exports are gated with it (same cross-gate shape as regex/utf16.rs).
 #[cfg(feature = "regex-engine")]
-pub(crate) use self::named_props::{
-    array_named_props_install_inline, inline_reserve_layout, InlineKeySet,
-};
+pub(crate) use self::named_props::{array_named_props_install, NamedPropertyKeys};
 
 #[cfg(test)]
 pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_roots};
@@ -375,8 +369,3 @@ pub use iterator_step::{
 pub(crate) use iterator_method::array_shape_iterator;
 #[cfg(test)]
 pub(crate) use iterator_step::js_array_record_iterator_at;
-#[cfg(test)]
-pub(crate) use iterator_step::ArrayRecordSite;
-
-#[cfg(test)]
-pub(crate) use iterator_step::array_record_full_proof_calls;

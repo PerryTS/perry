@@ -408,6 +408,10 @@ pub(super) fn compile_module_entry(
                 );
             }
             blk.call_void("js_gc_init", &[]);
+            blk.call_void(
+                "perry_array_iteration_init",
+                &[(I32, &crate::expr::array_program_facts().to_string())],
+            );
             // Design step 4: mint the program's static literal ids in this
             // agent before any module init or user code (the seed unit the
             // driver links registers the function; none = a no-op).

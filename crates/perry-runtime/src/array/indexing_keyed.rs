@@ -104,13 +104,13 @@ pub extern "C" fn js_array_set_string_key(
     if array_is_frozen(arr) {
         return arr;
     }
-    let existing = unsafe { array_named_property_get(arr, key).is_some() };
+    let existing = unsafe { array_named_property_has(arr, key) };
     if !existing && array_is_sealed_or_no_extend(arr) {
         return arr;
     }
     // Named accessor installed via `Object.defineProperty(arr, "prop",
     // {get,set})`: dispatch the setter instead of the expando store.
-    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    {
         if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, key_str) {
             if acc.set != 0 {
                 unsafe {

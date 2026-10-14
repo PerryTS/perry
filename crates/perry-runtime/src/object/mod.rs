@@ -148,6 +148,7 @@ pub(crate) use gc_slots::{
 pub(crate) mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 mod global_this;
+pub(crate) use global_this::proto_room::BUILTIN_PROTOTYPE_ROOM;
 pub(crate) mod shape_chain;
 /// Lane 3: the (receiver shape, key) -> (holder, slot) cache that gives an
 /// INHERITED read an inline-cache hit. See the module docs for the guard and
@@ -346,9 +347,9 @@ pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
-    attach_iterator_prototype, call_overridden_iterator_next, ensure_iterator_prototypes,
-    iterator_next_property_owner, iterator_prototype_for_class_id,
-    iterator_prototypes_materialized, iterator_step_method_is_builtin,
+    attach_iterator_prototype, call_overridden_iterator_next, iterator_next_property_owner,
+    iterator_prototype_for_class_id, iterator_prototypes_materialized,
+    iterator_step_method_is_builtin,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;
@@ -1671,7 +1672,7 @@ const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 16 - size_of::
 const _: () = assert!(
     std::mem::offset_of!(ObjectHeader, parent_class_id) == crate::codegen_abi::OBJECT_SHAPE_OFFSET
 );
-const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
+const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 16);
 
 pub(crate) mod cell_meta;
 pub(crate) use cell_meta::{cell_expando_ensure, cell_expando_get, cell_meta_slot};
@@ -1810,6 +1811,3 @@ mod packed_keys;
 pub(crate) use packed_keys::packed_key_names;
 
 pub(crate) use iterator_prototypes::array_record_close_is_absent;
-pub(crate) use iterator_prototypes::{
-    array_iterator_next_is_intrinsic, array_iterator_prototype_addr, shape_member_body_is,
-};

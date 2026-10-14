@@ -4151,19 +4151,14 @@ fn lower_packed_f64_range_versioned_for(
     ctx.current_block = slow_pre_idx;
     // The arrays this tier refused (not packed numbers) may still be region
     // arrays (S3): their element reads are then bare in the split loop.
-    let region = super::region_loop::begin_for_arrays(ctx, condition, body, update)?;
-    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_for_after_init(
-            ctx,
-            init,
-            condition,
-            update,
-            body,
-            "for.packed_f64_range_slow",
-        )
-    });
-    super::region_loop::end(ctx, region);
-    lowered?;
+    lower_for_after_init(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.packed_f64_range_slow",
+    )?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -6131,7 +6126,7 @@ fn local_array_binding_element_type_is_erased(ctx: &FnCtx<'_>, local_id: u32) ->
 ///   sloppy mode or throw in strict mode therefore never reaches the fast copy
 ///   at all; it runs the unchanged generic store in the slow loop.
 /// * **index accessors / `defineProperty` descriptors** — the same guard
-///   declines on `OBJ_FLAG_ARRAY_DESCRIPTORS`.
+///   declines on the array's named layout (`ArrayHeader.named`).
 /// * **a setter on `Array.prototype` / `Object.prototype`, or a recorded custom
 ///   array prototype** — declined by the three prototype-pollution flags in
 ///   `plain_array_index_guard`. This is what makes a store INTO A HOLE safe:
@@ -7020,26 +7015,6 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
-    // Element receivers (`const o = xs[i]` read and written by static key):
-    // a region proves `o`'s shape at its load and splits the body, which the
-    // call-free clones below cannot do. When it forms, its plain copy (a
-    // failed guard) is the rest of this chain.
-    // Planning sees the context the region path plans in (as below).
-    let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
-    ctx.repsel_context_allows_ptr_shape = false;
-    let element_region = super::region_loop::begin_for_elements(ctx, condition, body, update);
-    ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
-    if let Some(region) = element_region? {
-        return lower_for_in_region(
-            ctx,
-            Some(region),
-            init,
-            condition,
-            update,
-            body,
-            &mut |ctx| lower_for_after_element_region(ctx, init, condition, update, body),
-        );
-    }
     lower_for_after_element_region(ctx, init, condition, update, body)
 }
 
@@ -7118,16 +7093,7 @@ fn lower_for_in_region(
 ) -> Result<()> {
     let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
     let saved_ptr_shape_denial = ctx.repsel_ptr_shape_context_denial;
-    let prepared_counter = region
-        .and_then(|t| super::region_loop::element_entry_slot(ctx, t))
-        .and_then(|valid_slot| {
-            let prepared = i32_counter::prepare(ctx, init, condition, update, body, true)?;
-            let range_ok = ctx.block().load(I1, &prepared.1.flag_slot);
-            let receiver_ok = ctx.block().load(I1, &valid_slot);
-            let pass = ctx.block().and(I1, &range_ok, &receiver_ok);
-            ctx.block().store(I1, &pass, &valid_slot);
-            Some(prepared)
-        });
+    let prepared_counter = None;
     let lowered = (|| -> Result<()> {
         // With no region there is no F/G extent: ordinary loop lowering can
         // consume its pre-existing straight-line receiver facts as before.
@@ -8090,8 +8056,7 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
         }
     }
     // Loop regions' array bases (S3), from the same GC-updated roots.
-    crate::stmt::region_loop::emit_poll_refresh(ctx)
-        .expect("a region array binding lowers as a plain load");
+
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
 }

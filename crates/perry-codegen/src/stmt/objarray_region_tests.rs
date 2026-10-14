@@ -87,20 +87,24 @@ fn ir(m: &Module) -> String {
     String::from_utf8(compile_module(m, opts).unwrap()).unwrap()
 }
 
+/// Object model step 7 deleted the array/element loop regions: a bounded
+/// loop over object elements lowers through checked element loads, and the
+/// live numeric arm still multiplies.
 #[test]
-fn bounded_object_elements_use_array_and_numeric_receiver_regions() {
+fn bounded_object_elements_use_checked_element_loads() {
     let ir = ir(&fixture(7));
     assert!(
-        ir.contains("rloop.version.split") && ir.contains("rloop.guard.static"),
+        !ir.contains("rloop.version.split") && !ir.contains("rloop.element.join"),
+        "no array/element region forms: {ir}"
+    );
+    assert!(
+        ir.contains("@js_array_get") || ir.contains("bidx.header") || ir.contains("arr_get"),
         "{ir}"
     );
     assert!(
         ir.contains("fmul double"),
         "the live numeric arm must multiply: {ir}"
     );
-    // Region admission must use the static window, rather than testing the
-    // 200k loop bound against this eight-element array's capacity.
-    assert!(!ir.contains("fcmp ole double 200000"), "{ir}");
 }
 
 #[test]
@@ -117,7 +121,7 @@ fn unbounded_signed_mask_keeps_checked_element_loads() {
 }
 
 #[test]
-fn boxed_bound_shares_receiver_tail_and_integer_entry_decision() {
+fn boxed_bound_element_loop_keeps_checked_element_loads() {
     let mut m = fixture(7);
     let mut f = m.classes[0].constructor.clone().unwrap();
     f.id = 100;
@@ -137,13 +141,15 @@ fn boxed_bound_shares_receiver_tail_and_integer_entry_decision() {
     f.body.push(Stmt::Return(Some(Expr::LocalGet(11))));
     m.functions.push(f);
     let ir = ir(&m);
+    // Step 7 deleted the element regions: no receiver tail, and the loop's
+    // element reads stay checked.
     assert!(
-        ir.contains("rloop.element.join"),
-        "one receiver tail after the array binding: {ir}"
+        !ir.contains("rloop.element.join"),
+        "no element region forms: {ir}"
     );
     assert!(
-        ir.contains("for.iv.fast.cond") && !ir.contains("for.iv.slow.cond"),
-        "the plain region loop must own the range fallback: {ir}"
+        ir.contains("@js_array_get") || ir.contains("bidx.header") || ir.contains("arr_get"),
+        "{ir}"
     );
 }
 
@@ -178,18 +184,20 @@ fn declared_numeric_row_hint_still_requires_its_live_shape() {
     // array actually carries BoxedRow's Any lanes. The numeric arm must
     // compare the live shape rather than trusting the declaration.
     let births = crate::module_birth_shapes(&m, ir_opts()).unwrap();
-    let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
     let numeric = births.iter().find(|b| b.class_id == 101).unwrap();
     assert_eq!(
         numeric.shape.rep & 15,
         5,
         "the nominee must have two F64 lanes"
     );
+    let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
     let expected = ids[&numeric.shape].to_string();
     let ir = ir(&m);
+    // Step 7 deleted the element regions; the row receivers' object regions
+    // still compare the live shape rather than trusting the declaration.
     assert!(
-        ir.contains("rloop.element.join"),
-        "the array region must be live: {ir}"
+        !ir.contains("rloop.element.join"),
+        "no element region forms: {ir}"
     );
     let mut in_guard = false;
     let mut numeric_guard = false;

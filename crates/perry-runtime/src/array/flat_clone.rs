@@ -50,22 +50,15 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
 ///    `Array.prototype` / `Object.prototype` index properties shadowing the
 ///    dense slots, and no live indices past the dense backing store — the three
 ///    cases where `arr[i]` is not the raw slot.
-///  - `array_iteration_not_pristine`: array iteration can no longer be PROVEN
-///    to be the pristine builtin protocol — either user code replaced or
-///    deleted `Array.prototype[Symbol.iterator]`, or `%ArrayIteratorPrototype%`
-///    itself escaped through `Object.getPrototypeOf` and its `next` may have
-///    been replaced (#10086's escape signal; #9846). Both mean the builtin walk
-///    is no longer what a spread must run. This gate used to read only the
-///    narrower `array_proto_iterator_modified`, so `[...[4, 5]]` under a patched
-///    `%ArrayIteratorPrototype%.next` memcpy'd the raw elements and never called
-///    the patch. The narrow fact implies the broad one, so nothing that used to
-///    decline now passes.
-///  - `object_static_prototype`: `Object.setPrototypeOf(array, custom)` can
-///    replace the inherited iterator without touching Array.prototype.
-///  - `has_own_symbol_property`: the instance carries its OWN `[Symbol.iterator]`,
-///    which shadows the prototype's. Existence is probed WITHOUT invoking an
-///    accessor, so falling through to the slow path calls a user getter exactly
-///    once, as the spec requires.
+///  - the iteration member: array iteration depends only on the array's
+///    `Symbol.iterator` member (object model step 7). With no program write
+///    able to reach one (a compile-time fact) there is nothing to check;
+///    otherwise the member must be the intrinsic: its own (a key of its named
+///    layout) or `%Array.prototype%`'s fixed slot, and `%ArrayIteratorPrototype%`'s
+///    `next` the builtin (`iterator_step::array_iteration_is_intrinsic`). A
+///    re-parented array reads the ordinary chain there.
+///
+/// Named properties are never copied: spread copies elements only.
 pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     // `clean_arr_ptr` admits a raw word before any deref (handle ids and the
     // header-less small-buffer slab fail), and a POINTER_TAG word is honest.
@@ -90,24 +83,8 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     if crate::array::array_iteration_is_exotic(arr) {
         return None;
     }
-    if crate::array::array_iteration_not_pristine() {
+    if !unsafe { super::iterator_step::array_iteration_is_intrinsic(arr) } {
         return None;
-    }
-    if crate::object::prototype_chain::object_static_prototype(arr as usize).is_some() {
-        return None;
-    }
-    // Do not materialize Symbol.iterator from a guard. If it is not cached,
-    // user code cannot have installed it as an own key; if it is cached, the
-    // side-table existence probe below is non-allocating and never invokes an
-    // accessor. This keeps dense_spread_source usable in call-site guards that
-    // hold evaluated operands in SSA registers.
-    let iter_sym = crate::symbol::well_known_symbol_if_cached("iterator");
-    if !iter_sym.is_null() {
-        let sym_value =
-            f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-        if unsafe { crate::symbol::has_own_symbol_property(value, sym_value) } {
-            return None;
-        }
     }
     Some(arr)
 }
@@ -122,7 +99,7 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
 /// through to [`dense_spread_source`]'s complete proof.
 #[inline]
 pub(crate) fn plain_call_spread_source(value: f64) -> Option<*const ArrayHeader> {
-    if crate::array::array_iteration_not_pristine() {
+    if crate::array::array_iteration_facts() & 3 != 0 {
         return None;
     }
     let arr = crate::array::clean_arr_ptr(super::honest_word::array_arg_of_value(value));
@@ -138,9 +115,9 @@ pub(crate) fn plain_call_spread_source(value: f64) -> Option<*const ArrayHeader>
 /// it read `value[0]`, `value[1]` directly?
 ///
 /// Returns `0` exactly when `value` is an ordinary Array whose iteration nobody
-/// can observe — [`dense_spread_source`]'s proof, which already folds in the
-/// sticky `PERRY_ARRAY_ITERATION_NOT_PRISTINE` byte that #10086's
-/// statically-proven arm reads on its own — and `1` for everything else: a
+/// can observe — [`dense_spread_source`]'s proof, which includes the
+/// iteration-member check #10086's statically-proven arm makes on its own —
+/// and `1` for everything else: a
 /// string, Map, Set, generator, typed array, Proxy, `class X extends Array`
 /// instance, an array with its own or a re-parented `[Symbol.iterator]`, an
 /// array whose indices hit accessors or prototype-inherited elements, or any

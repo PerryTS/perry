@@ -1124,7 +1124,11 @@ fn guarded_read_sends_forwarding_and_holes_to_shared_runtime() {
         &ir,
         "@perry_method_index_method_clone_ts__Reader__read$idx_u31_12(",
     );
-    assert!(clone.contains("67141887") && clone.contains("arr.guard.range"));
+    // Type/forwarding remain guarded; a program without descriptor writers
+    // has no named-layout or element-kind guard on its element read.
+    assert!(clone.contains("33023") && clone.contains("arr.guard.range"));
+    assert!(!clone.contains("call i32 @perry_array_element_kind"));
+    assert!(!clone.contains("icmp ne i64"));
     assert!(clone.contains("icmp ult i32") && clone.contains(crate::nanbox::TAG_HOLE_I64));
     assert!(clone.contains("call double @perry_array_read_cold_shared"));
     assert!(!clone.contains("guard.follow") && !clone.contains("guard.hole"));

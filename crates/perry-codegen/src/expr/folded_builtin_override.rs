@@ -133,8 +133,8 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
         // costs it the INLINE STORE -- measured at +94 instructions per call,
         // against +6 for `indexOf`, which is a call on both arms either way --
         // and buys nothing: every inline push tier's admission mask already
-        // tests `OBJ_FLAG_ARRAY_DESCRIPTORS`, which every install of an array's
-        // own named property arms, so a receiver that owns `push` always lands
+        // tests the array's named layout (`ArrayHeader.named`), where every own
+        // named property of an array lives, so a receiver that owns `push` lands
         // in a slow arm, and each slow arm has an exit whose value is the
         // method's return.
         // `a.push()` with NO arguments is not an `ArrayPush`: HIR folds it to

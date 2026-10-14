@@ -314,9 +314,7 @@ fn bootstrap_prototype_addr(slot: usize) -> usize {
         0
     };
     // Don't poison the cache with 0: during runtime init the global constructor
-    // may not be materialized yet (symbol writes on other builtin prototypes
-    // call into here via `note_array_proto_iterator_write`). Re-derive until it
-    // resolves.
+    // may not be materialized yet. Re-derive until it resolves.
     if addr != 0 {
         prototype_addrs()[slot].set(addr);
     }

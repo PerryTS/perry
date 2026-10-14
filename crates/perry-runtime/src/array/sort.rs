@@ -483,7 +483,7 @@ unsafe fn publish_sorted_values(
                 | crate::gc::OBJ_FLAG_SEALED
                 | crate::gc::OBJ_FLAG_NO_EXTEND)
             == 0
-        && !super::indexing::array_iteration_is_exotic_resolved(arr, flags)
+        && !super::indexing::array_iteration_is_exotic_resolved(arr)
     {
         // No user code or allocation in this region. Resolve each root once,
         // copy the dense prefix, and rebuild layout/barriers after all stores.

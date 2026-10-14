@@ -361,7 +361,10 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
             let Some(range) = crate::array::gc_element_slot_range(arr) else {
                 return HeapChildSlotIterator::empty();
             };
-            HeapChildSlotIterator::new(header, None, range)
+            // The named layout object (§6a) is a child only once it exists.
+            let named = (!(*arr).named.is_null())
+                .then(|| std::ptr::addr_of_mut!((*arr).named).cast::<u64>());
+            HeapChildSlotIterator::new(header, None, range).with_meta_slot(named)
         }
         GcLayoutSlotKind::ObjectFields => {
             let obj = user_ptr as *mut crate::object::ObjectHeader;

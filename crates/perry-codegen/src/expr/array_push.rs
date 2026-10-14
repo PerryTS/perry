@@ -112,15 +112,17 @@ fn guarded_numeric_add_push_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
 /// expression, never an operand — a consumed `n = arr.push(x)` always
 /// computes the real length). When set, the placeholder constant is returned
 /// without emitting the call.
-/// The `nofwd` admission test for a #7839 numeric push: the historical
-/// integrity mask `0x0407` PLUS the three `_reserved` states in which
+/// The `nofwd` admission test for a #7839 numeric push: the integrity mask
+/// `0x0007` PLUS the three `_reserved` states in which
 /// `js_gc_note_slot_layout` does real work for a **non-pointer** value stored
 /// into a `GC_TYPE_ARRAY`. Every other state that function can be in is a
 /// provable no-op for such a value (see
 /// [`emit_numeric_push_store_pointer_tested`]).
 ///
-/// * `0x0407` `FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS` — the historical
-///   integrity bits, unchanged in meaning and in destination.
+/// * `0x0007` `FROZEN|SEALED|NO_EXTEND` — the integrity bits. Element
+///   descriptors (a non-writable `length`) and an own `push` live in the
+///   array's named layout, which every push admission tests beside the mask
+///   (`emit_array_has_named_layout`).
 /// * `0x0800` `GC_ARRAY_ELEMENT_SHAPE` — a live element-shape proof (#7480).
 ///   `note_element_store` must CLEAR it when a non-object lands in the array,
 ///   and that call sits ahead of every early return in `layout_note_slot`.
@@ -143,8 +145,8 @@ fn guarded_numeric_add_push_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
 /// widening here can only ever be slower, never wrong — the same direction of
 /// approximation `emit_may_carry_heap_pointer_check` documents.
 ///
-/// `0x0407 | 0x3800` == `0x3C07` == 15367.
-const ARRAY_PUSH_NUMERIC_CLEAN_I16: &str = "15367";
+/// `0x0007 | 0x3800` == `0x3807` == 14343.
+const ARRAY_PUSH_NUMERIC_CLEAN_I16: &str = "14343";
 
 /// Header admission mask for the dynamic pointer-append bookkeeping fast arm.
 ///
@@ -899,7 +901,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         TypedFeedbackContract::numeric_array_push(),
                     );
                     // #11021: the fallback is where an own `push` lands (the
-                    // guard rejects `OBJ_FLAG_ARRAY_DESCRIPTORS`), and exits here.
+                    // guard rejects a named layout), and exits here.
                     let mut own = OwnPushJoin::new(ctx);
                     let fast_idx = ctx.new_block("apush.numeric_fast");
                     let fallback_idx = ctx.new_block("apush.numeric_fallback");
@@ -1105,8 +1107,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
 
                 // #11021: the forwarded and realloc arms are where an own
                 // `push` lands — the admission mask below tests
-                // `OBJ_FLAG_ARRAY_DESCRIPTORS`, which every own-named-property
-                // install arms — and both exit here with the method's return.
+                // the array's named layout, where every own named property
+                // lives — and both exit here with the method's return.
                 let mut own = OwnPushJoin::new(ctx);
                 let fwd_idx = ctx.new_block("apush.fwd");
                 // An elements-backed Array subclass (`ObjectMeta.elements`)
@@ -1197,7 +1199,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // length < capacity, slow call on full.
                 //
                 // A frozen / sealed / non-extensible array, or one carrying
-                // per-index/`length` descriptors (`OBJ_FLAG_ARRAY_DESCRIPTORS`),
+                // per-index/`length` descriptors (in its named layout),
                 // must NOT take the raw inline store: `push` performs
                 // `Set(O,"length",…,true)`, so a frozen array or one whose
                 // `length` was made non-writable must throw a **TypeError**
@@ -1208,7 +1210,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // throws / handles them correctly. The integrity bits live in
                 // the GcHeader `_reserved` u16 at `arr - 6` (obj_type u8 at -8,
                 // gc_flags u8 at -7, `_reserved` u16 at -6): mask
-                // FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS = 0x407.
+                // FROZEN|SEALED|NO_EXTEND = 0x7, plus a null named layout.
                 let live_object_flags: String;
                 ctx.current_block = nofwd_idx;
                 let payload = ctx.block().phi(
@@ -1232,14 +1234,14 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         // declaration this push's elisions rest on. Bits, from
                         // `gc/types.rs` + `gc/layout.rs` (GC_TYPE_ARRAY):
                         //
-                        //   0x0407  FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS
+                        //   0x0007  FROZEN|SEALED|NO_EXTEND
                         //           -> must be 0, exactly as below
                         //   0x0080  GC_ARRAY_RAW_F64_LAYOUT   -> must be 0
                         //   0x1000  GC_ARRAY_RAW_F64_HOLES    -> must be 0
                         //   0x2000  GC_LAYOUT_ALL_POINTERS    -> must be 1
                         //   0xC000  layout state              -> SIDE_MASK
                         //
-                        // mask 0xF487 == 62599, expected 0xA000 == 40960.
+                        // mask 0xF087 == 61575, expected 0xA000 == 40960.
                         //
                         // The two raw-f64 bits are what makes eliding
                         // `js_array_note_numeric_write` sound: its whole body
@@ -1263,7 +1265,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         // stranded live child. Failing the test costs this push
                         // the inline store (it takes `js_array_push_f64`, which
                         // notes the slot); it can never cost correctness.
-                        let admitted_bits = blk.and(I16, &obj_flags, "62599");
+                        let admitted_bits = blk.and(I16, &obj_flags, "61575");
                         blk.icmp_eq(I16, &admitted_bits, "40960")
                     } else if guarded_numeric_bookkeeping {
                         // #7839 — the array's half of the guard, folded into the
@@ -1277,8 +1279,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         let admitted_bits = blk.and(I16, &obj_flags, ARRAY_PUSH_NUMERIC_CLEAN_I16);
                         blk.icmp_eq(I16, &admitted_bits, "0")
                     } else {
-                        // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
-                        let integrity_bits = blk.and(I16, &obj_flags, "1031");
+                        // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4).
+                        let integrity_bits = blk.and(I16, &obj_flags, "7");
                         blk.icmp_eq(I16, &integrity_bits, "0")
                     };
                     // A sticky runtime byte records indexed properties on
@@ -1292,6 +1294,12 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                             blk, &obj_flags,
                         );
                     let clean = blk.and(I1, &clean, &prototype_clean);
+                    // A non-writable `length`, an element descriptor or an own
+                    // `push` lives in the array's named layout (§6a).
+                    let has_named =
+                        crate::expr::array_proto_guard::emit_array_has_named_layout(blk, &payload);
+                    let no_named = blk.xor(I1, &has_named, "true");
+                    let clean = blk.and(I1, &clean, &no_named);
                     let length = blk.safe_load_i32_from_ptr(&payload);
                     let cap_addr = blk.add(I64, &payload, "4");
                     let cap_ptr = blk.inttoptr(I64, &cap_addr);

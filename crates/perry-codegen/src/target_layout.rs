@@ -180,7 +180,7 @@ pub const OBJECT_META_SPILL_OFFSET_BYTES: u64 = 32;
 /// capacity words — on every target: a spill buffer's elements start right
 /// after it (a spill buffer is private and never shifted, so it has no front
 /// reserve). Pinned by `spill_layout_matches_codegen` in the runtime.
-pub const ARRAY_HEADER_SIZE_BYTES: u64 = 8;
+pub const ARRAY_HEADER_SIZE_BYTES: u64 = 16;
 
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
 /// target: `{capture_count: u32, shape_id: u32, info, props}` — 24 bytes

@@ -682,13 +682,13 @@ unsafe fn prepare(slot: *mut MethodSiteSlot, recv: f64, method_id: i64, argc: us
         // ordinary method, before its arguments can change the slot.
         Some(crate::gc::GC_TYPE_CLOSURE) => prepare_function(slot, recv, name, argc),
         _ if cell => {
-            // An array that never had an own descriptor installed says so in
-            // its header (`OBJ_FLAG_ARRAY_DESCRIPTORS`, armed on the live
-            // head by every install, carried by growth and monotone for the
-            // allocation; a pre-growth alias was resolved to that head above).
+            // An array owns properties beyond its elements only in its named
+            // layout (`ArrayHeader.named`, carried by growth; a pre-growth
+            // alias was resolved to the live head above).
             let own = if kind == Some(crate::gc::GC_TYPE_ARRAY)
-                && header.is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0)
-            {
+                && !crate::array::array_has_named_properties_resolved(
+                    addr as *const crate::array::ArrayHeader,
+                ) {
                 None
             } else {
                 own_getter_value(addr, recv, name)

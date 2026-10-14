@@ -93,10 +93,15 @@ pub(super) fn try_lower(
                     // preserve POINTER_FREE; pointer/unknown values use the shared
                     // continuation so their barrier never adds per-site spills.
                     let word = super::index_get::guarded_array::emit_array_guard_word(blk, &handle);
-                    let mask = "4232544511"; // 0xFC47_80FF
+                    let mask = "4165435647"; // 0xF847_80FF
                     let expected = "1073741825"; // POINTER_FREE | ARRAY
                     let masked = blk.and(I32, &word, mask);
                     let shape = blk.icmp_eq(I32, &masked, expected);
+                    // Element descriptors and an own `push` live in the
+                    // array's named layout.
+                    let shape = super::index_get::guarded_array::emit_and_no_named_layout(
+                        blk, &shape, &handle,
+                    );
                     blk.cond_br(&shape, &room, &slow);
                 }
                 ctx.current_block = room_idx;

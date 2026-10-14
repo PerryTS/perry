@@ -55,7 +55,7 @@ use super::helpers::is_date_receiver;
 use crate::expr::{lower_expr, FnCtx};
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_declared_map_expr, is_map_expr, is_set_expr};
-use crate::types::{DOUBLE, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
 /// below. Over-approximating is safe — a name the chain declines simply makes
@@ -150,16 +150,16 @@ pub(super) fn guards(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
 /// receiver (`object/own_override.rs`), and never answers "no" for anything it
 /// cannot prove: a wrong "no" is a silent wrong value, a wrong "yes" is only
 /// slower.
-/// `GC_ARRAY_NAMED_PROPS` (0x100) | `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400) in
-/// `GcHeader::_reserved`. Both clear is the runtime predicate's own proof that
-/// an array owns no named property: the bit is monotonic and set when an array
-/// takes one, and the fallback table is reachable only with the descriptor
-/// flag set (`named_props::fallback_possible`).
-///
-/// Plus `GC_ARRAY_CUSTOM_PROTO` (0x40, #11915): an array with its own
-/// `[[Prototype]]` does not read `%Array.prototype%` either, and the
-/// predicate answers "may own" for it.
-const ARRAY_NOT_DEFAULT_MASK_I16: &str = "1344";
+/// An array owns a named property only in its named layout object
+/// (`ArrayHeader.named`, §6a): a null `named` is the absence proof. Plus
+/// `GC_ARRAY_CUSTOM_PROTO` (0x40 in `GcHeader::_reserved`, #11915): an array
+/// with its own `[[Prototype]]` does not read `%Array.prototype%`, and the
+/// predicate answers for it; and `GC_FLAG_FORWARDED` (0x80 in `gc_flags`): a
+/// pre-growth alias's `named` is not the live head's. As one i32 at -8
+/// (`obj_type`, `gc_flags`, `_reserved`): `0x80 << 8 | 0x40 << 16`.
+const ARRAY_NOT_DEFAULT_MASK_I32: &str = "4227072";
+/// `ArrayHeader.named`'s byte offset.
+const ARRAY_NAMED_OFFSET: &str = "8";
 /// `HANDLE_MASK_48` — the address bits of a NaN-boxed pointer.
 const HANDLE_MASK_48: &str = "281474976710655";
 
@@ -215,14 +215,18 @@ pub(crate) fn emit_own_override_branch(
                 ctx.current_block = header_idx;
             }
             let blk = ctx.block();
-            // GcHeader precedes the object: `_reserved` @-6 (i16).
             let bits = blk.bitcast_double_to_i64(recv);
             let handle = blk.and(I64, &bits, HANDLE_MASK_48);
             let obj_ptr = blk.inttoptr(I64, &handle);
-            let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
-            let reserved = blk.load(I16, &res_ptr);
-            let may = blk.and(I16, &reserved, ARRAY_NOT_DEFAULT_MASK_I16);
-            let maybe_owns = blk.icmp_ne(I16, &may, "0");
+            // GcHeader precedes the array: obj_type/gc_flags/_reserved @-8.
+            let hdr_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+            let hdr = blk.load(I32, &hdr_ptr);
+            let odd = blk.and(I32, &hdr, ARRAY_NOT_DEFAULT_MASK_I32);
+            let not_default = blk.icmp_ne(I32, &odd, "0");
+            let named_ptr = blk.gep(I8, &obj_ptr, &[(I64, ARRAY_NAMED_OFFSET)]);
+            let named = blk.load(I64, &named_ptr);
+            let has_named = blk.icmp_ne(I64, &named, "0");
+            let maybe_owns = blk.or(I1, &not_default, &has_named);
             blk.cond_br(&maybe_owns, &ask_label, builtin_label);
         } else {
             let blk = ctx.block();

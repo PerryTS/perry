@@ -879,7 +879,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
         ],
     );
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.dynamic.guard.deref"));
-    assert!(ir.contains("67141887") && ir.contains("aidx.dynamic.fast"));
+    assert!(ir.contains("33023") && ir.contains("aidx.dynamic.fast"));
     assert!(ir.contains("call double @perry_array_read_cold_shared"));
     assert!(
         !ir.contains("aidx.claimed.brand"),

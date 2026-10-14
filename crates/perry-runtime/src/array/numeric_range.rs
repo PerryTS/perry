@@ -64,7 +64,7 @@ fn array_numeric_range_add_impl(receiver: f64, start: f64, end: Option<f64>, del
         None => unsafe { (*arr).length },
     };
     let flags = array_object_flags(arr);
-    if flags & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS) != 0 {
+    if flags & crate::gc::OBJ_FLAG_FROZEN != 0 || array_has_element_descriptors(arr) {
         return -1;
     }
 
@@ -196,11 +196,9 @@ pub unsafe extern "C" fn js_array_fill_range_strided_tagged(
 
     let flags = array_object_flags(arr);
     if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
         != 0
+        || array_has_element_descriptors(arr)
     {
         return -1;
     }

@@ -395,14 +395,7 @@ pub(crate) fn lower_let(
             ctx.tdz_boxes.remove(&id);
             let set = perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone()));
             // A region's plan names the original initializer (step 4b).
-            let aliased = match &set {
-                perry_hir::Expr::LocalSet(_, v) => {
-                    crate::stmt::region_loop::alias_clone(ctx, init_expr, v)
-                }
-                _ => Vec::new(),
-            };
             let lowered = crate::expr::lower_expr(ctx, &set);
-            crate::stmt::region_loop::unalias_clone(ctx, aliased);
             lowered?;
             // #10488: a hoisted `var`'s real declaration reaches this branch
             // (#1803 predefine-then-declare) and returns before the

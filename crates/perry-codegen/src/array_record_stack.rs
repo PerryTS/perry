@@ -238,13 +238,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let value = lower_expr(ctx, input)?;
             ctx.block().store_volatile(DOUBLE, &value, &r.fields[0]);
             let counted = matches!(args.get(1), Some(Expr::Bool(true)));
-            let site = crate::expr::array_record_site(ctx);
+            let writable = crate::expr::array_iteration_facts().to_string();
             let verdict = ctx.block().call(
                 I32,
                 "js_array_record_stack_enter",
                 &[
                     (PTR, &r.base),
-                    (PTR, &site),
+                    (I32, &writable),
                     (I32, if counted { "1" } else { "0" }),
                 ],
             );

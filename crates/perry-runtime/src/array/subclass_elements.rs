@@ -721,11 +721,10 @@ unsafe fn plain_store_flags(elements: *mut ArrayHeader) -> Option<u16> {
     {
         return None;
     }
-    let blocking = crate::gc::OBJ_FLAG_FROZEN
-        | crate::gc::OBJ_FLAG_SEALED
-        | crate::gc::OBJ_FLAG_NO_EXTEND
-        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-    (header._reserved & blocking == 0).then_some(header._reserved)
+    let blocking =
+        crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    (header._reserved & blocking == 0 && !super::array_has_element_descriptors(elements))
+        .then_some(header._reserved)
 }
 
 /// Append without allocating: `Some(new_length)` when the store had spare

@@ -33,7 +33,7 @@
 //! `GcHeader::_reserved` has **no free bits** (`gc/types.rs`'s bit map says so
 //! outright, and bits 12/13 are actively ERASED by `set_layout_state` —
 //! #8690 and #10842 both lost a flag there). Arrays already carry
-//! `GC_ARRAY_NAMED_PROPS`, but Map/Set/Date/RegExp keep their own named
+//! `GC_ARRAY_KEY_ATTRS`, but Map/Set/Date/RegExp keep their own named
 //! properties in a per-thread side table, so there is no per-cell bit to read
 //! and their `ObjectMeta` is usually null — asking there would mean
 //! MATERIALISING a record to read an almost-always-clear flag.
@@ -45,7 +45,7 @@
 //!
 //! The flag is **set-only and over-approximating**, both deliberately. Set-only
 //! because clearing it on delete would reopen the hole for
-//! delete-then-shadow, exactly as `GC_ARRAY_NAMED_PROPS` is monotonic. Over-
+//! delete-then-shadow, exactly as `GC_ARRAY_KEY_ATTRS` is monotonic. Over-
 //! approximating because it is armed at the TOP of the exotic-store gauntlet,
 //! before that gauntlet's per-kind branches (buffer table, stream table, the
 //! meta/expando paths): there is no single install funnel, and a missed
@@ -233,76 +233,26 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -
         return 0;
     }
 
-    // An ARRAY records the fact on the cell, so it is answered exactly without
-    // consulting the global arm at all: `GC_ARRAY_NAMED_PROPS` is set when an
-    // array takes a named property and is monotonic for the same reason this
-    // module's flag is.
     if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
-        if matches!(
-            header.obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
-        ) {
-            if header._reserved & crate::gc::GC_ARRAY_NAMED_PROPS != 0 {
-                return 1;
-            }
-            // The bit is NOT a proof of absence, which this module's own rule
-            // ("never answer 0 for anything it cannot prove") forbids relying
-            // on. An array has a THIRD place for an own named property: the
-            // descriptor side table that `get_accessor_descriptor` reads and
-            // `array_own_key_present` consults BEFORE the bit-flagged named
-            // props. `a.push = () => 1` lands there — measured: neither
-            // `array_named_property_set` nor `expando_store` runs, yet
-            // `hasOwn` is true, `typeof` is "function" and `Object.keys`
-            // shows it. Reflection was right and this tier was reading the
-            // wrong table.
-            //
-            // So when any descriptor exists anywhere, ask the authoritative
-            // predicate instead of answering 0. When none does — the
-            // overwhelmingly common case — the bit stands and this stays one
-            // load and a test.
-            // Nor is the descriptor side table the answer: with
-            // `accessors_in_use` clear the row still ran the builtin, so the
-            // property `a.push = () => 1` installs is in neither the
-            // bit-flagged named props, the exotic expando, nor the accessor
-            // descriptors — yet `hasOwn`/`typeof`/`Object.keys` all see it.
-            //
-            // MEASURED COST OF ASKING ANYWAY: +4,745 instructions per
-            // guarded array builtin call (`a.push(i)` hot, 90.5 -> 4886.7 per
-            // iteration; `a.indexOf` 701.0 -> 5442.6; an element-read control
-            // flat at 16.05). The two deltas agree within 55 instructions on
-            // calls whose own work differs by 610, so it is a fixed per-call
-            // cost: the key-string allocation plus a full `hasOwn`. The exotic
-            // kinds pay +38.000 for the same guard, because their flag lets
-            // them answer 0.
-            //
-            // The cheap absence proof arrays were said to lack EXISTS, and
-            // this tier simply was not wired to it.
-            // `array_has_named_properties_resolved` covers all three storages
-            // an array named property can live in — the inline reserve, the
-            // pairs array, and the fallback table behind
-            // `FULL_ARRAY_NAMED_PROPS_EVER` — and both spellings of an
-            // own-method install go through `array_named_property_set`, which
-            // writes one of them. That is profiled, not assumed: `a.push = fn`
-            // on an `any` receiver and on a proven array local both show
-            // `array::named_props::array_named_property_set` in the install
-            // profile. (The earlier note here, that neither that function nor
-            // the expando store runs, was measured on a path that no longer
-            // carries this spelling and is wrong.)
-            //
-            // The descriptor table is still not covered by it, so a receiver
-            // with ANY descriptor keeps asking the authoritative predicate —
-            // the module's rule is unchanged, only the set of receivers that
-            // can be proven absent has grown. With no descriptors,
-            // `fallback_possible` is false, so the predicate is flag tests and
-            // a reserve read: no hash lookup, no allocation, no call.
-            if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
-                && header.obj_type == crate::gc::GC_TYPE_ARRAY
-                && !crate::array::array_has_named_properties_resolved(
-                    addr as *const crate::array::ArrayHeader,
-                )
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+            // Every own named property of an array (data or accessor, string
+            // or symbol key) lives in its named layout object (§6a), so the
+            // array owns `key` exactly when that object does.
+            let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+            if live.is_null()
+                || crate::array::array_object_flags_resolved(live)
+                    & crate::gc::GC_ARRAY_CUSTOM_PROTO
+                    != 0
             {
+                return authoritative_has_own(recv, key);
+            }
+            let named = crate::array::array_property_bag_resolved(live);
+            if named.is_null() {
                 return 0;
             }
+            return authoritative_has_own(crate::value::js_nanbox_pointer(named as i64), key);
+        }
+        if header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             return authoritative_has_own(recv, key);
         }
     } else {
@@ -512,9 +462,8 @@ unsafe fn invoke_own_user_method(own: f64, recv: f64, args: &[f64]) -> f64 {
 /// Does the array behind `arr` OWN a property named `push`? Returns the LIVE
 /// head when it does. Non-allocating, and never runs user code.
 ///
-/// `OBJ_FLAG_ARRAY_DESCRIPTORS` clear is the absence proof, answered from the
-/// header the caller's admission mask already read (#11021). Every path that
-/// gives an array an own named property arms it: `array_named_property_set`
+/// A null named layout (`ArrayHeader.named`) is the absence proof (#11021).
+/// Every path that gives an array an own named property writes that layout: `array_named_property_set`
 /// on both of its storages (the pairs reserve and the full-array fallback
 /// table — `named_props::mark_array_descriptors`), and every
 /// `Object.defineProperty` route (`array_object_ops`). It is monotone, and
@@ -545,15 +494,12 @@ unsafe fn array_owning_push(
     let live = if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         crate::array::clean_arr_ptr_mut(arr)
     } else {
-        if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0 {
+        if (*arr).named.is_null() {
             return None;
         }
         arr
     };
-    if live.is_null()
-        || crate::array::array_object_flags_resolved(live) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
-            == 0
-    {
+    if live.is_null() || (*live).named.is_null() {
         return None;
     }
     let owns = crate::object::get_accessor_descriptor(live as usize, "push").is_some()
@@ -566,9 +512,8 @@ unsafe fn array_owning_push(
 ///
 /// # Why the inline tier needs no test of its own
 ///
-/// Every inline push tier admits a receiver through a mask over
-/// `GcHeader::_reserved` that already includes `OBJ_FLAG_ARRAY_DESCRIPTORS`,
-/// and every own-named-property install arms that bit (see
+/// Every inline push tier admits a receiver only with a null named layout
+/// (`ArrayHeader.named`), where every own named property lives (see
 /// [`array_owning_push`]). So an array that owns `push` can never take the
 /// inline store: it fails admission and lands in a slow arm, and every slow arm
 /// calls THIS. The hot path pays nothing — the absence proof rides the
@@ -612,8 +557,8 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
         }
     }
     // The common case, in the one header probe `js_array_push_f64_spec` makes
-    // anyway: a plain live array has `OBJ_FLAG_ARRAY_DESCRIPTORS` clear, so it
-    // owns no named property at all. Asking `array_owning_push` first cost the
+    // anyway: a plain live array has no named layout, so it owns no named
+    // property at all. Asking `array_owning_push` first cost the
     // local tail — whose EVERY push is this call — a second probe: +46
     // instructions per push on a captured receiver, measured.
     //

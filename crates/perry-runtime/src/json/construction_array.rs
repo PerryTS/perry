@@ -71,6 +71,8 @@ impl ConstructionArray {
                 capacity,
             );
             (*ptr).capacity = capacity;
+            // GC_STORE_AUDIT(INIT): a fresh array owns no named layout.
+            (*ptr).named = std::ptr::null_mut();
             let slots = crate::array::array_elements_ptr(raw as *const ArrayHeader).cast::<u64>();
             for index in 0..capacity as usize {
                 // GC_STORE_AUDIT(INIT): initialize all physical slack for the

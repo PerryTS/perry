@@ -87,6 +87,7 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
         // Initialize header
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
         // HOLE-initialize the whole capacity so the unused [length, capacity)
         // slack never holds stale arena bits that the whole-heap from-space
         // scan misreads as live from-space pointers.
@@ -117,38 +118,25 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
 #[cfg(feature = "regex-engine")]
 pub(crate) fn js_array_alloc_named_props_reserved(
     capacity: u32,
-    set: crate::array::InlineKeySet,
+    set: crate::array::NamedPropertyKeys,
 ) -> *mut ArrayHeader {
-    let (header_word, reserve) = crate::array::inline_reserve_layout(set);
-    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
-    let ptr = arena_alloc_gc(
-        array_byte_size(actual_capacity as usize + reserve),
-        8,
-        crate::gc::GC_TYPE_ARRAY,
-    ) as *mut ArrayHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array = scope.root_raw_mut_ptr(js_array_alloc(capacity));
     unsafe {
-        (*ptr).length = 0;
-        (*ptr).capacity = actual_capacity;
-        let front = ptr.add(1) as *mut u64;
-        // GC_STORE_AUDIT(INIT): the header word is an INT32 box on a
-        // just-allocated array nothing references yet; no edge, no barrier.
-        std::ptr::write(front, header_word);
-        for i in 1..reserve {
-            // GC_STORE_AUDIT(INIT): inline value slots start `undefined`, a
-            // non-pointer, on the still unpublished allocation.
-            std::ptr::write(front.add(i), crate::value::TAG_UNDEFINED);
-        }
-        let elements_ptr = crate::array::array_elements_ptr(ptr);
-        for i in 0..actual_capacity as usize {
-            // GC_STORE_AUDIT(INIT): same hole-initialization of a still
-            // unpublished allocation as `js_array_alloc`; no edge, no barrier.
-            std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
-        }
-        let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
-        (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
-        debug_assert_eq!(crate::array::array_front_offset(ptr), reserve);
+        let named = crate::object::layout_desc::perry_alloc_layout(match set {
+            crate::array::NamedPropertyKeys::ExecResult => {
+                std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_NAMED)
+            }
+            crate::array::NamedPropertyKeys::ExecResultIndices => {
+                std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED)
+            }
+            crate::array::NamedPropertyKeys::IndicesGroups => {
+                std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED)
+            }
+        });
+        super::named_props::publish_named(array.get_raw_mut_ptr::<ArrayHeader>(), named);
     }
-    ptr
+    array.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Allocate a fresh array whose initialized prefix is known to contain only
@@ -170,6 +158,7 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
         // The caller writes a slot before it publishes the length that
         // covers it, so every slot it does not reach stays a hole.
         fill_fresh_capacity_with_holes(ptr);
@@ -244,12 +233,13 @@ fn alloc_key_list(
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = capacity;
+        (*ptr).named = std::ptr::null_mut();
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         if canonical {
             (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
         if with_attrs {
-            (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
+            (*header)._reserved |= crate::gc::GC_ARRAY_KEY_ATTRS;
             // GC_STORE_AUDIT(INIT): unpublished reserve, initialized to a non-pointer.
             std::ptr::write(ptr.add(1) as *mut u64, crate::value::TAG_HOLE);
         }
@@ -300,6 +290,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
     unsafe {
         (*ptr).length = capacity; // Set length = requested capacity
         (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
         let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         // The whole capacity: `[length, capacity)` is hole-filled on every
         // array (`array_truncate_length`).
@@ -331,6 +322,7 @@ pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeade
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        (*ptr).named = std::ptr::null_mut();
         let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         for i in 0..capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
@@ -412,6 +404,7 @@ pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut Ar
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        (*ptr).named = std::ptr::null_mut();
         clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
@@ -688,6 +681,7 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
     unsafe {
         (*ptr).length = capacity;
         (*ptr).capacity = capacity;
+        (*ptr).named = std::ptr::null_mut();
         clear_array_numeric_layout(ptr);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }

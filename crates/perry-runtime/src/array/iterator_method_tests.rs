@@ -10,7 +10,6 @@ struct ArrayGlobalsGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
     static_proto: bool,
     index: u8,
-    iteration: u8,
 }
 
 impl ArrayGlobalsGuard {
@@ -19,8 +18,6 @@ impl ArrayGlobalsGuard {
             _lock: crate::typed_feedback::typed_feedback_test_lock(),
             static_proto: crate::object::prototype_chain::array_static_proto_recorded(),
             index: crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed),
-            iteration: super::super::indexing_support::PERRY_ARRAY_ITERATION_NOT_PRISTINE
-                .load(Ordering::Acquire),
         }
     }
 }
@@ -29,8 +26,6 @@ impl Drop for ArrayGlobalsGuard {
     fn drop(&mut self) {
         crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.static_proto);
         crate::array::test_swap_array_index_fast_path_invalidated(self.index);
-        super::super::indexing_support::PERRY_ARRAY_ITERATION_NOT_PRISTINE
-            .store(self.iteration, Ordering::Release);
     }
 }
 
@@ -149,11 +144,7 @@ fn array_stack_entry_acquires_once_and_publishes_next() {
             value: f64::from_bits(TAG_UNDEFINED),
         };
         assert_eq!(
-            super::super::iterator_step::js_array_record_stack_enter(
-                &mut record,
-                std::ptr::null(),
-                0
-            ),
+            super::super::iterator_step::js_array_record_stack_enter(&mut record, 1, 0),
             1
         );
         assert_eq!(
@@ -232,11 +223,7 @@ fn array_custom_prototype_supplies_the_method_to_both_consumers() {
             value: f64::from_bits(TAG_UNDEFINED),
         };
         assert_eq!(
-            super::super::iterator_step::js_array_record_stack_enter(
-                &mut stack,
-                std::ptr::null(),
-                0
-            ),
+            super::super::iterator_step::js_array_record_stack_enter(&mut stack, 1, 0),
             1
         );
         assert_eq!(FACTORY_CALLS.with(std::cell::Cell::get), 3);
@@ -341,12 +328,29 @@ fn array_next_shape_read_honours_replacement_accessor_own_and_foreign_edge() {
     }
 }
 
+/// A realm whose `%Array.prototype%` is not materialized yet: no code has
+/// reached the prototype, so its iteration member is still the intrinsic and
+/// iteration needs no resolver (the materialization memo is primed before any
+/// user code, `prime_prototype_addr_cache`).
 #[test]
-fn unresolved_array_prototype_uses_the_property_resolver() {
+fn unmaterialized_array_prototype_iterates_with_the_intrinsic() {
     unsafe {
         assert!(matches!(
             prototype_iterator_method(0),
-            IteratorMethod::Generic
+            IteratorMethod::Intrinsic
+        ));
+    }
+}
+
+#[test]
+fn unresolved_intrinsic_prototype_has_the_declared_default_iterator() {
+    // Before a realm is exposed there can be no user write to its slot.
+    // Resolving it need not bootstrap the realm just to rediscover the
+    // runtime-declared intrinsic.
+    unsafe {
+        assert!(matches!(
+            prototype_iterator_method(0),
+            IteratorMethod::Intrinsic
         ));
     }
 }

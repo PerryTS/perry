@@ -29,3 +29,27 @@ impl ShapeRecord {
             | if absent { RECORD_KEYS_NO_SYMBOLS } else { 0 };
     }
 }
+
+impl ShapeRecord {
+    pub(super) fn refresh_element_kind(&mut self) {
+        self.element_kind = if self.summary() == 0 {
+            0
+        } else if self.keys == 0 {
+            2
+        } else {
+            unsafe {
+                let keys = self.keys as usize as *const crate::ArrayHeader;
+                if !super::super::keys_prefix_is_immutable(keys) {
+                    2
+                } else if crate::array::named_props::keys_hold_element_descriptors(
+                    keys,
+                    self.logical_key_count,
+                ) {
+                    1
+                } else {
+                    0
+                }
+            }
+        };
+    }
+}

@@ -160,6 +160,9 @@ pub(crate) struct ShapeRecord {
     /// Borrowed stable identity-word address; zero for DEFAULT/null/per-object.
     /// GC rewrites the word, not this derived address; no new identity fact.
     pub(super) proto_cell: u64,
+    /// Element properties described by this immutable key prefix: 0 plain,
+    /// 1 indexed/length descriptors, 2 a per-object mutable key list.
+    pub(super) element_kind: u64,
 }
 
 // Derived once from the immutable key prefix on slab publication. Owned
@@ -226,7 +229,7 @@ const _: () = {
 };
 const _: () = assert!(super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MAX);
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 72);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 80);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, special_constfn_mask) == 44);
@@ -248,6 +251,7 @@ impl ShapeRecord {
         rep: 0,
         extras: 0,
         proto_cell: 0,
+        element_kind: 0,
     };
 
     #[inline]
@@ -363,6 +367,7 @@ impl ShapeRecord {
             rep: 0,
             extras: 0,
             proto_cell: 0,
+            element_kind: 0,
         };
         record.refresh_positional();
         record
@@ -1297,6 +1302,7 @@ impl ShapeSlab {
         // bit follows them.
         record.refresh_positional();
         record.refresh_symbol_presence();
+        record.refresh_element_kind();
         *cell = record;
         if previous.is_none() {
             self.len += 1;

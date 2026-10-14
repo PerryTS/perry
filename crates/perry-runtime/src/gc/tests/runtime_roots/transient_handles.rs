@@ -443,9 +443,19 @@ fn test_transient_runtime_handle_object_set_gc() {
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    let obj = crate::object::js_object_alloc(0, 1);
+    let obj = crate::object::js_object_alloc(0, 2);
     js_shadow_slot_set(0, ptr_bits(obj as usize));
-    let key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+    // Canonical key metadata is stationary old storage now. Fill the
+    // inline slots first so the tested Set crosses its real allocating
+    // overflow window, with owner/key/value in transient custody.
+    for (name, value) in [(b"seed-a".as_slice(), 1.0), (b"seed-b".as_slice(), 2.0)] {
+        crate::object::js_object_set_field_by_name(obj, crate::string::canonical_key(name), value);
+    }
+    assert_eq!(unsafe { crate::object::object_keys(obj).count() }, 2);
+    let key = crate::string::js_string_from_bytes(
+        b"transient-unseeded-name".as_ptr(),
+        b"transient-unseeded-name".len() as u32,
+    );
     let value = crate::string::js_string_from_bytes(b"object-payload".as_ptr(), 14);
     force_next_general_arena_alloc_slow();
 
@@ -457,20 +467,26 @@ fn test_transient_runtime_handle_object_set_gc() {
         f64::from_bits(string_bits(value as usize)),
     );
 
-    drain_scheduled_minor_gc(before, "keys-array allocation");
+    drain_scheduled_minor_gc(before, "property spill allocation");
     let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     unsafe {
         assert!(!crate::object::object_keys(obj_after).arr().is_null());
-        let stored_value = crate::object::js_object_get_field(obj_after, 0).bits();
+        let keys = crate::object::object_keys(obj_after);
+        let slot = crate::object::keys_find_property_slot_by_bytes(
+            keys.arr(),
+            keys.count(),
+            b"transient-unseeded-name",
+        )
+        .expect("the collected Set retains its new key");
+        let stored_value = crate::object::js_object_get_field(obj_after, slot).bits();
         assert_eq!(stored_value & TAG_MASK, STRING_TAG);
         let stored_value_ptr = (stored_value & POINTER_MASK) as *const crate::StringHeader;
         assert_string_bytes(stored_value_ptr, b"object-payload");
 
-        let key_value =
-            crate::array::js_array_get(crate::object::object_keys(obj_after).arr(), 0).bits();
+        let key_value = keys.get(slot).bits();
         assert_eq!(key_value & TAG_MASK, STRING_TAG);
         let stored_key_ptr = (key_value & POINTER_MASK) as *const crate::StringHeader;
-        assert_string_bytes(stored_key_ptr, b"name");
+        assert_string_bytes(stored_key_ptr, b"transient-unseeded-name");
     }
 }
 

@@ -272,7 +272,8 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
 #[inline(always)]
 pub(super) unsafe fn array_miss_index_get(arr: *const ArrayHeader, index: u32) -> f64 {
     let flags = array_object_flags_resolved(arr);
-    if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_NAMED_PROPS) == 0
+    if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+        && !super::array_has_element_descriptors_resolved(arr)
         && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed)
             & super::INDEX_INVALIDATED
             == 0
@@ -328,7 +329,7 @@ unsafe fn array_index_get_walk(
                 as *const ArrayHeader;
         holder.set_raw_const_ptr(arr);
         let flags = array_object_flags_resolved(arr);
-        if check_own && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        if check_own && super::array_has_element_descriptors_resolved(arr) {
             if let Some(value) = array_index_accessor_get(arr, index, receiver.get_nanbox_f64()) {
                 return value;
             }

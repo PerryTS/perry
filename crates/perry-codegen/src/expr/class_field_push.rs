@@ -65,9 +65,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         let live = blk.icmp_eq(I8, &forwarded, "0");
         let reserved_ptr = blk.gep(I8, &ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &reserved_ptr);
-        // NAMED_PROPS | ARRAY_DESCRIPTORS: no own method or method getter.
-        let named = blk.and(I16, &reserved, "1280");
-        let no_own = blk.icmp_eq(I16, &named, "0");
+        // No own method or method getter: every own property of an array
+        // lives in its named layout (`ArrayHeader.named`, §6a).
+        let has_named = super::array_proto_guard::emit_array_has_named_layout(blk, &handle);
+        let no_own = blk.xor(I1, &has_named, "true");
         let default_proto = super::array_proto_guard::emit_array_method_admission(blk, &reserved);
         let plain = blk.and(I1, &array, &live);
         let method = blk.and(I1, &no_own, &default_proto);

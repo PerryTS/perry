@@ -27,7 +27,8 @@ pub(crate) unsafe fn position(obj: *const ObjectHeader, symbol: usize) -> Option
 pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
     let obj = owner(addr)?;
     let index = position(obj, symbol)?;
-    Some(js_object_get_field(obj, index).bits())
+    let value = js_object_get_field(obj, index).bits();
+    (value != crate::value::TAG_HOLE).then_some(value)
 }
 
 /// Root all operands while publishing the shared layout and growing storage.
@@ -120,7 +121,10 @@ pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, 
         }
         let symbol = (key.bits() & crate::value::POINTER_MASK) as usize;
         // A non-string key in this shape is an actual Symbol, never an encoded name.
-        result.push((symbol, js_object_get_field(obj, i as u32).bits()));
+        let value = js_object_get_field(obj, i as u32).bits();
+        if value != crate::value::TAG_HOLE {
+            result.push((symbol, value));
+        }
     }
     result
 }
@@ -128,6 +132,9 @@ pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, 
 pub(crate) unsafe fn entry(addr: usize, symbol: usize) -> Option<u8> {
     let obj = owner(addr)?;
     let pos = position(obj, symbol)?;
+    if js_object_get_field(obj, pos).bits() == crate::value::TAG_HOLE {
+        return None;
+    }
     Some(key_attrs::keys_entry(object_keys(obj).arr(), pos))
 }
 
@@ -236,6 +243,14 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
         return true;
     };
     let _no_move = crate::gc::GcSuppressScope::new();
+    if pos == crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT
+        && crate::value::addr_class::try_read_tracked_gc_header(addr)
+            .is_some_and(|header| header.as_ref().obj_type == crate::gc::GC_TYPE_ARRAY)
+    {
+        set_entry(addr, symbol, 0);
+        store(obj, pos, crate::value::TAG_HOLE);
+        return true;
+    }
     let keys = object_keys(obj);
     let count = keys.count();
     let mut next = crate::array::js_array_alloc(count.saturating_sub(1));

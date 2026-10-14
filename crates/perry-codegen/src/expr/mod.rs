@@ -124,8 +124,8 @@ mod strings;
 mod typed_feedback;
 mod url_helpers;
 mod v8_interop;
-mod write_barrier;
 pub(crate) mod wpfacts_access;
+mod write_barrier;
 
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
 pub(crate) use array_literal::{
@@ -135,7 +135,7 @@ pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
     lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, typed_array_store_value_is_native, BufferAccessSpec,
+    lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -249,7 +249,6 @@ mod method_value_shape_tests;
 mod proven_view_guarded_tests;
 mod record_value;
 #[cfg(test)]
-mod region_array_loop_tests;
 #[cfg(test)]
 mod region_loop_tests;
 mod repsel_gates;
@@ -2560,17 +2559,41 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// inline hit path loads the slot through [`emit_inline_cache_slot`] and
 /// proves it non-null before reading a cache word; every runtime miss entry
 /// takes the slot's address.
-/// A fresh array-record entry site: one zeroed `i64` word the runtime uses
-/// as the site's memo of the intrinsic owners' validated ShapeIds
-/// (`perry_runtime::array::iterator_step::ArrayRecordSite`). It holds no heap
-/// pointer and is re-validated by ShapeId compare on every entry.
-pub(crate) fn array_record_site(ctx: &mut FnCtx<'_>) -> String {
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let name = format!("{}_record", inline_cache_global_name(ctx, site_id));
-    ctx.typed_parse_rodata
-        .push(format!("@{name} = private global i64 0, align 8"));
-    format!("@{name}")
+/// The program's array-iteration facts (object model step 7), from the
+/// whole-program write census fixed before module codegen starts: bit 0, a
+/// write may reach a `Symbol.iterator` member (or re-parent an array), so
+/// iteration reads `%Array.prototype%`'s fixed slot (and an array's own
+/// member); bit 1, `%ArrayIteratorPrototype%` may be named, so iteration also
+/// checks its `next`. Zero: iteration is the builtin element walk, unchecked.
+pub(crate) fn array_iteration_facts() -> u32 {
+    let names = crate::program_patched_proto_methods();
+    let mut facts = 0;
+    if names
+        .iter()
+        .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_WRITABLE)
+    {
+        facts |= 1;
+    }
+    if names
+        .iter()
+        .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_PROTO_REACHABLE)
+    {
+        facts |= 2;
+    }
+    facts
+}
+
+/// Immutable whole-program array facts handed to the runtime at startup.
+pub(crate) fn array_program_facts() -> u32 {
+    array_iteration_facts()
+        | if crate::program_patched_proto_methods()
+            .iter()
+            .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
+        {
+            4
+        } else {
+            0
+        }
 }
 
 pub(crate) fn inline_cache_global_definition(name: &str) -> String {
@@ -3211,8 +3234,8 @@ mod unary_bigint_tests;
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    emit_array_region_guard, emit_typed_f64_region_guard, lower_record_index, lower_record_next,
-    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts, ArrayRegionDense,
+    lower_record_index, lower_record_next, numeric_index_has_integer_array_index_proof,
+    packed_f64_loop_index_parts,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach
@@ -4735,3 +4758,6 @@ mod byte_scanning_tests;
 
 #[cfg(test)]
 mod byte_prepass_tests;
+
+#[cfg(test)]
+mod array_layout_loop_tests;

@@ -98,9 +98,9 @@ unsafe fn admitted_append(receiver: f64, index: f64) -> Option<*mut ArrayHeader>
     const REJECT: u16 = crate::gc::OBJ_FLAG_FROZEN
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
-        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
         | crate::gc::GC_ARRAY_CUSTOM_PROTO;
     if array_object_flags_resolved(arr) & REJECT != 0
+        || array_has_element_descriptors_resolved(arr)
         || PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(std::sync::atomic::Ordering::Relaxed)
             & super::INDEX_INVALIDATED
             != 0

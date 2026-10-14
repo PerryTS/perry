@@ -246,8 +246,10 @@ pub(super) fn try_emit_cached_field_index_return(
     let array_reserved_addr = ctx.block().sub(I64, &array_raw, "6");
     let array_reserved_ptr = ctx.block().inttoptr(I64, &array_reserved_addr);
     let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
-    let array_descriptor_bits = ctx.block().and(I16, &array_reserved, "1024");
-    let array_no_descriptors = ctx.block().icmp_eq(I16, &array_descriptor_bits, "0");
+    // Element descriptors live in the array's named layout.
+    let array_has_named =
+        crate::expr::array_proto_guard::emit_array_has_named_layout(ctx.block(), &array_raw);
+    let array_no_descriptors = ctx.block().xor(I1, &array_has_named, "true");
     // #10593: the process-wide byte AND this array's own custom-proto bit.
     let default_prototypes = crate::expr::array_proto_guard::emit_array_default_prototype_chain(
         ctx.block(),

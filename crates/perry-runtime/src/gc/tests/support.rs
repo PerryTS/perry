@@ -148,6 +148,16 @@ pub(super) unsafe fn retire_old_test_set(
     crate::set::finalize_set_side_allocation_for_gc(set);
 }
 
+/// Return this thread's malloc registry to the lazy, inactive state of a
+/// thread that never asked for exact malloc-pointer validation.
+pub(super) fn deactivate_malloc_registry_for_tests() {
+    MALLOC_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.set = crate::fast_hash::new_ptr_hash_set();
+        s.registry_state = crate::gc::malloc::MallocRegistryState::Inactive;
+    });
+}
+
 pub(super) fn activate_malloc_registry_for_tests() {
     MALLOC_STATE.with(|s| {
         let mut s = s.borrow_mut();
@@ -292,6 +302,7 @@ pub(super) struct ScopedRootScannerRegistryGuard {
     ffi_roots_len: usize,
     ffi_mutable_roots_len: usize,
     prev_auto_init_suppressed: bool,
+    prev_gc_init_done: bool,
     prev_conservative_override: Option<crate::gc::ConservativeStackScanMode>,
 }
 
@@ -313,6 +324,10 @@ impl ScopedRootScannerRegistryGuard {
         // state, not a root the test chose, so every window heals it exactly
         // as `gc_init` does.
         crate::gc::register_prototype_addr_cache_scanner();
+        // An explicit gc_init inside the fixture must install the production
+        // scanner set into the newly empty registry. Restore the matching
+        // initialization state together with the saved registry on drop.
+        let prev_gc_init_done = GC_INIT_DONE.with(|done| done.replace(false));
         let prev_auto_init_suppressed = crate::gc::set_auto_gc_init_suppressed(true);
         // Opt out of the test build's full-conservative-scan default (see
         // `conservative_stack_scan_mode`): GC tests verify collection of objects
@@ -327,6 +342,7 @@ impl ScopedRootScannerRegistryGuard {
             ffi_roots_len,
             ffi_mutable_roots_len,
             prev_auto_init_suppressed,
+            prev_gc_init_done,
             prev_conservative_override,
         }
     }
@@ -344,12 +360,69 @@ impl Drop for ScopedRootScannerRegistryGuard {
         });
         crate::gc::set_conservative_stack_scan_override(self.prev_conservative_override);
         crate::gc::set_auto_gc_init_suppressed(self.prev_auto_init_suppressed);
+        GC_INIT_DONE.with(|done| done.set(self.prev_gc_init_done));
     }
 }
 
 pub(super) struct GcTestIsolationGuard {
     _scanner_guard: ScopedRootScannerRegistryGuard,
     _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+/// Keep runtime startup metadata outside controlled GC page fixtures.
+/// The whole page is a valid initialized object, not opaque padding.
+fn isolate_runtime_layout_pages() {
+    let _ = crate::state::state();
+    unsafe {
+        let page = crate::arena::GENERATION_PAGE_SIZE;
+        let minimum = GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>();
+        let total = crate::arena::OLD_ARENA.with(|cell| {
+            let arena = &*cell.get();
+            let block = &arena.blocks[arena.current];
+            let mut remaining = page - ((block.data as usize + block.offset) % page);
+            if remaining < minimum {
+                remaining += page;
+            }
+            remaining
+        });
+        // Consume the tail with a real object. Over-aligning an allocation
+        // leaves an unregistered gap and makes the sequential arena walk stop.
+        let raw = crate::arena::arena_alloc_gc_old(total - GC_HEADER_SIZE, 8, GC_TYPE_ARRAY);
+        let gc = crate::gc::header_from_trusted_user_ptr(raw).cast_mut();
+        let payload = (*gc).size as usize - GC_HEADER_SIZE;
+        std::ptr::write_bytes(raw, 0, payload);
+        let arr = raw.cast::<crate::array::ArrayHeader>();
+        (*arr).length = 0;
+        (*arr).capacity = 0;
+        (*arr).named = std::ptr::null_mut();
+        crate::gc::layout_init_pointer_free(raw);
+    }
+}
+
+/// Compaction fixtures separate their objects from stationary metadata
+/// at block granularity because evacuation moves a whole source block.
+pub(super) fn isolate_runtime_layout_blocks() {
+    let _ = crate::state::state();
+    // The promotion allocator searches every old block with spare bump
+    // space. Merely opening another block still lets it return to the
+    // stationary metadata block after the fixture fills its current block.
+    // Close that tail with a real walkable object, not an alignment gap.
+    let remaining = crate::arena::OLD_ARENA.with(|cell| unsafe {
+        let arena = &*cell.get();
+        let block = &arena.blocks[arena.current];
+        block.size - block.offset
+    });
+    if remaining != 0 {
+        assert!(remaining >= GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>());
+        let raw = crate::arena::arena_alloc_gc_old(remaining - GC_HEADER_SIZE, 8, GC_TYPE_ARRAY);
+        unsafe {
+            std::ptr::write_bytes(raw, 0, remaining - GC_HEADER_SIZE);
+            crate::gc::layout_init_pointer_free(raw);
+        }
+    }
+    crate::arena::OLD_ARENA.with(|cell| unsafe {
+        (&mut *cell.get()).install_fresh_block(crate::arena::BLOCK_SIZE);
+    });
 }
 
 impl GcTestIsolationGuard {
@@ -404,6 +477,7 @@ impl GcTestIsolationGuard {
                  move out of the window is still inside it"
             );
         }
+        isolate_runtime_layout_pages();
         let scanner_guard = ScopedRootScannerRegistryGuard::new();
         reset_copying_nursery_runtime_test_state();
         reset_shadow_stack();
@@ -483,6 +557,7 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
 impl CopyingNurseryTestGuard {
     pub(crate) fn new(slot_count: u32) -> Self {
         let lock = copying_nursery_isolation_lock();
+        isolate_runtime_layout_pages();
         let scanner_guard = ScopedRootScannerRegistryGuard::new();
         reset_copying_nursery_runtime_test_state();
         reset_shadow_stack();
@@ -991,6 +1066,7 @@ pub(super) unsafe fn alloc_old_test_array(
         as *mut crate::array::ArrayHeader;
     (*arr).length = length;
     (*arr).capacity = length;
+    (*arr).named = std::ptr::null_mut();
     let elements =
         crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut u64;
     for i in 0..length as usize {

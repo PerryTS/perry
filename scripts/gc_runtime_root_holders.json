@@ -2866,12 +2866,6 @@
       "why": "Monotonic number of fired deferred HTTP client callbacks. fetch_add(1) in the drain and load in deferred_fired; never stores an address or JS value."
     },
     {
-      "file": "crates/perry-runtime/src/array/iterator_step.rs",
-      "name": "ARRAY_RECORD_FULL_PROOFS",
-      "verdict": "test_only",
-      "why": "Scalar test counter of full array iterator-body proof calls."
-    },
-    {
       "file": "crates/perry-runtime/src/gc/root_words.rs",
       "name": "PRECISE_ROOT_VERIFICATION",
       "verdict": "test_only",

@@ -61,8 +61,7 @@ const SRC: &[u8] = br#"{"a":1,"n":2,"b":3}"#;
 /// entry; otherwise every iteration falls through the slow miss path.
 #[test]
 fn pooled_runtime_key_names_prime_static_overwrites() {
-    let target = parsed(br#"{"name":0,"nam":0,"E":0,"X":0,"length":0,"len":0,"now":0,"later":0}"#);
-    for (index, name) in [
+    let names = [
         b"name".as_slice(),
         b"nam",
         b"E",
@@ -71,16 +70,27 @@ fn pooled_runtime_key_names_prime_static_overwrites() {
         b"len",
         b"now",
         b"later",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let runtime_key = interned(name);
-        let pooled_key =
-            crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, fnv1a(name), 0);
-        assert_ne!(
-            pooled_key as *const _, runtime_key,
-            "fixture must use the pooled copy"
+    ];
+    // Mirror link-image startup: register program atoms before parsing data.
+    let keys: Vec<_> = names
+        .iter()
+        .map(|name| unsafe {
+            let key = crate::string::js_string_pool_atom(
+                name.as_ptr(),
+                name.len() as u32,
+                fnv1a(name),
+                0,
+            );
+            crate::string::seed_static_atom(name, fnv1a(name), key);
+            key
+        })
+        .collect();
+    let target = parsed(br#"{"name":0,"nam":0,"E":0,"X":0,"length":0,"len":0,"now":0,"later":0}"#);
+    for (index, (name, pooled_key)) in names.into_iter().zip(keys).enumerate() {
+        assert_eq!(
+            pooled_key as *const _,
+            interned(name),
+            "data keys must intern to the program's one atom"
         );
         let (stored, word) = store_fresh(target, pooled_key, index as f64 + 1.0);
         assert_eq!(stored, index as f64 + 1.0);

@@ -2619,6 +2619,7 @@ fn compile_module_impl(
                         keys,
                         slot_count: birth_live,
                         rep,
+                        array_named: false,
                     });
                 } else if by_global[keys_global] != *first {
                     continue;
@@ -2634,6 +2635,14 @@ fn compile_module_impl(
                     },
                 );
             }
+        }
+        if crate::layout_desc::layouts_enabled(&opts.output_type, &triple) {
+            layouts.extend(crate::layout_desc::array_families::collect(
+                hir,
+                &module_prefix,
+            ));
+        } else {
+            crate::layout_desc::array_families::clear();
         }
         crate::layout_desc::set_module_families(adds, layouts);
     }

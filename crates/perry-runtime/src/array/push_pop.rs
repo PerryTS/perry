@@ -20,13 +20,8 @@ fn throw_frozen_array_mutation() -> ! {
 /// Array.prototype.{push,pop,shift,unshift}/set-length-*-non-writable.)
 #[inline]
 pub(crate) fn array_length_is_non_writable(arr: *const ArrayHeader) -> bool {
-    let flags = array_object_flags(arr);
-    array_length_is_non_writable_with_flags(arr, flags)
-}
-
-#[inline]
-fn array_length_is_non_writable_with_flags(arr: *const ArrayHeader, flags: u16) -> bool {
-    flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+    // A non-writable `length` is a key of the array's named layout.
+    array_has_element_descriptors(arr)
         && crate::object::get_property_attrs(arr as usize, "length")
             .map(|a| !a.writable())
             .unwrap_or(false)
@@ -114,13 +109,6 @@ unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
     ((*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY).then(|| (*gc_header)._reserved)
 }
 
-#[inline]
-fn guard_writable_length_with_flags(arr: *const ArrayHeader, flags: u16) {
-    if array_length_is_non_writable_with_flags(arr, flags) {
-        throw_non_writable_length();
-    }
-}
-
 /// Guard called from the static `push_single`/`push` codegen path so that
 /// frozen + non-writable-`length` checks fire even for `arr.push()` with no
 /// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`.
@@ -136,7 +124,7 @@ pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader) {
     if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
         throw_frozen_array_mutation();
     }
-    guard_writable_length_with_flags(arr, flags);
+    guard_writable_length(arr);
 }
 
 #[no_mangle]
@@ -185,7 +173,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // the replacement allocation keeps the same number of physical slots
         // in front of logical element 0, so `capacity` excludes them on both
         // sides and the element copy below is verbatim at the same byte offset.
-        let reserve = crate::array::array_named_props_reserve(arr);
+        let reserve = crate::array::key_attrs_reserve(arr);
         let old_size = array_byte_size(old_capacity as usize + reserve);
         let new_size = array_byte_size(new_capacity as usize + reserve);
 
@@ -230,6 +218,13 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let shifted = array_front_offset(arr) != reserve;
         (*new_ptr).length = (*arr).length;
         (*new_ptr).capacity = new_capacity;
+        // GC_STORE_AUDIT(BARRIERED): growth carries the traced ordinary named layout.
+        (*new_ptr).named = (*arr).named;
+        crate::gc::runtime_write_barrier_slot(
+            new_ptr as usize,
+            std::ptr::addr_of_mut!((*new_ptr).named) as usize,
+            crate::value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
+        );
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the logical backing
         // range, transfers its layout, and replays its write barriers below.
         ptr::copy_nonoverlapping(
@@ -272,12 +267,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             // live in the reserve slots. Growth is not a collector move, so
             // carry them to the replacement head explicitly (barriered) before
             // the old address becomes a forwarding stub (#9371, #9201).
-            crate::array::carry_named_props_reserve(arr, new_ptr, reserve);
-        } else if (*old_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
-            // An array that was full at its first named property keeps them in
-            // the address-keyed fallback table; rekey it before the old
-            // address becomes a forwarding stub (#9371, #9201).
-            crate::array::transfer_full_array_named_props_owner(arr as usize, new_ptr as usize);
+            crate::array::carry_key_attrs_reserve(arr, new_ptr, reserve);
         }
         // `js_array_grow` is an allocation replacement outside the collector,
         // so GC's normal side-table rekey phase does not run. Preserve every
@@ -816,7 +806,7 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
         throw_frozen_array_mutation();
     }
-    guard_writable_length_with_flags(arr, flags);
+    guard_writable_length(arr);
     if flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 {
         return arr;
     }
@@ -850,7 +840,7 @@ fn direct_plain_push_receiver(arr: *mut ArrayHeader) -> Option<*mut ArrayHeader>
         .filter(|header| {
             header.obj_type == crate::gc::GC_TYPE_ARRAY
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                && unsafe { (*arr).named.is_null() }
                 && !super::array_index_fast_path_invalid_for(header._reserved)
         })
         .and_then(|_| unsafe {
@@ -958,8 +948,8 @@ pub extern "C" fn js_array_push_f64_spec(arr: *mut ArrayHeader, value: f64) -> *
 /// [`js_array_push_f64_spec`]'s first arm: `Some(new head)` when the receiver
 /// is a plain live array, `None` — having done nothing — otherwise. Shared with
 /// `js_array_push_f64_spec_or_own` (#11021), whose absence proof it also is:
-/// admission requires `OBJ_FLAG_ARRAY_DESCRIPTORS` clear, so such a receiver
-/// owns no named property, `push` included, and one header probe answers both.
+/// admission requires a null named layout (`ArrayHeader.named`), so such a
+/// receiver owns no named property, `push` included, and one probe answers both.
 ///
 /// `inline(always)`: both entries are hot, and with two callers the shipping
 /// profile outlined it from the second, costing that one a call per push.
@@ -1101,9 +1091,9 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     {
         return arr;
     }
-    guard_writable_length_with_flags(arr, flags);
+    guard_writable_length(arr);
     unsafe {
-        if crate::array::array_iteration_is_exotic_cleaned(arr, flags) {
+        if crate::array::array_iteration_is_exotic_cleaned(arr) {
             return js_array_push_f64_spec(arr, value);
         }
         if crate::array::array_numeric_raw_f64_push_inbounds_resolved(arr, value) {
@@ -1209,12 +1199,11 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     // length is the GC trace bound and a later push overwrites the word before
     // publishing the larger length.
     if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) } {
-        let guarded_flags = crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+        let guarded_flags =
+            crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
         if header.obj_type == crate::gc::GC_TYPE_ARRAY
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && !unsafe { array_has_element_descriptors_resolved(arr) }
             && header._reserved & guarded_flags == 0
             && !super::array_index_fast_path_invalid_for(header._reserved)
         {
@@ -1222,8 +1211,8 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
                 let length = (*arr).length;
                 let capacity = (*arr).capacity;
                 // An empty plain array: `Set(O, "length", 0)` is a no-op on a
-                // writable length (`OBJ_FLAG_ARRAY_DESCRIPTORS` is where a
-                // non-writable one is recorded, and it is excluded above), and
+                // writable length (a non-writable one is a key of the array's
+                // named layout, and it is excluded above), and
                 // there is no index to Get or Delete — the answer is
                 // `undefined`. Without this arm the drained pool's
                 // `pool.pop() ?? []` ran the whole generic tower (subclass and
@@ -1268,7 +1257,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
             if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
                 throw_frozen_array_mutation();
             }
-            guard_writable_length_with_flags(arr, flags);
+            guard_writable_length(arr);
         }
         None => {
             if array_is_frozen(arr) {
@@ -1285,7 +1274,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 
         let new_length = length - 1;
         let exotic = match plain_flags {
-            Some(flags) => crate::array::array_iteration_is_exotic_resolved(arr, flags),
+            Some(_) => crate::array::array_iteration_is_exotic_resolved(arr),
             None => crate::array::array_iteration_is_exotic(arr),
         };
         if !exotic {
@@ -1380,8 +1369,8 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// object pool's `pooled.length = 0` that tower was the whole cost, five
 /// thousand times a frame. Exactly the header facts the pop fast path proves
 /// are enough here: a `GC_TYPE_ARRAY` head that is not forwarded, none of the
-/// integrity / descriptor flags (a non-writable `length` is recorded under
-/// `OBJ_FLAG_ARRAY_DESCRIPTORS`, so neither entry has anything to throw), a
+/// integrity flags, no element descriptor (a non-writable `length` is a key of
+/// the array's named layout, so neither entry has anything to throw), a
 /// dense `length <= capacity`, and no named properties. The work is the
 /// plain-shrink branch's, unchanged: holes over the retired prefix, the
 /// length, one layout rebuild. Anything else declines to the full entry.
@@ -1391,12 +1380,11 @@ fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
     else {
         return false;
     };
-    let guarded_flags = crate::gc::OBJ_FLAG_FROZEN
-        | crate::gc::OBJ_FLAG_SEALED
-        | crate::gc::OBJ_FLAG_NO_EXTEND
-        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    let guarded_flags =
+        crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
     if header.obj_type != crate::gc::GC_TYPE_ARRAY
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || unsafe { array_has_element_descriptors_resolved(arr) }
         || header._reserved & guarded_flags != 0
     {
         return false;
@@ -1498,7 +1486,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
         // in the attrs side table; an ordinary `arr.length = n` write must
         // then no-op (strict-mode throw is handled by the caller's PutValue).
         if n != cur
-            && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            && array_has_element_descriptors(arr)
             && crate::object::get_property_attrs(arr as usize, "length")
                 .map(|a| !a.writable())
                 .unwrap_or(false)
@@ -1525,7 +1513,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // live-prefix GC layout once. This preserves the holes required if
             // the array grows again without paying String construction and
             // three descriptor/expando probes for every removed element.
-            if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+            if !array_has_element_descriptors(arr)
                 && cur <= capacity
                 && !array_has_named_properties_resolved(arr)
             {

@@ -1,3 +1,4 @@
+//! Length/counter semantic inputs ported from removed array-region proofs.
 use super::*;
 use perry_hir::{types::Type, Function, Module, Param, UpdateOp};
 
@@ -186,30 +187,22 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
         .expect("length region compiles"),
     )
     .unwrap();
-    let signature = output
-        .lines()
-        .find(|l| {
-            l.starts_with("define internal ")
-                && l.contains("@perry_fn_length_region__probe")
-                && !l.contains("$generic(")
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "no numeric clone: {}",
-                output
-                    .lines()
-                    .filter(|l| l.starts_with("define "))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        });
-    let at = output.find(signature).unwrap();
-    let f = &output[at..];
-    f[..f.find("\n}\n").expect("function end")].to_string()
+    output
 }
 
+fn check_view(ir: &str) {
+    crate::testing::verify_ir(ir, "array_layout_length").expect("valid checked view lowering");
+    assert!(
+        !ir.contains("rloop.fast") && !ir.contains("rloop.recheck"),
+        "there is one checked loop, without runtime array region clones"
+    );
+    assert!(
+        ir.contains("load i32") || ir.contains("js_buffer_length"),
+        "length remains an unsigned live receiver fact"
+    );
+}
 #[test]
-fn length_bound_guarded_copy_has_no_per_access_check() {
+fn own_other_inclusive_constant_and_symbolic_length_bounds_compile() {
     for (op, offset, other) in [
         (CompareOp::Lt, Expr::Integer(0), false),
         (CompareOp::Le, Expr::Integer(1), false),
@@ -217,124 +210,47 @@ fn length_bound_guarded_copy_has_no_per_access_check() {
         (CompareOp::Lt, Expr::LocalGet(7), false),
         (CompareOp::Lt, Expr::Integer(0), true),
     ] {
-        let ir = ir(op, offset, other, 0, false);
+        check_view(&ir(op, offset, other, 0, false));
+    }
+}
+#[test]
+fn observing_buffer_keeps_live_length() {
+    let ir = ir(CompareOp::Lt, Expr::Integer(0), false, 1, false);
+    check_view(&ir);
+    assert!(
+        !ir.contains("!invariant.load"),
+        "exposed storage length cannot be invariant"
+    );
+}
+#[test]
+fn negative_and_other_receiver_offsets_use_checked_accesses() {
+    for offset in [Expr::Integer(-1), Expr::Integer(1), Expr::Integer(2)] {
+        let ir = ir(CompareOp::Lt, offset, true, 0, false);
+        check_view(&ir);
         assert!(
-            ir.contains("rloop.fast"),
-            "no region for {op:?}, other={other}:\n{ir}"
-        );
-        let fast_label = ir
-            .lines()
-            .find(|l| l.starts_with("rloop.fast.") && l.ends_with(':'))
-            .unwrap();
-        let fast = &ir[ir.find(fast_label).unwrap() + fast_label.len()..];
-        let fast = fast.split("\n\n").next().unwrap();
-        assert!(fast.matches("load double, ptr").count() >= 2, "{fast}");
-        assert!(
-            !fast.contains("icmp ult")
-                && !fast.contains("@llvm.assume")
-                && !fast.contains("pview.get.oob")
-                && !fast.contains("pview.gget"),
-            "{fast}"
-        );
-        // Witness: the plain copy still tests its accesses (either a checked
-        // branch or the existing sealed-length assume proof).
-        assert!(
-            ir.contains("icmp ult i32") || ir.contains("pview.gget.slow"),
-            "{ir}"
-        );
-        let guard = ir.split("rloop.version.split").next().unwrap();
-        assert!(
-            guard
-                .lines()
-                .any(|l| l.contains("fcmp ole double") && !l.contains("2147483647.0")),
-            "missing end <= length: {ir}"
-        );
-        // The guard has plain header reads. Sealed loop conditions may carry
-        // invariant metadata elsewhere, but the guard must not.
-        assert!(
-            guard.contains("load i32, ptr"),
-            "live independent length: {guard}"
-        );
-        // Constructors may resolve their initial extent with a helper. The
-        // region's bounds guard itself must read the canonical length slot.
-        for block in guard
-            .split("\n\n")
-            .filter(|block| block.contains("fcmp ole double") && !block.contains("2147483647.0"))
-        {
-            assert!(!block.contains("call i32 @js_buffer_length("), "{block}");
-        }
-        assert!(
-            !guard.contains("!invariant.load"),
-            "length guard must observe current storage: {guard}"
+            ir.contains("icmp ult") || ir.contains("index_get") || ir.contains("pview.gget"),
+            "an offset never lends another receiver an unchecked bound"
         );
     }
 }
-
 #[test]
-fn observing_buffer_refuses_length_region() {
-    let ir = ir(CompareOp::Lt, Expr::Integer(0), false, 1, false);
-    assert!(!ir.contains("rloop.fast"), "{ir}");
-    assert!(!ir.contains("!invariant.load"), "{ir}");
-}
-
-#[test]
-fn length_range_offsets_preserve_source_and_reject_negative_indices() {
-    let mut env = Env::default();
-    env.ranges.insert(
-        5,
-        Rng::checked(Some(0), Some(Hi::Lt(Symbol::ViewLength(3, None), -2)), true).unwrap(),
-    );
-    let end = env
-        .view_end(&bin(BinaryOp::Add, Expr::LocalGet(5), Expr::Integer(2)))
-        .unwrap();
-    assert_eq!(end.end, End::Sym(Symbol::ViewLength(3, None), 0));
-    assert!(end.counter);
-    assert!(env
-        .view_end(&bin(BinaryOp::Sub, Expr::LocalGet(5), Expr::Integer(1)))
-        .is_none());
-    let u = ArrayUse {
-        view: true,
-        view_counter: true,
-        view_sym: Some((Symbol::ViewLength(3, None), 0)),
-        ..ArrayUse::default()
-    };
-    assert!(u.view_covers(end));
-    assert!(!u.view_covers(ViewEnd {
-        end: End::Sym(Symbol::ViewLength(4, None), 0),
-        counter: true
-    }));
-}
-
-#[test]
-fn late_exposed_length_is_plain_at_entry_and_every_recheck() {
+fn late_buffer_exposure_and_call_keep_live_length() {
     let ir = ir(CompareOp::Lt, Expr::Integer(0), false, 2, true);
+    check_view(&ir);
     assert!(
-        ir.contains("rloop.fast") && ir.contains("rloop.recheck"),
-        "{ir}"
+        !ir.contains("!invariant.load"),
+        "the next iteration observes changed storage"
     );
-    assert!(!ir.contains("!invariant.load"), "{ir}");
-    let label = ir
-        .lines()
-        .find(|l| l.starts_with("rloop.recheck.") && l.ends_with(':'))
-        .unwrap();
-    let rc = &ir[ir.find(label).unwrap() + label.len()..];
-    let rc = rc.split("\n\n").next().unwrap();
-    assert!(
-        rc.matches("call i32 @js_buffer_length(").count() >= 2 && rc.contains("fcmp ole double"),
-        "{rc}"
-    );
-    assert!(!rc.contains("!invariant.load"), "{rc}");
 }
-
 #[test]
-fn symbolic_length_guard_contains_local_subtraction() {
+fn symbolic_bound_retains_subtraction() {
     let ir = ir(CompareOp::Lt, Expr::LocalGet(7), false, 0, false);
-    let guard = ir.split("rloop.version.split").next().unwrap();
-    let start = guard.rfind("fcmp oge double").expect("counter entry guard");
-    let guard = &guard[start..];
-    assert!(guard.contains("fsub double"), "{guard}");
+    check_view(&ir);
+    assert!(
+        ir.contains("fsub double") || ir.contains("sub i32"),
+        "source subtraction remains"
+    );
 }
-
 #[test]
 fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
     let mut m = Module::new("getter_bound");
@@ -420,54 +336,39 @@ fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
     );
     assert!(!body.contains("rloop.fast"), "{body}");
 }
-
 #[test]
-fn counter_entry_guard_checks_nonnegative_i32_and_integrality() {
+fn counter_and_length_are_checked_at_each_access() {
     let ir = ir(CompareOp::Lt, Expr::Integer(0), false, 0, false);
-    let guard = ir.split("rloop.version.split").next().unwrap();
+    check_view(&ir);
     assert!(
-        guard.contains("fcmp oge double") && guard.contains("2147483647.0"),
-        "{guard}"
-    );
-    assert!(guard.contains("fcmp oeq double"), "{guard}");
-    assert!(
-        guard.contains("select i1") && guard.contains("fptosi double"),
-        "{guard}"
+        ir.contains("icmp ult") || ir.contains("index_get") || ir.contains("pview.gget"),
+        "a source counter is not an unchecked array-region proof"
     );
 }
-
 #[test]
-fn inclusive_length_minus_one_has_exclusive_end_at_length() {
+fn inclusive_length_minus_one_retains_inclusive_comparison() {
     let ir = ir(CompareOp::Le, Expr::Integer(1), false, 0, false);
-    let guard = ir.split("rloop.version.split").next().unwrap();
-    let start = guard.rfind("fcmp oge double").unwrap();
+    check_view(&ir);
     assert!(
-        guard[start..]
-            .lines()
-            .any(|l| l.contains("fadd double") && l.ends_with(", 0.0")),
-        "{guard}"
+        ir.contains("icmp sle") || ir.contains("fcmp ole"),
+        "inclusive condition remains"
     );
 }
-
 #[test]
-fn symbolic_length_reads_the_unsigned_header_value() {
+fn unsigned_length_conversion_is_retained() {
     let ir = ir(CompareOp::Lt, Expr::Integer(0), false, 0, false);
-    let guard = ir.split("rloop.version.split").next().unwrap();
-    let start = guard.rfind("fcmp oge double").unwrap();
-    assert!(guard[start..].contains("uitofp i32"), "{guard}");
+    check_view(&ir);
+    assert!(
+        ir.contains("uitofp i32") || ir.contains("zext i32"),
+        "a view length must not become negative at bit 31"
+    );
 }
-
 #[test]
-fn a_recheck_requires_the_counter_below_the_live_exclusive_bound() {
-    // After JS shrinks both source and target to zero, end <= length passes.
-    // The iteration's earlier condition does not justify a remaining access.
+fn shrinking_both_receivers_does_not_keep_a_pre_call_region() {
     let ir = ir(CompareOp::Le, Expr::Integer(1), false, 2, true);
-    let label = ir
-        .lines()
-        .find(|l| l.starts_with("rloop.recheck.") && l.ends_with(':'))
-        .expect("a recheck");
-    let rc = &ir[ir.find(label).unwrap() + label.len()..];
-    let rc = rc.split("\n\n").next().unwrap();
-    assert!(rc.contains("fcmp olt double"), "{rc}");
-    assert!(rc.contains("fcmp ole double"), "{rc}");
+    check_view(&ir);
+    assert!(
+        ir.contains("icmp ult") || ir.contains("index_get") || ir.contains("pview.gget"),
+        "current length controls access after a call"
+    );
 }

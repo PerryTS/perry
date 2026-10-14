@@ -1502,7 +1502,9 @@ fn object_array_numeric_write_slots(
     )?;
     if array_gc.obj_type != crate::gc::GC_TYPE_ARRAY
         || array_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || array_gc._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || crate::array::array_has_element_descriptors(
+            array_addr as *const crate::array::ArrayHeader,
+        )
         || crate::array::array_index_fast_path_invalid_for(array_gc._reserved)
     {
         trace_object_array_numeric_write_rejection(

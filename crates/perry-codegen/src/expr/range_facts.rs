@@ -709,13 +709,7 @@ pub(crate) fn bounds_for_buffer_access_width(
     // region's guard (or its last re-check) proved every index of this
     // access below the length it read, and nothing that can run JS has run
     // since (decision 69).
-    if bounds_width_units == 1
-        && crate::stmt::region_loop::view_bounds_proven(ctx, buffer_local_id, index)
-    {
-        return BoundsState::Proven {
-            proof: BoundsProof::RegionGuard,
-        };
-    }
+
     if let Some(index_local_id) = native_index_source_local(ctx, index) {
         if let Some(bounds) = ctx
             .bounded_buffer_index_pairs

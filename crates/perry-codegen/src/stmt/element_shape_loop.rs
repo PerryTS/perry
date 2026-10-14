@@ -61,7 +61,7 @@
 //! | `arr[i] = x` (different class / non-object / hole) | `gc::layout_note_slot` → `note_element_store` | yes |
 //! | `arr.push` / `pop` / `shift` / `splice` / `arr.length = n` | length change ⇒ `verified_len` mismatch on next query | yes |
 //! | `delete arr[i]` | `TAG_HOLE` store through the same funnel | yes |
-//! | `Object.defineProperty(arr, i, …)` | `OBJ_FLAG_ARRAY_DESCRIPTORS` ⇒ `array_admits_element_proof` | yes |
+//! | `Object.defineProperty(arr, i, …)` | element descriptor in the array's named layout ⇒ `array_admits_element_proof` | yes |
 //! | prototype surgery on the element class | `invalidate_all_element_shapes` | yes |
 //! | a GC moving the array | `layout_transfer` → `transfer_element_shape` | needs an allocation |
 //!

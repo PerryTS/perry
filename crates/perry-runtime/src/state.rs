@@ -113,5 +113,12 @@ fn init_state() -> &'static RuntimeState {
     // choice — only other TLS destructors can still reach it.
     let _ = STATE_OWNER.try_with(|o| *o.borrow_mut() = Some(StateOwner(raw)));
     STATE_PTR.with(|c| c.set(raw));
+    // Rust test threads are agents too. Mirror executable startup before a
+    // fixture reaches a runtime producer; no producer registers on demand.
+    #[cfg(test)]
+    {
+        crate::object::layout_desc::seed_static_atoms();
+        crate::object::layout_desc::register_static_layouts();
+    }
     unsafe { &*raw }
 }

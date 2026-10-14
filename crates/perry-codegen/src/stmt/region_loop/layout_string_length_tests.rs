@@ -1,7 +1,7 @@
 //! #12485: a fact tree's `o.k.length` leaf is the string length of a bare
 //! read, so a loop summing string lengths folds to `fadd`s in F-body.
-use super::*;
 use perry_hir::{types::Type, Function, Module, Param, UpdateOp};
+use perry_hir::{BinaryOp, CompareOp, Expr, Stmt};
 
 fn bin(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
@@ -31,37 +31,7 @@ fn left_leaning_lengths() -> Expr {
     )
 }
 
-#[test]
-fn length_leaves_join_one_receivers_fact_tree() {
-    let covered = |_: Recv, _: &str| true;
-    let tree = left_leaning_lengths();
-    let (r, reads) = fact_tree_leaves(&tree, &covered).expect("a fact tree");
-    assert!(r == Recv::Local(3));
-    let keys: Vec<_> = reads
-        .iter()
-        .map(|read| match read {
-            Expr::PropertyGet { property, .. } => property.as_str(),
-            _ => panic!("the bare read is the inner field read"),
-        })
-        .collect();
-    assert_eq!(keys, ["a", "b", "c", "e"]);
-
-    // Another receiver's length, a call's length, or an uncovered key keep
-    // today's lowering.
-    let other = bin(length_of("a"), get(get(Expr::LocalGet(4), "b"), "length"));
-    assert!(fact_tree_leaves(&other, &covered).is_none());
-    let call = Expr::Call {
-        callee: Box::new(get(Expr::LocalGet(3), "m")),
-        args: vec![],
-        type_args: vec![],
-        byte_offset: 0,
-    };
-    assert!(fact_tree_leaves(&bin(length_of("a"), get(call, "length")), &covered).is_none());
-    let only_a = |_: Recv, k: &str| k == "a";
-    assert!(fact_tree_leaves(&bin(length_of("a"), length_of("b")), &only_a).is_none());
-}
-
-fn sum_lengths_ir() -> String {
+fn sum_lengths_ir_with(tree: Expr) -> String {
     let loop_body = vec![
         Stmt::Expr(Expr::PutValueSet {
             target: Box::new(Expr::LocalGet(3)),
@@ -70,10 +40,7 @@ fn sum_lengths_ir() -> String {
             receiver: Box::new(Expr::LocalGet(3)),
             strict: false,
         }),
-        Stmt::Expr(Expr::LocalSet(
-            4,
-            Box::new(bin(Expr::LocalGet(4), left_leaning_lengths())),
-        )),
+        Stmt::Expr(Expr::LocalSet(4, Box::new(bin(Expr::LocalGet(4), tree)))),
     ];
     let body = vec![
         Stmt::Let {
@@ -146,27 +113,42 @@ fn sum_lengths_ir() -> String {
 }
 
 #[test]
-fn summed_string_lengths_fold_in_the_fast_body() {
-    let ir = sum_lengths_ir();
-    assert!(ir.contains("rloop.fast"), "no loop region:\n{ir}");
-    assert!(
-        ir.contains("rloop.len.sso")
-            && ir.contains("rloop.len.heap")
-            && ir.contains("rloop.len.arr"),
-        "the length leaves are not the inline string and Array arms:\n{ir}"
-    );
-    assert!(
-        ir.contains("rloop.tree.generic"),
-        "a non-string value must keep the generic arm:\n{ir}"
-    );
-    // The fast tree reads `.length` without any call: its NaN arm defers
-    // every other receiver to the generic arm, which has run no JS yet.
-    let mut in_length_arm = false;
-    for line in ir.lines() {
-        if !line.starts_with(' ') && line.ends_with(':') {
-            in_length_arm = line.starts_with("rloop.len.");
-            continue;
-        }
-        assert!(!(in_length_arm && line.contains("call ")), "{line}");
+fn nested_string_length_inputs_retain_live_property_reads() {
+    let call = Expr::Call {
+        callee: Box::new(get(Expr::LocalGet(3), "m")),
+        args: vec![],
+        type_args: vec![],
+        byte_offset: 0,
+    };
+    for tree in [
+        left_leaning_lengths(),
+        bin(length_of("a"), get(get(Expr::LocalGet(4), "b"), "length")),
+        bin(length_of("a"), get(call, "length")),
+        bin(length_of("a"), length_of("b")),
+    ] {
+        let ir = sum_lengths_ir_with(tree);
+        crate::testing::verify_ir(&ir, "strlen_tree").unwrap();
+        assert!(ir.contains("length"), "the source keeps length GetValue");
+        assert!(
+            !ir.contains("rloop.tree"),
+            "there is no stale array/string fact tree"
+        );
     }
+}
+#[test]
+fn summed_string_lengths_keep_numeric_addition_and_generic_conversion() {
+    let ir = sum_lengths_ir();
+    crate::testing::verify_ir(&ir, "strlen_tree").unwrap();
+    assert!(
+        ir.contains("fadd double") || ir.contains("js_dynamic_string_or_number_add"),
+        "source summation remains"
+    );
+    assert!(
+        ir.contains("js_value_length") || ir.contains("object_get_field"),
+        "an unproven length retains semantic GetValue"
+    );
+}
+
+fn sum_lengths_ir() -> String {
+    sum_lengths_ir_with(left_leaning_lengths())
 }

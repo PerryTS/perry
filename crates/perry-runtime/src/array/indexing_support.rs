@@ -4,7 +4,7 @@
 //! the dense keys-array slot helpers. Pure move except for the `use` lines and
 //! `pub(super)` visibility on items `indexing.rs` still calls.
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 /// Largest hole (`index - length`) an extending write may create while still
 /// growing the dense backing store once the array is large. Sparse storage is
@@ -183,89 +183,30 @@ pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
 }
 
-/// Sticky flag: user code replaced or deleted `Array.prototype[Symbol.iterator]`.
-/// `js_get_iterator`'s array short-circuit assumes the builtin values iterator;
-/// once this flips, GetIterator on an array must consult the (patched) method
-/// per spec — or throw TypeError when it was deleted. Same single-relaxed-load
-/// hot-path shape as `ARRAY_PROTO_HAS_INDEX` above.
-pub(super) static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(false);
+/// The program's array-iteration facts (object model step 7), fixed by the
+/// compiler from the whole-program write census and handed over before any
+/// user code runs; never learned from stores. Bit 0
+/// ([`ITERATION_MEMBER_WRITABLE`]): a write may reach a `Symbol.iterator`
+/// member or re-parent an array, so iteration reads the member's one slot.
+/// Bit 1 ([`ITERATION_NEXT_REACHABLE`]): `%ArrayIteratorPrototype%` may be
+/// named, so iteration also checks its `next`. A runtime with no compiled
+/// program (the Rust tests) assumes both.
+static ARRAY_ITERATION_FACTS: AtomicU32 = AtomicU32::new(
+    ITERATION_MEMBER_WRITABLE | ITERATION_NEXT_REACHABLE | ELEMENT_DESCRIPTORS_REACHABLE,
+);
+pub(crate) const ITERATION_MEMBER_WRITABLE: u32 = 1;
+pub(crate) const ITERATION_NEXT_REACHABLE: u32 = 2;
+pub(crate) const ELEMENT_DESCRIPTORS_REACHABLE: u32 = 4;
 
-/// Sticky, exported so GENERATED code can read it: array iteration can no
-/// longer be PROVEN to be the pristine builtin protocol.
-///
-/// Two independent facts set it, and generated code must decline its
-/// non-iterator fast arm for either:
-///
-///   * [`ARRAY_PROTO_ITERATOR_MODIFIED`] — `Array.prototype[Symbol.iterator]`
-///     was replaced or deleted (#7760 item 1). `for…of` over a statically-proven
-///     array desugars to an index loop (`__i < __arr.length` / `__arr[__i]`) in
-///     HIR lowering, which never consults the iteration protocol, so such a
-///     patch was ignored there even after the spread paths were fixed (#7542).
-///   * The array-iterator PROTOTYPE object was handed to user code (#10086; see
-///     `object::iterator_prototypes::note_iterator_prototype_exposed`).
-///     A replaced `%ArrayIteratorPrototype%.next` is detected per `.next()` call
-///     (`prototype_next_is_canonical`), which a fast arm that never calls
-///     `.next()` cannot observe — and the only way to reach that object in order
-///     to patch it is `Object.getPrototypeOf` / `Reflect.getPrototypeOf`. So the
-///     flag is set the moment the object escapes, whether or not it is then
-///     patched: over-approximating costs the fast arm only in programs that
-///     introspect array iterators, while under-approximating would silently
-///     return unpatched elements.
-///
-/// The two GENERATED consumers — the `for…of` index loop and #10086's
-/// array-destructuring arm — branch on it ONCE, which is also what the spec
-/// wants: iteration performs GetIterator exactly once, so a patch landing
-/// mid-loop must not change the iterator already in hand.
-///
-/// #9846 added a third, RUNTIME-side consumer through
-/// [`array_iteration_not_pristine`]: `dense_spread_source`'s element copy and
-/// `array_from_spread_value`'s `Array.prototype[Symbol.iterator]` delegation,
-/// which are the spread / `Array.from` equivalents of the same hole.
-///
-/// A separate `u8` global rather than exposing the `AtomicBool`: codegen emits
-/// a plain volatile `i8` load, the same shape as
-/// `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED`, so the fast arm pays one load and
-/// a predictable branch per LOOP — not per iteration — and the index loop
-/// itself is emitted byte-identically to before.
-///
-/// NOTE the asymmetry with [`ARRAY_PROTO_ITERATOR_MODIFIED`]: that bool keeps
-/// its exact original meaning (the `Symbol.iterator` slot was written). This
-/// byte carries the broader "not provably pristine" fact, and since #9846 it
-/// is what the Rust-side spread / `js_get_iterator` delegation gates on too —
-/// the narrow bool implies it (`note_array_proto_iterator_write` sets both),
-/// so widening those call sites strictly grows the set of receivers that take
-/// the real protocol.
 #[no_mangle]
-pub static PERRY_ARRAY_ITERATION_NOT_PRISTINE: AtomicU8 = AtomicU8::new(0);
-
-/// Publish "array iteration is no longer provably pristine" to generated code.
-/// Release-ordered so a reader that observes the `1` also observes the
-/// prototype exposure / write that preceded it.
-#[inline]
-pub(crate) fn note_array_iteration_not_pristine() {
-    PERRY_ARRAY_ITERATION_NOT_PRISTINE.store(1, Ordering::Release);
+pub extern "C" fn perry_array_iteration_init(facts: u32) {
+    ARRAY_ITERATION_FACTS.store(facts, Ordering::Relaxed);
 }
 
-/// Rust-side reader for [`PERRY_ARRAY_ITERATION_NOT_PRISTINE`]. Acquire-ordered
-/// to pair with `note_array_iteration_not_pristine`'s release.
+/// The program's array-iteration facts (see [`ARRAY_ITERATION_FACTS`]).
 #[inline]
-pub(crate) fn array_iteration_not_pristine() -> bool {
-    PERRY_ARRAY_ITERATION_NOT_PRISTINE.load(Ordering::Acquire) != 0
-}
-
-/// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
-/// `Symbol.iterator`) that the array iteration protocol has been tampered
-/// with. Called from the symbol-property set/delete paths.
-pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
-    if ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed) || obj == 0 || sym_key == 0 {
-        return;
-    }
-    if obj == array_prototype_addr()
-        && sym_key == crate::symbol::well_known_symbol("iterator") as usize
-    {
-        ARRAY_PROTO_ITERATOR_MODIFIED.store(true, Ordering::Relaxed);
-        note_array_iteration_not_pristine();
-    }
+pub(crate) fn array_iteration_facts() -> u32 {
+    ARRAY_ITERATION_FACTS.load(Ordering::Relaxed)
 }
 
 /// Record (if `arr` is `Array.prototype`) that the prototype now carries an
@@ -347,7 +288,7 @@ pub(crate) unsafe fn keys_array_slot(
     if let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) {
         if header.obj_type == crate::gc::GC_TYPE_ARRAY
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+            && !super::array_has_element_descriptors_resolved(keys)
             && index < (*keys).length
             && index < (*keys).capacity
         {

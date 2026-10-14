@@ -332,21 +332,7 @@ fn lower_stmts_list(
         // Decision 69: a straight-line run of typed-array view accesses (an
         // unrolled loop) proves its indices against the length once, at its
         // top, like a loop region does per loop.
-        if let Some(len) =
-            region_loop::try_lower_view_run(ctx, &stmts[i..limit], lower_region_list)?
-        {
-            let end = i + len;
-            if emit_shadow_clears {
-                for j in i..end {
-                    emit_shadow_clears_after_stmt(ctx, j);
-                }
-            }
-            i = end;
-            if ctx.block().is_terminated() {
-                break;
-            }
-            continue;
-        }
+
         crate::expr::class_guard_memo::before_stmt(ctx, stmts, i);
         let lowered = lower_stmt(ctx, &stmts[i]);
         crate::expr::class_guard_memo::after_stmt(ctx);

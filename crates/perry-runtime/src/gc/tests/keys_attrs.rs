@@ -5,7 +5,7 @@
 //! installed young attributes child still moves and remains readable.
 //!
 //! Fault injection this catches: a keys-list allocator that forgets
-//! `GC_ARRAY_NAMED_PROPS` (the reserve word is then never visited, the
+//! `GC_ARRAY_KEY_ATTRS` (the reserve word is then never visited, the
 //! attributes array dies in the nursery, and the entries read back as
 //! whatever reuses its storage) — `attributes_survive_a_moving_minor`.
 

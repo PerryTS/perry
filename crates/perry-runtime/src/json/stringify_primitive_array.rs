@@ -20,7 +20,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
         return false;
     }
     let flags = header._reserved;
-    if (*arr).length > (*arr).capacity || flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    if (*arr).length > (*arr).capacity || !(*arr).named.is_null() {
         return false;
     }
     let data = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;

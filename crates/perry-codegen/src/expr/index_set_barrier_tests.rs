@@ -441,11 +441,16 @@ fn the_guarded_property_receiver_store_guards_on_one_word_and_follows_a_stub_col
         block_body(&ir, "idxset.recv_prop.probe.").expect("guarded store emits its `probe` block");
 
     // (0) ONE header word: `[h-8]` as an i32 under the store mask (type byte,
-    // FORWARDED, descriptors, frozen / sealed / non-extensible) must equal
-    // GC_TYPE_ARRAY. Everything else leaves for the cold `deref.follow`.
+    // FORWARDED, frozen / sealed / non-extensible) must equal GC_TYPE_ARRAY,
+    // with no named-property condition. This fixture has no descriptor
+    // writer, so its element-kind query is statically absent.
     assert!(
-        deref.contains("load i32") && deref.contains(", 67600639") && deref.contains("icmp eq i32"),
-        "`deref` tests the header word under 0x0407_80FF:\n{deref}"
+        deref.contains("load i32") && deref.contains(", 491775") && deref.contains("icmp eq i32"),
+        "`deref` tests the header word under 0x0007_80FF:\n{deref}"
+    );
+    assert!(
+        !deref.contains("icmp ne i64") && !deref.contains("@perry_array_element_kind"),
+        "named properties cannot reject an element store:\n{deref}"
     );
     assert!(
         deref.contains("idxset.recv_prop.deref.live.")
@@ -459,8 +464,12 @@ fn the_guarded_property_receiver_store_guards_on_one_word_and_follows_a_stub_col
         "`deref.follow.target` loads the forwarding word:\n{target}"
     );
     assert!(
-        check.contains("load i32") && check.contains(", 67600639"),
-        "`deref.follow.check` re-tests the destination's word:\n{check}"
+        check.contains("load i32") && check.contains(", 491775") && check.contains("icmp eq i32"),
+        "`deref.follow.check` re-tests the destination's type and integrity word:\n{check}"
+    );
+    assert!(
+        !check.contains("icmp ne i64") && !check.contains("@perry_array_element_kind"),
+        "the followed array uses the same static absence of descriptor writers:\n{check}"
     );
     // (2) `deref.live` joins the receiver and the followed destination.
     let phi_line = live

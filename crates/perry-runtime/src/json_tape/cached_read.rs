@@ -38,25 +38,19 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
             .cast::<u8>()
             .sub(crate::gc::GC_HEADER_SIZE)
             .cast::<crate::gc::GcHeader>();
-        let (arr, flags) = if header.obj_type == crate::gc::GC_TYPE_ARRAY
+        let arr = if header.obj_type == crate::gc::GC_TYPE_ARRAY
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && (*cached).length <= (*cached).capacity
             && (*cached).length <= 100_000_000
         {
             // Keep the length mirror observed by lazy-array length dispatch.
             (*hdr).cached_length = (*cached).length;
-            (cached, header._reserved)
+            cached
         } else {
-            let arr = super::resolve_materialized_array(hdr);
-            let flags = if arr.is_null() {
-                0
-            } else {
-                crate::array::array_object_flags_resolved(arr)
-            };
-            (arr, flags)
+            super::resolve_materialized_array(hdr)
         };
         if !arr.is_null()
-            && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+            && !crate::array::array_has_element_descriptors_resolved(arr)
             && i < (*arr).length
             && i < (*arr).capacity
         {
@@ -131,7 +125,7 @@ pub unsafe extern "C" fn js_lazy_array_index_probe(raw: i64, idx: i64) -> f64 {
         .cast::<crate::gc::GcHeader>();
     if header.obj_type != crate::gc::GC_TYPE_ARRAY
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || crate::array::array_has_element_descriptors_resolved(cached)
         || (*cached).length > (*cached).capacity
         || (*cached).length > 100_000_000
         || i >= (*cached).length
@@ -413,11 +407,9 @@ mod tests {
             });
             hdr.with_mut_ptr(|hdr| {
                 let resolved = resolve_materialized_array(hdr);
-                assert_ne!(
-                    crate::array::array_object_flags_resolved(resolved)
-                        & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-                    0,
-                    "the real defineProperty path must install a descriptor"
+                assert!(
+                    crate::array::array_has_element_descriptors(resolved),
+                    "the real defineProperty path must install an element descriptor in the array's layout"
                 );
             });
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 0);

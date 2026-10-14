@@ -899,18 +899,6 @@ fn object_like_iterator_result(value: f64) -> bool {
     raw >= 0x10000
 }
 
-/// #7542: does this value carry its OWN `[Symbol.iterator]`? An own method
-/// shadows the prototype, so the patched-prototype shortcut must stand aside
-/// for it and let the ordinary `@@iterator` walk resolve it.
-fn array_has_own_iterator(value: f64) -> bool {
-    let iter_sym = crate::symbol::well_known_symbol("iterator");
-    if iter_sym.is_null() {
-        return false;
-    }
-    let sym_value = f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
-    unsafe { crate::symbol::has_own_symbol_property(value, sym_value) }
-}
-
 pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
 
@@ -1026,11 +1014,15 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // not preempt the walk below for that case: `js_get_iterator`'s patched
     // branch reads the PROTOTYPE only, and would throw "not iterable" for an
     // array carrying its own method once the prototype slot has been deleted.
-    if crate::array::array_iteration_not_pristine()
-        && crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE
-        && !array_has_own_iterator(value())
+    if crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE
+        && crate::array::array_iteration_facts() != 0
     {
-        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+        let array =
+            crate::array::clean_arr_ptr(js_nanbox_get_pointer(value()) as *const ArrayHeader);
+        if !array.is_null() && !unsafe { super::iterator_step::array_iteration_is_intrinsic(array) }
+        {
+            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+        }
     }
 
     if let Some(entries) = entries_array_for_small_handle_id(raw_ptr() as i64) {

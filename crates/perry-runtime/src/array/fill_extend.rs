@@ -36,11 +36,9 @@ pub extern "C" fn js_array_fill_f64_const_extend(
     note_array_index_write(arr as usize);
     let flags = array_object_flags(arr);
     if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
         != 0
+        || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
         || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
     {
@@ -115,11 +113,9 @@ pub extern "C" fn js_array_fill_f64_const_len_extend(
     note_array_index_write(arr as usize);
     let flags = array_object_flags(arr);
     if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
         != 0
+        || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
         || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
     {
@@ -152,11 +148,9 @@ pub extern "C" fn js_array_fill_f64_iota_extend(
     note_array_index_write(arr as usize);
     let flags = array_object_flags(arr);
     if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
         != 0
+        || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
         || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
     {
@@ -220,11 +214,9 @@ pub extern "C" fn js_array_fill_f64_iota_len_extend(arr: *mut ArrayHeader) -> *m
     note_array_index_write(arr as usize);
     let flags = array_object_flags(arr);
     if flags
-        & (crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
         != 0
+        || array_has_element_descriptors(arr)
         || crate::buffer::is_registered_buffer(arr as usize)
         || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
     {

@@ -812,7 +812,7 @@ fn array_stack_entry_refreshes_getter_factory_and_next_after_moving_collection()
         js_shadow_slot_bind(2, std::ptr::addr_of_mut!(stack.next).cast());
         js_shadow_slot_bind(3, std::ptr::addr_of_mut!(stack.value).cast());
         assert_eq!(
-            crate::array::js_array_record_stack_enter(&mut stack, std::ptr::null(), 0),
+            crate::array::js_array_record_stack_enter(&mut stack, 1, 0),
             1
         );
         assert_relocated(crate::value::js_nanbox_get_pointer(before) as usize);

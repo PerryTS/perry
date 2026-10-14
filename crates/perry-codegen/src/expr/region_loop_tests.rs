@@ -784,20 +784,22 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
         !ir.contains("br i1 true, label %rloop.recheck"),
         "constant-bound flow-derived R/5L must avoid an unconditional recheck:\n{ir}"
     );
+    // Object model step 7 deleted the numeric-expression region facts with
+    // the array regions; the Number body keeps its poll.
     assert!(
-        !split_loop_has_poll(&ir),
-        "the emitted Number body must omit its poll:\n{ir}"
+        split_loop_has_poll(&ir),
+        "the Number body keeps its poll without the numeric-expression facts:\n{ir}"
     );
     let bl = blocks(&ir);
     let f = f_body_blocks(&bl);
     assert!(!f.is_empty(), "F body must be present:\n{ir}");
-    for label in f {
-        let instructions = bl[&label].0.join("\n");
-        assert!(
-            !instructions.contains("@js_object_get_field"),
-            "{label} must retain the bare R-proven load:\n{instructions}\n{ir}"
-        );
-    }
+    // Without the numeric-expression facts the flow-derived Number local is
+    // not R-proven: the F body reads it through the generic field read.
+    assert!(
+        f.iter()
+            .any(|label| bl[label].0.join("\n").contains("@js_object_get_field")),
+        "the F body reads the flow-derived local generically:\n{ir}"
+    );
     let masks = prime_rep_masks(&ir);
     assert!(
         !masks.is_empty() && masks.iter().all(|&m| m == 1),
@@ -858,13 +860,16 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
         ir.contains("@js_rel_lt("),
         "Any bound must retain its collecting comparison:\n{ir}"
     );
+    // Object model step 7 deleted the numeric-expression region facts with
+    // the array regions: the Any bound is rechecked each iteration and the
+    // split loop keeps its poll.
     assert!(
-        !ir.contains("br i1 true, label %rloop.recheck"),
-        "an entry-tested invariant bound must avoid the per-iteration recheck:\n{ir}"
+        ir.contains("br i1 true, label %rloop.recheck"),
+        "the Any bound is rechecked without the numeric-expression facts:\n{ir}"
     );
     assert!(
-        !split_loop_has_poll(&ir),
-        "the Number-admitted bound must omit the split-loop poll:\n{ir}"
+        split_loop_has_poll(&ir),
+        "the split loop keeps its poll without the numeric-expression facts:\n{ir}"
     );
     assert!(
         ir.contains("@js_gc_loop_safepoint"),

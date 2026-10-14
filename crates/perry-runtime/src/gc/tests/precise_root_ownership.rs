@@ -209,6 +209,11 @@ fn local_old_generation_roots_need_no_census_entry() {
 fn release_admission_reads_no_malloc_state() {
     std::thread::spawn(|| {
         crate::agent::enter_worker_agent();
+        // The agent's static layout registration canonicalizes
+        // `%Array.prototype%`'s `Symbol.iterator` key, which (like every
+        // symbol key's canonicalization) builds the registry. Start this
+        // proof from the lazy state of a thread that never validates.
+        deactivate_malloc_registry_for_tests();
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let snapshot = build_valid_pointer_set();
         // Many live malloc residents: a search over them would be the cost.

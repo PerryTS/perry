@@ -336,14 +336,6 @@ pub(super) type DeadKeyPruneFn = fn(&dyn Fn(usize) -> bool);
 /// are re-keyed by a per-object move hook (`gc_type_after_payload_move`) rather
 /// than by a metadata visitor, so they have no `visit_metadata_*` site at all.
 pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
-    // #10166 brief 4: arrays that were full at their first named property.
-    DeadKeyPrune {
-        table: "FULL_ARRAY_NAMED_PROPS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::array::prune_dead_full_array_named_property_owners,
-        full_only: false,
-        young_prune: None,
-    },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "ELEMENT_SHAPES",

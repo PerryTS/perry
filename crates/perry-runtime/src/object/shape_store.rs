@@ -338,6 +338,161 @@ unsafe fn try_warm_array_transition(
     stored.map(|_| value_root.get_nanbox_f64())
 }
 
+/// Array named properties use the same shaped bag as customized descriptors.
+/// Its prototype edge names the array chain; elements and length stay exotic.
+unsafe fn try_array_store(
+    target: f64,
+    key: f64,
+    value: f64,
+    name: &str,
+    may_move: &mut bool,
+) -> Option<f64> {
+    let key_ptr = (key.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    if name == "length"
+        || name == "__proto__"
+        || name.starts_with('#')
+        || super::canonical_array_index(name).is_some()
+    {
+        return None;
+    }
+    let arr = crate::array::clean_arr_ptr_mut(
+        (target.to_bits() & crate::value::POINTER_MASK) as *mut crate::ArrayHeader,
+    );
+    let flags = crate::array::array_object_flags_resolved(arr);
+    if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::OBJ_FLAG_FROZEN) != 0 {
+        return None;
+    }
+    let bag = crate::array::array_property_bag(arr);
+    let existing = if bag.is_null() {
+        crate::array::array_named_property_has(arr, key_ptr)
+    } else {
+        super::obj_value_has_own_key(crate::value::js_nanbox_pointer(bag as i64), key)
+    };
+    if !existing && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 {
+        return None;
+    }
+    *may_move = true;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(target);
+    let key_root = scope.root_string_ptr(key_ptr);
+    let value_root = scope.root_nanbox_f64(value);
+    let bag = crate::array::array_property_bag_ensure(arr);
+    let bag_root = scope.root_raw_mut_ptr(bag);
+    if bag.is_null() {
+        return None;
+    }
+    // This internal holder has ordinary data/descriptor semantics; it is
+    // not one of the runtime-born special objects the unmarked kind covers.
+    if shapes::object_shape_record(bag)?.object_kind() == shapes::ShapeObjectKind::OrdinaryUnmarked
+    {
+        super::alloc_plain::mark_object_plain_ordinary(bag);
+    }
+    if !existing {
+        // Array.prototype is itself an array. Its named-property bag is
+        // the ordinary shape projection of this named-only chain. Marking
+        // that bag makes subsequent named descriptor edits invalidate the
+        // proof through the existing shape-stamp hook.
+        let mut array_proto = crate::array::array_prototype_addr();
+        if array_proto == 0 {
+            let _ = super::js_get_global_this();
+            array_proto = crate::array::array_prototype_addr();
+        }
+        if array_proto == 0 {
+            return None;
+        }
+        let owner_arr = crate::array::clean_arr_ptr_mut(
+            (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *mut crate::ArrayHeader,
+        );
+        let array_proto = crate::array::clean_arr_ptr_mut(array_proto as *mut crate::ArrayHeader);
+        let prototype = if owner_arr == array_proto {
+            crate::value::js_nanbox_pointer(crate::array::object_prototype_addr() as i64)
+        } else {
+            crate::value::js_nanbox_pointer(array_proto as i64)
+        };
+        let proto_root = scope.root_nanbox_f64(prototype);
+        let proto_addr = (prototype.to_bits() & crate::value::POINTER_MASK) as usize;
+        let header = crate::value::addr_class::try_read_gc_header(proto_addr)?;
+        let prototype = if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+            let proto_arr = crate::array::clean_arr_ptr_mut(proto_addr as *mut crate::ArrayHeader);
+            if crate::array::array_object_flags_resolved(proto_arr)
+                & crate::gc::GC_ARRAY_CUSTOM_PROTO
+                != 0
+            {
+                return None;
+            }
+            let proto_bag = crate::array::array_property_bag_ensure(proto_arr);
+            if proto_bag.is_null() {
+                return None;
+            }
+            let proto_bag_root = scope.root_raw_mut_ptr(proto_bag);
+            let object_proto_addr = crate::array::object_prototype_addr();
+            if object_proto_addr == 0 {
+                return None;
+            }
+            let object_proto = crate::value::js_nanbox_pointer(object_proto_addr as i64);
+            if super::prototype_chain::object_static_prototype(proto_bag as usize)
+                != Some(object_proto.to_bits())
+            {
+                // Internal construction of `%Array.prototype%`'s bag, not a
+                // modification of it (#11915, `builtin_proto`).
+                super::own_override::as_builtin_definition(|| {
+                    super::prototype_chain::object_link_created_prototype(
+                        proto_bag as usize,
+                        object_proto.to_bits(),
+                    )
+                });
+            }
+            crate::value::js_nanbox_pointer(proto_bag_root.get_raw_mut_ptr::<ObjectHeader>() as i64)
+        } else if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+            proto_root.get_nanbox_f64()
+        } else {
+            return None;
+        };
+        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
+        if super::prototype_chain::object_static_prototype(bag as usize)
+            != Some(prototype.to_bits())
+        {
+            // Internal construction, not observable prototype surgery. The
+            // new shape names the edge; no global plan invalidation is needed.
+            super::prototype_chain::object_link_created_prototype(
+                bag as usize,
+                prototype.to_bits(),
+            );
+        }
+    }
+    let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
+    let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+    let key_value = crate::value::js_nanbox_string(key as i64);
+    let result = try_store_with_refresh(
+        crate::value::js_nanbox_pointer(bag as i64),
+        key_value,
+        value_root.get_nanbox_f64(),
+        may_move,
+    );
+    if result.is_some() {
+        return Some(value_root.get_nanbox_f64());
+    }
+    if !existing {
+        // The first transition has no edge yet. A proven chain can create it
+        // through the ordinary bag store; later receivers reuse that edge.
+        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
+        let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        let record = shapes::object_shape_record(bag)?;
+        let bytes = crate::string::header_str_checked(key)?.as_bytes();
+        if record.store_chain_blocks(bytes, super::proto_validity::proto_validity()) == Some(false)
+        {
+            super::object_ops::define_property_force_store_value(
+                bag,
+                key,
+                value_root.get_nanbox_f64(),
+            );
+            return Some(value_root.get_nanbox_f64());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,15 +641,19 @@ mod tests {
             let header = (arr as *mut u8)
                 .sub(crate::gc::GC_HEADER_SIZE)
                 .cast::<crate::gc::GcHeader>();
-            for flag in [
-                crate::gc::OBJ_FLAG_FROZEN,
-                crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-            ] {
-                let saved = (*header)._reserved;
-                (*header)._reserved |= flag;
-                assert!(!try_own_store(arr.cast(), index, 44.0));
-                (*header)._reserved = saved;
-            }
+            let saved = (*header)._reserved;
+            (*header)._reserved |= crate::gc::OBJ_FLAG_FROZEN;
+            assert!(!try_own_store(arr.cast(), index, 44.0));
+            (*header)._reserved = saved;
+            // An element descriptor is a key of the array's named layout: its
+            // attribute summary sends every own element store to the exact path.
+            crate::object::set_property_attrs(
+                arr as usize,
+                "0".to_string(),
+                crate::object::PropertyAttrs::new(false, true, true),
+            );
+            assert!(crate::array::array_has_element_descriptors(arr));
+            assert!(!try_own_store(arr.cast(), index, 44.0));
             assert_eq!(crate::array::js_array_get_f64(arr, 1), 33.0);
         }
     }
@@ -1685,159 +1844,6 @@ unsafe fn apply_proven_add(
 
 /// Array named properties use the same shaped bag as customized descriptors.
 /// Its prototype edge names the array chain; elements and length stay exotic.
-unsafe fn try_array_store(
-    target: f64,
-    key: f64,
-    value: f64,
-    name: &str,
-    may_move: &mut bool,
-) -> Option<f64> {
-    let key_ptr = (key.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
-    if name == "length"
-        || name == "__proto__"
-        || name.starts_with('#')
-        || super::canonical_array_index(name).is_some()
-    {
-        return None;
-    }
-    let arr = crate::array::clean_arr_ptr_mut(
-        (target.to_bits() & crate::value::POINTER_MASK) as *mut crate::ArrayHeader,
-    );
-    let flags = crate::array::array_object_flags_resolved(arr);
-    if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::OBJ_FLAG_FROZEN) != 0 {
-        return None;
-    }
-    let bag = crate::array::array_property_bag(arr);
-    let existing = if bag.is_null() {
-        crate::array::array_named_property_has(arr, key_ptr)
-    } else {
-        super::obj_value_has_own_key(crate::value::js_nanbox_pointer(bag as i64), key)
-    };
-    if !existing && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 {
-        return None;
-    }
-    *may_move = true;
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(target);
-    let key_root = scope.root_string_ptr(key_ptr);
-    let value_root = scope.root_nanbox_f64(value);
-    let bag = crate::array::array_property_bag_ensure(arr);
-    let bag_root = scope.root_raw_mut_ptr(bag);
-    if bag.is_null() {
-        return None;
-    }
-    // This internal holder has ordinary data/descriptor semantics; it is
-    // not one of the runtime-born special objects the unmarked kind covers.
-    if shapes::object_shape_record(bag)?.object_kind() == shapes::ShapeObjectKind::OrdinaryUnmarked
-    {
-        super::alloc_plain::mark_object_plain_ordinary(bag);
-    }
-    if !existing {
-        // Array.prototype is itself an array. Its named-property bag is
-        // the ordinary shape projection of this named-only chain. Marking
-        // that bag makes subsequent named descriptor edits invalidate the
-        // proof through the existing shape-stamp hook.
-        let mut array_proto = crate::array::array_prototype_addr();
-        if array_proto == 0 {
-            let _ = super::js_get_global_this();
-            array_proto = crate::array::array_prototype_addr();
-        }
-        if array_proto == 0 {
-            return None;
-        }
-        let owner_arr = crate::array::clean_arr_ptr_mut(
-            (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
-                as *mut crate::ArrayHeader,
-        );
-        let array_proto = crate::array::clean_arr_ptr_mut(array_proto as *mut crate::ArrayHeader);
-        let prototype = if owner_arr == array_proto {
-            crate::value::js_nanbox_pointer(crate::array::object_prototype_addr() as i64)
-        } else {
-            crate::value::js_nanbox_pointer(array_proto as i64)
-        };
-        let proto_root = scope.root_nanbox_f64(prototype);
-        let proto_addr = (prototype.to_bits() & crate::value::POINTER_MASK) as usize;
-        let header = crate::value::addr_class::try_read_gc_header(proto_addr)?;
-        let prototype = if header.obj_type == crate::gc::GC_TYPE_ARRAY {
-            let proto_arr = crate::array::clean_arr_ptr_mut(proto_addr as *mut crate::ArrayHeader);
-            if crate::array::array_object_flags_resolved(proto_arr)
-                & crate::gc::GC_ARRAY_CUSTOM_PROTO
-                != 0
-            {
-                return None;
-            }
-            let proto_bag = crate::array::array_property_bag_ensure(proto_arr);
-            if proto_bag.is_null() {
-                return None;
-            }
-            let proto_bag_root = scope.root_raw_mut_ptr(proto_bag);
-            let object_proto_addr = crate::array::object_prototype_addr();
-            if object_proto_addr == 0 {
-                return None;
-            }
-            let object_proto = crate::value::js_nanbox_pointer(object_proto_addr as i64);
-            if super::prototype_chain::object_static_prototype(proto_bag as usize)
-                != Some(object_proto.to_bits())
-            {
-                // Internal construction of `%Array.prototype%`'s bag, not a
-                // modification of it (#11915, `builtin_proto`).
-                super::own_override::as_builtin_definition(|| {
-                    super::prototype_chain::object_link_created_prototype(
-                        proto_bag as usize,
-                        object_proto.to_bits(),
-                    )
-                });
-            }
-            crate::value::js_nanbox_pointer(proto_bag_root.get_raw_mut_ptr::<ObjectHeader>() as i64)
-        } else if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-            proto_root.get_nanbox_f64()
-        } else {
-            return None;
-        };
-        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
-        if super::prototype_chain::object_static_prototype(bag as usize)
-            != Some(prototype.to_bits())
-        {
-            // Internal construction, not observable prototype surgery. The
-            // new shape names the edge; no global plan invalidation is needed.
-            super::prototype_chain::object_link_created_prototype(
-                bag as usize,
-                prototype.to_bits(),
-            );
-        }
-    }
-    let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
-    let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
-    let key_value = crate::value::js_nanbox_string(key as i64);
-    let result = try_store_with_refresh(
-        crate::value::js_nanbox_pointer(bag as i64),
-        key_value,
-        value_root.get_nanbox_f64(),
-        may_move,
-    );
-    if result.is_some() {
-        return Some(value_root.get_nanbox_f64());
-    }
-    if !existing {
-        // The first transition has no edge yet. A proven chain can create it
-        // through the ordinary bag store; later receivers reuse that edge.
-        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
-        let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
-        let record = shapes::object_shape_record(bag)?;
-        let bytes = crate::string::header_str_checked(key)?.as_bytes();
-        if record.store_chain_blocks(bytes, super::proto_validity::proto_validity()) == Some(false)
-        {
-            super::object_ops::define_property_force_store_value(
-                bag,
-                key,
-                value_root.get_nanbox_f64(),
-            );
-            return Some(value_root.get_nanbox_f64());
-        }
-    }
-    None
-}
-
 unsafe fn try_function_store(
     target: f64,
     key: f64,

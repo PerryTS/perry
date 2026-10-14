@@ -1285,7 +1285,7 @@ fn plain_array_index_guard_impl(
         // reads and writes through their holder shapes; the inline
         // raw-slot fast path the guard admits would bypass them (test262
         // sort/precise-* read accessor indices after defineProperty).
-        if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        if crate::array::array_has_element_descriptors_resolved(arr as *const ArrayHeader) {
             return false;
         }
         // A polluted `Array.prototype[i]` (or custom array prototype) makes
@@ -1435,11 +1435,9 @@ pub(crate) unsafe fn packed_f64_loop_admits_live_array(
     // Accessor/descriptor indices, a prototype that can serve holes, and
     // frozen/sealed/non-extensible receivers all keep the ordinary path.
     if flags
-        & (crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND)
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
         != 0
+        || crate::array::array_has_element_descriptors_resolved(arr)
         || crate::array::array_index_fast_path_invalid_for(flags)
     {
         return false;
@@ -1820,20 +1818,19 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         if flags
             & (crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND
-                | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
             != 0
+            || crate::array::array_has_element_descriptors_resolved(arr)
         {
             return false;
         }
         // A non-writable `length` is reachable only through a descriptor
-        // write, and every one of those marks the receiver
-        // `OBJ_FLAG_ARRAY_DESCRIPTORS` (`array::named_props::mark_array_descriptors`
-        // — the bit is documented there as the shared "index-accessor /
-        // non-writable-length / sparse-index" gate). The flag test above has
-        // already returned `false` for any receiver carrying it, so by this
+        // write, which makes `length` a non-writable key of the array's named
+        // layout (`array::array_has_element_descriptors`, the shared
+        // "index-accessor / non-writable-length / sparse-index" fact). The test
+        // above has already returned `false` for any such receiver, so by this
         // point the array provably has no descriptors and its `length` is
-        // provably writable. `array::push_pop::array_length_is_non_writable_with_flags`
+        // provably writable. `array::push_pop::array_length_is_non_writable`
         // encodes the same implication the other way round, short-circuiting on
         // the flag before it will look a descriptor up at all.
         //

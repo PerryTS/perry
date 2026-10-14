@@ -191,7 +191,7 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
 ///   Skipping either would drop edges the payload bit says nothing about — the
 ///   closure's dynamic property values and static `.prototype`, the object's
 ///   meta record, shape `keys` edge and overflow fields;
-/// * **the array's named-property reserve slots** — `GC_ARRAY_NAMED_PROPS`,
+/// * **the array's named-property reserve slots** — `GC_ARRAY_KEY_ATTRS`,
 ///   which live in front of element 0, outside every layout range;
 ///
 /// A FORWARDED header is never skippable, whatever its layout: array growth
@@ -215,8 +215,7 @@ pub(crate) unsafe fn gc_object_yields_no_child_slots(header: *const GcHeader) ->
     // terms fold into ONE mask compare on a word `move_young` has already
     // loaded, so a non-candidate is rejected in two instructions.
     let reserved = (*header)._reserved;
-    if reserved & (GC_LAYOUT_STATE_MASK | crate::gc::GC_ARRAY_NAMED_PROPS) != GC_LAYOUT_POINTER_FREE
-    {
+    if reserved & (GC_LAYOUT_STATE_MASK | crate::gc::GC_ARRAY_KEY_ATTRS) != GC_LAYOUT_POINTER_FREE {
         return false;
     }
     if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
@@ -228,7 +227,12 @@ pub(crate) unsafe fn gc_object_yields_no_child_slots(header: *const GcHeader) ->
     // uncovered sibling would simply not be admitted here, costing a walk it
     // could have skipped. `the_array_type_still_pairs_with_the_prefix_free_
     // layout_kind` pins the two table facts this leans on.
-    (*header).obj_type == crate::gc::GC_TYPE_ARRAY
+    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return false;
+    }
+    let array =
+        (header as *const u8).add(crate::gc::GC_HEADER_SIZE) as *const crate::array::ArrayHeader;
+    (*array).named.is_null()
 }
 
 #[inline]

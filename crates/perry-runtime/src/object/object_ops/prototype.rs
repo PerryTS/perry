@@ -631,7 +631,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // cached intrinsic pointer (also a GC root) so the chain holds
                 // through copying GC.
                 // Bit 8 means "per-kind TypedArray prototype" only on a
-                // `GC_TYPE_OBJECT`; on an array it is `GC_ARRAY_NAMED_PROPS`.
+                // `GC_TYPE_OBJECT`; on an array it is `GC_ARRAY_KEY_ATTRS`.
                 if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
                     && (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
                 {
@@ -893,7 +893,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             }
 
             // Bit 8 means "per-kind TypedArray prototype" only on a
-            // `GC_TYPE_OBJECT`; on an array it is `GC_ARRAY_NAMED_PROPS`.
+            // `GC_TYPE_OBJECT`; on an array it is `GC_ARRAY_KEY_ATTRS`.
             if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
                 && (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
             {

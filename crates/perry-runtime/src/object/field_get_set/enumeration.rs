@@ -1022,20 +1022,24 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
 /// else `None`. These are the keys that `OrdinaryOwnPropertyKeys` enumerates
 /// first, in ascending numeric order. (#2438)
 pub(crate) fn canonical_array_index(s: &str) -> Option<u32> {
-    let b = s.as_bytes();
-    if b == b"0" {
-        return Some(0);
-    }
-    // Non-empty, no leading zero, every byte an ASCII digit.
-    if b.is_empty() || b[0] == b'0' || !b.iter().all(|c| c.is_ascii_digit()) {
+    canonical_array_index_bytes(s.as_bytes())
+}
+
+/// Canonical decimal index from a key's bytes; Unicode keys are not indices.
+/// This is a pure read, also used by layout element-kind publication.
+pub(crate) fn canonical_array_index_bytes(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() || bytes.len() > 10 || (bytes.len() > 1 && bytes[0] == b'0') {
         return None;
     }
-    // Array-index range is `0..=2^32-2` (4294967294). 4294967295 is reserved
-    // for `.length`, not a valid index; larger values are ordinary string keys.
-    match s.parse::<u64>() {
-        Ok(n) if n <= 4_294_967_294 => Some(n as u32),
-        _ => None,
+    let mut index = 0u32;
+    for &byte in bytes {
+        let digit = byte.wrapping_sub(b'0');
+        if digit > 9 {
+            return None;
+        }
+        index = index.checked_mul(10)?.checked_add(digit as u32)?;
     }
+    (index != u32::MAX).then_some(index)
 }
 
 /// Compute the position order that `OrdinaryOwnPropertyKeys` mandates for an

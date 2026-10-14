@@ -26,7 +26,7 @@
 //! [`keys_summary`]`(keys, count)`.
 //!
 //! The pointer to the attributes array lives in the keys array's first
-//! physical slot, in front of logical element 0, with `GC_ARRAY_NAMED_PROPS`
+//! physical slot, in front of logical element 0, with `GC_ARRAY_KEY_ATTRS`
 //! set: exactly the reserve #10166 gives an Array's named properties
 //! (`array/named_props.rs`). So nothing new exists for the collector: the
 //! reserve word is already emitted as a fixed child slot of every flagged
@@ -35,7 +35,7 @@
 //! (`array_elements_ptr`, #10939). The front slot count is
 //! [`KEYS_ATTRS_FRONT_SLOTS`]; nothing may hand-type it.
 //!
-//! # Why reusing `GC_ARRAY_NAMED_PROPS` on a keys array is sound
+//! # Why reusing `GC_ARRAY_KEY_ATTRS` on a keys array is sound
 //!
 //! `GcHeader::_reserved` has no free bit for arrays (`gc/types.rs`). The
 //! named-properties bit means "the first physical slot is a traced reserve
@@ -240,6 +240,19 @@ impl AttributeKey for &str {
     }
 }
 
+// A declared key's hash is already static data. Registration uses the
+// same Bloom bit as every dynamic writer without hashing its bytes again.
+impl AttributeKey for &super::layout_desc::StaticAtom {
+    #[inline]
+    fn bloom_bit(self) -> u16 {
+        if self.kind == crate::codegen_abi::ATOM_KIND_STRING {
+            1u16 << (self.hash >> 60)
+        } else {
+            0
+        }
+    }
+}
+
 /// The Bloom bit a key contributes: one of 16, from the key's content hash.
 /// A key without a string form (a hole, a symbol) contributes none — it
 /// carries no entry either.
@@ -283,19 +296,29 @@ pub(crate) unsafe fn keys_attrs(keys: *const ArrayHeader) -> *mut ArrayHeader {
 #[cold]
 #[inline(never)]
 unsafe fn keys_attrs_forwarded(keys: *const ArrayHeader) -> *mut ArrayHeader {
-    let keys = crate::array::clean_arr_ptr(keys);
-    if keys.is_null() {
-        return std::ptr::null_mut();
+    // Keys metadata is always a real array, never a Proxy or lazy JSON
+    // receiver. Follow its GC/growth forwarding words without invoking the
+    // arbitrary-array resolver, whose JSON arm can allocate and call JS.
+    let mut keys = keys;
+    loop {
+        let header = crate::gc::header_from_trusted_user_ptr(keys.cast());
+        if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+            break;
+        }
+        keys = crate::gc::forwarding_address(header).cast::<ArrayHeader>();
+        if keys.is_null() {
+            return std::ptr::null_mut();
+        }
     }
     keys_attrs_resolved(keys)
 }
 
 #[inline(always)]
 unsafe fn keys_attrs_resolved(keys: *const ArrayHeader) -> *mut ArrayHeader {
-    if crate::array::array_object_flags_resolved(keys) & crate::gc::GC_ARRAY_NAMED_PROPS == 0 {
+    if crate::array::array_object_flags_resolved(keys) & crate::gc::GC_ARRAY_KEY_ATTRS == 0 {
         return std::ptr::null_mut();
     }
-    let word = *crate::array::array_named_props_slot(keys);
+    let word = *crate::array::key_attrs_slot(keys);
     if word & TAG_MASK != POINTER_TAG {
         return std::ptr::null_mut();
     }
@@ -624,13 +647,13 @@ pub(crate) unsafe fn recompute_cumulative(
 ///
 /// # Safety
 /// `keys` is a live, forwarding-resolved keys array carrying
-/// `GC_ARRAY_NAMED_PROPS`; `attrs` is a live attributes array.
+/// `GC_ARRAY_KEY_ATTRS`; `attrs` is a live attributes array.
 #[inline]
 pub(crate) unsafe fn attach_attrs(keys: *mut ArrayHeader, attrs: *mut ArrayHeader) {
     debug_assert!(
-        crate::array::array_object_flags_resolved(keys) & crate::gc::GC_ARRAY_NAMED_PROPS != 0
+        crate::array::array_object_flags_resolved(keys) & crate::gc::GC_ARRAY_KEY_ATTRS != 0
     );
-    crate::array::store_named_props_word(
+    crate::array::store_key_attrs_word(
         keys,
         crate::value::js_nanbox_pointer(attrs as i64).to_bits(),
     );
@@ -1255,7 +1278,7 @@ pub(crate) unsafe fn ensure_owned_attrs(keys: *mut ArrayHeader, count: u32) -> *
     let (attrs, keys) = keys_handle.across_mut::<ArrayHeader, _>(|| alloc_attrs(capacity + 1));
     let attrs_handle = scope.root_raw_mut_ptr(attrs);
     let (keys, attrs) =
-        attrs_handle.across_mut::<ArrayHeader, _>(|| crate::array::ensure_named_props_slot(keys));
+        attrs_handle.across_mut::<ArrayHeader, _>(|| crate::array::ensure_key_attrs_slot(keys));
     assert!(
         !keys.is_null(),
         "an owned key list must be able to take its attributes reserve"

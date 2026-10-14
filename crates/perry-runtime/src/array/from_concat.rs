@@ -116,20 +116,18 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // segfaulted. Materialize to a heap StringHeader so every pointer
     // extraction downstream is valid; the per-codepoint path in
     // `js_array_clone` then behaves exactly as it does for a literal.
-    // #7542: `Array.from(arr)` is `GetIterator(arr)` + drain, so a patched
-    // `Array.prototype[Symbol.iterator]` drives it exactly as it drives spread.
-    // #9846 widened the condition from the `Symbol.iterator` write alone to the
-    // whole "array iteration is no longer provably pristine" fact, so a patched
-    // `%ArrayIteratorPrototype%.next` drives `Array.from(arr)` too.
-    // This function's array arm ends in a raw `js_array_clone` — a shallow
-    // element copy that never consults the protocol — so the guard has to be
-    // here rather than downstream. `array_from_spread_value` already routes the
-    // patched case through `js_get_iterator`; reuse it so the two entry points
-    // cannot answer differently for the same receiver.
-    if crate::array::array_iteration_not_pristine()
-        && crate::array::js_array_is_array(boxed).to_bits() == crate::value::TAG_TRUE
+    // Array.from uses GetMethod: null/undefined iterator members mean the
+    // indexed array-like operation, while other methods drive their protocol.
+    // The layout-proven intrinsic dense walk shares spread's bulk element copy.
+    if crate::value::addr_class::pointer_value_header(bits)
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
     {
-        return crate::array::js_array_clone_for_spread(boxed);
+        if super::flat_clone::dense_spread_source(boxed).is_some() {
+            return super::flat_clone::dense_spread_copy(boxed);
+        }
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let result = array_from_full(undefined, boxed, undefined, undefined);
+        return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
     }
     // #9846: the Map / Set / String families have the same hole. Their arms end
     // in `js_array_clone`'s element copies (the Set backing, the Map entry
@@ -685,6 +683,7 @@ unsafe fn populate_from_iterable(
     mapfn: &RuntimeHandle<'_>,
     this_arg: &RuntimeHandle<'_>,
     array_result: bool,
+    method: Option<&RuntimeHandle<'_>>,
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
     let map = |value: f64, k: usize| {
@@ -694,7 +693,12 @@ unsafe fn populate_from_iterable(
             value
         }
     };
-    match classify_iter_source(items.get_nanbox_f64()) {
+    let source = if method.is_some() {
+        IterSourceKind::Generic
+    } else {
+        classify_iter_source(items.get_nanbox_f64())
+    };
+    match source {
         IterSourceKind::LiveArray => {
             let mut k = 0usize;
             loop {
@@ -733,8 +737,13 @@ unsafe fn populate_from_iterable(
             finish_length(result, len, array_result)
         }
         IterSourceKind::Generic => {
-            let iter =
-                scope.root_nanbox_f64(crate::symbol::js_get_iterator(items.get_nanbox_f64()));
+            let iter = scope.root_nanbox_f64(match method {
+                Some(method) => super::iterator_method::iterator_from_method(
+                    items.get_nanbox_f64(),
+                    super::iterator_method::IteratorMethod::Data(method.get_nanbox_f64()),
+                ),
+                None => crate::symbol::js_get_iterator(items.get_nanbox_f64()),
+            });
             let mut k = 0usize;
             loop {
                 match crate::collection_iter::iterator_next_value(iter.get_nanbox_f64()) {
@@ -829,7 +838,34 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     }
     let is_ctor = is_constructor_value(c.get_nanbox_f64());
 
-    if items_is_iterable(items.get_nanbox_f64()) {
+    // Array GetMethod reads the fixed member once, before Construct. Retain
+    // a custom method across that call; nullish methods choose array-like
+    // access, and only the intrinsic permits the live element walk.
+    let (iterable, method) =
+        if crate::value::addr_class::pointer_value_header(items.get_nanbox_u64())
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+        {
+            let proto = crate::array::array_prototype_addr();
+            let arr =
+                clean_arr_ptr(crate::value::js_nanbox_get_pointer(items.get_nanbox_f64())
+                    as *const ArrayHeader);
+            let method = unsafe { super::iterator_method::array_iterator_method(arr, proto) };
+            if matches!(method, super::iterator_method::IteratorMethod::Intrinsic) {
+                (true, None)
+            } else {
+                let value = unsafe { super::iterator_method::read_method(&items, method) };
+                let value = scope.root_nanbox_f64(value);
+                let nullish = matches!(value.get_nanbox_u64(), TAG_UNDEFINED | TAG_NULL);
+                if !nullish && !crate::proxy::is_callable_function(value.get_nanbox_f64()) {
+                    throw_not_iterable("object");
+                }
+                (!nullish, Some(value))
+            }
+        } else {
+            (items_is_iterable(items.get_nanbox_f64()), None)
+        };
+
+    if iterable {
         // Step 5: iterable. Construct the result BEFORE creating the iterator
         // (Construct can throw, e.g. a custom constructor) so the throw
         // propagates without a dangling open iterator.
@@ -843,7 +879,17 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
         };
         let result = scope.root_nanbox_f64(result);
         let array_result = jsv_is_array(result.get_nanbox_f64());
-        unsafe { populate_from_iterable(&result, &items, mapping, &mapfn, &this_arg, array_result) }
+        unsafe {
+            populate_from_iterable(
+                &result,
+                &items,
+                mapping,
+                &mapfn,
+                &this_arg,
+                array_result,
+                method.as_ref(),
+            )
+        }
     } else {
         // Step 6+: array-like.
         let len = array_like_length(items.get_nanbox_f64());

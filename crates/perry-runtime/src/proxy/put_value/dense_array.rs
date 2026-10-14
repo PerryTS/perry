@@ -102,15 +102,18 @@ mod tests {
             let header = (ptr as *mut u8)
                 .sub(crate::gc::GC_HEADER_SIZE)
                 .cast::<crate::gc::GcHeader>();
-            for flag in [
-                crate::gc::OBJ_FLAG_FROZEN,
-                crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-            ] {
-                let saved = (*header)._reserved;
-                (*header)._reserved |= flag;
-                assert!(!try_set(boxed, 0.0, 99.0, boxed));
-                (*header)._reserved = saved;
-            }
+            let saved = (*header)._reserved;
+            (*header)._reserved |= crate::gc::OBJ_FLAG_FROZEN;
+            assert!(!try_set(boxed, 0.0, 99.0, boxed));
+            (*header)._reserved = saved;
+            // An element descriptor is a key of the array's named layout.
+            crate::object::set_property_attrs(
+                ptr as usize,
+                "1".to_string(),
+                crate::object::PropertyAttrs::new(false, true, true),
+            );
+            assert!(crate::array::array_has_element_descriptors(ptr));
+            assert!(!try_set(boxed, 0.0, 99.0, boxed));
         }
         assert_eq!(
             js_array_get_f64(ptr, 0),

@@ -12,9 +12,9 @@
 //! * a `POINTER`-tagged heap handle (the receiver may be a claimed, not
 //!   proven, Array: a String or a NaN-boxed number takes the call);
 //! * `GC_TYPE_ARRAY`, not forwarded (`GC_FLAG_FORWARDED`), none of
-//!   `FROZEN | SEALED | NO_EXTEND | ARRAY_DESCRIPTORS` in `_reserved` — a
-//!   frozen array or a non-writable `length` must throw, a descriptor-bearing
-//!   one needs the descriptor-aware `[[Delete]]`;
+//!   `FROZEN | SEALED | NO_EXTEND` in `_reserved` and no named layout
+//!   (`ArrayHeader.named`) — a frozen array or a non-writable `length` must
+//!   throw, a descriptor-bearing one needs the descriptor-aware `[[Delete]]`;
 //! * `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED == 0` — a polluted
 //!   `Array.prototype` can intercept the element read;
 //! * `0 < length <= capacity <= 100_000_000` and the popped slot is not the
@@ -29,9 +29,10 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{unbox_to_i64, FnCtx};
 
-/// `FROZEN | SEALED | NO_EXTEND | ARRAY_DESCRIPTORS` in the GcHeader's
-/// `_reserved` word (0x407) — the same mask `js_array_pop_f64` tests.
-const POP_BLOCKING_FLAGS_I16: &str = "1031";
+/// `FROZEN | SEALED | NO_EXTEND` in the GcHeader's `_reserved` word (0x007) —
+/// the same mask `js_array_pop_f64` tests. Element descriptors (a
+/// non-writable `length`) live in the array's named layout, tested beside it.
+const POP_BLOCKING_FLAGS_I16: &str = "7";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HEAP_LIMIT: &str = "140737488355328"; // 2^47
@@ -98,7 +99,10 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
         let reserved = blk.load(I16, &reserved_ptr);
         let blocking = blk.and(I16, &reserved, POP_BLOCKING_FLAGS_I16);
-        let plain = blk.icmp_eq(I16, &blocking, "0");
+        let unflagged = blk.icmp_eq(I16, &blocking, "0");
+        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(blk, &handle);
+        let no_named = blk.xor(I1, &has_named, "true");
+        let plain = blk.and(I1, &unflagged, &no_named);
         // #10593: the process-wide byte AND this array's own custom-proto bit.
         let prototype_clean =
             crate::expr::array_proto_guard::emit_array_method_admission(blk, &reserved);
@@ -152,7 +156,10 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
         let reserved = blk.load(I16, &reserved_ptr);
         let blocking = blk.and(I16, &reserved, POP_BLOCKING_FLAGS_I16);
-        let plain = blk.icmp_eq(I16, &blocking, "0");
+        let unflagged = blk.icmp_eq(I16, &blocking, "0");
+        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(blk, &store);
+        let no_named = blk.xor(I1, &has_named, "true");
+        let plain = blk.and(I1, &unflagged, &no_named);
         let mut ok = blk.and(I1, &is_array, &not_fwd);
         ok = blk.and(I1, &ok, &plain);
         blk.cond_br(&ok, &len_label, &slow_label);
@@ -386,8 +393,15 @@ mod tests {
         let hdr = super::super::class_field_barrier_tests::block_body(ir, "apop.hdr.")
             .expect("header block");
         assert!(
-            hdr.contains(", 1031") && hdr.contains("icmp eq i8") && hdr.contains(", 1\n"),
-            "{what}: the header gate must test GC_TYPE_ARRAY and the 0x407 integrity mask:\n{hdr}"
+            hdr.lines()
+                .any(|l| l.contains("= and i16 ") && l.trim_end().ends_with(", 7"))
+                && hdr.contains("icmp eq i8")
+                && hdr.contains(", 1\n"),
+            "{what}: the header gate must test GC_TYPE_ARRAY and the 0x7 integrity mask:\n{hdr}"
+        );
+        assert!(
+            hdr.contains(", 8\n") && hdr.contains("icmp ne i64"),
+            "{what}: the header gate must test the array's named layout (`ArrayHeader.named`):\n{hdr}"
         );
         assert!(
             hdr.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
@@ -445,8 +459,13 @@ mod tests {
         let check = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.check.")
             .expect("the store validation block exists");
         assert!(
-            check.contains(", 1031") && check.contains("icmp eq i8"),
-            "{what}: the store must clear the same integrity mask as a plain array:\n{check}"
+            check
+                .lines()
+                .any(|l| l.contains("= and i16 ") && l.trim_end().ends_with(", 7"))
+                && check.contains("icmp eq i8")
+                && check.contains("icmp ne i64"),
+            "{what}: the store must clear the same integrity mask and named-layout \
+             test as a plain array:\n{check}"
         );
     }
 

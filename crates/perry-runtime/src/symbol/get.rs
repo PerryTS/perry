@@ -196,8 +196,10 @@ pub unsafe extern "C" fn js_object_get_symbol_property_ic_miss(
                     let slot = slot.filter(|&index| {
                         shape != 0 && index < crate::object::object_live_slot_count(obj)
                     });
-                    let value_bits =
-                        slot.map(|index| crate::object::js_object_get_field(obj, index).bits());
+                    let value_bits = slot.and_then(|index| {
+                        let value = crate::object::js_object_get_field(obj, index).bits();
+                        (value != crate::value::TAG_HOLE).then_some(value)
+                    });
                     if let Some(value_bits) = value_bits {
                         let epoch = PERRY_SYMBOL_PROPERTY_IC_EPOCH
                             .load(std::sync::atomic::Ordering::Acquire);

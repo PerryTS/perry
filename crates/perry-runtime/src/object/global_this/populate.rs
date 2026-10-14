@@ -258,6 +258,12 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // The prototype is an own static data property too. Include it in
         // the initial attributed layout so adding name/length cannot spill it.
         let proto_obj = if name == "Array" {
+            // A runtime with no compiled entry (the Rust tests) registers the
+            // static layouts at realm bootstrap, as `js_shape_run_static_seed`
+            // does before any user code (§6a); `%Array.prototype%` is born on
+            // one of them.
+            #[cfg(test)]
+            crate::object::layout_desc::register_static_layouts();
             let arr = crate::array::js_array_alloc(0);
             // SAFETY: the fresh intrinsic, under this bootstrap's no-move scope.
             unsafe {

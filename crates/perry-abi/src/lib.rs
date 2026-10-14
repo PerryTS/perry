@@ -17,7 +17,52 @@ pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
 pub const STATIC_SHAPE_ID_COUNT: u32 = 1 << 20;
 
 /// `array::ArrayHeader` size: element 0 follows it.
-pub const ARRAY_HEADER_SIZE: usize = 8;
+pub const ARRAY_HEADER_SIZE: usize = 16;
+
+/// `StaticAtom.kind` (OBJECT_MODEL_2026-10-13.md §6a): a string key.
+pub const ATOM_KIND_STRING: u8 = 0;
+/// `StaticAtom.kind`: a well-known symbol; `string` is null and `index` is
+/// its number in [`WELL_KNOWN_SYMBOLS`].
+pub const ATOM_KIND_WELL_KNOWN_SYMBOL: u8 = 1;
+/// `StaticAtom.kind`: a program symbol (a module-level `const s =
+/// Symbol(desc)`); `string` is the description and `hash` the creation
+/// sequence number the runtime assigns when it creates the symbol.
+pub const ATOM_KIND_PROGRAM_SYMBOL: u8 = 2;
+/// The well-known symbols by number (`StaticAtom.index` of a kind-1 atom),
+/// spelled as `Symbol.<name>`.
+pub const WELL_KNOWN_SYMBOLS: [&str; 15] = [
+    "iterator",
+    "asyncIterator",
+    "hasInstance",
+    "toPrimitive",
+    "toStringTag",
+    "species",
+    "isConcatSpreadable",
+    "match",
+    "matchAll",
+    "replace",
+    "search",
+    "split",
+    "unscopables",
+    "dispose",
+    "asyncDispose",
+];
+/// `WELL_KNOWN_SYMBOLS` number of `Symbol.iterator`.
+pub const WELL_KNOWN_SYMBOL_ITERATOR: u32 = 0;
+const _: () = assert!(WELL_KNOWN_SYMBOLS[WELL_KNOWN_SYMBOL_ITERATOR as usize].len() == 8);
+
+/// The number of well-known symbol `name` (`"iterator"`), if it is one.
+pub fn well_known_symbol_number(name: &str) -> Option<u32> {
+    WELL_KNOWN_SYMBOLS
+        .iter()
+        .position(|n| *n == name)
+        .map(|i| i as u32)
+}
+
+/// The fixed `StaticAtom.hash` of well-known symbol `number`.
+pub const fn well_known_symbol_atom_hash(number: u32) -> u64 {
+    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(number as u64 + 1)
+}
 
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
 pub const AGENT_PTR_SLOTS: usize = 4;

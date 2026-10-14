@@ -103,8 +103,8 @@ fn shift_leaves_holes() {
 fn capacity_past_the_size_ceiling_is_a_range_error() {
     const {
         assert!(
-            super::alloc::ARRAY_MAX_CAPACITY as u64 * 8 + 16 <= u32::MAX as u64
-                && (super::alloc::ARRAY_MAX_CAPACITY as u64 + 1) * 8 + 16 > u32::MAX as u64
+            super::alloc::ARRAY_MAX_CAPACITY as u64 * 8 + 24 <= u32::MAX as u64
+                && (super::alloc::ARRAY_MAX_CAPACITY as u64 + 1) * 8 + 24 > u32::MAX as u64
         )
     };
     let outcome = crate::exception::catch_js_throw(|| {

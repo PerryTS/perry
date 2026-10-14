@@ -304,8 +304,9 @@ fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
 /// to remove identity decoding and directory indexing from a prototype hop.
 #[test]
 fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 72, "record grew");
+    assert_eq!(std::mem::size_of::<ShapeRecord>(), 80, "record grew");
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
+    assert_eq!(std::mem::offset_of!(ShapeRecord, element_kind), 72);
 
     // `facts_key` folds the keys ADDRESS; it must never dereference it.
     // A wild, unmapped address must be folded, not read. If the probe
@@ -382,7 +383,7 @@ fn special_body_identity_uses_record_owned_extension() {
     assert_eq!(special.special_constfn_mask(), 1);
     assert_eq!(special.constfn_infos(), &a);
     assert_eq!(special.position_bound_raw(), old.position_bound_raw());
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 72);
+    assert_eq!(std::mem::size_of::<ShapeRecord>(), 80);
     assert!(special.facts_match_proto_with_special(
         0x40,
         1,

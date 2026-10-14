@@ -95,9 +95,7 @@
 //! site of its own. That is what keeps the invalidation matrix small enough
 //! to enumerate.
 
-use super::header::{
-    array_elements_ptr, array_gc_header, array_object_flags, clean_arr_ptr, clean_arr_ptr_mut,
-};
+use super::header::{array_elements_ptr, array_gc_header, clean_arr_ptr, clean_arr_ptr_mut};
 use super::ArrayHeader;
 use crate::gc::GC_ARRAY_ELEMENT_SHAPE;
 use std::cell::RefCell;
@@ -408,10 +406,10 @@ unsafe fn clear_bit(header: *mut crate::gc::GcHeader) {
 /// An array carrying per-index descriptors (accessors, custom attrs) can
 /// hand back a value its element slot does not hold, so no element proof is
 /// admissible — the same stand-down the raw-f64 element accessors make on
-/// `OBJ_FLAG_ARRAY_DESCRIPTORS`.
+/// an element descriptor in the array's layout.
 #[inline]
 unsafe fn array_admits_element_proof(arr: *const ArrayHeader) -> bool {
-    array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+    !super::array_has_element_descriptors(arr)
 }
 
 #[inline]

@@ -50,6 +50,7 @@ fn restore_coverage_keeps_an_untraced_malloc_parents_uncovered_page() {
 fn exercise_restore() {
     let _isolation = copying_nursery_isolation_lock();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    isolate_runtime_layout_blocks();
     reset_remembered_set();
 
     unsafe {

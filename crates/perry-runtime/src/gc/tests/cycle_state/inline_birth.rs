@@ -5,7 +5,7 @@ use super::*;
 unsafe fn raw_birth(kind: u8, shape: u32, child: *mut u8, premature_drain: bool) -> *mut u8 {
     let slots = if kind == GC_TYPE_ARRAY { 2 } else { 8 };
     let prefix = if kind == GC_TYPE_ARRAY {
-        8
+        std::mem::size_of::<crate::array::ArrayHeader>()
     } else {
         std::mem::size_of::<crate::object::ObjectHeader>()
     };
@@ -23,6 +23,7 @@ unsafe fn raw_birth(kind: u8, shape: u32, child: *mut u8, premature_drain: bool)
         (user as *mut crate::array::ArrayHeader).write(crate::array::ArrayHeader {
             length: slots as u32,
             capacity: slots as u32,
+            named: std::ptr::null_mut(),
         });
     } else {
         let object = user as *mut crate::object::ObjectHeader;

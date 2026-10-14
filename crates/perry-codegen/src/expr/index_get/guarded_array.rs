@@ -192,14 +192,15 @@ pub(in crate::expr) const HEAP_POINTER_BAND_BASE_I64: &str =
 pub(in crate::expr) const HEAP_POINTER_BAND_SPAN_I64: &str =
     crate::expr::receiver_range::RECEIVER_SPAN_LITERAL;
 /// The array read's guard mask over the header word `[h-8]` read as an i32:
-/// the type byte, `GC_FLAG_FORWARDED` (0x80 in byte 1) and
-/// `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400 in `_reserved`, bytes 2..3).
-const ARRAY_READ_GUARD_MASK_I32: &str = "67141887"; // 0x0400_80FF
+/// the type byte and `GC_FLAG_FORWARDED` (0x80 in byte 1). Element
+/// descriptors live in the array's named layout, tested beside the word
+/// (`emit_array_has_named_layout`).
+const ARRAY_READ_GUARD_MASK_I32: &str = "33023"; // 0x0000_80FF
 /// The masked word of a readable array: `GC_TYPE_ARRAY`, every masked flag clear.
 const ARRAY_READ_GUARD_EXPECT_I32: &str = "1";
 /// The array STORE's guard mask: the read's, plus the integrity bits a
 /// write must respect, `FROZEN | SEALED | NO_EXTEND` (0x1..0x4 in `_reserved`).
-pub(in crate::expr) const ARRAY_STORE_GUARD_MASK_I32: &str = "67600639"; // 0x0407_80FF
+pub(in crate::expr) const ARRAY_STORE_GUARD_MASK_I32: &str = "491775"; // 0x0007_80FF
 /// The STORE's band: `is_valid_obj_ptr`'s 2^47 ceiling, less the 1 MiB the
 /// band is measured from. A store keeps the ceiling the runtime guard applies
 /// before it dereferences anything (#7396), at no extra instruction.
@@ -218,247 +219,24 @@ pub(in crate::expr) fn emit_array_guard_word(
     blk.load(I32, &word_ptr)
 }
 
-/// The GC header's `_reserved` half-word of `handle` (the array's own flags).
-fn emit_array_reserved(blk: &mut crate::block::LlBlock, handle: &str) -> String {
-    let reserved_addr = blk.sub(I64, handle, "6");
-    let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
-    blk.load(I16, &reserved_ptr)
-}
-
-/// `(word & MASK) == EXPECT`: an ordinary array, not forwarded, no element
-/// descriptors.
-fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> String {
+/// `(word & MASK) == EXPECT` and a null named layout: an ordinary array, not
+/// forwarded, no element descriptors.
+fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str, handle: &str) -> String {
     let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
-    blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32)
+    let word_ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
+    emit_and_no_named_layout(blk, &word_ok, handle)
 }
 
-/// What a [`emit_array_region_guard`] receiver needs beyond the read facts.
-#[derive(Clone, Copy)]
-pub(crate) struct ArrayRegionDense<'a> {
-    /// The region stores elements: the integrity bits must be clear too.
-    pub(crate) store: bool,
-    /// The counter's bound (an `f64`): `bound <= length`.
-    pub(crate) len_bound: Option<&'a str>,
-}
-
-/// A loop region's array guard (#11650 regions, array slice S3): the S1 guard
-/// word, the prototype facts a hole read needs, and `max_index <u capacity`,
-/// checked once in the preheader (and at a re-check). On a pass it also
-/// derives the element base from the same header and stores it into
-/// `base_slot`; F-body's element reads then load `base + 8 * idx` and select
-/// `undefined` for a hole. Returns the `i1` pass flag. The receiver is tested
-/// against the heap band before anything is dereferenced.
-///
-/// #10741: a receiver whose region also STORES elements, or indexes them by
-/// the loop counter, needs more, and `dense` asks for it: the store word
-/// (integrity bits clear), the dense raw-f64 layout bit (every slot in
-/// `[0, length)` a canonical double), and the bounds against `length`
-/// as well as `capacity` (`max_index < min(length, capacity)`, and
-/// `len_bound <= min(length, capacity)` for the counter's bound, an `f64`). A bare read is then one `load double`
-/// and a bare store of a proven double one `store double`: neither changes
-/// the length, the layout or any pointer the collector traces.
-pub(crate) fn emit_array_region_guard(
-    ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-    max_index: u32,
-    dense: Option<ArrayRegionDense<'_>>,
-    cap_bound: Option<&str>,
-    base_slot: &str,
+/// `ok` and "the array at `handle` has no named layout" (no element
+/// descriptors can intercept a raw slot access).
+pub(in crate::expr) fn emit_and_no_named_layout(
+    blk: &mut crate::block::LlBlock,
+    ok: &str,
+    handle: &str,
 ) -> String {
-    let deref_idx = ctx.new_block("rloop.arr.deref");
-    let cap_idx = ctx.new_block("rloop.arr.cap");
-    let join_idx = ctx.new_block("rloop.arr.join");
-    let deref_label = ctx.block_label(deref_idx);
-    let cap_label = ctx.block_label(cap_idx);
-    let join_label = ctx.block_label(join_idx);
-    let pre_label = ctx.block().label.clone();
-    let band_offset = {
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(recv_box);
-        let band_offset = blk.sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
-        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
-        blk.cond_br(&in_band, &deref_label, &join_label);
-        band_offset
-    };
-    ctx.current_block = deref_idx;
-    let handle = {
-        let blk = ctx.block();
-        let handle = blk.add(
-            I64,
-            &band_offset,
-            crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
-        );
-        let word = emit_array_guard_word(blk, &handle);
-        let word_ok = match dense {
-            None => emit_array_guard_word_ok(blk, &word),
-            Some(d) => {
-                let mask = if d.store {
-                    ARRAY_STORE_GUARD_MASK_I32
-                } else {
-                    ARRAY_READ_GUARD_MASK_I32
-                };
-                let masked = blk.and(I32, &word, mask);
-                let ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
-                // GC_ARRAY_RAW_F64_LAYOUT (0x80 in `_reserved`, the word's
-                // upper half): dense canonical raw f64, no holes.
-                let f64_bit = blk.and(I32, &word, "8388608"); // 0x80 << 16
-                let is_f64 = blk.icmp_ne(I32, &f64_bit, "0");
-                blk.and(I1, &ok, &is_f64)
-            }
-        };
-        blk.cond_br(&word_ok, &cap_label, &join_label);
-        handle
-    };
-    ctx.current_block = cap_idx;
-    let (pass, base) = {
-        let blk = ctx.block();
-        let reserved = emit_array_reserved(blk, &handle);
-        let proto_ok =
-            crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
-        let capacity_addr = blk.add(I64, &handle, "4");
-        let capacity_ptr = blk.inttoptr(I64, &capacity_addr);
-        let capacity = blk.load(I32, &capacity_ptr);
-        let fits = match dense {
-            // Element receivers (no dense facts): every counter value is
-            // below `cap_bound`, an `f64`, so `cap_bound <= capacity` keeps
-            // each load inside the backing store; a slot in
-            // `[length, capacity)` holds a hole (the S0 invariant).
-            None => {
-                let fits = blk.icmp_ult(I32, &max_index.to_string(), &capacity);
-                match cap_bound {
-                    Some(bound) => {
-                        let cap_f = blk.uitofp(I32, &capacity, DOUBLE);
-                        let within = blk.fcmp("ole", bound, &cap_f);
-                        blk.and(I1, &fits, &within)
-                    }
-                    None => fits,
-                }
-            }
-            Some(d) => {
-                // #9784: the logical length does not prove the backing
-                // store (a presized array's capacity can be smaller): every
-                // slot the region touches is below BOTH.
-                let length_ptr = blk.inttoptr(I64, &handle);
-                let length = blk.load(I32, &length_ptr);
-                let shorter = blk.icmp_ult(I32, &length, &capacity);
-                let limit = blk.select(I1, &shorter, I32, &length, &capacity);
-                let fits = blk.icmp_ult(I32, &max_index.to_string(), &limit);
-                match d.len_bound {
-                    Some(bound) => {
-                        let len_f = blk.uitofp(I32, &limit, DOUBLE);
-                        let within = blk.fcmp("ole", bound, &len_f);
-                        blk.and(I1, &fits, &within)
-                    }
-                    None => fits,
-                }
-            }
-        };
-        let pass = blk.and(I1, &proto_ok, &fits);
-        let base = blk.array_elements_addr_with_capacity(&handle, &capacity);
-        blk.br(&join_label);
-        (pass, base)
-    };
-    ctx.current_block = join_idx;
-    let blk = ctx.block();
-    let pass = blk.phi(
-        I1,
-        &[
-            ("false", &pre_label),
-            ("false", &deref_label),
-            (&pass, &cap_label),
-        ],
-    );
-    let base = blk.phi(
-        I64,
-        &[("0", &pre_label), ("0", &deref_label), (&base, &cap_label)],
-    );
-    blk.store(I64, &base, base_slot);
-    pass
-}
-
-/// The `Float64Array` twin of [`emit_array_region_guard`]'s dense facts
-/// (#10741): a heap pointer whose GC header names a typed array (never
-/// forwarded: typed arrays live in the non-moving space), of element kind
-/// `Float64`, with an owning byte-cell header (Inline or OutOfLine), and
-/// the same bounds against its `length` (payload `+0`). On a pass it stores
-/// the element base into `base_slot`; F-body's reads and stores are then the
-/// same raw `f64` slots as a dense array's, its reads canonicalising a NaN
-/// (a typed array may hold any NaN payload). A typed array's length and kind
-/// never change and it is never moved, so nothing but a view creation (JS)
-/// can invalidate the facts.
-pub(crate) fn emit_typed_f64_region_guard(
-    ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-    max_index: u32,
-    len_bound: Option<&str>,
-    base_slot: &str,
-) -> String {
-    let deref_idx = ctx.new_block("rloop.ta.deref");
-    let len_idx = ctx.new_block("rloop.ta.len");
-    let join_idx = ctx.new_block("rloop.ta.join");
-    let deref_label = ctx.block_label(deref_idx);
-    let len_label = ctx.block_label(len_idx);
-    let join_label = ctx.block_label(join_idx);
-    let pre_label = ctx.block().label.clone();
-    let band_offset = {
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(recv_box);
-        let band_offset = blk.sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
-        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
-        blk.cond_br(&in_band, &deref_label, &join_label);
-        band_offset
-    };
-    ctx.current_block = deref_idx;
-    let (handle, word) = {
-        let blk = ctx.block();
-        let handle = blk.add(
-            I64,
-            &band_offset,
-            crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
-        );
-        let word = emit_array_guard_word(blk, &handle);
-        let masked = blk.and(I32, &word, &(0xffu32 | (1 << 15)).to_string());
-        let ok = blk.icmp_eq(
-            I32,
-            &masked,
-            &crate::expr::byte_cell::brand_for_kind(7).to_string(),
-        );
-        blk.cond_br(&ok, &len_label, &join_label);
-        (handle, word)
-    };
-    ctx.current_block = len_idx;
-    let (pass, base, data_end) = {
-        let blk = ctx.block();
-        let length_ptr = blk.inttoptr(I64, &handle);
-        let length = blk.load(I32, &length_ptr);
-        let mut fits = blk.icmp_ult(I32, &max_index.to_string(), &length);
-        if let Some(bound) = len_bound {
-            let len_f = blk.uitofp(I32, &length, DOUBLE);
-            let within = blk.fcmp("ole", bound, &len_f);
-            fits = blk.and(I1, &fits, &within);
-        }
-        let word = blk.zext(I32, &word, I64);
-        let base = super::super::byte_cell::owner_data(ctx, &handle, &word, "rloop.ta.data");
-        let data_end = ctx.block().label.clone();
-        ctx.block().br(&join_label);
-        (fits, base, data_end)
-    };
-    ctx.current_block = join_idx;
-    let blk = ctx.block();
-    let pass = blk.phi(
-        I1,
-        &[
-            ("false", &pre_label),
-            ("false", &deref_label),
-            (&pass, &data_end),
-        ],
-    );
-    let base = blk.phi(
-        I64,
-        &[("0", &pre_label), ("0", &deref_label), (&base, &data_end)],
-    );
-    blk.store(I64, &base, base_slot);
-    pass
+    let has_named = crate::expr::array_proto_guard::emit_array_element_descriptors(blk, handle);
+    let no_named = blk.xor(crate::types::I1, &has_named, "true");
+    blk.and(crate::types::I1, ok, &no_named)
 }
 
 /// Every caller already has a nonnegative signed-i32 index: the canonical
@@ -597,7 +375,7 @@ fn lower_guarded_array_index_get_with_index(
         ctx.block().and(I64, &bits, POINTER_MASK_I64)
     };
     let word = emit_array_guard_word(ctx.block(), &handle);
-    let live = emit_array_guard_word_ok(ctx.block(), &word);
+    let live = emit_array_guard_word_ok(ctx.block(), &word, &handle);
     ctx.block().cond_br(&live, &range_label, &exotic_label);
 
     ctx.current_block = range_idx;
@@ -994,7 +772,7 @@ pub(crate) fn lower_record_index(
     let bits = ctx.block().bitcast_double_to_i64(array);
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
-    let safe = emit_array_guard_word_ok(ctx.block(), &word);
+    let safe = emit_array_guard_word_ok(ctx.block(), &word, &handle);
     let invalidated = ctx
         .block()
         .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
@@ -1062,7 +840,7 @@ pub(crate) fn lower_record_next(
     let bits = ctx.block().bitcast_double_to_i64(array);
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
-    let safe = emit_array_guard_word_ok(ctx.block(), &word);
+    let safe = emit_array_guard_word_ok(ctx.block(), &word, &handle);
     let invalidated = ctx
         .block()
         .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
@@ -1178,9 +956,14 @@ mod compact_read_tests {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(1)),
         }))]);
+        assert!(ll.contains("33023"), "type and forwarding word");
         assert!(
-            ll.contains("67141887"),
-            "type, forwarding and descriptor word"
+            !ll.contains("icmp ne i64"),
+            "named properties do not guard elements"
+        );
+        assert!(
+            !ll.contains("call i32 @perry_array_element_kind"),
+            "no descriptor writer means no element-kind query"
         );
         assert!(ll.contains("icmp ult i32"), "logical and backing bounds");
         assert!(

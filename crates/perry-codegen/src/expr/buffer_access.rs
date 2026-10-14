@@ -397,19 +397,6 @@ pub(crate) fn emit_buffer_access_pointer(
     proof: &BufferAccessProof,
     spec: BufferAccessSpec,
 ) -> BufferAccessEmission {
-    // A loop region's view access (decision 69): the region guard proved the
-    // bounds against the length it read. No invariant length load and no
-    // assume here: the length is not invariant (a detach zeroes it), so an
-    // `!invariant.load` must not carry it across the JS a re-check follows.
-    let region_proven = matches!(
-        proof.bounds,
-        BoundsState::Proven {
-            proof: BoundsProof::RegionGuard
-        }
-    );
-    if region_proven {
-        crate::stmt::region_loop::note_view_access(ctx);
-    }
     let blk = ctx.block();
     let data_ptr = blk.load(PTR, &proof.view.data_slot);
     let len_i32 = if let Some(length_slot) = proof.view.length_slot.as_ref() {
@@ -418,14 +405,9 @@ pub(crate) fn emit_buffer_access_pointer(
     {
         len.to_string()
     } else {
-        assert!(
-            region_proven,
-            "a byte view must carry its receiver length independently of its data pointer"
-        );
-        // A region proof consumed its bound at admission; this value is dead.
-        "0".to_string()
+        unreachable!("a byte view must carry its receiver length independently of its data pointer")
     };
-    if proof.may_emit_inbounds && !region_proven {
+    if proof.may_emit_inbounds {
         let bounds_width_units = spec.bounds_width_units();
         let in_bounds = if bounds_width_units == 1 {
             blk.icmp_ult(I32, &proof.index.value, &len_i32)

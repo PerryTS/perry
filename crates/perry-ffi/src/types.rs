@@ -68,12 +68,14 @@ const _: () = assert!(std::mem::size_of::<StringHeader>() == 20);
 
 /// Header for a runtime-allocated JS array.
 /// Element storage may have a consumed queue prefix; use `js_array_get` to read it.
-#[repr(C)]
+#[repr(C, align(8))]
 pub struct ArrayHeader {
     /// Number of elements currently in the array.
     pub length: u32,
     /// Available slots from logical element zero to the backing allocation end.
     pub capacity: u32,
+    /// Ordinary object holding own named properties.
+    pub named: *mut ObjectHeader,
 }
 
 /// Header for a runtime-allocated JS object.

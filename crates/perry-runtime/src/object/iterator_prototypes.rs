@@ -133,7 +133,6 @@ pub(crate) fn note_iterator_prototype_exposed(value: f64) {
         return;
     }
     if ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
-        crate::array::note_array_iteration_not_pristine();
         return;
     }
     if MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
@@ -153,7 +152,6 @@ pub(crate) fn note_iterator_prototype_exposed(value: f64) {
     // second `getPrototypeOf` hop off a family prototype, so this arm is
     // strictly rarer than the four above — mark them all.
     if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
-        crate::array::note_array_iteration_not_pristine();
         MAP_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
         SET_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
         STRING_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
@@ -725,6 +723,15 @@ unsafe fn prototype_next_is_canonical(proto: *const ObjectHeader, canonical: *co
         return false;
     }
     !super::descriptor_state::may_have_descriptor_entry(proto as usize, "next", true)
+}
+
+/// Is `%ArrayIteratorPrototype%.next` the builtin? Before the iterator tower
+/// exists nothing can have named it. Reads only, like
+/// [`prototype_next_is_canonical`].
+pub(crate) fn array_iterator_next_is_canonical() -> bool {
+    let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+    proto.is_null()
+        || unsafe { prototype_next_is_canonical(proto, array_iterator_next_thunk as *const u8) }
 }
 
 /// The prototype-override probe must be free on the path every real program

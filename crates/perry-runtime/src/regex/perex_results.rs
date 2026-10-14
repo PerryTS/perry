@@ -31,9 +31,9 @@ pub(super) fn materialize(
     // Born with the named-property reserve: `index`/`input`/`groups` (and
     // `indices`) are installed below without moving an element.
     let result_keys = if has_indices {
-        crate::array::InlineKeySet::ExecResultIndices
+        crate::array::NamedPropertyKeys::ExecResultIndices
     } else {
-        crate::array::InlineKeySet::ExecResult
+        crate::array::NamedPropertyKeys::ExecResult
     };
     #[cfg(test)]
     super::perex_api::before_result_alloc();
@@ -58,7 +58,7 @@ pub(super) fn materialize(
     let indices = if has_indices {
         let array = crate::array::js_array_alloc_named_props_reserved(
             captures.len() as u32,
-            crate::array::InlineKeySet::IndicesGroups,
+            crate::array::NamedPropertyKeys::IndicesGroups,
         );
         let array = scope.root_raw_mut_ptr(array);
         array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
@@ -162,7 +162,7 @@ pub(super) fn materialize(
     }
     let value_count = result_keys.keys().len();
     array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
-        crate::array::array_named_props_install_inline(array, &values[..value_count]);
+        crate::array::array_named_props_install(array, &values[..value_count]);
     });
     if let Some(indices) = indices.as_ref() {
         let groups_value = index_groups.as_ref().map_or(
@@ -170,7 +170,7 @@ pub(super) fn materialize(
             RuntimeHandle::get_nanbox_f64,
         );
         indices.with_mut_ptr::<ArrayHeader, _>(|indices| unsafe {
-            crate::array::array_named_props_install_inline(indices, &[groups_value]);
+            crate::array::array_named_props_install(indices, &[groups_value]);
         });
     }
     let groups = groups.as_ref().map_or(std::ptr::null_mut(), |g| {

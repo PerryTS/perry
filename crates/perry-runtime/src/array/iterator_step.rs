@@ -201,26 +201,11 @@ pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i3
     array_record_enter(
         value,
         std::ptr::null_mut(),
-        std::ptr::null(),
+        super::array_iteration_facts(),
         false,
         std::ptr::null_mut(),
     )
 }
-
-/// One entry site's memo of the intrinsic owners' shapes its last full proof
-/// validated, plus its verdict: the Array prototype bag's ShapeId in the low half and
-/// %ArrayIteratorPrototype%'s in the high half. Its only authority is the
-/// compare against both owners' current ShapeIds at every entry; ShapeIds are
-/// minted from one process-wide sequence and never reused, so a word written
-/// by another realm or agent can only match an owner whose shape carries the
-/// same validated facts. Zero never matches (it names no shape).
-pub type ArrayRecordSite = std::sync::atomic::AtomicU64;
-
-// ShapeIds occupy [0x8000_0000, 0xc000_0000), so bit 30 is
-// always zero. Bit 62 of their pair records refusal without losing either
-// identity. Dictionary ids are never memoized: their keys can change in place.
-pub(crate) const ARRAY_RECORD_SITE_REFUSED: u64 = 1 << 62;
-const _: () = assert!(crate::object::shapes::SHAPE_ID_END <= 0xc000_0000);
 
 /// Capture the actual source and its shape verdict together. The output is
 /// published only after intrinsic materialization has finished allocating.
@@ -228,9 +213,9 @@ const _: () = assert!(crate::object::shapes::SHAPE_ID_END <= 0xc000_0000);
 pub unsafe extern "C-unwind" fn js_array_record_enter(
     value: f64,
     out: *mut f64,
-    site: *const ArrayRecordSite,
+    iterator_writable: u32,
 ) -> i32 {
-    array_record_enter(value, out, site, false, std::ptr::null_mut())
+    array_record_enter(value, out, iterator_writable, false, std::ptr::null_mut())
 }
 
 /// The counted consumer's entry: the same proof (bit 0), then the packed-f64
@@ -240,9 +225,9 @@ pub unsafe extern "C-unwind" fn js_array_record_enter(
 pub unsafe extern "C-unwind" fn js_array_record_enter_counted(
     value: f64,
     out: *mut f64,
-    site: *const ArrayRecordSite,
+    iterator_writable: u32,
 ) -> i32 {
-    array_record_enter(value, out, site, true, std::ptr::null_mut())
+    array_record_enter(value, out, iterator_writable, true, std::ptr::null_mut())
 }
 
 /// Admission and protocol acquisition share the receiver/owner facts. The
@@ -250,14 +235,14 @@ pub unsafe extern "C-unwind" fn js_array_record_enter_counted(
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_stack_enter(
     record: *mut super::iterator_stack_record::ArrayStackRecord,
-    site: *const ArrayRecordSite,
+    iterator_writable: u32,
     counted: u32,
 ) -> i32 {
     let value = std::ptr::read_volatile(std::ptr::addr_of!((*record).payload));
     array_record_enter(
         value,
         std::ptr::addr_of_mut!((*record).payload),
-        site,
+        iterator_writable,
         counted != 0,
         record,
     )
@@ -296,55 +281,11 @@ unsafe fn array_record_refused(
 unsafe fn array_record_enter(
     value: f64,
     out: *mut f64,
-    site: *const ArrayRecordSite,
-    counted: bool,
-    record: *mut super::iterator_stack_record::ArrayStackRecord,
-) -> i32 {
-    let proto = crate::array::array_prototype_addr_if_resolved();
-    // Published only once the whole iterator-prototype tower is built.
-    let next_owner = crate::object::array_iterator_prototype_addr();
-    if proto != 0 && next_owner != 0 {
-        return array_record_needs_iterator_resolved(
-            value, proto, next_owner, out, site, counted, record,
-        );
-    }
-    array_record_needs_iterator_cold(value, out, record)
-}
-
-#[cold]
-#[inline(never)]
-unsafe fn array_record_needs_iterator_cold(
-    value: f64,
-    out: *mut f64,
-    record: *mut super::iterator_stack_record::ArrayStackRecord,
-) -> i32 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let _ = crate::object::builtin_prototype_value("Array");
-    crate::object::ensure_iterator_prototypes();
-    array_record_needs_iterator_resolved(
-        value.get_nanbox_f64(),
-        crate::array::array_prototype_addr(),
-        crate::object::array_iterator_prototype_addr(),
-        out,
-        std::ptr::null(),
-        false,
-        record,
-    )
-}
-
-#[inline(always)]
-unsafe fn array_record_needs_iterator_resolved(
-    value: f64,
-    proto: usize,
-    next_owner: usize,
-    out: *mut f64,
-    site: *const ArrayRecordSite,
+    iterator_writable: u32,
     counted: bool,
     record: *mut super::iterator_stack_record::ArrayStackRecord,
 ) -> i32 {
     if !out.is_null() {
-        // GC_STORE_AUDIT(STACK): publish after the cold entry has completed reentry.
         *out = value;
     }
     if !JSValue::from_bits(value.to_bits()).is_pointer() {
@@ -357,180 +298,76 @@ unsafe fn array_record_needs_iterator_resolved(
     if header.obj_type != crate::gc::GC_TYPE_ARRAY {
         return array_record_refused(value, record, None);
     }
-    let mut array = raw as *const crate::array::ArrayHeader;
-    let mut flags = header._reserved;
-    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        // An alias can still name a growth stub. Its old flags do not
-        // describe members subsequently installed on the live array.
-        array = crate::array::clean_arr_ptr(array);
-        if array.is_null() {
-            return array_record_refused(value, record, None);
-        }
-        flags = crate::array::array_object_flags_resolved(array);
-        if !out.is_null() {
-            // GC_STORE_AUDIT(STACK): caller owns the repaired live source root.
-            *out = crate::value::js_nanbox_pointer(array as i64);
+    let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+    let value = crate::value::js_nanbox_pointer(array as i64);
+    if !out.is_null() {
+        *out = value;
+    }
+    if iterator_writable & super::ITERATION_MEMBER_WRITABLE != 0 {
+        let method = array_iterator_property(array);
+        if !matches!(method, super::iterator_method::IteratorMethod::Intrinsic) {
+            return array_record_refused(value, record, Some(method));
         }
     }
-    let value = crate::value::js_nanbox_pointer(array as i64);
-    if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+    if iterator_writable & super::ITERATION_NEXT_REACHABLE != 0
+        && !crate::object::iterator_prototypes::array_iterator_next_is_canonical()
+    {
         return array_record_refused(
             value,
             record,
-            Some(super::iterator_method::IteratorMethod::Generic),
+            Some(super::iterator_method::IteratorMethod::Intrinsic),
         );
     }
-    if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
-        let own = crate::array::array_property_bag(array);
-        let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-        if !own.is_null() {
-            if let Some(slot) = crate::object::shaped_symbols::position(own, symbol) {
-                let method = if record.is_null() {
-                    None
-                } else {
-                    Some(super::iterator_method::iterator_method_at(own, slot))
-                };
-                return array_record_refused(value, record, method);
-            }
-        }
-    }
-    if !array_record_prototypes_proven_at(site, proto, next_owner) {
-        let method = if record.is_null() {
-            None
-        } else {
-            Some(super::iterator_method::prototype_iterator_method(proto))
-        };
-        return array_record_refused(value, record, method);
-    }
+    let flags = crate::array::array_object_flags_resolved(array);
     if counted && crate::typed_feedback::packed_f64_loop_admits_live_array(array, flags) {
         return 2;
     }
     0
 }
 
+/// The iterator property is the sole semantic dispatch for array iteration.
+/// Standalone runtime callers and programs with reachable writes read it;
+/// immutable programs select the intrinsic arm at compile time.
+pub(crate) unsafe fn array_iterator_property(
+    array: *const crate::array::ArrayHeader,
+) -> super::iterator_method::IteratorMethod {
+    super::iterator_method::array_iterator_method(
+        array,
+        crate::array::array_prototype_addr_if_resolved(),
+    )
+}
+
+/// Is iterating `array` the builtin element walk under the program's
+/// iteration `facts` (`indexing_support::ARRAY_ITERATION_FACTS`)? With none
+/// it is, unchecked; otherwise the array's iteration member (one fixed slot
+/// of `%Array.prototype%`'s layout, or the array's own) must be the
+/// intrinsic, and `%ArrayIteratorPrototype%.next` the builtin.
+pub(crate) unsafe fn array_iteration_is_intrinsic_under(
+    array: *const crate::array::ArrayHeader,
+    facts: u32,
+) -> bool {
+    (facts & super::ITERATION_MEMBER_WRITABLE == 0
+        || matches!(
+            array_iterator_property(array),
+            super::iterator_method::IteratorMethod::Intrinsic
+        ))
+        && (facts & super::ITERATION_NEXT_REACHABLE == 0
+            || crate::object::iterator_prototypes::array_iterator_next_is_canonical())
+}
+
+/// [`array_iteration_is_intrinsic_under`] the program's own facts.
+pub(crate) unsafe fn array_iteration_is_intrinsic(array: *const crate::array::ArrayHeader) -> bool {
+    array_iteration_is_intrinsic_under(array, super::array_iteration_facts())
+}
+
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator(
-    site: *const ArrayRecordSite,
-) -> i32 {
-    let mut proto_addr = crate::array::array_prototype_addr_if_resolved();
-    let mut next_owner = crate::object::array_iterator_prototype_addr();
-    if proto_addr == 0 || next_owner == 0 {
-        let _ = crate::object::builtin_prototype_value("Array");
-        crate::object::ensure_iterator_prototypes();
-        proto_addr = crate::array::array_prototype_addr();
-        next_owner = crate::object::array_iterator_prototype_addr();
+pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator(facts: u32) -> i32 {
+    if facts == 0 {
+        return 0;
     }
-    i32::from(!array_record_prototypes_proven_at(
-        site, proto_addr, next_owner,
-    ))
-}
-
-/// The prototype facts at one entry site: a hit is the two owners' current
-/// ShapeIds equal to the site's validated pair; anything else is the full
-/// shape proof, which publishes the pair with either verdict. Every edit that can
-/// change a checked fact (a store, define or delete on either member, a
-/// dictionary conversion) moves its owner to another ShapeId.
-#[inline(always)]
-unsafe fn array_record_prototypes_proven_at(
-    site: *const ArrayRecordSite,
-    proto_addr: usize,
-    next_owner: usize,
-) -> bool {
-    let bag = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
-    if bag.is_null() {
-        return false;
-    }
-    let array_shape = crate::object::shapes::object_shape_stamp(bag);
-    let next_shape = crate::object::shapes::object_shape_stamp(next_owner as *const ObjectHeader);
-    let pair = u64::from(array_shape) | u64::from(next_shape) << 32;
-    let complete = array_shape != 0 && next_shape != 0;
-    if !site.is_null() && complete {
-        let memo = (*site).load(std::sync::atomic::Ordering::Relaxed);
-        if memo == pair {
-            return true;
-        }
-    }
-    array_record_prototypes_miss(site, proto_addr, next_owner, pair)
-}
-
-// Test instrumentation only: a warm refusal must bypass the full body proof.
-#[cfg(test)]
-thread_local! {
-    static ARRAY_RECORD_FULL_PROOFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-#[cfg(test)]
-pub(crate) fn array_record_full_proof_calls() -> usize {
-    ARRAY_RECORD_FULL_PROOFS.with(std::cell::Cell::get)
-}
-
-// Key scans and ConstFn body checks live in one cold callee; a hit only
-// reads the two owners' ShapeIds and the site's last verdict.
-#[cold]
-#[inline(never)]
-unsafe fn array_record_prototypes_miss(
-    site: *const ArrayRecordSite,
-    proto_addr: usize,
-    next_owner: usize,
-    pair: u64,
-) -> bool {
-    let complete = pair as u32 != 0 && (pair >> 32) as u32 != 0;
-    if !site.is_null()
-        && complete
-        && (*site).load(std::sync::atomic::Ordering::Relaxed) == pair | ARRAY_RECORD_SITE_REFUSED
-    {
-        return false;
-    }
-    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-    #[cfg(test)]
-    ARRAY_RECORD_FULL_PROOFS.with(|calls| calls.set(calls.get() + 1));
-    let proven = array_record_prototypes_need_iterator(proto_addr, next_owner, symbol) == 0;
-    if !site.is_null()
-        && complete
-        && crate::object::shapes::is_site_matchable_shape_id(pair as u32)
-        && crate::object::shapes::is_site_matchable_shape_id((pair >> 32) as u32)
-    {
-        let verdict = if proven {
-            pair
-        } else {
-            pair | ARRAY_RECORD_SITE_REFUSED
-        };
-        (*site).store(verdict, std::sync::atomic::Ordering::Relaxed);
-    }
-    proven
-}
-
-/// Both intrinsic members, read from their owners' current shapes: the
-/// Array prototype's property bag names `@@iterator` at a ConstFn lane whose
-/// body is `values`, and %ArrayIteratorPrototype% names `next` at a ConstFn
-/// lane whose body is the intrinsic step. No mutation fact is cached here.
-#[inline(always)]
-unsafe fn array_record_prototypes_need_iterator(
-    proto_addr: usize,
-    next_owner: usize,
-    symbol: usize,
-) -> i32 {
-    if !array_prototype_iterates_intrinsically(proto_addr, symbol) {
-        return 1;
-    }
-    i32::from(!crate::object::array_iterator_next_is_intrinsic(
-        next_owner as *const ObjectHeader,
-    ))
-}
-
-/// The Array prototype bag's shape names `@@iterator` at a ConstFn lane whose
-/// body is the intrinsic `values`.
-#[inline(always)]
-unsafe fn array_prototype_iterates_intrinsically(proto_addr: usize, symbol: usize) -> bool {
-    let bag = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
-    if bag.is_null() {
-        return false;
-    }
-    let Some(shape) = crate::object::shapes::object_shape_record(bag) else {
-        return false;
-    };
-    let key_bits = crate::value::POINTER_TAG | symbol as u64;
-    let values = crate::object::array_prototype_values_thunk as *const u8;
-    crate::object::shape_member_body_is(shape, |bits| bits == key_bits, values)
+    let proto = crate::object::builtin_prototype_value("Array");
+    let array = js_nanbox_get_pointer(proto) as *const crate::array::ArrayHeader;
+    i32::from(!array_iteration_is_intrinsic_under(array, facts))
 }
 
 #[no_mangle]

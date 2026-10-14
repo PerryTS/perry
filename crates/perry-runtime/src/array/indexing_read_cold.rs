@@ -38,6 +38,10 @@ pub unsafe extern "C" fn perry_array_read_cold_shared(
         "jne 2f",
         "test word ptr [rdi - 6], {flags}",
         "jne 2f",
+        // A named layout (`ArrayHeader.named`) may hold element descriptors;
+        // the exact entry reads its attribute summary.
+        "cmp qword ptr [rdi + {named}], 0",
+        "jne 2f",
         "cmp byte ptr [rip + {invalidated}], 0",
         "jne 2f",
         "movabs rax, {undefined}",
@@ -45,7 +49,8 @@ pub unsafe extern "C" fn perry_array_read_cold_shared(
         "ret",
         "2:",
         "jmp {exact}",
-        flags = const crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_NAMED_PROPS,
+        flags = const crate::gc::GC_ARRAY_CUSTOM_PROTO,
+        named = const std::mem::offset_of!(ArrayHeader, named),
         undefined = const crate::value::TAG_UNDEFINED,
         invalidated = sym PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
         exact = sym read_cold_entry,
@@ -96,7 +101,8 @@ unsafe extern "C" fn read_cold_entry(receiver: f64, key: f64, control: u64) -> f
     let check_empty = !cfg!(all(target_arch = "x86_64", not(target_os = "windows"))) || coerce;
     if source.is_null() && check_empty && (control > 15 || (control & 6 == 4 && key >= 0.0)) {
         let flags = array_object_flags_resolved(arr);
-        if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_NAMED_PROPS) == 0
+        if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+            && !array_has_element_descriptors_resolved(arr)
             && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed)
                 & super::INDEX_INVALIDATED
                 == 0
@@ -208,7 +214,7 @@ unsafe fn plain_index_get(receiver: f64, key: f64) -> Option<f64> {
         steps += 1;
     }
     let index = n as u32;
-    if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    if array_has_element_descriptors(arr) {
         return Some(array_spec_get(arr, index));
     }
     if index < (*arr).length {

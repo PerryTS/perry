@@ -34,9 +34,7 @@ const NOTE_CALL: &str = "call void @js_gc_note_slot_layout(";
 const ADDREF_CALL: &str = "call void @js_string_addref_if_heap_string(";
 const NUMERIC_NOTE_CALL: &str = "call void @js_array_note_numeric_write(";
 /// `ARRAY_PUSH_NUMERIC_CLEAN_I16` as it appears in the `nofwd` admission test.
-const WIDENED_ADMISSION_MASK: &str = "15367";
-/// The historical integrity mask, which the numeric push must NOT still use.
-const NARROW_INTEGRITY_MASK: &str = ", 1031";
+const WIDENED_ADMISSION_MASK: &str = "14343";
 const POINTER_LAYOUT_BLOCK: &str = "apush.pointer_layout.bookkeeping";
 const POINTER_LAYOUT_MASK: &str = "63616";
 
@@ -308,11 +306,12 @@ fn a_numeric_push_moves_its_gc_bookkeeping_behind_one_live_test() {
     // array would reach the inline store and silently skip the note it needs.
     assert!(
         ir.contains(WIDENED_ADMISSION_MASK),
-        "the nofwd admission mask did not widen to 0x3C07 for a numeric push:\n{ir}"
+        "the nofwd admission mask did not widen to 0x3807 for a numeric push:\n{ir}"
     );
     assert!(
-        !ir.contains(NARROW_INTEGRITY_MASK),
-        "a numeric push still admits on the narrow 0x0407 integrity mask, so \
+        !ir.lines()
+            .any(|l| l.contains("= and i16 ") && l.trim_end().ends_with(", 7")),
+        "a numeric push still admits on the bare 0x0007 integrity mask, so \
          the guard rests on nothing about the array:\n{ir}"
     );
 }

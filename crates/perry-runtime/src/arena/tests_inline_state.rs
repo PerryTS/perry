@@ -33,7 +33,7 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                     (*raw).birth_seeds as usize,
                 );
                 rendezvous.wait();
-                let allocated = js_inline_arena_slow_alloc(raw, 40, 8);
+                let allocated = js_inline_arena_slow_alloc(raw, 48, 8);
                 assert!(!allocated.is_null());
                 allocated
                     .cast::<crate::gc::GcHeader>()
@@ -41,17 +41,18 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                         obj_type: crate::gc::GC_TYPE_ARRAY,
                         gc_flags: crate::gc::GC_FLAG_ARENA,
                         _reserved: 0,
-                        size: 40,
+                        size: 48,
                     });
                 allocated.add(8).cast::<crate::array::ArrayHeader>().write(
                     crate::array::ArrayHeader {
                         length: 0,
                         capacity: 3,
+                        named: std::ptr::null_mut(),
                     },
                 );
                 for i in 0..3 {
                     allocated
-                        .add(16 + i * 8)
+                        .add(24 + i * 8)
                         .cast::<u64>()
                         .write(crate::value::TAG_HOLE);
                 }

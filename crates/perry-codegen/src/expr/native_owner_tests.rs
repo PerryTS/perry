@@ -121,7 +121,7 @@ fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String 
 }
 
 #[test]
-fn native_f64_region_resolves_the_owner_data_word() {
+fn native_f64_loop_reads_through_the_checked_view_access() {
     let output = compile(
         "native_f64_region",
         vec![param(1, Type::Any)],
@@ -141,17 +141,16 @@ fn native_f64_region_resolves_the_owner_data_word() {
         ],
         perry_hir::TYPED_ARRAY_KIND_FLOAT64,
     );
+    // Object model step 7 deleted the typed-array view regions: the loop
+    // reads the Native-owned Float64Array through the ordinary checked view
+    // access, with no region admission.
     assert!(
-        output.contains("rloop.ta.data.external"),
-        "region must resolve Native data"
+        !output.contains("rloop.ta.") && !output.contains("rloop.fast"),
+        "no view region forms"
     );
     assert!(
-        !output.contains(", 8421631"),
-        "region admission must allow the OOL bit"
-    );
-    assert!(
-        output.contains("rloop.fast"),
-        "the region proof must remain active"
+        output.contains("load double"),
+        "the view's elements are still read as doubles"
     );
 }
 
@@ -230,8 +229,9 @@ fn native_rmw_resolves_data_before_read_and_after_rhs() {
 
 #[test]
 fn inline_only_data_derivation_turns_all_native_tier_witnesses_red() {
+    // The f64 view-region witness went with the view regions (object model
+    // step 7); the packed-column and RMW tiers still derive Native data.
     for name in [
-        "native_f64_region_resolves_the_owner_data_word",
         "native_packed_columns_resolve_each_owner_data_word",
         "native_rmw_resolves_data_before_read_and_after_rhs",
     ] {

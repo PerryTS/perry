@@ -2,7 +2,7 @@
 //!
 //! `array_front_offset` is `array_physical_capacity - capacity`, so logical
 //! element zero sits past the header for any array whose front has been
-//! consumed — a dense-queue shift, a `GC_ARRAY_NAMED_PROPS` reserve, #9019's
+//! consumed — a dense-queue shift, a `GC_ARRAY_KEY_ATTRS` reserve, #9019's
 //! reserved-floor seed, or a size-class round-up on its own. Four sites
 //! hand-computed the offset instead of asking `keys_array_dense_slots` /
 //! `array_elements_ptr`, and all four sit on a clone-before-mutate path for a

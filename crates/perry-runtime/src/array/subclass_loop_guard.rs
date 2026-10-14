@@ -59,7 +59,7 @@ fn elements_backed_loop_guard(
     require_numeric: i32,
     out: *mut u64,
 ) -> Option<(i32, *const u8)> {
-    if elements_header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+    if super::super::array_has_element_descriptors(elements as *const crate::array::ArrayHeader)
         || super::super::array_index_fast_path_invalid_for(elements_header._reserved)
         || require_numeric >= 2
     {
@@ -165,8 +165,9 @@ fn packed_arraylike_loop_guard(
     }
 
     if header.obj_type == crate::gc::GC_TYPE_ARRAY {
-        if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-            || super::super::array_index_fast_path_invalid_for(header._reserved)
+        if unsafe {
+            super::super::array_has_element_descriptors_resolved(raw as *const ArrayHeader)
+        } || super::super::array_index_fast_path_invalid_for(header._reserved)
         {
             return None;
         }
@@ -450,7 +451,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
 
     if kind == 1 {
         if header.obj_type != crate::gc::GC_TYPE_ARRAY
-            || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            || super::super::array_has_element_descriptors(raw as *const crate::array::ArrayHeader)
             || super::super::array_index_fast_path_invalid_for(header._reserved)
         {
             return 0;
@@ -536,7 +537,7 @@ fn revalidate_admitted_elements_live(
     let Some((elements, elements_header)) = elements_loop_source(raw, header) else {
         return 0;
     };
-    if elements_header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+    if super::super::array_has_element_descriptors(elements as *const crate::array::ArrayHeader)
         || super::super::array_index_fast_path_invalid_for(elements_header._reserved)
     {
         return 0;

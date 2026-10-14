@@ -1311,9 +1311,10 @@ fn typed_feedback_marks_numeric_array_literals() {
         ])))],
     ));
 
-    // GcHeader: size=40, pointer-free/raw-f64 reserved bits=0x4080,
+    // GcHeader: size=48 (8-byte GcHeader, 16-byte ArrayHeader with its
+    // `named` word, three slots), pointer-free/raw-f64 reserved bits=0x4080,
     // flags=ARENA, type=ARRAY. Live birth flags are ORed into this word.
-    let numeric_header = (40u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    let numeric_header = (48u64 << 32) | (0x4080u64 << 16) | 0x0201;
     assert!(numeric_ir.contains(&numeric_header.to_string()));
     assert!(!numeric_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
 

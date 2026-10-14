@@ -103,7 +103,7 @@ unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
         || (*arr).length > (*arr).capacity
-        || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || !(*arr).named.is_null()
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE
                 + std::mem::size_of::<crate::ArrayHeader>()

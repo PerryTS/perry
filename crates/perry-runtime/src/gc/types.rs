@@ -1622,26 +1622,15 @@ pub(crate) const GC_BUFFER_FOREIGN_DATA: u16 = 0x80;
 /// A Buffer-family view contains a resolved native data pointer at +8.
 /// Kind-disjoint from the Object typed-array-prototype bit. The view's
 /// backing edge is traced and the derived pointer is refreshed on rewrite.
-// Array carries properties outside its ordinary dense-element representation:
-// per-index descriptors (accessors or custom attrs installed via
-// `Object.defineProperty`), a non-writable `length`, or named properties in
-// the array side table. The raw-f64 and callback-free fast paths must decline
-// and route through the property-aware path. This bit is monotone for an
-// allocation, so deleting the last special property may conservatively leave
-// it set. Bit 10 — bits 7/8/9 are taken by
-// `GC_ARRAY_RAW_F64_LAYOUT` (0x80), `OBJ_FLAG_TYPED_ARRAY_PROTO` (0x100),
-// and `GC_ARRAY_ARGUMENTS_OBJECT` (0x200). Only meaningful for
-// `GC_TYPE_ARRAY`.
-pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
+// Bit 10 has no array meaning: an array's element descriptors (accessors or
+// custom attrs on an index key, a non-writable `length`) are a fact of its
+// named layout (`array::array_has_element_descriptors`, object model step 7).
 /// #9064: this `GC_TYPE_OBJECT` has O(1)-delete tombstones whose ShapeId is
 /// deliberately stable. A cached slot is authoritative only after its value
 /// is checked against `TAG_HOLE`; the marker means the cached key was deleted
 /// and the access must take the ordinary lookup path.
 ///
-/// Bit 10 is shared with `OBJ_FLAG_ARRAY_DESCRIPTORS`, which is meaningful
-/// only for `GC_TYPE_ARRAY`. Object and Array payloads are disjoint by the
-/// already-required `obj_type` guard, matching the existing bit sharing at
-/// 7/9/11/12.
+/// Bit 10; only meaningful for `GC_TYPE_OBJECT`.
 pub const OBJ_FLAG_STABLE_TOMBSTONES: u16 = 0x400;
 // #5054: a property/accessor descriptor (or builtin attrs) has been installed
 // on this specific object — the dynamic-write fast path must take the full
@@ -1709,7 +1698,7 @@ pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
 /// pins that. The readers that only use the bit to DECLINE an object fast path
 /// (`proxy/put_value.rs`, `field_set_by_name*`, `delete_rest.rs`,
 /// `read_stub.rs`, `then_probe.rs`) are type-guarded as well.
-pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
+pub(crate) const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
 /// #8098: this `GC_TYPE_OBJECT` allocation is an ORDINARY plain object. It has
 /// no class, but it also carries none of the per-object `[[Set]]` semantics a
 /// class-less receiver may otherwise have — a `URL`'s `pathname`/`search`/…
@@ -1749,9 +1738,9 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` | free (non-object) |
 /// | 7 | `OBJ_FLAG_NEVER_MOVE` | `GC_ARRAY_RAW_F64_LAYOUT` | closure: `GC_CLOSURE_NON_CONSTRUCTABLE`; byte owner: `GC_BUFFER_FOREIGN_DATA` (out-of-line); byte view: `BYTES_LENGTH_TRACKING` |
-/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | byte owner: `BYTES_RESIZABLE` |
+/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_KEY_ATTRS` | byte owner: `BYTES_RESIZABLE` |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
-/// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
+/// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | (free) | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
 /// | 12 | `OBJ_FLAG_ARGUMENTS` | `GC_ARRAY_RAW_F64_HOLES` | |
 /// | 13 | `OBJ_FLAG_MEMO_NAMED` | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |

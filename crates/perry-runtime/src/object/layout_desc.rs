@@ -58,12 +58,21 @@ pub const LAYOUT_PROTO_WRITABLE_STATE: usize = 4;
 pub const LAYOUT_PROTO_TIMEOUT: usize = 5;
 pub const LAYOUT_PROTO_IMMEDIATE: usize = 6;
 
-/// A program-named key: its precomputed FNV-1a hash (the runtime's key hash)
-/// and the immutable image string that is its one address.
+/// A program-named key (§6a). `kind` 0 is a string key: its precomputed
+/// FNV-1a hash (the runtime's key hash) and the immutable image string that
+/// is its one address. `kind` 1 is a well-known symbol: `string` null,
+/// `index` its number in `codegen_abi::WELL_KNOWN_SYMBOLS`, `hash` that
+/// number's fixed constant. `kind` 2 is a program symbol: `string` its
+/// description, `hash` the creation sequence number the runtime assigns when
+/// module init creates it. Registration binds a well-known symbol atom to the
+/// agent's symbol before user code runs.
 #[repr(C)]
 pub struct StaticAtom {
     pub hash: u64,
     pub string: *const StringHeader,
+    pub kind: u8,
+    pub _pad: [u8; 3],
+    pub index: u32,
 }
 
 /// One key of a layout's key sequence (enumeration order).
@@ -108,7 +117,9 @@ const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, layout_id) == 12);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, keys) == 32);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, index) == 48);
 const _: () = assert!(std::mem::size_of::<PerryLayoutKey>() == 16);
-const _: () = assert!(std::mem::size_of::<StaticAtom>() == 16);
+const _: () = assert!(std::mem::size_of::<StaticAtom>() == 24);
+const _: () = assert!(std::mem::offset_of!(StaticAtom, kind) == 16);
+const _: () = assert!(std::mem::offset_of!(StaticAtom, index) == 20);
 
 /// `PerryLayoutDesc.layout_id` as emitted for a layout some object carries:
 /// [`register_static_layouts`] replaces it with the registered id. Every other
@@ -171,7 +182,10 @@ section_sentinel!(
     StaticAtom,
     StaticAtom {
         hash: 0,
-        string: std::ptr::null()
+        string: std::ptr::null(),
+        kind: crate::codegen_abi::ATOM_KIND_STRING,
+        _pad: [0; 3],
+        index: 0,
     },
     "perry_atoms",
     "__DATA,__perry_atoms",
@@ -287,13 +301,24 @@ fn records<T>(bounds: (usize, usize)) -> impl Iterator<Item = *mut T> {
 /// The bytes of an atom's image string.
 unsafe fn atom_bytes<'a>(atom: *const StaticAtom) -> Option<&'a [u8]> {
     let s = (*atom).string;
-    if s.is_null() {
+    if (*atom).kind != crate::codegen_abi::ATOM_KIND_STRING || s.is_null() {
         return None;
     }
     Some(std::slice::from_raw_parts(
         crate::string::string_data(s),
         (*s).byte_len as usize,
     ))
+}
+
+/// The agent-independent well-known symbol a kind-1 atom is bound to.
+pub(crate) unsafe fn well_known_atom_symbol(
+    atom: *const StaticAtom,
+) -> Option<*mut crate::symbol::SymbolHeader> {
+    if (*atom).kind != crate::codegen_abi::ATOM_KIND_WELL_KNOWN_SYMBOL {
+        return None;
+    }
+    let name = crate::codegen_abi::WELL_KNOWN_SYMBOLS.get((*atom).index as usize)?;
+    Some(crate::symbol::well_known_symbol(name))
 }
 
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
@@ -353,20 +378,19 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
     } else {
         std::slice::from_raw_parts(d.keys, d.key_count as usize)
     };
-    let mut entries: Vec<(&str, f64)> = Vec::with_capacity(keys.len());
-    let mut attrs: Vec<u8> = Vec::with_capacity(keys.len());
+    // Names, hashes and attribute bytes already live in the binary.
+    // Validate the fixed ABI without rebuilding transient name/attribute
+    // vectors or revalidating each image string as UTF-8 at agent startup.
     for (i, key) in keys.iter().enumerate() {
         if key.slot as usize != i || key.slot >= d.slot_count {
             return 0;
         }
-        let Some(bytes) = atom_bytes(key.atom) else {
-            return 0;
-        };
-        let Ok(name) = std::str::from_utf8(bytes) else {
-            return 0;
-        };
-        entries.push((name, f64::from_bits(crate::value::TAG_UNDEFINED)));
-        attrs.push(key.attrs);
+        match (*key.atom).kind {
+            crate::codegen_abi::ATOM_KIND_STRING if !(*key.atom).string.is_null() => {}
+            crate::codegen_abi::ATOM_KIND_WELL_KNOWN_SYMBOL
+                if ((*key.atom).index as usize) < crate::codegen_abi::WELL_KNOWN_SYMBOLS.len() => {}
+            _ => return 0,
+        }
     }
     let proto_id = match d.proto {
         LAYOUT_PROTO_OBJECT => super::shapes::PROTO_ID_DEFAULT,
@@ -387,16 +411,19 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
         let list = super::key_attrs::alloc_canonical_key_list(
             key_count,
             true,
-            attrs.iter().any(|&a| a != 0),
+            keys.iter().any(|key| key.attrs != 0),
         );
         let values = crate::array::array_elements_ptr(list);
         let attributes = super::key_attrs::keys_attrs(list);
         for (i, key) in keys.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): unpublished startup list, under suppression.
-            *values.add(i) =
-                crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits();
+            *values.add(i) = match well_known_atom_symbol(key.atom) {
+                // The key word a symbol data property stores.
+                Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
+                None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),
+            };
             if !attributes.is_null() {
-                super::key_attrs::attrs_write(attributes, i as u32, key.attrs, entries[i].0);
+                super::key_attrs::attrs_write(attributes, i as u32, key.attrs, &*key.atom);
             }
         }
         (*list).length = key_count;
@@ -509,6 +536,37 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     }
     (*gc)._reserved |= d.integrity as u16;
     super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+    obj
+}
+
+/// A builtin prototype holder born on a registered runtime layout (§3.6:
+/// builtin prototypes are families with runtime-defined static layouts). Like
+/// [`perry_alloc_layout`], but born old and never moving, as every builtin
+/// prototype holder is, with `room` inline slots for the keys population adds
+/// after the layout's own. The caller stores every layout slot before user
+/// code runs.
+///
+/// # Safety
+/// `desc` is a registered runtime descriptor with the default prototype.
+pub(crate) unsafe fn alloc_layout_prototype(
+    desc: *const PerryLayoutDesc,
+    room: u32,
+) -> *mut ObjectHeader {
+    let d = &*desc;
+    let Some(id) = registered_layout_id(d.layout_id) else {
+        eprintln!(
+            "Perry internal error: a prototype born on an unregistered layout (family {:#x})",
+            d.family
+        );
+        std::process::abort();
+    };
+    let obj = super::object_alloc_prototype_old(0, room.max(d.slot_count));
+    super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    for i in 0..d.slot_count as usize {
+        // GC_STORE_AUDIT(INIT): the hole marker is a scalar.
+        *fields.add(i) = crate::value::TAG_HOLE;
+    }
     obj
 }
 

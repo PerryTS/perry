@@ -270,6 +270,8 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
         let word = emit_array_guard_word(blk, &arr_handle);
         let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
         let word_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
+        let word_ok =
+            super::index_get::guarded_array::emit_and_no_named_layout(blk, &word_ok, &arr_handle);
         blk.cond_br(&word_ok, &live_deref_label, &follow_label);
         (arr_handle, blk.label.clone())
     };
@@ -321,6 +323,11 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
         let word = emit_array_guard_word(blk, &forwarding_target);
         let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
         let word_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
+        let word_ok = super::index_get::guarded_array::emit_and_no_named_layout(
+            blk,
+            &word_ok,
+            &forwarding_target,
+        );
         blk.cond_br(&word_ok, &live_deref_label, &slow_label);
     }
 

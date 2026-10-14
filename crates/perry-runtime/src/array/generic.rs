@@ -331,9 +331,7 @@ pub(super) fn al_get(recv: f64, k: i64) -> f64 {
         }
         // SAFETY: `as_real_array` resolved this head. On this default-chain
         // arm the prototype probe neither materialized a prototype nor collected.
-        return unsafe {
-            super::indexing::array_get_resolved(arr, k as u32, array_object_flags_resolved(arr))
-        };
+        return unsafe { super::indexing::array_get_resolved(arr, k as u32) };
     }
     let b = recv.to_bits();
     if is_string_value(b) {

@@ -85,7 +85,7 @@ fn named_properties_refuse_the_skip() {
         let (arr, _) = pointer_free_array(4);
         let header = header_of(arr as usize);
         assert!(gc_object_yields_no_child_slots(header), "premise");
-        (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
+        (*header)._reserved |= crate::gc::GC_ARRAY_KEY_ATTRS;
         assert!(
             !gc_object_yields_no_child_slots(header),
             "named-property reserve slots sit in front of element 0, outside \

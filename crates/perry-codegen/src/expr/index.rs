@@ -216,7 +216,12 @@ pub(crate) fn lower_index_set_fast(
             // tested on that arm (`idxset.ext`), not here.
             let word = emit_array_guard_word(blk, &arr_handle);
             let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
-            let mut guard_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
+            let guard_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
+            let mut guard_ok = super::index_get::guarded_array::emit_and_no_named_layout(
+                blk,
+                &guard_ok,
+                &arr_handle,
+            );
             if require_numeric_layout {
                 // Raw-f64 layout is a precondition of the RAW store only
                 // (dense 0x80 or raw-f64-or-holes 0x1000, `_reserved` is the

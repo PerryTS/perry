@@ -2,6 +2,7 @@
 //! Proofs run before effects; a miss executes the original initializers in order.
 
 use anyhow::Result;
+use perry_hir::CompareOp;
 use perry_hir::{types::Type, BinaryOp, Expr, LogicalOp, Stmt, UnaryOp};
 use std::collections::HashMap;
 
@@ -304,7 +305,9 @@ impl Value {
     fn boxed(&self, ctx: &mut FnCtx<'_>) -> String {
         match self.kind {
             Kind::Number => self.value.clone(),
-            Kind::Boolean => crate::stmt::region_loop::box_numeric_predicate(ctx, &self.value),
+            Kind::Boolean => {
+                crate::stmt::region_read_stmts::box_numeric_predicate(ctx, &self.value)
+            }
         }
     }
 }
@@ -356,7 +359,7 @@ fn fold(
             let r = fold(ctx, right, fields, locals);
             let ln = l.numeric(ctx);
             let rn = r.numeric(ctx);
-            let pred = crate::stmt::region_loop::numeric_predicate(ctx, *op, &ln, &rn);
+            let pred = crate::stmt::region_read_stmts::numeric_predicate(ctx, *op, &ln, &rn);
             if matches!(
                 op,
                 CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
@@ -690,3 +693,26 @@ mod tests {
 #[cfg(test)]
 #[path = "region_read_stmts/ir_tests.rs"]
 mod ir_tests;
+
+pub(crate) fn numeric_predicate(ctx: &mut FnCtx<'_>, op: CompareOp, l: &str, r: &str) -> String {
+    let pred = match op {
+        CompareOp::Lt => "olt",
+        CompareOp::Le => "ole",
+        CompareOp::Gt => "ogt",
+        CompareOp::Ge => "oge",
+        CompareOp::Eq | CompareOp::LooseEq => "oeq",
+        CompareOp::Ne | CompareOp::LooseNe => "une",
+    };
+    ctx.block().fcmp(pred, l, r)
+}
+
+pub(crate) fn box_numeric_predicate(ctx: &mut FnCtx<'_>, bit: &str) -> String {
+    let bits = ctx.block().select(
+        crate::types::I1,
+        bit,
+        crate::types::I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    ctx.block().bitcast_i64_to_double(&bits)
+}

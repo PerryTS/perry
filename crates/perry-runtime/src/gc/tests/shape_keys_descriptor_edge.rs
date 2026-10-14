@@ -714,6 +714,7 @@ fn dead_canonical_cache_list_storage_is_reused() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::object::canonical_keys::reset_for_test();
     crate::arena::arena_reset_all_blocks_to_zero();
+    super::support::isolate_runtime_layout_blocks();
     let raw = crate::array::js_array_alloc(1);
     let raw = crate::array::js_array_push(raw, crate::JSValue::from_bits(crate::value::TAG_HOLE));
     let list: CanonicalKeys = unsafe { canonicalize(&SharedLayout::shape_cache_entry(), raw, 1) };

@@ -39,15 +39,12 @@ pub(super) struct ArraySideTableTestGuard;
 
 impl ArraySideTableTestGuard {
     pub(super) fn new() -> Self {
-        crate::array::test_clear_full_array_named_property_roots();
         Self
     }
 }
 
 impl Drop for ArraySideTableTestGuard {
-    fn drop(&mut self) {
-        crate::array::test_clear_full_array_named_property_roots();
-    }
+    fn drop(&mut self) {}
 }
 
 pub(super) fn register_array_side_table_scanners() {
@@ -78,6 +75,7 @@ pub(super) unsafe fn alloc_nursery_test_array() -> *mut crate::array::ArrayHeade
     ) as *mut crate::array::ArrayHeader;
     (*arr).length = 0;
     (*arr).capacity = 0;
+    (*arr).named = std::ptr::null_mut();
     arr
 }
 

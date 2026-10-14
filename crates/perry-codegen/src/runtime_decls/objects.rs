@@ -62,7 +62,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // #11915: the inline `charCodeAt` heap-handle bound (`builtin_proto`).
     module.add_external_global("PERRY_STRING_INLINE_MIN_HANDLE", I64);
     // #7760: set when `Array.prototype[Symbol.iterator]` is replaced.
-    module.add_external_global("PERRY_ARRAY_ITERATION_NOT_PRISTINE", I8);
+
     // Process-wide count of threads with an active incremental marking
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.

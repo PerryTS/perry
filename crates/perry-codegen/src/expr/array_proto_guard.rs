@@ -56,3 +56,38 @@ pub(crate) fn emit_array_method_admission(blk: &mut LlBlock, reserved: &str) -> 
     let own_proto_default = blk.icmp_eq(I16, &custom_proto_bit, "0");
     blk.and(I1, &globally_clean, &own_proto_default)
 }
+
+/// `ArrayHeader.named`'s byte offset (perry-runtime `array/header.rs`, object
+/// model §6a): null until the array owns a property beyond its elements.
+pub(crate) const ARRAY_NAMED_OFFSET: &str = "8";
+
+/// Emit the i1 "the array owns a property beyond its elements" test for a
+/// live `GC_TYPE_ARRAY` head whose address is the i64 `arr_addr`. Every such
+/// property (a named or symbol key, an index-key descriptor, a non-writable
+/// `length`) lives in the array's named layout object; an inline element or
+/// length fast path admits a null `named` and leaves anything else to the
+/// runtime, which reads the layout's element-kind fact exactly
+/// (`array_has_element_descriptors`).
+pub(crate) fn emit_array_has_named_layout(blk: &mut LlBlock, arr_addr: &str) -> String {
+    let named_addr = blk.add(crate::types::I64, arr_addr, ARRAY_NAMED_OFFSET);
+    let named_ptr = blk.inttoptr(crate::types::I64, &named_addr);
+    let named = blk.load(crate::types::I64, &named_ptr);
+    blk.icmp_ne(crate::types::I64, &named, "0")
+}
+
+/// Closed World excludes indexed descriptors in programs which never obtain
+/// a descriptor writer. Otherwise query the receiver's layout element kind.
+pub(crate) fn emit_array_element_descriptors(blk: &mut LlBlock, arr_addr: &str) -> String {
+    if !crate::program_patched_proto_methods()
+        .iter()
+        .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
+    {
+        return "false".to_owned();
+    }
+    let kind = blk.call(
+        crate::types::I32,
+        "perry_array_element_kind",
+        &[(crate::types::I64, arr_addr)],
+    );
+    blk.icmp_ne(crate::types::I32, &kind, "0")
+}

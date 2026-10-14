@@ -86,6 +86,10 @@ unsafe fn ensure_key_in_keys_array_inner(
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
     }
+    // A property list retains the spelling even when transition-cache
+    // admission declines it (symbols, tombstones, long keys or private lists).
+    // Apply the ordinary string ownership rule before publishing that edge.
+    crate::string::js_string_addref(key.cast_mut());
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);

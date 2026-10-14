@@ -162,15 +162,9 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // refresh raw copies held by this caller between field probes.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    // A customized `length` (e.g. writable:false) gates the raw numeric
-    // fast paths — see OBJ_FLAG_ARRAY_DESCRIPTORS in define_array_property.
-    // Set here too so the `Reflect.defineProperty` entry point is covered.
-    {
-        obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
-            let gc = gc_header_for(obj);
-            (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-        });
-    }
+    // A customized `length` (e.g. writable:false) is a key of the array's
+    // named layout, whose attribute summary the raw numeric fast paths read
+    // (`array_has_element_descriptors`).
 
     let read_present = |name: &[u8]| descriptor.has_named(name);
     let read_bool = |name: &[u8]| descriptor.flag(name).unwrap_or(false);
@@ -342,17 +336,10 @@ pub(crate) unsafe fn define_array_property(
     let current_key = || key_handle.get_raw_const_ptr::<crate::StringHeader>();
     let current_arr = || array_header_mut(current_obj());
 
-    // Any explicit per-index/named/length descriptor makes the raw numeric
-    // fast paths ineligible for this array — they can't see accessors or
-    // attribute overrides, so they must decline to the descriptor-aware
-    // element get/set (OBJ_FLAG_ARRAY_DESCRIPTORS gates them).
-    {
-        // The caller may retain a pre-growth alias. Accessors are installed
-        // on current_arr() below, so flag that same live header; marking the
-        // forwarding stub leaves numeric reads/stringify skipping getters.
-        let gc = gc_header_for(current_arr().cast());
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-    }
+    // An explicit per-index/length descriptor is a key of the array's named
+    // layout; its attribute summary is the element-kind fact that sends the
+    // raw numeric fast paths to the descriptor-aware element get/set
+    // (`array_has_element_descriptors`).
 
     if key_name == "length" {
         return Some(array_set_length_from_descriptor(obj, descriptor));
@@ -508,8 +495,6 @@ pub(crate) unsafe fn define_array_property(
                 );
                 let canonical = crate::array::clean_arr_ptr(new_arr);
                 if !canonical.is_null() && canonical as usize != side_addr {
-                    let gc = gc_header_for(canonical as *const ObjectHeader);
-                    (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
                     side_addr = canonical as usize;
                 }
             }

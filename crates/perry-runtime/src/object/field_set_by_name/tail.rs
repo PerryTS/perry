@@ -106,7 +106,6 @@ pub(crate) fn set_field_by_name_object_tail(
                 arr
             };
             let obj = arr.cast::<ObjectHeader>();
-            let flags = crate::array::array_object_flags_resolved(arr);
             // Own-accessor short-circuit — an Array can carry a named accessor
             // property installed via `Object.defineProperty(arr, k, {get,set})`.
             // A `[[Set]]` on such a property must invoke the setter (a
@@ -116,15 +115,13 @@ pub(crate) fn set_field_by_name_object_tail(
             // ran the setter (test262 Object/defineProperty + defineProperties
             // accessor-on-Array cases, e.g. 15.2.3.6-4-278).
             //
-            // Gated on the per-array `OBJ_FLAG_ARRAY_DESCRIPTORS` flag (the
-            // ArrayHeader analogue of `object_has_descriptors` — the ObjectHeader
-            // `OBJ_FLAG_HAS_DESCRIPTORS` is never set for an ArrayHeader). The
-            // flag is set unconditionally by `define_array_property` whenever any
-            // descriptor is installed on the array and travels with it across
+            // Gated on the array's named layout (`ArrayHeader.named`, object
+            // model §6a): every descriptor `define_array_property` installs is a
+            // key of that object, which travels with the array across
             // evacuation and growth. The array's traced property bag owns
             // accessor facts in its shape and getter/setter pairs in its slots;
             // resolving a growth alias reaches that same holder.
-            if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+            if crate::array::array_has_named_layout(obj as *const crate::array::ArrayHeader) {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                     if acc.set != 0 {
                         let closure = (acc.set & crate::value::POINTER_MASK)

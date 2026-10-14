@@ -29,7 +29,11 @@ fn array_annexb_named_and_indexed_accessors_read() {
     ) as i64);
     for name in ["x", "0"] {
         object::js_object_define_getter(receiver, strval(name), getter);
-        assert!(array::array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0);
+        assert_eq!(
+            array::array_has_element_descriptors(arr),
+            name == "0",
+            "a named accessor leaves elements ordinary; an indexed accessor does not"
+        );
         assert!(
             object::get_accessor_descriptor(array::clean_arr_ptr(arr) as usize, name).is_some()
         );

@@ -493,7 +493,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             let header = unsafe {
                 &*((arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
             };
-            if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            if crate::array::array_has_element_descriptors(arr)
                 || crate::array::array_index_fast_path_invalid_for(header._reserved)
             {
                 return crate::array::js_array_get_f64(arr, idx_i32 as u32);

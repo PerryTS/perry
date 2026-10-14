@@ -432,9 +432,10 @@ fn unproven_array_receiver_asks_the_own_override_test_from_its_header() {
         vec![method_call(any_value(), "toSorted", vec![Expr::Undefined])],
     );
     assert!(
-        ir.contains(OWN_TEST) && ir.contains("load i16"),
-        "a plain array tests its own named-property header bits before the \
-         builtin, and asks the predicate only when they are set:\n{ir}"
+        ir.contains(OWN_TEST) && ir.contains(", 4227072") && ir.contains("icmp ne i64"),
+        "a plain array tests its header word and its named layout \
+         (`ArrayHeader.named`) before the builtin, and asks the predicate only \
+         when it may own one:\n{ir}"
     );
     assert!(
         !ir.contains(OWN_FLAG),

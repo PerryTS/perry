@@ -56,6 +56,7 @@ const PAGE: usize = crate::arena::GENERATION_PAGE_SIZE;
 /// objects are pinned. The plan ends with a run of dead objects covering whole
 /// pages, so the last page the sweep visits holds no survivor.
 unsafe fn plant() -> Vec<Planted> {
+    isolate_runtime_layout_blocks();
     const LIVE_SLOTS: u32 = 2048;
     let (holder, elements) = alloc_old_test_array(LIVE_SLOTS);
     let root: &'static mut u64 = Box::leak(Box::new(ptr_bits(holder as usize)));
