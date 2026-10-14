@@ -1090,7 +1090,7 @@ unsafe fn function_bind_observable(
         captures.extend(partial_handles.iter().map(|h| h.get_nanbox_f64().to_bits()));
         let bound = crate::closure::js_closure_alloc_init_boxed(
             &crate::closure::BOUND_FUNCTION_INFO,
-            captures.len() as u32,
+            crate::codegen_abi::checked_closure_capture_count(captures.len()),
             captures.as_ptr(),
         ) as *mut ClosureHeader;
         bound

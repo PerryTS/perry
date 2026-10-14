@@ -1,60 +1,62 @@
-//! Branded native construction sites remember a scalar ShapeId only.
-//! Presence and complete facts are revalidated on every use; the interner
-//! resolves misses and retired records. No constructor/property name is used.
-use super::{shapes_store::ShapeSlab, *};
+//! Declared WeakMap/WeakSet birth layouts, installed at agent creation.
+//! These ids name immutable scalar facts and are retained by the layout,
+//! just like the intrinsic function layouts. Nothing is learned at use.
+use super::*;
 
-#[derive(Default)]
-pub(crate) struct BrandedBirthSite(std::cell::Cell<u32>);
+// The first plain granule after the compiler's reserved static band.
+pub(crate) const WEAKMAP_BIRTH_LAYOUT: u32 = SHAPE_ID_BASE + (4 << 20);
+pub(crate) const WEAKSET_BIRTH_LAYOUT: u32 = WEAKMAP_BIRTH_LAYOUT + 1;
+pub(crate) const NATIVE_BIRTH_LAYOUT_END: u32 = WEAKSET_BIRTH_LAYOUT + 1;
+const _: () = assert!(STATIC_SHAPE_ID_END <= WEAKMAP_BIRTH_LAYOUT);
+const _: () = assert!(NATIVE_BIRTH_LAYOUT_END < SITE_SHAPE_ID_END);
+const _: () = assert!(WEAKMAP_BIRTH_LAYOUT & SHAPE_ID_KIND_MASK == 0);
 
-impl BrandedBirthSite {
-    pub(crate) const fn new() -> Self {
-        Self(std::cell::Cell::new(0))
+pub(crate) const fn branded_birth_layout(class_id: u32) -> u32 {
+    match class_id {
+        crate::weakref::CLASS_ID_WEAKMAP => WEAKMAP_BIRTH_LAYOUT,
+        crate::weakref::CLASS_ID_WEAKSET => WEAKSET_BIRTH_LAYOUT,
+        _ => panic!("no declared native birth layout for class"),
     }
+}
 
-    #[inline]
-    pub(crate) fn resolve(&self, class_id: u32, brand: u64) -> u32 {
-        let id = self.0.get();
-        if branded_birth_matches(id, class_id, brand) {
-            return id;
+impl ShapeTable {
+    pub(super) fn seed_native_birth_layouts(&self) {
+        let mut inner = self.inner.borrow_mut();
+        for class in [
+            crate::weakref::CLASS_ID_WEAKMAP,
+            crate::weakref::CLASS_ID_WEAKSET,
+        ] {
+            let id = branded_birth_layout(class);
+            let proto = PROTO_ID_CLASS | u64::from(class);
+            let brands = [u64::from(class)];
+            let rep = super::super::field_rep::REP_ANY;
+            let mut record = ShapeRecord::new(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0)
+                .with_proto_id(proto)
+                .with_special_facts(rep, &[], &brands);
+            record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+            unsafe { self.slab_mut().insert(id, record) };
+            let facts = shapes_store::integrity_facts_key(
+                shapes_store::facts_key_proto_with_special(
+                    0,
+                    0,
+                    0,
+                    0,
+                    ShapeObjectKind::Ordinary,
+                    0,
+                    proto,
+                    0,
+                    rep,
+                    &[],
+                    &brands,
+                ),
+                0,
+            );
+            inner.facts_append_fresh(facts, id);
+            inner.family_append_fresh(0, id);
         }
-        let id = publish_shape_result(shape_descriptor_intern_with_rep(
-            std::ptr::null(),
-            0,
-            0,
-            0,
-            ShapeObjectKind::Ordinary,
-            0,
-            PROTO_ID_CLASS | u64::from(class_id),
-            0,
-            super::super::field_rep::REP_ANY,
-            &[brand],
-            None,
-            0,
-        ));
-        self.0.set(id);
-        id
     }
 }
 
-#[inline]
-pub(crate) fn branded_birth_matches(id: u32, class_id: u32, brand: u64) -> bool {
-    let Some(record) = ShapeSlab::agent_record_present(id) else {
-        return false;
-    };
-    let r = unsafe { &*record };
-    r.keys == 0
-        && r.logical_key_count == 0
-        && r.live_inline_slot_count == 0
-        && r.semantic_generation == 0
-        && r.hole_count == 0
-        && r.object_kind() == ShapeObjectKind::Ordinary
-        && r.proto_id == (PROTO_ID_CLASS | u64::from(class_id))
-        && r.summary() == 0
-        && r.rep == 0
-        && r.special_constfn_mask() == 0
-        && r.integrity_flags() == 0
-        && r.brands() == [brand]
-}
 #[cfg(test)]
 #[path = "shapes_branded_birth_tests.rs"]
 mod tests;

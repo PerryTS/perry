@@ -135,8 +135,9 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // prototype are held as raw pointers across every allocating install
     // below, and both live for the life of the realm.
     let _no_move = crate::gc::GcSuppressScope::new();
-    let info = crate::fn_info!(global_this_object_thunk, 1; with_declared(1));
-    let closure_ptr = crate::closure::js_closure_alloc(info, 0);
+    let closure_ptr = super::super::global_this_tables::alloc_builtin_constructor(
+        super::super::global_this_tables::BuiltinConstructorIdentity::Object,
+    );
     if closure_ptr.is_null() {
         return None;
     }

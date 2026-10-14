@@ -48,7 +48,10 @@ pub(super) fn rooted_closure<'s>(
     func: *const crate::closure::JsFunctionInfo,
     captures: &[&RuntimeHandle<'_>],
 ) -> RuntimeHandle<'s> {
-    let closure = crate::closure::js_closure_alloc(func, captures.len() as u32);
+    let closure = crate::closure::js_closure_alloc(
+        func,
+        crate::codegen_abi::checked_closure_capture_count(captures.len()),
+    );
     for (i, capture) in captures.iter().enumerate() {
         crate::closure::js_closure_set_capture_f64(closure, i as u32, capture.get_nanbox_f64());
     }

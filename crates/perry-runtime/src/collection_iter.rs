@@ -172,28 +172,15 @@ pub(crate) fn normalize_callable_value(value: f64) -> f64 {
     value
 }
 
-/// `Get(receiver, method_name)` resolved off `builtin_name`'s `.prototype`,
-/// honoring an accessor descriptor installed there
-/// (`Object.defineProperty(WeakMap.prototype, 'set', {get(){throw ...}})`) so
-/// a throwing getter propagates per the constructor spec's
-/// `ReturnIfAbrupt(adder)` step. Falls back to the plain installed method
-/// value — [`builtin_prototype_method`] — for the common case (a normal data
-/// property, whether the built-in thunk or a user override).
-pub(crate) fn builtin_prototype_adder(builtin_name: &str, method_name: &str, receiver: f64) -> f64 {
-    let proto = crate::object::builtin_prototype_value(builtin_name);
-    let proto_addr = js_nanbox_get_pointer(proto) as usize;
-    if proto_addr == 0 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    if let Some(acc) = crate::object::get_accessor_descriptor(proto_addr, method_name) {
-        if acc.get == 0 {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        return f64::from_bits(
-            unsafe { crate::object::invoke_accessor_getter(acc.get, receiver) }.bits(),
-        );
-    }
-    builtin_prototype_method(builtin_name, method_name)
+/// The constructor's spec Get(receiver, adder): its actual prototype,
+/// including a subclass or custom new.target, decides the method.
+pub(crate) fn constructor_adder(method_name: &str, receiver: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let obj = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64())
+        as *const crate::object::ObjectHeader;
+    unsafe { f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits()) }
 }
 
 pub(crate) fn builtin_prototype_method(builtin_name: &str, method_name: &str) -> f64 {

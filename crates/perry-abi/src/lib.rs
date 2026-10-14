@@ -913,6 +913,28 @@ pub const PACKED_ADD_REP_ONLY_SLOT: u64 = (1 << 15) | PACKED_ADD_CONSTFN_SLOT;
 /// claim (`field_rep_store::constfn_store_info`).
 pub const CLOSURE_CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
 pub const CLOSURE_NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
+/// Immutable builtin [[Construct]] identity. No closure layout growth.
+pub const CLOSURE_CONSTRUCT_SHIFT: u32 = 23;
+pub const CLOSURE_CONSTRUCT_MASK: u32 = 0x3f80_0000;
+pub const CLOSURE_CAPTURE_COUNT_MASK: u32 = 0x007f_ffff;
+/// Encode an ordinary capture count before adding either `this` flag.
+/// This check must survive release builds: truncation could forge an identity.
+#[inline]
+pub fn checked_closure_capture_count(count: usize) -> u32 {
+    assert!(
+        count <= CLOSURE_CAPTURE_COUNT_MASK as usize,
+        "closure capture count exceeds the 23-bit header capacity"
+    );
+    count as u32
+}
+
+const _: () = assert!(
+    CLOSURE_CONSTRUCT_MASK
+        | CLOSURE_CAPTURE_COUNT_MASK
+        | CLOSURE_CAPTURES_THIS_FLAG
+        | CLOSURE_NO_THIS_REBIND_FLAG
+        == u32::MAX
+);
 
 // Unified byte cell: the type byte carries the element brand and view role.
 pub const BYTES_LEN: usize = 0;

@@ -1733,20 +1733,23 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// #2771 (arbitrary iterables + TypeError on non-iterables).
 #[no_mangle]
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
+    set_init_iterable(js_set_alloc(4), value)
+}
+
+/// The sole iterable initializer, on the receiver with its final prototype.
+pub(crate) fn set_init_iterable(set: *mut SetHeader, value: f64) -> *mut SetHeader {
     use crate::collection_iter::{constructor_iter, ConstructorIter};
 
     if crate::collection_iter::is_null_or_undefined(value) {
-        return js_set_alloc(4);
+        return set;
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
-    let set = js_set_alloc(4);
     let set_handle = scope.root_raw_mut_ptr(set);
     let adder = crate::collection_iter::require_callable(
         set_handle.with_mut_ptr::<SetHeader, _>(|set| {
-            crate::collection_iter::builtin_prototype_adder(
-                "Set",
+            crate::collection_iter::constructor_adder(
                 "add",
                 crate::value::js_nanbox_pointer(set as i64),
             )

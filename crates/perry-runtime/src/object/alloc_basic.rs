@@ -154,12 +154,8 @@ pub(crate) fn object_alloc_created(
 /// An intrinsic's empty object, born with its internal brand and class
 /// prototype in one shape. Only scalar facts cross allocation; no literal
 /// keys cache, intermediate prototype shape or brand transition is needed.
-pub(crate) fn object_alloc_branded(
-    class_id: u32,
-    brand: u64,
-    site: &shapes::BrandedBirthSite,
-) -> *mut ObjectHeader {
-    let shape = site.resolve(class_id, brand);
+pub(crate) fn object_alloc_branded(class_id: u32) -> *mut ObjectHeader {
+    let shape = shapes::branded_birth_layout(class_id);
     let width = super::INLINE_SLOT_FLOOR;
     let size = std::mem::size_of::<ObjectHeader>() + width * 8;
     let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
@@ -174,13 +170,6 @@ pub(crate) fn object_alloc_branded(
     let object = object_alloc_unpublished(class_id, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(object);
-    // The uncarried memo can retire during allocation. Resolve the same facts
-    // through the sole interner with the unpublished receiver rooted.
-    let shape = if shapes::branded_birth_matches(shape, class_id, brand) {
-        shape
-    } else {
-        site.resolve(class_id, brand)
-    };
     let object = owner.get_raw_mut_ptr::<ObjectHeader>();
     unsafe {
         if crate::arena::pointer_in_nursery(object as usize) {

@@ -1,5 +1,6 @@
 mod adaptive_tenuring;
 mod all_pointer_elements_7469;
+mod constructor_identity;
 mod deferred_finalize_7635;
 mod fabricated_map_rejection;
 mod latch;

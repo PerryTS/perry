@@ -2874,23 +2874,27 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
 /// (Maps materialize to their `[k, v]` pair arrays) inside `classify_init`.
 #[no_mangle]
 pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
+    map_init_iterable(js_map_alloc(4), value)
+}
+
+/// The sole iterable initializer, on the receiver with its final prototype.
+pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHeader {
     use crate::collection_iter::{constructor_iter, ConstructorIter};
 
     // The constructor returns before Get(map, "set") for a nullish iterable.
     // In particular, a throwing accessor installed on Map.prototype.set must
     // not affect `new Map()` / `new Map(null)`.
     if crate::collection_iter::is_null_or_undefined(value) {
-        return js_map_alloc(4);
+        return map;
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
-    let map_handle = scope.root_raw_mut_ptr(js_map_alloc(4));
+    let map_handle = scope.root_raw_mut_ptr(map);
 
     let adder = crate::collection_iter::require_callable(
         map_handle.with_mut_ptr::<MapHeader, _>(|map| {
-            crate::collection_iter::builtin_prototype_adder(
-                "Map",
+            crate::collection_iter::constructor_adder(
                 "set",
                 crate::value::js_nanbox_pointer(map as i64),
             )

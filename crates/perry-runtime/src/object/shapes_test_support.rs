@@ -93,7 +93,9 @@ pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn test_shape_descriptor_count() -> usize {
     // Count dynamic records; intrinsic function layouts are permanent seeds.
-    crate::state::state().shapes.slab().len() - crate::codegen_abi::FUNCTION_SHAPE_COUNT as usize
+    crate::state::state().shapes.slab().len()
+        - crate::codegen_abi::FUNCTION_SHAPE_COUNT as usize
+        - 2
 }
 
 #[cfg(test)]
@@ -109,6 +111,7 @@ pub(crate) fn test_clear_shape_table() {
     unsafe { table.slab_mut().clear() };
     drop(inner);
     table.seed_function_shapes();
+    table.seed_native_birth_layouts();
 }
 
 #[cfg(test)]

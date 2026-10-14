@@ -1,0 +1,7 @@
+Builtin constructor values carry their immutable construct identity in the existing function header. Constructors reached through aliases, intrinsic lookup, captures or rebound globals dispatch from that header fact; ordinary functions and wrappers carry no builtin identity. This removes the construct path's repeated builtin-body/capture classifier. Debug builds verify that the birth declaration and body agree.
+
+WeakMap and WeakSet are born on declared branded layouts seeded at agent creation, removing BrandedBirthSite, its weak shape memo and branded_birth_matches revalidation. Map births use the retained realm intrinsic prototype without recording a duplicate link. Set births retain their original prototype on the owner. Dynamic Map/Set construction with a distinct new.target retains the new.target prototype.
+
+Ordinary runtime births reject capture words that overlap the identity field, and codegen checks the 23-bit count before truncation. Overflow checks remain active in release builds. Constructor cloning uses the same declared birth helper. Tests require every declared constructor to actually evacuate while retaining its complete header word, and retain ordinary/wrapper negative controls.
+
+Collection initialization selects the receiver's prototype before reading its iterable adder. Set now uses the shared Map/Set property path, removing its duplicate method-name dispatcher and bound fallback.

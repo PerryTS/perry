@@ -1017,7 +1017,7 @@ pub(crate) fn builtin_parent_ctor_in_chain(class_id: u32) -> Option<f64> {
     let mut depth = 0u32;
     while depth < 32 && cid != 0 {
         let parent = super::parent_static::template_dynamic_parent_value(cid);
-        if identify_global_builtin_constructor(parent).is_some() {
+        if super::super::global_this_tables::constructor_identity(parent).is_some() {
             return Some(parent);
         }
         match get_parent_class_id(cid) {

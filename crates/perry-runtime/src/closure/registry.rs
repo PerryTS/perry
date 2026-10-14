@@ -593,8 +593,8 @@ pub const CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
 pub const NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
 
 /// Extract the real capture count (masking out the flag bits stored in the
-/// two high bits: `CAPTURES_THIS_FLAG` and `NO_THIS_REBIND_FLAG`).
+/// header flags and the immutable builtin construct identity).
 #[inline(always)]
 pub fn real_capture_count(capture_count: u32) -> u32 {
-    capture_count & !(CAPTURES_THIS_FLAG | NO_THIS_REBIND_FLAG)
+    capture_count & crate::codegen_abi::CLOSURE_CAPTURE_COUNT_MASK
 }

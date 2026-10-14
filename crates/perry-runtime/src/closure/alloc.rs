@@ -367,8 +367,8 @@ fn capture_fingerprint(captures: &[u64]) -> u64 {
 /// IS comes from its `GcHeader` type byte; there is no magic word.
 #[repr(C)]
 pub struct ClosureHeader {
-    /// Number of captured values; the two high bits are `CAPTURES_THIS_FLAG`
-    /// and `NO_THIS_REBIND_FLAG` (see `real_capture_count`).
+    /// Capture count in bits 0..22, immutable builtin [[Construct]] identity
+    /// in bits 23..29, and the two `this` flags in bits 30..31.
     pub capture_count: u32,
     /// The function object's ShapeId (`closure::shape`): a
     /// `ShapeObjectKind::Function` / `FunctionDictionary` id in the exotic band.
@@ -420,8 +420,54 @@ const _: () = {
 /// the u32 capture count precedes it).
 pub const CLOSURE_SHAPE_OFFSET: usize = std::mem::offset_of!(ClosureHeader, shape_id);
 
+/// Ordinary births may carry only captures and the two `this` flags.
+/// Reject overflow before masking; builtin birth stamps its declaration only
+/// after the same ordinary allocation funnel has initialized the object.
+#[inline(always)]
+fn ordinary_capture_count(word: u32) -> usize {
+    assert_eq!(
+        word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK,
+        0,
+        "ordinary closure capture count overlaps builtin identity"
+    );
+    debug_assert_eq!(
+        word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK,
+        0,
+        "ordinary closures have no builtin constructor identity"
+    );
+    real_capture_count(word) as usize
+}
+
+#[cfg(test)]
+mod capture_bound_tests {
+    use super::ordinary_capture_count;
+    use crate::codegen_abi::*;
+
+    #[test]
+    fn capture_limit_and_this_flags_do_not_overlap_identity() {
+        let max = checked_closure_capture_count(CLOSURE_CAPTURE_COUNT_MASK as usize);
+        assert_eq!(
+            ordinary_capture_count(max | CLOSURE_CAPTURES_THIS_FLAG | CLOSURE_NO_THIS_REBIND_FLAG),
+            max as usize
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "23-bit header capacity")]
+    fn unencoded_overflow_is_rejected_before_truncation() {
+        checked_closure_capture_count(CLOSURE_CAPTURE_COUNT_MASK as usize + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlaps builtin identity")]
+    fn encoded_overflow_is_rejected_before_masking() {
+        ordinary_capture_count(1 << CLOSURE_CONSTRUCT_SHIFT);
+    }
+}
+
 #[inline]
 pub fn closure_payload_size(actual_count: usize) -> usize {
+    crate::codegen_abi::checked_closure_capture_count(actual_count);
     std::mem::size_of::<ClosureHeader>() + actual_count * std::mem::size_of::<u64>()
 }
 
@@ -466,7 +512,7 @@ pub(crate) unsafe fn closure_alloc_bound_function(
     args: &[f64],
 ) -> *mut ClosureHeader {
     const MAX_INLINE_ARGS: usize = 4;
-    debug_assert!(args.len() <= MAX_INLINE_ARGS);
+    assert!(args.len() <= MAX_INLINE_ARGS);
     let count = 3 + args.len();
     let shape_id = super::shape::function_bound_shape();
     let Some(raw) = closure_alloc_storage_no_collect(count) else {
@@ -529,7 +575,7 @@ pub extern "C" fn js_closure_alloc_init(
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
     crate::promise::bump(&CLOSURE_ALLOC_COUNT);
-    let actual_count = real_capture_count(capture_count) as usize;
+    let actual_count = ordinary_capture_count(capture_count);
     if actual_count == 0 || captures_ptr.is_null() {
         return js_closure_alloc(info, capture_count);
     }
@@ -608,9 +654,9 @@ pub extern "C" fn js_closure_alloc_small(
     capture2: u64,
 ) -> *mut ClosureHeader {
     let capture_count = header as u32;
-    let count = real_capture_count(capture_count) as usize;
+    let count = ordinary_capture_count(capture_count);
     let shape_id = (header >> 32) as u32;
-    debug_assert!(count <= 3);
+    assert!(count <= 3);
     debug_assert!(
         shape_id >= crate::codegen_abi::FUNCTION_SHAPE_BASE
             && shape_id < crate::codegen_abi::FUNCTION_SHAPE_BASE + 4
@@ -667,7 +713,7 @@ pub extern "C" fn js_closure_alloc_init_boxed(
     capture_count: u32,
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
-    let actual_count = real_capture_count(capture_count) as usize;
+    let actual_count = ordinary_capture_count(capture_count);
     if actual_count == 0 || captures_ptr.is_null() {
         return js_closure_alloc(info, capture_count);
     }
@@ -688,7 +734,7 @@ pub extern "C" fn js_closure_alloc_fixed(
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
     let capture_count = header as u32;
-    let actual_count = real_capture_count(capture_count) as usize;
+    let actual_count = ordinary_capture_count(capture_count);
     let shape_id = (header >> 32) as u32;
     if actual_count == 0 || captures_ptr.is_null() {
         return closure_alloc_empty(info, capture_count, shape_id);
@@ -753,7 +799,7 @@ fn closure_alloc_init_collecting(
     boxed: bool,
     shape_id: u32,
 ) -> *mut ClosureHeader {
-    let count = real_capture_count(capture_count) as usize;
+    let count = ordinary_capture_count(capture_count);
     let scope = crate::gc::RuntimeHandleScope::new();
     let values = unsafe { std::slice::from_raw_parts(captures_ptr, count) };
     let rooted = scope.root_nanbox_u64_slice_iter(values);
@@ -900,7 +946,7 @@ fn closure_alloc_empty(
     shape_id: u32,
 ) -> *mut ClosureHeader {
     crate::promise::bump(&CLOSURE_ALLOC_COUNT);
-    let actual_count = real_capture_count(capture_count) as usize;
+    let actual_count = ordinary_capture_count(capture_count);
     let raw = closure_alloc_storage(actual_count);
     let ptr = raw as *mut ClosureHeader;
 
@@ -1117,7 +1163,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     capture_count: u32,
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
-    let n = real_capture_count(capture_count) as usize;
+    let n = ordinary_capture_count(capture_count);
     let captures_slice: &[u64] = if n == 0 || captures_ptr.is_null() {
         &[]
     } else {

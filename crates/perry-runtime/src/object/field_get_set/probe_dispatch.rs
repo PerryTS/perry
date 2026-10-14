@@ -34,48 +34,7 @@ pub(super) unsafe fn set_property_if_registered(
     if !crate::set::is_registered_set(obj as usize) {
         return None;
     }
-    if !key.is_null() {
-        let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let key_len = (*key).byte_len as usize;
-        let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-        if key_bytes == b"size" {
-            let set = obj as *const crate::set::SetHeader;
-            return Some(JSValue::number(crate::set::js_set_size(set) as f64));
-        }
-        if let Some(name) = set_method_value_name(key_bytes) {
-            // Return the SAME brand-checking thunk installed on Set.prototype
-            // so `const m = s.forEach; m.call(badThis)` throws a TypeError (and
-            // `m === Set.prototype.forEach`). Fall back to the legacy
-            // instance-bound closure if the prototype thunk isn't available.
-            if let Ok(method_name) = std::str::from_utf8(name) {
-                if let Some(value) =
-                    super::super::collection_proto_thunks::collection_proto_method_value(
-                        "Set",
-                        method_name,
-                    )
-                {
-                    return Some(JSValue::from_bits(value.to_bits()));
-                }
-            }
-            let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-            let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
-            return Some(JSValue::from_bits(result.to_bits()));
-        }
-        // User expando keys (`s.tag = x`) live in the exotic side table
-        // (`ExoticKind::Set`); see the Map/Set arm in the caller.
-        if let Ok(name) = std::str::from_utf8(key_bytes) {
-            let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-            if let Some(value) = crate::object::exotic_expando::exotic_get_own_property(
-                obj as usize,
-                crate::object::exotic_expando::ExoticKind::Set,
-                name,
-                receiver,
-            ) {
-                return Some(JSValue::from_bits(value.to_bits()));
-            }
-        }
-    }
-    // Unknown keys continue to the shared Map/Set receiver path, which owns
-    // prototype data-property lookup and the final `undefined` fallback.
-    None
+    Some(super::map_set_receiver::map_set_instance_property(
+        obj, key, false,
+    ))
 }

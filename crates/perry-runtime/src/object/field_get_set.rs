@@ -336,7 +336,7 @@ pub(crate) use ic_miss::{
     private_lexical_brand_push, private_lexical_brand_stack_restore,
     private_lexical_brand_stack_savepoint, private_member_access_hints_restore,
     private_member_access_hints_savepoint, private_member_call_by_name, private_member_get_by_name,
-    private_member_set_by_name, scan_private_lexical_brand_roots_mut, set_method_value_name,
+    private_member_set_by_name, scan_private_lexical_brand_roots_mut,
     stamp_private_birth_evaluation_brand, stamp_private_evaluation_brand,
     take_private_method_call_hint, take_private_method_owner_hint, IntrinsicPrivateReadSite,
     PrivateHintBrandScope,

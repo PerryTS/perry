@@ -140,9 +140,9 @@ pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
 pub(crate) use class_meta::text_decoder_bool_option;
 pub(crate) use class_meta::{
     anonymous_class_role, identify_global_builtin_constructor, report_dispatch_miss,
-    shared_global_builtin_constructor_body, text_encoding_stream_new_with_constructor,
-    validate_web_compression_stream_format, CLASS_ID_COMPRESSION_STREAM,
-    CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM, CLASS_ID_TEXT_ENCODER_STREAM,
+    text_encoding_stream_new_with_constructor, validate_web_compression_stream_format,
+    CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
+    CLASS_ID_TEXT_ENCODER_STREAM,
 };
 pub use class_meta::{
     class_length_for_id, class_name_for_id, class_ref_inspect_label, class_ref_to_string,

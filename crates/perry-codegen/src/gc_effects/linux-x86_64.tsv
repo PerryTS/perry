@@ -4039,7 +4039,7 @@ js_weakmap_delete	Reenters	yes
 js_weakmap_get	Reenters	yes
 js_weakmap_has	Reenters	yes
 js_weakmap_init_iterable	Reenters	yes
-js_weakmap_new	Reenters	no
+js_weakmap_new	AllocOnly	no
 js_weakmap_set	Reenters	yes
 js_weakref_deref	Reenters	yes
 js_weakref_new	Reenters	yes
@@ -4047,7 +4047,7 @@ js_weakset_add	Reenters	yes
 js_weakset_delete	Reenters	yes
 js_weakset_has	Reenters	yes
 js_weakset_init_iterable	Reenters	yes
-js_weakset_new	Reenters	no
+js_weakset_new	AllocOnly	no
 js_webcrypto_decrypt	Reenters	yes
 js_webcrypto_derive_bits	Reenters	yes
 js_webcrypto_derive_key	Reenters	yes

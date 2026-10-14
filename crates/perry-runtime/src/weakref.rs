@@ -1317,22 +1317,9 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
 pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
 pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 
-fn weak_collection_new(
-    class: u32,
-    site: &crate::object::shapes::BrandedBirthSite,
-) -> *mut ObjectHeader {
-    crate::object::object_alloc_branded(class, u64::from(class), site)
-}
-crate::perry_thread_local! {
-    static WEAKMAP_BIRTH_SITE: crate::object::shapes::BrandedBirthSite =
-        const { crate::object::shapes::BrandedBirthSite::new() };
-    static WEAKSET_BIRTH_SITE: crate::object::shapes::BrandedBirthSite =
-        const { crate::object::shapes::BrandedBirthSite::new() };
-}
-
 #[no_mangle]
 pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
-    WEAKMAP_BIRTH_SITE.with(|site| weak_collection_new(CLASS_ID_WEAKMAP, site))
+    crate::object::object_alloc_branded(CLASS_ID_WEAKMAP)
 }
 
 include!("weakref/subclass.rs");
@@ -1359,11 +1346,7 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
     let iterable_handle = scope.root_nanbox_f64(iterable);
 
     let adder = crate::collection_iter::require_callable(
-        crate::collection_iter::builtin_prototype_adder(
-            "WeakMap",
-            "set",
-            map_handle.get_nanbox_f64(),
-        ),
+        crate::collection_iter::constructor_adder("set", map_handle.get_nanbox_f64()),
         "WeakMap.prototype.set",
     );
     let adder = crate::collection_iter::normalize_callable_value(adder);
@@ -1450,7 +1433,7 @@ fn throw_invalid_weakset_value() -> ! {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
-    WEAKSET_BIRTH_SITE.with(|site| weak_collection_new(CLASS_ID_WEAKSET, site))
+    crate::object::object_alloc_branded(CLASS_ID_WEAKSET)
 }
 
 /// `WeakSet ( [ iterable ] )`'s iterable-consumption loop. `set` is the
@@ -1472,11 +1455,7 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
     let iterable_handle = scope.root_nanbox_f64(iterable);
 
     let adder = crate::collection_iter::require_callable(
-        crate::collection_iter::builtin_prototype_adder(
-            "WeakSet",
-            "add",
-            set_handle.get_nanbox_f64(),
-        ),
+        crate::collection_iter::constructor_adder("add", set_handle.get_nanbox_f64()),
         "WeakSet.prototype.add",
     );
     let adder = crate::collection_iter::normalize_callable_value(adder);
@@ -1622,6 +1601,8 @@ mod tests {
 
     #[test]
     fn weak_collections_inspect_with_items_unknown() {
+        // Declared layouts are installed at agent startup, before a JS birth.
+        let _ = crate::state::state();
         // WeakMap/WeakSet contents aren't enumerable, so Node prints the
         // `<items unknown>` placeholder rather than leaking storage fields.
         let wm = js_weakmap_new();

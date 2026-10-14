@@ -163,28 +163,6 @@ pub(crate) fn is_array_method_value_name(key: &[u8]) -> bool {
     )
 }
 
-pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
-    match key {
-        b"add" => Some(b"add"),
-        b"clear" => Some(b"clear"),
-        b"delete" => Some(b"delete"),
-        b"entries" => Some(b"entries"),
-        b"forEach" => Some(b"forEach"),
-        b"has" => Some(b"has"),
-        b"keys" => Some(b"keys"),
-        b"values" => Some(b"values"),
-        b"union" => Some(b"union"),
-        b"intersection" => Some(b"intersection"),
-        b"difference" => Some(b"difference"),
-        b"symmetricDifference" => Some(b"symmetricDifference"),
-        b"isSubsetOf" => Some(b"isSubsetOf"),
-        b"isSupersetOf" => Some(b"isSupersetOf"),
-        b"isDisjointFrom" => Some(b"isDisjointFrom"),
-        b"@@iterator" => Some(b"@@iterator"),
-        _ => None,
-    }
-}
-
 /// A `Timeout` / `Immediate` handle method key, as a `'static` byte string:
 /// the literal out of this list, never a borrow of `key`.
 ///
@@ -202,7 +180,7 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
 /// Returning the literal rather than answering `bool` is deliberate: with no
 /// predicate left, a caller has nothing to pair with its own pointer, so the
 /// bug cannot be reintroduced by writing the obvious code. Same shape as
-/// `set_method_value_name` above and `buffer_method_name_static` (#7747).
+/// `buffer_method_name_static` (#7747).
 
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
 /// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's

@@ -4,7 +4,10 @@ pub(crate) fn promise_parent_in_chain(class_id: u32) -> bool {
     let mut depth = 0u32;
     while depth < 32 && cid != 0 {
         let parent = js_get_dynamic_parent_value(cid);
-        if matches!(identify_global_builtin_constructor(parent), Some("Promise")) {
+        if matches!(
+            super::super::global_this_tables::constructor_identity(parent),
+            Some(BuiltinConstructorIdentity::Promise)
+        ) {
             return true;
         }
         match get_parent_class_id(cid) {
@@ -30,10 +33,8 @@ unsafe fn ensure_promise_subclass_backing(
         return;
     }
     let has_backing = instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
-        crate::promise::subclass_backing_promise(crate::value::js_nanbox_pointer(
-            instance as i64,
-        ))
-        .is_some()
+        crate::promise::subclass_backing_promise(crate::value::js_nanbox_pointer(instance as i64))
+            .is_some()
     });
     if has_backing {
         return;

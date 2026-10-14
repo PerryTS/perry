@@ -450,10 +450,17 @@ impl<'s, 'm> Reader<'s, 'm> {
         capture_count: u32,
         captures: &'m [SerializedValue],
     ) -> u64 {
-        let closure = crate::closure::js_closure_alloc(
-            info as *const crate::closure::JsFunctionInfo,
-            capture_count,
-        );
+        let closure = match crate::object::BuiltinConstructorIdentity::from_header(capture_count) {
+            Some(identity) => {
+                assert_eq!(info, identity.declaration().info as *const _ as usize);
+                assert_eq!(crate::closure::real_capture_count(capture_count), 1);
+                crate::object::alloc_builtin_constructor(identity)
+            }
+            None => crate::closure::js_closure_alloc(
+                info as *const crate::closure::JsFunctionInfo,
+                capture_count,
+            ),
+        };
         self.fill(
             slot,
             JSValue::pointer(closure as *const u8).bits(),

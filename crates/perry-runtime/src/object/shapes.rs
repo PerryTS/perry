@@ -46,7 +46,7 @@ pub(crate) use shapes_own_data::own_data_shape;
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;
-pub(crate) use shapes_branded_birth::{branded_birth_matches, BrandedBirthSite};
+pub(crate) use shapes_branded_birth::branded_birth_layout;
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]
@@ -1384,6 +1384,7 @@ impl ShapeTable {
             }),
         };
         table.seed_function_shapes();
+        table.seed_native_birth_layouts();
         table
     }
 
@@ -1521,7 +1522,7 @@ const _: () = assert!(SITE_SHAPE_ID_END < SHAPE_ID_END);
 /// allocated for a different shape. Monotonic — ids are NEVER reused, so
 /// a stale stamp or cache entry can only miss, not falsely hit.
 static SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
-    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
+    std::sync::atomic::AtomicU32::new(shapes_branded_birth::NATIVE_BIRTH_LAYOUT_END),
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
 ];

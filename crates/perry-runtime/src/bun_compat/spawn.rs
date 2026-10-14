@@ -103,7 +103,10 @@ fn call_method(receiver: f64, name: &[u8], args: &[f64]) -> f64 {
 fn closure_with_captures(info: *const crate::closure::JsFunctionInfo, captures: &[f64]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let captures = scope.root_nanbox_f64_slice(captures);
-    let closure = js_closure_alloc(info, captures.len() as u32);
+    let closure = js_closure_alloc(
+        info,
+        crate::codegen_abi::checked_closure_capture_count(captures.len()),
+    );
     for (index, value) in captures.iter().enumerate() {
         js_closure_set_capture_f64(closure, index as u32, value.get_nanbox_f64());
     }
