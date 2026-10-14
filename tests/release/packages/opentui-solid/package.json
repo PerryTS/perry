@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@opentui/solid": "0.4.5",
+    "@opentui/solid": "0.6.1",
     "solid-js": "1.9.12"
   },
   "perry": {
