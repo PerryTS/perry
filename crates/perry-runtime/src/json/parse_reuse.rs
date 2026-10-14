@@ -179,8 +179,8 @@ pub(crate) unsafe fn remember_parse_object_template(
         .sub(crate::gc::GC_HEADER_SIZE)
         .cast::<crate::gc::GcHeader>());
     // The plan rebuilds fixed slots under one layout. A record with an
-    // overflow (every JSON.parse record since object model step 4, §3.4)
-    // keeps its keys and values in that table, which no plan describes.
+    // overflow (§3.4) keeps keys and values in that table, which no plan
+    // describes, so such a record is never remembered.
     if header.obj_type != crate::gc::GC_TYPE_OBJECT || crate::object::overflow::has_overflow(object)
     {
         return;

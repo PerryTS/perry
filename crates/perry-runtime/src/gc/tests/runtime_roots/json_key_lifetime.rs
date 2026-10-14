@@ -58,10 +58,10 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
     for _ in 0..3 {
         unsafe {
             let value = parse(&source);
-            // Object model step 4: the record's fields are overflow entries.
-            let table = crate::object::overflow::table(value.as_pointer());
-            assert!(!table.is_null());
-            assert!((*table).length as usize >= fields_born_old());
+            assert_eq!(
+                crate::object::object_live_slot_count(value.as_pointer()),
+                fields_born_old() as u32
+            );
         }
         assert_eq!(
             crate::json::PARSE_KEY_CACHE.with(|cache| cache.borrow().len()),
@@ -88,7 +88,7 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
 }
 
 #[test]
-fn json_cached_strings_move_with_the_records_that_hold_them() {
+fn json_cached_strings_move_in_a_stationary_canonical_backing() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuation = ForcedEvacuationTestGuard::on();
@@ -101,33 +101,31 @@ fn json_cached_strings_move_with_the_records_that_hold_them() {
     unsafe {
         let value = parse(source);
         let root = scope.root_nanbox_u64(value.bits());
-        // Object model step 4: the record's keys are its overflow's keys
-        // column (§3.4), which holds the agent's property atoms; an atom
-        // moves, and the record's key moves with it.
-        let first_key = |value: crate::JSValue| {
-            let table = crate::object::overflow::table(value.as_pointer());
-            assert!(!table.is_null(), "a JSON.parse record carries its overflow");
-            let first = (0..(*table).length)
-                .map(|i| *crate::object::overflow::key_at(table, i))
-                .find(|&key| key != crate::value::TAG_HOLE)
-                .expect("a key");
-            crate::JSValue::from_bits(first).as_string_ptr()
-        };
-        let atom = || {
-            let name = b"moving_property";
-            let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
-            crate::string::atom_lookup(name, hash).expect("the record's key is an atom")
-        };
-        let key_before = atom();
-        assert_eq!(first_key(value), key_before);
+        let keys_before = crate::object::object_keys(value.as_pointer()).arr();
+        let key_before = crate::json::cached_parse_key_ptr(b"moving_property");
         gc_collect_minor();
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
-        let key_after = atom();
-        assert_ne!(key_before, key_after, "the key atom must actually move");
-        assert_eq!(first_key(live), key_after);
+        let keys_after = crate::object::object_keys(live.as_pointer()).arr();
+        let key_after = crate::json::cached_parse_key_ptr(b"moving_property");
+        assert!(crate::arena::pointer_in_old_gen(keys_before as usize));
+        assert_eq!(
+            keys_before, keys_after,
+            "canonical key backings stay stationary while their keys move"
+        );
+        assert_ne!(
+            key_before, key_after,
+            "the cached key string must actually move"
+        );
+        assert_eq!(
+            crate::array::js_array_get(keys_after, 0).as_string_ptr(),
+            key_after
+        );
         assert_output(live, source);
         let again = parse(source);
-        assert_eq!(first_key(again), atom());
+        assert_eq!(
+            crate::object::object_keys(again.as_pointer()).arr(),
+            keys_after
+        );
         assert_output(again, source);
     }
 }

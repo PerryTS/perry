@@ -64,69 +64,6 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
     result
 }
 
-/// [`test_json_parse_direct`], with every object of the result rebuilt as a
-/// plain record whose keys are fixed slots of its layout (no overflow), in
-/// the same key order and with the same values. Object model step 4 gives a
-/// `JSON.parse` record an overflow from birth (§3.4); the serializer fast
-/// paths read layouts and decline such records until step 5, so tests of
-/// those paths take records built this way.
-#[cfg(test)]
-pub(crate) unsafe fn test_json_record_direct(text_ptr: *const StringHeader) -> JSValue {
-    let parsed = test_json_parse_direct(text_ptr);
-    let _no_gc = crate::gc::GcSuppressScope::new();
-    test_fixed_slot_records(parsed)
-}
-
-#[cfg(test)]
-unsafe fn test_fixed_slot_records(value: JSValue) -> JSValue {
-    if !value.is_pointer() {
-        return value;
-    }
-    let ptr = value.as_pointer::<u8>();
-    let Some(header) = crate::value::addr_class::try_read_gc_header(ptr as usize) else {
-        return value;
-    };
-    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
-        let array = ptr as *mut crate::array::ArrayHeader;
-        for i in 0..crate::array::js_array_length(array) {
-            let element = crate::array::js_array_get(array, i);
-            crate::array::js_array_set(array, i, test_fixed_slot_records(element));
-        }
-        return value;
-    }
-    let object = ptr as *mut crate::object::ObjectHeader;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || !crate::object::overflow::has_overflow(object)
-    {
-        return value;
-    }
-    let keys = crate::object::js_object_keys(object);
-    let mut names: Vec<Vec<u8>> = Vec::new();
-    let mut values = Vec::new();
-    for i in 0..crate::array::js_array_length(keys) {
-        let key = crate::array::js_array_get(keys, i);
-        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let name = crate::string::js_string_key_bytes(key, &mut scratch)
-            .expect("a JSON record has string keys")
-            .to_vec();
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        values.push(test_fixed_slot_records(
-            crate::object::js_object_get_field_by_name(object, key),
-        ));
-        names.push(name);
-    }
-    let name_refs: Vec<&[u8]> = names.iter().map(Vec::as_slice).collect();
-    let layout = crate::object::static_shapes::canonical_keys_for_names(&name_refs);
-    let record =
-        crate::object::alloc_plain::alloc_plain_record_with_keys(names.len() as u32, layout);
-    for (name, value) in names.iter().zip(values) {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(record, key, f64::from_bits(value.bits()));
-    }
-    assert!(!crate::object::overflow::has_overflow(record));
-    JSValue::object_ptr(record.cast())
-}
-
 fn syntax_error_value(message: &str) -> f64 {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_syntaxerror_new(msg_ptr);

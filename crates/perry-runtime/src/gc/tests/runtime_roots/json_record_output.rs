@@ -14,7 +14,7 @@ fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() 
     for index in [0, 1, 2] {
         let source = r#"[{"id":0,"nested":{"value":"heap value zero"}},{"id":1,"nested":{"value":"heap value one"}},{"id":2,"nested":{"value":"heap value two"}}]"#;
         let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
-        let value = unsafe { crate::json::test_json_record_direct(text) };
+        let value = unsafe { crate::json::test_json_parse_direct(text) };
         let scope = RuntimeHandleScope::new();
         let array = scope.root_nanbox_u64(value.bits());
         let parent = crate::array::js_array_get(value.as_pointer(), index);
@@ -92,7 +92,7 @@ fn json_array_getter_runs_once_and_rederives_later_elements_after_movement() {
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let source = br#"[1,"tail after getter"]"#;
     let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
-    let value = unsafe { crate::json::test_json_record_direct(text) };
+    let value = unsafe { crate::json::test_json_parse_direct(text) };
     let scope = RuntimeHandleScope::new();
     let array = scope.root_nanbox_u64(value.bits());
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
@@ -151,7 +151,7 @@ fn json_grown_array_getter_flags_live_head_and_survives_movement() {
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let source = br#"[1,"tail after getter"]"#;
     let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
-    let value = unsafe { crate::json::test_json_record_direct(text) };
+    let value = unsafe { crate::json::test_json_parse_direct(text) };
     let scope = RuntimeHandleScope::new();
     let array = scope.root_nanbox_u64(value.bits());
     let original =
@@ -286,7 +286,7 @@ fn assert_record_children_move(cold: bool, escaped: bool) {
         br#"{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_alpha","tag_bravo"]}"#
     };
     let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    let value = unsafe { crate::json::test_json_record_direct(source) };
+    let value = unsafe { crate::json::test_json_parse_direct(source) };
     let scope = RuntimeHandleScope::new();
     let input = scope.root_nanbox_u64(value.bits());
     let children = || {

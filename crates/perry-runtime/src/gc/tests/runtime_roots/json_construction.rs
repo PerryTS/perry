@@ -79,18 +79,22 @@ fn json_construction_wide_old_record_remembers_sparse_pointer_pages() {
     let scope = RuntimeHandleScope::new();
     unsafe {
         let value = parse(&source);
+        assert!(crate::arena::pointer_in_old_gen(
+            value.as_pointer::<u8>() as usize
+        ));
         let root = scope.root_nanbox_u64(value.bits());
-        // Object model step 4: the record's fields are its overflow entries
-        // (§3.4); with this many the overflow is the old-born container, and
-        // its last entry is a young child object.
-        let last = format!("key{}", super::json_key_lifetime::fields_born_old() - 1);
+        // The generic indexed getter has a pre-existing 10,000-slot guard.
+        // Verify the final physical slot directly after proving its bounds.
         let last_child = |value: crate::JSValue| {
-            let table = crate::object::overflow::table(value.as_pointer());
-            assert!(!table.is_null(), "a JSON.parse record carries its overflow");
-            assert!(crate::arena::pointer_in_old_gen(table as usize));
-            let entry =
-                crate::object::overflow::find_bytes(table, last.as_bytes()).expect("the last key");
-            *crate::object::overflow::value_at(table, entry)
+            assert_eq!(
+                crate::object::object_live_slot_count(value.as_pointer()),
+                super::json_key_lifetime::fields_born_old() as u32
+            );
+            let slots = value
+                .as_pointer::<u8>()
+                .add(std::mem::size_of::<crate::ObjectHeader>())
+                .cast::<crate::JSValue>();
+            (*slots.add(super::json_key_lifetime::fields_born_old() - 1)).bits()
         };
         let last_before = last_child(value);
         assert!(crate::JSValue::from_bits(last_before).is_pointer());

@@ -136,13 +136,6 @@ fn repeated_large_exact_outputs_arm_sweep_only_after_a_completed_budget() {
     assert!(gc_collection_count() > before);
 }
 
-/// A named field of a `JSON.parse` record. Object model step 4: the record's
-/// keys and values live in its overflow (§3.4), not at fixed positions.
-fn json_field(object: crate::JSValue, name: &str) -> crate::JSValue {
-    let key = crate::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_get_field_by_name(object.as_pointer(), key)
-}
-
 fn exercise_large_parse_output_debt(use_result_entry: bool, block_boundary: bool) {
     use crate::gc::policy::unsafe_zone_test_override::set_unsafe_zone_blocked_for_test;
     struct BlockedBoundary(Option<bool>);
@@ -184,11 +177,11 @@ fn exercise_large_parse_output_debt(use_result_entry: bool, block_boundary: bool
             }
         });
         assert_eq!(
-            json_field(value, "id").as_number(),
+            crate::object::js_object_get_field(value.as_pointer(), 0).as_number(),
             id as f64,
             "alternating sources must not reuse the previous object's value"
         );
-        let text = json_field(value, "text");
+        let text = crate::object::js_object_get_field(value.as_pointer(), 1);
         unsafe {
             assert_eq!((*text.as_string_ptr()).byte_len as usize, payload.len());
         }
@@ -209,7 +202,11 @@ fn exercise_large_parse_output_debt(use_result_entry: bool, block_boundary: bool
         let result = result_scope.root_nanbox_u64(value.bits());
         js_gc_loop_safepoint();
         assert_eq!(
-            json_field(crate::JSValue::from_bits(result.get_nanbox_u64()), "id").as_number(),
+            crate::object::js_object_get_field(
+                crate::JSValue::from_bits(result.get_nanbox_u64()).as_pointer(),
+                0,
+            )
+            .as_number(),
             id as f64,
             "the completed result must survive the caller's collection"
         );

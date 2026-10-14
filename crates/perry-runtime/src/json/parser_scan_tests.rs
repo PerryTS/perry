@@ -156,9 +156,7 @@ fn repeated_parse_reuses_only_the_immutable_string_token() {
         let first = crate::json::js_json_parse(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let first = scope.root_nanbox_u64(first.bits());
-        // Object model step 4: a record keeps its fields in its overflow, so
-        // no fixed-slot object template is remembered for it.
-        assert!(!crate::json::test_parse_object_template_matches(
+        assert!(crate::json::test_parse_object_template_matches(
             source,
             input.len()
         ));
@@ -201,15 +199,14 @@ fn repeated_parse_reuses_only_the_immutable_string_token() {
 }
 
 #[test]
-fn repeated_small_object_parse_rebuilds_nested_arrays() {
+fn repeated_small_object_template_rebuilds_nested_arrays() {
     let input = r#"{"id":42,"name":"long-enough-to-cross-the-small-template-threshold","tags":["alpha","beta"]}"#;
     let source = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
     unsafe {
         let first = crate::json::js_json_parse(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let first = scope.root_nanbox_u64(first.bits());
-        // Object model step 4: no fixed-slot template for an overflow record.
-        assert!(!crate::json::test_parse_object_template_matches(
+        assert!(crate::json::test_parse_object_template_matches(
             source,
             input.len()
         ));
@@ -218,12 +215,17 @@ fn repeated_small_object_parse_rebuilds_nested_arrays() {
             .as_pointer::<crate::object::ObjectHeader>();
         let second_object = second.as_pointer::<crate::object::ObjectHeader>();
         assert_ne!(first_object, second_object);
-        let tags = crate::js_string_from_bytes(b"tags".as_ptr(), 4);
+        let first_fields = first_object
+            .cast::<u8>()
+            .add(std::mem::size_of::<crate::object::ObjectHeader>())
+            .cast::<crate::JSValue>();
+        let second_fields = second_object
+            .cast::<u8>()
+            .add(std::mem::size_of::<crate::object::ObjectHeader>())
+            .cast::<crate::JSValue>();
         assert_ne!(
-            crate::object::js_object_get_field_by_name(first_object, tags)
-                .as_pointer::<crate::array::ArrayHeader>(),
-            crate::object::js_object_get_field_by_name(second_object, tags)
-                .as_pointer::<crate::array::ArrayHeader>(),
+            (*first_fields.add(2)).as_pointer::<crate::array::ArrayHeader>(),
+            (*second_fields.add(2)).as_pointer::<crate::array::ArrayHeader>(),
             "nested mutable arrays must be reconstructed"
         );
         let output = crate::json::js_json_stringify(
@@ -343,22 +345,8 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
         let value = parser.parse_value();
         assert!(parser.finish());
         let object = value.as_pointer::<crate::ObjectHeader>();
-        // Object model step 4: the record's overflow is its order authority
-        // from birth (§3.4), so it does not take the warm shape's key list;
-        // its keys arrive in source order all the same.
-        let _ = (keys_array, shape_id);
-        assert!(crate::object::overflow::has_overflow(object));
-        let own = crate::object::js_object_keys(object);
-        assert_eq!(crate::array::js_array_length(own) as usize, keys.len());
-        for (i, name) in ["id", "name", "email", "active", "score", "tags"]
-            .into_iter()
-            .enumerate()
-        {
-            assert!(crate::string::js_string_key_matches_bytes(
-                crate::array::js_array_get(own, i as u32),
-                name.as_bytes()
-            ));
-        }
+        assert_eq!(crate::object::object_keys(object).arr(), keys_array);
+        assert_eq!((*object).parent_class_id, shape_id);
 
         PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
         crate::gc::gc_unsuppress();
@@ -422,12 +410,8 @@ fn warm_shape_fallback_keeps_duplicate_semantics_after_key_cache_eviction() {
         let value = parser.parse_value();
         assert!(parser.finish());
         let object = value.as_pointer::<crate::ObjectHeader>();
-        let keys = crate::object::js_object_keys(object);
-        assert_eq!(
-            crate::array::js_array_length(keys),
-            4,
-            "the second id must replace the first"
-        );
+        let keys = crate::object::object_keys(object).arr();
+        assert_eq!((*keys).length, 4, "the second id must replace the first");
         let id = cached_parse_key_ptr(b"id");
         assert_eq!(
             crate::object::js_object_get_field_by_name(object, id).as_number(),

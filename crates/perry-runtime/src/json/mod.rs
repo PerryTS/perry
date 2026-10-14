@@ -86,8 +86,6 @@ pub use stringify_api::{
 #[cfg(test)]
 pub(crate) use parse_api::test_json_parse_direct;
 #[cfg(test)]
-pub(crate) use parse_api::test_json_record_direct;
-#[cfg(test)]
 pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
     stringify_record_output::try_object(bits)
 }

@@ -532,7 +532,7 @@ fn object_literal_shapes_reach_the_flat_emitter() {
     unsafe {
         let text = "{\"a\":1,\"b\":\"x\"}";
         let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = super::super::test_json_record_direct(source);
+        let value = super::super::test_json_parse_direct(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let value = scope.root_nanbox_u64(value.bits());
         let obj = || (value.get_nanbox_f64().to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
@@ -575,7 +575,7 @@ unsafe fn parsed<'s>(
     text: &str,
 ) -> crate::gc::RuntimeHandle<'s> {
     let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    scope.root_nanbox_u64(super::super::test_json_record_direct(source).bits())
+    scope.root_nanbox_u64(super::super::test_json_parse_direct(source).bits())
 }
 
 unsafe fn keys_of(value: &crate::gc::RuntimeHandle<'_>) -> crate::object::ObjectKeys {

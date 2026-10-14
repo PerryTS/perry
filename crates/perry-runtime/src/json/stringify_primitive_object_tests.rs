@@ -13,7 +13,7 @@ fn primitive_object_leaf_preserves_wide_output_without_managed_scratch() {
         }
         text.push('}');
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_record_direct(source);
+        let value = crate::json::test_json_parse_direct(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
         input.with_const_ptr(|obj: *const crate::ObjectHeader| {
@@ -49,7 +49,7 @@ fn primitive_object_leaf_uses_existing_key_order_and_omits_undefined() {
     unsafe {
         let text = b"{\"20\":20,\"3\":3,\"z\":null,\"a\":\"quote\\\"\"}";
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_record_direct(source);
+        let value = crate::json::test_json_parse_direct(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
         input.with_const_ptr(|obj: *const crate::ObjectHeader| {
@@ -96,7 +96,7 @@ fn primitive_object_one_pass_attempt_rolls_back_a_complex_late_field() {
     unsafe {
         let text = br#"{"a":1,"b":{"x":2}}"#;
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_record_direct(source);
+        let value = crate::json::test_json_parse_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>();
         let keys = crate::object::object_keys(obj);
         let mut output = String::from("prefix");
@@ -110,7 +110,7 @@ fn primitive_object_one_pass_attempt_rolls_back_an_array_index_key() {
     unsafe {
         let text = br#"{"plain":1,"2":2}"#;
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-        let value = crate::json::test_json_record_direct(source);
+        let value = crate::json::test_json_parse_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>();
         let keys = crate::object::object_keys(obj);
         let mut output = String::from("prefix");
