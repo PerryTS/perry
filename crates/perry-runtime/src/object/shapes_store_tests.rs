@@ -805,7 +805,8 @@ fn weak_collection_summary_agrees_with_shape_brands() {
             record.note_descendant_width(64);
             assert_eq!(record.descendant_width(), 64);
             assert_eq!(record.tracked_births(), 8);
-            record = record.with_summary(0xFF);
+            // Every attribute-summary bit set must leave the brand intact.
+            record = record.with_summary(crate::object::key_attrs::SUMMARY_KEY_BITS);
             assert_eq!(record.weak_collection_brand(), expected);
             unsafe {
                 record.release_extras();

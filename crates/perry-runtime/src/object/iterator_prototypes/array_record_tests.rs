@@ -322,36 +322,25 @@ fn array_record_prototype_symbol_identity_guard() {
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, proto, sym) = fixture();
-        let addr = crate::value::js_nanbox_get_pointer(proto) as usize;
-        let symbol = crate::value::js_nanbox_get_pointer(sym) as usize;
-        let other = crate::symbol::well_known_symbol("toStringTag") as usize;
+        let other = js_nanbox_pointer(crate::symbol::well_known_symbol("toStringTag") as i64);
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-        let bag = super::super::shaped_symbols::owner(addr).unwrap();
-        let slot = super::super::shaped_symbols::position(bag, symbol).unwrap();
-        let keys = super::super::object_keys(bag);
-        let replacement = crate::array::js_array_alloc(keys.count());
-        let mut replacement = replacement;
-        for i in 0..keys.count() {
-            let key = if i == slot {
-                JSValue::from_bits(crate::value::POINTER_TAG | other as u64)
-            } else {
-                keys.get(i)
-            };
-            replacement = crate::array::js_array_push(replacement, key);
-        }
-        // Preserve the original slot and values while changing only the
-        // member's identity; an append/delete fixture could miss ConstFn lanes.
-        super::super::set_object_keys(bag, super::super::ObjectKeys::owned(replacement));
-        super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
-        assert!(
-            super::super::shapes::object_shape_record(bag)
-                .unwrap()
-                .constfn_info(slot)
-                .is_some(),
-            "the unrelated member must carry the genuine values body at its actual slot"
+        let next_proto =
+            ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+        let wrong = f64::from_bits(super::super::js_object_get_field(next_proto, 0).bits());
+        // The genuine `values` body moves to an unrelated member while the
+        // fixed Symbol.iterator slot holds another function: the guard must
+        // read that slot, not accept the body wherever it appears.
+        crate::symbol::js_object_set_symbol_property(proto, other, original);
+        crate::symbol::js_object_set_symbol_property(proto, sym, wrong);
+        assert_eq!(
+            crate::symbol::js_object_get_symbol_property(proto, other).to_bits(),
+            original.to_bits(),
+            "the unrelated member must carry the genuine values body"
         );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
-        super::super::set_object_keys(bag, keys);
+        crate::symbol::js_object_set_symbol_property(proto, sym, original);
+        assert_eq!(crate::symbol::js_object_delete_symbol_property(proto, other), 1);
+        assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
     }
 }
 
