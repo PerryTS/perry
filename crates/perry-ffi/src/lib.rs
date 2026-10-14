@@ -405,3 +405,13 @@ pub use perry_abi::{native_class_ids, RECEIVER_HANDLE_FLOOR};
 
 mod native_handle_record;
 pub use native_handle_record::{NativePayloadRecord, NativePropertyBag};
+
+/// Runtime-owned static record declarations and allocation.
+pub mod runtime_layouts;
+
+/// Initialize standalone native-binding fixtures that link the runtime directly.
+#[cfg(feature = "runtime-link")]
+#[doc(hidden)]
+pub fn initialize_runtime_fixture() {
+    _perry_runtime_link::gc::initialize_runtime_fixture();
+}

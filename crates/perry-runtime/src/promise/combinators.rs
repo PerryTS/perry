@@ -1424,50 +1424,26 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
 
 /// Build a `{ status: "fulfilled", value: v }` object for Promise.allSettled.
 fn build_settled_fulfilled(value: f64) -> f64 {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
-    // Both allocations can collect: hold `value` and the object in handles.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let packed = b"status\0value\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF10, 2, packed.as_ptr(), packed.len() as u32);
-    let obj = rooted_ptr(&scope, obj);
-    let status_str = crate::string::js_string_from_bytes(b"fulfilled".as_ptr(), 9);
-    let status_nb = crate::value::js_nanbox_string(status_str as i64);
-    js_object_set_field(
-        ptr_of(&obj),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F470_0);
+    obj.set(1, crate::JSValue::from_bits(value.to_bits()));
+    let status = crate::string::js_string_from_bytes(b"fulfilled".as_ptr(), 9);
+    obj.set(
         0,
-        crate::value::JSValue::from_bits(status_nb.to_bits()),
+        crate::JSValue::from_bits(crate::value::js_nanbox_string(status as i64).to_bits()),
     );
-    js_object_set_field(
-        ptr_of(&obj),
-        1,
-        crate::value::JSValue::from_bits(value.get_nanbox_f64().to_bits()),
-    );
-    obj.get_nanbox_f64()
+    crate::value::js_nanbox_pointer(obj.finish() as i64)
 }
 
 /// Build a `{ status: "rejected", reason: r }` object for Promise.allSettled.
 fn build_settled_rejected(reason: f64) -> f64 {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
-    // Both allocations can collect: hold `reason` and the object in handles.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let reason = scope.root_nanbox_f64(reason);
-    let packed = b"status\0reason\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF11, 2, packed.as_ptr(), packed.len() as u32);
-    let obj = rooted_ptr(&scope, obj);
-    let status_str = crate::string::js_string_from_bytes(b"rejected".as_ptr(), 8);
-    let status_nb = crate::value::js_nanbox_string(status_str as i64);
-    js_object_set_field(
-        ptr_of(&obj),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F471_0);
+    obj.set(1, crate::JSValue::from_bits(reason.to_bits()));
+    let status = crate::string::js_string_from_bytes(b"rejected".as_ptr(), 8);
+    obj.set(
         0,
-        crate::value::JSValue::from_bits(status_nb.to_bits()),
+        crate::JSValue::from_bits(crate::value::js_nanbox_string(status as i64).to_bits()),
     );
-    js_object_set_field(
-        ptr_of(&obj),
-        1,
-        crate::value::JSValue::from_bits(reason.get_nanbox_f64().to_bits()),
-    );
-    obj.get_nanbox_f64()
+    crate::value::js_nanbox_pointer(obj.finish() as i64)
 }
 
 /// Promise.allSettled — never rejects; resolves with an array of result objects

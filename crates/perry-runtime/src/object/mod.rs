@@ -184,10 +184,10 @@ mod live_slots;
 mod null_stub;
 mod side_table_roots;
 mod string_wrapper;
-pub(crate) use live_slots::{object_inline_capacity, set_object_live_slot_count};
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
+pub(crate) use live_slots::{object_inline_capacity, set_object_live_slot_count};
 pub(crate) use null_stub::null_stub_value;
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
 #[cfg(test)]
@@ -1811,3 +1811,5 @@ mod packed_keys;
 pub(crate) use packed_keys::packed_key_names;
 
 pub(crate) use iterator_prototypes::array_record_close_is_absent;
+#[cfg(test)]
+mod record_layout_tests;

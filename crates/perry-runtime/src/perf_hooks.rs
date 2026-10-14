@@ -90,27 +90,9 @@ const RESOURCE_ENTRY_FIELD_COUNT: u32 = 23;
 /// serialized object is a plain object with no `toJSON` method of its own.
 const PERF_ENTRY_JSON_SHAPE: u32 = 0x7FFF_FF42;
 
-/// Shape id for the `{ idle, active, utilization }` eventLoopUtilization object.
-const ELU_SHAPE: u32 = 0x7FFF_FF41;
-const ELU_KEYS: &[u8] = b"idle\0active\0utilization\0";
-
-/// Shape id for the `{ eventLoopUtilization, nodeTiming, timeOrigin }`
-/// snapshot returned by `performance.toJSON()`.
-const TOJSON_SHAPE: u32 = 0x7FFF_FF50;
-const TOJSON_KEYS: &[u8] = b"eventLoopUtilization\0nodeTiming\0timeOrigin\0";
-
 /// Shape id + keys for `performance.nodeTiming` (PerformanceNodeTiming entry).
 const NODE_TIMING_SHAPE: u32 = 0x7FFF_FF43;
 const NODE_TIMING_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0uvMetricsInfo\0";
-
-/// Shape id + keys for the plain object `performance.nodeTiming.toJSON()`
-/// returns — the nodeTiming fields minus `uvMetricsInfo`.
-const NODE_TIMING_JSON_SHAPE: u32 = 0x7FFF_FF52;
-const NODE_TIMING_JSON_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0nodeStart\0v8Start\0bootstrapComplete\0environment\0loopStart\0loopExit\0idleTime\0";
-
-/// Shape id + keys for `performance.nodeTiming.uvMetricsInfo`.
-const UV_METRICS_INFO_SHAPE: u32 = 0x7FFF_FF51;
-const UV_METRICS_INFO_KEYS: &[u8] = b"loopCount\0events\0eventsWaiting\0";
 
 #[derive(Clone)]
 pub(crate) struct PerfEntry {
@@ -1138,10 +1120,11 @@ unsafe fn make_elu_object(idle: f64, active: f64) -> f64 {
     } else {
         0.0
     };
-    let obj = js_object_alloc_with_shape(ELU_SHAPE, 3, ELU_KEYS.as_ptr(), ELU_KEYS.len() as u32);
-    js_object_set_field(obj, 0, JSValue::number(idle));
-    js_object_set_field(obj, 1, JSValue::number(active));
-    js_object_set_field(obj, 2, JSValue::number(util));
+    let mut values = [idle, active, util];
+    let obj = crate::object::runtime_layouts::perry_build_runtime_record(
+        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F426_0),
+        values.as_mut_ptr(),
+    );
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
@@ -1181,28 +1164,15 @@ unsafe fn read_elu_idle_active(value: f64) -> Option<(f64, f64)> {
 /// values for libuv-specific counters.
 #[no_mangle]
 pub extern "C" fn js_perf_to_json() -> f64 {
-    unsafe {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let (idle, active) = cumulative_idle_active();
-        let elu = make_elu_object(idle, active);
-        let elu_handle = scope.root_nanbox_f64(elu);
-        let node_timing = js_perf_node_timing();
-        let node_timing_handle = scope.root_nanbox_f64(node_timing);
-        let obj = js_object_alloc_with_shape(
-            TOJSON_SHAPE,
-            3,
-            TOJSON_KEYS.as_ptr(),
-            TOJSON_KEYS.len() as u32,
-        );
-        js_object_set_field(obj, 0, JSValue::from_bits(elu_handle.get_nanbox_u64()));
-        js_object_set_field(
-            obj,
-            1,
-            JSValue::from_bits(node_timing_handle.get_nanbox_u64()),
-        );
-        js_object_set_field(obj, 2, JSValue::number(time_origin_ms()));
-        crate::value::js_nanbox_pointer(obj as i64)
-    }
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F427_0);
+    let (idle, active) = cumulative_idle_active();
+    obj.set(
+        0,
+        JSValue::from_bits(unsafe { make_elu_object(idle, active) }.to_bits()),
+    );
+    obj.set(1, JSValue::from_bits(js_perf_node_timing().to_bits()));
+    obj.set(2, JSValue::number(time_origin_ms()));
+    crate::value::js_nanbox_pointer(obj.finish() as i64)
 }
 
 // ── performance.nodeTiming (PerformanceNodeTiming) ───────────────────────────
@@ -1278,32 +1248,22 @@ pub(crate) unsafe fn node_timing_to_json(this: f64) -> f64 {
     if src.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // Snapshot before allocating: the alloc can move `src`.
-    let fields: [JSValue; 11] = std::array::from_fn(|i| js_object_get_field(src, i as u32));
-    let out = js_object_alloc_with_shape(
-        NODE_TIMING_JSON_SHAPE,
-        11,
-        NODE_TIMING_JSON_KEYS.as_ptr(),
-        NODE_TIMING_JSON_KEYS.len() as u32,
+    // Snapshot without allocating, then root/copy through the shared birth.
+    let mut values: [f64; 11] =
+        std::array::from_fn(|i| f64::from_bits(js_object_get_field(src, i as u32).bits()));
+    let out = crate::object::runtime_layouts::perry_build_runtime_record(
+        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F429_0),
+        values.as_mut_ptr(),
     );
-    for (i, v) in fields.iter().enumerate() {
-        js_object_set_field(out, i as u32, *v);
-    }
     crate::value::js_nanbox_pointer(out as i64)
 }
 
 unsafe fn make_uv_metrics_info_object() -> f64 {
-    let obj = js_object_alloc_with_shape(
-        UV_METRICS_INFO_SHAPE,
-        3,
-        UV_METRICS_INFO_KEYS.as_ptr(),
-        UV_METRICS_INFO_KEYS.len() as u32,
+    let mut values = [0.0; 3];
+    let obj = crate::object::runtime_layouts::perry_build_runtime_record(
+        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F430_0),
+        values.as_mut_ptr(),
     );
-    // Perry does not expose libuv counters; retain Node's property names and
-    // numeric field types with deterministic zero counters.
-    js_object_set_field(obj, 0, JSValue::number(0.0)); // loopCount
-    js_object_set_field(obj, 1, JSValue::number(0.0)); // events
-    js_object_set_field(obj, 2, JSValue::number(0.0)); // eventsWaiting
     crate::value::js_nanbox_pointer(obj as i64)
 }
 

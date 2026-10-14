@@ -510,7 +510,7 @@ fn event_array(events: &[ParcelEvent]) -> f64 {
     let scope = TransientRootScope::enter();
     let array = unsafe { js_array_alloc(events.len() as u32) };
     let rooted_array = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(array).bits()));
-    let (packed, shape) = build_object_shape(&["path", "type"]);
+
     for event in events {
         let path = alloc_string(&js_visible_path(&event.path));
         let path = scope.root_nanbox(f64::from_bits(
@@ -524,8 +524,11 @@ fn event_array(events: &[ParcelEvent]) -> f64 {
         let kind = scope.root_nanbox(f64::from_bits(
             JsValue::from_string_ptr(kind.as_raw()).bits(),
         ));
-        let object =
-            unsafe { js_object_alloc_with_shape(shape, 2, packed.as_ptr(), packed.len() as u32) };
+        let object = unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F29_0
+            ))
+        };
         unsafe {
             js_object_set_field(object, 0, JsValue::from_bits(path.get().to_bits()));
             js_object_set_field(object, 1, JsValue::from_bits(kind.get().to_bits()));
@@ -1173,6 +1176,32 @@ mod tests {
                 matcher.ignores(root, &root.join(path)).unwrap(),
                 expected,
                 "{pattern:?} {path:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F29_0
+            ))
+        } as i64);
+        for slot in 0..2 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
             );
         }
     }

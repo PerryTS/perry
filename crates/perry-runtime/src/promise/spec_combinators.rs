@@ -519,58 +519,25 @@ extern "C" fn any_reject_element_fn(
 }
 
 fn build_settled_fulfilled(value: f64) -> f64 {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
-    let packed = b"status\0value\0";
-    // #7497: `js_string_from_bytes` below allocates, so neither the freshly
-    // allocated record nor the caller's value may be held across it raw.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_nanbox_f64(boxed_ptr(js_object_alloc_with_shape(
-        0x7FFF_FF10,
-        2,
-        packed.as_ptr(),
-        packed.len() as u32,
-    )));
-    let value_h = scope.root_nanbox_f64(value);
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F470_0);
+    obj.set(1, JSValue::from_bits(value.to_bits()));
     let status = crate::string::js_string_from_bytes(b"fulfilled".as_ptr(), 9);
-    let obj = unboxed_ptr(obj_h.get_nanbox_f64());
-    js_object_set_field(
-        obj,
+    obj.set(
         0,
         JSValue::from_bits(crate::value::js_nanbox_string(status as i64).to_bits()),
     );
-    js_object_set_field(
-        obj,
-        1,
-        JSValue::from_bits(value_h.get_nanbox_f64().to_bits()),
-    );
-    obj_h.get_nanbox_f64()
+    crate::value::js_nanbox_pointer(obj.finish() as i64)
 }
 
 fn build_settled_rejected(reason: f64) -> f64 {
-    use crate::object::{js_object_alloc_with_shape, js_object_set_field};
-    let packed = b"status\0reason\0";
-    // #7497: see `build_settled_fulfilled`.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_nanbox_f64(boxed_ptr(js_object_alloc_with_shape(
-        0x7FFF_FF11,
-        2,
-        packed.as_ptr(),
-        packed.len() as u32,
-    )));
-    let reason_h = scope.root_nanbox_f64(reason);
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F471_0);
+    obj.set(1, JSValue::from_bits(reason.to_bits()));
     let status = crate::string::js_string_from_bytes(b"rejected".as_ptr(), 8);
-    let obj = unboxed_ptr(obj_h.get_nanbox_f64());
-    js_object_set_field(
-        obj,
+    obj.set(
         0,
         JSValue::from_bits(crate::value::js_nanbox_string(status as i64).to_bits()),
     );
-    js_object_set_field(
-        obj,
-        1,
-        JSValue::from_bits(reason_h.get_nanbox_f64().to_bits()),
-    );
-    obj_h.get_nanbox_f64()
+    crate::value::js_nanbox_pointer(obj.finish() as i64)
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,33 +1091,14 @@ pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
         return js_nanbox_pointer(obj as i64);
     }
     let cap = new_promise_capability(ctor_h.get_nanbox_f64());
-    let cap_promise_h = scope.root_nanbox_f64(cap.promise);
-    let cap_resolve_h = scope.root_nanbox_f64(cap.resolve);
-    let cap_reject_h = scope.root_nanbox_f64(cap.reject);
-    let packed = b"promise\0resolve\0reject\0";
-    let obj_h = scope.root_nanbox_f64(boxed_ptr(crate::object::js_object_alloc_with_shape(
-        0xFFF0_0001,
-        3,
-        packed.as_ptr(),
-        packed.len() as u32,
-    )));
-    let obj = unboxed_ptr(obj_h.get_nanbox_f64());
-    crate::object::js_object_set_field(
-        obj,
-        0,
-        JSValue::from_bits(cap_promise_h.get_nanbox_f64().to_bits()),
-    );
-    crate::object::js_object_set_field(
-        obj,
-        1,
-        JSValue::from_bits(cap_resolve_h.get_nanbox_f64().to_bits()),
-    );
-    crate::object::js_object_set_field(
-        obj,
-        2,
-        JSValue::from_bits(cap_reject_h.get_nanbox_f64().to_bits()),
-    );
-    obj_h.get_nanbox_f64()
+    let mut values = [cap.promise, cap.resolve, cap.reject];
+    let obj = unsafe {
+        crate::object::runtime_layouts::perry_build_runtime_record(
+            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F473_0),
+            values.as_mut_ptr(),
+        )
+    };
+    boxed_ptr(obj)
 }
 
 /// `Promise.try(callbackfn, ...args)` (ECMA-262 27.2.4.x) with `this` = C:

@@ -1920,3 +1920,80 @@ mod force_link;
 
 static HTTP_CREATE_SOCKET_CB_INFO: perry_ffi::JsFunctionInfo =
     perry_ffi::JsFunctionInfo::of(http_create_socket_cb as perry_ffi::JsBody2).with_declared(2);
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F6_0
+            ))
+        } as i64);
+        for slot in 0..1 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F7_0
+            ))
+        } as i64);
+        for slot in 0..5 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F13_0
+            ))
+        } as i64);
+        for slot in 0..1 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F17_0
+            ))
+        } as i64);
+        for slot in 0..7 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+    }
+}

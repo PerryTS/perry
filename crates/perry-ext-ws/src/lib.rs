@@ -1727,3 +1727,29 @@ fn listeners_on_server(handle: Handle, event: &str) -> Vec<i64> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F37_0
+            ))
+        } as i64);
+        for slot in 0..3 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+    }
+}

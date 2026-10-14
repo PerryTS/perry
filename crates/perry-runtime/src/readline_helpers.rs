@@ -149,22 +149,19 @@ fn string_bytes(value: f64) -> Vec<u8> {
 }
 
 fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &str) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let packed = b"name\0ctrl\0shift\0meta\0sequence\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF48, 5, packed.as_ptr(), packed.len() as u32);
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let (name_str, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-        js_string_from_bytes(name.as_ptr(), name.len() as u32)
-    });
-    js_object_set_field(obj, 0, JSValue::string_ptr(name_str));
-    js_object_set_field(obj, 1, JSValue::bool(ctrl));
-    js_object_set_field(obj, 2, JSValue::bool(shift));
-    js_object_set_field(obj, 3, JSValue::bool(meta));
-    let (seq_str, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-        js_string_from_bytes(seq.as_ptr(), seq.len() as u32)
-    });
-    js_object_set_field(obj, 4, JSValue::string_ptr(seq_str));
-    obj_handle.with_const_ptr::<u8, _>(|obj| f64::from_bits(JSValue::pointer(obj).bits()))
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F483_0);
+    obj.set(
+        0,
+        JSValue::string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32)),
+    );
+    obj.set(1, JSValue::bool(ctrl));
+    obj.set(2, JSValue::bool(shift));
+    obj.set(3, JSValue::bool(meta));
+    obj.set(
+        4,
+        JSValue::string_ptr(js_string_from_bytes(seq.as_ptr(), seq.len() as u32)),
+    );
+    crate::value::js_nanbox_pointer(obj.finish() as i64)
 }
 
 fn parse_keypress(chunk: &[u8]) -> Option<(Option<String>, String, bool, bool, bool, String)> {

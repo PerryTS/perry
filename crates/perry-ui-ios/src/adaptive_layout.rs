@@ -241,61 +241,121 @@ fn bool_value(value: bool) -> f64 {
     f64::from_bits(if value { TAG_TRUE } else { TAG_FALSE })
 }
 
-unsafe fn set_field(object: *mut c_void, name: &str, value: f64) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(object, key, value);
-}
-
 unsafe fn snapshot_object(snapshot: &LayoutSnapshot) -> i64 {
-    let object = js_object_alloc(0, 20);
-    if object.is_null() {
+    let _record_roots = perry_ffi::TransientRootScope::enter();
+    let object = _record_roots.root_addr(
+        (unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_U613
+            ))
+        }) as i64,
+    );
+    if (object.get() as *mut perry_ffi::ObjectHeader).is_null() {
         return 0;
     }
-    set_field(object, "width", snapshot.width);
-    set_field(object, "height", snapshot.height);
-    set_field(object, "aspectRatio", snapshot.aspect_ratio);
-    set_field(object, "displayScale", snapshot.display_scale);
-    set_field(
-        object,
-        "horizontalSizeClass",
-        string_value(snapshot.horizontal_size_class),
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        0,
+        perry_ffi::JsValue::from_bits((snapshot.width).to_bits()),
     );
-    set_field(
-        object,
-        "verticalSizeClass",
-        string_value(snapshot.vertical_size_class),
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        1,
+        perry_ffi::JsValue::from_bits((snapshot.height).to_bits()),
     );
-    set_field(object, "orientation", string_value(snapshot.orientation));
-    set_field(object, "windowMode", string_value(snapshot.window_mode));
-    set_field(
-        object,
-        "isMultitasking",
-        bool_value(snapshot.is_multitasking),
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        2,
+        perry_ffi::JsValue::from_bits((snapshot.aspect_ratio).to_bits()),
     );
-    set_field(
-        object,
-        "isFourByThree",
-        bool_value(snapshot.is_four_by_three),
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        3,
+        perry_ffi::JsValue::from_bits((snapshot.display_scale).to_bits()),
     );
-    set_field(object, "systemFrameX", snapshot.system_frame_x);
-    set_field(object, "systemFrameY", snapshot.system_frame_y);
-    set_field(object, "systemFrameWidth", snapshot.system_frame_width);
-    set_field(object, "systemFrameHeight", snapshot.system_frame_height);
-    set_field(
-        object,
-        "isInteractivelyResizing",
-        bool_value(snapshot.is_interactively_resizing),
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        4,
+        perry_ffi::JsValue::from_bits((string_value(snapshot.horizontal_size_class)).to_bits()),
     );
-    set_field(
-        object,
-        "isInterfaceOrientationLocked",
-        bool_value(snapshot.is_interface_orientation_locked),
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        5,
+        perry_ffi::JsValue::from_bits((string_value(snapshot.vertical_size_class)).to_bits()),
     );
-    set_field(object, "safeAreaTop", snapshot.safe_area.top);
-    set_field(object, "safeAreaRight", snapshot.safe_area.right);
-    set_field(object, "safeAreaBottom", snapshot.safe_area.bottom);
-    set_field(object, "safeAreaLeft", snapshot.safe_area.left);
-    object as i64
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        6,
+        perry_ffi::JsValue::from_bits((string_value(snapshot.orientation)).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        7,
+        perry_ffi::JsValue::from_bits((string_value(snapshot.window_mode)).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        8,
+        perry_ffi::JsValue::from_bits((bool_value(snapshot.is_multitasking)).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        9,
+        perry_ffi::JsValue::from_bits((bool_value(snapshot.is_four_by_three)).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        10,
+        perry_ffi::JsValue::from_bits((snapshot.system_frame_x).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        11,
+        perry_ffi::JsValue::from_bits((snapshot.system_frame_y).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        12,
+        perry_ffi::JsValue::from_bits((snapshot.system_frame_width).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        13,
+        perry_ffi::JsValue::from_bits((snapshot.system_frame_height).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        14,
+        perry_ffi::JsValue::from_bits((bool_value(snapshot.is_interactively_resizing)).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        15,
+        perry_ffi::JsValue::from_bits(
+            (bool_value(snapshot.is_interface_orientation_locked)).to_bits(),
+        ),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        16,
+        perry_ffi::JsValue::from_bits((snapshot.safe_area.top).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        17,
+        perry_ffi::JsValue::from_bits((snapshot.safe_area.right).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        18,
+        perry_ffi::JsValue::from_bits((snapshot.safe_area.bottom).to_bits()),
+    );
+    perry_ffi::runtime_layouts::init_runtime_field(
+        &object,
+        19,
+        perry_ffi::JsValue::from_bits((snapshot.safe_area.left).to_bits()),
+    );
+    (object.get() as *mut perry_ffi::ObjectHeader) as i64
 }
 
 unsafe fn invoke_listener(callback: f64, snapshot: &LayoutSnapshot) {

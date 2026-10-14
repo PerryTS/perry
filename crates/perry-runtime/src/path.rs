@@ -891,19 +891,18 @@ pub(crate) fn js_path_posix_parse(
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();
     let (root, dir, base, ext, name) = parse_posix_components(&path_str);
 
-    // Build the object via shape with packed keys
-    let packed = b"root\0dir\0base\0ext\0name\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF20, 5, packed.as_ptr(), packed.len() as u32);
+    // Fill the declared record slots
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F418_0);
     let nb = |s: &str| -> f64 {
         let ptr = string_to_js(s);
         crate::value::js_nanbox_string(ptr as i64)
     };
-    js_object_set_field(obj, 0, JSValue::from_bits(nb(&root).to_bits()));
-    js_object_set_field(obj, 1, JSValue::from_bits(nb(&dir).to_bits()));
-    js_object_set_field(obj, 2, JSValue::from_bits(nb(&base).to_bits()));
-    js_object_set_field(obj, 3, JSValue::from_bits(nb(&ext).to_bits()));
-    js_object_set_field(obj, 4, JSValue::from_bits(nb(&name).to_bits()));
-    obj
+    obj.set(0, JSValue::from_bits(nb(&root).to_bits()));
+    obj.set(1, JSValue::from_bits(nb(&dir).to_bits()));
+    obj.set(2, JSValue::from_bits(nb(&base).to_bits()));
+    obj.set(3, JSValue::from_bits(nb(&ext).to_bits()));
+    obj.set(4, JSValue::from_bits(nb(&name).to_bits()));
+    obj.finish()
 }
 
 /// Throw `TypeError [ERR_INVALID_ARG_TYPE]` for a `path.format` descriptor that
@@ -1561,21 +1560,11 @@ pub extern "C" fn js_path_win32_parse(
 
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();
     let fields = win32_parse::parse_components(&path_str);
-    let packed = b"root\0dir\0base\0ext\0name\0";
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
-        0x7FFF_FF21,
-        5,
-        packed.as_ptr(),
-        packed.len() as u32,
-    ));
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F418_0);
     for (index, field) in fields.iter().enumerate() {
-        // Allocate the string first: it can collect, and the object handle is
-        // re-read after it rather than held as a raw pointer across it.
-        let value = JSValue::string_ptr(string_to_js(field));
-        obj.with_mut_ptr(|o| js_object_set_field(o, index as u32, value));
+        obj.set(index as u32, JSValue::string_ptr(string_to_js(field)));
     }
-    obj.with_mut_ptr(|o| o)
+    obj.finish()
 }
 
 /// `path.win32.format({ dir, root, base, name, ext })` — like the POSIX

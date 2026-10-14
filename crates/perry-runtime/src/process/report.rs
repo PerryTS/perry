@@ -7,31 +7,37 @@ use super::*;
 use crate::value::JSValue;
 
 pub(crate) fn process_release_value() -> f64 {
-    let obj = crate::object::js_object_alloc(0, if cfg!(windows) { 4 } else { 3 });
-    module_set_field(obj, "name", module_string_value("node"));
-    module_set_field(obj, "sourceUrl", module_string_value(""));
-    module_set_field(obj, "headersUrl", module_string_value(""));
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q457_0);
+    obj.set(
+        0,
+        JSValue::from_bits((module_string_value("node")).to_bits()),
+    );
+    obj.set(1, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(2, JSValue::from_bits((module_string_value("")).to_bits()));
     #[cfg(windows)]
-    module_set_field(obj, "libUrl", module_string_value(""));
-    module_object_value(obj)
+    obj.set(3, JSValue::from_bits((module_string_value("")).to_bits()));
+    module_object_value(obj.finish())
 }
 
 pub(crate) fn process_features_value() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 13);
-    module_set_field(obj, "inspector", bool_value(false));
-    module_set_field(obj, "debug", bool_value(false));
-    module_set_field(obj, "uv", bool_value(true));
-    module_set_field(obj, "ipv6", bool_value(true));
-    module_set_field(obj, "tls_alpn", bool_value(true));
-    module_set_field(obj, "tls_sni", bool_value(true));
-    module_set_field(obj, "tls_ocsp", bool_value(true));
-    module_set_field(obj, "tls", bool_value(true));
-    module_set_field(obj, "openssl_is_boringssl", bool_value(false));
-    module_set_field(obj, "cached_builtins", bool_value(false));
-    module_set_field(obj, "require_module", bool_value(false));
-    module_set_field(obj, "quic", bool_value(false));
-    module_set_field(obj, "typescript", module_string_value("transform"));
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q458_0);
+    obj.set(0, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(1, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(2, JSValue::from_bits((bool_value(true)).to_bits()));
+    obj.set(3, JSValue::from_bits((bool_value(true)).to_bits()));
+    obj.set(4, JSValue::from_bits((bool_value(true)).to_bits()));
+    obj.set(5, JSValue::from_bits((bool_value(true)).to_bits()));
+    obj.set(6, JSValue::from_bits((bool_value(true)).to_bits()));
+    obj.set(7, JSValue::from_bits((bool_value(true)).to_bits()));
+    obj.set(8, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(9, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(10, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(11, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(
+        12,
+        JSValue::from_bits((module_string_value("transform")).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 extern "C" fn process_report_function_get_report(
@@ -141,130 +147,170 @@ pub(crate) fn process_report_value() -> f64 {
 }
 
 fn process_report_controller_object() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 11);
-    module_set_field(obj, "compact", bool_value(false));
-    module_set_field(obj, "directory", module_string_value(""));
-    module_set_field(obj, "excludeEnv", bool_value(false));
-    module_set_field(obj, "excludeNetwork", bool_value(false));
-    module_set_field(obj, "filename", module_string_value(""));
-    module_set_field(
-        obj,
-        "getReport",
-        module_function1(
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q459_0);
+    obj.set(0, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(1, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(2, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(3, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(4, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set( 5, JSValue::from_bits((module_function1(
             "getReport",
             crate::fn_info!(process_report_function_get_report, 1; with_declared(1), with_length(1)),
             1,
-        ),
+        )).to_bits()));
+    obj.set(6, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(7, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(8, JSValue::from_bits((bool_value(false)).to_bits()));
+    obj.set(
+        9,
+        JSValue::from_bits((module_string_value("SIGUSR2")).to_bits()),
     );
-    module_set_field(obj, "reportOnFatalError", bool_value(false));
-    module_set_field(obj, "reportOnSignal", bool_value(false));
-    module_set_field(obj, "reportOnUncaughtException", bool_value(false));
-    module_set_field(obj, "signal", module_string_value("SIGUSR2"));
-    module_set_field(
-        obj,
-        "writeReport",
-        module_function2(
+    obj.set( 10, JSValue::from_bits((module_function2(
             "writeReport",
             crate::fn_info!(process_report_function_write_report, 2; with_declared(2), with_length(2)),
             2,
-        ),
-    );
-    module_object_value(obj)
+        )).to_bits()));
+    module_object_value(obj.finish())
 }
 
 fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 11);
-    module_set_field(
-        obj,
-        "header",
-        process_report_header_object(trigger, filename),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q460_0);
+    obj.set(
+        0,
+        JSValue::from_bits((process_report_header_object(trigger, filename)).to_bits()),
     );
-    module_set_field(
-        obj,
-        "javascriptStack",
-        process_report_javascript_stack_object(),
+    obj.set(
+        1,
+        JSValue::from_bits((process_report_javascript_stack_object()).to_bits()),
     );
-    module_set_field(
-        obj,
-        "javascriptHeap",
-        process_report_javascript_heap_object(),
+    obj.set(
+        2,
+        JSValue::from_bits((process_report_javascript_heap_object()).to_bits()),
     );
-    module_set_field(obj, "nativeStack", module_array_value(&[]));
-    module_set_field(obj, "resourceUsage", process_report_resource_usage_object());
-    module_set_field(
-        obj,
-        "uvthreadResourceUsage",
-        process_report_thread_resource_usage_object(),
+    obj.set(3, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    obj.set(
+        4,
+        JSValue::from_bits((process_report_resource_usage_object()).to_bits()),
     );
-    module_set_field(obj, "libuv", module_array_value(&[]));
-    module_set_field(obj, "workers", module_array_value(&[]));
-    module_set_field(
-        obj,
-        "environmentVariables",
-        module_object_value(crate::object::js_object_alloc(0, 0)),
+    obj.set(
+        5,
+        JSValue::from_bits((process_report_thread_resource_usage_object()).to_bits()),
+    );
+    obj.set(6, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    obj.set(7, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    obj.set(
+        8,
+        JSValue::from_bits(
+            (module_object_value(unsafe {
+                crate::object::runtime_layouts::perry_build_runtime_record(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
+                )
+            }))
+            .to_bits(),
+        ),
     );
     #[cfg(not(windows))]
-    module_set_field(obj, "userLimits", process_report_user_limits_object());
-    module_set_field(obj, "sharedObjects", module_array_value(&[]));
-    module_object_value(obj)
+    obj.set(
+        9,
+        JSValue::from_bits((process_report_user_limits_object()).to_bits()),
+    );
+    obj.set(
+        if cfg!(windows) { 9 } else { 10 },
+        JSValue::from_bits((module_array_value(&[])).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 22);
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q461_0);
     let now_ms = process_report_unix_time_ms();
-    module_set_field(obj, "reportVersion", 5.0);
-    module_set_field(obj, "event", module_string_value("JavaScript API"));
-    module_set_field(obj, "trigger", module_string_value(trigger));
-    module_set_field(obj, "filename", module_string_value(filename.unwrap_or("")));
-    module_set_field(
-        obj,
-        "dumpEventTime",
-        module_string_value(&format!("{:.0}", now_ms / 1000.0)),
+    obj.set(0, JSValue::from_bits((5.0f64).to_bits()));
+    obj.set(
+        1,
+        JSValue::from_bits((module_string_value("JavaScript API")).to_bits()),
     );
-    module_set_field(obj, "dumpEventTimeStamp", now_ms);
-    module_set_field(obj, "processId", std::process::id() as f64);
-    module_set_field(obj, "threadId", 0.0);
-    module_set_field(
-        obj,
-        "cwd",
-        module_string_value(&std::env::current_dir().map_or_else(
-            |_| String::new(),
-            |path| path.to_string_lossy().into_owned(),
-        )),
+    obj.set(
+        2,
+        JSValue::from_bits((module_string_value(trigger)).to_bits()),
     );
-    module_set_field(obj, "commandLine", process_report_command_line_array());
-    module_set_field(obj, "nodejsVersion", module_string_value("v22.0.0"));
-    module_set_field(obj, "wordSize", (std::mem::size_of::<usize>() * 8) as f64);
-    module_set_field(obj, "arch", module_string_value(node_arch_name()));
-    module_set_field(obj, "platform", module_string_value(node_platform_name()));
-    module_set_field(
-        obj,
-        "componentVersions",
-        process_report_component_versions(),
+    obj.set(
+        3,
+        JSValue::from_bits((module_string_value(filename.unwrap_or(""))).to_bits()),
     );
-    module_set_field(obj, "release", process_release_value());
-    module_set_field(obj, "osName", module_string_value(std::env::consts::OS));
-    module_set_field(obj, "osRelease", module_string_value(""));
-    module_set_field(obj, "osVersion", module_string_value(""));
-    module_set_field(
-        obj,
-        "osMachine",
-        module_string_value(std::env::consts::ARCH),
+    obj.set(
+        4,
+        JSValue::from_bits((module_string_value(&format!("{:.0}", now_ms / 1000.0))).to_bits()),
     );
-    module_set_field(obj, "host", module_string_value(""));
-    module_object_value(obj)
+    obj.set(5, JSValue::from_bits((now_ms).to_bits()));
+    obj.set(6, JSValue::from_bits((std::process::id() as f64).to_bits()));
+    obj.set(7, JSValue::from_bits((0.0f64).to_bits()));
+    obj.set(
+        8,
+        JSValue::from_bits(
+            (module_string_value(&std::env::current_dir().map_or_else(
+                |_| String::new(),
+                |path| path.to_string_lossy().into_owned(),
+            )))
+            .to_bits(),
+        ),
+    );
+    obj.set(
+        9,
+        JSValue::from_bits((process_report_command_line_array()).to_bits()),
+    );
+    obj.set(
+        10,
+        JSValue::from_bits((module_string_value("v22.0.0")).to_bits()),
+    );
+    obj.set(
+        11,
+        JSValue::from_bits(((std::mem::size_of::<usize>() * 8) as f64).to_bits()),
+    );
+    obj.set(
+        12,
+        JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
+    );
+    obj.set(
+        13,
+        JSValue::from_bits((module_string_value(node_platform_name())).to_bits()),
+    );
+    obj.set(
+        14,
+        JSValue::from_bits((process_report_component_versions()).to_bits()),
+    );
+    obj.set(15, JSValue::from_bits((process_release_value()).to_bits()));
+    obj.set(
+        16,
+        JSValue::from_bits((module_string_value(std::env::consts::OS)).to_bits()),
+    );
+    obj.set(17, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(18, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(
+        19,
+        JSValue::from_bits((module_string_value(std::env::consts::ARCH)).to_bits()),
+    );
+    obj.set(20, JSValue::from_bits((module_string_value("")).to_bits()));
+    module_object_value(obj.finish())
 }
 
 fn process_report_javascript_stack_object() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(obj, "message", module_string_value(""));
-    module_set_field(obj, "stack", module_array_value(&[]));
-    module_set_field(
-        obj,
-        "errorProperties",
-        module_object_value(crate::object::js_object_alloc(0, 0)),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q462_0);
+    obj.set(0, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(1, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    obj.set(
+        2,
+        JSValue::from_bits(
+            (module_object_value(unsafe {
+                crate::object::runtime_layouts::perry_build_runtime_record(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
+                )
+            }))
+            .to_bits(),
+        ),
     );
-    module_object_value(obj)
+    module_object_value(obj.finish())
 }
 
 fn process_report_javascript_heap_object() -> f64 {
@@ -272,58 +318,80 @@ fn process_report_javascript_heap_object() -> f64 {
     let mut heap_total: u64 = 0;
     crate::arena::js_arena_stats(&mut heap_used, &mut heap_total);
 
-    let obj = crate::object::js_object_alloc(0, 8);
-    module_set_field(obj, "totalMemory", heap_total as f64);
-    module_set_field(obj, "executableMemory", 0.0);
-    module_set_field(obj, "totalCommittedMemory", heap_total as f64);
-    module_set_field(obj, "availableMemory", js_process_available_memory());
-    module_set_field(obj, "totalGlobalHandlesMemory", 0.0);
-    module_set_field(obj, "usedGlobalHandlesMemory", 0.0);
-    module_set_field(obj, "usedMemory", heap_used as f64);
-    module_set_field(
-        obj,
-        "heapSpaces",
-        module_object_value(crate::object::js_object_alloc(0, 0)),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q463_0);
+    obj.set(0, JSValue::from_bits((heap_total as f64).to_bits()));
+    obj.set(1, JSValue::from_bits((0.0f64).to_bits()));
+    obj.set(2, JSValue::from_bits((heap_total as f64).to_bits()));
+    obj.set(
+        3,
+        JSValue::from_bits((js_process_available_memory()).to_bits()),
     );
-    module_object_value(obj)
+    obj.set(4, JSValue::from_bits((0.0f64).to_bits()));
+    obj.set(5, JSValue::from_bits((0.0f64).to_bits()));
+    obj.set(6, JSValue::from_bits((heap_used as f64).to_bits()));
+    obj.set(
+        7,
+        JSValue::from_bits(
+            (module_object_value(unsafe {
+                crate::object::runtime_layouts::perry_build_runtime_record(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
+                )
+            }))
+            .to_bits(),
+        ),
+    );
+    module_object_value(obj.finish())
 }
 
 fn process_report_resource_usage_object() -> f64 {
     let (user, system) = read_process_cpu_micros();
-    let obj = crate::object::js_object_alloc(0, 6);
-    module_set_field(obj, "userCpuSeconds", user / 1_000_000.0);
-    module_set_field(obj, "kernelCpuSeconds", system / 1_000_000.0);
-    module_set_field(obj, "cpuConsumptionPercent", 0.0);
-    module_set_field(obj, "rss", get_rss_bytes() as f64);
-    module_set_field(obj, "maxRss", get_rss_bytes() as f64);
-    module_set_field(
-        obj,
-        "fsActivity",
-        module_object_value(crate::object::js_object_alloc(0, 0)),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q464_0);
+    obj.set(0, JSValue::from_bits((user / 1_000_000.0).to_bits()));
+    obj.set(1, JSValue::from_bits((system / 1_000_000.0).to_bits()));
+    obj.set(2, JSValue::from_bits((0.0f64).to_bits()));
+    obj.set(3, JSValue::from_bits((get_rss_bytes() as f64).to_bits()));
+    obj.set(4, JSValue::from_bits((get_rss_bytes() as f64).to_bits()));
+    obj.set(
+        5,
+        JSValue::from_bits(
+            (module_object_value(unsafe {
+                crate::object::runtime_layouts::perry_build_runtime_record(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
+                )
+            }))
+            .to_bits(),
+        ),
     );
-    module_object_value(obj)
+    module_object_value(obj.finish())
 }
 
 fn process_report_thread_resource_usage_object() -> f64 {
     let (user, system) = read_thread_cpu_micros();
-    let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(obj, "userCpuSeconds", user / 1_000_000.0);
-    module_set_field(obj, "kernelCpuSeconds", system / 1_000_000.0);
-    module_set_field(obj, "cpuConsumptionPercent", 0.0);
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q465_0);
+    obj.set(0, JSValue::from_bits((user / 1_000_000.0).to_bits()));
+    obj.set(1, JSValue::from_bits((system / 1_000_000.0).to_bits()));
+    obj.set(2, JSValue::from_bits((0.0f64).to_bits()));
+    module_object_value(obj.finish())
 }
 
 #[cfg(not(windows))]
 fn process_report_user_limits_object() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(
-        obj,
-        "core_file_size_blocks",
-        module_string_value("unlimited"),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q466_0);
+    obj.set(
+        0,
+        JSValue::from_bits((module_string_value("unlimited")).to_bits()),
     );
-    module_set_field(obj, "data_size_kbytes", module_string_value("unlimited"));
-    module_set_field(obj, "file_size_blocks", module_string_value("unlimited"));
-    module_object_value(obj)
+    obj.set(
+        1,
+        JSValue::from_bits((module_string_value("unlimited")).to_bits()),
+    );
+    obj.set(
+        2,
+        JSValue::from_bits((module_string_value("unlimited")).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 fn process_report_command_line_array() -> f64 {
@@ -341,12 +409,24 @@ fn process_report_command_line_array() -> f64 {
 }
 
 fn process_report_component_versions() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 4);
-    module_set_field(obj, "node", module_string_value("22.0.0"));
-    module_set_field(obj, "v8", module_string_value("12.4.254.21"));
-    module_set_field(obj, "uv", module_string_value("1.51.0"));
-    module_set_field(obj, "perry", module_string_value("0.4.71"));
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q467_0);
+    obj.set(
+        0,
+        JSValue::from_bits((module_string_value("22.0.0")).to_bits()),
+    );
+    obj.set(
+        1,
+        JSValue::from_bits((module_string_value("12.4.254.21")).to_bits()),
+    );
+    obj.set(
+        2,
+        JSValue::from_bits((module_string_value("1.51.0")).to_bits()),
+    );
+    obj.set(
+        3,
+        JSValue::from_bits((module_string_value("0.4.71")).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 fn process_report_unix_time_ms() -> f64 {
@@ -457,58 +537,63 @@ fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
 }
 
 pub(crate) fn process_config_value() -> f64 {
-    let config = crate::object::js_object_alloc(0, 2);
-    let variables = crate::object::js_object_alloc(0, 10);
-    let target_defaults = crate::object::js_object_alloc(0, 7);
-    let configurations = crate::object::js_object_alloc(0, 1);
+    crate::object::runtime_layouts::runtime_record!(config, RECORD_Q468_0);
+    crate::object::runtime_layouts::runtime_record!(variables, RECORD_Q468_1);
+    crate::object::runtime_layouts::runtime_record!(target_defaults, RECORD_Q468_2);
+    crate::object::runtime_layouts::runtime_record!(configurations, RECORD_Q468_3);
 
-    module_set_field(
-        variables,
-        "target_arch",
-        module_string_value(node_arch_name()),
+    variables.set(
+        0,
+        JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
     );
-    module_set_field(
-        variables,
-        "host_arch",
-        module_string_value(node_arch_name()),
+    variables.set(
+        1,
+        JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
     );
-    module_set_field(variables, "node_module_version", 141.0);
-    module_set_field(variables, "node_shared_openssl", bool_value(false));
-    module_set_field(variables, "node_use_openssl", bool_value(true));
-    module_set_field(variables, "node_use_node_code_cache", bool_value(false));
-    module_set_field(variables, "node_use_node_snapshot", bool_value(false));
-    module_set_field(variables, "v8_enable_i18n_support", 1.0);
-    module_set_field(variables, "v8_enable_pointer_compression", 0.0);
-    module_set_field(variables, "uv_parent_path", module_string_value(""));
+    variables.set(2, JSValue::from_bits((141.0f64).to_bits()));
+    variables.set(3, JSValue::from_bits((bool_value(false)).to_bits()));
+    variables.set(4, JSValue::from_bits((bool_value(true)).to_bits()));
+    variables.set(5, JSValue::from_bits((bool_value(false)).to_bits()));
+    variables.set(6, JSValue::from_bits((bool_value(false)).to_bits()));
+    variables.set(7, JSValue::from_bits((1.0f64).to_bits()));
+    variables.set(8, JSValue::from_bits((0.0f64).to_bits()));
+    variables.set(9, JSValue::from_bits((module_string_value("")).to_bits()));
 
-    module_set_field(target_defaults, "cflags", module_array_value(&[]));
-    module_set_field(target_defaults, "conditions", module_array_value(&[]));
-    module_set_field(target_defaults, "defines", module_array_value(&[]));
-    module_set_field(target_defaults, "include_dirs", module_array_value(&[]));
-    module_set_field(target_defaults, "libraries", module_array_value(&[]));
-    module_set_field(
-        target_defaults,
-        "default_configuration",
-        module_string_value("Release"),
+    target_defaults.set(0, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    target_defaults.set(1, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    target_defaults.set(2, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    target_defaults.set(3, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    target_defaults.set(4, JSValue::from_bits((module_array_value(&[])).to_bits()));
+    target_defaults.set(
+        5,
+        JSValue::from_bits((module_string_value("Release")).to_bits()),
     );
-    module_set_field(
-        configurations,
-        "Release",
-        module_object_value(crate::object::js_object_alloc(0, 0)),
+    configurations.set(
+        0,
+        JSValue::from_bits(
+            (module_object_value(unsafe {
+                crate::object::runtime_layouts::perry_build_runtime_record(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
+                )
+            }))
+            .to_bits(),
+        ),
     );
-    module_set_field(
-        target_defaults,
-        "configurations",
-        module_object_value(configurations),
+    target_defaults.set(
+        6,
+        JSValue::from_bits((module_object_value(configurations.finish())).to_bits()),
     );
 
-    module_set_field(config, "variables", module_object_value(variables));
-    module_set_field(
-        config,
-        "target_defaults",
-        module_object_value(target_defaults),
+    config.set(
+        0,
+        JSValue::from_bits((module_object_value(variables.finish())).to_bits()),
     );
-    module_object_value(config)
+    config.set(
+        1,
+        JSValue::from_bits((module_object_value(target_defaults.finish())).to_bits()),
+    );
+    module_object_value(config.finish())
 }
 
 pub(crate) fn process_allowed_flags_value() -> f64 {

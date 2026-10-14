@@ -138,36 +138,39 @@ unsafe fn key_material_arg(
     Ok(bytes_from_jsvalue(key_bits))
 }
 
-unsafe fn object_with_two_buffers(
-    first_name: &[u8],
-    first_bytes: &[u8],
-    second_name: &[u8],
-    second_bytes: &[u8],
-) -> *mut Promise {
-    let first = alloc_uint8array_from_slice(first_bytes);
-    let second = alloc_uint8array_from_slice(second_bytes);
-    if first.is_null() || second.is_null() {
+unsafe fn object_with_two_buffers(first_bytes: &[u8], second_bytes: &[u8]) -> *mut Promise {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let first = scope.root_raw_mut_ptr(alloc_uint8array_from_slice(first_bytes));
+    let second = scope.root_raw_mut_ptr(alloc_uint8array_from_slice(second_bytes));
+    if first.get_raw_mut_ptr::<BufferHeader>().is_null()
+        || second.get_raw_mut_ptr::<BufferHeader>().is_null()
+    {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
-    let obj = js_object_alloc(0, 2);
-    if obj.is_null() {
+    let obj = scope.root_raw_mut_ptr(
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
+            perry_runtime::object::runtime_layouts::RECORD_V026
+        )),
+    );
+    if obj
+        .get_raw_mut_ptr::<perry_runtime::ObjectHeader>()
+        .is_null()
+    {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
-    let first_key =
-        perry_runtime::js_string_from_bytes(first_name.as_ptr(), first_name.len() as u32);
-    let second_key =
-        perry_runtime::js_string_from_bytes(second_name.as_ptr(), second_name.len() as u32);
-    js_object_set_field_by_name(
-        obj,
-        first_key,
-        f64::from_bits(JSValue::pointer(first as *const u8).bits()),
+    perry_runtime::object::runtime_layouts::init_runtime_field(
+        &obj,
+        0,
+        JSValue::pointer(first.get_raw_mut_ptr::<BufferHeader>().cast()),
     );
-    js_object_set_field_by_name(
-        obj,
-        second_key,
-        f64::from_bits(JSValue::pointer(second as *const u8).bits()),
+    perry_runtime::object::runtime_layouts::init_runtime_field(
+        &obj,
+        1,
+        JSValue::pointer(second.get_raw_mut_ptr::<BufferHeader>().cast()),
     );
-    resolve_with_bits(JSValue::pointer(obj as *const u8).bits())
+    resolve_with_bits(
+        JSValue::pointer(obj.get_raw_mut_ptr::<perry_runtime::ObjectHeader>().cast()).bits(),
+    )
 }
 
 unsafe fn import_shared_secret_key(
@@ -284,7 +287,7 @@ pub unsafe fn js_webcrypto_encapsulate_bits(args_ptr: *const f64, args_len: usiz
         Some(result) => result,
         None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
-    object_with_two_buffers(b"sharedKey", &shared, b"ciphertext", &ciphertext)
+    object_with_two_buffers(&shared, &ciphertext)
 }
 
 pub unsafe fn js_webcrypto_decapsulate_bits(args_ptr: *const f64, args_len: usize) -> *mut Promise {
@@ -386,4 +389,88 @@ pub unsafe fn js_webcrypto_decapsulate_key(args_ptr: *const f64, args_len: usize
         Err(promise) => return promise,
     };
     resolve_with_bits(JSValue::pointer(shared_key as *const u8).bits())
+}
+
+#[cfg(test)]
+mod record_layout_tests {
+    use super::*;
+
+    #[test]
+    fn static_layout_encapsulate_result_keeps_two_buffers_after_gc() {
+        crate::test_runtime::initialize();
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let promise =
+            scope.root_raw_mut_ptr(unsafe { object_with_two_buffers(&[1, 2, 3], &[4, 5]) });
+        let result = scope.root_nanbox_f64(perry_runtime::promise::js_promise_result(
+            promise.get_raw_mut_ptr(),
+        ));
+        let pointer = || {
+            perry_runtime::value::js_nanbox_get_pointer(result.get_nanbox_f64())
+                as *mut perry_runtime::ObjectHeader
+        };
+        let desc = std::ptr::addr_of!(perry_runtime::object::runtime_layouts::RECORD_V026);
+        unsafe {
+            assert_eq!((*pointer()).parent_class_id, (*desc).layout_id);
+        }
+        perry_runtime::gc::js_gc_collect();
+        for key in [b"sharedKey".as_slice(), b"ciphertext".as_slice()] {
+            let key = scope.root_raw_mut_ptr(perry_runtime::js_string_from_bytes(
+                key.as_ptr(),
+                key.len() as u32,
+            ));
+            let value = perry_runtime::object::js_object_get_field_by_name_f64(
+                pointer(),
+                key.get_raw_const_ptr(),
+            );
+            assert!(perry_runtime::JSValue::from_bits(value.to_bits()).is_pointer());
+        }
+        let keys = scope.root_raw_mut_ptr(perry_runtime::js_object_keys(pointer()));
+        assert_eq!(
+            unsafe { (*keys.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()).length },
+            2
+        );
+        let names: Vec<String> = (0..2)
+            .map(|i| {
+                let bits = perry_runtime::js_array_get_jsvalue(keys.get_raw_mut_ptr(), i);
+                perry_runtime::fs::validate::read_js_string_pub(f64::from_bits(bits))
+            })
+            .collect();
+        assert_eq!(names, ["sharedKey", "ciphertext"]);
+        for name in &names {
+            let key = scope.root_raw_mut_ptr(perry_runtime::js_string_from_bytes(
+                name.as_ptr(), name.len() as u32,
+            ));
+            let property = scope.root_nanbox_f64(
+                perry_runtime::object::js_object_get_own_property_descriptor(
+                    result.get_nanbox_f64(),
+                    perry_runtime::value::js_nanbox_string(key.get_raw_mut_ptr::<perry_runtime::StringHeader>() as i64),
+                ),
+            );
+            for attr in ["writable", "enumerable", "configurable"] {
+                let key = scope.root_raw_mut_ptr(perry_runtime::js_string_from_bytes(
+                    attr.as_ptr(), attr.len() as u32,
+                ));
+                let object = perry_runtime::value::js_nanbox_get_pointer(property.get_nanbox_f64())
+                    as *mut perry_runtime::ObjectHeader;
+                assert_eq!(
+                    perry_runtime::object::js_object_get_field_by_name_f64(object, key.get_raw_const_ptr()).to_bits(),
+                    JSValue::bool(true).bits(),
+                );
+            }
+        }
+        let ordinary = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+        assert_eq!(
+            perry_runtime::object::js_object_get_prototype_of(result.get_nanbox_f64()).to_bits(),
+            perry_runtime::object::js_object_get_prototype_of(
+                perry_runtime::value::js_nanbox_pointer(ordinary.get_raw_mut_ptr::<perry_runtime::ObjectHeader>() as i64),
+            ).to_bits(),
+        );
+        let extra = scope.root_raw_mut_ptr(perry_runtime::js_string_from_bytes(b"extra".as_ptr(), 5));
+        perry_runtime::object::js_object_set_field_by_name(pointer(), extra.get_raw_const_ptr(), 19.0);
+        perry_runtime::gc::js_gc_collect();
+        assert_eq!(
+            perry_runtime::object::js_object_get_field_by_name_f64(pointer(), extra.get_raw_const_ptr()),
+            19.0,
+        );
+    }
 }

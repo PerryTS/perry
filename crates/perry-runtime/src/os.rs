@@ -687,16 +687,9 @@ pub extern "C" fn js_process_versions() -> f64 {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::{js_nanbox_string, JSValue};
 
-    // Build the object via shape with packed keys. Order MUST match the
+    // Fill the declared record slots. Order MUST match the
     // js_object_set_field calls below — slot indices are positional.
-    let packed = b"node\0v8\0perry\0uv\0modules\0openssl\0zlib\0ares\0icu\0unicode\0napi\0llhttp\0nghttp2\0undici\0";
-    let field_count: u32 = 14;
-    let obj = js_object_alloc_with_shape(
-        0x7FFF_FF21,
-        field_count,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F411_0);
 
     let nb = |s: &str| -> JSValue {
         let bytes = s.as_bytes();
@@ -704,23 +697,23 @@ pub extern "C" fn js_process_versions() -> f64 {
         JSValue::from_bits(js_nanbox_string(ptr as i64).to_bits())
     };
 
-    js_object_set_field(obj, 0, nb("22.0.0"));
-    js_object_set_field(obj, 1, nb("12.4.254.21"));
-    js_object_set_field(obj, 2, nb("0.4.71"));
-    js_object_set_field(obj, 3, nb("1.51.0")); // uv (target spec; Perry doesn't link libuv)
-    js_object_set_field(obj, 4, nb("0")); // modules (NAPI ABI counter — "do not assume real Node host")
-    js_object_set_field(obj, 5, nb("0")); // openssl (Perry's TLS uses rustls; no OpenSSL link)
-    js_object_set_field(obj, 6, nb("1.3.0")); // zlib
-    js_object_set_field(obj, 7, nb("0")); // ares
-    js_object_set_field(obj, 8, nb("0")); // icu
-    js_object_set_field(obj, 9, nb("16.0")); // unicode
-    js_object_set_field(obj, 10, nb("0")); // napi
-    js_object_set_field(obj, 11, nb("0")); // llhttp
-    js_object_set_field(obj, 12, nb("0")); // nghttp2
-    js_object_set_field(obj, 13, nb("0")); // undici
+    obj.set(0, nb("22.0.0"));
+    obj.set(1, nb("12.4.254.21"));
+    obj.set(2, nb("0.4.71"));
+    obj.set(3, nb("1.51.0")); // uv (target spec; Perry doesn't link libuv)
+    obj.set(4, nb("0")); // modules (NAPI ABI counter — "do not assume real Node host")
+    obj.set(5, nb("0")); // openssl (Perry's TLS uses rustls; no OpenSSL link)
+    obj.set(6, nb("1.3.0")); // zlib
+    obj.set(7, nb("0")); // ares
+    obj.set(8, nb("0")); // icu
+    obj.set(9, nb("16.0")); // unicode
+    obj.set(10, nb("0")); // napi
+    obj.set(11, nb("0")); // llhttp
+    obj.set(12, nb("0")); // nghttp2
+    obj.set(13, nb("0")); // undici
 
     // Return as NaN-boxed pointer
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    f64::from_bits(JSValue::pointer(obj.finish() as *const u8).bits())
 }
 
 /// process.hrtime.bigint() -> bigint of nanoseconds
@@ -958,9 +951,6 @@ pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
     use crate::array::{js_array_alloc, js_array_push};
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::{js_nanbox_string, JSValue};
-
-    const CPU_TIMES_SHAPE_ID: u32 = 0x7FFF_FF25;
-    const CPU_INFO_SHAPE_ID: u32 = 0x7FFF_FF26;
 
     #[derive(Clone, Copy, Default)]
     struct CpuTimes {
@@ -1213,33 +1203,21 @@ pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
     }
 
     fn build_times_object(times: CpuTimes) -> *mut ObjectHeader {
-        let packed = b"user\0nice\0sys\0idle\0irq\0";
-        let obj =
-            js_object_alloc_with_shape(CPU_TIMES_SHAPE_ID, 5, packed.as_ptr(), packed.len() as u32);
-        js_object_set_field(obj, 0, JSValue::number(times.user));
-        js_object_set_field(obj, 1, JSValue::number(times.nice));
-        js_object_set_field(obj, 2, JSValue::number(times.sys));
-        js_object_set_field(obj, 3, JSValue::number(times.idle));
-        js_object_set_field(obj, 4, JSValue::number(times.irq));
-        obj
+        let mut values = [times.user, times.nice, times.sys, times.idle, times.irq];
+        unsafe {
+            crate::object::runtime_layouts::perry_build_runtime_record(
+                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F412_0),
+                values.as_mut_ptr(),
+            )
+        }
     }
 
     fn build_cpu_object(info: CpuInfo) -> *mut ObjectHeader {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let model = nanbox_string_value(&info.model);
-        let model_handle = scope.root_nanbox_u64(model.bits());
-        let times = build_times_object(info.times);
-        let times_handle = scope.root_raw_mut_ptr(times);
-
-        let packed = b"model\0speed\0times\0";
-        // #7341: the alloc and the re-read are one step.
-        let (obj, times) = times_handle.across_mut::<ObjectHeader, _>(|| {
-            js_object_alloc_with_shape(CPU_INFO_SHAPE_ID, 3, packed.as_ptr(), packed.len() as u32)
-        });
-        js_object_set_field(obj, 0, JSValue::from_bits(model_handle.get_nanbox_u64()));
-        js_object_set_field(obj, 1, JSValue::number(info.speed));
-        js_object_set_field(obj, 2, JSValue::pointer(times as *const u8));
-        obj
+        crate::object::runtime_layouts::runtime_record!(obj, RECORD_F413_0);
+        obj.set(0, nanbox_string_value(&info.model));
+        obj.set(1, JSValue::number(info.speed));
+        obj.set(2, JSValue::pointer(build_times_object(info.times).cast()));
+        obj.finish()
     }
 
     let infos = host_cpu_infos();
@@ -1329,8 +1307,7 @@ fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;
 
-    let packed = b"uid\0gid\0username\0homedir\0shell\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF24, 5, packed.as_ptr(), packed.len() as u32);
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F414_0);
 
     #[cfg(unix)]
     let uid = unsafe { libc::geteuid() as f64 };
@@ -1374,16 +1351,16 @@ fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
         }
     };
 
-    js_object_set_field(obj, 0, JSValue::number(uid));
-    js_object_set_field(obj, 1, JSValue::number(gid));
-    js_object_set_field(obj, 2, text_value(&username));
-    js_object_set_field(obj, 3, text_value(&homedir));
+    obj.set(0, JSValue::number(uid));
+    obj.set(1, JSValue::number(gid));
+    obj.set(2, text_value(&username));
+    obj.set(3, text_value(&homedir));
     #[cfg(unix)]
-    js_object_set_field(obj, 4, text_value(&shell));
+    obj.set(4, text_value(&shell));
     #[cfg(not(unix))]
-    js_object_set_field(obj, 4, JSValue::null());
+    obj.set(4, JSValue::null());
 
-    obj
+    obj.finish()
 }
 
 #[cfg(test)]

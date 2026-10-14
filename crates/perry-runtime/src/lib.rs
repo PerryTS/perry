@@ -11,6 +11,7 @@
 #![recursion_limit = "256"]
 // Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
 #![feature(used_with_arg)]
+#![feature(linkage)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]
 // `agent_ptrs::PERRY_AGENT_PTRS`: a thread-local generated code names directly.

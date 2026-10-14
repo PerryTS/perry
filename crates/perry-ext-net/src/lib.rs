@@ -181,3 +181,46 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
 ) {
     payload_socket::connect(payload_transport::boxed_addr(handle), arg1, arg2, arg3);
 }
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F20_0
+            ))
+        } as i64);
+        for slot in 0..4 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F21_0
+            ))
+        } as i64);
+        for slot in 0..5 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+    }
+}

@@ -1,0 +1,1 @@
+Declare static layouts for checked fixed runtime records and remove their packed keys, shape hints and per-name birth writes. Keep undefined-valued properties present, retain native ownership and barriers, and share immutable atom symbols and one record allocator across runtime, stdlib and native bindings. Four performance-entry contracts remain gated on native-family branding.

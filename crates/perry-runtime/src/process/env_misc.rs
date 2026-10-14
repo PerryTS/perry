@@ -479,14 +479,10 @@ pub extern "C" fn js_process_cpu_usage(prior: f64) -> f64 {
         user_us = (user_us - prev_user).max(0.0);
         system_us = (system_us - prev_system).max(0.0);
     }
-    let obj = crate::object::js_object_alloc(0, 2);
-    let set_field = |name: &str, value: f64| {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, value);
-    };
-    set_field("user", user_us);
-    set_field("system", system_us);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q436_0);
+    obj.set(0, JSValue::from_bits((user_us).to_bits()));
+    obj.set(1, JSValue::from_bits((system_us).to_bits()));
+    f64::from_bits(JSValue::pointer(obj.finish() as *const u8).bits())
 }
 
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
@@ -1502,14 +1498,10 @@ pub extern "C" fn js_process_thread_cpu_usage(prior: f64) -> f64 {
         system_us -= prev_system;
     }
 
-    let obj = crate::object::js_object_alloc(0, 2);
-    let set_field = |name: &str, value: f64| {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, value);
-    };
-    set_field("user", user_us);
-    set_field("system", system_us);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q436_0);
+    obj.set(0, JSValue::from_bits((user_us).to_bits()));
+    obj.set(1, JSValue::from_bits((system_us).to_bits()));
+    f64::from_bits(JSValue::pointer(obj.finish() as *const u8).bits())
 }
 
 /// process.memoryUsage() -> object { rss, heapTotal, heapUsed, external, arrayBuffers }
@@ -1527,22 +1519,24 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
     let memory = crate::gc::heap_stats();
 
     // Allocate object with 5 fields
-    let obj = crate::object::js_object_alloc(0, 5);
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q439_0);
 
     // Set fields by name to match Node.js API
-    let set_field = |name: &str, value: f64| {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, value);
-    };
 
-    set_field("rss", rss as f64);
-    set_field("heapTotal", heap_total as f64);
-    set_field("heapUsed", heap_used as f64);
-    set_field("external", memory.external_bytes as f64);
-    set_field("arrayBuffers", memory.array_buffer_bytes as f64);
+    obj.set(0, JSValue::from_bits((rss as f64).to_bits()));
+    obj.set(1, JSValue::from_bits((heap_total as f64).to_bits()));
+    obj.set(2, JSValue::from_bits((heap_used as f64).to_bits()));
+    obj.set(
+        3,
+        JSValue::from_bits((memory.external_bytes as f64).to_bits()),
+    );
+    obj.set(
+        4,
+        JSValue::from_bits((memory.array_buffer_bytes as f64).to_bits()),
+    );
 
     // Return as NaN-boxed pointer (convert bits to f64)
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    f64::from_bits(JSValue::pointer(obj.finish() as *const u8).bits())
 }
 
 /// Render a number the way Node prints the `Received …` clause of an

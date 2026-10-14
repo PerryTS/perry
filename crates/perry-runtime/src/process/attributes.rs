@@ -79,28 +79,24 @@ pub extern "C" fn js_process_resource_usage() -> f64 {
         }
     }
 
-    let obj = crate::object::js_object_alloc(0, 16);
-    let set_field = |name: &str, value: f64| {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, value);
-    };
-    set_field("userCPUTime", user_cpu);
-    set_field("systemCPUTime", system_cpu);
-    set_field("maxRSS", max_rss);
-    set_field("sharedMemorySize", shared_mem);
-    set_field("unsharedDataSize", unshared_data);
-    set_field("unsharedStackSize", unshared_stack);
-    set_field("minorPageFault", minor_faults);
-    set_field("majorPageFault", major_faults);
-    set_field("swappedOut", swapped_out);
-    set_field("fsRead", fs_read);
-    set_field("fsWrite", fs_write);
-    set_field("ipcSent", ipc_sent);
-    set_field("ipcReceived", ipc_recv);
-    set_field("signalsCount", signals);
-    set_field("voluntaryContextSwitches", vcsw);
-    set_field("involuntaryContextSwitches", ivcsw);
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q435_0);
+    obj.set(0, JSValue::from_bits((user_cpu).to_bits()));
+    obj.set(1, JSValue::from_bits((system_cpu).to_bits()));
+    obj.set(2, JSValue::from_bits((max_rss).to_bits()));
+    obj.set(3, JSValue::from_bits((shared_mem).to_bits()));
+    obj.set(4, JSValue::from_bits((unshared_data).to_bits()));
+    obj.set(5, JSValue::from_bits((unshared_stack).to_bits()));
+    obj.set(6, JSValue::from_bits((minor_faults).to_bits()));
+    obj.set(7, JSValue::from_bits((major_faults).to_bits()));
+    obj.set(8, JSValue::from_bits((swapped_out).to_bits()));
+    obj.set(9, JSValue::from_bits((fs_read).to_bits()));
+    obj.set(10, JSValue::from_bits((fs_write).to_bits()));
+    obj.set(11, JSValue::from_bits((ipc_sent).to_bits()));
+    obj.set(12, JSValue::from_bits((ipc_recv).to_bits()));
+    obj.set(13, JSValue::from_bits((signals).to_bits()));
+    obj.set(14, JSValue::from_bits((vcsw).to_bits()));
+    obj.set(15, JSValue::from_bits((ivcsw).to_bits()));
+    f64::from_bits(JSValue::pointer(obj.finish() as *const u8).bits())
 }
 
 /// process.title -> string. Returns the value set via the setter, or

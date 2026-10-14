@@ -1619,8 +1619,11 @@ pub extern "C" fn js_readline_write(handle: i64, chunk: f64) -> f64 {
 pub extern "C" fn js_readline_get_cursor_pos(handle: i64) -> i64 {
     let (cols, rows) =
         with_interface(handle, |state| (state.cursor_cols, state.cursor_rows)).unwrap_or((0, 0));
-    let packed = b"cols\0rows\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF49, 2, packed.as_ptr(), packed.len() as u32);
+    let obj = unsafe {
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
+            perry_runtime::object::runtime_layouts::RECORD_F568_0
+        ))
+    };
     js_object_set_field(obj, 0, JSValue::number(cols as f64));
     js_object_set_field(obj, 1, JSValue::number(rows as f64));
     obj as i64

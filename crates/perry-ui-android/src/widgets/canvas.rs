@@ -63,29 +63,8 @@ extern "C" {
     fn js_promise_rejected(reason: f64) -> *mut c_void;
 }
 
-fn js_key(name: &[u8]) -> *mut c_void {
-    unsafe { js_string_from_bytes(name.as_ptr(), name.len() as u32) }
-}
-
-fn set_image_field(obj: *mut c_void, name: &[u8], value: f64) {
-    unsafe { js_object_set_field_by_name(obj, js_key(name), value) }
-}
-
 fn resolved_image_promise(handle: i64, width: f64, height: f64) -> i64 {
-    unsafe {
-        let obj = js_object_alloc(0, 4);
-        if obj.is_null() {
-            let msg = b"Failed to allocate Canvas image object";
-            let reason =
-                js_nanbox_string(js_string_from_bytes(msg.as_ptr(), msg.len() as u32) as i64);
-            return js_promise_rejected(reason) as i64;
-        }
-        set_image_field(obj, b"__perryImageHandle", handle as f64);
-        set_image_field(obj, b"width", width);
-        set_image_field(obj, b"height", height);
-        set_image_field(obj, b"ready", f64::from_bits(JS_TAG_TRUE));
-        js_promise_resolved(js_nanbox_pointer(obj as i64)) as i64
-    }
+    perry_ffi::runtime_layouts::image_result(handle, width, height)
 }
 
 fn rejected_image_promise(message: &str) -> i64 {

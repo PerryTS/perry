@@ -2634,7 +2634,7 @@ js_process_add_listener	Reenters	yes
 js_process_add_uncaught_exception_capture_callback	Reenters	yes
 js_process_argv	Reenters	yes
 js_process_available_memory	Leaf	no
-js_process_binding	Reenters	no
+js_process_binding	Reenters	yes
 js_process_chdir	Reenters	yes
 js_process_chdir_jsv	Reenters	yes
 js_process_constrained_memory	Leaf	no
@@ -2673,7 +2673,7 @@ js_process_internal_kill	Leaf	no
 js_process_ipc_drain	Reenters	yes
 js_process_ipc_has_active	Reenters	yes
 js_process_kill	Reenters	yes
-js_process_linked_binding	Reenters	no
+js_process_linked_binding	Reenters	yes
 js_process_listener_count	Reenters	yes
 js_process_listeners	Reenters	yes
 js_process_load_env_file	Reenters	yes
@@ -4199,6 +4199,7 @@ js_zlib_zstd_decompress_init	Reenters	yes
 js_zlib_zstd_decompress_sync	Reenters	yes
 keys_array_len_capped_to_capacity	Reenters	yes
 perry_alloc_layout	AllocOnly	no
+perry_alloc_runtime_record	AllocOnly	no
 perry_app_group_init	Leaf	no
 perry_app_group_suite_name	Leaf	no
 perry_arkts_register_text_id	Reenters	yes
@@ -4208,6 +4209,7 @@ perry_array_attach_layout	AllocOnly	no
 perry_array_element_kind	Leaf	no
 perry_array_iteration_init	Leaf	no
 perry_array_read_cold_shared	Reenters	yes
+perry_build_runtime_record	Reenters	yes
 perry_class_value_dir_cell	Leaf	no
 perry_cluster_compute_key_id	Leaf	no
 perry_cluster_is_worker	Leaf	no
@@ -4332,6 +4334,7 @@ perry_poll	Reenters	yes
 perry_register_static_plugin	Leaf	no
 perry_resolve_static_plugin	Reenters	yes
 perry_retain_memory_profile_init	Leaf	no
+perry_runtime_image_result	Reenters	yes
 perry_runtime_widget_init	Reenters	no
 perry_safe_area_insets_make	Reenters	yes
 perry_set_wake_callback	Leaf	no

@@ -559,10 +559,11 @@ pub extern "C" fn js_net_socket_address_to_json(handle: i64) -> f64 {
         )
         .bits(),
     ));
-    let keys = ["address", "port", "family", "flowlabel"];
-    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
+
     let object = scope.root_addr(unsafe {
-        perry_ffi::js_object_alloc_with_shape(shape_id, 4, packed.as_ptr(), packed.len() as u32)
+        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+            perry_ffi::runtime_layouts::RECORD_F20_0
+        ))
     } as i64);
     for (i, value) in [
         address.get(),

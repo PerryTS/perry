@@ -21,23 +21,14 @@ use crate::value::JSValue;
 /// TS unchanged — TS sees a plain object it can destructure.
 #[no_mangle]
 pub extern "C" fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64, left: f64) -> f64 {
-    let packed = b"top\0right\0bottom\0left\0";
-    let field_count: u32 = 4;
-    // Unique shape_id — must not collide with other shape-allocated objects
-    // (grep `0x7FFF_FF` in perry-runtime to verify).
-    let obj = js_object_alloc_with_shape(
-        0x7FFF_FF34,
-        field_count,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
-
-    js_object_set_field(obj, 0, JSValue::number(top));
-    js_object_set_field(obj, 1, JSValue::number(right));
-    js_object_set_field(obj, 2, JSValue::number(bottom));
-    js_object_set_field(obj, 3, JSValue::number(left));
-
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let mut values = [top, right, bottom, left];
+    let obj = unsafe {
+        crate::object::runtime_layouts::perry_build_runtime_record(
+            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F487_0),
+            values.as_mut_ptr(),
+        )
+    };
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 #[cfg(test)]

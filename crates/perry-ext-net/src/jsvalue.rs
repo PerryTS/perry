@@ -321,10 +321,11 @@ fn libuv_message_parts(msg: &str) -> Option<(&str, &str)> {
 
 pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     let parts = libuv_message_parts(msg);
-    let keys: [&str; 5] = ["message", "code", "name", "errno", "syscall"];
-    let (packed, shape_id) = build_object_shape(&keys);
-    let obj: *mut ObjectHeader =
-        js_object_alloc_with_shape(shape_id, 5, packed.as_ptr(), packed.len() as u32);
+    let obj: *mut ObjectHeader = unsafe {
+        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+            perry_ffi::runtime_layouts::RECORD_F21_0
+        ))
+    };
     if obj.is_null() {
         // Fall back to the bare string so the listener still receives
         // *something* if the object alloc failed.

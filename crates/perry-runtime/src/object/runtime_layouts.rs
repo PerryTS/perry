@@ -3,6 +3,297 @@ use super::layout_desc::{PerryLayoutDesc, PerryLayoutKey, StaticAtom};
 use crate::gc::GcHeader;
 use crate::string::StringHeader;
 
+// The symbol suffix is explicit because macro_rules cannot hex-encode a string
+// into an export name. The bytes themselves occur once, with the image's NUL
+// and the FNV hash both derived here. Existing runtime atoms are reused.
+macro_rules! runtime_atom {
+    (reuse $name:ident, $bytes:literal, $symbol:literal) => {
+        #[allow(non_snake_case)]
+        pub(crate) mod $name {
+            pub(crate) const HASH: u64 = super::atom_hash($bytes.as_bytes());
+        }
+        unsafe extern "C" {
+            #[link_name = concat!("perry_atom_", $symbol)]
+            pub(crate) safe static $name: StaticAtom;
+        }
+    };
+    ($name:ident, $bytes:literal, $symbol:literal) => {
+        #[allow(non_snake_case)]
+        pub(crate) mod $name {
+            use super::*;
+            pub(crate) const HASH: u64 = atom_hash($bytes.as_bytes());
+            #[used(linker)]
+            #[linkage = "weak_odr"]
+            #[export_name = concat!("perry_image_literal_0_", $symbol)]
+            #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+            #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+            #[cfg_attr(
+                not(any(target_vendor = "apple", target_os = "windows")),
+                link_section = "perry_strings"
+            )]
+            pub(super) static IMAGE: ImageString<{ $bytes.len() + 1 }> =
+                image_bytes(concat!($bytes, "\0").as_bytes());
+        }
+        #[used(linker)]
+        #[linkage = "weak_odr"]
+        #[export_name = concat!("perry_atom_", $symbol)]
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+        #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+        #[cfg_attr(
+            not(any(target_vendor = "apple", target_os = "windows")),
+            link_section = "perry_atoms"
+        )]
+        pub(crate) static $name: StaticAtom = StaticAtom {
+            hash: $name::HASH,
+            string: std::ptr::addr_of!($name::IMAGE.string),
+            kind: crate::codegen_abi::ATOM_KIND_STRING,
+            _pad: [0; 3],
+            index: 0,
+        };
+    };
+}
+
+const fn image_bytes<const N: usize>(bytes: &[u8]) -> ImageString<N> {
+    assert!(bytes.len() == N);
+    let mut result = [0; N];
+    let mut i = 0;
+    while i < N {
+        result[i] = bytes[i];
+        i += 1;
+    }
+    image(result)
+}
+
+const fn layout_keys<const N: usize>(
+    atoms: [(*const StaticAtom, u64, u8); N],
+) -> [PerryLayoutKey; N] {
+    let mut keys = [const {
+        PerryLayoutKey {
+            atom: std::ptr::null(),
+            slot: 0,
+            attrs: 0,
+            _pad: [0; 3],
+        }
+    }; N];
+    let mut i = 0;
+    while i < N {
+        keys[i] = PerryLayoutKey {
+            atom: atoms[i].0,
+            slot: i as u32,
+            attrs: atoms[i].2,
+            _pad: [0; 3],
+        };
+        i += 1;
+    }
+    keys
+}
+
+const fn layout_index_size(keys: usize) -> usize {
+    (keys * 2).next_power_of_two()
+}
+
+const fn layout_index<const N: usize>(atoms: &[(*const StaticAtom, u64, u8)]) -> [u32; N] {
+    assert!(N == layout_index_size(atoms.len()));
+    let mut index = [u32::MAX; N];
+    let mut i = 0;
+    while i < atoms.len() {
+        let mut bucket = atoms[i].1 as usize & (N - 1);
+        while index[bucket] != u32::MAX {
+            bucket = (bucket + 1) & (N - 1);
+        }
+        index[bucket] = i as u32;
+        i += 1;
+    }
+    index
+}
+
+// Optional attribute bytes support the non-default checked contracts; the
+// family/variant are carried contract facts. Slots, padding and probing data
+// are exclusively computed, including the one-bucket empty layout.
+macro_rules! runtime_layout {
+    (@attrs) => { 0 };
+    (@attrs $attrs:expr) => { $attrs };
+    ($name:ident, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(=> $attrs:expr)?),* $(,)?]) => {
+        #[allow(non_snake_case)]
+        pub mod $name {
+            use super::*;
+            const ATOMS: &[(*const StaticAtom, u64, u8)] = &[$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?))),*];
+            pub const SLOT_COUNT: usize = ATOMS.len();
+            pub(super) static KEYS: [PerryLayoutKey; SLOT_COUNT] =
+                layout_keys([$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?))),*]);
+            pub(super) static INDEX: [u32; layout_index_size(SLOT_COUNT)] = layout_index(ATOMS);
+        }
+        #[used(linker)]
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
+        #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
+        #[cfg_attr(not(any(target_vendor = "apple", target_os = "windows")), link_section = "perry_layouts")]
+        #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
+        /// Declared layout of a checked runtime record.
+        pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
+            family: $family, variant: $variant, kind: 0, integrity: 0,
+            slot_count: $name::SLOT_COUNT as u32,
+            layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+            rep: 0, proto: $proto, keys: $name::KEYS.as_ptr(),
+            key_count: $name::SLOT_COUNT as u32,
+            index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
+            index: $name::INDEX.as_ptr(),
+        };
+    };
+}
+
+include!("runtime_layouts/records.rs");
+
+/// Allocate a fixed record with every declared property present, including undefined values.
+///
+/// # Safety
+/// `desc` is a registered descriptor of this binary's fixed runtime records.
+#[no_mangle]
+pub unsafe extern "C" fn perry_alloc_runtime_record(
+    desc: *const PerryLayoutDesc,
+) -> *mut super::ObjectHeader {
+    let object = super::layout_desc::perry_alloc_layout(desc);
+    let fields = object
+        .cast::<u8>()
+        .add(std::mem::size_of::<super::ObjectHeader>())
+        .cast::<u64>();
+    // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
+    for slot in 0..(*desc).slot_count as usize {
+        *fields.add(slot) = crate::value::TAG_UNDEFINED;
+    }
+    object
+}
+
+// A hygienic stack binding for each builder, sized by its declaration.
+macro_rules! runtime_record {
+    ($object:ident, $desc:ident) => {
+        let fields = [const { std::cell::UnsafeCell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+            crate::object::runtime_layouts::$desc::SLOT_COUNT];
+        let $object = unsafe { crate::object::runtime_layouts::RuntimeRecordBuilder::new(
+            std::ptr::addr_of!(crate::object::runtime_layouts::$desc), &fields) };
+    };
+}
+pub(crate) use runtime_record;
+
+/// One shared record birth: root the value buffer before allocation, then fill
+/// declared slots through the ordinary barrier funnel. Moving GC updates the
+/// cells themselves; no copied managed pointer survives allocation.
+///
+/// # Safety
+/// `desc` is registered, and `values` points to `slot_count` writable NaN-boxed
+/// words which remain at this address until the call returns.
+#[no_mangle]
+#[inline(never)]
+pub unsafe extern "C" fn perry_build_runtime_record(
+    desc: *const PerryLayoutDesc,
+    values: *mut f64,
+) -> *mut super::ObjectHeader {
+    let roots = crate::gc::RuntimeHandleScope::new();
+    let count = (*desc).slot_count as usize;
+    let cells = std::slice::from_raw_parts(values.cast::<std::cell::UnsafeCell<f64>>(), count);
+    for cell in cells {
+        roots.root_nanbox_cell(cell);
+    }
+    let object = roots.root_raw_mut_ptr(super::layout_desc::perry_alloc_layout(desc));
+    for (slot, cell) in cells.iter().enumerate() {
+        // The field-store funnel does not allocate or poll the collector.
+        super::js_object_set_field(
+            object.get_raw_mut_ptr(),
+            slot as u32,
+            crate::JSValue::from_bits((*cell.get()).to_bits()),
+        );
+    }
+    object.get_raw_mut_ptr()
+}
+
+#[used(linker)]
+static KEEP_RUNTIME_RECORD_BUILD: unsafe extern "C" fn(
+    *const PerryLayoutDesc,
+    *mut f64,
+) -> *mut super::ObjectHeader = perry_build_runtime_record;
+
+/// Values are evaluated in caller order into a borrowed, fixed stack buffer.
+/// Registering the cells once lets every later allocation rewrite that buffer.
+/// The borrow prevents it from moving or being destroyed while rooted.
+pub struct RuntimeRecordBuilder<'a> {
+    desc: *const PerryLayoutDesc,
+    fields: &'a [std::cell::UnsafeCell<f64>],
+    _roots: std::mem::ManuallyDrop<crate::gc::RuntimeHandleScope>,
+}
+
+impl<'a> RuntimeRecordBuilder<'a> {
+    /// # Safety
+    /// `desc` is registered and its slot count equals the buffer length.
+    #[inline(never)]
+    pub unsafe fn new(
+        desc: *const PerryLayoutDesc,
+        fields: &'a [std::cell::UnsafeCell<f64>],
+    ) -> Self {
+        assert_eq!((*desc).slot_count as usize, fields.len());
+        let roots = crate::gc::RuntimeHandleScope::new();
+        for cell in fields {
+            roots.root_nanbox_cell(cell);
+        }
+        Self {
+            desc,
+            fields,
+            _roots: std::mem::ManuallyDrop::new(roots),
+        }
+    }
+
+    #[inline(never)]
+    pub fn set(&self, slot: u32, value: crate::JSValue) {
+        unsafe {
+            *self.fields[slot as usize].get() = f64::from_bits(value.bits());
+        }
+        crate::gc::runtime_write_barrier_root_nanbox(value.bits());
+    }
+
+    #[inline(never)]
+    pub fn get(&self, slot: u32) -> crate::JSValue {
+        unsafe { crate::JSValue::from_bits((*self.fields[slot as usize].get()).to_bits()) }
+    }
+
+    #[inline(never)]
+    pub fn finish(&self) -> *mut super::ObjectHeader {
+        unsafe { perry_build_runtime_record(self.desc, self.fields.as_ptr().cast_mut().cast()) }
+    }
+}
+
+impl Drop for RuntimeRecordBuilder<'_> {
+    #[inline(never)]
+    fn drop(&mut self) {
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut self._roots);
+        }
+    }
+}
+
+/// Initialize a declared slot after the value expression has finished allocating.
+#[inline(never)]
+pub fn init_runtime_field(object: &crate::gc::RuntimeHandle<'_>, slot: u32, value: crate::JSValue) {
+    super::js_object_set_field(object.get_raw_mut_ptr::<super::ObjectHeader>(), slot, value);
+}
+
+#[used(linker)]
+static KEEP_RUNTIME_RECORD_ALLOC: unsafe extern "C" fn(
+    *const PerryLayoutDesc,
+) -> *mut super::ObjectHeader = perry_alloc_runtime_record;
+
+/// Build the shared fixed image record and its resolved promise for native UI backends.
+#[no_mangle]
+pub extern "C" fn perry_runtime_image_result(handle: i64, width: f64, height: f64) -> i64 {
+    runtime_record!(object, RECORD_U610);
+    object.set(0, crate::JSValue::number(handle as f64));
+    object.set(1, crate::JSValue::number(width));
+    object.set(2, crate::JSValue::number(height));
+    object.set(3, crate::JSValue::bool(true));
+    crate::promise::js_promise_resolved(crate::value::js_nanbox_pointer(object.finish() as i64))
+        as i64
+}
+
+#[used(linker)]
+static KEEP_IMAGE_RESULT: extern "C" fn(i64, f64, f64) -> i64 = perry_runtime_image_result;
+
 #[repr(C, align(8))]
 struct ImageString<const N: usize> {
     gc: GcHeader,

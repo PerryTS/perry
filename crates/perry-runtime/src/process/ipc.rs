@@ -374,26 +374,30 @@ pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
 }
 
 fn process_channel_value() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 2);
-    set_field(
-        obj,
-        "ref",
-        ipc_function(
-            "ref",
-            crate::fn_info!(process_channel_ref_fn, 0; with_declared(0), with_length(0)),
-            0,
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q441_0);
+    obj.set(
+        0,
+        JSValue::from_bits(
+            (ipc_function(
+                "ref",
+                crate::fn_info!(process_channel_ref_fn, 0; with_declared(0), with_length(0)),
+                0,
+            ))
+            .to_bits(),
         ),
     );
-    set_field(
-        obj,
-        "unref",
-        ipc_function(
-            "unref",
-            crate::fn_info!(process_channel_unref_fn, 0; with_declared(0), with_length(0)),
-            0,
+    obj.set(
+        1,
+        JSValue::from_bits(
+            (ipc_function(
+                "unref",
+                crate::fn_info!(process_channel_unref_fn, 0; with_declared(0), with_length(0)),
+                0,
+            ))
+            .to_bits(),
         ),
     );
-    object_value(obj)
+    object_value(obj.finish())
 }
 
 extern "C" fn process_channel_ref_fn(

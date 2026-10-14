@@ -61,14 +61,31 @@ pub extern "C" fn js_ethers_wallet_create_random() -> JsValue {
     }
     let addr_checksummed = to_checksum_address(&addr_lower);
 
-    let (packed, shape_id) = build_object_shape(&["address", "privateKey"]);
-    let obj =
-        unsafe { js_object_alloc_with_shape(shape_id, 2, packed.as_ptr(), packed.len() as u32) };
+    let _record_roots = perry_ffi::TransientRootScope::enter();
+    let obj = _record_roots.root_addr(
+        (unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F3_0
+            ))
+        }) as i64,
+    );
     let addr_str = alloc_string(&addr_checksummed);
-    unsafe { js_object_set_field(obj, 0, JsValue::from_string_ptr(addr_str.as_raw())) };
+    unsafe {
+        perry_ffi::runtime_layouts::init_runtime_field(
+            &obj,
+            0,
+            JsValue::from_string_ptr(addr_str.as_raw()),
+        )
+    };
     let pk_jsstr = alloc_string(pk_str);
-    unsafe { js_object_set_field(obj, 1, JsValue::from_string_ptr(pk_jsstr.as_raw())) };
-    JsValue::from_object_ptr(obj)
+    unsafe {
+        perry_ffi::runtime_layouts::init_runtime_field(
+            &obj,
+            1,
+            JsValue::from_string_ptr(pk_jsstr.as_raw()),
+        )
+    };
+    JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
 }
 
 /// `parseEther(value: string) -> bigint` — alias of
@@ -442,5 +459,31 @@ mod tests {
         assert_eq!(parse_units_to_string("1.0", 6), "1000000");
         assert_eq!(parse_units_to_string("0.5", 6), "500000");
         assert_eq!(parse_units_to_string("1.000001", 6), "1000001");
+    }
+}
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F3_0
+            ))
+        } as i64);
+        for slot in 0..2 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
     }
 }

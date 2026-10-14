@@ -54,16 +54,7 @@ fn intern_pointer_type_strings() -> &'static InternedPointerTypes {
 /// Pass the returned f64 directly to `js_closure_call1`.
 #[no_mangle]
 pub extern "C" fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64 {
-    let packed = b"x\0y\0button\0pointerType\0";
-    let field_count: u32 = 4;
-    // Unique shape_id for PointerEvent — must not collide with other
-    // shape-allocated objects (grep `0x7FFF_FF` in perry-runtime to verify).
-    let obj = js_object_alloc_with_shape(
-        0x7FFF_FF30,
-        field_count,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F434_0);
 
     let interned = intern_pointer_type_strings();
     let type_str_bits = match pointer_type {
@@ -72,12 +63,12 @@ pub extern "C" fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type
         _ => interned.mouse.to_bits(),
     };
 
-    js_object_set_field(obj, 0, JSValue::number(x));
-    js_object_set_field(obj, 1, JSValue::number(y));
-    js_object_set_field(obj, 2, JSValue::number(button as f64));
-    js_object_set_field(obj, 3, JSValue::from_bits(type_str_bits));
+    obj.set(0, JSValue::number(x));
+    obj.set(1, JSValue::number(y));
+    obj.set(2, JSValue::number(button as f64));
+    obj.set(3, JSValue::from_bits(type_str_bits));
 
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    f64::from_bits(JSValue::pointer(obj.finish() as *const u8).bits())
 }
 
 #[cfg(test)]

@@ -690,3 +690,28 @@ mod tests {
         let _ = (alloc_string("x"), JsString::from_raw as *const ());
     }
 }
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_PCHECKED031
+            ))
+        } as i64);
+        let pointer = record.get() as *const perry_ffi::ObjectHeader;
+        assert!(!pointer.is_null());
+        unsafe {
+            assert_eq!((*pointer).class_id, 0);
+            assert_ne!(
+                (*pointer).parent_class_id & 0x8000_0000,
+                0,
+                "the empty handle placeholder must carry a registered layout"
+            );
+            assert!((*pointer).meta.is_null());
+        }
+    }
+}

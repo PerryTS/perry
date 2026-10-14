@@ -904,13 +904,12 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "_sessionCache" => {
             let scope = perry_ffi::TransientRootScope::enter();
             let map = scope.root_nanbox(empty_object_f64());
-            let (packed, shape_id) = perry_ffi::build_object_shape(&["map"]);
-            let object = perry_ffi::js_object_alloc_with_shape(
-                shape_id,
-                1,
-                packed.as_ptr(),
-                packed.len() as u32,
-            );
+
+            let object = unsafe {
+                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                    perry_ffi::runtime_layouts::RECORD_F6_0
+                ))
+            };
             if object.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
@@ -1681,14 +1680,11 @@ pub(crate) unsafe fn build_connect_options(
     port: u16,
     path: &str,
 ) -> f64 {
-    let keys = ["host", "port", "path", "keepAlive", "keepAliveInitialDelay"];
-    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
-    let obj: *mut perry_ffi::ObjectHeader = perry_ffi::js_object_alloc_with_shape(
-        shape_id,
-        keys.len() as u32,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
+    let obj: *mut perry_ffi::ObjectHeader = unsafe {
+        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+            perry_ffi::runtime_layouts::RECORD_F7_0
+        ))
+    };
     if obj.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }

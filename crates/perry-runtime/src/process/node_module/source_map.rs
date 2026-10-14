@@ -157,9 +157,12 @@ fn source_map_prototype() -> f64 {
         // Pre-shape the object so all properties are reflected even when their
         // value is `undefined` (the accessor slots). Store the singleton root
         // immediately: allocating closures below can run a moving GC.
-        let keys = b"constructor\0findEntry\0findOrigin\0lineLengths\0payload\0";
-        let proto =
-            crate::object::js_object_alloc_with_shape(0, 5, keys.as_ptr(), keys.len() as u32);
+
+        let proto = unsafe {
+            crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
+                crate::object::runtime_layouts::RECORD_Q443_0
+            ))
+        };
         let value = module_object_value(proto);
         slot.set(value.to_bits());
         crate::object::js_object_set_field(
@@ -185,11 +188,6 @@ fn source_map_prototype() -> f64 {
                 proto as *mut _,
                 index,
                 JSValue::from_bits(value.to_bits()),
-            );
-            crate::object::set_builtin_property_attrs(
-                proto as usize,
-                name.to_string(),
-                crate::object::PropertyAttrs::new(true, false, true),
             );
         }
         for (index, name, info) in [
@@ -561,7 +559,12 @@ fn source_map_origin_object(
     col: Option<f64>,
 ) -> f64 {
     let Some(entry) = entry else {
-        return module_object_value(crate::object::js_object_alloc(0, 0));
+        return module_object_value(unsafe {
+            crate::object::runtime_layouts::perry_build_runtime_record(
+                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                std::ptr::NonNull::<f64>::dangling().as_ptr(),
+            )
+        });
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let payload = scope.root_nanbox_f64(payload);
@@ -617,7 +620,12 @@ extern "C" fn source_map_find_entry_thunk(
     let query_col = source_map_arg_i64(column.get_nanbox_f64());
 
     let Some(entry) = source_map_lookup(payload.get_nanbox_f64(), query_line, query_col) else {
-        return module_object_value(crate::object::js_object_alloc(0, 0));
+        return module_object_value(unsafe {
+            crate::object::runtime_layouts::perry_build_runtime_record(
+                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                std::ptr::NonNull::<f64>::dangling().as_ptr(),
+            )
+        });
     };
 
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 6));
@@ -669,7 +677,12 @@ extern "C" fn source_map_find_origin_thunk(
     let col = source_map_arg_number(col_arg.get_nanbox_f64());
 
     if line == Some(0.0) && col == Some(0.0) {
-        return module_object_value(crate::object::js_object_alloc(0, 0));
+        return module_object_value(unsafe {
+            crate::object::runtime_layouts::perry_build_runtime_record(
+                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                std::ptr::NonNull::<f64>::dangling().as_ptr(),
+            )
+        });
     }
 
     // `findOrigin` consumes 1-based generated coordinates, unlike findEntry's

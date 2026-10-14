@@ -404,10 +404,13 @@ pub extern "C" fn js_ws_server_address(handle: i64) -> f64 {
     let family = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string(family).as_raw()).bits(),
     ));
-    let (keys, shape) = perry_ffi::build_object_shape(&["address", "family", "port"]);
+
     unsafe {
-        let object =
-            perry_ffi::js_object_alloc_with_shape(shape, 3, keys.as_ptr(), keys.len() as u32);
+        let object = unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F37_0
+            ))
+        };
         perry_ffi::js_object_set_field(object, 0, JsValue::from_bits(address.get().to_bits()));
         perry_ffi::js_object_set_field(object, 1, JsValue::from_bits(family.get().to_bits()));
         perry_ffi::js_object_set_field(object, 2, JsValue::from_number(port as f64));

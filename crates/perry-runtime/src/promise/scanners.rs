@@ -763,40 +763,15 @@ pub(crate) fn test_current_microtask_value() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_promise_with_resolvers() -> *mut crate::object::ObjectHeader {
     use crate::closure::js_closure_alloc;
-    use crate::object::js_object_alloc_with_shape;
-
-    // Create the pending promise.
-    let promise = js_promise_new();
-    let promise_box = crate::value::js_nanbox_pointer(promise as i64);
-
-    // Create resolve closure that resolves this promise.
-    let resolve_fn = js_closure_alloc(
-        crate::fn_info!(with_resolvers_resolve_handler, 1),
-        1, // 1 capture: the promise pointer
-    );
-    crate::closure::js_closure_set_capture_f64(resolve_fn, 0, promise_box);
-    let resolve_box = crate::value::js_nanbox_pointer(resolve_fn as i64);
-
-    // Create reject closure.
-    let reject_fn = js_closure_alloc(crate::fn_info!(with_resolvers_reject_handler, 1), 1);
-    crate::closure::js_closure_set_capture_f64(reject_fn, 0, promise_box);
-    let reject_box = crate::value::js_nanbox_pointer(reject_fn as i64);
-
-    // Build the { promise, resolve, reject } object.
-    // Use a 3-field object with packed keys "promise\0resolve\0reject\0".
-    let packed = b"promise\0resolve\0reject\0";
-    let obj = js_object_alloc_with_shape(
-        0xFFF0_0001, // unique shape id
-        3,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
-
-    unsafe {
-        store_with_resolvers_result_fields(obj, promise_box, resolve_box, reject_box);
-    }
-
-    obj
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F473_0);
+    obj.set(0, crate::JSValue::pointer(js_promise_new().cast()));
+    let resolve = js_closure_alloc(crate::fn_info!(with_resolvers_resolve_handler, 1), 1);
+    crate::closure::js_closure_set_capture_f64(resolve, 0, f64::from_bits(obj.get(0).bits()));
+    obj.set(1, crate::JSValue::pointer(resolve.cast()));
+    let reject = js_closure_alloc(crate::fn_info!(with_resolvers_reject_handler, 1), 1);
+    crate::closure::js_closure_set_capture_f64(reject, 0, f64::from_bits(obj.get(0).bits()));
+    obj.set(2, crate::JSValue::pointer(reject.cast()));
+    obj.finish()
 }
 
 unsafe fn store_with_resolvers_result_fields(

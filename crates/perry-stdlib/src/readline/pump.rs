@@ -18,8 +18,11 @@ use super::*;
 fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &str) -> f64 {
     use perry_runtime::object::{js_object_alloc_with_shape, js_object_set_field};
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let packed = b"name\0ctrl\0shift\0meta\0sequence\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF47, 5, packed.as_ptr(), packed.len() as u32);
+    let obj = unsafe {
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
+            perry_runtime::object::runtime_layouts::RECORD_F483_0
+        ))
+    };
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let name_str = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();

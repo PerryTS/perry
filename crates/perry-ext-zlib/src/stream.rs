@@ -612,7 +612,17 @@ unsafe fn create_stream(
     ));
     method(owner.get(), "on", &[event.get(), prefinish.get()]);
     np::own(owner.get(), "bytesWritten", 0.0);
-    own_new!("_handle", f64::from_bits(perry_ffi::alloc_object().bits()));
+    own_new!(
+        "_handle",
+        f64::from_bits(
+            JsValue::from_object_ptr(unsafe {
+                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                    perry_ffi::runtime_layouts::RECORD_PCHECKED031
+                ))
+            })
+            .bits()
+        )
+    );
     own_new!("_outBuffer", value_bytes(&vec![0; chunk_size]));
     np::own(owner.get(), "_outOffset", 0.0);
     np::own(owner.get(), "_chunkSize", chunk_size as f64);

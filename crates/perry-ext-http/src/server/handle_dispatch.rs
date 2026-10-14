@@ -1264,17 +1264,24 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
 /// `out.constructor.name` reads "ServerResponse"/"IncomingMessage" the way
 /// the corpus outgoing-message tests expect (#4909).
 fn constructor_object(name: &str) -> f64 {
-    let (packed, shape_id) = perry_ffi::build_object_shape(&["name"]);
-    let obj =
-        unsafe { js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32) };
-    if obj.is_null() {
+    let _record_roots = perry_ffi::TransientRootScope::enter();
+    let obj = _record_roots.root_addr(
+        (unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F13_0
+            ))
+        }) as i64,
+    );
+    if (obj.get() as *mut perry_ffi::ObjectHeader).is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
     let value = JsValue::from_string_ptr(alloc_string(name).as_raw());
     unsafe {
-        perry_ffi::js_object_set_field(obj, 0, value);
+        perry_ffi::runtime_layouts::init_runtime_field(&obj, 0, value);
     }
-    f64::from_bits(JsValue::from_object_ptr(obj as *mut u8).bits())
+    f64::from_bits(
+        JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader) as *mut u8).bits(),
+    )
 }
 
 /// Dispatch a property write on a registered server-side `ServerResponse`.

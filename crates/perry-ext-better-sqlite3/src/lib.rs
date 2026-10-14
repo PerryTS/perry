@@ -274,14 +274,12 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
                     sqlite_params.iter().map(|p| p.as_ref()).collect();
                 if let Ok(changes) = conn.execute(&stmt.sql, param_refs.as_slice()) {
                     let last_id = conn.last_insert_rowid();
-                    let (packed_keys, shape_id) =
-                        build_object_shape(&["changes", "lastInsertRowid"]);
-                    let result = js_object_alloc_with_shape(
-                        shape_id,
-                        2,
-                        packed_keys.as_ptr(),
-                        packed_keys.len() as u32,
-                    );
+
+                    let result = unsafe {
+                        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                            perry_ffi::runtime_layouts::RECORD_F0_0
+                        ))
+                    };
                     js_object_set_field(result, 0, JsValue::from_number(changes as f64));
                     js_object_set_field(result, 1, JsValue::from_number(last_id as f64));
                     return result;
@@ -650,5 +648,31 @@ mod tests {
         assert_eq!(js_sqlite_close(h), 1);
         // Second close is a no-op (handle already gone).
         assert_eq!(js_sqlite_close(h), 0);
+    }
+}
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F0_0
+            ))
+        } as i64);
+        for slot in 0..2 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
     }
 }

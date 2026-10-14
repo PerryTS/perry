@@ -779,28 +779,42 @@ pub unsafe extern "C" fn js_sharp_to_file(
                     let format = fmt_name(out_format).to_string();
                     let size = bytes.len() as u64;
                     promise.resolve_with(move || {
-                        let (packed, shape_id) =
-                            build_object_shape(&["format", "width", "height", "channels", "size"]);
-                        let obj = unsafe {
-                            js_object_alloc_with_shape(
-                                shape_id,
-                                5,
-                                packed.as_ptr(),
-                                packed.len() as u32,
-                            )
-                        };
+                        let _record_roots = perry_ffi::TransientRootScope::enter();
+                        let obj = _record_roots.root_addr(
+                            (unsafe {
+                                perry_ffi::runtime_layouts::alloc_runtime_record(
+                                    std::ptr::addr_of!(perry_ffi::runtime_layouts::RECORD_F30_0),
+                                )
+                            }) as i64,
+                        );
                         unsafe {
-                            js_object_set_field(
-                                obj,
+                            perry_ffi::runtime_layouts::init_runtime_field(
+                                &obj,
                                 0,
                                 JsValue::from_string_ptr(alloc_string(&format).as_raw()),
                             );
-                            js_object_set_field(obj, 1, JsValue::from_number(width as f64));
-                            js_object_set_field(obj, 2, JsValue::from_number(height as f64));
-                            js_object_set_field(obj, 3, JsValue::from_number(channels as f64));
-                            js_object_set_field(obj, 4, JsValue::from_number(size as f64));
+                            perry_ffi::runtime_layouts::init_runtime_field(
+                                &obj,
+                                1,
+                                JsValue::from_number(width as f64),
+                            );
+                            perry_ffi::runtime_layouts::init_runtime_field(
+                                &obj,
+                                2,
+                                JsValue::from_number(height as f64),
+                            );
+                            perry_ffi::runtime_layouts::init_runtime_field(
+                                &obj,
+                                3,
+                                JsValue::from_number(channels as f64),
+                            );
+                            perry_ffi::runtime_layouts::init_runtime_field(
+                                &obj,
+                                4,
+                                JsValue::from_number(size as f64),
+                            );
                         }
-                        JsValue::from_object_ptr(obj)
+                        JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
                     });
                 }
                 Err(e) => promise.reject_string(&format!("Failed to save image: {}", e)),
@@ -862,29 +876,47 @@ pub extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
             let format = fmt_name(sharp.format).to_string();
             let space = space.to_string();
             promise.resolve_with(move || {
-                let (packed, shape_id) = build_object_shape(&[
-                    "format", "width", "height", "channels", "space", "hasAlpha",
-                ]);
-                let obj = unsafe {
-                    js_object_alloc_with_shape(shape_id, 6, packed.as_ptr(), packed.len() as u32)
-                };
+                let _record_roots = perry_ffi::TransientRootScope::enter();
+                let obj = _record_roots.root_addr(
+                    (unsafe {
+                        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                            perry_ffi::runtime_layouts::RECORD_F31_0
+                        ))
+                    }) as i64,
+                );
                 unsafe {
-                    js_object_set_field(
-                        obj,
+                    perry_ffi::runtime_layouts::init_runtime_field(
+                        &obj,
                         0,
                         JsValue::from_string_ptr(alloc_string(&format).as_raw()),
                     );
-                    js_object_set_field(obj, 1, JsValue::from_number(width as f64));
-                    js_object_set_field(obj, 2, JsValue::from_number(height as f64));
-                    js_object_set_field(obj, 3, JsValue::from_number(channels as f64));
-                    js_object_set_field(
-                        obj,
+                    perry_ffi::runtime_layouts::init_runtime_field(
+                        &obj,
+                        1,
+                        JsValue::from_number(width as f64),
+                    );
+                    perry_ffi::runtime_layouts::init_runtime_field(
+                        &obj,
+                        2,
+                        JsValue::from_number(height as f64),
+                    );
+                    perry_ffi::runtime_layouts::init_runtime_field(
+                        &obj,
+                        3,
+                        JsValue::from_number(channels as f64),
+                    );
+                    perry_ffi::runtime_layouts::init_runtime_field(
+                        &obj,
                         4,
                         JsValue::from_string_ptr(alloc_string(&space).as_raw()),
                     );
-                    js_object_set_field(obj, 5, JsValue::from_bool(has_alpha));
+                    perry_ffi::runtime_layouts::init_runtime_field(
+                        &obj,
+                        5,
+                        JsValue::from_bool(has_alpha),
+                    );
                 }
-                JsValue::from_object_ptr(obj)
+                JsValue::from_object_ptr((obj.get() as *mut perry_ffi::ObjectHeader))
             });
         } else {
             promise.reject_string("Invalid sharp handle");
@@ -1142,5 +1174,48 @@ mod tests {
     fn no_exif_orientation_defaults_to_1() {
         // Raw bytes with no EXIF container parse to orientation 1.
         assert_eq!(read_exif_orientation(b"not an image"), 1);
+    }
+}
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    #[test]
+    fn static_layout_binding_records_keep_all_declared_properties() {
+        perry_ffi::initialize_runtime_fixture();
+        let roots = perry_ffi::TransientRootScope::enter();
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F30_0
+            ))
+        } as i64);
+        for slot in 0..5 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
+        let record = roots.root_addr(unsafe {
+            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+                perry_ffi::runtime_layouts::RECORD_F31_0
+            ))
+        } as i64);
+        for slot in 0..6 {
+            assert_eq!(
+                unsafe {
+                    perry_ffi::js_object_get_field(
+                        record.get() as *const perry_ffi::ObjectHeader,
+                        slot,
+                    )
+                }
+                .bits(),
+                perry_ffi::JsValue::UNDEFINED.bits()
+            );
+        }
     }
 }

@@ -310,16 +310,11 @@ fn listen_error_message(err: &ListenError) -> String {
 /// receiver **before the next store**, because a field write can collect and a
 /// raw local would be read back stale (#8082).
 unsafe fn build_listen_error_value(err: &ListenError) -> f64 {
-    let keys: [&str; 7] = [
-        "message", "code", "name", "errno", "syscall", "address", "port",
-    ];
-    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
-    let obj: *mut perry_ffi::ObjectHeader = perry_ffi::js_object_alloc_with_shape(
-        shape_id,
-        keys.len() as u32,
-        packed.as_ptr(),
-        packed.len() as u32,
-    );
+    let obj: *mut perry_ffi::ObjectHeader = unsafe {
+        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
+            perry_ffi::runtime_layouts::RECORD_F17_0
+        ))
+    };
     if obj.is_null() {
         return listen_error_message_value(err);
     }

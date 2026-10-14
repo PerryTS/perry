@@ -136,22 +136,13 @@ pub(crate) unsafe fn build_data_descriptor(
     enumerable: bool,
     configurable: bool,
 ) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let packed = b"value\0writable\0enumerable\0configurable";
-    let desc = js_object_alloc_with_shape(0x0D_E5_C0, 4, packed.as_ptr(), packed.len() as u32);
-    let header_size = std::mem::size_of::<ObjectHeader>();
-    let fields = (desc as *mut u8).add(header_size) as *mut f64;
-    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-    *fields = value.get_nanbox_f64();
-    *fields.add(1) = bf(writable);
-    *fields.add(2) = bf(enumerable);
-    *fields.add(3) = bf(configurable);
-    super::rebuild_object_field_layout(desc, 4);
-    f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
+    let bf = |b| f64::from_bits(crate::JSValue::bool(b).bits());
+    let mut values = [value, bf(writable), bf(enumerable), bf(configurable)];
+    let desc = crate::object::runtime_layouts::perry_build_runtime_record(
+        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F327_0),
+        values.as_mut_ptr(),
+    );
+    crate::value::js_nanbox_pointer(desc as i64)
 }
 
 pub(crate) unsafe fn build_accessor_descriptor(
@@ -160,23 +151,13 @@ pub(crate) unsafe fn build_accessor_descriptor(
     enumerable: bool,
     configurable: bool,
 ) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let get = scope.root_nanbox_f64(get);
-    let set = scope.root_nanbox_f64(set);
-    let packed = b"get\0set\0enumerable\0configurable";
-    let desc = js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
-    let header_size = std::mem::size_of::<ObjectHeader>();
-    let fields = (desc as *mut u8).add(header_size) as *mut f64;
-    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-    *fields = get.get_nanbox_f64();
-    *fields.add(1) = set.get_nanbox_f64();
-    *fields.add(2) = bf(enumerable);
-    *fields.add(3) = bf(configurable);
-    super::rebuild_object_field_layout(desc, 4);
-    f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
+    let bf = |b| f64::from_bits(crate::JSValue::bool(b).bits());
+    let mut values = [get, set, bf(enumerable), bf(configurable)];
+    let desc = crate::object::runtime_layouts::perry_build_runtime_record(
+        std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F328_0),
+        values.as_mut_ptr(),
+    );
+    crate::value::js_nanbox_pointer(desc as i64)
 }
 
 /// #2818: own-property descriptor for a string primitive receiver. Index keys

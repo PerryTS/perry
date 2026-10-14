@@ -222,26 +222,30 @@ pub(crate) fn process_permission_value() -> Option<f64> {
         return Some(cached);
     }
 
-    let obj = crate::object::js_object_alloc(0, 2);
-    module_set_field(
-        obj,
-        "has",
-        module_function2(
-            "has",
-            crate::fn_info!(process_permission_has_thunk, 2; with_declared(2), with_length(2)),
-            2,
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q456_0);
+    obj.set(
+        0,
+        JSValue::from_bits(
+            (module_function2(
+                "has",
+                crate::fn_info!(process_permission_has_thunk, 2; with_declared(2), with_length(2)),
+                2,
+            ))
+            .to_bits(),
         ),
     );
-    module_set_field(
-        obj,
-        "drop",
-        module_function2(
-            "drop",
-            crate::fn_info!(process_permission_drop_thunk, 2; with_declared(2), with_length(2)),
-            2,
+    obj.set(
+        1,
+        JSValue::from_bits(
+            (module_function2(
+                "drop",
+                crate::fn_info!(process_permission_drop_thunk, 2; with_declared(2), with_length(2)),
+                2,
+            ))
+            .to_bits(),
         ),
     );
-    let value = module_object_value(obj);
+    let value = module_object_value(obj.finish());
     CACHED_PERMISSION.with(|c| c.set(value));
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     Some(value)

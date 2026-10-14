@@ -124,7 +124,12 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
         // Charter step 3: `class_id` is a store-kind input.
         crate::object::shapes::store_kind::restamp_object_store_kind(module);
     }
-    let exports = scope.root_nanbox_f64(module_object_value(crate::object::js_object_alloc(0, 0)));
+    let exports = scope.root_nanbox_f64(module_object_value(unsafe {
+        crate::object::runtime_layouts::perry_build_runtime_record(
+            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+            std::ptr::NonNull::<f64>::dangling().as_ptr(),
+        )
+    }));
     let children = scope.root_nanbox_f64(f64::from_bits(
         JSValue::array_ptr(crate::array::js_array_alloc_with_length(0)).bits(),
     ));
@@ -758,23 +763,26 @@ pub extern "C" fn js_process_set_source_maps_enabled(value: f64) -> f64 {
 /// through `node:module` and shares the enabled flag with `process`.
 #[no_mangle]
 pub extern "C" fn js_module_get_source_maps_support() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 3);
-    module_set_field(
-        obj,
-        "enabled",
-        module_bool_value(SOURCE_MAPS_ENABLED.load(Ordering::Relaxed)),
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q448_0);
+    obj.set(
+        0,
+        JSValue::from_bits(
+            (module_bool_value(SOURCE_MAPS_ENABLED.load(Ordering::Relaxed))).to_bits(),
+        ),
     );
-    module_set_field(
-        obj,
-        "nodeModules",
-        module_bool_value(SOURCE_MAPS_NODE_MODULES.load(Ordering::Relaxed)),
+    obj.set(
+        1,
+        JSValue::from_bits(
+            (module_bool_value(SOURCE_MAPS_NODE_MODULES.load(Ordering::Relaxed))).to_bits(),
+        ),
     );
-    module_set_field(
-        obj,
-        "generatedCode",
-        module_bool_value(SOURCE_MAPS_GENERATED_CODE.load(Ordering::Relaxed)),
+    obj.set(
+        2,
+        JSValue::from_bits(
+            (module_bool_value(SOURCE_MAPS_GENERATED_CODE.load(Ordering::Relaxed))).to_bits(),
+        ),
     );
-    module_object_value(obj)
+    module_object_value(obj.finish())
 }
 
 #[no_mangle]
@@ -848,7 +856,7 @@ pub extern "C" fn js_module_enable_compile_cache(cache_dir: f64) -> f64 {
     let mut guard = MODULE_COMPILE_CACHE_DIR
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let status = if guard.is_some() {
+    let status: f64 = if guard.is_some() {
         2.0
     } else {
         *guard = Some(requested_dir);
@@ -856,10 +864,13 @@ pub extern "C" fn js_module_enable_compile_cache(cache_dir: f64) -> f64 {
     };
     let directory = guard.as_deref().unwrap_or("");
 
-    let obj = crate::object::js_object_alloc(0, 2);
-    module_set_field(obj, "status", status);
-    module_set_field(obj, "directory", module_string_value(directory));
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q449_0);
+    obj.set(0, JSValue::from_bits((status).to_bits()));
+    obj.set(
+        1,
+        JSValue::from_bits((module_string_value(directory)).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 #[no_mangle]
@@ -906,14 +917,12 @@ fn module_hooks_deregister_function(id: u64) -> f64 {
 }
 
 fn module_hooks_deregister_prototype(id: u64) -> *mut crate::object::ObjectHeader {
-    let proto = crate::object::js_object_alloc(0, 1);
-    module_set_field(proto, "deregister", module_hooks_deregister_function(id));
-    crate::object::set_property_attrs(
-        proto as usize,
-        "deregister".to_string(),
-        crate::object::PropertyAttrs::new(true, false, true),
+    crate::object::runtime_layouts::runtime_record!(proto, RECORD_Q450_0);
+    proto.set(
+        0,
+        JSValue::from_bits((module_hooks_deregister_function(id)).to_bits()),
     );
-    proto
+    proto.finish()
 }
 
 /// `module.registerHooks(options)` — synchronous loader customization entry
@@ -921,7 +930,9 @@ fn module_hooks_deregister_prototype(id: u64) -> *mut crate::object::ObjectHeade
 /// dynamic import resolution/loading still follows Perry's compile-time graph.
 #[no_mangle]
 pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
-    let hooks_value = JSValue::from_bits(hooks.to_bits());
+    let _record_roots = crate::gc::RuntimeHandleScope::new();
+    let hooks = _record_roots.root_nanbox_f64(hooks);
+    let hooks_value = JSValue::from_bits(hooks.get_nanbox_u64());
     if hooks_value.is_undefined() {
         module_throw_plain_type_error(
             "Cannot destructure property 'resolve' of 'hooks' as it is undefined.",
@@ -933,11 +944,19 @@ pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
         );
     }
 
-    let mut resolve = module_undefined();
-    let mut load = module_undefined();
-    if let Some(hooks_obj) = module_object_ptr(hooks) {
-        resolve = module_hook_member(module_get_named_field(hooks_obj, "resolve"), "resolve");
-        load = module_hook_member(module_get_named_field(hooks_obj, "load"), "load");
+    let resolve = _record_roots.root_nanbox_f64(module_undefined());
+    let load = _record_roots.root_nanbox_f64(module_undefined());
+    if let Some(hooks_obj) = module_object_ptr(hooks.get_nanbox_f64()) {
+        resolve.set_nanbox_f64(module_hook_member(
+            module_get_named_field(hooks_obj, "resolve"),
+            "resolve",
+        ));
+        // Reading the first hook can run a getter and move the receiver.
+        let hooks_obj = module_object_ptr(hooks.get_nanbox_f64()).expect("rooted hook receiver");
+        load.set_nanbox_f64(module_hook_member(
+            module_get_named_field(hooks_obj, "load"),
+            "load",
+        ));
     }
 
     let id = MODULE_LOADER_HOOK_NEXT_ID.with(|next| {
@@ -948,25 +967,26 @@ pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
     MODULE_LOADER_HOOKS.with(|hooks| {
         hooks.borrow_mut().push(ModuleLoaderHookEntry {
             id,
-            resolve,
-            load,
+            resolve: resolve.get_nanbox_f64(),
+            load: load.get_nanbox_f64(),
             active: true,
         });
     });
-    crate::gc::runtime_write_barrier_root_nanbox(resolve.to_bits());
-    crate::gc::runtime_write_barrier_root_nanbox(load.to_bits());
+    crate::gc::runtime_write_barrier_root_nanbox(resolve.get_nanbox_u64());
+    crate::gc::runtime_write_barrier_root_nanbox(load.get_nanbox_u64());
 
-    let handle = crate::object::js_object_alloc(0, 2);
-    module_set_field(handle, "resolve", resolve);
-    module_set_field(handle, "load", load);
+    crate::object::runtime_layouts::runtime_record!(handle, RECORD_Q451_0);
+    handle.set(0, JSValue::from_bits(resolve.get_nanbox_u64()));
+    handle.set(1, JSValue::from_bits(load.get_nanbox_u64()));
 
+    let handle = _record_roots.root_raw_mut_ptr(handle.finish());
     let proto = module_hooks_deregister_prototype(id);
     let proto_value = module_object_value(proto);
     crate::object::prototype_chain::object_set_static_prototype(
-        handle as usize,
+        handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
         proto_value.to_bits(),
     );
-    module_object_value(handle)
+    module_object_value(handle.get_raw_mut_ptr::<crate::object::ObjectHeader>())
 }
 
 extern "C" fn module_loader_next_resolve(
@@ -975,10 +995,15 @@ extern "C" fn module_loader_next_resolve(
     specifier: f64,
     _context: f64,
 ) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 2);
-    module_set_field(obj, "url", specifier);
-    module_set_field(obj, "format", module_string_value("module-typescript"));
-    module_object_value(obj)
+    let _record_roots = crate::gc::RuntimeHandleScope::new();
+    let specifier = _record_roots.root_nanbox_f64(specifier);
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q452_0);
+    obj.set(0, JSValue::from_bits(specifier.get_nanbox_u64()));
+    obj.set(
+        1,
+        JSValue::from_bits((module_string_value("module-typescript")).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 extern "C" fn module_loader_next_load(
@@ -987,10 +1012,13 @@ extern "C" fn module_loader_next_load(
     _url: f64,
     _context: f64,
 ) -> f64 {
-    let obj = crate::object::js_object_alloc(0, 2);
-    module_set_field(obj, "format", module_string_value("module-typescript"));
-    module_set_field(obj, "source", module_string_value(""));
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q453_0);
+    obj.set(
+        0,
+        JSValue::from_bits((module_string_value("module-typescript")).to_bits()),
+    );
+    obj.set(1, JSValue::from_bits((module_string_value("")).to_bits()));
+    module_object_value(obj.finish())
 }
 
 fn module_loader_callback(
@@ -1013,15 +1041,18 @@ fn module_loader_callback(
 }
 
 fn module_loader_resolve_context() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 1);
-    module_set_field(obj, "parentURL", module_string_value(""));
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q454_0);
+    obj.set(0, JSValue::from_bits((module_string_value("")).to_bits()));
+    module_object_value(obj.finish())
 }
 
 fn module_loader_load_context() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 1);
-    module_set_field(obj, "format", module_string_value("module-typescript"));
-    module_object_value(obj)
+    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q455_0);
+    obj.set(
+        0,
+        JSValue::from_bits((module_string_value("module-typescript")).to_bits()),
+    );
+    module_object_value(obj.finish())
 }
 
 fn module_loader_result_url(result: f64, fallback: f64) -> f64 {
@@ -1716,4 +1747,35 @@ pub extern "C" fn js_module_strip_typescript_types(code: f64, options: f64) -> f
 
     let output = module_strip_type_syntax(&source);
     module_string_value(&output)
+}
+
+#[cfg(test)]
+mod static_record_layout_tests {
+    use super::*;
+
+    #[test]
+    fn static_layout_loader_result_keeps_specifier_after_gc() {
+        crate::gc::initialize_runtime_fixture();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let specifier = scope.root_nanbox_f64(module_string_value("file:///loader-result.ts"));
+        let result = scope.root_nanbox_f64(module_loader_next_resolve(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(module_undefined()),
+            specifier.get_nanbox_f64(),
+            module_undefined(),
+        ));
+        crate::gc::js_gc_collect();
+        let pointer = module_object_ptr(result.get_nanbox_f64()).unwrap();
+        let value = crate::object::js_object_get_field(pointer, 0);
+        assert_eq!(
+            crate::fs::validate::read_js_string_pub(f64::from_bits(value.bits())),
+            "file:///loader-result.ts"
+        );
+        unsafe {
+            assert_eq!(
+                (*pointer).parent_class_id,
+                (*std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_Q452_0)).layout_id
+            );
+        }
+    }
 }
