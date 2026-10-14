@@ -4212,13 +4212,23 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.6"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
 dependencies = [
  "num-integer",
  "num-traits",
  "serde",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
+dependencies = [
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
@@ -4280,7 +4290,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.8",
  "num-integer",
  "num-traits",
 ]
@@ -5374,7 +5384,7 @@ dependencies = [
  "mimalloc",
  "node-semver",
  "notify",
- "num-bigint",
+ "num-bigint 0.5.1",
  "num-traits",
  "perex",
  "perry-abi",
@@ -7375,7 +7385,7 @@ dependencies = [
  "bytes-str",
  "either",
  "from_variant",
- "num-bigint",
+ "num-bigint 0.4.8",
  "once_cell",
  "rustc-hash 2.1.2",
  "serde",
@@ -7422,7 +7432,7 @@ checksum = "2839d2cf4e611b944438c304ec59396221b3db4580acd172fcd70522bb450ee9"
 dependencies = [
  "bitflags",
  "is-macro",
- "num-bigint",
+ "num-bigint 0.4.8",
  "once_cell",
  "phf 0.11.3",
  "rustc-hash 2.1.2",
@@ -7443,7 +7453,7 @@ dependencies = [
  "compact_str",
  "dragonbox_ecma",
  "memchr",
- "num-bigint",
+ "num-bigint 0.4.8",
  "once_cell",
  "regex",
  "rustc-hash 2.1.2",
@@ -7504,7 +7514,7 @@ dependencies = [
  "bitflags",
  "compact_str",
  "either",
- "num-bigint",
+ "num-bigint 0.4.8",
  "phf 0.11.3",
  "rustc-hash 2.1.2",
  "seq-macro",
@@ -7632,7 +7642,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a830a070fea84a3a8a8c556463f0551e3bfc6cf2f8bdeecd62fa753e22a72289"
 dependencies = [
  "new_debug_unreachable",
- "num-bigint",
+ "num-bigint 0.4.8",
  "swc_atoms",
  "swc_common",
  "swc_ecma_ast",

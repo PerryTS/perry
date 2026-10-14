@@ -377,7 +377,7 @@ dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 [dependencies]
 # Replacement/search metadata stays inline until it outgrows the operation stack.
 smallvec = { version = "1.15", optional = true }
-num-bigint = "0.4.6"
+num-bigint = "0.5.1"
 num-traits = "0.2"
 # #9500: the CJS-default module table (`<mod>.default` <-> base) is shared
 # with perry-hir through perry-dispatch, so the runtime's property-read and
