@@ -2166,6 +2166,7 @@ js_number_is_finite	Leaf	no
 js_number_is_integer	Leaf	no
 js_number_is_nan	Leaf	no
 js_number_is_safe_integer	Leaf	no
+js_number_mod	Leaf	no
 js_number_to_exponential	Reenters	yes
 js_number_to_fixed	Reenters	yes
 js_number_to_locale_string	AllocOnly	no

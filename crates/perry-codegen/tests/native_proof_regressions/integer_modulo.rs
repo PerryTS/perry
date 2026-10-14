@@ -53,10 +53,21 @@ fn assert_checked_modulo(ir: &str) {
         ir.contains("call double @js_number_mod("),
         "runtime-checked modulo must fall back to the shared js_number_mod helper:\n{ir}"
     );
-    assert!(
-        !ir.contains("frem double"),
-        "runtime-checked modulo must not keep an inline frem fallback:\n{ir}"
-    );
+    // Scope the "no frem" check to the checked path's own fallback blocks: a
+    // separate typed-f64 clone of a constant expression may still fold
+    // through `frem double <const>, <const>`, which is not this lowering.
+    let fallbacks: Vec<&str> = ir
+        .split("\nmod.f64.fallback")
+        .skip(1)
+        .map(|rest| rest.split("\n\n").next().unwrap_or(rest).split("\nmod.merge").next().unwrap_or(rest))
+        .collect();
+    assert!(!fallbacks.is_empty(), "checked modulo must emit a mod.f64.fallback block:\n{ir}");
+    for block in &fallbacks {
+        assert!(
+            block.contains("call double @js_number_mod(") && !block.contains("frem double"),
+            "the checked-modulo fallback must call js_number_mod, not frem:\n{block}"
+        );
+    }
     assert!(
         ir.contains("mod.i32.convert")
             && ir.contains("srem i32")
