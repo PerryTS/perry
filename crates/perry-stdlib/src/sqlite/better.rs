@@ -611,56 +611,60 @@ pub unsafe extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
     require_statement_database_open(stmt_handle);
-    let result = js_array_alloc(0);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let result = scope.root_raw_mut_ptr(js_array_alloc(0));
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         if let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) {
             if let Ok(conn) = db.conn.lock() {
                 if let Ok(prepared) = conn.prepare(&stmt.sql) {
-                    // Node returns metadata objects keyed in this order.
-                    let keys = vec![
-                        "column".to_string(),
-                        "database".to_string(),
-                        "name".to_string(),
-                        "table".to_string(),
-                        "type".to_string(),
-                    ];
-                    let (packed_keys, shape_id) = build_packed_keys(&keys);
-
                     for col in prepared.columns() {
                         let name = col.name().to_string();
                         let decl_type = col.decl_type().map(|s| s.to_string());
 
-                        let obj = js_object_alloc_with_shape(
-                            shape_id,
-                            keys.len() as u32,
-                            packed_keys.as_ptr(),
-                            packed_keys.len() as u32,
+                        let obj = scope.root_raw_mut_ptr(
+                            perry_runtime::object::layout_desc::perry_alloc_layout(
+                                std::ptr::addr_of!(
+                                    perry_runtime::object::runtime_layouts::SQLITE_COLUMN_METADATA
+                                ),
+                            ),
                         );
                         // column / database / table are null for the
                         // common computed/aliased cases; `name` is the
                         // result label, `type` the declared column type.
-                        js_object_set_field(obj, 0, JSValue::null());
-                        js_object_set_field(obj, 1, JSValue::null());
+                        js_object_set_field(obj.get_raw_mut_ptr(), 0, JSValue::null());
+                        js_object_set_field(obj.get_raw_mut_ptr(), 1, JSValue::null());
                         let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        js_object_set_field(obj, 2, JSValue::string_ptr(name_ptr));
-                        js_object_set_field(obj, 3, JSValue::null());
+                        js_object_set_field(
+                            obj.get_raw_mut_ptr(),
+                            2,
+                            JSValue::string_ptr(name_ptr),
+                        );
+                        js_object_set_field(obj.get_raw_mut_ptr(), 3, JSValue::null());
                         match decl_type {
                             Some(t) => {
                                 let t_ptr = js_string_from_bytes(t.as_ptr(), t.len() as u32);
-                                js_object_set_field(obj, 4, JSValue::string_ptr(t_ptr));
+                                js_object_set_field(
+                                    obj.get_raw_mut_ptr(),
+                                    4,
+                                    JSValue::string_ptr(t_ptr),
+                                );
                             }
-                            None => js_object_set_field(obj, 4, JSValue::null()),
+                            None => js_object_set_field(obj.get_raw_mut_ptr(), 4, JSValue::null()),
                         }
 
-                        js_array_push(result, JSValue::object_ptr(obj as *mut u8));
+                        let next = js_array_push(
+                            result.get_raw_mut_ptr(),
+                            JSValue::object_ptr(obj.get_raw_mut_ptr::<ObjectHeader>().cast()),
+                        );
+                        result.set_raw_mut_ptr(next);
                     }
                 }
             }
         }
     }
 
-    result
+    result.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Keepalive anchors for the codegen-emitted `node:sqlite` (and shared
@@ -697,3 +701,101 @@ pub(crate) static KEEP_SQLITE_CLOSE: unsafe extern "C" fn(Handle) -> i32 = js_sq
 #[used(compiler)]
 pub(crate) static KEEP_SQLITE_STMT_COLUMNS: unsafe extern "C" fn(Handle) -> *mut ArrayHeader =
     js_sqlite_stmt_columns;
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn static_layout_sqlite_columns_keep_names_values_and_gc_edges() {
+        crate::test_runtime::initialize();
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE t (id INTEGER)")
+            .unwrap();
+        let db = register_handle(SqliteDbHandle {
+            conn: Mutex::new(connection),
+        });
+        let stmt = register_handle(SqliteStmtHandle {
+            sql: "SELECT id, 1 AS computed FROM t".to_string(),
+            db_handle: db,
+            raw_mode: AtomicBool::new(false),
+        });
+        let columns = scope.root_raw_mut_ptr(unsafe { js_sqlite_stmt_columns(stmt) });
+        assert_eq!(
+            unsafe { (*columns.get_raw_mut_ptr::<ArrayHeader>()).length },
+            2
+        );
+        let first = scope.root_nanbox_u64(perry_runtime::js_array_get_jsvalue(
+            columns.get_raw_mut_ptr(),
+            0,
+        ));
+        let second = scope.root_nanbox_u64(perry_runtime::js_array_get_jsvalue(
+            columns.get_raw_mut_ptr(),
+            1,
+        ));
+        let pointer = |column: &perry_runtime::gc::RuntimeHandle<'_>| {
+            perry_runtime::value::js_nanbox_get_pointer(column.get_nanbox_f64())
+                as *mut ObjectHeader
+        };
+        let desc =
+            std::ptr::addr_of!(perry_runtime::object::runtime_layouts::SQLITE_COLUMN_METADATA);
+        for column in [&first, &second] {
+            unsafe {
+                assert_eq!(
+                    (*pointer(column)).parent_class_id,
+                    (*desc).layout_id,
+                    "column metadata must be born with its declared layout"
+                );
+                let gc = pointer(column)
+                    .cast::<u8>()
+                    .sub(perry_runtime::gc::GC_HEADER_SIZE)
+                    .cast::<perry_runtime::gc::GcHeader>();
+                assert_eq!(
+                    (*gc).size as usize,
+                    perry_runtime::gc::GC_HEADER_SIZE + std::mem::size_of::<ObjectHeader>() + 40,
+                    "column metadata must allocate exactly its five declared slots"
+                );
+            }
+            let keys = scope.root_raw_mut_ptr(perry_runtime::js_object_keys(pointer(column)));
+            let names: Vec<String> = (0..5)
+                .map(|i| {
+                    let bits = perry_runtime::js_array_get_jsvalue(keys.get_raw_mut_ptr(), i);
+                    unsafe { string_from_header(JSValue::from_bits(bits).as_string_ptr()).unwrap() }
+                })
+                .collect();
+            assert_eq!(names, ["column", "database", "name", "table", "type"]);
+        }
+        let read = |column: &perry_runtime::gc::RuntimeHandle<'_>, name: &[u8]| {
+            let key =
+                scope.root_raw_mut_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+            perry_runtime::object::js_object_get_field_by_name_f64(
+                pointer(column),
+                key.get_raw_mut_ptr(),
+            )
+        };
+        assert_eq!(read(&first, b"column").to_bits(), JSValue::null().bits());
+        assert_eq!(read(&second, b"type").to_bits(), JSValue::null().bits());
+        assert!(drop_handle(stmt));
+        assert_eq!(unsafe { js_sqlite_close(db) }, 1);
+        perry_runtime::gc::js_gc_collect();
+        let name = read(&first, b"name").to_bits();
+        assert_eq!(
+            unsafe { string_from_header(JSValue::from_bits(name).as_string_ptr(),).unwrap() },
+            "id"
+        );
+        let name = read(&second, b"name").to_bits();
+        assert_eq!(
+            unsafe { string_from_header(JSValue::from_bits(name).as_string_ptr(),).unwrap() },
+            "computed"
+        );
+        let key = scope.root_raw_mut_ptr(js_string_from_bytes(b"extra".as_ptr(), 5));
+        perry_runtime::object::js_object_set_field_by_name(
+            pointer(&first),
+            key.get_raw_mut_ptr(),
+            23.0,
+        );
+        assert_eq!(read(&first, b"extra"), 23.0);
+    }
+}

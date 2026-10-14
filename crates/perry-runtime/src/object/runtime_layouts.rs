@@ -1103,3 +1103,181 @@ pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
+
+// Fixed legacy SQLite column metadata; the five data properties are all present.
+#[used(linker)]
+#[export_name = "perry_image_literal_0_636f6c756d6e"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_strings"
+)]
+static SQLITE_IMAGE_0: ImageString<7> = image(*b"column\0");
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_atoms"
+)]
+#[export_name = "perry_atom_636f6c756d6e"]
+static SQLITE_ATOM_0: StaticAtom = StaticAtom {
+    hash: atom_hash(b"column"),
+    string: std::ptr::addr_of!(SQLITE_IMAGE_0.string),
+};
+#[used(linker)]
+#[export_name = "perry_image_literal_0_6461746162617365"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_strings"
+)]
+static SQLITE_IMAGE_1: ImageString<9> = image(*b"database\0");
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_atoms"
+)]
+#[export_name = "perry_atom_6461746162617365"]
+static SQLITE_ATOM_1: StaticAtom = StaticAtom {
+    hash: atom_hash(b"database"),
+    string: std::ptr::addr_of!(SQLITE_IMAGE_1.string),
+};
+#[used(linker)]
+#[export_name = "perry_image_literal_0_6e616d65"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_strings"
+)]
+static SQLITE_IMAGE_2: ImageString<5> = image(*b"name\0");
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_atoms"
+)]
+#[export_name = "perry_atom_6e616d65"]
+static SQLITE_ATOM_2: StaticAtom = StaticAtom {
+    hash: atom_hash(b"name"),
+    string: std::ptr::addr_of!(SQLITE_IMAGE_2.string),
+};
+#[used(linker)]
+#[export_name = "perry_image_literal_0_7461626c65"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_strings"
+)]
+static SQLITE_IMAGE_3: ImageString<6> = image(*b"table\0");
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_atoms"
+)]
+#[export_name = "perry_atom_7461626c65"]
+static SQLITE_ATOM_3: StaticAtom = StaticAtom {
+    hash: atom_hash(b"table"),
+    string: std::ptr::addr_of!(SQLITE_IMAGE_3.string),
+};
+#[used(linker)]
+#[export_name = "perry_image_literal_0_74797065"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_strings"
+)]
+static SQLITE_IMAGE_4: ImageString<5> = image(*b"type\0");
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_atoms"
+)]
+#[export_name = "perry_atom_74797065"]
+static SQLITE_ATOM_4: StaticAtom = StaticAtom {
+    hash: atom_hash(b"type"),
+    string: std::ptr::addr_of!(SQLITE_IMAGE_4.string),
+};
+static SQLITE_COLUMN_KEYS: [PerryLayoutKey; 5] = [
+    PerryLayoutKey {
+        atom: std::ptr::addr_of!(SQLITE_ATOM_0),
+        slot: 0,
+        attrs: 0,
+        _pad: [0; 3],
+    },
+    PerryLayoutKey {
+        atom: std::ptr::addr_of!(SQLITE_ATOM_1),
+        slot: 1,
+        attrs: 0,
+        _pad: [0; 3],
+    },
+    PerryLayoutKey {
+        atom: std::ptr::addr_of!(SQLITE_ATOM_2),
+        slot: 2,
+        attrs: 0,
+        _pad: [0; 3],
+    },
+    PerryLayoutKey {
+        atom: std::ptr::addr_of!(SQLITE_ATOM_3),
+        slot: 3,
+        attrs: 0,
+        _pad: [0; 3],
+    },
+    PerryLayoutKey {
+        atom: std::ptr::addr_of!(SQLITE_ATOM_4),
+        slot: 4,
+        attrs: 0,
+        _pad: [0; 3],
+    },
+];
+static SQLITE_COLUMN_INDEX: [u32; 16] = [
+    u32::MAX,
+    u32::MAX,
+    u32::MAX,
+    u32::MAX,
+    u32::MAX,
+    u32::MAX,
+    2,
+    0,
+    1,
+    u32::MAX,
+    u32::MAX,
+    u32::MAX,
+    u32::MAX,
+    4,
+    u32::MAX,
+    3,
+];
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
+#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_layouts"
+)]
+pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
+    family: 0x53514c01,
+    variant: 0,
+    kind: 0,
+    integrity: 0,
+    slot_count: 5,
+    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
+    rep: 0,
+    proto: 0,
+    keys: SQLITE_COLUMN_KEYS.as_ptr(),
+    key_count: 5,
+    index_mask: 15,
+    index: SQLITE_COLUMN_INDEX.as_ptr(),
+};

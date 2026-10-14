@@ -266,7 +266,7 @@ pub(crate) mod shape_carriers;
 // other hooks are feature-only), so a stock non-test build never
 // reaches it and the linker drops it: the shipped runtime pays nothing.
 pub mod layout_desc;
-pub(crate) mod runtime_layouts;
+pub mod runtime_layouts;
 #[cfg(test)]
 mod layout_desc_tests;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
