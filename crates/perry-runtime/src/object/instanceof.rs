@@ -50,8 +50,8 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     if !jv.is_pointer() {
         return class_ref_id(value).is_some();
     }
-    // A class function object is a closure: one probe answers both.
-    crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
+    crate::value::addr_class::pointer_value_header(jv.bits())
+        .is_some_and(|header| perry_abi::gc_header_word_is_callable(header.kind_facts_word()))
 }
 
 fn small_native_handle_id(value: f64) -> Option<i64> {

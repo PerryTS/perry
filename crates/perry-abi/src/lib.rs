@@ -173,6 +173,24 @@ pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
 pub const GC_HEADER_SIZE: usize = 8;
 
+/// Creation-time [[Call]] on OBJECT and PROXY only. This bit has no other
+/// meaning; closures are callable by their type byte.
+pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
+pub const GC_TYPE_PROXY: u8 = 37;
+pub const GC_TYPE_SYMBOL: u8 = 32;
+pub const GC_TYPE_STRING: u8 = 3;
+
+/// Classify the first four GC-header bytes, loaded as a native-endian u32.
+/// No shape or target read is needed after the creation-time publication.
+#[inline(always)]
+pub const fn gc_header_word_is_callable(word: u32) -> bool {
+    let bytes = word.to_ne_bytes();
+    let kind = bytes[0];
+    let facts = u16::from_ne_bytes([bytes[2], bytes[3]]);
+    kind == GC_TYPE_CLOSURE
+        || ((kind == GC_TYPE_OBJECT || kind == GC_TYPE_PROXY) && facts & GC_OBJECT_CALLABLE != 0)
+}
+
 /// The JS BODY calling convention. Every native body a function object runs —
 /// a compiled closure body, a value wrapper, a native builtin installed as a
 /// function object, a body an addon registers through perry-ffi — is

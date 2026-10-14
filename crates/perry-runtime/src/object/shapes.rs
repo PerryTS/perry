@@ -1118,6 +1118,9 @@ pub(crate) enum ShapeObjectKind {
     /// an ordinary read produces undefined. Absence proofs must retain
     /// collecting native forwarding.
     OrdinaryNativeAlias,
+    /// Ordinary ObjectHeader slots with a birth-declared [[Call]] method.
+    /// Unlike Function kinds, this is not a ClosureHeader allocation.
+    CallableOrdinary,
 }
 
 impl ShapeObjectKind {
@@ -1157,6 +1160,7 @@ impl ShapeObjectKind {
                 | ShapeObjectKind::OrdinaryNumericProof
                 | ShapeObjectKind::NativeNamespace
                 | ShapeObjectKind::OrdinaryNativeAlias
+                | ShapeObjectKind::CallableOrdinary
         )
     }
 
@@ -1176,6 +1180,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::FunctionBoundApply => 8,
             ShapeObjectKind::FunctionBound => 9,
             ShapeObjectKind::OrdinaryNativeAlias => 10,
+            ShapeObjectKind::CallableOrdinary => 11,
         }
     }
 }
@@ -5344,6 +5349,19 @@ pub(crate) fn shape_proto_id(id: u32) -> Option<u64> {
 pub(crate) unsafe fn transition_object_shape_to_class(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
+    publish_callable_object_kind(obj, ShapeObjectKind::Class)
+}
+
+/// Publish a birth-declared [[Call]] and its authoritative shape together.
+/// Called before the newly created function object is exposed to JS.
+pub(crate) unsafe fn publish_callable_object_kind(
+    obj: *mut crate::object::ObjectHeader,
+    kind: ShapeObjectKind,
+) -> u32 {
+    assert!(matches!(
+        kind,
+        ShapeObjectKind::Class | ShapeObjectKind::CallableOrdinary
+    ));
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
@@ -5352,7 +5370,7 @@ pub(crate) unsafe fn transition_object_shape_to_class(
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
-    if current.object_kind == ShapeObjectKind::Class {
+    if current.object_kind == kind {
         return object_shape_stamp(obj);
     }
     let id = publish_shape_result(shape_descriptor_ensure_with_generation(
@@ -5360,10 +5378,14 @@ pub(crate) unsafe fn transition_object_shape_to_class(
         current.logical_key_count,
         current.live_inline_slot_count,
         current.semantic_generation,
-        ShapeObjectKind::Class,
+        kind,
         current.proto_id,
         receiver_facts_of_current(obj, &current),
     ));
+    // Publish [[Call]] in the same writer as the Class shape, before the
+    // stamp's R6 audit. Subsequent shapes carry Class and preserve this bit.
+    let header = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
+    (*header)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id

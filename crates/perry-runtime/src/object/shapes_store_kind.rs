@@ -92,7 +92,9 @@ pub(crate) unsafe fn receiver_carries_numeric_proof(obj: *const ObjectHeader) ->
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeObjectKind {
-    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+    if (*gc_header(obj))._reserved & crate::gc::GC_OBJECT_CALLABLE != 0 {
+        ShapeObjectKind::CallableOrdinary
+    } else if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         ShapeObjectKind::NativeNamespace
     } else if !(*obj).meta.is_null()
         && (*(*obj).meta).flags & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS != 0
@@ -141,9 +143,20 @@ pub(crate) fn shape_admits_plain_store(shape_id: u32) -> bool {
 /// # Safety
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
 pub(crate) unsafe fn store_facts_agree(obj: *const ObjectHeader) -> bool {
+    if !crate::gc::GC_OBJECT_CALLABLE_IS_DISJOINT {
+        return false;
+    }
     let Some(kind) = super::shape_object_kind_by_id(object_shape_stamp(obj)) else {
         return true;
     };
+    if ((*gc_header(obj))._reserved & crate::gc::GC_OBJECT_CALLABLE != 0)
+        != matches!(
+            kind,
+            ShapeObjectKind::Class | ShapeObjectKind::CallableOrdinary
+        )
+    {
+        return false;
+    }
     let proof = receiver_carries_numeric_proof(obj);
     if !kind.is_ordinary_layout() {
         return !proof;

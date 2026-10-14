@@ -618,6 +618,11 @@ unsafe fn class_object_in_template_shape(
     }
     // Born a class object in its final shape (all `Any` lanes, so every slot
     // holds a valid value while still `undefined`).
+    // The validated template names a Class shape. Publish its immutable
+    // [[Call]] fact before the shape stamp's R6 audit, just as the ordinary
+    // class publisher does; this birth skips an intermediate ordinary shape.
+    let header = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
+    (*header)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
     crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, final_shape);
     // The keys carry non-default attribute entries from birth.
     crate::object::descriptor_state::note_attrs_born_with_keys(obj as usize);

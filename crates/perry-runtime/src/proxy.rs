@@ -81,12 +81,6 @@ pub struct ProxyEntry {
     pub handler: f64, // NaN-boxed handler object (raw f64 bits preserved); 0 bits once revoked
     pub(crate) props: *mut crate::object::ObjectHeader,
     pub revoked: bool,
-    /// Whether the proxy's (possibly nested) [[ProxyTarget]] was callable at
-    /// creation. Per spec a proxy has a [[Call]] internal method iff its
-    /// target did AT CREATION, and `typeof` of a revoked proxy is unchanged —
-    /// so callability must be snapshotted, not recomputed from `target`
-    /// (which revocation nulls).
-    pub callable: bool,
     /// Creation-time presence of [[Construct]], independent of [[Call]].
     pub constructable: bool,
 }
@@ -197,10 +191,15 @@ fn throw_proxy_non_object() -> ! {
 /// directly.
 fn target_callable_at_creation(target: f64) -> bool {
     match lookup(target) {
-        Some(id) => entry(id).map(|e| e.callable).unwrap_or(false),
-        None => {
-            crate::object::is_class_object_value(target) || crate::object::value_is_callable(target)
-        }
+        Some(id) => unsafe {
+            crate::gc::header_from_trusted_user_ptr(id as *const u8)
+                .as_ref()
+                .unwrap()
+                ._reserved
+                & crate::gc::GC_OBJECT_CALLABLE
+                != 0
+        },
+        None => crate::object::value_is_callable(target),
     }
 }
 
@@ -222,6 +221,15 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
     )
     .cast::<ProxyEntry>();
     unsafe {
+        let header = crate::gc::header_from_trusted_user_ptr(cell.cast()).cast_mut();
+        if callable {
+            (*header)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
+        }
+        debug_assert_eq!(
+            perry_abi::gc_header_word_is_callable((*header).kind_facts_word()),
+            callable,
+            "Proxy [[Call]] must agree with its creation-time target"
+        );
         std::ptr::write(
             cell,
             ProxyEntry {
@@ -230,7 +238,6 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
                 handler: 0.0,
                 props: std::ptr::null_mut(),
                 revoked: false,
-                callable,
                 constructable,
             },
         );
@@ -316,12 +323,19 @@ pub(crate) fn is_array_proxy_step(value: f64) -> Option<f64> {
 /// Whether a Proxy value's (possibly nested) [[ProxyTarget]] is callable —
 /// the predicate behind `typeof proxyOfFn === "function"` and
 /// `Function.prototype.toString` accepting a proxy receiver. Reads the
-/// creation-time `callable` snapshot (which already resolved through nested
+/// creation-time header fact (which already resolved through nested
 /// proxies), so callability survives revocation (per spec, `typeof` of a
 /// revoked proxy is unchanged) even though revoke nulls the recorded target.
 pub(crate) fn proxy_wraps_callable(value: f64) -> bool {
     match lookup(value) {
-        Some(id) => entry(id).map(|e| e.callable).unwrap_or(false),
+        Some(id) => unsafe {
+            crate::gc::header_from_trusted_user_ptr(id as *const u8)
+                .as_ref()
+                .unwrap()
+                ._reserved
+                & crate::gc::GC_OBJECT_CALLABLE
+                != 0
+        },
         None => crate::object::value_is_callable(value),
     }
 }
@@ -2651,7 +2665,7 @@ mod tests {
             crate::gc::OBJ_FLAG_NULL_PROTO,
             crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
             crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
-            0x0038, // GC_COPY_SURVIVAL_AGE_MASK
+            0x0018, // GC_COPY_SURVIVAL_AGE_MASK
         ] {
             assert_eq!(
                 crate::gc::OBJ_FLAG_PLAIN_ORDINARY & other,

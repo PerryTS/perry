@@ -12,6 +12,24 @@ pub struct GcHeader {
     pub size: u32,
 }
 
+impl GcHeader {
+    /// One load of kind and creation-time object facts. Header alignment is
+    /// u32 and these fields occupy its first four bytes on every target.
+    #[inline(always)]
+    pub(crate) fn kind_facts_word(&self) -> u32 {
+        unsafe { std::ptr::read((self as *const Self).cast::<u32>()) }
+    }
+}
+
+/// [[Call]] for OBJECT and PROXY. Set with the class shape at birth, or with
+/// the proxy target at creation; never changed by properties or revocation.
+pub(crate) const GC_OBJECT_CALLABLE: u16 = perry_abi::GC_OBJECT_CALLABLE;
+const _: () = assert!(std::mem::offset_of!(GcHeader, _reserved) == 2);
+const _: () = assert!(GC_TYPE_OBJECT == perry_abi::GC_TYPE_OBJECT);
+const _: () = assert!(GC_TYPE_PROXY == perry_abi::GC_TYPE_PROXY);
+const _: () = assert!(GC_TYPE_SYMBOL == perry_abi::GC_TYPE_SYMBOL);
+const _: () = assert!(GC_TYPE_STRING == perry_abi::GC_TYPE_STRING);
+
 pub const GC_HEADER_SIZE: usize = std::mem::size_of::<GcHeader>(); // 8 bytes
 
 /// The value stored in [`GcHeader::size`]: the exact allocation total, which
@@ -1614,9 +1632,8 @@ pub const OBJ_FLAG_SEALED: u16 = 0x02;
 pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // #1175: object was created with a null prototype (Object.create(null) /
 // querystring.parse). `Object.getPrototypeOf` returns null for these.
-// Bit 6 -- bits 3..5 are the copied-nursery survival counter
-// (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
-// so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
+// Bit 6; bits 3..4 are survival age, bit 5 is callability, and 14..15
+// are layout state. See the complete map below before allocating a bit.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// I1 (`gc::never_move`): this `GC_TYPE_OBJECT` never moves once it is in
 /// the old generation. The copying minor promotes it at its next survival,
@@ -1630,8 +1647,9 @@ pub(crate) const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
 /// I1 companion (`gc::never_move::note_memo_named`): a site memo stores
 /// this object's address. If a class relink displaces it from a class
 /// identity, the retirement pins it, so the memo keeps reading this object.
-/// Bit 13 has no object meaning (arrays and closures use it for
-/// `GC_LAYOUT_ALL_POINTERS`; readers check `obj_type`). Set-only.
+/// Bit 13 shares generic layout initialization's ALL_POINTERS bit. The
+/// object field iterator selects by shape; memo readers require OBJECT.
+/// Layout initialization must finish before this set-only fact is published.
 pub(crate) const OBJ_FLAG_MEMO_NAMED: u16 = 0x2000;
 /// The GC_TYPE_BUFFER payload contains a native data pointer after BufferHeader.
 /// Bit 7 is kind-disjoint from object/array numeric-layout proofs. Generic age
@@ -1657,14 +1675,6 @@ pub const OBJ_FLAG_STABLE_TOMBSTONES: u16 = 0x400;
 // path is always correct). #7480 reuses bit 11 for `GC_TYPE_ARRAY` as
 // `GC_ARRAY_ELEMENT_SHAPE`; the two are disjoint by `obj_type`.
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
-/// Heap class-expression value (`class C {}`), as distinct from an ordinary
-/// instance carrying the same `GC_TYPE_OBJECT` allocation tag. This is the
-/// authoritative replacement for `ObjectHeader::object_type ==
-/// OBJECT_TYPE_CLASS`; #8113 deleted that legacy payload word — the note below
-/// is history, kept because it explains why the kind lives in the descriptor
-/// rather than in
-/// #8047 removes it. Bit 13 is preserved by survival-age and layout-state
-/// updates and is otherwise unused for `GC_TYPE_OBJECT`.
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached
@@ -1737,9 +1747,8 @@ pub(crate) const GC_ARRAY_KEY_ATTRS: u16 = 0x100;
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// This OBJECT allocation has an Arguments private tail. Its class id stays
 /// zero: the identity does not invent a constructor or private class fields.
-/// Bit 12 is free on OBJECT, whose layout is entirely a ShapeId fact. Array
-/// and closure layout bits are interpreted only after their own kind guard;
-/// object layout transitions never write these bits, and copying preserves it.
+/// Bit 12 is disjoint from object initialization state (14..15). Array
+/// numeric-hole layout uses bit 12 only after its array kind guard.
 pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// # `GcHeader::_reserved` bit map by GC kind
 ///
@@ -1750,29 +1759,51 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// were "the last free bits" while `gc/layout.rs` already owned 12, 13, 14
 /// and 15.
 ///
-/// | bit | OBJECT (`GC_TYPE_OBJECT`) | ARRAY | all kinds |
+/// | bit | OBJECT | PROXY | other uses |
 /// |---|---|---|---|
-/// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
-/// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
-/// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` | free (non-object) |
-/// | 7 | `OBJ_FLAG_NEVER_MOVE` | `GC_ARRAY_RAW_F64_LAYOUT` | closure: `GC_CLOSURE_NON_CONSTRUCTABLE`; byte owner: `GC_BUFFER_FOREIGN_DATA` (out-of-line); byte view: `BYTES_LENGTH_TRACKING` |
-/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_KEY_ATTRS` | byte owner: `BYTES_RESIZABLE` |
-/// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
-/// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | (free) | |
-/// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
-/// | 12 | `OBJ_FLAG_ARGUMENTS` | `GC_ARRAY_RAW_F64_HOLES` | |
-/// | 13 | `OBJ_FLAG_MEMO_NAMED` | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
-/// | 14..15 | available | `GC_LAYOUT_STATE_MASK` | closure/array layout only |
+/// | 0..2 | FROZEN / SEALED / NO_EXTEND | no proxy-specific writer | integrity flags |
+/// | 3..4 | survival age | survival age | GC_COPY_SURVIVAL_AGE_MASK, all kinds |
+/// | 5 | GC_OBJECT_CALLABLE | GC_OBJECT_CALLABLE | unused |
+/// | 6 | NULL_PROTO | unused | array: CUSTOM_PROTO |
+/// | 7 | NEVER_MOVE | unused | array: RAW_F64_LAYOUT; closure: NON_CONSTRUCTABLE; byte owner: FOREIGN_DATA; byte view: LENGTH_TRACKING |
+/// | 8 | TYPED_ARRAY_PROTO | unused | array: KEY_ATTRS; byte owner: RESIZABLE |
+/// | 9 | PLAIN_ORDINARY | unused | array: ARGUMENTS_OBJECT |
+/// | 10 | STABLE_TOMBSTONES | unused | byte pin count |
+/// | 11 | HAS_DESCRIPTORS | unused | array: ELEMENT_SHAPE; byte pin count |
+/// | 12 | ARGUMENTS | unused | array: RAW_F64_HOLES; byte pin count |
+/// | 13 | MEMO_NAMED / generic ALL_POINTERS initialization | unused | array/closure: ALL_POINTERS; byte pin count |
+/// | 14..15 | GC_LAYOUT_STATE_MASK initialization | unused | array/closure layout state |
+///
+/// OBJECT has ObjectFields layout: generic layout initialization writes
+/// 13..15 even though its field iterator later selects exclusively by ShapeId.
+/// These bits are not available for an independent object fact. MEMO_NAMED
+/// is published after initialization and its readers require OBJECT.
 ///
 /// Byte families, TypedArray and NativeArena owner only: byte access uses
-/// the active byte-pin count in 9..13, 14 is buffer detached state, and 15
-/// preserves a pre-existing permanent pin.
-/// These types have no dynamic layout-slot state; no header or cell grows.
-///
-/// Object layout is a ShapeId fact. Bits 7 and 13..15 have no object
-/// layout meaning; array and closure layout metadata still uses its listed
-/// bits. Any new header use must be checked against every GC kind.
+/// the active byte-pin count in 9..13, 14 is detached state, and 15
+/// preserves a permanent pin. These kinds have no dynamic layout-slot state.
+/// No header or payload layout grows.
 pub const OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC: () = ();
+
+/// All independent OBJECT header meanings. Callability must never alias one.
+pub(crate) const GC_OBJECT_CALLABLE_IS_DISJOINT: bool = GC_OBJECT_CALLABLE
+    & (super::layout::GC_LAYOUT_STATE_MASK
+        | super::layout::GC_LAYOUT_ALL_POINTERS
+        | super::layout::GC_COPY_SURVIVAL_AGE_MASK
+        | OBJ_FLAG_FROZEN
+        | OBJ_FLAG_SEALED
+        | OBJ_FLAG_NO_EXTEND
+        | OBJ_FLAG_NULL_PROTO
+        | OBJ_FLAG_NEVER_MOVE
+        | OBJ_FLAG_TYPED_ARRAY_PROTO
+        | OBJ_FLAG_PLAIN_ORDINARY
+        | OBJ_FLAG_STABLE_TOMBSTONES
+        | OBJ_FLAG_HAS_DESCRIPTORS
+        | OBJ_FLAG_ARGUMENTS
+        | OBJ_FLAG_MEMO_NAMED)
+    == 0;
+const _: () = assert!(GC_OBJECT_CALLABLE_IS_DISJOINT);
+
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
 /// `GC_ARRAY_RAW_F64_LAYOUT`. Set when `new Array(n)` hole-initializes a

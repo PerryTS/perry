@@ -4,6 +4,10 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
+#[path = "compare_typeof_object.rs"]
+mod typeof_object;
+use typeof_object::lower_typeof_object_inline;
+
 #[path = "compare_chain.rs"]
 mod chain;
 pub(crate) use chain::try_lower as try_lower_chain;
@@ -1238,10 +1242,9 @@ fn lower_typeof_number_inline(ctx: &mut FnCtx<'_>, value: &str, negate: bool) ->
 /// arithmetic.rs`) decides `undefined` (including the hole sentinel), the two
 /// booleans and both string tags with exact bit tests before any registry or
 /// heap lookup, so `"undefined"`, `"boolean"` and `"string"` never need the
-/// call, and `"number"` keeps its inline definitely-a-Number arm. `"object"`,
-/// `"function"`, `"symbol"` and `"bigint"` are usually asked of heap values the
-/// classifier must inspect anyway, so they keep the direct call: an inline
-/// primitive pre-test would only add instructions to that common case.
+/// call, and `"number"` keeps its inline definitely-a-Number arm. `"object"` and
+/// `"function"` read heap callability inline; `"symbol"` and `"bigint"` use the
+/// shared classifier.
 fn lower_typeof_literal_inline(
     ctx: &mut FnCtx<'_>,
     value: &str,
@@ -1268,6 +1271,9 @@ fn lower_typeof_literal_inline(
         } else {
             bit
         };
+    }
+    if expected_tag == 1 || expected_tag == 5 {
+        return lower_typeof_object_inline(ctx, value, expected_tag, negate);
     }
     if expected_tag == 3 {
         return lower_typeof_number_inline(ctx, value, negate);

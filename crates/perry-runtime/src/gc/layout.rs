@@ -4,13 +4,18 @@
 //! path calls is in `layout/transfer.rs`.
 
 use super::*;
-// Copied-nursery survival age in otherwise-unused low `_reserved` bits;
-// bits 0..2 remain object flags and bits 14..15 remain layout state.
+// Young survival ages are 0..3: the fourth survival promotes, and TENURED
+// is already the authoritative encoding of age 4. Two bits suffice; bit 5
+// belongs exclusively to OBJECT/PROXY callability, even on promoted headers.
 pub(super) const GC_COPY_SURVIVAL_AGE_SHIFT: usize = 3;
-pub(super) const GC_COPY_SURVIVAL_AGE_MASK: u16 = 0x0038;
+pub(super) const GC_COPY_SURVIVAL_AGE_MASK: u16 = 0x0018;
 pub(super) const GC_COPY_PROMOTION_SURVIVALS: u8 = 4;
+pub(super) const GC_COPY_YOUNG_AGE_MAX: u8 =
+    (GC_COPY_SURVIVAL_AGE_MASK >> GC_COPY_SURVIVAL_AGE_SHIFT) as u8;
+const _: () = assert!(GC_COPY_PROMOTION_SURVIVALS == GC_COPY_YOUNG_AGE_MAX + 1);
 
-// Array/closure pointer-slot layout state in high `_reserved` bits.
+// Generic pointer-slot initialization state in high `_reserved` bits.
+// OBJECT initialization also writes it; OBJECT field tracing selects by shape.
 pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
 pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 /// No payload slot holds a pointer, so `heap_payload_slot_selection` skips the
@@ -100,7 +105,9 @@ pub(super) fn copied_survival_age(reserved: u16, flags: u8) -> u8 {
 
 #[inline]
 pub(super) fn reserved_with_copied_survival_age(reserved: u16, age: u8) -> u16 {
-    let capped = age.min(7) as u16;
+    // Only TENURED headers encode age >= 4; copied_survival_age reads their
+    // age from TENURED before inspecting this word.
+    let capped = age.min(GC_COPY_YOUNG_AGE_MAX) as u16;
     (reserved & !GC_COPY_SURVIVAL_AGE_MASK) | (capped << GC_COPY_SURVIVAL_AGE_SHIFT)
 }
 

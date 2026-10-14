@@ -16,7 +16,8 @@ impl ShapeRecord {
             7 => ShapeObjectKind::FunctionBoundCall,
             8 => ShapeObjectKind::FunctionBoundApply,
             9 => ShapeObjectKind::FunctionBound,
-            _ => ShapeObjectKind::OrdinaryNativeAlias,
+            10 => ShapeObjectKind::OrdinaryNativeAlias,
+            _ => ShapeObjectKind::CallableOrdinary,
         }
     }
 

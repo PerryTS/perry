@@ -24,7 +24,7 @@ use crate::array::ArrayHeader;
 ///
 /// The bit lives in `GcHeader::_reserved`, which survives evacuation
 /// (`gc/copying.rs` and `gc/oldgen.rs` carry the word across), is preserved by
-/// the survival-age (`0x0038`) and layout-state (`0xC000`) updates, and is
+/// the survival-age (`0x0018`) and layout-state (`0xC000`) updates, and is
 /// already loaded by the generated write PIC for its blocking-flag test.
 ///
 /// Charter step 3: the mark is an input of the receiver's store kind

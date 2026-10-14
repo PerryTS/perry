@@ -755,26 +755,12 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         // One kind read: a POINTER_TAG word names a GC-headed object (honest
         // pointers), including leaked symbol cells in immortal space.
         if let Some(header) = crate::value::addr_class::pointer_value_header(jsval.bits()) {
-            return match header.obj_type {
-                crate::gc::GC_TYPE_CLOSURE => ValueTypeofTag::Function,
-                crate::gc::GC_TYPE_OBJECT
-                    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                        && unsafe {
-                            crate::object::shapes::object_shape_record(
-                                addr as *const crate::object::ObjectHeader,
-                            )
-                            .is_some_and(|record| {
-                                record.object_kind()
-                                    == crate::object::shapes::ShapeObjectKind::Class
-                            })
-                        } =>
-                {
-                    ValueTypeofTag::Function
-                }
+            let word = header.kind_facts_word();
+            if perry_abi::gc_header_word_is_callable(word) {
+                return ValueTypeofTag::Function;
+            }
+            return match word.to_ne_bytes()[0] {
                 crate::gc::GC_TYPE_SYMBOL => ValueTypeofTag::Symbol,
-                crate::gc::GC_TYPE_PROXY if crate::proxy::proxy_wraps_callable(value) => {
-                    ValueTypeofTag::Function
-                }
                 // Fresh symbols retain the legacy string allocation kind. Only
                 // a matching magic word needs its collision-safe symbol proof.
                 crate::gc::GC_TYPE_STRING
@@ -1076,5 +1062,104 @@ mod rel_numeric_fastpath_tests {
         assert!(!is_true(js_rel_gt(i32v(3), i32v(9))));
         assert!(is_true(js_rel_lt(i32v(3), 3.5)));
         assert!(is_true(js_rel_gt(3.5, i32v(3))));
+    }
+}
+
+#[cfg(test)]
+mod qstypeof_tests {
+    use super::{classify_value_typeof, ValueTypeofTag};
+
+    #[test]
+    fn qstypeof3_pointer_free_plain_object_is_not_callable() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        unsafe {
+            obj.with_mut_ptr::<crate::ObjectHeader, _>(|p| {
+                let gc = crate::gc::header_from_trusted_user_ptr(p.cast()).cast_mut();
+                (*gc)._reserved = ((*gc)._reserved & !crate::gc::GC_LAYOUT_STATE_MASK)
+                    | crate::gc::GC_LAYOUT_POINTER_FREE;
+                let boxed = f64::from_bits(crate::value::POINTER_TAG | p as u64);
+                assert_eq!(classify_value_typeof(boxed), ValueTypeofTag::Object);
+                assert!(crate::object::shapes::store_kind::store_facts_agree(p));
+            });
+        }
+    }
+
+    #[test]
+    fn class_birth_callability_survives_shape_changes_and_audit_catches_corruption() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+        unsafe {
+            obj.with_mut_ptr::<crate::ObjectHeader, _>(|p| {
+                let boxed = f64::from_bits(crate::value::POINTER_TAG | p as u64);
+                assert_eq!(classify_value_typeof(boxed), ValueTypeofTag::Object);
+                crate::object::js_object_mark_class(p as i64);
+                assert_eq!(classify_value_typeof(boxed), ValueTypeofTag::Function);
+                assert!(crate::object::shapes::store_kind::store_facts_agree(p));
+                let gc = crate::gc::header_from_trusted_user_ptr(p.cast()).cast_mut();
+                (*gc)._reserved ^= crate::gc::GC_OBJECT_CALLABLE;
+                assert!(
+                    !crate::object::shapes::store_kind::store_facts_agree(p),
+                    "R6 must detect a missing Class callability fact"
+                );
+                (*gc)._reserved ^= crate::gc::GC_OBJECT_CALLABLE;
+            });
+            let name =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"extra".as_ptr(), 5));
+            obj.across_mut::<crate::ObjectHeader, _>(|| {
+                obj.with_mut_ptr::<crate::ObjectHeader, _>(|p| {
+                    name.with_const_ptr::<crate::StringHeader, _>(|k| {
+                        crate::object::js_object_set_field_by_name(p, k, 42.0)
+                    });
+                });
+            });
+            obj.with_mut_ptr::<crate::ObjectHeader, _>(|p| {
+                let boxed = f64::from_bits(crate::value::POINTER_TAG | p as u64);
+                assert_eq!(classify_value_typeof(boxed), ValueTypeofTag::Function);
+                assert!(crate::object::shapes::store_kind::store_facts_agree(p));
+            });
+        }
+    }
+
+    #[test]
+    fn callable_ordinary_birth_agrees_with_shape_and_audit_catches_corruption() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+        unsafe {
+            obj.with_mut_ptr::<crate::ObjectHeader, _>(|p| {
+                crate::object::shapes::publish_callable_object_kind(
+                    p,
+                    crate::object::shapes::ShapeObjectKind::CallableOrdinary,
+                );
+                let boxed = f64::from_bits(crate::value::POINTER_TAG | p as u64);
+                assert_eq!(classify_value_typeof(boxed), ValueTypeofTag::Function);
+                assert!(crate::object::shapes::store_kind::store_facts_agree(p));
+                let gc = crate::gc::header_from_trusted_user_ptr(p.cast()).cast_mut();
+                (*gc)._reserved ^= crate::gc::GC_OBJECT_CALLABLE;
+                assert!(!crate::object::shapes::store_kind::store_facts_agree(p));
+                (*gc)._reserved ^= crate::gc::GC_OBJECT_CALLABLE;
+                assert!(crate::object::shapes::store_kind::store_facts_agree(p));
+            });
+        }
+    }
+
+    #[test]
+    fn kind_disjoint_flags_do_not_make_other_gc_types_callable() {
+        for kind in 0..=u8::MAX {
+            let flags = crate::gc::GC_OBJECT_CALLABLE.to_ne_bytes();
+            let bytes = [kind, 0, flags[0], flags[1]];
+            assert_eq!(
+                perry_abi::gc_header_word_is_callable(u32::from_ne_bytes(bytes)),
+                matches!(
+                    kind,
+                    crate::gc::GC_TYPE_OBJECT
+                        | crate::gc::GC_TYPE_PROXY
+                        | crate::gc::GC_TYPE_CLOSURE
+                )
+            );
+        }
     }
 }

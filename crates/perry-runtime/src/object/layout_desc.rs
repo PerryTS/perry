@@ -776,6 +776,9 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader
 unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) {
     super::shapes::store_kind::premark_plain_ordinary(obj);
     let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
+    if d.kind == super::shapes::ShapeObjectKind::Class.code() as u8 {
+        (*gc)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
+    }
     if d.proto == LAYOUT_PROTO_NULL {
         (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
     }

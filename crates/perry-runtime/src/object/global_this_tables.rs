@@ -30,11 +30,12 @@ pub(crate) struct BuiltinConstructorDeclaration {
     pub info: &'static crate::closure::JsFunctionInfo,
     pub prototype_class: Option<u32>,
     pub prototype_serial: Option<u64>,
+    pub prototype_callable: bool,
     pub instance_identity: Option<BuiltinInstanceIdentity>,
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; instance $instance:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
@@ -65,10 +66,13 @@ macro_rules! builtin_constructors {
                 info: unsafe { &*$info },
                 prototype_class: builtin_constructors!(@optional $($class)?),
                 prototype_serial: builtin_constructors!(@optional $($serial)?),
+                prototype_callable: builtin_constructors!(@callable $($callable)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
             },)*
         ];
     };
+    (@callable $callable:expr) => { $callable };
+    (@callable) => { false };
     (@optional $class:expr) => { Some($class) };
     (@optional) => { None };
 }
@@ -87,7 +91,7 @@ builtin_constructors! {
     String => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D1),
     Number => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D0),
     Boolean => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D2),
-    Function => crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION; instance BuiltinInstanceIdentity::Class(0xFFFF00F0),
+    Function => crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION; instance BuiltinInstanceIdentity::Class(0xFFFF00F0); prototype_callable true,
     RegExp => crate::fn_info!(regexp_constructor_call_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0021),
     Date => crate::fn_info!(global_this_date_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0020),
     Error => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_ERROR),

@@ -268,3 +268,106 @@ fn two_records_with_one_shape_id_trace_all_children() {
         );
     }
 }
+
+// The Class owns the only roots for its heap children. Birth callability must
+// not change the collector's layout state or prevent evacuation rewrites.
+#[test]
+fn qstypeof3_callable_class_keeps_heap_fields_across_evacuation() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let obj = unsafe { materialise_record() };
+    unsafe { crate::object::js_object_mark_class(obj as i64) };
+    let before: Vec<usize> = (0..FIELD_VALUES.len())
+        .map(|index| unsafe { (field_bits(obj, index) & POINTER_MASK) as usize })
+        .collect();
+    js_shadow_slot_set(0, ptr_bits(obj as usize));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(
+        trace.copying_nursery.copied_objects >= FIELD_VALUES.len() + 1,
+        "Class and its children must evacuate; copied_objects = {}",
+        trace.copying_nursery.copied_objects
+    );
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
+    assert_ne!(moved as usize, obj as usize, "Class must move");
+    unsafe {
+        for (index, bytes) in FIELD_VALUES.iter().enumerate() {
+            let child = (field_bits(moved, index) & POINTER_MASK) as usize;
+            assert_ne!(child, before[index], "Class field must be rewritten");
+            assert!(
+                crate::arena::pointer_in_nursery(child) || crate::arena::pointer_in_old_gen(child)
+            );
+            assert_string_bytes(child as *const crate::StringHeader, bytes);
+        }
+        let boxed = f64::from_bits(ptr_bits(moved as usize));
+        assert_eq!(crate::builtins::arithmetic::js_value_typeof_tag(boxed), 5);
+    }
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+}
+
+// Every reachable young age has the same promotion decision with two bits.
+// Higher ages are TENURED, whose decoder returns the promotion age directly.
+#[test]
+fn qstypeof3b_two_age_bits_preserve_promotion_and_other_header_facts() {
+    for callable in [0, GC_OBJECT_CALLABLE] {
+        let other = callable | OBJ_FLAG_HAS_DESCRIPTORS | GC_LAYOUT_POINTER_FREE;
+        for age in 0..GC_COPY_PROMOTION_SURVIVALS {
+            let encoded = reserved_with_copied_survival_age(other, age);
+            assert_eq!(encoded & !GC_COPY_SURVIVAL_AGE_MASK, other);
+            let flags = if age == 0 { 0 } else { GC_FLAG_HAS_SURVIVED };
+            assert_eq!(copied_survival_age(encoded, flags), age);
+            for threshold in 1..=GC_COPY_PROMOTION_SURVIVALS {
+                assert_eq!(
+                    copied_survival_age(encoded, flags) + 1 >= threshold,
+                    age + 1 >= threshold
+                );
+            }
+        }
+        let promoted = reserved_with_copied_survival_age(other, GC_COPY_PROMOTION_SURVIVALS);
+        assert_eq!(promoted & !GC_COPY_SURVIVAL_AGE_MASK, other);
+        assert_eq!(
+            copied_survival_age(promoted, GC_FLAG_TENURED),
+            GC_COPY_PROMOTION_SURVIVALS
+        );
+    }
+}
+
+// Exercise actual copying and promotion for every accepted diagnostic u8 pin.
+// Zero has a zero comparison threshold and promotes at the first opportunity.
+#[test]
+fn qstypeof3d_all_env_pins_saturate_and_promote_at_effective_threshold() {
+    for pin in 0..=u8::MAX {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _pin = crate::gc::tenuring::set_env_pin_for_test(pin);
+        let threshold = pin.min(crate::gc::tenuring::GC_MAX_PROMOTION_AGE);
+        assert_eq!(crate::gc::tenuring::tenuring_survivals(), threshold);
+        let obj = fresh_string(b"qstypeof3d rooted movable survivor");
+        js_shadow_slot_set(0, string_bits(obj));
+        for survival in 1..=threshold.max(1) {
+            let trace = collect_minor_trace(GcTriggerKind::Direct);
+            let current = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+            let tenured = survival >= threshold;
+            unsafe {
+                assert_eq!(
+                    (*header_from_user_ptr(current as *const u8)).gc_flags & GC_FLAG_TENURED != 0,
+                    tenured,
+                    "pin={pin}, survival={survival}"
+                );
+                assert_string_bytes(
+                    current as *const crate::StringHeader,
+                    b"qstypeof3d rooted movable survivor",
+                );
+            }
+            if tenured {
+                assert!(
+                    trace.copying_nursery.promoted_objects > 0,
+                    "pin={pin}: promotion-by-age must execute"
+                );
+            } else {
+                assert!(trace.copying_nursery.copied_objects > 0);
+                assert_eq!(trace.copying_nursery.promoted_objects, 0);
+                assert!(
+                    copied_minor_promotable_active_survivor_bytes() > 0 || survival + 1 < threshold
+                );
+            }
+        }
+    }
+}

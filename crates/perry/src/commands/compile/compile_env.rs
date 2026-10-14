@@ -580,7 +580,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     (
         "PERRY_GC_TENURING_SURVIVALS",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
+        "Runtime-only diagnostic u8 pin; effective 0..=3, larger values saturate with one stderr warning.",
     ),
     (
         "PERRY_GLSLC",

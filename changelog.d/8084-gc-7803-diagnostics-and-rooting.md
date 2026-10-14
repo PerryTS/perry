@@ -55,7 +55,7 @@ get repeated):
 | `PERRY_KEEP_SYMBOLS` | skip only the final `strip`, leaving `-g` off — `PERRY_DEBUG_SYMBOLS` does both, and `--debug-symbols` SUPPRESSES #7803 (0/13 against 44%), so an instrument that needs symbols must not use it |
 | `PERRY_GC_INTERP_SAFEPOINTS` | cooperative GC safepoints at every `eval_expr` / `exec_stmt` |
 | `PERRY_GC_POISON_FROMSPACE` | poison retired from-space in place, changing no layout |
-| `PERRY_GC_TENURING_SURVIVALS` | pin the promotion age past the adaptive threshold |
+| `PERRY_GC_TENURING_SURVIVALS` | pin the promotion age (effective 0..=3; larger u8 values saturate with one warning) |
 
 The pin-latch abort now also prints **which copying-minor walk** handed it
 the header (`copying walk phase: <scanner | remembered_set | worklist_drain

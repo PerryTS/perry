@@ -1636,7 +1636,9 @@ needed forty runs to mean anything.
 ## 32. The promotion hypothesis is NOT supported either — and why I stopped here
 
 `PERRY_GC_TENURING_SURVIVALS` (commit `b7dbe5c3d`) pins the promotion age,
-overriding the adaptive threshold. Paced schedule, seeds 1–5, same binary:
+overriding the adaptive threshold. Current effective range is 0..=3; larger
+u8 pins saturate to 3 with one stderr warning. The `=255` results below
+are historical, before saturation. Paced schedule, seeds 1–5, same binary:
 
 | promotion age | relocations per object | failures |
 |---|---|---|

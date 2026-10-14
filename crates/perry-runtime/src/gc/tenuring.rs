@@ -141,6 +141,12 @@ use super::*;
 
 /// Ceiling and previous fixed threshold.
 pub(super) const GC_TENURING_SURVIVALS_MAX: u8 = GC_COPY_PROMOTION_SURVIVALS;
+// The largest young age fits the two-bit field. The adaptive threshold may
+// request one further survival: move_young compares next_age before encoding
+// it and sets TENURED instead of storing a young age of 4.
+pub(super) const GC_MAX_PROMOTION_AGE: u8 = super::layout::GC_COPY_YOUNG_AGE_MAX;
+const _: () = assert!(GC_MAX_PROMOTION_AGE <= 3);
+const _: () = assert!(GC_TENURING_SURVIVALS_MAX <= GC_MAX_PROMOTION_AGE + 1);
 
 /// The lowest threshold the **occupancy rule** may select.
 ///
@@ -287,7 +293,8 @@ thread_local! {
 /// The survivals threshold the next copying minor should promote at:
 /// `next_age >= tenuring_survivals()` tenures. In `1..=4`; 4 is the
 /// original fixed policy, 1 promotes every live nursery object on first
-/// copy.
+/// copy. Diagnostic pins accept 0 (also promotes on the first copy) through
+/// `GC_MAX_PROMOTION_AGE`; larger u8 pins saturate with one process warning.
 pub(super) fn tenuring_survivals() -> u8 {
     #[cfg(test)]
     if let Some(forced) = TENURING_SURVIVALS_TEST_OVERRIDE.with(Cell::get) {
@@ -321,7 +328,9 @@ impl Drop for TenuringSurvivalsTestGuard {
 }
 
 /// `PERRY_GC_TENURING_SURVIVALS=<u8>` pins the promotion age, overriding the
-/// adaptive threshold (#7432). Diagnostic only; unset means adaptive.
+/// adaptive threshold (#7432). Effective range 0..=3; larger u8 values
+/// saturate to `GC_MAX_PROMOTION_AGE` with one stderr warning per process.
+/// Diagnostic only; unset means adaptive.
 ///
 /// # Why (#7803)
 ///
@@ -341,9 +350,10 @@ impl Drop for TenuringSurvivalsTestGuard {
 ///
 ///   `=1`   promote on the first minor  -> fewest relocations -> predicts the
 ///          failure disappears;
-///   `=255` never promote by age        -> every survivor re-evacuated every
-///          cycle -> predicts the failure becomes reliable, which would be the
-///          deterministic reproducer this bug has never had.
+///   `=3`   promote on the third minor -> up to two survivor relocations.
+///
+/// Historical `=255` experiments disabled promotion by age. Those pins now
+/// saturate to 3 so every young age remains representable in the header.
 ///
 /// Pair it with `PERRY_GC_SCHEDULE_ALLOC_KB=0`, which pins the schedule
 /// exactly (63,941 safepoints, reproduced to the digit), so a change in
@@ -355,7 +365,31 @@ fn tenuring_survivals_override() -> Option<u8> {
         std::env::var("PERRY_GC_TENURING_SURVIVALS")
             .ok()
             .and_then(|v| v.trim().parse::<u8>().ok())
+            .map(|pin| {
+                let effective = saturated_tenuring_pin(pin);
+                if effective != pin {
+                    eprintln!(
+                        "[gc] PERRY_GC_TENURING_SURVIVALS={pin} exceeds {GC_MAX_PROMOTION_AGE}; using {effective}"
+                    );
+                }
+                effective
+            })
     })
+}
+
+/// Shared bound for diagnostic pins; the adaptive loop retains its existing
+/// compare-before-store fourth-survival endpoint.
+#[inline]
+pub(super) fn saturated_tenuring_pin(pin: u8) -> u8 {
+    pin.min(GC_MAX_PROMOTION_AGE)
+}
+
+#[cfg(test)]
+pub(super) fn set_env_pin_for_test(pin: u8) -> TenuringSurvivalsTestGuard {
+    TenuringSurvivalsTestGuard(
+        TENURING_SURVIVALS_TEST_OVERRIDE
+            .with(|cell| cell.replace(Some(saturated_tenuring_pin(pin)))),
+    )
 }
 
 /// The effective scavenge nursery cap: the configured base

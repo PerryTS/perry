@@ -266,6 +266,16 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         } else {
             super::proto_room::alloc_builtin_prototype()
         };
+        if declaration.prototype_callable {
+            // The declaration is immutable birth metadata, independent of the
+            // public name/property. Publish the callable shape and header fact.
+            unsafe {
+                crate::object::shapes::publish_callable_object_kind(
+                    proto_obj,
+                    crate::object::shapes::ShapeObjectKind::CallableOrdinary,
+                );
+            }
+        }
         install_builtin_constructor_statics(
             name,
             closure_ptr,
