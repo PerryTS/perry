@@ -3682,6 +3682,7 @@ js_transform_stream_writable	Leaf	no
 js_transition_ic_note_hit	Leaf	no
 js_transition_ic_probe_report	Leaf	no
 js_transition_ic_spill_append	Reenters	yes
+js_trap_call	Reenters	yes
 js_try_end	Leaf	no
 js_try_push	Leaf	no
 js_tty_isatty	Leaf	no
@@ -4213,6 +4214,8 @@ perry_cluster_worker_recv_fd	Leaf	no
 perry_cluster_worker_sched_is_rr	Leaf	no
 perry_debug_trace_init	Leaf	no
 perry_debug_trace_init_done	Leaf	no
+perry_eh_capture_context	Leaf	no
+perry_eh_install_context	Reenters	yes
 perry_eh_personality	Leaf	no
 perry_ffi_call_scalar_f32	Reenters	yes
 perry_ffi_call_scalar_f64	Reenters	yes
@@ -4289,13 +4292,10 @@ perry_i18n_set_currencies	Leaf	no
 perry_i18n_set_locale_index	Leaf	no
 perry_i18n_set_plural_locales	Leaf	no
 perry_init_guard_check_and_set	Leaf	no
-perry_iterator_cleanup_query	Leaf	no
-perry_iterator_eh_personality	Leaf	no
 perry_key_content_hash	Leaf	no
 perry_layout_index_probe	Leaf	no
 perry_macos_bundle_chdir	Leaf	no
 perry_memory_profile_allow_thp	Leaf	no
-perry_native_iterator_cleanup_before_trap	Leaf	no
 perry_next_wake_ms	Reenters	yes
 perry_object_header_abi_revision	Leaf	no
 perry_plugin_count	Leaf	no
@@ -4333,9 +4333,6 @@ perry_runtime_widget_init	Reenters	no
 perry_safe_area_insets_make	Reenters	yes
 perry_set_wake_callback	Leaf	no
 perry_shape_dir_cell	Leaf	no
-perry_sjlj_native_cleanup_present	Leaf	no
-perry_sjlj_personality_addr	Leaf	no
-perry_sjlj_try	Reenters	yes
 perry_store_census_arm	Leaf	no
 perry_string_header_abi_revision	Leaf	no
 perry_stub_warn_ffi	Leaf	no

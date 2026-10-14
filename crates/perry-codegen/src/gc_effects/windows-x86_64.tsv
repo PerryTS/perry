@@ -3682,6 +3682,7 @@ js_transform_stream_writable	Leaf	no
 js_transition_ic_note_hit	Leaf	no
 js_transition_ic_probe_report	Leaf	no
 js_transition_ic_spill_append	Reenters	yes
+js_trap_call	Reenters	yes
 js_try_end	Leaf	no
 js_try_push	Leaf	no
 js_tty_isatty	Leaf	no
@@ -4324,7 +4325,6 @@ perry_runtime_widget_init	Reenters	no
 perry_safe_area_insets_make	Reenters	yes
 perry_set_wake_callback	Leaf	no
 perry_shape_dir_cell	Leaf	no
-perry_sjlj_try	Reenters	yes
 perry_store_census_arm	Leaf	no
 perry_string_header_abi_revision	Leaf	no
 perry_stub_warn_ffi	Leaf	no
