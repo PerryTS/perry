@@ -521,6 +521,19 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     for i in 0..d.slot_count as usize {
         *fields.add(i) = crate::value::TAG_HOLE;
     }
+    mark_layout_object_facts(obj, d);
+    super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+    obj
+}
+
+/// The per-object record a layout-born object carries before its shape is
+/// stamped: plain ordinary, null prototype, descriptors and integrity, all
+/// from the descriptor. Every allocator that stamps a layout shape calls it,
+/// so the shape kind and the record agree (R6).
+///
+/// # Safety
+/// `obj` is a freshly allocated, unpublished `GC_TYPE_OBJECT` born on `d`.
+unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) {
     super::shapes::store_kind::premark_plain_ordinary(obj);
     let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
     if d.proto == LAYOUT_PROTO_NULL {
@@ -535,8 +548,6 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
     }
     (*gc)._reserved |= d.integrity as u16;
-    super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
-    obj
 }
 
 /// A builtin prototype holder born on a registered runtime layout (§3.6:
@@ -561,6 +572,7 @@ pub(crate) unsafe fn alloc_layout_prototype(
         std::process::abort();
     };
     let obj = super::object_alloc_prototype_old(0, room.max(d.slot_count));
+    mark_layout_object_facts(obj, d);
     super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     for i in 0..d.slot_count as usize {
