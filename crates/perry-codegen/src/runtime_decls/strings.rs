@@ -120,6 +120,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_sign", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_imul", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_pow", DOUBLE, &[DOUBLE, DOUBLE]);
+    // Numeric `%` slow path: exact-integer operands within ±2^53 use an
+    // integer remainder, everything else is `fmod` (see expr/binary.rs).
+    module.declare_function("js_number_mod", DOUBLE, &[DOUBLE, DOUBLE]);
 
     // Math.* unary functions: use LLVM intrinsics directly so we
     // get hardware instructions / libm calls instead of depending

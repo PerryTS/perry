@@ -54,12 +54,19 @@ fn lower_rooted_dynamic_binary(
 
 /// Emit JS numeric remainder with an inline fast path for i32-valued operands.
 ///
-/// LLVM lowers `frem double` to a libm `fmod` call on AArch64. Most application
+/// LLVM lowers `frem double` to a libm `fmod` call. Most application
 /// remainders use small whole numbers (loop indices, lengths, parsed integer
 /// configuration), so prove that common case at runtime and use integer
 /// remainder instead. The ordered range checks are deliberately in a separate
 /// predecessor from `fptosi`: converting NaN, infinity, or an out-of-range
 /// double is poison in LLVM even when a later select would discard it.
+///
+/// Everything the inline i32 check refuses goes to ONE shared out-of-line
+/// helper, `js_number_mod`, in place of the `frem` that used to be emitted
+/// here. That `frem` was already a libm call, so the site does not grow. The
+/// helper adds an exact-integer path for operands within ±2^53 (a 64-bit
+/// LCG step such as `(seed * 48271) % 2147483647` overflows i32 but not
+/// i53) and falls back to `fmod` for everything else.
 fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> String {
     let convert_idx = ctx.new_block("mod.i32.convert");
     let integer_idx = ctx.new_block("mod.i32.integer");
@@ -114,7 +121,9 @@ fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> Str
     ctx.block().br(&merge_label);
 
     ctx.current_block = fallback_idx;
-    let fallback_value = ctx.block().frem(left, right);
+    let fallback_value =
+        ctx.block()
+            .call(DOUBLE, "js_number_mod", &[(DOUBLE, left), (DOUBLE, right)]);
     let fallback_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

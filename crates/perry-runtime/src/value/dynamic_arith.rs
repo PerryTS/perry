@@ -706,21 +706,44 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
     numify_arith_operand(a) / numify_arith_operand(b)
 }
 
+/// JS `%` on two Numbers (ECMA-262 Number::remainder).
+///
+/// When both operands are exact integers within ±2^53 and the divisor is
+/// nonzero, the remainder is computed in `i64`: every such operand converts
+/// exactly, `i64` `%` truncates toward zero like `fmod` (so a nonzero result
+/// already carries the dividend's sign), and the result is exact in `f64`.
+/// The only sign the integer path cannot carry is that of a zero result,
+/// which Number::remainder defines as the dividend's sign: `-4 % 2` and
+/// `-0 % 5` are `-0`. Everything else (a zero divisor, NaN, ±Infinity, a
+/// fractional or out-of-range operand) is `fmod`, which is the spec.
+///
+/// This is the single out-of-line slow path for numeric `%`: generated code
+/// keeps only its inline i32 check and calls here instead of emitting
+/// `frem` (a libm `fmod` call on every target).
+#[no_mangle]
+pub extern "C" fn js_number_mod(a: f64, b: f64) -> f64 {
+    const EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0; // 2^53
+    // Ordered comparisons are false for NaN, so NaN never enters the
+    // integer path; the bound also excludes ±Infinity.
+    if a.abs() <= EXACT_INT_LIMIT && b.abs() <= EXACT_INT_LIMIT {
+        let dividend = a as i64;
+        let divisor = b as i64;
+        if divisor != 0 && dividend as f64 == a && divisor as f64 == b {
+            let remainder = dividend % divisor;
+            if remainder == 0 {
+                return if a.is_sign_negative() { -0.0 } else { 0.0 };
+            }
+            return remainder as f64;
+        }
+    }
+    a % b
+}
+
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
     if is_plain_double(a) && is_plain_double(b) {
-        // Index arithmetic commonly stays in the exact u32 domain. Reject
-        // negative zero so every signed, fractional or exceptional case keeps
-        // fmod semantics. Cast round trips also reject infinity and NaN.
-        if !a.is_sign_negative() {
-            let dividend = a as u32;
-            let divisor = b as u32;
-            if divisor != 0 && dividend as f64 == a && divisor as f64 == b {
-                return (dividend % divisor) as f64;
-            }
-        }
-        return a % b;
+        return js_number_mod(a, b);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let (a_handle, b_handle) = to_numeric_pair(&scope, a, b);
@@ -742,7 +765,7 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
     // `x % Infinity` (should be `x`). Rust's `f64 % f64` *is* `fmod`, matching
     // the spec exactly on the sign of zero, `x % ±Inf`, and `±Inf % y` / `x % 0`
     // → `NaN` (test262 compound-assignment `mod-whitespace`: `-0` expected).
-    a % b
+    js_number_mod(a, b)
 }
 
 /// Dynamic negate: -BigInt if operand is BigInt, else -f64.
@@ -1057,6 +1080,70 @@ static KEEP_NUMERIC_STEP: unsafe extern "C" fn(f64, i32) -> f64 = js_numeric_ste
 mod tests {
     use super::*;
 
+    /// Number::remainder edge cases for the shared `%` slow path: the i53
+    /// integer path must agree with `fmod` bit for bit, including the sign of
+    /// a zero result, and must hand every non-integer case to `fmod`.
+    #[test]
+    fn number_mod_matches_fmod_including_signed_zero() {
+        let two53 = 9_007_199_254_740_992.0_f64;
+        let cases: &[(f64, f64)] = &[
+            // integers beyond i32, within i53 (the LCG step that motivated this)
+            (12_345_678.0 * 48_271.0, 2_147_483_647.0),
+            (-(12_345_678.0 * 48_271.0), 2_147_483_647.0),
+            (two53, 3.0),
+            (-two53, 7.0),
+            (two53, two53),
+            (two53 - 1.0, -2.0),
+            // zero results take the DIVIDEND's sign
+            (-4.0, 2.0),
+            (4.0, -2.0),
+            (-4.0, -2.0),
+            (-0.0, 5.0),
+            (0.0, -5.0),
+            (-0.0, -5.0),
+            (-(2.0_f64.powi(40)), 2.0_f64.powi(20)),
+            // nonzero results take the dividend's sign
+            (-7.0, 3.0),
+            (7.0, -3.0),
+            (-7.0, -3.0),
+            // zero divisor and non-finite / non-integral operands: fmod
+            (5.0, 0.0),
+            (5.0, -0.0),
+            (-5.0, 0.0),
+            (0.0, 0.0),
+            (f64::NAN, 3.0),
+            (3.0, f64::NAN),
+            (f64::INFINITY, 3.0),
+            (3.0, f64::INFINITY),
+            (-3.0, f64::NEG_INFINITY),
+            (5.5, 2.0),
+            (5.0, 2.5),
+            // out of the exact-integer range: fmod
+            (two53 * 2.0, 3.0),
+            (1e300, 7.0),
+            (7.0, 1e300),
+        ];
+        for &(a, b) in cases {
+            let got = js_number_mod(a, b);
+            let want = a % b;
+            assert!(
+                (got.is_nan() && want.is_nan()) || got.to_bits() == want.to_bits(),
+                "js_number_mod({a:?}, {b:?}) = {got:?} (bits {:#x}), fmod gives {want:?} (bits {:#x})",
+                got.to_bits(),
+                want.to_bits(),
+            );
+        }
+    }
+
+    /// `js_dynamic_mod` must route plain doubles through the same slow path.
+    #[test]
+    fn dynamic_mod_plain_doubles_use_number_mod() {
+        for &(a, b) in &[(103_524_123_456_789.0, 2_147_483_647.0), (-4.0, 2.0), (5.0, 0.0)] {
+            let got = unsafe { js_dynamic_mod(a, b) };
+            let want = js_number_mod(a, b);
+            assert!((got.is_nan() && want.is_nan()) || got.to_bits() == want.to_bits());
+        }
+    }
     fn int32(n: i32) -> f64 {
         f64::from_bits(JSValue::int32(n).bits())
     }
