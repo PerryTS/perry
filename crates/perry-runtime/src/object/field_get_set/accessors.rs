@@ -3,6 +3,33 @@
 
 use super::*;
 
+/// Read the value of `obj`'s key position `position` (its storage slot, or
+/// its ordered overflow entry). Slot-addressed FFI and codegen keep using
+/// [`js_object_get_field`].
+#[inline]
+pub(crate) unsafe fn js_object_get_key_field(obj: *const ObjectHeader, position: u32) -> JSValue {
+    let (keys, live) = crate::object::object_keys_and_live_slot_count(obj);
+    object_key_field_at_with_keys(obj, keys.arr(), position, live)
+}
+
+/// [`js_object_get_key_field`] with the receiver's current `keys` and live
+/// inline bound already resolved.
+#[inline(always)]
+pub(crate) unsafe fn object_key_field_at_with_keys(
+    obj: *const ObjectHeader,
+    keys: *const ArrayHeader,
+    position: u32,
+    live: u32,
+) -> JSValue {
+    match crate::object::key_attrs::list_storage_slot(keys, position) {
+        Some(slot) => object_field_at_with_live(obj, slot, live),
+        None => JSValue::from_bits(
+            crate::object::overflow::get_from(keys.cast(), obj, position)
+                .unwrap_or(crate::value::TAG_UNDEFINED),
+        ),
+    }
+}
+
 /// Get a field from an object by index
 ///
 /// #1129/#1136: the small-pointer guard below previously used a 16 MB
@@ -145,8 +172,9 @@ pub unsafe extern "C" fn js_object_record_set_by_bytes(
     let key = std::slice::from_raw_parts(key, len);
     let mut index = 0;
     let Some(OwnSlot::Data(_)) = own_property_slot(obj, |keys, count| {
-        index = crate::object::keys_find_property_slot_by_bytes(keys, count, key)?;
-        Some(index)
+        let position = crate::object::keys_find_property_slot_by_bytes(keys, count, key)?;
+        index = crate::object::key_attrs::key_storage_slot(keys, position);
+        Some(position)
     }) else {
         return 0;
     };
@@ -244,7 +272,8 @@ unsafe fn own_property_slot(
             // The holder's shape resolved the key to this slot, so its lane
             // holds the accessor pair (#12015): read it there, no name search.
             let live = crate::object::object_live_slot_count(obj);
-            let accessor = super::super::accessor_pair::slot_accessor_with_live(obj, islot, live);
+            let accessor =
+                super::super::accessor_pair::slot_accessor_with_live(obj, keys, islot, live);
             return Some(OwnSlot::Accessor {
                 getter: accessor.get,
             });
@@ -255,6 +284,7 @@ unsafe fn own_property_slot(
                     .unwrap_or(crate::value::TAG_UNDEFINED),
             )));
         }
+        let i = crate::object::key_attrs::key_storage_slot(keys, islot) as usize;
         if i < alloc_limit {
             return Some(OwnSlot::Data(js_object_get_field(obj, i as u32)));
         }
@@ -699,12 +729,41 @@ pub(crate) unsafe fn object_accessor_at_with_live(
     if !super::super::key_attrs::key_is_accessor_at(keys, slot) {
         return None;
     }
-    let acc = super::super::accessor_pair::slot_accessor_with_live(obj, slot, live);
+    let acc = super::super::accessor_pair::slot_accessor_with_live(obj, keys, slot, live);
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     Some(invoke_accessor_getter(acc.get, receiver))
+}
+
+/// [`object_accessor_at_with_live`], else the data value at `position`: one
+/// attribute-word load answers both the accessor question and the slot.
+#[inline]
+pub(crate) unsafe fn object_property_at_with_live(
+    obj: *const ObjectHeader,
+    keys: *const ArrayHeader,
+    position: u32,
+    live: u32,
+) -> JSValue {
+    let word = super::super::key_attrs::key_word(keys, position);
+    if word as u8 & super::super::key_attrs::ENTRY_ACCESSOR != 0 {
+        return match object_accessor_at_with_live(obj, keys, position, live) {
+            Some(value) => value,
+            None => JSValue::undefined(),
+        };
+    }
+    if crate::object::overflow::is_table(keys) {
+        return JSValue::from_bits(
+            crate::object::overflow::get_from(keys.cast(), obj, position)
+                .unwrap_or(crate::value::TAG_UNDEFINED),
+        );
+    }
+    object_field_at_with_live(
+        obj,
+        super::super::key_attrs::slot_of_word(word, position),
+        live,
+    )
 }
 
 /// True when `addr` is the shared `%TypedArray%.prototype` intrinsic or one of

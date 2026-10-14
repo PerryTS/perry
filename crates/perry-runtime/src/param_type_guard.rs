@@ -432,9 +432,12 @@ impl GuardState<'_> {
             Some(required) => required,
             None => return ObjectKeys::Invalid,
         };
+        // Fields are read by key position: a layout that keeps its own
+        // storage slots takes the general path.
         if key_len > key_capacity
             || key_len > MAX_CONTAINER_LEN
             || required > keys_header.size as usize
+            || crate::object::key_attrs::keys_have_slots(keys, key_len as u32)
         {
             return ObjectKeys::Invalid;
         }

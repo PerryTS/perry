@@ -16,7 +16,11 @@ pub(crate) unsafe fn owner(addr: usize) -> Option<*mut ObjectHeader> {
 }
 
 pub(crate) unsafe fn position(obj: *const ObjectHeader, symbol: usize) -> Option<u32> {
-    let keys = object_keys(obj);
+    position_in(object_keys(obj), symbol)
+}
+
+/// [`position`] in the receiver's already resolved `keys`.
+pub(crate) unsafe fn position_in(keys: ObjectKeys, symbol: usize) -> Option<u32> {
     let bits = crate::value::POINTER_TAG | symbol as u64;
     let (slots, count) = keys.dense_slots();
     (0..count)
@@ -26,8 +30,9 @@ pub(crate) unsafe fn position(obj: *const ObjectHeader, symbol: usize) -> Option
 
 pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
     let obj = owner(addr)?;
-    let index = position(obj, symbol)?;
-    let value = js_object_get_field(obj, index).bits();
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let index = position_in(keys, symbol)?;
+    let value = object_key_field_at_with_keys(obj, keys.arr(), index, live).bits();
     (value != crate::value::TAG_HOLE).then_some(value)
 }
 
@@ -65,12 +70,15 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
         // Otherwise a symbol key is a key of the object's layout, as a
         // defined string key is: builtin prototypes keep their symbol
         // methods in fixed slots that method sites and shape proofs read.
-        let existing = position(
-            current,
+        let keys = object_keys(current);
+        let existing = position_in(
+            keys,
             (symbol.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
         );
+        // An existing key keeps its storage slot; an added key's slot is its
+        // position (`key_attrs::SUMMARY_SLOTS`).
         let index = if let Some(index) = existing {
-            index
+            keys.storage_slot(index)
         } else {
             // Reserved native-layout fields precede dynamic keys just as they do
             // on the string-property append path.
@@ -126,7 +134,7 @@ pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, 
     let Some(obj) = owner(addr) else {
         return Vec::new();
     };
-    let keys = object_keys(obj);
+    let (keys, live) = object_keys_and_live_slot_count(obj);
     let (slots, count) = keys.dense_slots();
     let mut result = Vec::new();
     for i in 0..count {
@@ -139,7 +147,7 @@ pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, 
         }
         let symbol = (key.bits() & crate::value::POINTER_MASK) as usize;
         // A non-string key in this shape is an actual Symbol, never an encoded name.
-        let value = js_object_get_field(obj, i as u32).bits();
+        let value = object_key_field_at_with_keys(obj, keys.arr(), i as u32, live).bits();
         if value != crate::value::TAG_HOLE {
             result.push((symbol, value));
         }
@@ -149,11 +157,12 @@ pub(crate) unsafe fn entries(addr: usize, include_private: bool) -> Vec<(usize, 
 
 pub(crate) unsafe fn entry(addr: usize, symbol: usize) -> Option<u8> {
     let obj = owner(addr)?;
-    let pos = position(obj, symbol)?;
-    if js_object_get_field(obj, pos).bits() == crate::value::TAG_HOLE {
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let pos = position_in(keys, symbol)?;
+    if object_key_field_at_with_keys(obj, keys.arr(), pos, live).bits() == crate::value::TAG_HOLE {
         return None;
     }
-    Some(key_attrs::keys_entry(object_keys(obj).arr(), pos))
+    Some(key_attrs::keys_entry(keys.arr(), pos))
 }
 
 pub(crate) unsafe fn set_entry(addr: usize, symbol: usize, entry: u8) {
@@ -277,6 +286,7 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
         {
             return false;
         }
+        let pos = object_keys(obj).storage_slot(pos);
         if pos == crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT
             && crate::value::addr_class::try_read_tracked_gc_header(addr)
                 .is_some_and(|header| header.as_ref().obj_type == crate::gc::GC_TYPE_ARRAY)

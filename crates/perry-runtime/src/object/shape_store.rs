@@ -136,6 +136,10 @@ pub(crate) unsafe fn try_own_store(
             {
                 return false;
             }
+            let slot = super::key_attrs::key_storage_slot(
+                record.keys() as usize as *const crate::ArrayHeader,
+                slot as u32,
+            ) as usize;
             if store_proven_own_slot(obj, record, slot, value) {
                 return true;
             }

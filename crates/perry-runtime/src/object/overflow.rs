@@ -244,16 +244,17 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
         let shape = super::shapes::object_shape_descriptor(obj).unwrap();
         let keys = ObjectKeys::new(shape.keys as usize as *mut ArrayHeader, count);
+        let fixed = if i < count { keys.storage_slot(i) } else { i };
         let key = if i < count {
-            let value = if i < shape.live_inline_slot_count {
+            let value = if fixed < shape.live_inline_slot_count {
                 super::field_get_set::object_field_at_with_live(
                     obj,
-                    i,
+                    fixed,
                     shape.live_inline_slot_count,
                 )
                 .bits()
             } else {
-                super::spill::spill_get_present(obj as usize, i as usize).unwrap_or(TAG_HOLE)
+                super::spill::spill_get_present(obj as usize, fixed as usize).unwrap_or(TAG_HOLE)
             };
             if value == TAG_HOLE {
                 TAG_HOLE
@@ -282,7 +283,7 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
             0
         };
         *key_at(t, i) = atom;
-        *value_at(t, i) = crate::value::INT32_TAG | i as u64;
+        *value_at(t, i) = crate::value::INT32_TAG | fixed as u64;
         *attrs_at(t, i) = attrs as u64 | SLOT_REF;
         (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
         (*t).length = i + 1;
@@ -426,6 +427,15 @@ pub(crate) unsafe fn get(obj: *const ObjectHeader, slot: u32) -> Option<u64> {
     get_from(t, obj, slot)
 }
 
+/// Physical fixed storage referenced by an ordered entry, when one exists.
+pub(crate) unsafe fn fixed_slot_at(t: *const Table, entry: u32) -> Option<u32> {
+    if entry >= (*t).length || *key_at(t, entry) == TAG_HOLE || *attrs_at(t, entry) & SLOT_REF == 0
+    {
+        return None;
+    }
+    Some(*value_at(t, entry) as u32)
+}
+
 pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u32) -> Option<u64> {
     if slot >= (*t).length {
         return None;
@@ -511,6 +521,7 @@ pub(crate) unsafe fn reattach_fixed(obj: *mut ObjectHeader, key: u64) {
     else {
         return;
     };
+    let fixed = super::key_attrs::key_storage_slot(keys, fixed);
     let entry = insert_key_bits(obj, key, crate::value::TAG_UNDEFINED, 0);
     let t = table(obj);
     *value_at(t, entry) = crate::value::INT32_TAG | fixed as u64;
@@ -770,7 +781,11 @@ pub(crate) unsafe fn store_routed(
         record.logical_key_count(),
         atom,
     );
-    if let Some(fixed) = fixed {
+    if let Some(position) = fixed {
+        let fixed = super::key_attrs::key_storage_slot(
+            record.keys() as usize as *const ArrayHeader,
+            position,
+        );
         let old = if fixed < record.live_inline_slot_count() {
             super::field_get_set::object_field_at_with_live(
                 obj,

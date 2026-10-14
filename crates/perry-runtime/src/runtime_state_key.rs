@@ -83,20 +83,32 @@ impl NamedStateKey {
                 return false;
             }
             let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-            let slot = match site.own_slot(obj) {
-                Some(slot) => slot,
-                None => {
-                    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(
+            // A primed slot is the key's position unless the layout keeps
+            // its own storage slots; then the position comes from the keys.
+            let (slot, position) = match site.own_slot(obj) {
+                Some(slot)
+                    if !crate::object::key_attrs::keys_have_slots(
+                        keys,
+                        shape.logical_key_count,
+                    ) =>
+                {
+                    (slot, slot)
+                }
+                _ => {
+                    let Some(position) = crate::object::keys_find_property_slot_by_bytes(
                         keys,
                         shape.logical_key_count,
                         self.bytes,
                     ) else {
                         return false;
                     };
-                    slot
+                    (
+                        crate::object::key_attrs::key_storage_slot(keys, position),
+                        position,
+                    )
                 }
             };
-            let entry = crate::object::key_attrs::keys_entry(keys, slot);
+            let entry = crate::object::key_attrs::keys_entry(keys, position);
             if entry
                 & (crate::object::key_attrs::ENTRY_NON_WRITABLE
                     | crate::object::key_attrs::ENTRY_ACCESSOR)
@@ -176,6 +188,7 @@ impl NamedStateKey {
                 if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
                     return None;
                 }
+                let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
                 site.prime_own_slot(
                     crate::object::shapes::object_shape_stamp(obj),
                     slot,

@@ -661,6 +661,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
             crate::object::attr_census::note_global("ic.write_prime_declined.not_plain_key");
             return result;
         }
+        let idx = crate::object::key_attrs::key_storage_slot(keys, idx);
         // #9287: a slot past the inline region primes too, carrying
         // IC_SLOT_OVERFLOW_BIT exactly like the dynamic-key IC's stub entries.
         // A way hit on such a slot is served by `dyn_ic_try_store` —
@@ -1289,6 +1290,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
+        let idx = crate::object::key_attrs::key_storage_slot(keys, idx);
         // Generated own-slot hits write raw bits. A ConstFn target must
         // keep using the checked store funnel so an incompatible overwrite
         // invalidates its body fact before changing the slot.
@@ -1617,10 +1619,8 @@ fn object_array_numeric_write_slots(
         if key_count > 4096 {
             return None;
         }
-        if let Some(slot) = crate::object::keys_find_slot_by_key_ptr(keys, key_count, key) {
-            return Some(slot);
-        }
-        None
+        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key)
+            .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
     }
 
     let elements = unsafe {

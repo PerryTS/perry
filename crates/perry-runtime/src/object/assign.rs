@@ -456,6 +456,7 @@ unsafe fn positional_entry(
         return None;
     }
     let alloc_limit = crate::object::object_inline_capacity(src) as usize;
+    let i = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
     let value = if i < alloc_limit {
         std::ptr::read(
             (src as *const u8).add(std::mem::size_of::<ObjectHeader>() + i * 8) as *const f64,

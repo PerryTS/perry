@@ -1628,7 +1628,7 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
         if key_bytes != b"depth" {
             continue;
         }
-        let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+        let raw = f64::from_bits(crate::object::js_object_get_key_field(obj_ptr, i as u32).bits());
         let v = JSValue::from_bits(raw.to_bits());
         if v.is_null() {
             return Some(usize::MAX);
@@ -1706,7 +1706,7 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         if key_bytes != target {
             continue;
         }
-        let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+        let raw = f64::from_bits(crate::object::js_object_get_key_field(obj_ptr, i as u32).bits());
         let v = JSValue::from_bits(raw.to_bits());
         if v.is_bool() {
             return Some(v.as_bool());

@@ -149,7 +149,7 @@ unsafe fn prime_chain_start(
         else {
             return false;
         };
-        index | (1 << 31)
+        crate::object::key_attrs::key_storage_slot(keys, index) | (1 << 31)
     };
     let Some((info, mut code, tag)) = callable_route(value, argc) else {
         return false;
@@ -289,6 +289,7 @@ pub(super) unsafe fn prime_holder(
                     refuse(8);
                     return HolderPrime::Refused;
                 }
+                let s = super::super::key_attrs::key_storage_slot(keys, s);
                 if s >= shape.live_inline_slot_count {
                     refuse(8);
                     return HolderPrime::NeedsChain;

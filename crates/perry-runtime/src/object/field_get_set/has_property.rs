@@ -1460,7 +1460,12 @@ pub(crate) unsafe fn native_module_own_field_by_key(
         let stored = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if crate::string::js_string_key_bytes(stored, &mut sso_buf) == Some(target) {
-            return Some(js_object_get_field(obj, i));
+            return Some(super::accessors::object_key_field_at_with_keys(
+                obj,
+                keys,
+                i,
+                crate::object::object_live_slot_count(obj),
+            ));
         }
     }
     None

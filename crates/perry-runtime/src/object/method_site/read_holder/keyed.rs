@@ -171,7 +171,12 @@ pub(super) unsafe fn walk_to_key(
                 if crate::object::key_attrs::key_is_accessor_at(keys, s) {
                     return None;
                 }
-                let s = holder_slot_word(next as usize, s, shape.live_inline_slot_count)?;
+                let s = holder_slot_word(
+                    next as usize,
+                    shape.keys as usize as *const crate::ArrayHeader,
+                    s,
+                    shape.live_inline_slot_count,
+                )?;
                 w.holder = next as usize;
                 w.holder_shape = object_shape_stamp(next);
                 w.slot = Some(s);
@@ -227,7 +232,12 @@ unsafe fn dynamic_key_walk(recv: *const ObjectHeader, key: KeyRef<'_>) -> Option
             if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
                 return None;
             }
-            let slot = holder_slot_word(recv as usize, slot, shape.live_inline_slot_count)?;
+            let slot = holder_slot_word(
+                recv as usize,
+                shape.keys as usize as *const crate::ArrayHeader,
+                slot,
+                shape.live_inline_slot_count,
+            )?;
             return Some(Walk {
                 holder: 0,
                 holder_shape: 0,

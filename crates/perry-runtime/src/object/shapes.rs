@@ -691,8 +691,8 @@ impl ShapeRecordRef {
         }
     }
 
-    /// [`Self::own_data_slot_of_value`]'s key POSITION, inline or not: a
-    /// position at or past the live inline count is the key's index in the
+    /// [`Self::own_data_slot_of_value`]'s storage slot, inline or not: a
+    /// slot at or past the live inline count is the key's index in the
     /// receiver's spill buffer (`object_field_at_with_live` reads either).
     #[inline]
     pub(crate) unsafe fn own_data_position_of_value(
@@ -742,7 +742,10 @@ impl ShapeRecordRef {
                     let key = crate::JSValue::from_bits(key_bits).as_string_ptr();
                     super::canonical_keys::adopt_image_key(r.keys as *mut ArrayHeader, i, key);
                 }
-                Some(Some(i as u32))
+                Some(Some(crate::object::key_attrs::key_storage_slot(
+                    r.keys as usize as *const ArrayHeader,
+                    i as u32,
+                )))
             }
         }
     }

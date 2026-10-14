@@ -826,7 +826,7 @@ pub(crate) fn set_field_by_name_object_tail(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             let key_hash = key_bytes_hash(name_ptr, name_len);
             if let Some(i) = keys_index_lookup_property(obj, keys_view, name_bytes, key_hash) {
-                let i = i as usize;
+                let i = keys_view.storage_slot(i) as usize;
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
                     crate::error::throw_frozen_write(obj, &key_str);
@@ -1021,6 +1021,7 @@ pub(crate) fn set_field_by_name_object_tail(
                         }
                     }
                 }
+                let i = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
                 if i < alloc_limit {
                     js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
                 } else {

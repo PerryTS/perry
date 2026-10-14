@@ -965,7 +965,13 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         return None;
     }
     let keys = shape.keys as usize as *mut crate::ArrayHeader;
-    if keys.is_null() || shape.logical_key_count == 0 || shape.logical_key_count > 16 {
+    // Tombstones hole slots by key position; keys with their own storage
+    // slots take the ordered overflow table.
+    if keys.is_null()
+        || shape.logical_key_count == 0
+        || shape.logical_key_count > 16
+        || super::key_attrs::keys_have_slots(keys, shape.logical_key_count)
+    {
         return None;
     }
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
@@ -1341,8 +1347,9 @@ pub extern "C" fn js_object_rest(
             let is_accessor = keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
                 crate::object::key_attrs::key_is_accessor_at(keys, i as u32)
             });
-            let field_val = src_handle
-                .with_const_ptr::<ObjectHeader, _>(|obj| js_object_get_field(obj, i as u32));
+            let field_val = src_handle.with_const_ptr::<ObjectHeader, _>(|obj| {
+                crate::object::field_get_set::js_object_get_key_field(obj, i as u32)
+            });
             if !is_accessor && field_val.is_undefined() {
                 continue;
             }

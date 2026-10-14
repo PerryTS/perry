@@ -89,6 +89,12 @@ impl ObjectKeys {
         (slots, len.min(self.count as usize))
     }
 
+    /// Storage slot of a key position. Key iteration continues to use get().
+    #[inline(always)]
+    pub(crate) unsafe fn storage_slot(self, position: u32) -> u32 {
+        super::key_attrs::key_storage_slot(self.arr, position)
+    }
+
     /// Key `index`, which must be below [`Self::count`].
     ///
     /// # Safety

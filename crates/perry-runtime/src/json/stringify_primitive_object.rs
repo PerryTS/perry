@@ -57,6 +57,11 @@ pub(super) unsafe fn try_emit(
     keys: crate::object::ObjectKeys,
     buf: &mut String,
 ) -> bool {
+    // Fields are read by key position; a layout with its own storage slots
+    // takes the general walker.
+    if crate::object::key_attrs::keys_have_slots(keys.arr(), keys.count()) {
+        return false;
+    }
     emit::<true>(obj, keys, None, buf)
 }
 

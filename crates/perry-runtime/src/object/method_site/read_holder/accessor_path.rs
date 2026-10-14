@@ -86,7 +86,12 @@ pub(crate) unsafe fn accessor_walk(
                     return None;
                 }
             }
-            let slot = holder_slot_word(addr, slot, shape.live_inline_slot_count)?;
+            let slot = holder_slot_word(
+                addr,
+                shape.keys as usize as *const crate::ArrayHeader,
+                slot,
+                shape.live_inline_slot_count,
+            )?;
             let lane = holder_slot_value(addr, slot)?;
             let getter = crate::object::accessor_pair::site_getter_word_of_value(lane)?;
             return Some(HolderAccessor {

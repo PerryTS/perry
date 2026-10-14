@@ -188,6 +188,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
                 if crate::object::key_attrs::key_is_accessor_at(keys, i as u32) {
                     return f64::from_bits(TAG_UNDEF);
                 }
+                let i = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
                 let val = if i < alloc_limit {
                     js_object_get_field(obj, i as u32)
                 } else {

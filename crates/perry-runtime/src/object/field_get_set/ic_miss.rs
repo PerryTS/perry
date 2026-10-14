@@ -1142,7 +1142,8 @@ pub(super) fn get_field_ic_miss_impl(
                 let k_bits = (*keys_data.add(i)).to_bits();
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
                 if !k_ptr.is_null() && crate::string::js_string_equals(k_ptr, key) != 0 {
-                    if i >= alloc_limit {
+                    let slot = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
+                    if slot >= alloc_limit {
                         crate::hot_diag::recv_route_note_runtime(
                             crate::hot_diag::RT_ROUTE_SPILL_MISS,
                         );
@@ -1164,7 +1165,7 @@ pub(super) fn get_field_ic_miss_impl(
                                 && crate::object::key_attrs::keys_entry(keys, i as u32)
                                     & crate::object::key_attrs::ENTRY_ACCESSOR
                                     != 0;
-                        if !key_is_accessor && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT {
+                        if !key_is_accessor && (slot as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT {
                             // S5: `spill_get_present`, not `overflow_get` — a
                             // stored `undefined` is a value the site can serve
                             // (the legacy convention read it as absent, so such
@@ -1172,7 +1173,8 @@ pub(super) fn get_field_ic_miss_impl(
                             // by-name walk), and `None` for any value that does
                             // not live in object-owned spill storage, which the
                             // emitted spill read could not reach.
-                            if let Some(bits) = crate::object::spill_get_present(obj as usize, i) {
+                            if let Some(bits) = crate::object::spill_get_present(obj as usize, slot)
+                            {
                                 let stamp = crate::object::shapes::object_shape_stamp(obj);
                                 let token =
                                     (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
@@ -1180,7 +1182,7 @@ pub(super) fn get_field_ic_miss_impl(
                                 packed_get::prime_get(
                                     cache,
                                     token,
-                                    (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
+                                    (slot as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
                                     packed,
                                 );
                                 if diag {
@@ -1227,7 +1229,7 @@ pub(super) fn get_field_ic_miss_impl(
                     // publishes the token on the object's meta, which
                     // `element_shape` consumes).
                     let named_prefix_proved = !(*obj).meta.is_null()
-                        && crate::array::array_subclass_named_prefix_token_for_slot(obj, i) != 0;
+                        && crate::array::array_subclass_named_prefix_token_for_slot(obj, slot) != 0;
                     // Charter step 3 (#10871): the SHAPE says whether THIS key
                     // is an accessor. A descriptor on another key of the
                     // object changes nothing a read of this slot depends on.
@@ -1245,12 +1247,12 @@ pub(super) fn get_field_ic_miss_impl(
                         break;
                     }
                     let cache = pic_slot_resolve(cache_slot);
-                    packed_get::prime_get(cache, token, i as i64, packed);
+                    packed_get::prime_get(cache, token, slot as i64, packed);
                     if diag {
                         ic_diag_note(cache_slot, key, R::OwnInlinePrimed);
                     }
                     let field_ptr = (obj as *const u8)
-                        .add(std::mem::size_of::<ObjectHeader>() + i * 8)
+                        .add(std::mem::size_of::<ObjectHeader>() + slot * 8)
                         as *const f64;
                     return *field_ptr;
                 }

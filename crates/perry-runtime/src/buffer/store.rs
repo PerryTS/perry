@@ -62,12 +62,7 @@ pub(crate) unsafe fn own_slot(obj: *const ObjectHeader, key: &[u8]) -> Option<u3
 /// Whether `bag` (non-null) holds a live own value under `key`.
 pub(crate) unsafe fn bag_holds(bag: *const ObjectHeader, key: &[u8]) -> bool {
     own_slot(bag, key).is_some_and(|slot| {
-        crate::object::object_field_at_with_live(
-            bag,
-            slot,
-            crate::object::object_live_slot_count(bag),
-        )
-        .bits()
+        crate::object::field_get_set::js_object_get_key_field(bag, slot).bits()
             != crate::value::TAG_HOLE
     })
 }
@@ -75,11 +70,7 @@ pub(crate) unsafe fn bag_holds(bag: *const ObjectHeader, key: &[u8]) -> bool {
 pub(crate) unsafe fn bag_get(addr: usize, key: &str) -> Option<f64> {
     let obj = bag(addr);
     let slot = own_slot(obj, key.as_bytes())?;
-    let value = crate::object::object_field_at_with_live(
-        obj,
-        slot,
-        crate::object::object_live_slot_count(obj),
-    );
+    let value = crate::object::field_get_set::js_object_get_key_field(obj, slot);
     (value.bits() != crate::value::TAG_HOLE).then(|| f64::from_bits(value.bits()))
 }
 

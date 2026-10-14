@@ -63,7 +63,7 @@ impl PrivateStorageKey {
                     self.as_bytes(),
                 )
             }?;
-            return Some((object, index, unsafe {
+            return Some((object, unsafe { keys.storage_slot(index) }, unsafe {
                 crate::object::object_live_slot_count(object)
             }));
         }
@@ -89,7 +89,7 @@ impl PrivateStorageKey {
                 return None;
             }
             let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape)?;
-            let slot = (shape, index, live);
+            let slot = (shape, unsafe { keys.storage_slot(index) }, live);
             self.slot.set(Some(slot));
             Some(slot)
         })?;
@@ -502,6 +502,7 @@ impl IntrinsicPrivateReadSite {
     ) -> Option<u32> {
         let spelling = private_storage_spelling(0, 0, self.name);
         crate::object::keys_find_private_slot_by_bytes(keys, count, spelling.as_bytes())
+            .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
     }
 
     #[inline]
@@ -550,6 +551,7 @@ impl IntrinsicPrivateReadSite {
         }?;
         let live = unsafe { crate::object::object_live_slot_count(object) };
         let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
+        let index = unsafe { keys.storage_slot(index) };
         self.site.prime_own_inline(shape, index, live);
         Some(f64::from_bits(unsafe {
             super::object_field_at_with_live(object, index, live).bits()

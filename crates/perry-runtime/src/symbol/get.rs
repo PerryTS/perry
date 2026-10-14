@@ -189,7 +189,16 @@ pub unsafe extern "C" fn js_object_get_symbol_property_ic_miss(
                     && accessors::symbol_accessor_property_by_key(obj_key, sym_key).is_none()
                 {
                     let obj = obj_key as *mut crate::object::ObjectHeader;
-                    let slot = crate::object::shaped_symbols::position(obj, sym_key);
+                    let keys = crate::object::object_keys(obj);
+                    let slot = crate::object::shaped_symbols::position_in(keys, sym_key).and_then(
+                        |position| {
+                            if crate::object::overflow::is_table(keys.arr()) {
+                                crate::object::overflow::fixed_slot_at(keys.arr().cast(), position)
+                            } else {
+                                Some(keys.storage_slot(position))
+                            }
+                        },
+                    );
                     let shape = crate::object::shapes::object_shape_stamp(obj);
                     // The generated hit reads the inline slot directly, so only
                     // a slot inside the published live inline bound may prime.
@@ -1845,7 +1854,7 @@ mod own_data_ic_tests {
             assert_eq!(got.to_bits(), second.to_bits());
             assert_eq!(cache[3] as u32, 0);
             assert_eq!(
-                crate::object::js_object_get_field(obj_ptr, cache[3] as u32).bits(),
+                crate::object::js_object_get_key_field(obj_ptr, cache[3] as u32).bits(),
                 second.to_bits()
             );
         }

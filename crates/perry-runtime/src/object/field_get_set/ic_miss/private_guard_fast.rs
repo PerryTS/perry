@@ -424,9 +424,11 @@ unsafe fn private_field_site_word(
     };
     if crate::object::key_attrs::keys_entry(keys.arr(), slot)
         != crate::object::key_attrs::PRIVATE_FIELD_ENTRY
-        || slot >= d.live_inline_slot_count
-        || u64::from(slot) > PRIVATE_FIELD_SITE_SLOT_MASK
     {
+        return 0;
+    }
+    let slot = keys.storage_slot(slot);
+    if slot >= d.live_inline_slot_count || u64::from(slot) > PRIVATE_FIELD_SITE_SLOT_MASK {
         return 0;
     }
     let lane = if slot < crate::object::field_rep::REP_SLOTS {

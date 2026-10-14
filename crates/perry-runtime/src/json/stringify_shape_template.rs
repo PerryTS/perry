@@ -165,7 +165,11 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         return None;
     }
     let keys_arr_view = crate::object::object_keys(obj);
-    if crate::object::overflow::is_table(keys_arr_view.arr()) {
+    // Templates read fields by key position: a layout with its own storage
+    // slots, or an ordered overflow table, keeps the general walker.
+    if crate::object::overflow::is_table(keys_arr_view.arr())
+        || crate::object::key_attrs::keys_have_slots(keys_arr_view.arr(), keys_arr_view.count())
+    {
         return None;
     }
     let keys_arr = keys_arr_view.arr();

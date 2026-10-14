@@ -441,7 +441,13 @@ unsafe fn holder_spill_value(addr: usize, index: u32) -> Option<u64> {
 /// getter takes it as found ([`holder_slot_value`]). `None` refuses the walk
 /// (a legacy side-table overflow slot, spill disabled, or a value the getter
 /// would read past).
-unsafe fn holder_slot_word(addr: usize, s: u32, inline: u32) -> Option<u32> {
+unsafe fn holder_slot_word(
+    addr: usize,
+    keys: *const crate::ArrayHeader,
+    position: u32,
+    inline: u32,
+) -> Option<u32> {
+    let s = crate::object::key_attrs::key_storage_slot(keys, position);
     if s < inline {
         return Some(s);
     }

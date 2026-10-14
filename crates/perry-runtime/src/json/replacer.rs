@@ -404,6 +404,8 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         buf.push_str("{}");
         return;
     };
+    // A layout that keeps its own storage slots reads each key through them.
+    let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
     let keys_arr = keys_view.arr() as *const crate::ArrayHeader;
     let keys_root = gc_scope.root_raw_const_ptr(keys_arr);
     let keys_len = keys_view.count();
@@ -497,10 +499,10 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         // resolve toJSON, then apply the replacer. Overflow slots (f >=
         // alloc_limit) route through js_object_get_field's OVERFLOW_FIELDS
         // lookup.
-        let mut field_val = if f < alloc_limit {
+        let mut field_val = if f < alloc_limit && !slotted {
             *fields_ptr.add(f as usize)
         } else {
-            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+            f64::from_bits(crate::object::field_get_set::js_object_get_key_field(obj, f).bits())
         };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
@@ -1040,6 +1042,8 @@ pub(crate) unsafe fn stringify_object_pretty(
         buf.push_str("{}");
         return;
     };
+    // A layout that keeps its own storage slots reads each key through them.
+    let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
     let keys_len = keys_view.count();
     let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
     let fields_ptr =
@@ -1092,10 +1096,10 @@ pub(crate) unsafe fn stringify_object_pretty(
         {
             continue;
         }
-        let mut field_val = if f < alloc_limit {
+        let mut field_val = if f < alloc_limit && !slotted {
             *fields_ptr.add(f as usize)
         } else {
-            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+            f64::from_bits(crate::object::field_get_set::js_object_get_key_field(obj, f).bits())
         };
         // Own accessor properties: serialize the getter's return value.
         if filter_non_enum && f < keys_len {
@@ -1264,6 +1268,8 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         buf.push_str("{}");
         return;
     };
+    // A layout that keeps its own storage slots reads each key through them.
+    let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
     let keys_len = keys_view.count();
     let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
     let fields_ptr =
@@ -1310,10 +1316,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         {
             continue;
         }
-        let mut field_val = if f < alloc_limit {
+        let mut field_val = if f < alloc_limit && !slotted {
             *fields_ptr.add(f as usize)
         } else {
-            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+            f64::from_bits(crate::object::field_get_set::js_object_get_key_field(obj, f).bits())
         };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =

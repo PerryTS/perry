@@ -1194,6 +1194,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         if key_ptr.is_null() {
             continue;
         }
+        let i = src_keys.storage_slot(i as u32) as usize;
         let field_f64 = if i < alloc_limit {
             let field_bits = *src_fields.add(i);
             f64::from_bits(field_bits)

@@ -863,6 +863,7 @@ fn get_field_by_name_past_data_probe(
                                 key as usize,
                                 keys_view.count(),
                             ) {
+                                let idx = keys_view.storage_slot(idx);
                                 prime_read_stub(o, key, idx, (idx as usize) < alloc_limit);
                                 return if (idx as usize) < alloc_limit {
                                     super::accessors::js_object_get_field(o, idx)
@@ -899,13 +900,13 @@ fn get_field_by_name_past_data_probe(
                                             key,
                                         )
                                     {
-                                        let i = i as usize;
-                                        prime_read_stub(o, key, i as u32, i < alloc_limit);
                                         super::super::prop_plan::read_plan_record(
                                             keys as usize,
                                             key as usize,
-                                            i as u32,
+                                            i,
                                         );
+                                        let i = keys_view.storage_slot(i) as usize;
+                                        prime_read_stub(o, key, i as u32, i < alloc_limit);
                                         return if i < alloc_limit {
                                             super::accessors::js_object_get_field(o, i as u32)
                                         } else {

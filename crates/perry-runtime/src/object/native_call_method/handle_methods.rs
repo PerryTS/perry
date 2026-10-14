@@ -952,7 +952,10 @@ pub(super) unsafe fn dispatch_handle(
                             key_count as u32,
                             method_name.as_bytes(),
                         ) {
-                            let field_val = js_object_get_field(obj as *mut _, slot);
+                            let field_val = crate::object::field_get_set::js_object_get_key_field(
+                                obj as *const _,
+                                slot,
+                            );
                             // Always try the field as a callable —
                             // `js_native_call_value` validates
                             // CLOSURE_MAGIC internally and safely

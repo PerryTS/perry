@@ -77,6 +77,7 @@ pub(super) unsafe fn on_prototype(proto: *const ObjectHeader, name: &[u8]) -> Op
                 holder_shape: stamp,
                 slot: Some(holder_slot_word(
                     proto as usize,
+                    shape.keys as usize as *const crate::ArrayHeader,
                     s,
                     shape.live_inline_slot_count,
                 )?),

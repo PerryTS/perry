@@ -151,6 +151,7 @@ fn own_slot(env: f64, name: &str) -> Option<u32> {
     unsafe {
         let keys = crate::object::object_keys(obj);
         crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())
+            .map(|position| keys.storage_slot(position))
     }
 }
 

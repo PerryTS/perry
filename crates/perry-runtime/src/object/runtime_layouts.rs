@@ -64,9 +64,10 @@ const fn image_bytes<const N: usize>(bytes: &[u8]) -> ImageString<N> {
     image(result)
 }
 
-const fn layout_keys<const N: usize>(
-    atoms: [(*const StaticAtom, u64, u8); N],
-) -> [PerryLayoutKey; N] {
+// Atom, hash, attribute byte, storage slot (`None`: the key's position).
+type LayoutAtom = (*const StaticAtom, u64, u8, Option<u32>);
+
+const fn layout_keys<const N: usize>(atoms: [LayoutAtom; N]) -> [PerryLayoutKey; N] {
     let mut keys = [const {
         PerryLayoutKey {
             atom: std::ptr::null(),
@@ -75,11 +76,19 @@ const fn layout_keys<const N: usize>(
             _pad: [0; 3],
         }
     }; N];
+    let mut taken = [false; N];
     let mut i = 0;
     while i < N {
+        let slot = match atoms[i].3 {
+            Some(slot) => slot,
+            None => i as u32,
+        };
+        // Storage slots are a permutation of the key positions.
+        assert!((slot as usize) < N && !taken[slot as usize]);
+        taken[slot as usize] = true;
         keys[i] = PerryLayoutKey {
             atom: atoms[i].0,
-            slot: i as u32,
+            slot,
             attrs: atoms[i].2,
             _pad: [0; 3],
         };
@@ -92,7 +101,7 @@ const fn layout_index_size(keys: usize) -> usize {
     (keys * 2).next_power_of_two()
 }
 
-const fn layout_index<const N: usize>(atoms: &[(*const StaticAtom, u64, u8)]) -> [u32; N] {
+const fn layout_index<const N: usize>(atoms: &[LayoutAtom]) -> [u32; N] {
     assert!(N == layout_index_size(atoms.len()));
     let mut index = [u32::MAX; N];
     let mut i = 0;
@@ -108,19 +117,23 @@ const fn layout_index<const N: usize>(atoms: &[(*const StaticAtom, u64, u8)]) ->
 }
 
 // Optional attribute bytes support the non-default checked contracts; the
-// family/variant are carried contract facts. Slots, padding and probing data
-// are exclusively computed, including the one-bucket empty layout.
+// family/variant are carried contract facts. The key order is the
+// enumeration order; `ATOM @ slot` stores a key in another slot (default:
+// its position). Padding and probing data are computed, including the
+// one-bucket empty layout; the index holds key positions.
 macro_rules! runtime_layout {
     (@attrs) => { 0 };
     (@attrs $attrs:expr) => { $attrs };
-    ($name:ident, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(=> $attrs:expr)?),* $(,)?]) => {
+    (@slot) => { None };
+    (@slot $slot:expr) => { Some($slot) };
+    ($name:ident, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(@ $slot:expr)? $(=> $attrs:expr)?),* $(,)?]) => {
         #[allow(non_snake_case)]
         pub mod $name {
             use super::*;
-            const ATOMS: &[(*const StaticAtom, u64, u8)] = &[$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?))),*];
+            const ATOMS: &[LayoutAtom] = &[$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*];
             pub const SLOT_COUNT: usize = ATOMS.len();
             pub(super) static KEYS: [PerryLayoutKey; SLOT_COUNT] =
-                layout_keys([$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?))),*]);
+                layout_keys([$((std::ptr::addr_of!($atom), $atom::HASH, runtime_layout!(@attrs $($attrs)?), runtime_layout!(@slot $($slot)?))),*]);
             pub(super) static INDEX: [u32; layout_index_size(SLOT_COUNT)] = layout_index(ATOMS);
         }
         #[used(linker)]
@@ -2009,3 +2022,7 @@ pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
     index_mask: 15,
     index: SQLITE_COLUMN_INDEX.as_ptr(),
 };
+
+#[cfg(test)]
+#[path = "runtime_layouts/slot_order_tests.rs"]
+mod slot_order_tests;

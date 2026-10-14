@@ -1053,7 +1053,7 @@ unsafe fn ordinary_own_property(obj: *mut ObjectHeader, name: &[u8]) -> Option<O
         );
     }
     OwnProperty::data(
-        f64::from_bits(js_object_get_field(obj, slot).bits()),
+        f64::from_bits(js_object_get_key_field(obj, slot).bits()),
         attrs.writable(),
         attrs.enumerable(),
         attrs.configurable(),

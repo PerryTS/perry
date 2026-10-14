@@ -114,13 +114,14 @@ unsafe fn present_slot(
     }
     let keys = crate::object::object_keys(named);
     let slot = crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), wanted)?;
-    (crate::object::js_object_get_field(named, slot).bits() != TAG_HOLE).then_some((named, slot))
+    (crate::object::field_get_set::js_object_get_key_field(named, slot).bits() != TAG_HOLE)
+        .then_some((named, slot))
 }
 
 unsafe fn lookup(arr: *const ArrayHeader, wanted: &[u8]) -> Option<f64> {
     let (named, slot) = present_slot(arr, wanted)?;
     let keys = crate::object::object_keys(named);
-    let value = crate::object::js_object_get_field(named, slot).bits();
+    let value = crate::object::field_get_set::js_object_get_key_field(named, slot).bits();
     if crate::object::key_attrs::key_is_accessor_at(keys.arr(), slot) {
         let pair = crate::object::accessor_pair::pair_of_value(value).unwrap_or_default();
         return Some(if pair.get == 0 {

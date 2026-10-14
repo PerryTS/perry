@@ -70,7 +70,9 @@ pub(super) fn lookup(target: f64, key: &str, property: Option<&str>) -> Option<f
             keys.count(),
             name.as_bytes(),
         )?;
-        Some(crate::object::js_object_get_field_f64(record, index))
+        Some(f64::from_bits(
+            crate::object::field_get_set::js_object_get_key_field(record, index).bits(),
+        ))
     }
 }
 pub(super) fn own_keys(target: f64, property: Option<&str>) -> Vec<String> {

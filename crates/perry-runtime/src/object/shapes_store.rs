@@ -402,8 +402,19 @@ impl ShapeRecord {
     /// shared by a growth chain), and one past the live inline count is
     /// spilled.
     #[inline]
+    /// Published records own live key arrays; record-only unit tests also
+    /// use synthetic addresses, so there the header read is checked.
+    unsafe fn keys_have_slots(&self) -> bool {
+        let keys = self.keys as usize as *const crate::ArrayHeader;
+        #[cfg(test)]
+        return crate::object::key_attrs::keys_have_slots_checked(keys, self.logical_key_count);
+        #[cfg(not(test))]
+        return crate::object::key_attrs::keys_have_slots(keys, self.logical_key_count);
+    }
+
     pub(super) fn position_bound_by_facts(&self) -> u32 {
-        if !self.positional_by_facts() {
+        // Keys that keep their own storage slots are not positional.
+        if !self.positional_by_facts() || unsafe { self.keys_have_slots() } {
             return 0;
         }
         self.logical_key_count.min(self.live_inline_slot_count)

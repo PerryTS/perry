@@ -1323,12 +1323,14 @@ unsafe fn state_inline_limit(obj: *mut ObjectHeader) -> usize {
 unsafe fn state_key_index(obj: *const ObjectHeader, name: &[u8]) -> Option<usize> {
     let keys = crate::object::object_keys(obj);
     let (slots, len) = keys.dense_slots();
-    (0..(keys.count() as usize).min(len)).find(|&i| {
-        crate::string::js_string_key_matches_bytes(
-            crate::JSValue::from_bits((*slots.add(i)).to_bits()),
-            name,
-        )
-    })
+    (0..(keys.count() as usize).min(len))
+        .find(|&i| {
+            crate::string::js_string_key_matches_bytes(
+                crate::JSValue::from_bits((*slots.add(i)).to_bits()),
+                name,
+            )
+        })
+        .map(|position| keys.storage_slot(position as u32) as usize)
 }
 
 fn set_state_field(

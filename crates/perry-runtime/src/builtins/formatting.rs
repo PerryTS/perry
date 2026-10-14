@@ -1267,13 +1267,15 @@ unsafe fn format_object_as_json(
             continue;
         }
 
-        let value_str =
-            if let Some(acc) = crate::object::get_accessor_descriptor(obj_addr, &key_str) {
-                format_accessor_property(acc, depth)
-            } else {
-                let value = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
-                format_jsvalue_for_json(value, depth + 1)
-            };
+        let value_str = if let Some(acc) =
+            crate::object::get_accessor_descriptor(obj_addr, &key_str)
+        {
+            format_accessor_property(acc, depth)
+        } else {
+            let value =
+                f64::from_bits(crate::object::js_object_get_key_field(obj_ptr, i as u32).bits());
+            format_jsvalue_for_json(value, depth + 1)
+        };
 
         let display_key = format_inspect_property_key(&key_str);
         let rendered = if is_enumerable {

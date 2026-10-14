@@ -359,8 +359,10 @@ pub(crate) fn register_static_layouts() {
 
 /// Register one descriptor under `requested`; the id it resolved to, or 0
 /// when this runtime cannot represent it yet (a descriptor prototype, a
-/// non-ordinary kind, slots not in key order, a key that is not an atom).
-unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
+/// non-ordinary kind, slots that are not a permutation of the key positions,
+/// a key that is not an atom). The key sequence is the enumeration order;
+/// each key's slot is its storage.
+pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
     let existing = registered_layout_id(word.load(Ordering::Acquire));
@@ -381,8 +383,23 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
     // Names, hashes and attribute bytes already live in the binary.
     // Validate the fixed ABI without rebuilding transient name/attribute
     // vectors or revalidating each image string as UTF-8 at agent startup.
-    for (i, key) in keys.iter().enumerate() {
-        if key.slot as usize != i || key.slot >= d.slot_count {
+    let mapped = keys
+        .iter()
+        .enumerate()
+        .any(|(i, key)| key.slot as usize != i);
+    if mapped {
+        // A permutation keeps the next position free as the next key's slot.
+        let mut taken = vec![false; keys.len()];
+        for key in keys {
+            let slot = key.slot as usize;
+            if slot >= keys.len() || taken[slot] {
+                return 0;
+            }
+            taken[slot] = true;
+        }
+    }
+    for key in keys {
+        if key.slot >= d.slot_count {
             return 0;
         }
         match (*key.atom).kind {
@@ -411,7 +428,7 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
         let list = super::key_attrs::alloc_canonical_key_list(
             key_count,
             true,
-            keys.iter().any(|key| key.attrs != 0),
+            mapped || keys.iter().any(|key| key.attrs != 0),
         );
         let values = crate::array::array_elements_ptr(list);
         let attributes = super::key_attrs::keys_attrs(list);
@@ -424,6 +441,9 @@ unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
             };
             if !attributes.is_null() {
                 super::key_attrs::attrs_write(attributes, i as u32, key.attrs, &*key.atom);
+                if mapped {
+                    super::key_attrs::attrs_write_slot(attributes, i as u32, key.slot);
+                }
             }
         }
         (*list).length = key_count;

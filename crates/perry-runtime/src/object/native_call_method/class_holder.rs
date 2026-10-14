@@ -223,6 +223,7 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
             if crate::object::key_attrs::key_is_accessor_at(keys, pos) {
                 return ChainMethod::Get { holder };
             }
+            let pos = crate::object::key_attrs::key_storage_slot(keys, pos);
             // Below the shape's live inline count the key IS that inline
             // slot; above it the general read finds the spill position.
             let inline = pos < record.live_inline_slot_count();

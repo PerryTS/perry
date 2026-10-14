@@ -192,8 +192,12 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
             {
                 return None;
             }
-            let value =
-                crate::object::object_field_at_with_live(obj, slot, d.live_inline_slot_count);
+            let value = crate::object::object_key_field_at_with_keys(
+                obj,
+                keys,
+                slot,
+                d.live_inline_slot_count,
+            );
             if value.bits() == crate::value::TAG_HOLE {
                 return None;
             }
@@ -224,7 +228,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
         return None;
     }
     let live = crate::object::object_live_slot_count(obj);
-    let value = crate::object::object_field_at_with_live(obj, slot, live);
+    let value = crate::object::object_key_field_at_with_keys(obj, arr, slot, live);
     if value.bits() == crate::value::TAG_HOLE {
         return None;
     }
@@ -415,8 +419,9 @@ pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
         return false;
     };
     crate::object::key_attrs::key_is_accessor_at(arr, slot as u32)
-        || crate::object::object_field_at_with_live(
+        || crate::object::object_key_field_at_with_keys(
             bag,
+            arr,
             slot,
             crate::object::object_live_slot_count(bag),
         )
@@ -489,7 +494,7 @@ pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for i in 0..keys.count() {
         if !crate::object::key_attrs::key_is_accessor_at(arr, i)
-            && crate::object::object_field_at_with_live(bag, i, live).bits()
+            && crate::object::object_key_field_at_with_keys(bag, arr, i, live).bits()
                 == crate::value::TAG_HOLE
         {
             continue;
@@ -525,7 +530,7 @@ pub(crate) unsafe fn bag_snapshot(ptr: usize) -> Vec<(String, f64)> {
     let mut indexed: Vec<(u32, String, f64)> = Vec::new();
     let mut strings: Vec<(String, f64)> = Vec::new();
     for i in 0..keys.count() {
-        let value = crate::object::object_field_at_with_live(bag, i, live);
+        let value = crate::object::object_key_field_at_with_keys(bag, arr, i, live);
         if value.bits() == crate::value::TAG_HOLE
             || crate::object::key_attrs::key_is_accessor_at(arr, i)
         {

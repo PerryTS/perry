@@ -237,7 +237,16 @@ unsafe fn prove_builtin_behavior(
     Some(holder)
 }
 
-unsafe fn constfn_code(shape: &super::shapes::ShapeDescriptor, slot: u32, code: *const u8) -> bool {
+// `position` is the key's position in the holder's key list.
+unsafe fn constfn_code(
+    shape: &super::shapes::ShapeDescriptor,
+    position: u32,
+    code: *const u8,
+) -> bool {
+    let slot = super::key_attrs::key_storage_slot(
+        shape.keys as usize as *const crate::array::ArrayHeader,
+        position,
+    );
     slot < super::field_rep::REP_SLOTS
         && shape.special_constfn_mask & (1 << slot) != 0
         && shape.constfn_infos().iter().any(|entry| {

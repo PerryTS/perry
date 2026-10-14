@@ -99,6 +99,7 @@ pub(crate) unsafe fn prime_alias(
         if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
             return prime_alias_accessor(recv, key, cache_slot, name);
         }
+        let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
         let slot = if slot < shape.live_inline_slot_count {
             slot
         } else {
@@ -242,6 +243,7 @@ pub(super) unsafe fn prime(
     if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
         return None;
     }
+    let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
     let slot = if slot < shape.live_inline_slot_count {
         slot
     } else if (slot as usize) < crate::object::spill::SPILL_MAX_FIELD_INDEX {

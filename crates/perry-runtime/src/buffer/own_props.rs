@@ -74,12 +74,7 @@ pub fn buffer_has_own_prop(addr: usize, prop: &str) -> bool {
     unsafe {
         let bag = store::bag(addr);
         store::own_slot(bag, prop.as_bytes()).is_some_and(|slot| {
-            crate::object::object_field_at_with_live(
-                bag,
-                slot,
-                crate::object::object_live_slot_count(bag),
-            )
-            .bits()
+            crate::object::field_get_set::js_object_get_key_field(bag, slot).bits()
                 != crate::value::TAG_HOLE
         })
     }
@@ -108,11 +103,7 @@ pub fn buffer_own_prop_names(addr: usize) -> Vec<String> {
             if crate::object::field_get_set::enumeration::is_internal_runtime_key_bytes(bytes) {
                 continue;
             }
-            let live = crate::object::object_field_at_with_live(
-                bag,
-                i,
-                crate::object::object_live_slot_count(bag),
-            );
+            let live = crate::object::field_get_set::js_object_get_key_field(bag, i);
             if live.bits() == crate::value::TAG_HOLE {
                 continue;
             }

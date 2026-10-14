@@ -72,6 +72,7 @@ pub(super) unsafe fn prime_function(
     if bag.is_null() {
         return;
     }
+    let s = super::super::key_attrs::key_storage_slot(keys, s);
     if s >= shape.live_inline_slot_count {
         refuse(3);
         return;

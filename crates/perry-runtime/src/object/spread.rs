@@ -143,6 +143,7 @@ unsafe fn copy_slots(
     source: *const ObjectHeader,
     record: shapes::ShapeRecordRef,
     result: Option<shapes::ShapeRecordRef>,
+    source_keys: *const ArrayHeader,
 ) {
     let prefix_count = prefix.map_or(0, |(_, r)| r.logical_key_count());
     if let Some((object, r)) = prefix {
@@ -161,6 +162,7 @@ unsafe fn copy_slots(
             source,
             record.logical_key_count(),
             record.live_inline_slot_count(),
+            source_keys,
         );
         return;
     }
@@ -184,6 +186,7 @@ unsafe fn copy_slots(
                 .flatten()
                 .expect("combined shape contains every source key") as usize
         };
+        let slot = source_slot(source_keys, slot);
         let bits = if slot < record.live_inline_slot_count() as usize {
             *fields(source).add(slot)
         } else {
@@ -195,25 +198,54 @@ unsafe fn copy_slots(
 
 #[inline(never)]
 #[optimize(size)]
+/// The storage slot of source key `position`. `source_keys` is null when the
+/// destination's slots are the source's (a shared list, or no own slots).
+#[inline]
+unsafe fn source_slot(source_keys: *const ArrayHeader, position: usize) -> usize {
+    if source_keys.is_null() {
+        position
+    } else {
+        key_attrs::key_storage_slot(source_keys, position as u32) as usize
+    }
+}
+
+/// Non-null when `source`'s keys keep their own storage slots but the result
+/// list `result_keys` is a positional copy. Such a source learns no edge, so
+/// the cached copies below never see one.
+#[inline]
+unsafe fn positional_source(
+    record: shapes::ShapeRecordRef,
+    result_keys: *const ArrayHeader,
+) -> *const ArrayHeader {
+    let keys = record.keys() as usize as *const ArrayHeader;
+    if keys != result_keys && key_attrs::keys_have_slots(keys, record.logical_key_count()) {
+        keys
+    } else {
+        ptr::null()
+    }
+}
+
 unsafe fn copy_source_slots(
     destination: *mut ObjectHeader,
     source: *const ObjectHeader,
     count: u32,
     inline: u32,
+    source_keys: *const ArrayHeader,
 ) {
-    if inline >= count {
+    if inline >= count && source_keys.is_null() {
         for slot in 0..count as usize {
             copy_value(destination, slot, *fields(source).add(slot));
         }
         return;
     }
-    for slot in 0..count as usize {
+    for position in 0..count as usize {
+        let slot = source_slot(source_keys, position);
         let bits = if slot < inline as usize {
             *fields(source).add(slot)
         } else {
             js_object_get_field(source, slot as u32).bits()
         };
-        copy_value(destination, slot, bits);
+        copy_value(destination, position, bits);
     }
 }
 
@@ -249,7 +281,13 @@ pub unsafe extern "C" fn js_object_spread_fresh_leading(_prefix: f64, source: f6
                         count as usize,
                     );
                 } else {
-                    copy_source_slots(object, src, count, entry.slot_idx & SOURCE_INLINE_MASK);
+                    copy_source_slots(
+                        object,
+                        src,
+                        count,
+                        entry.slot_idx & SOURCE_INLINE_MASK,
+                        ptr::null(),
+                    );
                 }
                 initialize_slack(object, count as usize);
                 return crate::value::js_nanbox_pointer(object as i64);
@@ -269,8 +307,14 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
             Some((None, 0))
         } else {
             source_record(prefix).and_then(|(object, id, r)| {
-                (r.summary() == 0 && r.proto_id() == shapes::PROTO_ID_DEFAULT)
-                    .then_some((Some((object, r)), id))
+                // A prefix is copied slot for slot into a positional list.
+                (r.summary() == 0
+                    && r.proto_id() == shapes::PROTO_ID_DEFAULT
+                    && !key_attrs::keys_have_slots(
+                        r.keys() as usize as *const ArrayHeader,
+                        r.logical_key_count(),
+                    ))
+                .then_some((Some((object, r)), id))
             })
         };
         if let Some((previous, prefix_id)) = predecessor {
@@ -287,7 +331,7 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
                         crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
                     if !raw.is_null() {
                         let object = finish_header(raw.cast(), entry.target_shape_id);
-                        copy_slots(object, previous, src, record, result);
+                        copy_slots(object, previous, src, record, result, ptr::null());
                         initialize_slack(object, entry.target_len as usize);
                         return crate::value::js_nanbox_pointer(object as i64);
                     }
@@ -334,7 +378,7 @@ unsafe fn birth_cached_collect(prefix: f64, source: f64) -> f64 {
     if !crate::arena::pointer_in_nursery(object as usize) {
         shapes::stamp_object_shape_id_with_carrier_note(object, entry.target_shape_id);
     }
-    copy_slots(object, previous, src, record, Some(result));
+    copy_slots(object, previous, src, record, Some(result), ptr::null());
     initialize_slack(object, entry.target_len as usize);
     crate::value::js_nanbox_pointer(object as i64)
 }
@@ -357,6 +401,7 @@ unsafe fn leading_collect(source: f64, entry: TransitionEntry) -> f64 {
         src,
         record.logical_key_count(),
         record.live_inline_slot_count(),
+        ptr::null(),
     );
     initialize_slack(object, entry.target_len as usize);
     crate::value::js_nanbox_pointer(object as i64)
@@ -409,8 +454,15 @@ unsafe fn leading_slow(source: f64) -> f64 {
     let object = allocate_fields(count);
     finish_header(object, shape);
     shapes::stamp_object_shape_id_with_carrier_note(object, shape);
-    copy_source_slots(object, src, count, record.live_inline_slot_count());
-    if count != 0 {
+    let source_keys = positional_source(record, keys.arr());
+    copy_source_slots(
+        object,
+        src,
+        count,
+        record.live_inline_slot_count(),
+        source_keys,
+    );
+    if count != 0 && source_keys.is_null() {
         learn(
             0,
             source_id,
@@ -543,8 +595,9 @@ unsafe fn birth_slow(
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::stamp_object_shape_id_with_carrier_note(object, shape);
     let result = shapes::shape_record_by_id(shape).unwrap();
-    copy_slots(object, prefix, source, record, Some(result));
-    if keys.count() != 0 {
+    let source_keys = positional_source(record, keys.arr());
+    copy_slots(object, prefix, source, record, Some(result), source_keys);
+    if keys.count() != 0 && source_keys.is_null() {
         learn(
             prefix_id,
             source_id,

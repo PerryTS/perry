@@ -109,7 +109,12 @@ pub(crate) unsafe fn prime(
             if attrs & crate::object::key_attrs::ENTRY_PRIVATE != 0 {
                 return None;
             }
-            let slot = holder_slot_word(current_obj as usize, index, shape.live_inline_slot_count)?;
+            let slot = holder_slot_word(
+                current_obj as usize,
+                shape.keys as usize as *const crate::ArrayHeader,
+                index,
+                shape.live_inline_slot_count,
+            )?;
             let lane = holder_slot_value(current_obj as usize, slot)?;
             let is_accessor = attrs & crate::object::key_attrs::ENTRY_ACCESSOR != 0;
             // Own data uses RuntimeReadSite's compact entry. Own spill reads

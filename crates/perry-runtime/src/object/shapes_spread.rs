@@ -14,6 +14,12 @@ impl ShapeRecordRef {
         let slots = crate::array::array_elements_ptr(r.keys as usize as *const crate::ArrayHeader);
         (0..r.logical_key_count.min(r.live_inline_slot_count))
             .find(|&i| *slots.add(i as usize) == key)
+            .map(|position| {
+                crate::object::key_attrs::key_storage_slot(
+                    r.keys as usize as *const crate::ArrayHeader,
+                    position,
+                )
+            })
     }
 
     /// These slots are exactly the receiver's own enumerable data properties.

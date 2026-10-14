@@ -1589,6 +1589,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
             refuse(4);
             return;
         }
+        let s = super::key_attrs::key_storage_slot(keys, s);
         // Where the value lives follows the by-name read's rule: below
         // `max(live slots, INLINE_SLOT_FLOOR)` it is inline, above it in the
         // spill buffer. The gap between the shape's live inline count and

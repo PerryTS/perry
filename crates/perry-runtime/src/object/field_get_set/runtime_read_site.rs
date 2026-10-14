@@ -242,7 +242,7 @@ impl RuntimeReadSite {
                 }
                 Key::Symbol(symbol) => crate::object::shaped_symbols::position(obj, symbol),
             };
-            if let Some(index) = index {
+            if let Some(index) = index.map(|position| keys.storage_slot(position)) {
                 self.prime_own_inline(
                     crate::object::shapes::object_shape_stamp(obj),
                     index,

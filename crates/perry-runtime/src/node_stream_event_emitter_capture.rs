@@ -104,6 +104,10 @@ fn read_default_slow(ctor: f64, proto: Option<f64>) -> bool {
                         shape.keys as usize as *const crate::array::ArrayHeader,
                         slot,
                     ) {
+                        let slot = crate::object::key_attrs::key_storage_slot(
+                            shape.keys as usize as *const crate::array::ArrayHeader,
+                            slot,
+                        );
                         let closure =
                             JSValue::from_bits(ctor.get_nanbox_u64()).as_pointer::<ClosureHeader>();
                         let bag = (*closure).props;

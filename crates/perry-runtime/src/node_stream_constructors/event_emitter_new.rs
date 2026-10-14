@@ -184,6 +184,7 @@ fn plain_prototype_max(proto: f64) -> Option<f64> {
                     descriptor.logical_key_count,
                     b"_maxListeners",
                 )?;
+                let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
                 if slot >= descriptor.live_inline_slot_count {
                     return None;
                 }

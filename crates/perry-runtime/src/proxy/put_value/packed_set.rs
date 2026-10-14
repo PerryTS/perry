@@ -590,6 +590,7 @@ unsafe fn prime_packed_set(
         };
         idx = property;
     }
+    let idx = crate::object::key_attrs::key_storage_slot(keys, idx);
     let inline = idx < shape.live_inline_slot_count;
     // The emitted hit stores raw bits, so a ConstFn slot is published only
     // flagged: the hit then admits only a closure of the site's one body,

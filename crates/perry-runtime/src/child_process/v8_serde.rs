@@ -611,10 +611,13 @@ impl Serializer {
             // it carries `undefined` for it, as the slot always read before.
             let val = if crate::object::key_attrs::key_is_accessor_at(keys_arr, f) {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
-            } else if f < alloc_limit {
-                *fields_ptr.add(f as usize)
             } else {
-                f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+                let f = crate::object::key_attrs::key_storage_slot(keys_arr, f);
+                if f < alloc_limit {
+                    *fields_ptr.add(f as usize)
+                } else {
+                    f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+                }
             };
             self.write_value(key);
             self.write_value(val);

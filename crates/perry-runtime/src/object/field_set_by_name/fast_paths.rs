@@ -221,6 +221,7 @@ unsafe fn existing_own_data_overwrite(
         return false;
     }
 
+    let idx = crate::object::key_attrs::key_storage_slot(keys, idx);
     let vbits = value.to_bits();
     let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
         crate::value::TAG_UNDEFINED

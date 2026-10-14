@@ -142,7 +142,12 @@ unsafe fn walk(receiver: *const ObjectHeader, name: &[u8]) -> Option<Proof> {
                 if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
                     return None;
                 }
-                let slot = holder_slot_word(next as usize, slot, shape.live_inline_slot_count)?;
+                let slot = holder_slot_word(
+                    next as usize,
+                    shape.keys as usize as *const crate::ArrayHeader,
+                    slot,
+                    shape.live_inline_slot_count,
+                )?;
                 return Some(Proof {
                     holder: next as usize,
                     holder_shape: stamp,

@@ -107,6 +107,14 @@ pub(crate) const SUMMARY_KEY_BITS: u8 = SUMMARY_ACCESSOR
     | SUMMARY_NON_ENUMERABLE
     | SUMMARY_NON_CONFIGURABLE
     | SUMMARY_PRIVATE;
+/// Attribute-word bit, not a shape summary bit: some key up to here keeps a
+/// storage slot other than its position. Such a list comes from a layout
+/// descriptor whose slots are a permutation of its key positions. A key
+/// added later takes its position as its slot, which is still free; a delete
+/// moves the receiver to its ordered overflow table.
+const SUMMARY_SLOTS: u8 = 0x20;
+/// Attribute-word bit for this position only: the Bloom half holds its slot.
+const WORD_SLOT: u8 = 0x80;
 /// Bits a plain data store must see clear on every hop of a prototype chain.
 pub(crate) const SUMMARY_BLOCKS_STORE: u8 = SUMMARY_ACCESSOR | SUMMARY_NON_WRITABLE;
 
@@ -167,6 +175,8 @@ pub(crate) const fn entry_is_plain_writable_data(entry: u8) -> bool {
 /// filters over the keys that carry a non-default entry / an accessor. The
 /// cumulative words make a prefix's answers one load: the summary of a shape
 /// naming `count` keys is element `count - 1`'s, and so are its filters.
+/// A key with its own storage slot ([`WORD_SLOT`]) keeps the slot in the
+/// Bloom half instead; the positions after it carry full filters.
 #[derive(Clone, Copy)]
 struct Word {
     entry: u8,
@@ -202,10 +212,35 @@ impl Word {
         }
     }
 
+    /// The storage slot this position keeps, if it is not its position.
+    #[inline(always)]
+    const fn slot(self) -> Option<u32> {
+        if self.summary & WORD_SLOT != 0 {
+            Some(self.entry_bloom as u32 | (self.accessor_bloom as u32) << 16)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn with_slot(mut self, slot: Option<u32>) -> Word {
+        if let Some(slot) = slot {
+            self.summary |= WORD_SLOT | SUMMARY_SLOTS;
+            self.entry_bloom = slot as u16;
+            self.accessor_bloom = (slot >> 16) as u16;
+        }
+        self
+    }
+
     /// This position's word: `entry` for `key`, after the cumulative `prev`.
     #[inline(always)]
     unsafe fn after(prev: Word, entry: u8, key: impl AttributeKey) -> Word {
         let mut w = Word { entry, ..prev };
+        if prev.summary & WORD_SLOT != 0 {
+            w.summary &= !WORD_SLOT;
+            w.entry_bloom = u16::MAX;
+            w.accessor_bloom = u16::MAX;
+        }
         if entry != 0 {
             w.summary |= entry_summary(entry);
             let bit = key.bloom_bit();
@@ -461,10 +496,11 @@ pub(crate) unsafe fn object_slot_data(
     obj: *const crate::object::ObjectHeader,
     idx: u32,
 ) -> crate::JSValue {
-    if key_is_accessor_at(crate::object::object_keys(obj).arr(), idx) {
+    let (keys, live) = crate::object::object_keys_and_live_slot_count(obj);
+    if key_is_accessor_at(keys.arr(), idx) {
         return crate::JSValue::undefined();
     }
-    crate::object::js_object_get_field(obj, idx)
+    crate::object::field_get_set::object_key_field_at_with_keys(obj, keys.arr(), idx, live)
 }
 
 /// [`object_slot_data`] as the raw `f64` word.
@@ -494,6 +530,60 @@ pub(crate) unsafe fn keys_summary(keys: *const ArrayHeader, count: u32) -> u8 {
         return 0;
     }
     prefix_word(attrs, count).summary & SUMMARY_KEY_BITS
+}
+
+/// Does some key among the first `count` keep its own storage slot? Such a
+/// list keeps its attributes array even when every entry is default. An
+/// ordered overflow table names each entry's slot, so it answers yes.
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline]
+pub(crate) unsafe fn keys_have_slots(keys: *const ArrayHeader, count: u32) -> bool {
+    if count == 0 || (keys as usize) < perry_abi::RECEIVER_HANDLE_FLOOR || (keys as u64) >> 48 != 0
+    {
+        return false;
+    }
+    // One header load answers a table and a list without attributes.
+    let header = &*crate::gc::header_from_trusted_user_ptr(keys.cast());
+    if header.obj_type == crate::gc::GC_TYPE_OVERFLOW {
+        return true;
+    }
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
+    {
+        return false;
+    }
+    let attrs = keys_attrs(keys);
+    !attrs.is_null() && prefix_word(attrs, count).summary & SUMMARY_SLOTS != 0
+}
+
+/// Must a list extending the first `count` keys carry an attributes array:
+/// does some key carry an entry or its own storage slot?
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline]
+pub(crate) unsafe fn keys_need_attrs(keys: *const ArrayHeader, count: u32) -> bool {
+    if count == 0 {
+        return false;
+    }
+    let attrs = keys_attrs(keys);
+    !attrs.is_null() && prefix_word(attrs, count).summary & (SUMMARY_KEY_BITS | SUMMARY_SLOTS) != 0
+}
+
+/// [`keys_have_slots`] through [`keys_attrs_checked`].
+///
+/// # Safety
+/// `keys` is any address.
+#[inline]
+pub(crate) unsafe fn keys_have_slots_checked(keys: *const ArrayHeader, count: u32) -> bool {
+    if count == 0 {
+        return false;
+    }
+    let attrs = keys_attrs_checked(keys);
+    !attrs.is_null() && prefix_word(attrs, count).summary & SUMMARY_SLOTS != 0
 }
 
 /// [`keys_summary`] through [`keys_attrs_checked`].
@@ -534,6 +624,9 @@ pub(crate) unsafe fn keys_may_carry(
         return false;
     }
     let w = prefix_word(attrs, count);
+    if w.summary & WORD_SLOT != 0 {
+        return true;
+    }
     let bloom = if accessor {
         w.accessor_bloom
     } else {
@@ -557,7 +650,10 @@ pub(crate) unsafe fn keys_have_entries(keys: *const ArrayHeader, count: u32) -> 
         return false;
     }
     let (w, len) = words(attrs);
-    (0..(count as usize).min(len)).any(|i| Word::decode(*w.add(i)).entry != 0)
+    (0..(count as usize).min(len)).any(|i| {
+        let word = Word::decode(*w.add(i));
+        word.entry != 0 || word.slot().is_some()
+    })
 }
 
 /// Allocate an attributes array with room for `capacity` positions.
@@ -601,6 +697,132 @@ pub(crate) unsafe fn attrs_write(
     }
 }
 
+/// Give the key just written at `pos` its own storage `slot`.
+///
+/// # Safety
+/// As [`attrs_write`], after it wrote `pos`.
+#[inline]
+pub(crate) unsafe fn attrs_write_slot(attrs: *mut ArrayHeader, pos: u32, slot: u32) {
+    let (w, _) = words(attrs);
+    // GC_STORE_AUDIT(POINTER_FREE): an INT32 box into a pointer-free array.
+    *w.add(pos as usize) = Word::decode(*w.add(pos as usize))
+        .with_slot(Some(slot))
+        .encode();
+}
+
+/// The attribute word of key position `pos` of `keys` (0 past its end). Its
+/// low byte is the entry, and [`slot_of_word`] reads the storage slot from
+/// it: a reader that loads the entry gets the slot from the same load. An
+/// ordered overflow table answers with its entry alone: its readers and
+/// writers address entries by position (`overflow::get_from`).
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline(always)]
+pub(crate) unsafe fn key_word(keys: *const ArrayHeader, pos: u32) -> u64 {
+    if crate::object::overflow::is_table(keys) {
+        return crate::object::overflow::entry_attrs(keys, pos) as u64;
+    }
+    let attrs = keys_attrs(keys);
+    if attrs.is_null() {
+        return 0;
+    }
+    let (w, len) = words(attrs);
+    if (pos as usize) < len {
+        *w.add(pos as usize)
+    } else {
+        0
+    }
+}
+
+/// The storage slot of key position `pos`, from its attribute word.
+#[inline(always)]
+pub(crate) const fn slot_of_word(word: u64, pos: u32) -> u32 {
+    match Word::decode(word).slot() {
+        Some(slot) => slot,
+        None => pos,
+    }
+}
+
+/// The canonical key trie's identity of position `pos`'s word: its entry,
+/// and its own storage slot when it keeps one. Zero is the default.
+#[inline(always)]
+pub(crate) const fn token_of_word(word: u64) -> u64 {
+    let w = Word::decode(word);
+    match w.slot() {
+        Some(slot) => w.entry as u64 | (slot as u64 + 1) << 8,
+        None => w.entry as u64,
+    }
+}
+
+/// [`attrs_write`] for a trie token ([`token_of_word`]).
+///
+/// # Safety
+/// As [`attrs_write`].
+#[inline]
+pub(crate) unsafe fn attrs_write_token(
+    attrs: *mut ArrayHeader,
+    pos: u32,
+    token: u64,
+    key: impl AttributeKey,
+) {
+    attrs_write(attrs, pos, token as u8, key);
+    if token >> 8 != 0 {
+        attrs_write_slot(attrs, pos, (token >> 8) as u32 - 1);
+    }
+}
+
+/// The storage slot of key position `pos` of `keys`, or `None` for an
+/// ordered overflow table, whose entries are addressed by position
+/// (`overflow::get_from`). One header load answers a table and a list without
+/// attributes, which keeps no slots.
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline(always)]
+pub(crate) unsafe fn list_storage_slot(keys: *const ArrayHeader, pos: u32) -> Option<u32> {
+    if (keys as usize) < perry_abi::RECEIVER_HANDLE_FLOOR || (keys as u64) >> 48 != 0 {
+        return Some(pos);
+    }
+    let header = &*crate::gc::header_from_trusted_user_ptr(keys.cast());
+    if header.obj_type == crate::gc::GC_TYPE_OVERFLOW {
+        return None;
+    }
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
+    {
+        return Some(pos);
+    }
+    Some(attributed_storage_slot(keys, pos))
+}
+
+/// [`list_storage_slot`] for a list with attributes: one shared helper, so
+/// each reader inlines only the header test.
+#[inline(never)]
+unsafe fn attributed_storage_slot(keys: *const ArrayHeader, pos: u32) -> u32 {
+    let attrs = keys_attrs(keys);
+    if attrs.is_null() {
+        return pos;
+    }
+    let (w, len) = words(attrs);
+    if (pos as usize) < len {
+        slot_of_word(*w.add(pos as usize), pos)
+    } else {
+        pos
+    }
+}
+
+/// The storage slot of key position `pos` of `keys`. An ordered overflow
+/// table answers the position: its entries are addressed by position.
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline(always)]
+pub(crate) unsafe fn key_storage_slot(keys: *const ArrayHeader, pos: u32) -> u32 {
+    list_storage_slot(keys, pos).unwrap_or(pos)
+}
+
 /// The key slot at `pos` of `keys`, or `undefined` past its initialized end.
 #[inline]
 unsafe fn key_at(keys: *const ArrayHeader, pos: u32) -> crate::JSValue {
@@ -631,6 +853,7 @@ pub(crate) unsafe fn attrs_set_owned(
         entry,
         ..Word::EMPTY
     }
+    .with_slot(Word::decode(*w.add(pos as usize)).slot())
     .encode();
     recompute_cumulative(keys, attrs, pos);
 }
@@ -652,8 +875,8 @@ pub(crate) unsafe fn recompute_cumulative(
         Word::decode(*w.add(from as usize - 1))
     };
     for i in from as usize..len {
-        let entry = Word::decode(*w.add(i)).entry;
-        prev = Word::after(prev, entry, key_at(keys, i as u32));
+        let old = Word::decode(*w.add(i));
+        prev = Word::after(prev, old.entry, key_at(keys, i as u32)).with_slot(old.slot());
         // GC_STORE_AUDIT(POINTER_FREE): an INT32 box into a pointer-free array.
         *w.add(i) = prev.encode();
     }
@@ -734,6 +957,7 @@ pub(crate) unsafe fn alloc_canonical_key_list(
 ///
 /// # Safety
 /// Both arrays are live, `dst_attrs` has the capacity, and nothing allocates.
+#[inline]
 pub(crate) unsafe fn copy_entries(
     src_keys: *const ArrayHeader,
     from: u32,
@@ -747,12 +971,15 @@ pub(crate) unsafe fn copy_entries(
         words(src)
     };
     for pos in from..from + n {
-        let entry = if (pos as usize) < slen {
-            Word::decode(*sw.add(pos as usize)).entry
+        let word = if (pos as usize) < slen {
+            Word::decode(*sw.add(pos as usize))
         } else {
-            0
+            Word::EMPTY
         };
-        attrs_write(dst_attrs, pos, entry, key_at(src_keys, pos));
+        attrs_write(dst_attrs, pos, word.entry, key_at(src_keys, pos));
+        if let Some(slot) = word.slot() {
+            attrs_write_slot(dst_attrs, pos, slot);
+        }
     }
 }
 
@@ -1405,16 +1632,17 @@ pub(crate) unsafe fn owned_note_compaction(keys: *mut ArrayHeader, mapping: &[u3
     }
     let (w, len) = words(attrs);
     for (to, &from) in mapping.iter().enumerate() {
-        let entry = if (from as usize) < len {
-            Word::decode(*w.add(from as usize)).entry
+        let old = if (from as usize) < len {
+            Word::decode(*w.add(from as usize))
         } else {
-            0
+            Word::EMPTY
         };
         // GC_STORE_AUDIT(POINTER_FREE): INT32 boxes inside a pointer-free array.
         *w.add(to) = Word {
-            entry,
+            entry: old.entry,
             ..Word::EMPTY
         }
+        .with_slot(old.slot())
         .encode();
     }
     (*attrs).length = mapping.len() as u32;

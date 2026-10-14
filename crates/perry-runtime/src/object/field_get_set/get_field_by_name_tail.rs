@@ -1571,11 +1571,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 let cache = &mut *st.field_lookup.field_cache.get();
                 cache[cache_idx] = (0, 0, 0);
             } else {
-                if let Some(value) = object_accessor_at_with_live(obj, keys, field_idx, live_slots)
-                {
-                    return value;
-                }
-                return super::accessors::object_field_at_with_live(obj, field_idx, live_slots);
+                return object_property_at_with_live(obj, keys, field_idx, live_slots);
             }
         }
 
@@ -1585,24 +1581,12 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // by every field read below and by the stamp; this used to be two
         // probes here (one of them into an unused binding) plus one more
         // inside every `js_object_get_field` the scan returned through.
-        let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
-
         // #5054: wide objects get a validated key→index map so per-key reads
         // stay O(1) instead of O(key_count). A `None` falls through to the
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                if let Some(value) = object_accessor_at_with_live(obj, keys, i, live_slots) {
-                    return value;
-                }
-                return if (i as usize) < alloc_limit {
-                    super::accessors::object_field_at_with_live(obj, i, live_slots)
-                } else {
-                    match overflow_get(obj as usize, i as usize) {
-                        Some(bits) => JSValue::from_bits(bits),
-                        None => JSValue::undefined(),
-                    }
-                };
+                return object_property_at_with_live(obj, keys, i, live_slots);
             }
         }
 
@@ -1659,17 +1643,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
-                if let Some(value) = object_accessor_at_with_live(obj, keys, i as u32, live_slots) {
-                    return value;
-                }
-                if i < alloc_limit {
-                    return super::accessors::object_field_at_with_live(obj, i as u32, live_slots);
-                } else {
-                    return match overflow_get(obj as usize, i) {
-                        Some(bits) => JSValue::from_bits(bits),
-                        None => JSValue::undefined(),
-                    };
-                }
+                return object_property_at_with_live(obj, keys, i as u32, live_slots);
             }
         }
 

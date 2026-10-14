@@ -283,8 +283,8 @@ pub(crate) extern "C-unwind" fn holder_closure_getter(this: f64, pair: i64) -> f
 /// `obj` is a live `ObjectHeader` and `pos` a key position whose entry
 /// carries `ENTRY_ACCESSOR`.
 pub(crate) unsafe fn slot_accessor(obj: *const crate::object::ObjectHeader, pos: u32) -> Accessor {
-    let live = crate::object::object_live_slot_count(obj);
-    slot_accessor_with_live(obj, pos, live)
+    let (keys, live) = crate::object::object_keys_and_live_slot_count(obj);
+    slot_accessor_with_live(obj, keys.arr(), pos, live)
 }
 
 /// Read an already-resolved accessor lane without resolving its holder again.
@@ -293,12 +293,14 @@ pub(crate) unsafe fn slot_accessor(obj: *const crate::object::ObjectHeader, pos:
 #[inline]
 pub(crate) unsafe fn slot_accessor_with_live(
     obj: *const crate::object::ObjectHeader,
+    keys: *const crate::ArrayHeader,
     pos: u32,
     live: u32,
 ) -> Accessor {
     let table = crate::object::overflow::table(obj);
     let value = if table.is_null() {
-        crate::object::field_get_set::object_field_at_with_live(obj, pos, live).bits()
+        let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
+        crate::object::field_get_set::object_field_at_with_live(obj, slot, live).bits()
     } else {
         crate::object::overflow::get_from(table, obj, pos).unwrap_or(crate::value::TAG_UNDEFINED)
     };
@@ -330,6 +332,7 @@ pub(crate) unsafe fn own_accessor(obj: usize, key: &[u8]) -> Option<Accessor> {
     }
     Some(slot_accessor_with_live(
         obj,
+        keys.arr(),
         pos,
         record.live_inline_slot_count(),
     ))

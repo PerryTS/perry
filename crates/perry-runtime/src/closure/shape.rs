@@ -534,11 +534,13 @@ unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: u32) -> u32
         b"prototype",
     ) {
         None => PROTOTYPE_SLOT_ABSENT,
-        Some(index)
-            if (index as u32) < descriptor.live_inline_slot_count
-                && !crate::object::key_attrs::key_is_accessor_at(keys, index as u32) =>
-        {
-            index as u32
+        Some(index) if !crate::object::key_attrs::key_is_accessor_at(keys, index as u32) => {
+            let slot = crate::object::key_attrs::key_storage_slot(keys, index as u32);
+            if slot < descriptor.live_inline_slot_count {
+                slot
+            } else {
+                PROTOTYPE_SLOT_UNKNOWN
+            }
         }
         Some(_) => PROTOTYPE_SLOT_UNKNOWN,
     }

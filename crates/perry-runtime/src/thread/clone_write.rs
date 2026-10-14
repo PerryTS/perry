@@ -830,7 +830,7 @@ impl Writer<'_> {
                 let field_bits = if crate::object::key_attrs::key_is_accessor_at(keys, i) {
                     TAG_UNDEFINED
                 } else {
-                    crate::object::js_object_get_field(obj, i).bits()
+                    crate::object::js_object_get_key_field(obj, i).bits()
                 };
                 names.push(name);
                 fields.push(self.value(field_bits));
@@ -1030,12 +1030,14 @@ impl Writer<'_> {
                 let positions = names
                     .iter()
                     .map(|name| {
-                        crate::object::keys_find_property_slot_by_bytes(
+                        let position = crate::object::keys_find_property_slot_by_bytes(
                             keys.arr(),
                             keys.count(),
                             name,
                         )
-                        .expect("shape key is own")
+                        .expect("shape key is own");
+                        // The value's storage slot under this layout.
+                        keys.storage_slot(position)
                     })
                     .collect();
                 let shape = self.data.shapes.len() as u32;
@@ -1123,7 +1125,7 @@ impl Writer<'_> {
             let bits = if crate::object::key_attrs::key_is_accessor_at(keys_arr, i as u32) {
                 TAG_UNDEFINED
             } else {
-                *fields_ptr.add(i)
+                *fields_ptr.add(keys_view.storage_slot(i as u32) as usize)
             };
             fields.push(self.value(bits));
         }

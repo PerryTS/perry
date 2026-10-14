@@ -13,9 +13,11 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
             {
                 let obj = addr as *const crate::object::ObjectHeader;
                 let symbol = sym_key_from_f64(sym_f64);
-                let position = crate::object::shaped_symbols::position(obj, symbol)?;
-                let keys = crate::object::object_keys(obj);
-                let lane = crate::object::js_object_get_field(obj, position).bits();
+                let (keys, live) = crate::object::object_keys_and_live_slot_count(obj);
+                let position = crate::object::shaped_symbols::position_in(keys, symbol)?;
+                let lane =
+                    crate::object::object_key_field_at_with_keys(obj, keys.arr(), position, live)
+                        .bits();
                 if lane == crate::value::TAG_HOLE {
                     return None;
                 }
@@ -40,9 +42,10 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     // One holder resolution and one key scan answer both the accessor and
     // the data question.
     let holder = crate::object::shaped_symbols::owner(obj_key)?;
-    let position = crate::object::shaped_symbols::position(holder, sym_key)?;
-    let keys = crate::object::object_keys(holder);
-    let lane = crate::object::js_object_get_field(holder, position).bits();
+    let (keys, live) = crate::object::object_keys_and_live_slot_count(holder);
+    let position = crate::object::shaped_symbols::position_in(keys, sym_key)?;
+    let lane =
+        crate::object::object_key_field_at_with_keys(holder, keys.arr(), position, live).bits();
     if lane == crate::value::TAG_HOLE {
         return None;
     }

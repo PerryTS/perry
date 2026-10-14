@@ -365,9 +365,13 @@ unsafe fn stringify_object_walk(
     // returned false, so `JSON.stringify` emitted the literal string "null"
     // for any parsed object with ≥9 fields.
     let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    // A layout that keeps its own storage slots reads each key through them.
+    let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_len);
     let read_field_bits = |f: u32| -> u64 {
         obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
-            if f < alloc_limit {
+            if slotted {
+                crate::object::field_get_set::js_object_get_key_field(obj, f).bits()
+            } else if f < alloc_limit {
                 let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
                     as *const f64;
                 (*fields_ptr.add(f as usize)).to_bits()

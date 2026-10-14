@@ -291,7 +291,7 @@ unsafe fn try_data_lookup_key(
                 }
                 return Some(Some(value));
             }
-        } else if !super::key_attrs::object_key_is_accessor(object, key) {
+        } else {
             let keys = keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
                 // Public reads skip intrinsic and class-private entries.
@@ -306,7 +306,14 @@ unsafe fn try_data_lookup_key(
                         keys, key_count, key, key_hash,
                     )
                 };
-                if let Some(slot) = slot {
+                if let Some(position) = slot {
+                    // The key's attribute word answers the accessor question
+                    // and holds its storage slot: one lookup, one load.
+                    let word = super::key_attrs::key_word(keys, position);
+                    if word as u8 & super::key_attrs::ENTRY_ACCESSOR != 0 {
+                        return None;
+                    }
+                    let slot = super::key_attrs::slot_of_word(word, position);
                     let value = super::field_get_set::object_field_at_with_live(object, slot, live);
                     // Legacy inherited resolution treats undefined/null as
                     // misses at some class edges. Preserve that fallback, and
@@ -324,8 +331,6 @@ unsafe fn try_data_lookup_key(
                 // Its mutable list is read by the ordinary generic lookup.
                 return None;
             }
-        } else {
-            return None;
         }
         if proto_id == shapes::PROTO_ID_NULL {
             // The chain ends here, and no hop listed the key.

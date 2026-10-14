@@ -388,6 +388,7 @@ pub(crate) unsafe fn method_site_test_code(
     let count = own.logical_key_count;
     if keys.is_null()
         || own.live_inline_slot_count < 2
+        || crate::object::key_attrs::keys_have_slots(keys, count)
         || crate::regex::matcher_slot(keys, count) != Some(0)
         || crate::object::keys_find_slot_by_bytes_resolved(keys, count, b"lastIndex") != Some(1)
         || crate::object::key_attrs::key_is_accessor_at(keys, 1)
@@ -409,9 +410,11 @@ pub(crate) unsafe fn method_site_test_code(
     ) else {
         return body;
     };
-    if crate::object::key_attrs::key_is_accessor_at(holder_keys, exec)
-        || exec >= crate::object::field_rep::REP_SLOTS
-        || holder.special_constfn_mask & (1 << exec) == 0
+    if crate::object::key_attrs::key_is_accessor_at(holder_keys, exec) {
+        return body;
+    }
+    let exec = crate::object::key_attrs::key_storage_slot(holder_keys, exec);
+    if exec >= crate::object::field_rep::REP_SLOTS || holder.special_constfn_mask & (1 << exec) == 0
     {
         return body;
     }

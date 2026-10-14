@@ -570,8 +570,9 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
                         view.present[fi] = true;
                         // Root the field value: the caller reads it back long
                         // after several allocating calls (#7963).
-                        view.handles[fi] =
-                            Some(scope.root_nanbox_u64(js_object_get_field(obj, i as u32).bits()));
+                        view.handles[fi] = Some(scope.root_nanbox_u64(
+                            crate::object::js_object_get_key_field(obj, i as u32).bits(),
+                        ));
                     }
                 }
             }
@@ -961,6 +962,7 @@ pub(crate) unsafe fn define_property_force_store_value(
                     crate::object::key_attrs::keys_entry(keys, i as u32),
                 )
             {
+                let i = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
                 let inline_limit = crate::object::object_inline_capacity(obj) as usize;
                 if i < inline_limit {
                     js_object_set_field(

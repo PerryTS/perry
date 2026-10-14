@@ -604,6 +604,7 @@ fn own_data_slot(
         else {
             return Some(None);
         };
+        let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
         Some(Some((obj, slot, shape.live_inline_slot_count)))
     }
 }
