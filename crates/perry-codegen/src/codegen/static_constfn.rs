@@ -21,7 +21,14 @@ pub(crate) fn literal_final(
     }
     let mut seen = BTreeSet::new();
     let mut keys = Vec::new();
+    // A numeric annotation is not a birth proof. Keep a raw lane only
+    // for a numeric literal; all other values retain their NaN-boxed bits.
     let mut rep = base_rep;
+    for (slot, (_, value)) in props.iter().enumerate() {
+        if (rep >> (slot * 2)) & 3 == 1 && !matches!(value, Expr::Number(_) | Expr::Integer(_)) {
+            rep &= !(3 << (slot * 2));
+        }
+    }
     let mut constfn = Vec::new();
     for (slot, (key, value)) in props.iter().enumerate() {
         if key.is_empty() || key.contains('\0') || key == "__proto__" || !seen.insert(key) {
@@ -276,6 +283,10 @@ pub(crate) fn module_literal_finals(
         .collect()
 }
 
+pub(crate) fn literal_seed_descriptors() -> Vec<(BirthShape, u32)> {
+    super::static_shape_ids::module_final_seeds()
+}
+
 pub(crate) fn entries_symbol(prefix: &str, id: u32) -> String {
     format!("perry_constfn_final_{prefix}__{id}")
 }
@@ -520,14 +531,18 @@ pub(crate) fn birth_literal(
     live: u32,
     class_id: u32,
 ) -> Option<anyhow::Result<String>> {
-    if !super::static_shape_ids::has_static_final_shapes() {
+    if !super::static_shape_ids::has_static_final_shapes()
+        || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+    {
         return None;
     }
     let mut shape = literal_final(ctx.strings.module_prefix(), props, base_rep)?;
     shape.live = live;
     let id = super::static_shape_ids::static_final_shape_id(&shape)?;
-    let entries = format!("@{}", entries_symbol(ctx.strings.module_prefix(), id));
-    let keys = format!("{entries}_keys");
+    let desc = format!(
+        "@{}",
+        crate::layout_desc::literal_desc_symbol(ctx.strings.module_prefix(), id)
+    );
     let patches: Vec<_> = props
         .iter()
         .enumerate()
@@ -554,31 +569,50 @@ pub(crate) fn birth_literal(
     Some(crate::rooting::with_operands_rooted_across_call(
         ctx,
         &exprs,
-        |_ctx| Ok(()),
-        |ctx, values, ()| {
-            use crate::types::{I32, I64, PTR};
-            let words = ctx.func.alloca_entry_array(I64, values.len());
-            for (slot, value) in values.iter().enumerate() {
-                let bits = ctx.block().bitcast_double_to_i64(value);
-                let ptr = ctx.block().gep(I64, &words, &[(I64, &slot.to_string())]);
-                ctx.block().store(I64, &bits, &ptr);
-            }
-            let object = ctx.block().call(
-                I64,
-                "js_object_alloc_constfn_static",
-                &[
-                    (I32, &id.to_string()),
-                    (PTR, &keys),
-                    (I32, &shape.keys.len().to_string()),
-                    (I32, &shape.key_count.to_string()),
-                    (I32, &live.to_string()),
-                    (I32, &class_id.to_string()),
-                    (I64, &shape.rep.to_string()),
-                    (PTR, &entries),
-                    (I32, &shape.constfn.len().to_string()),
-                    (PTR, &words),
-                ],
+        |ctx| {
+            let raw = ctx.block().call(
+                crate::types::PTR,
+                "perry_alloc_layout",
+                &[(crate::types::PTR, &desc)],
             );
+            Ok(ctx.block().ptrtoint(&raw, crate::types::I64))
+        },
+        |ctx, values, object| {
+            use crate::types::{I32, I64, I8};
+            let raw = ctx.block().inttoptr(I64, &object);
+            // The literal's synthetic class identity is independent of its layout.
+            ctx.block().store(I32, &class_id.to_string(), &raw);
+            let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+            let fields = ctx.block().gep(I8, &raw, &[(I64, &header.to_string())]);
+            for (slot, value) in values.iter().enumerate() {
+                let bits = if (shape.rep >> (slot * 2)) & 3 == 1 {
+                    // Numeric literal births may lower to the int32 NaN-box.
+                    // The compiler owns this conversion; no runtime admission.
+                    let number = match &props[slot].1 {
+                        Expr::Number(n) => crate::nanbox::double_literal(*n),
+                        Expr::Integer(n) => crate::nanbox::double_literal(*n as f64),
+                        _ => unreachable!("raw birth lane is proven numeric"),
+                    };
+                    ctx.block().bitcast_double_to_i64(&number)
+                } else {
+                    ctx.block().bitcast_double_to_i64(value)
+                };
+                let ptr = ctx.block().gep(I64, &fields, &[(I64, &slot.to_string())]);
+                // GC_STORE_AUDIT(INIT): fixed slot of an unpublished layout birth.
+                ctx.block().store(I64, &bits, &ptr);
+                if (shape.rep >> (slot * 2)) & 3 != 1 {
+                    let address = ctx.block().ptrtoint(&ptr, I64);
+                    crate::expr::emit_write_barrier_slot_value_and_generation_tested(
+                        ctx,
+                        &object,
+                        &object,
+                        &address,
+                        &bits,
+                        "literal_birth",
+                    );
+                }
+            }
+            // Reserved slots are absent until written.
             // The born object must survive every patch helper and be re-read
             // below it. The operand scope still owns all evaluated values.
             let mut group = crate::rooting::open_rooted_group(1);

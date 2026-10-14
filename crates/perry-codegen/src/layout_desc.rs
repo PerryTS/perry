@@ -169,7 +169,7 @@ fn atom(
     }
     let idx = strings.intern(key);
     let entry = strings.entry(idx);
-    if entry.is_wtf8 || entry.byte_len == 0 || entry.byte_len > ATOM_MAX_BYTES {
+    if entry.is_wtf8 || entry.byte_len == 0 {
         return None;
     }
     let image = crate::codegen::string_pool_image_pointer(entry);
@@ -456,7 +456,47 @@ pub(crate) fn emit_module_layouts(
         );
         n += 1;
     }
+    // Completed literal facts were emitted by the compiler and installed by
+    // the static seed before descriptor registration. This descriptor names
+    // that same shape, including its ConstFn slots; allocation never matches
+    // values or discovers a different shape.
+    for (shape, id) in crate::codegen::static_constfn::literal_seed_descriptors() {
+        if shape.proto != crate::codegen::BirthProto::Literal {
+            continue;
+        }
+        let keys: Vec<String> = shape
+            .keys
+            .split(|&b| b == 0)
+            .take(shape.key_count as usize)
+            .map(|k| String::from_utf8(k.to_vec()).expect("literal key UTF-8"))
+            .collect();
+        let atom_names: Vec<_> = keys
+            .iter()
+            .map(|key| atom(llmod, strings, &mut atoms, key).expect("static literal atom"))
+            .collect();
+        let name = literal_desc_symbol(module_prefix, id);
+        let family = (fnv1a(name.as_bytes()) as u32) & 0x7FFF_FFFF;
+        emit_descriptor(
+            llmod,
+            &sect,
+            &name,
+            &name,
+            &keys,
+            &atom_names,
+            family,
+            shape.live,
+            shape.rep,
+            id,
+            None,
+        );
+        n += 1;
+    }
     n
+}
+
+/// Descriptor of a compiler-declared completed literal shape.
+pub(crate) fn literal_desc_symbol(prefix: &str, id: u32) -> String {
+    format!("perry_layout_literal_{prefix}_{id}")
 }
 
 /// Emit one descriptor (its key sequence, slot = position, and key index).

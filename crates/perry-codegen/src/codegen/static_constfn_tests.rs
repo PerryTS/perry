@@ -63,7 +63,7 @@ fn default_and_explicit_constfn_modes_discover_and_emit_only_executable_final_sh
             .collect();
             let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
             assert_eq!(
-                ir.contains("call i64 @js_object_alloc_constfn_static"),
+                ir.contains("call ptr @perry_alloc_layout"),
                 admitted,
                 "{setting:?}/{output}"
             );
@@ -103,7 +103,7 @@ fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
         .collect::<Vec<_>>()
         .join("\n");
     let stamp = body
-        .find("call i64 @js_object_alloc_constfn_static")
+        .find("call ptr @perry_alloc_layout")
         .expect("finalizer was emitted");
     assert!(
         !body.contains("call void @js_object_set_field"),
@@ -121,7 +121,7 @@ fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
     );
     let line = body[stamp..].lines().next().unwrap();
     assert!(
-        line.contains(&format!("i32 {id},")),
+        line.contains(&format!("perry_layout_literal_cf_final_order_{id}")),
         "birth uses the final shape"
     );
     assert!(
@@ -160,7 +160,7 @@ fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
     );
     options.output_type = "dylib".into();
     let unloadable = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
-    assert!(!unloadable.contains("call i64 @js_object_alloc_constfn_static"));
+    assert!(!unloadable.contains("call ptr @perry_alloc_layout"));
     assert!(super::super::static_shape_ids::take_module_static_seeds().is_empty());
 }
 
@@ -401,8 +401,7 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
     options.static_shape_ids = assigned.into_iter().collect();
     let ir = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
     assert_eq!(
-        ir.matches("call i64 @js_object_alloc_constfn_static")
-            .count(),
+        ir.matches("call ptr @perry_alloc_layout").count(),
         1,
         "completed record must call the finalizer once"
     );
@@ -665,8 +664,7 @@ fn class_replacement_returns_never_produce_a_final_record() {
             .collect();
     let ir = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
     assert_eq!(
-        ir.matches("call i64 @js_object_alloc_constfn_static")
-            .count(),
+        ir.matches("call ptr @perry_alloc_layout").count(),
         1,
         "only the unrelated literal has a completed birth; the class allocation stays ordinary"
     );

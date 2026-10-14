@@ -2534,7 +2534,6 @@ js_object_alloc_class_dynamic_parent	ptr	i32u,i32u,ptr,i32u
 js_object_alloc_class_inline_keys	ptr	i32u,i32u,i32u,ptr
 js_object_alloc_class_inline_keys_stamped	ptr	i32u,i32u,i32u,ptr,i32u,i64
 js_object_alloc_class_with_keys	ptr	i32u,i32u,i32u,ptr,i32u
-js_object_alloc_constfn_static	i64	i32u,ptr,i32u,i32u,i32u,i32u,i64,ptr,i32u,ptr
 js_object_alloc_fast	ptr	i32u,i32u
 js_object_alloc_fast_with_parent	ptr	i32u,i32u,i32u
 js_object_alloc_null_proto	ptr	i32u,i32u

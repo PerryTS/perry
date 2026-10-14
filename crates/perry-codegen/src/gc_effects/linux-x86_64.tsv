@@ -2179,7 +2179,6 @@ js_object_alloc_class_dynamic_parent	Reenters	yes
 js_object_alloc_class_inline_keys	Reenters	yes
 js_object_alloc_class_inline_keys_stamped	Reenters	yes
 js_object_alloc_class_with_keys	Reenters	yes
-js_object_alloc_constfn_static	Reenters	yes
 js_object_alloc_fast	Reenters	no
 js_object_alloc_fast_with_parent	Reenters	no
 js_object_alloc_null_proto	Reenters	no

@@ -358,11 +358,14 @@ fn born_wide_constfn_final_preserves_reserved_capacity() {
     let text = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
     let calls: Vec<_> = text
         .lines()
-        .filter(|line| line.contains("call i64 @js_object_alloc_constfn_static("))
+        .filter(|line| line.contains("call ptr @perry_alloc_layout("))
         .collect();
     assert_eq!(calls.len(), 1, "finalization must be emitted");
     assert!(
-        calls[0].contains(", i32 2, i32 3, i32 ") && calls[0].contains(", i64 "),
+        text.lines()
+            .any(|line| line.contains("perry_layout_literal_")
+                && line.contains("section \"perry_layouts\"")
+                && line.contains("i32 3, i32 ")),
         "finalization must preserve live width: {}",
         calls[0]
     );

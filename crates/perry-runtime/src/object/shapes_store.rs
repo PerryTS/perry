@@ -768,7 +768,6 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
         store_chain: None,
         integrity_targets: [0; 3],
         integrity_flags: 0,
-        constfn_birth_admitted: false,
     });
     Box::into_raw(extras) as usize as u64
 }

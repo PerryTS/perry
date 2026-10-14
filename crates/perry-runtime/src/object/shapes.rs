@@ -46,8 +46,6 @@ pub(crate) use shapes_own_data::own_data_shape;
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;
-#[path = "static_constfn_birth.rs"]
-mod static_constfn_birth;
 pub(crate) use shapes_branded_birth::{branded_birth_matches, BrandedBirthSite};
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
@@ -309,11 +307,6 @@ impl ShapeRecordRef {
 
     pub(crate) fn note_field_define_target(self, target: u32) {
         unsafe { (*self.0.as_ptr()).note_field_define_target(target) }
-    }
-
-    /// Seed-only derivation from checked permanent-image body metadata.
-    pub(crate) unsafe fn derive_constfn_birth_admission(self) {
-        (*self.0.as_ptr()).derive_constfn_birth_admission();
     }
 
     /// Test a brand in this already-proved live record, without another probe.

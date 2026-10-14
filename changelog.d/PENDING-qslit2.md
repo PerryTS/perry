@@ -1,0 +1,1 @@
+Function-valued object literals allocate their compiler-declared layout and initialize its fixed slots directly. This removes the per-birth ConstFn body matcher, compatible-shape discovery, birth-record validation and admission bit. ConstFn consumers keep the compiler's startup shape facts; numeric annotations alone no longer establish a raw numeric birth slot.
