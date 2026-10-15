@@ -1448,7 +1448,7 @@ js_gc_collect	Reenters	no
 js_gc_enter_unsafe_zone	Leaf	no
 js_gc_exit_unsafe_zone	Leaf	no
 js_gc_forget_object_layout	Leaf	no
-js_gc_init	Reenters	no
+js_gc_init	Reenters	yes
 js_gc_loop_safepoint	Reenters	no
 js_gc_memory_pressure	Reenters	no
 js_gc_module_collect	Reenters	no
