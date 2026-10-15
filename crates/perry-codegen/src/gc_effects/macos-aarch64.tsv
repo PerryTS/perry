@@ -1190,6 +1190,7 @@ js_ethers_get_address	Reenters	yes
 js_ethers_parse_ether	Reenters	yes
 js_ethers_parse_units	Reenters	yes
 js_ethers_wallet_create_random	Reenters	yes
+js_eval_in_scope	Reenters	yes
 js_evalerror_new	AllocOnly	no
 js_event_emitter_async_resource_call	ThrowOnly	yes
 js_event_emitter_async_resource_object_new	Reenters	yes
@@ -4341,6 +4342,10 @@ perry_plugin_unregister_route	AllocOnly	no
 perry_plugin_unregister_service	Reenters	yes
 perry_plugin_unregister_tool	AllocOnly	no
 perry_poll	Reenters	yes
+perry_probe_get	Leaf	no
+perry_probe_get_binding	Leaf	no
+perry_probe_get_keyed	Leaf	no
+perry_probe_get_value	Leaf	no
 perry_register_static_plugin	Leaf	no
 perry_resolve_static_plugin	Leaf	no
 perry_runtime_image_result	Reenters	yes
