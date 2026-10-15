@@ -5287,6 +5287,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-gc-effects"
+version = "0.5.1659"
+dependencies = [
+ "anyhow",
+ "clap",
+ "llvm-sys",
+ "object",
+ "perry-perex",
+ "regex",
+ "rustc-demangle",
+ "serde_json",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "perry-hex"
 version = "0.5.1659"
 

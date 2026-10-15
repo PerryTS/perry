@@ -1,0 +1,28 @@
+[package]
+name = "perry-gc-effects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Archive-derived runtime GC and unwind effects"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+object = { version = "0.37", default-features = false, features = ["read", "std"] }
+rustc-demangle = "0.1"
+perry-perex.workspace = true
+regex.workspace = true
+walkdir.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+llvm-sys = "221"
+
+[target.'cfg(windows)'.dependencies]
+llvm-sys = { version = "221", features = ["no-llvm-linking"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

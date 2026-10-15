@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/perry-gc-effects",
     "crates/perry-cli-support",
     "crates/perry-hex",
     "crates/perry-base64",

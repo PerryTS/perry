@@ -1,0 +1,6 @@
+collector exact fixture_collect -- fixture stand-in for the allocation trigger
+js exact js_proxy_get -- fixture stand-in for a JS-invoking entry point
+throw exact js_throw -- fixture stand-in for the throw funnel
+poll exact fixture_poll -- fixture stand-in for a declared GC poll
+unwind exact _Unwind_RaiseException -- fixture stand-in for an unwinding raise
+extern regex ^(memcpy|_Unwind_RaiseException)$ -- libc memory primitive / unwinder, no callbacks
