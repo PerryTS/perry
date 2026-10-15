@@ -245,7 +245,8 @@ pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
     function_prototype_addr, function_prototype_addr_if_resolved, map_prototype_addr,
     note_object_prototype_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
-    object_prototype_addr_matches, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
+    object_prototype_addr_matches, object_prototype_cell, prime_prototype_addr_cache,
+    primitive_wrapper_prototype_addr,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{

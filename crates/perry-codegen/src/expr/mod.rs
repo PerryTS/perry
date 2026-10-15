@@ -81,6 +81,17 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
+pub(crate) mod layout_read;
+
+/// `PERRY_SITE_STATS=1`: one stderr line `PERRY_SITE <kind>` per lowered
+/// named-read site, for the step-5 site census (case 1 / case 2 / probe).
+pub(crate) fn note_site(kind: &str) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("PERRY_SITE_STATS").as_deref() == Ok("1")) {
+        eprintln!("PERRY_SITE {kind}");
+    }
+}
 pub(crate) mod array_length;
 mod array_literal;
 pub(crate) mod array_proto_guard;
@@ -357,6 +368,9 @@ pub enum HeaderImageSource {
 pub(crate) struct FnCtx<'a> {
     /// wpfacts slice 2: this module's elision facts (`expr/wpfacts_access.rs`).
     pub wpfacts: std::sync::Arc<crate::codegen::ElisionFacts>,
+    /// Object model step 5 (case 2c): the program's key colouring
+    /// (`layout_families`, `expr/layout_read.rs`).
+    pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
     /// `this` slots whose value is the `this` of a HIR function: (slot,
     /// function id). A `this` read is answered only while the top of
     /// `this_stack` is one of these slots (an inlined constructor pushes its

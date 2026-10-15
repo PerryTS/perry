@@ -347,6 +347,7 @@ pub(crate) fn lower_class_field_property_get(
     {
         return lower_generic_property_get(ctx, object, property, byte_offset);
     }
+    crate::expr::note_site("case2-class");
     let obj_box = lower_expr(ctx, object)?;
     // Same location record as the generic site (see `lower_property_site`).
     crate::expr::calls::emit_call_location_at(ctx, byte_offset);
@@ -482,7 +483,6 @@ fn lower_property_site(
     byte_offset: u32,
     global_reference: Option<bool>,
 ) -> Result<String> {
-    let global_binding = global_reference == Some(true);
     let obj_box = lower_expr(ctx, object)?;
     // #5247: record this access's source location right after the receiver is
     // evaluated and before the nullish-receiver throw path (the inline diamond
@@ -497,6 +497,32 @@ fn lower_property_site(
     // name is compile-time data. The optional debug-location call above only
     // updates TLS (`js_set_call_location`) and cannot allocate or collect, so
     // there is no second user-expression window requiring an operand group.
+    // Object model step 5 (case 2c): a coloured key's read through any
+    // receiver tests the receiver layout's colour bit and loads the colour
+    // slot (`expr/layout_read.rs`); everything else, and every miss, is the
+    // site below.
+    let arm = if global_reference.is_none() {
+        let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+        crate::expr::layout_read::begin(ctx, &bits, property)
+    } else {
+        None
+    };
+    let value = lower_property_site_tail(ctx, object, property, global_reference, obj_box)?;
+    Ok(match arm {
+        Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
+        None => value,
+    })
+}
+
+/// [`lower_property_site`] after the receiver is evaluated: the ordinary site.
+fn lower_property_site_tail(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    global_reference: Option<bool>,
+    obj_box: String,
+) -> Result<String> {
+    let global_binding = global_reference == Some(true);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();
@@ -678,12 +704,33 @@ fn lower_property_site(
                     (&primitive_value, &primitive_end),
                 ],
             )
+        } else if !property.is_empty() && property.bytes().all(|b| b.is_ascii_digit()) {
+            // An array-index name may be an element key no layout lists.
+            ctx.block()
+                .call(DOUBLE, "js_object_get_field_ic_fast_miss", &ic_args)
         } else {
+            // §3.7 case 3 for the outlined site: the receiver's own layout
+            // (`perry_probe_get_value` tests the receiver itself), then the
+            // complete site operation on a decline.
+            let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+                ctx,
+                crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+                EMPTY_SHAPE_DIR,
+            );
+            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
+            crate::expr::note_site("probe-outlined");
             crate::expr::ic_fast_split::emit_hole_declining_split(
                 ctx,
                 "pget.outline",
-                "js_object_get_field_ic_fast",
-                &ic_args,
+                "perry_probe_get_value",
+                &[
+                    (PTR, &dir),
+                    (I64, &obj_bits),
+                    (I64, &key_bits),
+                    (I64, &hash),
+                ],
                 "js_object_get_field_ic_fast_miss",
                 &ic_args,
             )
@@ -1156,8 +1203,11 @@ fn lower_property_site(
     // A nonzero packed word contains a valid ShapeId and its slot. The
     // header guard above rejects a fresh site; matching the low 32 bits then
     // proves the shape without a discriminator OR or a wide token mask.
-    let packed_stamp = ctx.block().trunc(I64, &packed_word, I32);
-    let token_eq = ctx.block().icmp_eq(I32, &pcid, &packed_stamp);
+    // Object model step 5: no site word. Every object receiver asks its own
+    // layout through the probe (`front`), so the compact-word compare is
+    // constant false and its loads fold away.
+    let _ = (&pcid, &packed_word);
+    let token_eq = "false".to_string();
     // What stays inline is the hit: the ShapeId compare and the load
     // (first-read D3). Everything else a miss can be — a spill entry, a
     // polymorphic way, a latched site's slot guess, an inherited read, the
@@ -1399,19 +1449,27 @@ fn lower_property_site(
         };
         let key_box = ctx.block().load(DOUBLE, &key_handle_global);
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+        // §3.7 case 3: the receiver's own layout answers (`perry_probe_get`,
+        // perry-runtime `object/layout_probe.rs`): the key's atom and its
+        // compile-time hash, nothing of the site's.
+        let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
+        // An array-index name may be an element key, which no layout lists:
+        // such a site takes only answers the probe finds, never absence.
+        let index_name = !property.is_empty() && property.bytes().all(|b| b.is_ascii_digit());
+        crate::expr::note_site("probe");
         let answered = ctx.block().call(
             DOUBLE,
-            if global_binding {
-                "js_object_get_own_field_ic_front"
+            // A global binding must tell absent from `undefined`.
+            if global_binding || index_name {
+                "perry_probe_get_binding"
             } else {
-                "js_object_get_field_ic_front"
+                "perry_probe_get"
             },
             &[
                 (PTR, &dir),
                 (I64, &front_recv),
                 (I64, &key_bits),
-                (PTR, &cache_slot_ref),
-                (PTR, &packed_ref),
+                (I64, &hash),
             ],
         );
         let answered_bits = ctx.block().bitcast_double_to_i64(&answered);

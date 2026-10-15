@@ -442,6 +442,13 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[PTR, I64, I64, PTR, PTR],
     );
     module.declare_function("perry_shape_dir_cell", PTR, &[]);
+    // Object model step 5: the unknown-receiver probe (agent directory,
+    // receiver payload minus the handle floor, key atom bits, atom hash).
+    // A GC leaf; `TAG_HOLE` = declined.
+    module.declare_function("perry_probe_get", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_binding", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_keyed", DOUBLE, &[PTR, I64, I64]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),
     // returns a new object pointer.

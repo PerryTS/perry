@@ -2802,6 +2802,7 @@ fn compile_module_impl(
             .collect();
     let mut cross_module = CrossModuleCtx {
         wpfacts: opts.program_facts.elision.clone(),
+        program_layouts: Arc::clone(&opts.program_layouts),
         program_has_worker: opts.program_has_worker,
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),

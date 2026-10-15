@@ -494,6 +494,28 @@ unsafe fn atom_bytes<'a>(atom: *const StaticAtom) -> Option<&'a [u8]> {
     ))
 }
 
+/// Object model step 5 (case 2c): every coloured key of the program, as
+/// `(bytes, hash, mask bit, slot)`. Codegen marks a coloured string atom with
+/// `_pad[0] = 1` and `index = bit | slot << 8` (`perry-codegen`
+/// `layout_desc::atom`); the entry module emits one for every coloured key.
+pub(crate) fn coloured_atoms() -> Vec<(&'static [u8], u64, u32, u32)> {
+    let mut out = Vec::new();
+    unsafe {
+        for atom in records::<StaticAtom>(atom_bounds()) {
+            if (*atom)._pad[0] != 1 {
+                continue;
+            }
+            if let Some(bytes) = atom_bytes(atom) {
+                let index = (*atom).index;
+                out.push((bytes, (*atom).hash, index & 0xFF, index >> 8));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// The agent-independent well-known symbol a kind-1 atom is bound to.
 pub(crate) unsafe fn well_known_atom_symbol(
     atom: *const StaticAtom,
@@ -515,6 +537,7 @@ pub(crate) fn seed_static_atoms() {
             }
         }
     }
+    crate::object::layout_probe::seed_colours();
 }
 
 pub(crate) fn register_static_layouts() {

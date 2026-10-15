@@ -178,6 +178,35 @@ unsafe fn place(t: *mut Table, slot: u32) {
     index(t).add(p).write(slot);
 }
 
+/// [`find`] with the key's hash supplied by the caller (the probe's
+/// compile-time atom hash, `layout_probe.rs`), so no key header is read.
+#[inline]
+pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option<u32> {
+    if (*t).length < 8 {
+        let keys = keys_ptr(t);
+        let mut i = (*t).length;
+        while i > 0 {
+            i -= 1;
+            if *keys.add(i as usize) == key {
+                return (!super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)).then_some(i);
+            }
+        }
+        return None;
+    }
+    let mask = (*t).index_capacity as usize - 1;
+    let mut p = hash as usize & mask;
+    loop {
+        let i = *index(t).add(p);
+        if i == EMPTY {
+            return None;
+        }
+        if *key_at(t, i) == key {
+            return Some(i);
+        }
+        p = (p + 1) & mask;
+    }
+}
+
 pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
     if (*t).length < 8 {
         return (0..(*t).length).rev().find(|&i| {

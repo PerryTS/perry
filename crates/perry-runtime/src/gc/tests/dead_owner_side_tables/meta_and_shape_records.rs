@@ -563,14 +563,17 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
     let logical_key_count = stale_capacity
         .checked_add(1)
         .expect("tracked array address unexpectedly fills the high u32");
+    // The mint reads the list it publishes (its colour masks, step 5), so it
+    // sees the arrays as allocated; the impossible length/capacity words are
+    // written after it, before the collection this test is about.
+    let id = crate::object::shapes::shape_descriptor_ensure(old_keys, logical_key_count, 0)
+        .expect("shape range unexpectedly exhausted");
     unsafe {
         (*old_keys).length = logical_key_count;
         (*old_keys).capacity = logical_key_count;
         (*live_keys).length = logical_key_count;
         (*live_keys).capacity = logical_key_count;
     }
-    let id = crate::object::shapes::shape_descriptor_ensure(old_keys, logical_key_count, 0)
-        .expect("shape range unexpectedly exhausted");
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     unsafe {
         (*owner).parent_class_id = id;

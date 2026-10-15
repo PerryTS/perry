@@ -56,6 +56,10 @@ pub(super) fn emit(llmod: &mut LlModule, entry: &StringEntry) -> String {
     // These objects never enter an arena or malloc ownership list, so GC
     // cannot reclaim or rewrite them. Both mark and pin are born in data:
     // precise roots may visit these immutable leaves during a full cycle.
+    // Object model step 5 (case 2c): a coloured key's image carries its
+    // colour in flags bits 16..32 (perry-runtime `string::atom_colour`), so a
+    // record's colour masks are one flags load per key at mint.
+    flags |= crate::layout_desc::image_colour_flags(&entry.bytes);
     let n = entry.byte_len + 1;
     let ty = format!("{{ i8, i8, i16, i32, i32, i32, i32, i32, i32, [{n} x i8], i64 }}");
     let gc_flags = IMAGE_GC_FLAGS;

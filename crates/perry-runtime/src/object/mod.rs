@@ -264,10 +264,11 @@ pub(crate) mod shape_carriers;
 // other hooks are feature-only), so a stock non-test build never
 // reaches it and the linker drops it: the shipped runtime pays nothing.
 pub mod layout_desc;
-pub mod runtime_layouts;
+pub(crate) use shapes::layout_probe;
 #[cfg(test)]
 mod layout_desc_tests;
 pub(crate) mod shadow;
+pub mod runtime_layouts;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;

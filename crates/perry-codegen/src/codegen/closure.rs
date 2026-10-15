@@ -1098,6 +1098,7 @@ pub(super) fn compile_closure(
         wpfacts: typed_body
             .map(|p| p.receiver_facts(&cross_module.wpfacts))
             .unwrap_or_else(|| cross_module.wpfacts.clone()),
+        program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_this: if captures_this {

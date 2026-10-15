@@ -149,6 +149,12 @@ fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
     }
 }
 
+/// The hash of key `key`'s atom (the runtime's property-atom hash), the
+/// unknown-receiver probe's operand.
+pub(crate) fn atom_hash(key: &str) -> u64 {
+    fnv1a(key.as_bytes())
+}
+
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for &b in bytes {
@@ -158,6 +164,25 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
+thread_local! {
+    /// This compile's key colouring (`emit_module_layouts`), read by [`atom`].
+    static COLOURS: std::cell::RefCell<BTreeMap<String, (u32, u32)>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// The colour bits of an image string with text `bytes` (perry-runtime
+/// `string::atom_colour`): bits 16..24 the mask bit + 1, bits 24..32 the
+/// colour slot; 0 for an uncoloured text or a colour that does not fit.
+pub(crate) fn image_colour_flags(bytes: &[u8]) -> u32 {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    match COLOURS.with(|c| c.borrow().get(text).copied()) {
+        Some((bit, slot)) if bit < 127 && slot < 256 => ((bit + 1) << 16) | (slot << 24),
+        _ => 0,
+    }
+}
+
 /// The static atom global of `key` (emitting it once per module).
 fn atom(
     llmod: &mut LlModule,
@@ -165,6 +190,7 @@ fn atom(
     emitted: &mut BTreeMap<String, String>,
     key: &str,
 ) -> Option<String> {
+    let colour = COLOURS.with(|c| c.borrow().get(key).copied());
     if let Some(name) = emitted.get(key) {
         return Some(name.clone());
     }
@@ -183,9 +209,14 @@ fn atom(
         ".perryatm$m",
     );
     llmod.add_raw_global(format!(
-        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] zeroinitializer, i32 0 }}, section \"{sect}\", align 8",
+        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] [i8 {}, i8 0, i8 0], i32 {} }}, section \"{sect}\", align 8",
         fnv1a(key.as_bytes()) as i64,
-        crate::runtime_abi::ATOM_KIND_STRING
+        crate::runtime_abi::ATOM_KIND_STRING,
+        u8::from(colour.is_some()),
+        // Object model step 5 (case 2c): a coloured key's (mask bit, slot),
+        // the same in every module (one program-wide colouring), so the
+        // weak_odr records coalesce to one definition.
+        colour.map_or(0, |(bit, slot)| bit | (slot << 8)) as i32
     ));
     emitted.insert(key.to_string(), name.clone());
     Some(name)
@@ -446,11 +477,21 @@ pub(crate) fn emit_module_layouts(
     hir: &HirModule,
     module_prefix: &str,
     output_type: &str,
+    colouring: &crate::layout_families::ProgramLayouts,
+    is_entry_module: bool,
 ) -> usize {
     if !layouts_enabled(output_type, &llmod.target_triple) {
         return 0;
     }
+    COLOURS.with(|c| *c.borrow_mut() = colouring.colored.clone());
     let mut atoms: BTreeMap<String, String> = BTreeMap::new();
+    // Step 5 (case 2c): the entry module carries an atom for every coloured
+    // key, so the runtime learns every colour from the atom section.
+    if is_entry_module {
+        for key in colouring.colored.keys() {
+            let _ = atom(llmod, strings, &mut atoms, key);
+        }
+    }
     let sect = section(
         &llmod.target_triple,
         "perry_layouts",

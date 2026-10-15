@@ -582,6 +582,10 @@ pub struct CompileOptions {
     /// (digest for the object-cache key; contract-build claims section).
     /// Default (zero digest, no section) when the pass did not run.
     pub program_facts: super::ProgramFactsView,
+    /// Object model step 2 (case 2c): the program's static class families
+    /// and key colouring (`layout_families`), the same value for every
+    /// module; its digest is in the object-cache key.
+    pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -911,6 +915,9 @@ pub(crate) struct CrossModuleCtx {
     /// wpfacts slice 2: the elision facts of this module
     /// (`CompileOptions::program_facts`).
     pub wpfacts: std::sync::Arc<super::ElisionFacts>,
+    /// Case 2c: the program's families and colouring
+    /// (`CompileOptions::program_layouts`).
+    pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// The class and method tables inverted (`class_hierarchy`). Set once

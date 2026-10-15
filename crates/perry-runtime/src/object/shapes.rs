@@ -62,6 +62,8 @@ pub(crate) use shapes_linked_birth::{
     complete_layout_generation, declaration_parent_identity, mutation_generation,
     pristine_declaration_holder, stamp_linked_final_shape, stamp_linked_final_shape_requested,
 };
+#[path = "layout_probe.rs"]
+pub(crate) mod layout_probe;
 #[cfg(all(test, feature = "regex-engine"))]
 #[path = "regex_direct_admission_tests.rs"]
 mod regex_direct_admission_tests;

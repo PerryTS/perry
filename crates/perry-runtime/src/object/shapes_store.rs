@@ -94,6 +94,9 @@ pub(super) const RECORD_FLAG_BIRTH_OWNER: u8 = 1 << 5;
 pub(super) const RECORD_FLAG_CARRIED_SEEN: u8 = 1 << 6;
 pub(super) const RECORD_FLAG_EXTERNAL_CARRIER: u8 = 1 << 7;
 
+#[cfg(target_pointer_width = "64")]
+#[path = "shapes_store/flat.rs"]
+mod flat;
 #[path = "shapes_store/kind.rs"]
 mod kind;
 
@@ -160,6 +163,22 @@ pub(crate) struct ShapeRecord {
     /// Element properties described by this immutable key prefix: 0 plain,
     /// 1 indexed/length descriptors, 2 a per-object mutable key list.
     pub(super) element_kind: u64,
+    /// The key index of this record's key list for the unknown-receiver
+    /// probe (`object/layout_probe.rs`): 0 until the first probe derives it
+    /// from the record's immutable key list, then `PROBE_*` bits plus the
+    /// address of an owned position table (0 for a list short enough to
+    /// scan). A function of the list alone; never invalidated, released with
+    /// the record. Offset 80.
+    pub(crate) probe: u64,
+    /// The coloured keys this record's receivers hold as inline data at
+    /// their colour slot (OBJECT_MODEL §3.7 case 2c; bit = the key's colour
+    /// bit, `perry-codegen` `layout_families`). Derived with `probe`; a read
+    /// site of a coloured key tests its bit and loads the slot. Offset 88.
+    pub(crate) colour_mask: [u64; 2],
+    /// The coloured keys a store may write at their colour slot: the read
+    /// bit, plus a writable `Any`-lane key of a store-admitted layout with no
+    /// integrity level. Offset 104.
+    pub(crate) colour_store_mask: [u64; 2],
 }
 
 // Derived once from the immutable key prefix on slab publication. Owned
@@ -226,7 +245,15 @@ const _: () = {
 };
 const _: () = assert!(super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MAX);
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 80);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == crate::codegen_abi::SHAPE_RECORD_SIZE);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, probe) == 80);
+const _: () = assert!(
+    std::mem::offset_of!(ShapeRecord, colour_mask) == crate::codegen_abi::SHAPE_RECORD_COLOUR_MASK
+);
+const _: () = assert!(
+    std::mem::offset_of!(ShapeRecord, colour_store_mask)
+        == crate::codegen_abi::SHAPE_RECORD_COLOUR_STORE_MASK
+);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, special_constfn_mask) == 44);
@@ -249,6 +276,9 @@ impl ShapeRecord {
         extras: 0,
         proto_cell: 0,
         element_kind: 0,
+        probe: 0,
+        colour_mask: [0; 2],
+        colour_store_mask: [0; 2],
     };
 
     #[inline]
@@ -365,6 +395,9 @@ impl ShapeRecord {
             extras: 0,
             proto_cell: 0,
             element_kind: 0,
+            probe: 0,
+            colour_mask: [0; 2],
+            colour_store_mask: [0; 2],
         };
         record.refresh_positional();
         record
@@ -994,6 +1027,12 @@ impl<T: Level> Slot<T> {
         // SAFETY: owned now.
         unsafe { self.0.as_mut() }
     }
+    /// Become the shared empty WITHOUT freeing: the allocation is a window
+    /// of the slab's record reservation (`flat.rs`), which owns the memory.
+    fn forget(&mut self) {
+        self.0 = T::shared();
+    }
+
     /// Free an owned allocation (not its children) and become the shared
     /// empty.
     fn release(&mut self) {
@@ -1051,12 +1090,31 @@ fn locate(id: u32) -> (usize, usize) {
 /// the directory with a shift. The ordinary band's entry is also what the
 /// megamorphic read confirm reads through its address
 /// ([`ShapeSlab::ordinary_dir_addr`]).
-#[repr(C, align(32))]
+#[repr(C, align(64))]
 pub(crate) struct BandDir {
     pages: std::cell::Cell<*const Page>,
     len: std::cell::Cell<usize>,
     base_rel: u32,
+    /// The ordinary band's records at fixed addresses (`flat.rs`): record
+    /// `rel` is `flat_base + rel` for every `rel < flat_ids`; null and 0 for
+    /// every other band, every target without the reservation, and a slab
+    /// that publishes nothing. Offsets 24 and 32 (`FLAT_BASE_OFFSET`).
+    flat_base: std::cell::Cell<*mut ShapeRecord>,
+    flat_ids: std::cell::Cell<usize>,
+    /// This agent's `Object.prototype` cell (`array::prototype_addr`), for
+    /// the probe's prototype walk; null when not published. Offset 40.
+    pub(crate) proto_cell: std::cell::Cell<*const usize>,
+    /// This agent's identity-word directory (`shapes_prototype`), for the
+    /// probe's class-holder hop; null when not published. Offset 48.
+    pub(crate) word_dir: std::cell::Cell<*const u8>,
 }
+
+/// `BandDir.flat_base`'s offset; `flat_ids` follows at +8.
+pub(crate) const FLAT_BASE_OFFSET: usize = crate::codegen_abi::SHAPE_DIR_FLAT_BASE;
+const _: () = assert!(std::mem::offset_of!(BandDir, flat_base) == FLAT_BASE_OFFSET);
+const _: () = assert!(std::mem::offset_of!(BandDir, flat_ids) == FLAT_BASE_OFFSET + 8);
+const _: () = assert!(std::mem::offset_of!(BandDir, proto_cell) == FLAT_BASE_OFFSET + 16);
+const _: () = assert!(std::mem::offset_of!(BandDir, word_dir) == FLAT_BASE_OFFSET + 24);
 
 impl BandDir {
     const fn empty(band: usize) -> BandDir {
@@ -1064,6 +1122,10 @@ impl BandDir {
             pages: std::cell::Cell::new(std::ptr::null()),
             len: std::cell::Cell::new(0),
             base_rel: BAND_BASE_REL[band],
+            flat_base: std::cell::Cell::new(std::ptr::null_mut()),
+            flat_ids: std::cell::Cell::new(0),
+            proto_cell: std::cell::Cell::new(std::ptr::null()),
+            word_dir: std::cell::Cell::new(std::ptr::null()),
         }
     }
 }
@@ -1110,6 +1172,9 @@ pub(crate) struct ShapeSlab {
     dict_pages: Vec<Page>,
     /// The exotic-receiver band (`shapes::EXOTIC_SHAPE_ID_BASE`).
     exotic_pages: Vec<Page>,
+    /// The ordinary band's chunks live here (`flat.rs`).
+    #[cfg(target_pointer_width = "64")]
+    region: flat::Region,
     /// Present records.
     len: usize,
     /// This is the agent's slab (the runtime state's shape table), so it
@@ -1126,14 +1191,22 @@ impl Drop for ShapeSlab {
             for band in &AGENT_SHAPE_DIR[..3] {
                 band.pages.set(std::ptr::null());
                 band.len.set(0);
+                band.flat_base.set(std::ptr::null_mut());
+                band.flat_ids.set(0);
+                band.proto_cell.set(std::ptr::null());
+                band.word_dir.set(std::ptr::null());
             }
             self.protos.unpublish();
         }
         // Retired records release on removal; live records release at agent
         // teardown. Rekeys transfer one pointer, never duplicate ownership.
-        self.for_each(|_, ptr| unsafe { (*ptr).release_extras() });
+        self.for_each(|_, ptr| unsafe {
+            (*ptr).release_extras();
+            crate::object::layout_probe::release_probe((*ptr).probe);
+            (*ptr).probe = 0;
+        });
         for band in [0u8, 1, 2] {
-            Self::free_dir(self.dir_mut(band));
+            Self::free_dir(self.dir_mut(band), band);
         }
     }
 }
@@ -1145,6 +1218,8 @@ impl ShapeSlab {
             pages: Vec::new(),
             dict_pages: Vec::new(),
             exotic_pages: Vec::new(),
+            #[cfg(target_pointer_width = "64")]
+            region: flat::Region::new(),
             len: 0,
             agent: false,
             protos: Default::default(),
@@ -1237,6 +1312,14 @@ impl ShapeSlab {
     pub(super) fn record_ptr(&self, id: u32) -> Option<*mut ShapeRecord> {
         let (band, index) = locate(id);
         let cell = match band {
+            // The ordinary band's records live at fixed addresses
+            // (`flat.rs`): inside the committed prefix the cell IS
+            // `base + index`, present or not, exactly as `agent_record` reads
+            // it. (An absent record under a chunk the directory never
+            // allocated is a zero record there, not the shared empty chunk.)
+            #[cfg(target_pointer_width = "64")]
+            // SAFETY: inside the committed prefix of this slab's reservation.
+            0 if index < self.region.committed_ids() => unsafe { self.region.base().add(index) },
             // SAFETY: a band's `Vec` holds `len()` live entries.
             0..=2 => unsafe {
                 let dir = self.dir(band as u8);
@@ -1244,7 +1327,7 @@ impl ShapeSlab {
             },
             _ => return None,
         };
-        // The published directory is this slab's, entry for entry.
+        // The agent's published view is this slab's, cell for cell.
         debug_assert!(!self.agent || cell == Self::agent_record(id));
         // SAFETY: `walk` returns a cell of a live chunk of this slab or of the
         // shared empty chunk; reads are serialized by the single-threaded
@@ -1298,10 +1381,28 @@ impl ShapeSlab {
         let dir = self.dir_mut(band);
         if page >= dir.len() {
             dir.resize_with(page + 1, Slot::empty);
+            #[cfg(target_pointer_width = "64")]
+            if band == 0 {
+                self.region.ensure((page + 1) << (CHUNK_SHIFT + PAGE_SHIFT));
+            }
             self.publish_dir();
         }
+        #[cfg(target_pointer_width = "64")]
+        let region_chunk = (band == 0).then(|| {
+            self.region
+                .chunk_cells(index >> CHUNK_SHIFT, CHUNK_LEN)
+                .cast::<ChunkCells>()
+        });
         let dir = self.dir_mut(band);
-        let page = dir[page].owned_or_alloc();
+        let page_index = page;
+        let page = dir[page_index].owned_or_alloc();
+        #[cfg(target_pointer_width = "64")]
+        if let Some(cells) = region_chunk {
+            if page[chunk].is_shared() {
+                // SAFETY: a window of the committed reservation.
+                page[chunk] = Slot(unsafe { std::ptr::NonNull::new_unchecked(cells) });
+            }
+        }
         let chunk = page[chunk].owned_or_alloc();
         let cell = chunk[slot].get_mut();
         let previous = cell.present().then_some(*cell);
@@ -1310,6 +1411,16 @@ impl ShapeSlab {
         record.refresh_positional();
         record.refresh_symbol_presence();
         record.refresh_element_kind();
+        // A record copy may carry the probe word of the cell it was lifted
+        // from (retire-and-reinsert); the table it names belongs to that
+        // cell. The new cell derives its own on first probe. Its colour
+        // masks are facts of the record from this mint.
+        record.probe = 0;
+        // SAFETY: the record's keys array is live (it is being published).
+        unsafe { crate::object::layout_probe::mint_colour_masks(&mut record) };
+        if cell.present() {
+            crate::object::layout_probe::release_probe(cell.probe);
+        }
         *cell = record;
         if previous.is_none() {
             self.len += 1;
@@ -1329,7 +1440,9 @@ impl ShapeSlab {
         if !cell.present() {
             return None;
         }
-        let previous = *cell;
+        let mut previous = *cell;
+        crate::object::layout_probe::release_probe(previous.probe);
+        previous.probe = 0;
         *cell = ShapeRecord::EMPTY;
         self.len -= 1;
         Some(previous)
@@ -1374,18 +1487,35 @@ impl ShapeSlab {
     /// oldest chunks empty first.
     pub(super) fn release_empty_chunks(&mut self) {
         for dict in [0u8, 1, 2] {
+            #[cfg(target_pointer_width = "64")]
+            let region = (dict == 0).then(|| &self.region as *const flat::Region);
+            #[cfg(not(target_pointer_width = "64"))]
+            let region: Option<*const ()> = None;
             let dir = self.dir_mut(dict);
-            for page in dir.iter_mut() {
+            for (page_index, page) in dir.iter_mut().enumerate() {
                 let Some(chunks) = page.owned_mut() else {
                     continue;
                 };
                 let mut live_chunks = 0usize;
-                for chunk in chunks.iter_mut() {
+                for (chunk_index, chunk) in chunks.iter_mut().enumerate() {
                     let empty = chunk
                         .owned()
                         .is_some_and(|c| c.iter().all(|cell| !unsafe { (*cell.get()).present() }));
                     if empty {
-                        chunk.release();
+                        match region {
+                            #[cfg(target_pointer_width = "64")]
+                            Some(region) => {
+                                // A window of the reservation: forget it and
+                                // give its whole pages back.
+                                chunk.forget();
+                                let first =
+                                    ((page_index << PAGE_SHIFT) | chunk_index) << CHUNK_SHIFT;
+                                // SAFETY: the slab owns the region; no other
+                                // borrow of it is live.
+                                unsafe { (*region).discard_ids(first, first + CHUNK_LEN) };
+                            }
+                            _ => chunk.release(),
+                        }
                     }
                     if !chunk.is_shared() {
                         live_chunks += 1;
@@ -1418,6 +1548,17 @@ impl ShapeSlab {
             AGENT_SHAPE_DIR[band].pages.set(dir.as_ptr());
             AGENT_SHAPE_DIR[band].len.set(dir.len());
         }
+        #[cfg(target_pointer_width = "64")]
+        {
+            AGENT_SHAPE_DIR[0].flat_base.set(self.region.base());
+            AGENT_SHAPE_DIR[0].flat_ids.set(self.region.committed_ids());
+        }
+        AGENT_SHAPE_DIR[0]
+            .proto_cell
+            .set(crate::array::object_prototype_cell());
+        AGENT_SHAPE_DIR[0]
+            .word_dir
+            .set(super::shapes_prototype::agent_word_dir_addr());
         // Emitted read sites hand the ordinary entry's address to the miss
         // front from the agent's pointer block; publish it with the directory.
         crate::agent_ptrs::publish(
@@ -1464,6 +1605,20 @@ impl ShapeSlab {
     ) -> Option<&'a ShapeRecord> {
         let dir = &*(dir as *const BandDir);
         debug_assert_eq!(dir.base_rel, 0);
+        #[cfg(target_pointer_width = "64")]
+        {
+            // The id as the receiver's header word holds it: a shadowed id
+            // (an object that may hold own keys past its layout) indexes past
+            // the band and answers `None`, as through the paged directory
+            // below. Every caller's answer is about the receiver's OWN keys,
+            // which the record alone does not decide for such an object.
+            let rel = id.wrapping_sub(SHAPE_ID_BASE) as usize;
+            if rel >= dir.flat_ids.get() {
+                return None;
+            }
+            return Some(&*dir.flat_base.get().add(rel));
+        }
+        #[allow(unreachable_code)]
         let (page, chunk, slot) = Self::split(id.wrapping_sub(SHAPE_ID_BASE) as usize);
         if page >= dir.len.get() {
             return None;
@@ -1493,6 +1648,14 @@ impl ShapeSlab {
     pub(super) fn agent_record(id: u32) -> *mut ShapeRecord {
         // A header word may carry the shadow bit; the record is the layout's.
         let rel = (id & !crate::object::overflow::SHADOW_BIT).wrapping_sub(SHAPE_ID_BASE);
+        #[cfg(target_pointer_width = "64")]
+        {
+            let dir = &AGENT_SHAPE_DIR[0];
+            if (rel as usize) < dir.flat_ids.get() {
+                // SAFETY: inside the committed prefix of this agent's records.
+                return unsafe { dir.flat_base.get().add(rel as usize) };
+            }
+        }
         let band = band_of(rel);
         debug_assert!(band < AGENT_SHAPE_DIR.len());
         // SAFETY: `band_of` is at most 3; the published pair is the agent slab's page vector,
@@ -1515,8 +1678,20 @@ impl ShapeSlab {
 
     #[cfg(test)]
     pub(super) fn clear(&mut self) {
+        // The ordinary band's cells stay at their addresses (`flat.rs`) after
+        // the directory forgets its windows, and `discard_ids` gives back only
+        // whole OS pages: empty every present cell first, so no record
+        // survives in a partial page for a later read by id. (Like the boxed
+        // chunks this used to drop, it leaves the records' extensions to the
+        // test process.)
+        self.for_each(|_, ptr| unsafe { *ptr = ShapeRecord::EMPTY });
         for band in [0u8, 1, 2] {
-            Self::free_dir(self.dir_mut(band));
+            Self::free_dir(self.dir_mut(band), band);
+        }
+        #[cfg(target_pointer_width = "64")]
+        {
+            let ids = self.region.committed_ids();
+            self.region.discard_ids(0, ids);
         }
         self.publish_dir();
         self.len = 0;
@@ -1557,11 +1732,16 @@ impl ShapeSlab {
     }
 
     /// Free every page and chunk a directory owns, and empty it.
-    fn free_dir(dir: &mut Vec<Page>) {
+    fn free_dir(dir: &mut Vec<Page>, band: u8) {
+        let windows = cfg!(target_pointer_width = "64") && band == 0;
         for page in dir.iter_mut() {
             if let Some(chunks) = page.owned_mut() {
                 for chunk in chunks.iter_mut() {
-                    chunk.release();
+                    if windows {
+                        chunk.forget();
+                    } else {
+                        chunk.release();
+                    }
                 }
             }
             page.release();

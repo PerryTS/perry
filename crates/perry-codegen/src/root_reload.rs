@@ -210,6 +210,11 @@ const NON_COLLECTING: &[&str] = &[
     "js_object_get_field_ic_fast",
     // First-read D3: a generic read's miss front, proven `Leaf` likewise.
     "js_object_get_field_ic_front",
+    // Object model step 5: the unknown-receiver probe, proven `Leaf`.
+    "perry_probe_get",
+    "perry_probe_get_value",
+    "perry_probe_get_binding",
+    "perry_probe_get_keyed",
     "js_put_value_set_packed_fast",
     "js_transition_ic_spill_append",
     "js_write_barrier_slot",

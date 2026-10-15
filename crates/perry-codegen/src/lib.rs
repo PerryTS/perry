@@ -27,6 +27,8 @@ pub mod gc_map;
 pub mod inprocess;
 pub mod inst;
 pub(crate) mod layout_desc;
+pub mod layout_families;
+pub use layout_families::ProgramLayouts;
 pub mod linker;
 pub(crate) mod loop_purity;
 pub(crate) mod lower_array_method;

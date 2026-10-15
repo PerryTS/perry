@@ -532,6 +532,8 @@ windows-sys = { version = "0.61", features = [
     # (`OpenProcess` / `TerminateProcess` / `GetExitCodeProcess`, mirroring
     # libuv's `uv_kill`) in `src/os/signal.rs`.
     "Win32_System_Threading",
+    # The shape-record reservation (`object/shapes_store/flat.rs`).
+    "Win32_System_Memory",
 ] }
 
 # #855: libc::mach_host_self is deprecated; the mach2 crate is the

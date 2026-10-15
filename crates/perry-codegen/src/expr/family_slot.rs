@@ -252,6 +252,7 @@ pub(crate) fn lower_get(
     property: &str,
 ) -> Result<String> {
     let add = &site.add;
+    crate::expr::note_site("case2-family");
     let recv_box = lower_expr(ctx, object)?;
     let (obj_handle, obj_ptr) = {
         let blk = ctx.block();

@@ -215,6 +215,31 @@ pub(crate) fn clear_class_identity_words() {
     }
 }
 
+/// This thread's identity-word directory, as an opaque address for
+/// [`identity_word_slot_in`] (the unknown-receiver probe reads it through
+/// the agent's shape directory instead of a thread-local access).
+pub(crate) fn agent_word_dir_addr() -> *const u8 {
+    AGENT_WORD_DIR.as_ptr() as *const u8
+}
+
+/// [`identity_word_slot`] through the directory at `word_dir`
+/// ([`agent_word_dir_addr`] of this thread).
+///
+/// # Safety
+/// `word_dir` is this thread's [`agent_word_dir_addr`].
+#[inline]
+pub(crate) unsafe fn identity_word_slot_in(word_dir: *const u8, proto_id: u64) -> Option<*mut u64> {
+    let (band, index) = word_key(proto_id)?;
+    let dir = &*(word_dir as *const WordDir).add(band);
+    let page = index >> PAGE_SHIFT;
+    if page >= dir.len.get() {
+        return None;
+    }
+    (*dir.pages.get().add(page))
+        .as_ref()
+        .map(|page| &page.words[index & PAGE_MASK] as *const u64 as *mut u64)
+}
+
 /// The address of identity `proto_id`'s word in this agent, if it was ever
 /// written. Two loads; no `state()` fetch.
 #[inline]

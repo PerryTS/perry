@@ -374,6 +374,14 @@ const NOUNWIND_HELPERS: &[&str] = &[
     // `Leaf` in the generated call-effects table, so the call is
     // `"gc-leaf-function"`.
     "js_object_get_field_ic_front",
+    // Object model step 5 (`object/layout_probe.rs`): the unknown-receiver
+    // probe. Loads and compares, one bounded probe of a key index; its only
+    // store derives a record's probe word (one malloc on a record's first
+    // probe). No throw, lock, collection or user code.
+    "perry_probe_get",
+    "perry_probe_get_value",
+    "perry_probe_get_binding",
+    "perry_probe_get_keyed",
     // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
     // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
     // anywhere in the body, every loop bounded by the 16M length/capacity

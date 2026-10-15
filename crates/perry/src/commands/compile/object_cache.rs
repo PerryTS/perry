@@ -387,6 +387,17 @@ fn compute_object_cache_key_with_env(
         "dynamic_code_reach",
         &format!("{:?}", opts.program_facts.dynamic_code_reach),
     );
+    // Object model case 2c: the program's families and key colouring decide
+    // every module's descriptors and coloured read sites.
+    h.field(
+        "program_layouts",
+        &format!(
+            "{:016x}:{}:{}",
+            opts.program_layouts.digest,
+            opts.program_layouts.families.len(),
+            opts.program_layouts.mask_words
+        ),
+    );
     // #11394: a module's method calls lower differently when ANY module in the
     // program writes that method name onto a builtin prototype.
     h.field(

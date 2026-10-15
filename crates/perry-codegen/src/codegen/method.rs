@@ -603,6 +603,7 @@ pub(super) fn compile_method(
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
+        program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_this: vec![(this_slot.clone(), method.id)],

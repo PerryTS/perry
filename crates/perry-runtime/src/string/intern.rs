@@ -653,6 +653,71 @@ const PROGRAM_ATOM: u32 = 1 << 4;
 /// runtime's layout key images, which share their symbols).
 pub(crate) const IMAGE_ATOM_FLAGS: u32 = PROPERTY_ATOM | PROGRAM_ATOM;
 
+/// Is `key` a property atom (the one atom of its text in this agent, its
+/// creation hash stored after the payload)?
+#[inline(always)]
+pub(crate) unsafe fn is_property_atom(key: *const StringHeader) -> bool {
+    (*key).flags & PROPERTY_ATOM != 0
+}
+
+/// Object model step 5 (case 2c): a coloured program atom carries its colour
+/// in `flags` bits 16..24 (mask bit + 1; 0 = no colour) and 24..32 (the
+/// colour slot), written once per agent by [`set_atom_colour`] before user
+/// code runs. A record's colour masks are then one flags load per key at mint
+/// (`object/layout_probe.rs`), not a table lookup.
+const ATOM_COLOUR_SHIFT: u32 = 16;
+
+/// The colour `(mask bit, slot)` of program atom `key`, if it has one.
+///
+/// # Safety
+/// `key` is a live `StringHeader`.
+#[inline(always)]
+pub(crate) unsafe fn atom_colour(key: *const StringHeader) -> Option<(u32, u32)> {
+    let f = (*key).flags;
+    if f & IMAGE_ATOM_FLAGS != IMAGE_ATOM_FLAGS {
+        return None;
+    }
+    let c = (f >> ATOM_COLOUR_SHIFT) & 0xFF;
+    (c != 0).then(|| (c - 1, f >> (ATOM_COLOUR_SHIFT + 8)))
+}
+
+/// Give this agent's atom of `bytes` colour `(bit, slot)`; returns that atom.
+/// A colour that does not fit (`bit >= 127`, `slot >= 256`) stays unset, so
+/// those keys never enter a mask.
+pub(crate) unsafe fn set_atom_colour(
+    bytes: &[u8],
+    hash: u64,
+    bit: u32,
+    slot: u32,
+) -> Option<*const StringHeader> {
+    if bit >= 127 || slot >= 256 {
+        return None;
+    }
+    let a = atom_lookup(bytes, hash)?;
+    if !is_program_atom(a) {
+        return None;
+    }
+    // An image atom is immutable data that codegen already coloured; only an
+    // atom the runtime allocated for the text is written here.
+    if atom_colour(a) != Some((bit, slot)) {
+        if super::is_image_string(a) {
+            return None;
+        }
+        let s = a as *mut StringHeader;
+        (*s).flags = ((*s).flags & 0xFFFF)
+            | ((bit + 1) << ATOM_COLOUR_SHIFT)
+            | (slot << (ATOM_COLOUR_SHIFT + 8));
+    }
+    Some(a)
+}
+
+/// Is `key` a program atom (a property atom the compiled image or a pool
+/// literal owns: immortal, the one atom of its text)?
+#[inline(always)]
+pub(crate) unsafe fn is_program_atom(key: *const StringHeader) -> bool {
+    (*key).flags & IMAGE_ATOM_FLAGS == IMAGE_ATOM_FLAGS
+}
+
 pub(crate) unsafe fn property_atom_hash(key: *const StringHeader) -> u64 {
     debug_assert!((*key).flags & PROPERTY_ATOM != 0);
     std::ptr::read_unaligned(

@@ -376,6 +376,10 @@ pub unsafe extern "C" fn js_object_get_field_by_key_site(
     key: f64,
     obj_box: f64,
 ) -> f64 {
+    crate::object::layout_probe::verify::check(
+        (obj_box.to_bits() & crate::value::POINTER_MASK) as usize,
+        key.to_bits(),
+    );
     // Workers leave the primary-owned words entirely alone, including peek.
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) == 0 {
         if let Some(recv) = receiver(obj_box.to_bits()) {
@@ -398,6 +402,10 @@ pub unsafe extern "C" fn js_dyn_index_get_site(
     obj_box: f64,
     key: f64,
 ) -> f64 {
+    crate::object::layout_probe::verify::check(
+        (obj_box.to_bits() & crate::value::POINTER_MASK) as usize,
+        key.to_bits(),
+    );
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) == 0 {
         if let Some(recv) = receiver(obj_box.to_bits()) {
             let cache = crate::object::pic_slot_peek(slot);

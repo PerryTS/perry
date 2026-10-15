@@ -242,10 +242,50 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
     // This is the one collecting read entry used by emitted sites; only a
     // declined holder proof pays the full operation's dispatch and rooting.
     let obj = obj_handle as usize as *const ObjectHeader;
+    if crate::object::layout_probe::diag_enabled() {
+        unsafe { crate::object::layout_probe::diag_explain(obj_handle, key) };
+    }
+    unsafe {
+        crate::object::layout_probe::verify::check(
+            obj_handle as usize,
+            0x7FFF_0000_0000_0000 | key as u64,
+        )
+    };
     // The site's layout compare missed. A receiver with an overflow holds
     // own keys past its layout, and one atom-keyed probe answers them.
     if let Some(value) = unsafe { crate::object::overflow::site_miss_own_get(obj, key) } {
         return f64::from_bits(value.bits());
+    }
+    // Object model step 5 (§3.7 case 3): the probe's walk found an accessor
+    // (it hands it back rather than calling user code from its leaf).
+    if let Some(acc) = unsafe { crate::object::layout_probe::probe_accessor(obj, key) } {
+        let this = crate::value::js_nanbox_pointer(obj as i64);
+        if acc.raw_get != 0 {
+            let f = unsafe { crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;) };
+            return f(this);
+        }
+        if acc.static_get == 0 {
+            if acc.get == 0 {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            // A getter that takes `this` from the call (not a capture) is
+            // called with the receiver directly, as a site accessor entry
+            // calls it (`accessor_pair::holder_closure_getter`).
+            let closure = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if crate::closure::is_closure_bits(acc.get)
+                && unsafe { !crate::closure::closure_reads_this_from_capture(closure) }
+            {
+                return unsafe {
+                    crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this))
+                };
+            }
+            let v = unsafe {
+                crate::object::field_get_set::invoke_accessor_getter(
+                    acc.get, this,
+                )
+            };
+            return f64::from_bits(v.bits());
+        }
     }
     let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
     let accessor = !cache.is_null()

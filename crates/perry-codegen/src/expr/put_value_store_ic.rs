@@ -230,6 +230,48 @@ pub(crate) fn emit_static_store_ic(
     value_is_scalar: bool,
     existing_key: Option<bool>,
 ) -> String {
+    // Object model step 5 (case 2c): a coloured key's store through any
+    // receiver writes the colour slot when the receiver's layout admits it
+    // (`expr/layout_read.rs`); every miss is the site below.
+    let bits = ctx.block().bitcast_double_to_i64(obj_box);
+    let arm = crate::expr::layout_read::begin_store(
+        ctx,
+        &bits,
+        property,
+        value_double,
+        value_bits,
+        value_is_scalar,
+    );
+    let value = emit_static_store_ic_site(
+        ctx,
+        obj_box,
+        property,
+        value_double,
+        value_bits,
+        strict,
+        value_may_be_closure,
+        value_is_scalar,
+        existing_key,
+    );
+    match arm {
+        Some(arm) => crate::expr::layout_read::finish_store(ctx, arm, value_double, &value),
+        None => value,
+    }
+}
+
+/// [`emit_static_store_ic`]'s ordinary site.
+#[allow(clippy::too_many_arguments)]
+fn emit_static_store_ic_site(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    property: &str,
+    value_double: &str,
+    value_bits: &str,
+    strict: bool,
+    value_may_be_closure: bool,
+    value_is_scalar: bool,
+    existing_key: Option<bool>,
+) -> String {
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
 

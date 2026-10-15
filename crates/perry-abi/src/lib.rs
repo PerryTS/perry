@@ -92,6 +92,24 @@ pub const AGENT_PTR_SHAPE_DIR: usize = 0;
 /// that form: the front adds the floor back inside its load displacements,
 /// and the site passes the value its test already holds.
 pub const RECEIVER_HANDLE_FLOOR: usize = 0x20_0000;
+
+/// Object model step 5 (case 2c): the size of one ordinary-band shape record
+/// (`perry-runtime` `object/shapes_store.rs` `ShapeRecord`). Record `id` of
+/// an agent is at `flat_base + (id - SHAPE_ID_BASE) * SHAPE_RECORD_SIZE`,
+/// `flat_base` and the committed id bound at `SHAPE_DIR_FLAT_BASE` and
+/// `SHAPE_DIR_FLAT_BASE + 8` of the agent's shape directory
+/// (`AGENT_PTR_SHAPE_DIR`).
+pub const SHAPE_RECORD_SIZE: usize = 120;
+/// Offset of a record's two-word coloured-key mask (read: the key is inline
+/// data at its colour slot).
+pub const SHAPE_RECORD_COLOUR_MASK: usize = 88;
+/// Offset of a record's two-word coloured-key store mask (the key is also a
+/// plain writable `Any`-lane slot of a store-admitted, non-frozen layout).
+pub const SHAPE_RECORD_COLOUR_STORE_MASK: usize = 104;
+/// Offset of the flat record base in the agent's shape directory.
+pub const SHAPE_DIR_FLAT_BASE: usize = 24;
+/// The layout word's shadow bit (`perry-runtime` `layout_desc.rs`).
+pub const LAYOUT_SHADOW_BIT: u32 = 1 << 30;
 /// Slot 2: this agent's stack limit (#10812) — not a pointer to anything, the
 /// lowest frame address a compiled prologue accepts before it throws
 /// `RangeError: Maximum call stack size exceeded`. Null means unchecked.

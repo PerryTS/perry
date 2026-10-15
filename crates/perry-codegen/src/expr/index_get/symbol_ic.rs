@@ -1,7 +1,7 @@
 //! Symbol reads share the computed-key holder record and its roots.
 use crate::expr::receiver_range::{emit_fused_receiver_test, emit_handle};
 use crate::expr::FnCtx;
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I64, PTR};
 
 /// The first keyed way's own inline entry is an emitted shape/key guard.
 /// Inherited, spill, absent and refused receivers use the same runtime front.
@@ -19,83 +19,25 @@ pub(crate) fn lower_symbol_property_get_ic(
         );
     }
 
-    let cache = ctx.block().load(PTR, &slot);
-    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    // Object model step 5 (§3.7 case 3): the receiver's own layout answers
+    // the symbol key (`perry_probe_get_keyed`); a decline takes the complete
+    // keyed read.
     let bits = ctx.block().bitcast_double_to_i64(obj_box);
     let receiver = emit_fused_receiver_test(ctx.block(), &bits);
     let raw = emit_handle(ctx.block(), &receiver.biased);
-    let workers = ctx
-        .block()
-        .load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
-    let primary = ctx.block().icmp_eq(I8, &workers, "0");
-    let ok = ctx.block().and(I1, &present, &receiver.is_object_pointer);
-    let ok = ctx.block().and(I1, &ok, &primary);
-    let probe = ctx.new_block("symic.probe");
-    let hit = ctx.new_block("symic.hit");
-    let miss = ctx.new_block("symic.miss");
-    let merge = ctx.new_block("symic.merge");
-    let probe_l = ctx.block_label(probe);
-    let hit_l = ctx.block_label(hit);
-    let miss_l = ctx.block_label(miss);
-    let merge_l = ctx.block_label(merge);
-    ctx.block().cond_br(&ok, &probe_l, &miss_l);
-    ctx.current_block = probe;
-    let shape_addr = ctx.block().add(I64, &raw, "4");
-    let shape_ptr = ctx.block().inttoptr(I64, &shape_addr);
-    let shape = ctx.block().load(I32, &shape_ptr);
-    let shape = ctx.block().zext(I32, &shape, I64);
-    let token = ctx.block().or(I64, &shape, "4611686018427387904");
-    // Keyed reads and runtime reads use one SharedEntry format.
-    let word = |ctx: &mut FnCtx<'_>, offset: usize| {
-        let ptr = ctx.block().gep(I8, &cache, &[(I64, &offset.to_string())]);
-        ctx.block().load(I64, &ptr)
-    };
-    let recv = word(ctx, perry_abi::KEYED_HOLDER_TOKEN_OFFSET);
-    let holder = word(ctx, perry_abi::METHOD_CHAIN_HOLDER_OFFSET);
-    let kind = word(ctx, perry_abi::METHOD_CHAIN_SLOT_OFFSET);
-    let key = word(ctx, perry_abi::KEYED_HOLDER_KEY_OFFSET);
-    let absent_ptr = ctx.block().gep(
-        I8,
-        &cache,
-        &[(I64, &perry_abi::KEYED_HOLDER_ABSENT_OFFSET.to_string())],
-    );
-    let absent = ctx.block().load(I8, &absent_ptr);
-    let data = ctx.block().icmp_eq(I8, &absent, "0");
-    let sym_bits = ctx.block().bitcast_double_to_i64(sym_box);
-    let same_shape = ctx.block().icmp_eq(I64, &token, &recv);
-    let same_key = ctx.block().icmp_eq(I64, &sym_bits, &key);
-    let own = ctx.block().icmp_eq(I64, &holder, "0");
-    let inline = ctx.block().icmp_ult(I64, &kind, "2147483648");
-    let ok = ctx.block().and(I1, &same_shape, &same_key);
-    let ok = ctx.block().and(I1, &ok, &own);
-    let ok = ctx.block().and(I1, &ok, &inline);
-    let ok = ctx.block().and(I1, &ok, &data);
-    ctx.block().cond_br(&ok, &hit_l, &miss_l);
-    ctx.current_block = hit;
-    let offset = ctx.block().shl(I64, &kind, "3");
-    let fields = ctx.block().add(I64, &raw, "16");
-    let addr = ctx.block().add(I64, &fields, &offset);
-    let ptr = ctx.block().inttoptr(I64, &addr);
-    let value = ctx.block().load(DOUBLE, &ptr);
-    let hit_end = ctx.block().label.clone();
-    ctx.block().br(&merge_l);
-    ctx.current_block = miss;
-    let value_miss = ctx.block().call(
-        DOUBLE,
-        "js_object_get_field_by_key_site",
-        &[
-            (PTR, &slot),
-            (I64, "0"),
-            (I64, &raw),
-            (DOUBLE, sym_box),
-            (DOUBLE, obj_box),
-        ],
-    );
-    let miss_end = ctx.block().label.clone();
-    ctx.block().br(&merge_l);
-    ctx.current_block = merge;
-    ctx.block()
-        .phi(DOUBLE, &[(&value, &hit_end), (&value_miss, &miss_end)])
+    emit_keyed_probe(ctx, obj_box, sym_box, |ctx| {
+        ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_by_key_site",
+            &[
+                (PTR, &slot),
+                (I64, "0"),
+                (I64, &raw),
+                (DOUBLE, sym_box),
+                (DOUBLE, obj_box),
+            ],
+        )
+    })
 }
 
 /// Separate property-key tags before the numeric array guards. Both branches
@@ -116,12 +58,17 @@ pub(super) fn lower_unknown_key_get(ctx: &mut FnCtx<'_>, obj: &str, key: &str) -
     let merge_l = ctx.block_label(merge);
     ctx.block().cond_br(&property, &named_l, &numeric_l);
     ctx.current_block = named;
-    let slot = super::keyed_slot(ctx);
-    let named_value = ctx.block().call(
-        DOUBLE,
-        "js_dyn_index_get_site",
-        &[(PTR, &slot), (DOUBLE, obj), (DOUBLE, key)],
-    );
+    // Object model step 5 (§3.7 case 3): the receiver's own layout answers a
+    // string or symbol key through the key's atom (`perry_probe_get_keyed`);
+    // only a decline calls the complete keyed read.
+    let named_value = emit_keyed_probe(ctx, obj, key, |ctx| {
+        let slot = super::keyed_slot(ctx);
+        ctx.block().call(
+            DOUBLE,
+            "js_dyn_index_get_site",
+            &[(PTR, &slot), (DOUBLE, obj), (DOUBLE, key)],
+        )
+    });
     let named_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = numeric;
@@ -133,4 +80,43 @@ pub(super) fn lower_unknown_key_get(ctx: &mut FnCtx<'_>, obj: &str, key: &str) -
         DOUBLE,
         &[(&named_value, &named_end), (&numeric_value, &numeric_end)],
     )
+}
+
+/// `obj[key]` through the unknown-receiver probe, then `slow` on a decline
+/// (`TAG_HOLE`). Returns the merged value; the current block is the merge.
+pub(crate) fn emit_keyed_probe(
+    ctx: &mut FnCtx<'_>,
+    obj: &str,
+    key: &str,
+    slow: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        "@PERRY_EMPTY_SHAPE_DIR",
+    );
+    let obj_bits = ctx.block().bitcast_double_to_i64(obj);
+    let key_bits = ctx.block().bitcast_double_to_i64(key);
+    let probed = ctx.block().call(
+        DOUBLE,
+        "perry_probe_get_keyed",
+        &[(PTR, &dir), (I64, &obj_bits), (I64, &key_bits)],
+    );
+    let probed_bits = ctx.block().bitcast_double_to_i64(&probed);
+    let served = ctx
+        .block()
+        .icmp_ne(I64, &probed_bits, crate::nanbox::TAG_HOLE_I64);
+    let slow_idx = ctx.new_block("keyprobe.slow");
+    let merge_idx = ctx.new_block("keyprobe.merge");
+    let slow_l = ctx.block_label(slow_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    let probe_end = ctx.block().label.clone();
+    ctx.block().cond_br(&served, &merge_l, &slow_l);
+    ctx.current_block = slow_idx;
+    let slow_value = slow(ctx);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&probed, &probe_end), (&slow_value, &slow_end)])
 }

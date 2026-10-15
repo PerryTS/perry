@@ -470,6 +470,11 @@ pub(crate) fn try_lower_get(
         return Ok(None);
     };
     let site = site_id(ctx, property);
+    crate::expr::note_site(if p.agrees() {
+        "case1-wpfacts"
+    } else {
+        "case2-wpfacts"
+    });
     let recv_box = lower_expr(ctx, object)?;
     if p.nullable {
         // The binding holds an object or null/undefined (F4). The one test

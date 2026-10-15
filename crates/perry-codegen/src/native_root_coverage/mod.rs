@@ -122,6 +122,7 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         static_shape_ids: Vec::new(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
+        program_layouts: Default::default(),
         target: Some(target.to_string()),
         is_entry_module: is_entry,
         non_entry_module_prefixes: Vec::new(),

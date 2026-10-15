@@ -5764,6 +5764,7 @@ pub fn run_with_parse_cache(
             static_shape_ids: Vec::new(),
             program_class_shape_ids: Default::default(),
             program_facts: Default::default(),
+            program_layouts: Default::default(),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             program_class_accessor_names: Some(std::sync::Arc::clone(
                 &program_class_accessor_names,
@@ -5987,6 +5988,12 @@ pub fn run_with_parse_cache(
         &ctx.native_modules,
         super::program_facts::has_stable_classes(&program_facts),
     );
+    // Object model case 2c: the program's static class families and global
+    // key colouring, one value for every module (its digest keys the object
+    // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
+    let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
+        ctx.native_modules.iter().map(|(_, m)| m),
+    ));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         &PathBuf,
@@ -6080,6 +6087,7 @@ pub fn run_with_parse_cache(
                 super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
             opts.program_facts.dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
             std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
+            opts.program_layouts = std::sync::Arc::clone(&program_layouts);
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry

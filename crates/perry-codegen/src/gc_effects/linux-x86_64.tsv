@@ -4343,6 +4343,10 @@ perry_plugin_unregister_route	Reenters	yes
 perry_plugin_unregister_service	Reenters	yes
 perry_plugin_unregister_tool	Reenters	yes
 perry_poll	Reenters	yes
+perry_probe_get	Leaf	no
+perry_probe_get_binding	Leaf	no
+perry_probe_get_keyed	Leaf	no
+perry_probe_get_value	Leaf	no
 perry_register_static_plugin	Leaf	no
 perry_resolve_static_plugin	Reenters	yes
 perry_retain_memory_profile_init	Leaf	no
