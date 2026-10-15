@@ -702,7 +702,7 @@ js_class_env_refresh	Reenters	yes
 js_class_env_register_slot	Leaf	no
 js_class_env_register_state	Leaf	no
 js_class_env_set	Reenters	yes
-js_class_env_stamp	Reenters	no
+js_class_env_stamp	Reenters	yes
 js_class_evaluation_finish_prototype	Reenters	yes
 js_class_evaluation_object	Reenters	yes
 js_class_evaluation_object_with_parent	Reenters	yes
@@ -1792,8 +1792,6 @@ js_method_direct_shape_guard	Leaf	no
 js_method_site_call_split	Reenters	yes
 js_method_site_call_value	Reenters	yes
 js_method_site_call_value_apply	Reenters	yes
-js_method_site_cert_contract_check	Reenters	yes
-js_method_site_certify	Reenters	yes
 js_method_site_chain_value	Leaf	no
 js_method_site_lookup	Reenters	yes
 js_method_site_miss	Reenters	yes
@@ -2182,10 +2180,10 @@ js_object_alloc_class_dynamic_parent	Reenters	yes
 js_object_alloc_class_inline_keys	Reenters	yes
 js_object_alloc_class_inline_keys_stamped	Reenters	yes
 js_object_alloc_class_with_keys	Reenters	yes
-js_object_alloc_fast	Reenters	no
+js_object_alloc_fast	Reenters	yes
 js_object_alloc_fast_with_parent	Reenters	yes
-js_object_alloc_null_proto	Reenters	no
-js_object_alloc_plain	Reenters	no
+js_object_alloc_null_proto	Reenters	yes
+js_object_alloc_plain	Reenters	yes
 js_object_alloc_with_parent	Reenters	yes
 js_object_alloc_with_shape	Reenters	yes
 js_object_array_keytable_write_guard	Reenters	yes
@@ -2259,7 +2257,7 @@ js_object_keys	Reenters	yes
 js_object_keys_value	Reenters	yes
 js_object_literal_define	Reenters	yes
 js_object_literal_infer_computed_function_name	AllocOnly	no
-js_object_literal_prototype_birth	Reenters	no
+js_object_literal_prototype_birth	Reenters	yes
 js_object_literal_set_computed	Reenters	yes
 js_object_literal_set_prototype	Reenters	yes
 js_object_literal_spread	Reenters	yes
@@ -2267,7 +2265,7 @@ js_object_literal_to_property_key	Reenters	yes
 js_object_live_slot_count	Leaf	no
 js_object_lookup_getter	Reenters	yes
 js_object_lookup_setter	Reenters	yes
-js_object_mark_class	Reenters	no
+js_object_mark_class	Reenters	yes
 js_object_own_method_cache_miss	Reenters	yes
 js_object_prevent_extensions	Reenters	yes
 js_object_property_is_enumerable	Reenters	yes
@@ -2810,7 +2808,7 @@ js_put_value_set	Reenters	yes
 js_put_value_set_dyn_ic	Reenters	yes
 js_put_value_set_dyn_ic_miss	Reenters	yes
 js_put_value_set_ic_miss	Reenters	yes
-js_put_value_set_packed_fast	Reenters	no
+js_put_value_set_packed_fast	Reenters	yes
 js_put_value_set_packed_miss	Reenters	yes
 js_querystring_escape	Reenters	yes
 js_querystring_native_dispatch	Reenters	yes
@@ -4043,7 +4041,7 @@ js_weakmap_delete	Reenters	yes
 js_weakmap_get	Reenters	yes
 js_weakmap_has	Reenters	yes
 js_weakmap_init_iterable	Reenters	yes
-js_weakmap_new	AllocOnly	no
+js_weakmap_new	Reenters	yes
 js_weakmap_set	Reenters	yes
 js_weakref_deref	Reenters	yes
 js_weakref_new	Reenters	yes
@@ -4051,7 +4049,7 @@ js_weakset_add	Reenters	yes
 js_weakset_delete	Reenters	yes
 js_weakset_has	Reenters	yes
 js_weakset_init_iterable	Reenters	yes
-js_weakset_new	AllocOnly	no
+js_weakset_new	Reenters	yes
 js_webcrypto_decrypt	Reenters	yes
 js_webcrypto_derive_bits	Reenters	yes
 js_webcrypto_derive_key	Reenters	yes
