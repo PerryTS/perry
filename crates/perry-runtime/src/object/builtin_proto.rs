@@ -379,14 +379,16 @@ pub(crate) fn note_array_prototype_write(arr: usize, site: &'static str) {
     if arr == 0 {
         return;
     }
-    let proto = crate::array::array_prototype_addr_if_resolved();
-    if proto == 0 {
-        return;
-    }
-    // A grown array leaves a forwarding alias; compare the live head.
-    let live = crate::array::clean_arr_ptr(arr as *const crate::array::ArrayHeader) as usize;
-    if proto == arr || proto == live {
-        note_family_write(BuiltinProto::Array as usize, site);
+    // `seal_realm` materialised `%Array.prototype%`'s named bag and sealed
+    // it, so the bag's meta record names the family; an ordinary array's bag
+    // (or none) is not sealed. The realm's memoized prototype address is not
+    // consulted: it may be unresolved when the realm was reached another way.
+    // SAFETY: `clean_arr_ptr` returns the live head of a grown array.
+    unsafe {
+        let live = crate::array::clean_arr_ptr(arr as *const crate::array::ArrayHeader);
+        if !live.is_null() {
+            note_write(crate::array::array_property_bag(live), site);
+        }
     }
 }
 

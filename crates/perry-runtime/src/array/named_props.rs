@@ -91,6 +91,9 @@ pub(crate) unsafe fn array_named_property_set(
     value: f64,
 ) -> *mut ArrayHeader {
     let arr = clean_arr_ptr_mut(arr);
+    // A named write to `%Array.prototype%` sets its shadow bit, so every
+    // `Pristine(Array)` site takes the generic path.
+    crate::object::builtin_proto::note_array_prototype_write(arr as usize, "named property");
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let key = scope.root_string_ptr(key);

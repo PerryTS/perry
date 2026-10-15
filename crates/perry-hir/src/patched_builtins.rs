@@ -56,16 +56,21 @@ impl PatchedBuiltins {
         Self::default()
     }
     /// Dynamic code that can name the global scope can replace any builtin
-    /// namespace or prototype member: record that as a write of every member.
+    /// namespace member: record that as a write of every member.
+    ///
+    /// Builtin PROTOTYPE members are not recorded. A write the interpreter
+    /// performs lands in the runtime's write funnels like any other write,
+    /// which set the shadow bit (bit 30) of the written intrinsic prototype,
+    /// and every direct builtin method site tests `Pristine(family)`
+    /// (perry-codegen `builtin_proto`) and takes the one generic path when it
+    /// is set. Namespace objects carry no such bit, so their members are
+    /// recorded as written.
     pub fn apply_dynamic_code_reach(&mut self) {
         if !self.dynamic_code_reach.disables_builtin_constants() {
             return;
         }
         for ns in BUILTIN_NAMESPACES {
             self.insert((ns.to_string(), ANY_MEMBER.to_string()));
-        }
-        for ns in PROTOTYPE_OWNERS {
-            self.insert((format!("{ns}.prototype"), ANY_MEMBER.to_string()));
         }
     }
 }

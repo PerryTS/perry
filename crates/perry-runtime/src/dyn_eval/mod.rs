@@ -597,6 +597,8 @@ fn eval_direct_in_context(
             caller_variable_env,
             strings_allowed,
             wasm_allowed,
+            inherited_strict,
+            this_value,
         )
     })
 }
@@ -610,6 +612,8 @@ fn eval_direct_in_entered(
     caller_variable_env: f64,
     strings_allowed: bool,
     wasm_allowed: bool,
+    inherited_strict: bool,
+    this_value: f64,
 ) -> f64 {
     let base = roots_len();
     let this_idx = root_push(this_value);
