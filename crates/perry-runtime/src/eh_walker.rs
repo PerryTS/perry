@@ -1490,7 +1490,10 @@ pub(crate) fn verify_prediction(actual_pad: u64, actual_cfa: u64) {
     if !diff_mode() {
         return;
     }
-    let Some((pad, cfa)) = PREDICTION.with(|c| c.take()) else {
+    let Some((pad, cfa)) = PREDICTION.with(
+        #[inline(never)]
+        |c| c.take(),
+    ) else {
         return; // walk declined (already reported); system carries the throw
     };
     if pad != actual_pad || cfa != actual_cfa {

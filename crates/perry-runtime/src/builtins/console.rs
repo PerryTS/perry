@@ -669,8 +669,10 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 thread_local! {
-    static CONSOLE_TIMERS: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
-    static CONSOLE_COUNTERS: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+    // Keep RandomState for user-provided labels; only construct it on a write.
+    // The Option and any populated map retain normal thread-exit destruction.
+    static CONSOLE_TIMERS: RefCell<Option<HashMap<String, Instant>>> = const { RefCell::new(None) };
+    static CONSOLE_COUNTERS: RefCell<Option<HashMap<String, u64>>> = const { RefCell::new(None) };
 }
 
 pub(crate) const CONSOLE_INSTANCE_CLASS_ID: u32 = 0xFFFF_0083;
@@ -790,16 +792,20 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
     // so the stored Instant reflects the call site, not the bookkeeping cost.
     let start = Instant::now();
     let label = unsafe { label_from_str_ptr(label_ptr) };
-    CONSOLE_TIMERS.with(|t| {
-        let mut map = t.borrow_mut();
-        if map.contains_key(&label) {
-            eprintln!(
-                "Warning: Label '{}' already exists for console.time()",
-                label
-            );
-        }
-        map.insert(label, start);
-    });
+    CONSOLE_TIMERS.with(
+        #[inline(never)]
+        |t| {
+            let mut map = t.borrow_mut();
+            let map = map.get_or_insert_with(HashMap::new);
+            if map.contains_key(&label) {
+                eprintln!(
+                    "Warning: Label '{}' already exists for console.time()",
+                    label
+                );
+            }
+            map.insert(label, start);
+        },
+    );
 }
 
 fn console_type_error_for_symbol_label() -> ! {
@@ -1313,13 +1319,16 @@ pub extern "C" fn js_console_count_reset_value(label_value: f64) {
 #[no_mangle]
 pub extern "C" fn js_console_time_end(label_ptr: *const StringHeader) {
     let label = unsafe { label_from_str_ptr(label_ptr) };
-    CONSOLE_TIMERS.with(|t| {
-        let mut map = t.borrow_mut();
-        match map.remove(&label) {
-            Some(start) => println!("{}: {}", label, format_elapsed(start.elapsed())),
-            None => eprintln!("Warning: No such label '{}' for console.timeEnd()", label),
-        }
-    });
+    CONSOLE_TIMERS.with(
+        #[inline(never)]
+        |t| {
+            let mut map = t.borrow_mut();
+            match map.as_mut().and_then(|map| map.remove(&label)) {
+                Some(start) => println!("{}: {}", label, format_elapsed(start.elapsed())),
+                None => eprintln!("Warning: No such label '{}' for console.timeEnd()", label),
+            }
+        },
+    );
 }
 
 #[no_mangle]
@@ -1327,7 +1336,7 @@ pub extern "C" fn js_console_time_log(label_ptr: *const StringHeader) {
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(|t| {
         let map = t.borrow();
-        match map.get(&label) {
+        match map.as_ref().and_then(|map| map.get(&label)) {
             Some(start) => println!("{}: {}", label, format_elapsed(start.elapsed())),
             None => eprintln!("Warning: No such label '{}' for console.timeLog()", label),
         }
@@ -1343,7 +1352,7 @@ pub extern "C" fn js_console_time_log_spread(
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(|t| {
         let map = t.borrow();
-        match map.get(&label) {
+        match map.as_ref().and_then(|map| map.get(&label)) {
             Some(start) => {
                 let mut line = format!("{}: {}", label, format_elapsed(start.elapsed()));
                 if !args_arr.is_null() {
@@ -1368,7 +1377,10 @@ pub extern "C" fn js_console_count(label_ptr: *const StringHeader) {
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_COUNTERS.with(|c| {
         let mut map = c.borrow_mut();
-        let entry = map.entry(label.clone()).or_insert(0);
+        let entry = map
+            .get_or_insert_with(HashMap::new)
+            .entry(label.clone())
+            .or_insert(0);
         *entry += 1;
         println!("{}: {}", label, *entry);
     });
@@ -1381,12 +1393,15 @@ pub extern "C" fn js_console_count_reset(label_ptr: *const StringHeader) {
         warn_console_count_missing(&label);
         return;
     }
-    CONSOLE_COUNTERS.with(|c| {
-        let mut map = c.borrow_mut();
-        if map.remove(&label).is_none() {
-            warn_console_count_missing(&label);
-        }
-    });
+    CONSOLE_COUNTERS.with(
+        #[inline(never)]
+        |c| {
+            let mut map = c.borrow_mut();
+            if map.as_mut().and_then(|map| map.remove(&label)).is_none() {
+                warn_console_count_missing(&label);
+            }
+        },
+    );
 }
 
 // === console.group / groupEnd / groupCollapsed ===

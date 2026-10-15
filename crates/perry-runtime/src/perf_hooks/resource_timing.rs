@@ -9,11 +9,16 @@ use super::*;
 // ── clearResourceTimings() / setResourceTimingBufferSize(n) ──────────────────
 #[no_mangle]
 pub extern "C" fn js_perf_clear_resource_timings() -> f64 {
-    PERF_ENTRIES.with(|store| {
-        store
-            .borrow_mut()
-            .retain(|entry| entry.entry_type != ENTRY_TYPE_RESOURCE);
-    });
+    // Keep TLS address resolution separate from the vector operation so the
+    // LocalKey accessor specializes to this const-initialized store.
+    PERF_ENTRIES.with(
+        #[inline(never)]
+        |store| {
+            store
+                .borrow_mut()
+                .retain(|entry| entry.entry_type != ENTRY_TYPE_RESOURCE);
+        },
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 

@@ -228,10 +228,14 @@ pub(crate) fn temp_roots_unwind_to(sp: usize) {
 }
 
 pub(crate) fn temp_roots_check_marks(sp: usize) {
-    TEMP_ROOTS.with(|cell| unsafe {
-        let marks: Vec<usize> = (*cell.get()).iter().map(|r| r.mark).collect();
-        crate::exception::marks::check_marks(&marks, sp, "temp_roots");
-    });
+    // Outline the check, rather than LocalKey's otherwise opaque getter.
+    TEMP_ROOTS.with(
+        #[inline(never)]
+        |cell| unsafe {
+            let marks: Vec<usize> = (*cell.get()).iter().map(|r| r.mark).collect();
+            crate::exception::marks::check_marks(&marks, sp, "temp_roots");
+        },
+    );
 }
 
 /// Test-only: drop every temp root, so an isolated GC test starts from a known

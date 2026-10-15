@@ -40,7 +40,15 @@ thread_local! {
     static TRACE_ID_SYMBOL: RefCell<f64> = const { RefCell::new(0.0) };
     static TRACE_ENABLED_OBJECTS: RefCell<usize> = const { RefCell::new(0) };
     static TRACE_WARNING_EMITTED: RefCell<bool> = const { RefCell::new(false) };
-    static TRACE_OUTPUT: RefCell<TraceOutput> = RefCell::new(TraceOutput::default());
+    static TRACE_OUTPUT: RefCell<TraceOutput> = const { RefCell::new(TraceOutput {
+        initialized: false,
+        enabled: false,
+        legacy_enabled: false,
+        explicit_categories: false,
+        categories: BTreeSet::new(),
+        file_pattern: None,
+        wrote: false,
+    }) };
 }
 
 static TRACE_EVENTS_ALLOCATED: AtomicI64 = AtomicI64::new(0);
@@ -582,29 +590,35 @@ fn seed_legacy_categories(output: &mut TraceOutput) {
 }
 
 pub(crate) fn init_trace_events_runtime() {
-    TRACE_OUTPUT.with(|slot| {
-        if slot.borrow().initialized {
-            return;
-        }
-        // #9401: this runs from `js_gc_init`, so a raw `std::env::args()`
-        // aborted the process on a non-UTF-8 argument before any JS ran.
-        let mut output = trace_options_from_args(crate::process::process_args_lossy());
-        seed_legacy_categories(&mut output);
-        output.initialized = true;
-        TRACE_ENABLED_COUNTS.with(|counts| {
-            let mut counts = counts.borrow_mut();
-            for category in &output.categories {
-                if !category.is_empty() {
-                    *counts.entry(category.clone()).or_insert(0) += 1;
-                }
+    TRACE_OUTPUT.with(
+        #[inline(never)]
+        |slot| {
+            if slot.borrow().initialized {
+                return;
             }
-        });
-        *slot.borrow_mut() = output;
-    });
+            // #9401: this runs from `js_gc_init`, so a raw `std::env::args()`
+            // aborted the process on a non-UTF-8 argument before any JS ran.
+            let mut output = trace_options_from_args(crate::process::process_args_lossy());
+            seed_legacy_categories(&mut output);
+            output.initialized = true;
+            TRACE_ENABLED_COUNTS.with(
+                #[inline(never)]
+                |counts| {
+                    let mut counts = counts.borrow_mut();
+                    for category in &output.categories {
+                        if !category.is_empty() {
+                            *counts.entry(category.clone()).or_insert(0) += 1;
+                        }
+                    }
+                },
+            );
+            *slot.borrow_mut() = output;
+        },
+    );
 }
 
 pub(crate) fn flush_trace_events_output() {
-    TRACE_OUTPUT.with(|slot| {
+    TRACE_OUTPUT.with(#[inline(never)] |slot| {
         let mut output = slot.borrow_mut();
         if output.wrote {
             return;

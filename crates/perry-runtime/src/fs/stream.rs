@@ -265,7 +265,10 @@ impl StreamState {
 thread_local! {
     static STREAM_REGISTRY: RefCell<StdHashMap<usize, StreamState>> = RefCell::new(StdHashMap::new());
     static FS_STREAM_NEXT_ID: RefCell<usize> = const { RefCell::new(1) };
-    static UTF8_STREAM_REGISTRY: RefCell<StdHashMap<usize, Utf8StreamState>> = RefCell::new(StdHashMap::new());
+    // Stream IDs are internal integers; the existing integer hasher lets the
+    // empty map live directly in TLS while retaining its ordinary drop glue.
+    static UTF8_STREAM_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, Utf8StreamState>> =
+        const { RefCell::new(crate::fast_hash::new_ptr_hash_map()) };
     static FS_UTF8_STREAM_NEXT_ID: RefCell<usize> = const { RefCell::new(1) };
 }
 

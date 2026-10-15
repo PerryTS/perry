@@ -562,13 +562,16 @@ fn utf8_add_listener(id: usize, event: &str, cb: f64, once: bool) {
 }
 
 fn utf8_remove_listener(id: usize, event: &str, cb: f64) {
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            if let Some(listeners) = state.listeners.get_mut(event) {
-                listeners.retain(|listener| listener.callback.to_bits() != cb.to_bits());
+    UTF8_STREAM_REGISTRY.with(
+        #[inline(never)]
+        |registry| {
+            if let Some(state) = registry.borrow_mut().get_mut(&id) {
+                if let Some(listeners) = state.listeners.get_mut(event) {
+                    listeners.retain(|listener| listener.callback.to_bits() != cb.to_bits());
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 fn utf8_buffered_chunk_value(mode: Utf8ContentMode, bytes: &[u8]) -> f64 {
@@ -1288,29 +1291,35 @@ pub(crate) fn utf8_stream_off_value(stream_value: f64, event: f64, cb: f64) -> O
 
 pub(crate) fn utf8_stream_remove_all_value(stream_value: f64, event: f64) -> Option<f64> {
     let id = utf8_stream_id_from_value(stream_value)?;
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            if is_undefined_value(event) {
-                state.listeners.clear();
-            } else {
-                state.listeners.remove(&event_name(event));
+    UTF8_STREAM_REGISTRY.with(
+        #[inline(never)]
+        |registry| {
+            if let Some(state) = registry.borrow_mut().get_mut(&id) {
+                if is_undefined_value(event) {
+                    state.listeners.clear();
+                } else {
+                    state.listeners.remove(&event_name(event));
+                }
             }
-        }
-    });
+        },
+    );
     Some(stream_value)
 }
 
 pub(crate) fn utf8_stream_listener_count_value(stream_value: f64, event: f64) -> Option<f64> {
     let id = utf8_stream_id_from_value(stream_value)?;
     let name = event_name(event);
-    Some(UTF8_STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .and_then(|state| state.listeners.get(&name))
-            .map(|listeners| listeners.len() as f64)
-            .unwrap_or(0.0)
-    }))
+    Some(UTF8_STREAM_REGISTRY.with(
+        #[inline(never)]
+        |registry| {
+            registry
+                .borrow()
+                .get(&id)
+                .and_then(|state| state.listeners.get(&name))
+                .map(|listeners| listeners.len() as f64)
+                .unwrap_or(0.0)
+        },
+    ))
 }
 
 pub(crate) fn utf8_stream_emit_value(stream_value: f64, event: f64, arg: f64) -> Option<f64> {

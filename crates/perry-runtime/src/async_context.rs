@@ -156,8 +156,11 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
     }
 }
 
+// Large operation callbacks are outlined explicitly at the affected access
+// sites: LocalKey::with can then specialize its small TLS getter instead of
+// retaining a call through LocalKey's accessor pointer in prod archives.
 thread_local! {
-    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = RefCell::new(AsyncContextSnapshot::default());
+    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new() }) };
 }
 
 unsafe fn token_ref(token: i64) -> &'static AsyncLocalStorageTokenInner {
@@ -324,29 +327,32 @@ pub fn get_store(token: i64) -> Option<f64> {
 /// the pre-`run` value on exit (#788, differential case 21).
 pub fn set_store(token: i64, store: f64) {
     let generation = token_generation(token);
-    ACTIVE_CONTEXT.with(|ctx| {
-        let mut ctx = ctx.borrow_mut();
-        ctx.entries.retain(|entry| {
-            Arc::as_ptr(&entry.token) as i64 != token || entry.generation == generation
-        });
-        if let Some(entry) = ctx
-            .entries
-            .iter_mut()
-            .find(|entry| entry_matches(entry, token, generation))
-        {
-            if let Some(slot) = entry.stores.last_mut() {
-                *slot = store;
-            } else {
-                entry.stores.push(store);
-            }
-        } else {
-            ctx.entries.push(AsyncContextEntry {
-                token: unsafe { clone_token(token) },
-                generation,
-                stores: vec![store],
+    ACTIVE_CONTEXT.with(
+        #[inline(never)]
+        |ctx| {
+            let mut ctx = ctx.borrow_mut();
+            ctx.entries.retain(|entry| {
+                Arc::as_ptr(&entry.token) as i64 != token || entry.generation == generation
             });
-        }
-    });
+            if let Some(entry) = ctx
+                .entries
+                .iter_mut()
+                .find(|entry| entry_matches(entry, token, generation))
+            {
+                if let Some(slot) = entry.stores.last_mut() {
+                    *slot = store;
+                } else {
+                    entry.stores.push(store);
+                }
+            } else {
+                ctx.entries.push(AsyncContextEntry {
+                    token: unsafe { clone_token(token) },
+                    generation,
+                    stores: vec![store],
+                });
+            }
+        },
+    );
 }
 
 pub fn enter_with(token: i64, store: f64) {
@@ -436,9 +442,10 @@ pub(crate) fn unwind_context_guards(sp: usize) {
 }
 
 pub(crate) fn check_context_guard_marks(sp: usize) {
-    CONTEXT_GUARDS.with(|guards| {
-        crate::exception::marks::check_marks(guards.borrow().marks(), sp, "async_context")
-    });
+    CONTEXT_GUARDS.with(
+        #[inline(never)]
+        |guards| crate::exception::marks::check_marks(guards.borrow().marks(), sp, "async_context"),
+    );
 }
 
 fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -492,11 +499,14 @@ pub fn clear_store(token: i64) {
 }
 
 fn remove_store(token: i64) {
-    ACTIVE_CONTEXT.with(|ctx| {
-        ctx.borrow_mut()
-            .entries
-            .retain(|entry| Arc::as_ptr(&entry.token) as i64 != token);
-    });
+    ACTIVE_CONTEXT.with(
+        #[inline(never)]
+        |ctx| {
+            ctx.borrow_mut()
+                .entries
+                .retain(|entry| Arc::as_ptr(&entry.token) as i64 != token);
+        },
+    );
 }
 
 pub fn take_store(token: i64) -> Option<(u64, Vec<f64>)> {

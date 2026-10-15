@@ -1574,14 +1574,17 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_perf_observer_disconnect(obs_val: f64) -> f64 {
     let id = observer_id_from_value(obs_val);
-    OBSERVERS.with(|o| {
-        if let Some(obs) = o.borrow_mut().get_mut(id) {
-            obs.active = false;
-            obs.single_mode = None;
-            obs.flush_queued = false;
-            obs.pending.clear();
-        }
-    });
+    OBSERVERS.with(
+        #[inline(never)]
+        |o| {
+            if let Some(obs) = o.borrow_mut().get_mut(id) {
+                obs.active = false;
+                obs.single_mode = None;
+                obs.flush_queued = false;
+                obs.pending.clear();
+            }
+        },
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 

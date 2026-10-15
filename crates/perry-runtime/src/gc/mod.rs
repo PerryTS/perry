@@ -1717,31 +1717,34 @@ pub extern "C" fn js_gc_pause_stats(
     out_recent_avg_us: *mut u64,
     out_recent_count: *mut u64,
 ) {
-    GC_STATS.with(|stats| {
-        let stats = stats.borrow();
-        let n = stats.recent_len as usize;
-        let window = &stats.recent_pauses_us[..n.min(GC_RECENT_PAUSE_WINDOW)];
-        let recent_max = window.iter().copied().max().unwrap_or(0);
-        let recent_avg = if window.is_empty() {
-            0
-        } else {
-            window.iter().copied().sum::<u64>() / window.len() as u64
-        };
-        unsafe {
-            if !out_max_us.is_null() {
-                *out_max_us = stats.max_pause_us;
+    GC_STATS.with(
+        #[inline(never)]
+        |stats| {
+            let stats = stats.borrow();
+            let n = stats.recent_len as usize;
+            let window = &stats.recent_pauses_us[..n.min(GC_RECENT_PAUSE_WINDOW)];
+            let recent_max = window.iter().copied().max().unwrap_or(0);
+            let recent_avg = if window.is_empty() {
+                0
+            } else {
+                window.iter().copied().sum::<u64>() / window.len() as u64
+            };
+            unsafe {
+                if !out_max_us.is_null() {
+                    *out_max_us = stats.max_pause_us;
+                }
+                if !out_recent_max_us.is_null() {
+                    *out_recent_max_us = recent_max;
+                }
+                if !out_recent_avg_us.is_null() {
+                    *out_recent_avg_us = recent_avg;
+                }
+                if !out_recent_count.is_null() {
+                    *out_recent_count = n as u64;
+                }
             }
-            if !out_recent_max_us.is_null() {
-                *out_recent_max_us = recent_max;
-            }
-            if !out_recent_avg_us.is_null() {
-                *out_recent_avg_us = recent_avg;
-            }
-            if !out_recent_count.is_null() {
-                *out_recent_count = n as u64;
-            }
-        }
-    });
+        },
+    );
 }
 
 /// Stamp a freshly built, runtime-owned keys array as copy-on-write shared.

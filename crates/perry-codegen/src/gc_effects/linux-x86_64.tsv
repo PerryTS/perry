@@ -831,8 +831,8 @@ js_console_new2	Reenters	yes
 js_console_noop	Leaf	no
 js_console_table	Reenters	yes
 js_console_table_with_properties	Reenters	yes
-js_console_time	Leaf	no
-js_console_time_end	Leaf	no
+js_console_time	Reenters	yes
+js_console_time_end	Reenters	yes
 js_console_time_end_value	Reenters	yes
 js_console_time_log	Reenters	yes
 js_console_time_log_spread	Reenters	yes
@@ -1414,9 +1414,9 @@ js_fs_utf8_stream_emit	Reenters	yes
 js_fs_utf8_stream_end	Reenters	yes
 js_fs_utf8_stream_flush	Reenters	yes
 js_fs_utf8_stream_flush_sync	Reenters	yes
-js_fs_utf8_stream_listener_count	Leaf	no
+js_fs_utf8_stream_listener_count	Reenters	yes
 js_fs_utf8_stream_new	Reenters	yes
-js_fs_utf8_stream_off	Leaf	no
+js_fs_utf8_stream_off	Reenters	yes
 js_fs_utf8_stream_on	Reenters	yes
 js_fs_utf8_stream_once	Reenters	yes
 js_fs_utf8_stream_remove_all	Leaf	no
