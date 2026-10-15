@@ -284,7 +284,7 @@ pub fn has_pending_jobs() -> bool {
 
 /// Jobs this thread has accepted and not yet delivered.
 pub fn outstanding() -> usize {
-    POOL.with(|state| state.borrow().jobs.len())
+    POOL.with(|state| state.borrow().jobs.as_ref().map_or(0, HashMap::len))
 }
 
 /// Whether this thread can take the turnloop pool path at all, asked without
@@ -312,14 +312,16 @@ struct Job {
 
 #[derive(Default)]
 struct PoolState {
-    jobs: HashMap<u64, Job>,
+    // RandomState is initialized with the first accepted job, rather than
+    // by a lazy TLS initializer that can drop an old table of closures.
+    jobs: Option<HashMap<u64, Job>>,
     next_id: u64,
 }
 
 crate::perry_thread_local! {
     /// Per agent, like the loop itself. A job belongs to the thread that
     /// submitted it; there is no cross-thread map to race on.
-    static POOL: RefCell<PoolState> = RefCell::new(PoolState::default());
+    static POOL: RefCell<PoolState> = const { RefCell::new(PoolState { jobs: None, next_id: 0 }) };
     /// Outside [`PoolState`] on purpose: registering a scanner pushes onto the
     /// scanner registry, and doing that while holding the table's borrow would
     /// be one more thing that has to be proven not to re-enter.
@@ -346,7 +348,7 @@ fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             // therefore correct, not a missed root.
             return;
         };
-        for job in state.jobs.values_mut() {
+        for job in state.jobs.iter_mut().flat_map(|jobs| jobs.values_mut()) {
             for root in job.roots.iter_mut() {
                 visitor.visit_nanbox_u64_slot(root);
             }
@@ -473,6 +475,7 @@ where
         state
             .borrow_mut()
             .jobs
+            .get_or_insert_with(HashMap::new)
             .insert(id, Job { op, deliver, roots })
     });
     SUBMITTED.fetch_add(1, Ordering::Relaxed);
@@ -577,7 +580,14 @@ where
 /// Returns false when the job is unknown — it has already been delivered, or
 /// it belongs to another thread.
 pub fn cancel(job: JobId) -> bool {
-    let op = POOL.with(|state| state.borrow().jobs.get(&job.0).map(|entry| entry.op));
+    let op = POOL.with(|state| {
+        state
+            .borrow()
+            .jobs
+            .as_ref()
+            .and_then(|jobs| jobs.get(&job.0))
+            .map(|entry| entry.op)
+    });
     let Some(op) = op else {
         return false;
     };
@@ -623,7 +633,13 @@ pub fn dispatch(completion: Completion) {
 /// one outcome. A stale id (a completion for a job already delivered at
 /// shutdown) is dropped.
 fn deliver(id: u64, delivery: Delivery<Erased>) {
-    let Some(job) = POOL.with(|state| state.borrow_mut().jobs.remove(&id)) else {
+    let Some(job) = POOL.with(|state| {
+        state
+            .borrow_mut()
+            .jobs
+            .as_mut()
+            .and_then(|jobs| jobs.remove(&id))
+    }) else {
         return;
     };
     match &delivery {
@@ -668,7 +684,15 @@ pub fn shutdown_current_thread() {
     // (a settlement that kicks off follow-up work), and draining "whatever is
     // in the table now" would then never terminate. Anything submitted during
     // the drain is left for the loop's own teardown, which is about to free it.
-    let ids: Vec<u64> = POOL.with(|state| state.borrow().jobs.keys().copied().collect());
+    let ids: Vec<u64> = POOL.with(|state| {
+        state
+            .borrow()
+            .jobs
+            .iter()
+            .flat_map(|jobs| jobs.keys())
+            .copied()
+            .collect()
+    });
     for id in ids {
         deliver(id, Delivery::Cancelled);
     }
@@ -679,7 +703,7 @@ pub(crate) fn reset_for_test() {
     let leftover = POOL.with(|state| {
         let mut state = state.borrow_mut();
         state.next_id = 0;
-        state.jobs.drain().count()
+        state.jobs.as_mut().map_or(0, |jobs| jobs.drain().count())
     });
     if leftover > 0 {
         OUTSTANDING.fetch_sub(leftover, Ordering::AcqRel);

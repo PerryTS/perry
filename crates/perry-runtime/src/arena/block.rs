@@ -136,8 +136,8 @@ impl Drop for BlockPool {
 //
 // The rule this is an instance of: a declaration read from the dynamic extent
 // of a `tls_hot::fill` provider cannot use `crate::perry_thread_local!`. Today
-// `ARENA` is the only provider whose first access allocates, so this is the
-// whole set.
+// `ARENA`'s first-use setup is the provider that reads these counters and
+// the block pool, so this is the complete dependency set.
 // ---------------------------------------------------------------------------
 thread_local! {
     static BLOCK_POOL: RefCell<BlockPool> = const { RefCell::new(BlockPool {
