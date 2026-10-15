@@ -103,7 +103,7 @@ pub type PtrHashMap<K, V> = HashMap<K, V, PtrHasher>;
 /// `PtrHasher` impls `Default`, but call sites that need an explicit
 /// builder for a `RefCell::new(...)` initializer reach for this helper.
 #[inline]
-pub fn new_ptr_hash_set<T: std::hash::Hash + Eq>() -> PtrHashSet<T> {
+pub const fn new_ptr_hash_set<T: std::hash::Hash + Eq>() -> PtrHashSet<T> {
     HashSet::with_hasher(PtrHasher)
 }
 
@@ -116,7 +116,7 @@ pub fn new_ptr_hash_set_with_capacity<T: std::hash::Hash + Eq>(cap: usize) -> Pt
 }
 
 #[inline]
-pub fn new_ptr_hash_map<K: std::hash::Hash + Eq, V>() -> PtrHashMap<K, V> {
+pub const fn new_ptr_hash_map<K: std::hash::Hash + Eq, V>() -> PtrHashMap<K, V> {
     HashMap::with_hasher(PtrHasher)
 }
 

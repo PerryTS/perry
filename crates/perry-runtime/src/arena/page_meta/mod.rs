@@ -252,7 +252,7 @@ pub(crate) struct OldArenaSourceBlockSelection {
 // exists; everything else in this file was simply never migrated.
 thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+        const { RefCell::new(crate::fast_hash::new_ptr_hash_map()) };
 
     static PAGE_GENERATION_CACHE: UnsafeCell<PageGenerationCacheSet> =
         const { UnsafeCell::new(PageGenerationCacheSet::empty()) };
@@ -260,15 +260,15 @@ thread_local! {
 
 crate::perry_thread_local! {
     static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
-        RefCell::new(OldGenPageObjectMap::default());
+        const { RefCell::new(OldGenPageObjectMap::new()) };
 
     static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
-        RefCell::new(OldGenPageMetaMap::default());
+        const { RefCell::new(OldGenPageMetaMap::new()) };
 
     /// Promoted-block pages whose object list is DESCRIBED rather than stored —
     /// see [`register_promoted_page_run`].
     static OLD_GEN_PAGE_PROMOTED_RUNS: RefCell<crate::fast_hash::PtrHashMap<usize, PromotedPageRun>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+        const { RefCell::new(crate::fast_hash::new_ptr_hash_map()) };
 
     /// Monotone-within-a-window latch so the common case — a program that never
     /// promotes a block in place — pays one `Cell` read per reader instead of a

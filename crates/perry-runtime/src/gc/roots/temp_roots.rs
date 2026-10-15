@@ -55,7 +55,7 @@ thread_local! {
     /// the two never overlap (GC is stop-the-world relative to this TLS, and
     /// the scanner allocates nothing).
     pub(crate) static TEMP_ROOTS: std::cell::UnsafeCell<Vec<TempRoot>> =
-        std::cell::UnsafeCell::new(Vec::with_capacity(TEMP_ROOT_RESERVE));
+        const { std::cell::UnsafeCell::new(Vec::new()) };
 }
 
 /// One temp-root slot: the rooted JSValue word and the frame mark of its
@@ -70,17 +70,24 @@ pub(crate) struct TempRoot {
 
 /// Address of this thread's `TEMP_ROOTS`.
 pub(crate) fn temp_roots_hot_addr() -> *mut u8 {
-    TEMP_ROOTS.with(|cell| cell.get() as *mut u8)
+    TEMP_ROOTS.with(|cell| {
+        let roots = cell.get();
+        // Called once while filling the hot cache, before the address is
+        // published. Keep the old reserve without a lazy TLS initializer.
+        unsafe {
+            if (*roots).capacity() == 0 {
+                (*roots).reserve(TEMP_ROOT_RESERVE);
+            }
+        }
+        roots as *mut u8
+    })
 }
 
 /// This thread's temp-root stack without a TLS resolution.
 ///
-/// `TEMP_ROOTS` is lazily initialised (its `Vec::with_capacity` is not const),
-/// so every `.with()` pays `_tlv_get_addr` **plus** an initialised/destroyed
-/// check. Generated code calls push/get/set/truncate as four separate FFI
-/// calls around a single allocating expression, so that toll is paid four
-/// times per temporary: 144 of the 653 attributed `_tlv_get_addr` samples on
-/// `churn.ts`.
+/// Storage is const-initialized; the address provider reserves backing
+/// storage before publishing it. The Vec's destructor still runs at thread
+/// exit, just as it did for the former allocating TLS initializer.
 #[inline(always)]
 fn hot_temp_roots() -> *mut Vec<TempRoot> {
     crate::tls_hot::hot().temp_roots as *mut Vec<TempRoot>

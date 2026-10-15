@@ -36,6 +36,12 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/arena/page_meta/mod.rs",
+      "name": "PAGE_GENERATIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Address classification metadata: PageGenerationMap maps native page numbers to PageGenerationRange values (base/end addresses, generation/space enums and object_starts). object_starts points into ArenaBlock.object_starts, a Rust-owned Box<[u64]> bitmap, never a GC cell or JSValue. Ranges describe mapped arena extents and are registered/unregistered with blocks; the collector neither marks nor relocates these native metadata pointers. Const initialization makes this pre-existing holder visible to the rule-T inventory."
+    },
+    {
       "file": "crates/perry-runtime/src/object/shapes_birth_width.rs",
       "name": "COMPLETE_BIRTH_PROOFS",
       "verdict": "test_only",

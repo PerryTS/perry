@@ -282,7 +282,7 @@ pub(crate) fn arena_free_list_bytes() -> usize {
 pub(crate) fn allocation_totals() -> (usize, usize) {
     let mut bytes = 0usize;
     let mut large = 0usize;
-    let mut add = |arena: &UnsafeCell<Arena>| unsafe {
+    let mut add = |arena: &super::block::ArenaCell| unsafe {
         let arena = &*arena.get();
         bytes = bytes.saturating_add(arena.allocated_bytes);
         large = large.saturating_add(arena.large_allocated_bytes);

@@ -30,6 +30,12 @@ pub(super) type PageMetaMap = PageMap<StoredPageMeta, 64>;
 
 impl<T, const N: usize> Default for PageMap<T, N> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, const N: usize> PageMap<T, N> {
+    pub(super) const fn new() -> Self {
         Self {
             chunks: crate::fast_hash::new_ptr_hash_map(),
             len: 0,

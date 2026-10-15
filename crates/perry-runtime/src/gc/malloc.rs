@@ -99,6 +99,15 @@ pub(super) enum MallocRegistryState {
 }
 
 impl MallocState {
+    /// Keep the original first-allocation capacity without a lazy TLS
+    /// initializer. The Vec itself records whether backing storage exists.
+    #[inline]
+    fn reserve_initial_objects(&mut self) {
+        if self.objects.capacity() == 0 {
+            self.objects.reserve(MALLOC_STATE_INITIAL_CAPACITY);
+        }
+    }
+
     /// Reclaim every malloc-tracked object block this state still owns.
     ///
     /// Runs at thread exit via `Drop`. Returns the number of bytes freed
@@ -247,8 +256,8 @@ pub(super) const MALLOC_STATE_HEAVY_LEN_THRESHOLD: usize = 64 * 1024;
 pub(super) const MALLOC_STATE_HEAVY_CAPACITY: usize = 256 * 1024;
 
 crate::perry_thread_local! {
-    pub(crate) static MALLOC_STATE: RefCell<MallocState> = RefCell::new(MallocState {
-        objects: Vec::with_capacity(MALLOC_STATE_INITIAL_CAPACITY),
+    pub(crate) static MALLOC_STATE: RefCell<MallocState> = const { RefCell::new(MallocState {
+        objects: Vec::new(),
         // Exact validation is lazy; its backing allocation must be lazy too.
         set: crate::fast_hash::new_ptr_hash_set(),
         realloc_forwarding: crate::fast_hash::new_ptr_hash_map(),
@@ -256,7 +265,7 @@ crate::perry_thread_local! {
         registry_state: MallocRegistryState::Inactive,
         heavy_capacity_reserved: false,
         kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
-    });
+    }) };
 }
 
 // `ARENA_FREE_LIST` / `ARENA_FREE_LIST_NONEMPTY` stay raw: they are NAMED
@@ -320,6 +329,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
         GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_IN_ALLOC));
         MALLOC_STATE.with(|s| {
             let mut s = s.borrow_mut();
+            s.reserve_initial_objects();
             s.objects.push(header);
             s.record_malloc_alloc(obj_type, 1, total as u64);
             if s.malloc_registry_available() {
@@ -378,6 +388,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
 
         MALLOC_STATE.with(|s| {
             let mut s = s.borrow_mut();
+            s.reserve_initial_objects();
             s.objects.extend_from_slice(&headers);
             s.record_malloc_alloc(obj_type, headers.len() as u64, allocated_bytes);
             if s.malloc_registry_available() {
@@ -788,6 +799,31 @@ impl MallocState {
 #[cfg(test)]
 mod drop_tests {
     use super::*;
+
+    #[test]
+    fn const_malloc_state_reserves_on_first_write_and_keeps_reclaim_semantics() {
+        std::thread::spawn(|| {
+            MALLOC_STATE.with(|cell| {
+                let mut state = cell.borrow_mut();
+                assert_eq!(state.objects.capacity(), 0);
+                assert_eq!(state.set.capacity(), 0);
+                assert_eq!(state.realloc_forwarding.capacity(), 0);
+                assert_eq!(state.realloc_snapshot_headers.capacity(), 0);
+                state.reserve_initial_objects();
+                assert_eq!(state.objects.capacity(), MALLOC_STATE_INITIAL_CAPACITY);
+                unsafe {
+                    state.push_test_object(4096, 0);
+                }
+                assert_eq!(
+                    state.free_all_tracked_objects(),
+                    (GC_HEADER_SIZE + 4096) as u64
+                );
+                assert_eq!(state.free_all_tracked_objects(), 0);
+            });
+        })
+        .join()
+        .expect("const-initialized malloc state must still tear down cleanly");
+    }
 
     /// `free_all_tracked_objects` (the body of `Drop for MallocState`) reclaims
     /// every tracked block and reports the exact byte total — the worker-exit
