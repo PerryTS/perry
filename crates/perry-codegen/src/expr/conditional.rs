@@ -18,6 +18,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             then_expr,
             else_expr,
         } => {
+            // #12643: a guarded namespace call.
+            if let Expr::NamespacePatched(ns) = condition.as_ref() {
+                return crate::builtin_proto::lower_namespace_guard(ctx, ns, then_expr, else_expr);
+            }
             // #11910: `recv.m?.(args)` reads `recv.m` once.
             if let Some(r) = crate::lower_call::try_lower_optional_method_call(
                 ctx, condition, then_expr, else_expr,

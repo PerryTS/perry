@@ -354,7 +354,7 @@ js_async_hook_disable	Reenters	yes
 js_async_hook_enable	Reenters	yes
 js_async_hooks_create_hook	Reenters	yes
 js_async_hooks_execution_async_id	Leaf	no
-js_async_hooks_execution_async_resource	Reenters	no
+js_async_hooks_execution_async_resource	Reenters	yes
 js_async_hooks_owned_provider_destroy	Reenters	yes
 js_async_hooks_owned_provider_emit_init	Reenters	yes
 js_async_hooks_owned_provider_new	Reenters	yes
@@ -462,7 +462,7 @@ js_bool_box_get	Leaf	no
 js_bool_box_release	Leaf	no
 js_bool_box_scope_release	Leaf	no
 js_bool_box_set	Leaf	no
-js_bootstrap_cjs_main_module_placeholder	Reenters	no
+js_bootstrap_cjs_main_module_placeholder	Reenters	yes
 js_borrowed_object_define_getter	Reenters	yes
 js_borrowed_object_define_setter	Reenters	yes
 js_borrowed_object_has_own	Reenters	yes
@@ -590,6 +590,9 @@ js_buffer_write_uint8	Reenters	yes
 js_buffer_write_uint_be	Reenters	yes
 js_buffer_write_uint_le	Reenters	yes
 js_build_class_keys_array	Reenters	yes
+js_builtin_namespace_contract_check	Reenters	yes
+js_builtin_namespace_member	Reenters	yes
+js_builtin_namespace_value	Reenters	yes
 js_builtin_proto_contract_check	Leaf	no
 js_builtin_proto_generic_call	Reenters	yes
 js_builtin_proto_generic_call0	Reenters	yes
@@ -702,7 +705,7 @@ js_class_env_refresh	Reenters	yes
 js_class_env_register_slot	Leaf	no
 js_class_env_register_state	Leaf	no
 js_class_env_set	Reenters	yes
-js_class_env_stamp	Reenters	no
+js_class_env_stamp	Reenters	yes
 js_class_evaluation_finish_prototype	Reenters	yes
 js_class_evaluation_object	Reenters	yes
 js_class_evaluation_object_with_parent	Reenters	yes
@@ -1837,7 +1840,7 @@ js_module_set_source_maps_support	Reenters	yes
 js_module_source_map_new	Reenters	yes
 js_module_strip_typescript_types	Reenters	yes
 js_module_sync_builtin_esm_exports	Reenters	yes
-js_module_top_this	Reenters	no
+js_module_top_this	Reenters	yes
 js_mul	Leaf	no
 js_multipart_parse	Reenters	yes
 js_multipart_parse_with_sizes	Reenters	yes
@@ -2177,16 +2180,16 @@ js_number_to_precision	Reenters	yes
 js_number_to_string	Reenters	yes
 js_number_to_string_box	AllocOnly	no
 js_numeric_step	Reenters	yes
-js_object_alloc	Reenters	no
+js_object_alloc	Reenters	yes
 js_object_alloc_class_dynamic_parent	Reenters	yes
 js_object_alloc_class_inline_keys	Reenters	yes
 js_object_alloc_class_inline_keys_stamped	Reenters	yes
 js_object_alloc_class_with_keys	Reenters	yes
-js_object_alloc_fast	Reenters	no
-js_object_alloc_fast_with_parent	Reenters	no
-js_object_alloc_null_proto	Reenters	no
-js_object_alloc_plain	Reenters	no
-js_object_alloc_with_parent	Reenters	no
+js_object_alloc_fast	Reenters	yes
+js_object_alloc_fast_with_parent	Reenters	yes
+js_object_alloc_null_proto	Reenters	yes
+js_object_alloc_plain	Reenters	yes
+js_object_alloc_with_parent	Reenters	yes
 js_object_alloc_with_shape	Reenters	yes
 js_object_array_keytable_write_guard	Reenters	yes
 js_object_array_numeric_write2_guard	Reenters	yes
@@ -2259,7 +2262,7 @@ js_object_keys	Reenters	yes
 js_object_keys_value	Reenters	yes
 js_object_literal_define	Reenters	yes
 js_object_literal_infer_computed_function_name	Reenters	yes
-js_object_literal_prototype_birth	Reenters	no
+js_object_literal_prototype_birth	Reenters	yes
 js_object_literal_set_computed	Reenters	yes
 js_object_literal_set_prototype	Reenters	yes
 js_object_literal_spread	Reenters	yes
@@ -2267,7 +2270,7 @@ js_object_literal_to_property_key	Reenters	yes
 js_object_live_slot_count	Leaf	no
 js_object_lookup_getter	Reenters	yes
 js_object_lookup_setter	Reenters	yes
-js_object_mark_class	Reenters	no
+js_object_mark_class	Reenters	yes
 js_object_own_method_cache_miss	Reenters	yes
 js_object_prevent_extensions	Reenters	yes
 js_object_property_is_enumerable	Reenters	yes
@@ -2810,7 +2813,7 @@ js_put_value_set	Reenters	yes
 js_put_value_set_dyn_ic	Reenters	yes
 js_put_value_set_dyn_ic_miss	Reenters	yes
 js_put_value_set_ic_miss	Reenters	yes
-js_put_value_set_packed_fast	Reenters	no
+js_put_value_set_packed_fast	Reenters	yes
 js_put_value_set_packed_miss	Reenters	yes
 js_querystring_escape	Reenters	yes
 js_querystring_native_dispatch	Reenters	yes
@@ -2939,7 +2942,7 @@ js_register_class_declaration	Reenters	yes
 js_register_class_extends_data_view	Leaf	no
 js_register_class_extends_error	Leaf	no
 js_register_class_extends_typed_array	Leaf	no
-js_register_class_generic_origin	Reenters	no
+js_register_class_generic_origin	Reenters	yes
 js_register_class_has_instance	Leaf	no
 js_register_class_id	Leaf	no
 js_register_class_length	Reenters	yes
@@ -3814,7 +3817,7 @@ js_uint8array_set	Reenters	yes
 js_uint8array_view	Reenters	yes
 js_unescape	Reenters	yes
 js_unresolved_default_call	Leaf	no
-js_unresolved_namespace_stub	Reenters	no
+js_unresolved_namespace_stub	Reenters	yes
 js_unsettled_top_level_await_exit	Reenters	yes
 js_urierror_new	Reenters	yes
 js_url_can_parse	Leaf	no
@@ -4043,7 +4046,7 @@ js_weakmap_delete	Reenters	yes
 js_weakmap_get	Reenters	yes
 js_weakmap_has	Reenters	yes
 js_weakmap_init_iterable	Reenters	yes
-js_weakmap_new	AllocOnly	no
+js_weakmap_new	Reenters	yes
 js_weakmap_set	Reenters	yes
 js_weakref_deref	Reenters	yes
 js_weakref_new	Reenters	yes
@@ -4051,7 +4054,7 @@ js_weakset_add	Reenters	yes
 js_weakset_delete	Reenters	yes
 js_weakset_has	Reenters	yes
 js_weakset_init_iterable	Reenters	yes
-js_weakset_new	AllocOnly	no
+js_weakset_new	Reenters	yes
 js_webcrypto_decrypt	Reenters	yes
 js_webcrypto_derive_bits	Reenters	yes
 js_webcrypto_derive_key	Reenters	yes
@@ -4215,7 +4218,7 @@ perry_array_attach_layout	AllocOnly	no
 perry_array_element_kind	Leaf	no
 perry_array_iteration_init	Leaf	no
 perry_array_read_cold_shared	Reenters	yes
-perry_bind_family_prototype	Reenters	no
+perry_bind_family_prototype	Reenters	yes
 perry_build_runtime_record	Reenters	yes
 perry_class_value_dir_cell	Leaf	no
 perry_cluster_compute_key_id	Leaf	no

@@ -590,6 +590,9 @@ js_buffer_write_uint8	Reenters	yes
 js_buffer_write_uint_be	Reenters	yes
 js_buffer_write_uint_le	Reenters	yes
 js_build_class_keys_array	Reenters	yes
+js_builtin_namespace_contract_check	Reenters	yes
+js_builtin_namespace_member	Reenters	yes
+js_builtin_namespace_value	Reenters	yes
 js_builtin_proto_contract_check	Leaf	no
 js_builtin_proto_generic_call	Reenters	yes
 js_builtin_proto_generic_call0	Reenters	yes

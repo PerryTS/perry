@@ -173,6 +173,9 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
 /// A test consumer needs only truthiness. Logical operands retain JavaScript
 /// evaluation order, with an i1 phi rather than a boxed operand-value phi.
 pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Expr::NamespacePatched(ns) = expr {
+        return Ok(crate::builtin_proto::emit_namespace_patched(ctx, ns));
+    }
     // A record bound spells a counted loop for admission, but an override
     // only needs IteratorStepValue's done bit. Keep that protocol call out of
     // line and consume its bit directly, without a synthetic Infinity bound.

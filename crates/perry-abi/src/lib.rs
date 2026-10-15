@@ -77,7 +77,7 @@ pub const fn well_known_symbol_atom_hash(number: u32) -> u64 {
 }
 
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
-pub const AGENT_PTR_SLOTS: usize = 4 + BUILTIN_PROTO_FAMILIES;
+pub const AGENT_PTR_SLOTS: usize = 4 + INTRINSIC_FAMILIES;
 /// Slots `AGENT_PTR_INTRINSIC_PROTO + k`: this agent's intrinsic prototype of
 /// builtin family `k` (`object::builtin_proto::BuiltinProto`; for Array the
 /// sealed named-property bag), whose layout word's shadow bit
@@ -86,6 +86,32 @@ pub const AGENT_PTR_SLOTS: usize = 4 + BUILTIN_PROTO_FAMILIES;
 pub const AGENT_PTR_INTRINSIC_PROTO: usize = 4;
 /// Number of builtin prototype families.
 pub const BUILTIN_PROTO_FAMILIES: usize = 16;
+/// The builtin namespace objects whose direct member calls lowering binds to
+/// intrinsics (`Math.max(..)`, `Object.keys(..)`, `console.log(..)`). Namespace
+/// `i` is intrinsic family `BUILTIN_PROTO_FAMILIES + i`: its agent slot
+/// (`AGENT_PTR_INTRINSIC_PROTO + BUILTIN_PROTO_FAMILIES + i`) names the object
+/// that holds the namespace's own members (a constructor's property bag), and
+/// that object's shadow bit (`UNSHADOWED_WORD_END`) is `Pristine(namespace)`:
+/// clear while every member still holds its builtin and `globalThis[name]`
+/// still names the namespace.
+pub const BUILTIN_NAMESPACES: [&str; 15] = [
+    "console", "Math", "JSON", "Reflect", "Object", "Number", "String", "Array", "Promise",
+    "Date", "Symbol", "BigInt", "Atomics", "Intl", "Boolean",
+];
+/// Builtin prototype families plus builtin namespaces: the intrinsic slots.
+pub const INTRINSIC_FAMILIES: usize = BUILTIN_PROTO_FAMILIES + BUILTIN_NAMESPACES.len();
+
+/// The intrinsic family of builtin namespace `name`, if it is one.
+pub fn builtin_namespace_family(name: &str) -> Option<usize> {
+    let mut i = 0;
+    while i < BUILTIN_NAMESPACES.len() {
+        if BUILTIN_NAMESPACES[i].as_bytes() == name.as_bytes() {
+            return Some(BUILTIN_PROTO_FAMILIES + i);
+        }
+        i += 1;
+    }
+    None
+}
 /// Slot 0: the address of this agent's ordinary shape-directory mirror
 /// (`shapes_store::AGENT_SHAPE_DIR[0]`), which a generic read site passes to its
 /// GC-leaf miss front (`js_object_get_field_ic_front`) so the front reads no

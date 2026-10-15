@@ -266,7 +266,13 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // lowered, leaving the flag set. Restoring here keeps it from leaking into
     // a sibling expression.
     let prev_suppress = ctx.suppress_stdlib_dispatch_guard_once;
-    let result = lower_call_inner(ctx, call);
+    // #12643: a namespace call dynamic code may redirect is lowered as usual
+    // and then guarded by its namespace's shadow bit.
+    let mut ns_guard = None;
+    let result = lower_call_inner(ctx, call, &mut ns_guard).map(|fast| match ns_guard {
+        Some(guard) => guard.wrap(fast),
+        None => fast,
+    });
     ctx.suppress_stdlib_dispatch_guard_once = prev_suppress;
     // Restore: drop any native-instance tags this call's pre-scans
     // added (and anything nested calls left above the mark — those
@@ -278,7 +284,11 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     result
 }
 
-fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
+fn lower_call_inner(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    ns_guard: &mut Option<patched_builtin_call::NamespaceGuard>,
+) -> Result<Expr> {
     // Safety net for the receiver-lowering memo (see
     // `LoweringContext::prelowered_member_receiver`): the memo is set by
     // `try_static_method_and_instance` only to be consumed by the immediately
@@ -399,10 +409,15 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         .collect::<Result<Vec<_>>>()?;
 
     // #10848: a built-in member the program replaces anywhere must not bind
-    // to its intrinsic — call whatever the property holds at runtime.
+    // to its intrinsic — call whatever the property holds at runtime. One
+    // dynamic code may replace binds it under a `Pristine(namespace)` guard.
     let args = match patched_builtin_call::try_patched_builtin_call(ctx, call, args)? {
-        Ok(expr) => return Ok(expr),
-        Err(args) => args,
+        patched_builtin_call::NamespaceCall::Dynamic(expr) => return Ok(expr),
+        patched_builtin_call::NamespaceCall::Plain(args) => args,
+        patched_builtin_call::NamespaceCall::Guarded(args, guard) => {
+            *ns_guard = Some(guard);
+            args
+        }
     };
     // #11394: likewise a method the program writes onto a builtin PROTOTYPE —
     // no receiver-specific arm may fold the call to its intrinsic.

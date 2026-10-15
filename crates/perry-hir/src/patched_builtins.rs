@@ -55,23 +55,13 @@ impl PatchedBuiltins {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Dynamic code that can name the global scope can replace any builtin
-    /// namespace member: record that as a write of every member.
-    ///
-    /// Builtin PROTOTYPE members are not recorded. A write the interpreter
-    /// performs lands in the runtime's write funnels like any other write,
-    /// which set the shadow bit (bit 30) of the written intrinsic prototype,
-    /// and every direct builtin method site tests `Pristine(family)`
-    /// (perry-codegen `builtin_proto`) and takes the one generic path when it
-    /// is set. Namespace objects carry no such bit, so their members are
-    /// recorded as written.
-    pub fn apply_dynamic_code_reach(&mut self) {
-        if !self.dynamic_code_reach.disables_builtin_constants() {
-            return;
-        }
-        for ns in BUILTIN_NAMESPACES {
-            self.insert((ns.to_string(), ANY_MEMBER.to_string()));
-        }
+    /// Is anything recorded: a program write, or dynamic code that can name
+    /// the global scope (whose writes the runtime reports: every builtin
+    /// prototype and namespace holder carries a shadow bit, and the direct
+    /// sites under such reach test it — `Pristine(family)` in perry-codegen
+    /// `builtin_proto`, and [`namespace_call_guarded`])?
+    pub fn is_inert(&self) -> bool {
+        self.entries.is_empty() && !self.dynamic_code_reach.disables_builtin_constants()
     }
 }
 impl std::ops::Deref for PatchedBuiltins {
@@ -514,7 +504,7 @@ thread_local! {
 }
 
 pub fn set_patched_builtins(set: Arc<PatchedBuiltins>) {
-    PATCHED.with(|p| *p.borrow_mut() = if set.is_empty() { None } else { Some(set) });
+    PATCHED.with(|p| *p.borrow_mut() = if set.is_inert() { None } else { Some(set) });
 }
 
 pub fn clear_patched_builtins() {
@@ -525,14 +515,21 @@ fn with_set<R>(f: impl FnOnce(&PatchedBuiltins) -> R) -> Option<R> {
     PATCHED.with(|p| p.borrow().as_deref().map(f))
 }
 
-/// Was `ns.member` (for a builtin namespace `ns`) replaced anywhere?
+/// Was `ns.member` (for a builtin namespace `ns`) replaced by program code?
 pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
     with_set(|s| {
-        s.dynamic_code_reach.disables_builtin_constants()
-            || s.contains(&(ns.to_string(), member.to_string()))
+        s.contains(&(ns.to_string(), member.to_string()))
             || s.contains(&(ns.to_string(), ANY_MEMBER.to_string()))
     })
     .unwrap_or(false)
+}
+
+/// May dynamic code replace a builtin namespace member or binding? Then a
+/// direct namespace call that binds its intrinsic is guarded by
+/// `Pristine(namespace)`, the shadow bit of the namespace's member holder
+/// (`Expr::NamespacePatched`), and takes the generic call when it is set.
+pub fn namespace_call_guarded() -> bool {
+    with_set(|s| s.dynamic_code_reach.disables_builtin_constants()).unwrap_or(false)
 }
 
 /// Was a method named `member` written onto the prototype of a builtin whose

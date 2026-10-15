@@ -58,10 +58,11 @@ pub static PERRY_AGENT_PTRS: AgentPtrs = AgentPtrs({
     // miss front reads it without a null test.
     slots[AGENT_PTR_SHAPE_DIR] =
         Cell::new(std::ptr::addr_of!(crate::object::shapes::PERRY_EMPTY_SHAPE_DIR) as *const u8);
-    // The intrinsic-prototype slots are never null either: until the realm is
-    // sealed they name the pristine stand-in, whose layout word is 0.
+    // The intrinsic slots (prototypes and namespaces) are never null either:
+    // until the realm is sealed they name the pristine stand-in, whose layout
+    // word is 0.
     let mut family = 0;
-    while family < crate::codegen_abi::BUILTIN_PROTO_FAMILIES {
+    while family < crate::codegen_abi::INTRINSIC_FAMILIES {
         slots[AGENT_PTR_INTRINSIC_PROTO + family] =
             Cell::new(std::ptr::addr_of!(PERRY_PRISTINE_PROTO) as *const u8);
         family += 1;
@@ -82,6 +83,23 @@ pub use crate::codegen_abi::AGENT_PTR_INTRINSIC_PROTO;
 #[no_mangle]
 pub static PERRY_PRISTINE_PROTO: [u64; 3] = [0; 3];
 
+/// The stand-in a namespace slot names once its namespace can no longer carry
+/// the fact in its own word (a holder whose layout word cannot take the
+/// shadow bit): a header whose layout word is shadowed, so every guarded
+/// site takes its generic arm for the rest of the agent's life.
+#[no_mangle]
+pub static PERRY_PATCHED_INTRINSIC: [u64; 3] = [
+    (crate::object::layout_desc::LAYOUT_SHADOW_BIT as u64 | 0x8000_0000) << 32,
+    0,
+    0,
+];
+
+/// Point intrinsic slot `family` at [`PERRY_PATCHED_INTRINSIC`] (never undone).
+pub(crate) fn publish_patched_intrinsic(family: usize) {
+    PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family]
+        .set(std::ptr::addr_of!(PERRY_PATCHED_INTRINSIC) as *const u8);
+}
+
 /// This agent's intrinsic prototype of `family` (the stand-in until sealed).
 #[inline(always)]
 pub(crate) fn intrinsic_proto(family: usize) -> *const crate::object::ObjectHeader {
@@ -97,19 +115,20 @@ pub(crate) fn publish_intrinsic_proto(family: usize, obj: *const crate::object::
 /// the object family `family`'s slot names. A leaf: one TLS read.
 #[no_mangle]
 pub extern "C" fn perry_intrinsic_proto(family: u32) -> *const u8 {
-    let family = (family as usize).min(crate::codegen_abi::BUILTIN_PROTO_FAMILIES - 1);
+    let family = (family as usize).min(crate::codegen_abi::INTRINSIC_FAMILIES - 1);
     PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family].get()
 }
 
-/// The registered root scanner of the intrinsic-prototype slots: a moving
-/// collection rewrites each slot that names a relocated prototype (the
-/// stand-in is not a heap object and is skipped).
+/// The registered root scanner of the intrinsic slots: a moving collection
+/// rewrites each slot that names a relocated prototype or namespace holder
+/// (the stand-ins are not heap objects and are skipped).
 pub fn scan_intrinsic_proto_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let standin = std::ptr::addr_of!(PERRY_PRISTINE_PROTO) as usize;
-    for family in 0..crate::codegen_abi::BUILTIN_PROTO_FAMILIES {
+    let patched = std::ptr::addr_of!(PERRY_PATCHED_INTRINSIC) as usize;
+    for family in 0..crate::codegen_abi::INTRINSIC_FAMILIES {
         let cell = &PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family];
         let mut addr = cell.get() as usize;
-        if addr == 0 || addr == standin {
+        if addr == 0 || addr == standin || addr == patched {
             continue;
         }
         if visitor.visit_usize_slot(&mut addr) {

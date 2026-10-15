@@ -242,6 +242,7 @@ impl<'a> Gen<'a> {
             | Expr::UrlParseWithBase { .. } => {
                 self.primbox_kids(fx, e, "primitive container builtin")
             }
+            Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
             Expr::GlobalThisExpr => {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                 self.tok_node(t)

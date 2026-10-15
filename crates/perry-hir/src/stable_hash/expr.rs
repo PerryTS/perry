@@ -113,6 +113,7 @@ impl SH for Expr {
             Expr::ProcessEnv => tag(h, 55),
             Expr::GlobalThisExpr => tag(h, 474),
             Expr::ModuleTopThis => tag(h, 4741),
+            Expr::NamespacePatched(ns) => { tag(h, 4742); ns.hash(h); }
             Expr::ProcessUptime => tag(h, 56),
             Expr::ProcessCwd => tag(h, 57),
             Expr::ProcessArgv => tag(h, 58),

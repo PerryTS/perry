@@ -559,6 +559,18 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::EnvGet(..)
         | Expr::EnvGetDynamic(..)
         | Expr::ProcessEnv => super::array_methods::lower(ctx, expr),
+        Expr::NamespacePatched(ns) => {
+            let bit = crate::builtin_proto::emit_namespace_patched(ctx, ns);
+            let blk = ctx.block();
+            let tagged = blk.select(
+                crate::types::I1,
+                &bit,
+                crate::types::I64,
+                crate::nanbox::TAG_TRUE_I64,
+                crate::nanbox::TAG_FALSE_I64,
+            );
+            Ok(blk.bitcast_i64_to_double(&tagged))
+        }
         Expr::GlobalThisExpr
         | Expr::ModuleTopThis
         | Expr::DateToISOString(..)

@@ -195,8 +195,11 @@ fn match_namespace_static_member(
         return None;
     }
     // #10848: a replaced static must be invoked through its property value,
-    // not rewritten into the intrinsic direct call.
-    if crate::patched_builtins::namespace_member_patched(ns, name) {
+    // not rewritten into the intrinsic direct call; so must one dynamic code
+    // may replace (this borrowed form carries no `Pristine` guard).
+    if crate::patched_builtins::namespace_member_patched(ns, name)
+        || crate::patched_builtins::namespace_call_guarded()
+    {
         return None;
     }
     // #4521: the Promise combinators read the `this` constructor

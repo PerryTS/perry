@@ -48,6 +48,7 @@ where
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
         | Expr::GlobalThisExpr
+        | Expr::NamespacePatched(_)
         | Expr::ModuleTopThis
         | Expr::ProcessUptime
         | Expr::ProcessCwd

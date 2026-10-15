@@ -91,6 +91,157 @@ pub(crate) fn emit_patched_any(ctx: &mut crate::expr::FnCtx<'_>, families: &[Bui
     acc.unwrap_or_else(|| "false".to_string())
 }
 
+/// `i1`: true when builtin namespace `ns` is no longer proven pristine
+/// (`Expr::NamespacePatched`, #12643): the shadow bit of the namespace's member
+/// holder, which its agent slot names (runtime `object::builtin_namespace`).
+/// One slot load, one word load and a compare; a name that is no builtin
+/// namespace is never proven (`true`).
+pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str) -> String {
+    let Some(family) = crate::runtime_abi::builtin_namespace_family(ns) else {
+        return "true".to_string();
+    };
+    let end = (crate::runtime_abi::UNSHADOWED_WORD_END as i32).to_string();
+    let holder = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family);
+    let at = ctx.block().gep(crate::types::I8, &holder, &[(I64, "4")]);
+    let word = ctx.block().load(I32, &at);
+    let patched = ctx.block().icmp_uge(I32, &word, &end);
+    ctx.block()
+        .call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
+}
+
+/// The member a guarded namespace call's generic arm reads
+/// (`globalThis.<ns>.<member>(…)`, `patched_builtin_call`).
+fn guarded_member(generic: &perry_hir::Expr) -> Option<&str> {
+    use perry_hir::Expr;
+    let callee = match generic {
+        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => callee,
+        _ => return None,
+    };
+    match callee.as_ref() {
+        Expr::PropertyGet { property, .. } => Some(property.as_str()),
+        _ => None,
+    }
+}
+
+/// A guarded call's generic arm `globalThis.<ns>.<member>(args…)` without
+/// spread: its family, member and arguments.
+fn compact_generic<'e>(
+    ns: &str,
+    generic: &'e perry_hir::Expr,
+) -> Option<(usize, &'e str, &'e [perry_hir::Expr])> {
+    use perry_hir::Expr;
+    let Expr::Call { callee, args, .. } = generic else {
+        return None;
+    };
+    let Expr::PropertyGet { object, property, .. } = callee.as_ref() else {
+        return None;
+    };
+    let Expr::PropertyGet { object: global, property: name, .. } = object.as_ref() else {
+        return None;
+    };
+    if !matches!(global.as_ref(), Expr::GlobalThisExpr) || name != ns {
+        return None;
+    }
+    let family = crate::runtime_abi::builtin_namespace_family(ns)?;
+    Some((family, property.as_str(), args.as_slice()))
+}
+
+/// The generic arm as three out-of-line calls: read `globalThis[ns]` and its
+/// `member` where the callee is read, evaluate the arguments, call the value
+/// with the namespace as `this` (ECMA-262 `Call(GetValue(ref), base, args)`).
+fn emit_namespace_generic_call(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    family: usize,
+    member: &str,
+    args: &[perry_hir::Expr],
+) -> anyhow::Result<String> {
+    use crate::types::{DOUBLE, PTR};
+    let ns = ctx.block().call(
+        DOUBLE,
+        "js_builtin_namespace_value",
+        &[(I64, &family.to_string())],
+    );
+    let idx = ctx.strings.intern(member);
+    let bytes = format!("@{}", ctx.strings.entry(idx).bytes_global);
+    let len = member.len().to_string();
+    let callee = ctx.block().call(
+        DOUBLE,
+        "js_builtin_namespace_member",
+        &[(DOUBLE, &ns), (PTR, &bytes), (I64, &len)],
+    );
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        values.push(crate::expr::lower_expr(ctx, arg)?);
+    }
+    let (argv, argc) = crate::lower_call::emit_method_args_buffer(ctx, &values);
+    Ok(ctx.block().call(
+        DOUBLE,
+        "js_method_site_call_value",
+        &[(DOUBLE, &callee), (DOUBLE, &ns), (PTR, &argv), (I64, &argc)],
+    ))
+}
+
+/// A guarded namespace call (#12643):
+/// `NamespacePatched(ns) ? <generic> : <intrinsic>`. The test runs where the
+/// callee would be read, before either arm evaluates the arguments. Contract
+/// mode first checks, in the intrinsic arm, that the clear bit is true
+/// (`js_builtin_namespace_contract_check`).
+pub(crate) fn lower_namespace_guard(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    ns: &str,
+    generic: &perry_hir::Expr,
+    fast: &perry_hir::Expr,
+) -> anyhow::Result<String> {
+    use crate::types::{DOUBLE, PTR};
+    let patched = emit_namespace_patched(ctx, ns);
+    let generic_idx = ctx.new_block("ns_guard.generic");
+    let fast_idx = ctx.new_block("ns_guard.intrinsic");
+    let merge_idx = ctx.new_block("ns_guard.merge");
+    let generic_label = ctx.block_label(generic_idx);
+    let fast_label = ctx.block_label(fast_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&patched, &generic_label, &fast_label);
+
+    ctx.current_block = generic_idx;
+    let generic_val = match compact_generic(ns, generic) {
+        Some((family, member, args)) => {
+            emit_namespace_generic_call(ctx, family, member, args)?
+        }
+        None => crate::expr::lower_expr(ctx, generic)?,
+    };
+    let generic_after = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = fast_idx;
+    if contract_mode() {
+        if let (Some(family), Some(member)) = (
+            crate::runtime_abi::builtin_namespace_family(ns),
+            guarded_member(generic),
+        ) {
+            let idx = ctx.strings.intern(member);
+            let ptr = format!("@{}", ctx.strings.entry(idx).bytes_global);
+            let len = member.len().to_string();
+            ctx.block().call_void(
+                "js_builtin_namespace_contract_check",
+                &[(I64, &family.to_string()), (PTR, &ptr), (I64, &len)],
+            );
+        }
+    }
+    let fast_val = crate::expr::lower_expr(ctx, fast)?;
+    let fast_after = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[(&generic_val, &generic_after), (&fast_val, &fast_after)],
+    ))
+}
+
 /// What a direct-call site has proven about its receiver — the input of the
 /// ONE pristine-receiver guard ([`emit_pristine_receiver`]): its KIND (HIR
 /// fold, type, NaN-box tag, header type byte), so its methods are `family`'s

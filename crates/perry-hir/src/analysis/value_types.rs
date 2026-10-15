@@ -552,7 +552,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
     match expr {
         Expr::Undefined | Expr::Void(_) => Type::Void,
         Expr::Null => Type::Null,
-        Expr::Bool(_) => Type::Boolean,
+        Expr::Bool(_) | Expr::NamespacePatched(_) => Type::Boolean,
         Expr::Number(_) | Expr::Integer(_) => Type::Number,
         Expr::BigInt(_) => Type::BigInt,
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } => Type::String,

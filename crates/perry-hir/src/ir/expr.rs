@@ -852,6 +852,12 @@ pub enum Expr {
     // value is not a function` at module init and the import
     // resolves to undefined. Followup to #957 / PR #959.
     GlobalThisExpr,
+    /// `Pristine(namespace)` withdrawn (#12643): true once builtin namespace
+    /// `.0`'s member holder carries its shadow bit, i.e. one of its members
+    /// or its `globalThis` binding may have been replaced. Only the condition
+    /// of a guarded namespace call (`patched_builtin_call`):
+    /// `NamespacePatched(ns) ? <the generic call> : <the intrinsic>`.
+    NamespacePatched(String),
     /// `this` in module top-level code. Node runs the assembled test files
     /// as CJS, where top-level `this` is `module.exports` — a fresh plain
     /// object distinct from `globalThis`. Lowered separately from

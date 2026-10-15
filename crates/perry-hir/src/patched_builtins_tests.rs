@@ -294,3 +294,71 @@ fn parsed_constant_sources_contribute_static_prototype_writes() {
     let set = scan("Function(\"Map.prototype.get = function () {};\");");
     assert!(set.contains(&("Map.prototype".into(), "get".into())));
 }
+
+fn lower_with_global_reach(src: &str) -> crate::Module {
+    let src = src.to_string();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let mut cache = SourceCache::new();
+            let parsed = parse_typescript_with_cache(&src, "test.ts", &mut cache).expect("parse");
+            let mut set = PatchedBuiltins::new();
+            scan_module(&parsed.module, &mut set);
+            set.dynamic_code_reach.record_global("new Function(...) @ test".to_string());
+            set_patched_builtins(Arc::new(set));
+            let module = lower_module(&parsed.module, "test", "test.ts").expect("lower");
+            clear_patched_builtins();
+            module
+        })
+        .expect("spawn")
+        .join()
+        .expect("lowering thread")
+}
+
+/// #12643: under global dynamic reach a namespace call keeps its intrinsic
+/// behind `NamespacePatched`, with the dynamic call as the other arm.
+#[test]
+fn reachable_namespace_call_is_guarded() {
+    let m = lower_with_global_reach(
+        r#"
+        const r = Math.max(1, 2);
+        const k = Object.keys({ a: 1 });
+        const t = typeof JSON.stringify;
+        "#,
+    );
+    let r = init_of(&m, 0);
+    assert!(
+        r.starts_with("Conditional { condition: NamespacePatched(\"Math\")"),
+        "{r}"
+    );
+    assert!(r.contains("MathMax"), "intrinsic arm: {r}");
+    assert!(r.contains("property: \"max\""), "dynamic arm: {r}");
+    let k = init_of(&m, 1);
+    assert!(k.contains("NamespacePatched(\"Object\")"), "{k}");
+    let t = init_of(&m, 2);
+    assert!(t.contains("NamespacePatched(\"JSON\")") && t.contains("TypeOf"), "{t}");
+}
+
+/// A definition in the arguments exists once: such a call is the one
+/// dynamic call, and a program write still wins over the guard.
+#[test]
+fn reachable_namespace_call_with_closure_or_program_write_is_dynamic() {
+    let m = lower_with_global_reach(
+        r#"
+        (Math as any).min = () => 0;
+        const r = Array.from([1], (x: number) => x + 1);
+        const s = Math.min(1, 2);
+        "#,
+    );
+    let r = init_of(&m, 0);
+    assert!(!r.contains("NamespacePatched"), "{r}");
+    let s = init_of(&m, 1);
+    assert!(is_dynamic_member_call(&s, "min"), "{s}");
+}
+
+#[test]
+fn unreachable_namespace_call_has_no_guard() {
+    let m = lower_with_patches("const r = Math.max(1, 2); const t = typeof JSON.parse;");
+    assert!(!init_of(&m, 0).contains("NamespacePatched"));
+    assert_eq!(init_of(&m, 1), "String(\"function\")");
+}

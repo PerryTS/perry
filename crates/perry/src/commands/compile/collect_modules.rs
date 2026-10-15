@@ -742,6 +742,7 @@ fn collect_module_one(
         .as_ref()
         .unwrap_or(solid_module.as_ref().unwrap_or(ast_module));
     let patched_before = ctx.patched_builtins.len();
+    let guarded_before = ctx.patched_builtins.dynamic_code_reach.disables_builtin_constants();
     perry_hir::dynamic_code::scan(
         dynamic_ast,
         &source_file_path,
@@ -752,9 +753,13 @@ fn collect_module_one(
     if !ctx.patched_builtins.dynamic_code_reach.is_empty() {
         perry_hir::eval_classifier::note_dynamic_function_reachable();
     }
-    ctx.patched_builtins.apply_dynamic_code_reach();
     perry_hir::scan_patched_builtins(dynamic_ast, &mut ctx.patched_builtins);
-    if ctx.patched_builtins.len() != patched_before && ctx.patched_builtins_lowered_modules > 0 {
+    // Global reach first seen here: modules lowered before it bound their
+    // namespace calls unguarded (`patched_builtins::namespace_call_guarded`).
+    let guarded_now = ctx.patched_builtins.dynamic_code_reach.disables_builtin_constants();
+    if (ctx.patched_builtins.len() != patched_before || guarded_now != guarded_before)
+        && ctx.patched_builtins_lowered_modules > 0
+    {
         ctx.patched_builtins_grew_after_lower = true;
     }
     perry_hir::scan_proto_census(

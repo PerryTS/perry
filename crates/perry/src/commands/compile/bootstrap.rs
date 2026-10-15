@@ -186,7 +186,6 @@ pub(super) fn rerun_collect_with_class_field_types(
             reach.record_global(name);
         }
         if newly_global {
-            ctx.patched_builtins.apply_dynamic_code_reach();
             ctx.patched_builtins_grew_after_lower = true;
         }
     }
