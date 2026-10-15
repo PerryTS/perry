@@ -159,7 +159,12 @@ pub(super) unsafe fn walk_to_key(
             return None;
         }
         let shape = object_shape_descriptor(next)?;
-        if !shape.object_kind.is_ordinary_layout() || object_shape_stamp(next) == 0 {
+        // A hop whose layout can have holes holds or lacks its optional keys
+        // per object (`key_view`): no walk describes it.
+        if !shape.object_kind.is_ordinary_layout()
+            || object_shape_stamp(next) == 0
+            || crate::object::key_view::summary_may_have_holes(shape.summary)
+        {
             return None;
         }
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;

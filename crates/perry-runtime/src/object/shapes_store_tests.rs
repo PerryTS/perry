@@ -60,7 +60,11 @@ fn kind_codes_round_trip() {
             r.set_tracked_births(births);
             assert_eq!(r.tracked_births(), births.min(15));
             assert_eq!(r.object_kind(), kind, "birth count overlaps kind");
-            assert_eq!(r.summary(), 0x1F, "birth count overlaps summary");
+            assert_eq!(
+                r.summary(),
+                crate::object::key_attrs::SUMMARY_KEY_BITS,
+                "birth count overlaps summary"
+            );
         }
         for other in [ShapeObjectKind::Ordinary, ShapeObjectKind::OrdinaryUnmarked] {
             if other != kind {
@@ -844,7 +848,7 @@ fn weak_collection_header_brand_preserves_map_precedence() {
         Some(crate::weakref::CLASS_ID_WEAKMAP)
     );
     record.note_descendant_width(u32::MAX);
-    assert_eq!(record.descendant_width(), 127);
+    assert_eq!(record.descendant_width(), 64);
     assert_eq!(
         record.weak_collection_brand(),
         Some(crate::weakref::CLASS_ID_WEAKMAP)

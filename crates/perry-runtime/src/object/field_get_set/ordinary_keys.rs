@@ -12,13 +12,15 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
         let record = crate::object::shapes::object_shape_record(obj)?;
         // Dictionary, native namespace and Array-subclass shapes retain their
         // existing enumeration. Class storage retains its internal-key filter.
+        // A layout that can have holes takes the walk that asks `key_view`.
         if !matches!(
             record.object_kind(),
             crate::object::shapes::ShapeObjectKind::Ordinary
                 | crate::object::shapes::ShapeObjectKind::OrdinaryUnmarked
         ) || record.summary()
             & (crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
-                | crate::object::key_attrs::SUMMARY_PRIVATE)
+                | crate::object::key_attrs::SUMMARY_PRIVATE
+                | crate::object::key_attrs::SUMMARY_HOLES)
             != 0
         {
             return None;

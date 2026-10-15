@@ -949,7 +949,9 @@ pub(crate) unsafe fn plain_own_key_present(
     let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
     if r.position_bound_raw() == 0
         || r.proto_id == PROTO_ID_PER_OBJECT
-        || r.summary() & crate::object::key_attrs::SUMMARY_PRIVATE != 0
+        || r.summary()
+            & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
+            != 0
     {
         return None;
     }

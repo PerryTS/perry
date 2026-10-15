@@ -808,7 +808,8 @@ impl Writer<'_> {
             for i in 0..keys_view.count() {
                 let slots = crate::array::array_elements_ptr(keys) as *const u64;
                 let key_bits = *slots.add(i as usize);
-                if key_bits == TAG_HOLE {
+                if key_bits == TAG_HOLE || crate::object::key_view::position_is_hole(obj, keys_view, i)
+                {
                     continue;
                 }
                 let entry = crate::object::key_attrs::keys_entry(keys, i);
@@ -1014,7 +1015,8 @@ impl Writer<'_> {
                 && d.summary
                     & (crate::object::key_attrs::SUMMARY_ACCESSOR
                         | crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
-                        | crate::object::key_attrs::SUMMARY_PRIVATE)
+                        | crate::object::key_attrs::SUMMARY_PRIVATE
+                        | crate::object::key_attrs::SUMMARY_HOLES)
                     == 0
         });
         if eligible {
@@ -1117,9 +1119,16 @@ impl Writer<'_> {
         // together so the reader's positional pairs stay aligned.
         let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
             as *const u64;
+        // An optional key whose slot holds the hole is absent: skip it the
+        // same way, key and slot together.
+        let absent = |i: usize| -> bool {
+            i < key_count
+                && (key_bits(i) == TAG_HOLE
+                    || crate::object::key_view::position_is_hole(obj, keys_view, i as u32))
+        };
         let mut fields = Vec::with_capacity(field_count);
         for i in 0..field_count {
-            if i < key_count && key_bits(i) == TAG_HOLE {
+            if absent(i) {
                 continue;
             }
             let bits = if crate::object::key_attrs::key_is_accessor_at(keys_arr, i as u32) {
@@ -1132,7 +1141,7 @@ impl Writer<'_> {
         let keys = (!keys_view.is_null()).then(|| {
             let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
             (0..key_count)
-                .filter(|&i| key_bits(i) != TAG_HOLE)
+                .filter(|&i| !absent(i))
                 .map(|i| {
                     crate::string::js_string_key_bytes(JSValue::from_bits(key_bits(i)), &mut short)
                         .map_or_else(Vec::new, <[u8]>::to_vec)

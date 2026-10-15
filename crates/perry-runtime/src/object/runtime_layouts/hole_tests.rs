@@ -1,0 +1,407 @@
+//! Object model §3.2: a layout key whose slot holds the hole is ABSENT, for
+//! every reader of presence, order and value (`object::key_view`).
+use super::*;
+use crate::object::*;
+
+thread_local! {
+    static CTX: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    static FAILURES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+// Record a failed check and continue, so one run names every reader that
+// fails; `finish` panics with the whole list.
+fn fail(line: u32, what: String, note: &str) {
+    let msg = format!("[{}] line {line}: {what} {note}", CTX.with(|c| c.borrow().clone()));
+    FAILURES.with(|f| f.borrow_mut().push(msg));
+}
+macro_rules! soft_eq {
+    ($a:expr, $b:expr) => { soft_eq!($a, $b, "") };
+    ($a:expr, $b:expr, $($m:tt)+) => {{
+        let (a, b) = (&$a, &$b);
+        if a != b {
+            fail(line!(), format!("{:?} != {:?}", a, b), &format!($($m)+));
+        }
+    }};
+}
+macro_rules! soft_ne {
+    ($a:expr, $b:expr) => { soft_ne!($a, $b, "") };
+    ($a:expr, $b:expr, $($m:tt)+) => {{
+        let (a, b) = (&$a, &$b);
+        if a == b {
+            fail(line!(), format!("{:?} == {:?}", a, b), &format!($($m)+));
+        }
+    }};
+}
+macro_rules! soft {
+    ($c:expr) => { soft!($c, "") };
+    ($c:expr, $($m:tt)+) => {{
+        if !$c {
+            fail(line!(), stringify!($c).to_string(), &format!($($m)+));
+        }
+    }};
+}
+
+fn ctx(label: &str) {
+    CTX.with(|c| *c.borrow_mut() = label.to_string());
+}
+
+fn finish() {
+    let failures = FAILURES.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    assert!(failures.is_empty(), "{} failed checks:\n{}", failures.len(), failures.join("\n"));
+}
+runtime_atom!(H_A, "holes_a", "686f6c65735f61");
+runtime_atom!(H_B, "holes_b", "686f6c65735f62");
+runtime_atom!(H_C, "holes_c", "686f6c65735f63");
+runtime_atom!(H_D, "holes_d", "686f6c65735f64");
+
+const OPT: u8 = crate::object::key_attrs::ENTRY_OPTIONAL;
+
+// Optional first and third keys, slot = position.
+runtime_layout!(
+    HOLEY,
+    0x7f000011,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [H_A => OPT, H_B, H_C => OPT, H_D]
+);
+
+// The same keys with permuted slots: a's slot is 3, c's slot is 0.
+runtime_layout!(
+    HOLEY_PERMUTED,
+    0x7f000012,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [H_A @ 3 => OPT, H_B @ 2, H_C @ 0 => OPT, H_D @ 1]
+);
+
+// No optional key: must keep every fast lane.
+runtime_layout!(
+    SOLID,
+    0x7f000013,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [H_A, H_B, H_C, H_D]
+);
+
+const TRUE: u64 = crate::value::TAG_TRUE;
+
+unsafe fn string(value: crate::JSValue) -> String {
+    let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
+    String::from_utf8(
+        crate::string::js_string_key_bytes(value, &mut sso)
+            .unwrap_or_else(|| panic!("expected string, got {:016x}", value.bits()))
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+unsafe fn names(array: *mut crate::ArrayHeader) -> Vec<String> {
+    (0..crate::array::js_array_length(array))
+        .map(|i| string(crate::array::js_array_get(array, i)))
+        .collect()
+}
+
+unsafe fn array_of(value: f64) -> *mut crate::ArrayHeader {
+    (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::ArrayHeader
+}
+
+unsafe fn json(value: f64) -> String {
+    string(crate::JSValue::string_ptr(crate::json::js_json_stringify(value, 0)))
+}
+
+/// Every enumeration reader lists exactly `expected`, in order.
+unsafe fn assert_order(object: *mut ObjectHeader, expected: &[&str]) {
+    assert_order_in(object, expected, expected)
+}
+
+/// [`assert_order`], with for-in's list (own keys, then inherited ones).
+unsafe fn assert_order_in(object: *mut ObjectHeader, expected: &[&str], for_in: &[&str]) {
+    let value = crate::js_nanbox_pointer(object as i64);
+    soft_eq!(names(js_object_keys(object)), expected, "Object.keys");
+    soft_eq!(
+        names(js_object_keys_value(value)),
+        expected,
+        "Object.keys (value)"
+    );
+    soft_eq!(
+        names(array_of(js_object_get_own_property_names(value))),
+        expected,
+        "getOwnPropertyNames"
+    );
+    soft_eq!(names(js_for_in_keys_value(value)), for_in, "for-in");
+    soft_eq!(
+        names(array_of(crate::proxy::js_reflect_own_keys(value))),
+        expected,
+        "Reflect.ownKeys"
+    );
+    soft_eq!(
+        crate::array::js_array_length(js_object_values(object)) as usize,
+        expected.len(),
+        "Object.values"
+    );
+    let entries = js_object_entries(object);
+    soft_eq!(
+        crate::array::js_array_length(entries) as usize,
+        expected.len(),
+        "Object.entries"
+    );
+    for (i, name) in expected.iter().enumerate() {
+        let pair = array_of(f64::from_bits(
+            crate::array::js_array_get(entries, i as u32).bits(),
+        ));
+        soft_eq!(string(crate::array::js_array_get(pair, 0)), *name);
+    }
+    let descriptors = js_object_get_own_property_descriptors(value);
+    let descriptor_keys = js_object_keys((descriptors.to_bits() & crate::value::POINTER_MASK) as _);
+    soft_eq!(
+        names(descriptor_keys),
+        expected,
+        "getOwnPropertyDescriptors"
+    );
+}
+
+/// `key` is absent: no presence reader sees it.
+unsafe fn assert_absent(object: *mut ObjectHeader, key: &StaticAtom) {
+    let value = crate::js_nanbox_pointer(object as i64);
+    let k = crate::js_nanbox_string(key.string as i64);
+    let name = string(crate::JSValue::string_ptr(key.string.cast_mut()));
+    soft_ne!(js_object_has_own(value, k).to_bits(), TRUE, "hasOwn {name}");
+    soft_ne!(js_in_operator(value, k).to_bits(), TRUE, "in {name}");
+    soft_ne!(
+        js_object_has_property(value, k).to_bits(),
+        TRUE,
+        "has_property {name}"
+    );
+    soft_eq!(
+        js_object_get_own_property_descriptor(value, k).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "getOwnPropertyDescriptor {name}"
+    );
+    soft_ne!(
+        js_object_property_is_enumerable(value, k).to_bits(),
+        TRUE,
+        "propertyIsEnumerable {name}"
+    );
+}
+
+unsafe fn assert_present(object: *mut ObjectHeader, key: &StaticAtom) {
+    let value = crate::js_nanbox_pointer(object as i64);
+    let k = crate::js_nanbox_string(key.string as i64);
+    let name = string(crate::JSValue::string_ptr(key.string.cast_mut()));
+    soft_eq!(js_object_has_own(value, k).to_bits(), TRUE, "hasOwn {name}");
+    soft_eq!(js_in_operator(value, k).to_bits(), TRUE, "in {name}");
+    soft_ne!(
+        js_object_get_own_property_descriptor(value, k).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "getOwnPropertyDescriptor {name}"
+    );
+}
+
+unsafe fn get(object: *mut ObjectHeader, key: &StaticAtom) -> u64 {
+    js_object_get_field_by_name_f64(object, key.string).to_bits()
+}
+
+/// Born with every slot the hole; fill `b` and `d` only.
+unsafe fn born(
+    desc: *const PerryLayoutDesc,
+    scope: &crate::gc::RuntimeHandleScope,
+) -> crate::gc::RuntimeHandle<'_> {
+    let object = scope.root_raw_mut_ptr(crate::object::layout_desc::perry_alloc_layout(desc));
+    object.with_mut_ptr(|obj| {
+        js_object_set_field_by_name(obj, H_B.string, 2.0);
+        js_object_set_field_by_name(obj, H_D.string, 4.0);
+    });
+    object
+}
+
+#[test]
+fn layout_holes_are_absent_for_every_reader() {
+    crate::gc::initialize_runtime_fixture();
+    for desc in [std::ptr::addr_of!(HOLEY), std::ptr::addr_of!(HOLEY_PERMUTED)] {
+        soft_ne!(unsafe { layout_id(desc) }, 0, "holey descriptor must register");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let object = unsafe { born(desc, &scope) };
+        unsafe {
+            ctx(&format!("born {:#x}", (*desc).family));
+            object.with_mut_ptr(|obj| {
+                soft!(crate::object::key_view::object_may_have_holes(obj));
+                assert_order(obj, &["holes_b", "holes_d"]);
+                assert_absent(obj, &H_A);
+                assert_absent(obj, &H_C);
+                assert_present(obj, &H_B);
+                assert_present(obj, &H_D);
+                soft_eq!(get(obj, &H_A), crate::value::TAG_UNDEFINED);
+                soft_eq!(get(obj, &H_B), 2.0f64.to_bits());
+                let value = crate::js_nanbox_pointer(obj as i64);
+                soft_eq!(json(value), "{\"holes_b\":2,\"holes_d\":4}");
+                let inspected = crate::builtins::format_jsvalue(value, 0);
+                soft!(!inspected.contains("holes_a"), "{inspected}");
+                soft!(!inspected.contains("holes_c"), "{inspected}");
+            });
+            // Copies see only the present keys.
+            ctx(&format!("structuredClone {:#x}", (*desc).family));
+            let cloned = object.with_const_ptr(|obj: *const ObjectHeader| {
+                crate::builtins::js_structured_clone(crate::js_nanbox_pointer(obj as i64))
+            });
+            let cloned = scope.root_nanbox_f64(cloned);
+            assert_order(
+                (cloned.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+                &["holes_b", "holes_d"],
+            );
+            ctx(&format!("assign {:#x}", (*desc).family));
+            let assigned = scope.root_raw_mut_ptr(js_object_alloc_plain(0));
+            let result = object.with_const_ptr(|obj: *const ObjectHeader| {
+                crate::object::js_object_assign_one(
+                    crate::js_nanbox_pointer(assigned.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                    crate::js_nanbox_pointer(obj as i64),
+                )
+            });
+            assert_order(
+                (result.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+                &["holes_b", "holes_d"],
+            );
+            ctx(&format!("spread {:#x}", (*desc).family));
+            let spread = object.with_const_ptr(|obj: *const ObjectHeader| {
+                crate::object::spread::js_object_spread_fresh_leading(
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                    crate::js_nanbox_pointer(obj as i64),
+                )
+            });
+            let spread = scope.root_nanbox_f64(spread);
+            assert_order(
+                (spread.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+                &["holes_b", "holes_d"],
+            );
+            // A read of a hole continues to the prototype.
+            ctx(&format!("proto {:#x}", (*desc).family));
+            let proto = scope.root_raw_mut_ptr(js_object_alloc_plain(0));
+            proto.with_mut_ptr(|p| js_object_set_field_by_name(p, H_A.string, 7.0));
+            crate::object::js_object_set_prototype_of(
+                crate::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                crate::js_nanbox_pointer(proto.get_raw_mut_ptr::<ObjectHeader>() as i64),
+            );
+            object.with_mut_ptr(|obj| {
+                soft_eq!(get(obj, &H_A), 7.0f64.to_bits(), "inherited through a hole");
+                assert_absent_own(obj, &H_A);
+                // for-in also lists the inherited key the hole lets through.
+                assert_order_in(obj, &["holes_b", "holes_d"], &["holes_b", "holes_d", "holes_a"]);
+                let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
+                for _ in 0..3 {
+                    soft_eq!(site.read(obj, b"holes_a"), 7.0);
+                }
+            });
+            ctx(&format!("fill {:#x}", (*desc).family));
+            // Filling a hole makes the key present, at its key position.
+            object.with_mut_ptr(|obj| {
+                js_object_set_field_by_name(obj, H_C.string, 3.0);
+                assert_order_in(
+                    obj,
+                    &["holes_b", "holes_c", "holes_d"],
+                    &["holes_b", "holes_c", "holes_d", "holes_a"],
+                );
+                assert_present(obj, &H_C);
+                soft_eq!(get(obj, &H_C), 3.0f64.to_bits());
+            });
+            ctx(&format!("delete {:#x}", (*desc).family));
+            // A delete moves the object to its overflow; the remaining hole
+            // stays absent.
+            object.with_mut_ptr(|obj| {
+                soft_eq!(js_object_delete_field(obj, H_B.string), 1);
+                assert_order_in(obj, &["holes_c", "holes_d"], &["holes_c", "holes_d", "holes_a"]);
+                assert_absent_own(obj, &H_A);
+                soft_eq!(get(obj, &H_A), 7.0f64.to_bits());
+            });
+            crate::gc::js_gc_collect();
+            object.with_mut_ptr(|obj| {
+                assert_order_in(obj, &["holes_c", "holes_d"], &["holes_c", "holes_d", "holes_a"])
+            });
+        }
+    }
+}
+
+unsafe fn assert_absent_own(object: *mut ObjectHeader, key: &StaticAtom) {
+    let value = crate::js_nanbox_pointer(object as i64);
+    let k = crate::js_nanbox_string(key.string as i64);
+    soft_ne!(js_object_has_own(value, k).to_bits(), TRUE);
+    soft_eq!(
+        js_object_get_own_property_descriptor(value, k).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    finish();
+}
+
+/// A word-keyed cache primed on an object whose optional key is present
+/// must not answer for one of the same layout whose slot is a hole.
+#[test]
+fn layout_hole_caches_decline() {
+    crate::gc::initialize_runtime_fixture();
+    let desc = std::ptr::addr_of!(HOLEY);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let full = unsafe { born(desc, &scope) };
+    let holey = unsafe { born(desc, &scope) };
+    unsafe {
+        full.with_mut_ptr(|obj| js_object_set_field_by_name(obj, H_A.string, 1.0));
+        let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
+        for _ in 0..3 {
+            full.with_mut_ptr(|obj| soft_eq!(site.read(obj, b"holes_a"), 1.0));
+        }
+        holey.with_mut_ptr(|obj| {
+            soft_eq!(
+                site.read(obj, b"holes_a").to_bits(),
+                crate::value::TAG_UNDEFINED
+            )
+        });
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut cache_slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(u64::MAX);
+        full.with_mut_ptr(|obj| {
+            soft_eq!(
+                js_object_get_field_ic_miss_packed(obj, H_A.string, &mut cache_slot, &packed),
+                1.0
+            )
+        });
+        // An emitted way must not be primed on a layout that can have holes.
+        soft_eq!(packed.load(Ordering::Relaxed), u64::MAX, "packed way primed");
+        holey.with_mut_ptr(|obj| {
+            let hit = crate::object::field_get_set::pic_outlined_mru_hit(obj, &mut cache_slot);
+            soft!(
+                hit.is_none_or(|v| v.to_bits() != crate::value::TAG_HOLE),
+                "a hole answered from a cache"
+            );
+            soft_eq!(
+                js_object_get_field_ic_miss_packed(obj, H_A.string, &mut cache_slot, &packed)
+                    .to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+        });
+        let k = crate::js_nanbox_string(H_A.string as i64);
+        for _ in 0..3 {
+            let v = full.with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
+            soft_eq!(js_in_operator(v, k).to_bits(), TRUE);
+        }
+        let v = holey.with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
+        soft_ne!(js_in_operator(v, k).to_bits(), TRUE);
+    }
+    finish();
+}
+
+/// A layout without optional keys has no hole bit: it keeps every lane.
+#[test]
+fn solid_layout_has_no_hole_bit() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(SOLID))
+    });
+    unsafe {
+        object.with_mut_ptr(|obj| {
+            for (i, key) in [&H_A, &H_B, &H_C, &H_D].iter().enumerate() {
+                js_object_set_field_by_name(obj, key.string, i as f64);
+            }
+            soft!(!crate::object::key_view::object_may_have_holes(obj));
+            assert_order(obj, &["holes_a", "holes_b", "holes_c", "holes_d"]);
+        });
+    }
+    finish();
+}

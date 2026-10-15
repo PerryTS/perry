@@ -24,6 +24,13 @@ pub const UNSHADOWED_WORD_END: u32 = 0xB000_0000;
 /// `array::ArrayHeader` size: element 0 follows it.
 pub const ARRAY_HEADER_SIZE: usize = 16;
 
+/// `PerryLayoutKey.attrs` bit (the runtime's key entry byte, `ENTRY_OPTIONAL`):
+/// the key is a layout's optional or late member. Its slot may hold the hole
+/// marker, and while it does the key is absent (OBJECT_MODEL_2026-10-13.md
+/// §3.2). A descriptor emits it only for such keys; the layout then carries
+/// the "may have holes" summary bit and every other layout keeps its cost.
+pub const LAYOUT_KEY_OPTIONAL: u8 = 0x80;
+
 /// `StaticAtom.kind` (OBJECT_MODEL_2026-10-13.md §6a): a string key.
 pub const ATOM_KIND_STRING: u8 = 0;
 /// `StaticAtom.kind`: a well-known symbol; `string` is null and `index` is

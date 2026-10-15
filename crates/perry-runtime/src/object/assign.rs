@@ -413,7 +413,8 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
         || super::key_attrs::object_summary(src)
             & (super::key_attrs::SUMMARY_ACCESSOR
                 | super::key_attrs::SUMMARY_NON_ENUMERABLE
-                | super::key_attrs::SUMMARY_PRIVATE)
+                | super::key_attrs::SUMMARY_PRIVATE
+                | super::key_attrs::SUMMARY_HOLES)
             != 0
     {
         return PositionalPlan::Refused;
@@ -1055,6 +1056,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             // enumerability check below drops it with the shape's own
             // attributes; no other lookup is needed for it.
             let hide_internal = (*src).class_id != 0;
+            let holey = crate::object::key_view::object_may_have_holes(src);
             for i in 0..key_count {
                 // Re-derive every raw address from its handle at the top of the
                 // iteration: the PREVIOUS iteration's getter may have moved all
@@ -1064,6 +1066,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 let src_raw = src as usize;
                 let key_val = crate::array::js_array_get(src_keys, i as u32);
                 if !key_val.is_any_string() {
+                    continue;
+                }
+                // An optional key whose slot holds the hole is absent.
+                if holey && crate::object::key_view::own_key_is_hole(src, key_val) {
                     continue;
                 }
                 if hide_internal {

@@ -1571,7 +1571,12 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 let cache = &mut *st.field_lookup.field_cache.get();
                 cache[cache_idx] = (0, 0, 0);
             } else {
-                return object_property_at_with_live(obj, keys, field_idx, live_slots);
+                // A slot holding the hole is an absent key (`key_view`): the
+                // own-key miss below continues the read.
+                let own = object_property_at_with_live(obj, keys, field_idx, live_slots);
+                if own.bits() != crate::value::TAG_HOLE {
+                    return own;
+                }
             }
         }
 
@@ -1586,7 +1591,12 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                return object_property_at_with_live(obj, keys, i, live_slots);
+                // A slot holding the hole is an absent key (`key_view`): the
+                // own-key miss below continues the read.
+                let own = object_property_at_with_live(obj, keys, i, live_slots);
+                if own.bits() != crate::value::TAG_HOLE {
+                    return own;
+                }
             }
         }
 
@@ -1643,7 +1653,12 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
-                return object_property_at_with_live(obj, keys, i as u32, live_slots);
+                // A slot holding the hole is an absent key (`key_view`): the
+                // own-key miss below continues the read.
+                let own = object_property_at_with_live(obj, keys, i as u32, live_slots);
+                if own.bits() != crate::value::TAG_HOLE {
+                    return own;
+                }
             }
         }
 

@@ -83,6 +83,11 @@ pub(crate) const ENTRY_PRIVATE: u8 = 0x40;
 /// skips it by the attribute it already honors. Readers that list or probe
 /// non-enumerable keys ask [`entry_is_private`].
 pub(crate) const PRIVATE_FIELD_ENTRY: u8 = ENTRY_PRIVATE | ENTRY_NON_ENUMERABLE;
+/// The key's storage slot may hold the hole marker, and then the key is
+/// ABSENT (object model §3.2: presence is the hole marker in the slot). Only a
+/// layout key a descriptor declares optional or late carries it; every
+/// presence, order and value reader asks [`super::key_view`].
+pub(crate) const ENTRY_OPTIONAL: u8 = crate::codegen_abi::LAYOUT_KEY_OPTIONAL;
 /// The three `PropertyAttrs` bits, inverted.
 pub(crate) const ENTRY_ATTR_MASK: u8 =
     ENTRY_NON_WRITABLE | ENTRY_NON_ENUMERABLE | ENTRY_NON_CONFIGURABLE;
@@ -101,18 +106,24 @@ pub(crate) const SUMMARY_NON_ENUMERABLE: u8 = 0x04;
 pub(crate) const SUMMARY_NON_CONFIGURABLE: u8 = 0x08;
 /// Some key is a private field ([`ENTRY_PRIVATE`]).
 pub(crate) const SUMMARY_PRIVATE: u8 = 0x10;
-/// Every per-key summary bit: a list with none of them is all default.
+/// Some key's slot may hold the hole marker ([`ENTRY_OPTIONAL`]): the layout
+/// may have holes, and its keys are not all present (`key_view`). A list
+/// without it keeps every key present, so no reader pays for holes.
+pub(crate) const SUMMARY_HOLES: u8 = 0x20;
+/// Every per-key summary bit: a list with none of them is all default (and
+/// every key of it is present).
 pub(crate) const SUMMARY_KEY_BITS: u8 = SUMMARY_ACCESSOR
     | SUMMARY_NON_WRITABLE
     | SUMMARY_NON_ENUMERABLE
     | SUMMARY_NON_CONFIGURABLE
-    | SUMMARY_PRIVATE;
+    | SUMMARY_PRIVATE
+    | SUMMARY_HOLES;
 /// Attribute-word bit, not a shape summary bit: some key up to here keeps a
 /// storage slot other than its position. Such a list comes from a layout
 /// descriptor whose slots are a permutation of its key positions. A key
 /// added later takes its position as its slot, which is still free; a delete
 /// moves the receiver to its ordered overflow table.
-const SUMMARY_SLOTS: u8 = 0x20;
+const SUMMARY_SLOTS: u8 = 0x40;
 /// Attribute-word bit for this position only: the Bloom half holds its slot.
 const WORD_SLOT: u8 = 0x80;
 /// Bits a plain data store must see clear on every hop of a prototype chain.
@@ -141,6 +152,9 @@ pub(crate) const fn entry_summary(entry: u8) -> u8 {
     }
     if entry & ENTRY_PRIVATE != 0 {
         s |= SUMMARY_PRIVATE;
+    }
+    if entry & ENTRY_OPTIONAL != 0 {
+        s |= SUMMARY_HOLES;
     }
     s
 }

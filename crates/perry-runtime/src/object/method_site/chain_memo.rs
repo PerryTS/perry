@@ -332,7 +332,12 @@ pub(crate) unsafe fn memo_record(
     let mut hop = start;
     loop {
         let depth = way.depth as usize;
-        if depth == CHAIN_MEMO_MAX_HOPS || !hop_admitted(hop as usize) {
+        // A hop whose layout can have holes holds or lacks its optional
+        // keys per object (`key_view`): the memo cannot describe it.
+        if depth == CHAIN_MEMO_MAX_HOPS
+            || !hop_admitted(hop as usize)
+            || crate::object::key_view::object_may_have_holes(hop)
+        {
             return;
         }
         way.hops[depth] = hop as usize;

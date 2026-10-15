@@ -189,6 +189,8 @@ impl NamedStateKey {
                     return None;
                 }
                 let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
+                // A memo hit reads the slot and answers a hole as absent
+                // below, so a layout that can have holes primes too.
                 site.prime_own_slot(
                     crate::object::shapes::object_shape_stamp(obj),
                     slot,
@@ -197,9 +199,9 @@ impl NamedStateKey {
                 slot
             };
             let live = crate::object::object_live_slot_count(obj);
-            Some(f64::from_bits(
-                crate::object::object_field_at_with_live(obj, slot, live).bits(),
-            ))
+            // A slot holding the hole is an absent optional key (`key_view`).
+            let bits = crate::object::object_field_at_with_live(obj, slot, live).bits();
+            (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
         })
     }
 }

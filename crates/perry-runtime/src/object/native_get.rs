@@ -320,7 +320,10 @@ unsafe fn try_data_lookup_key(
                     // Legacy inherited resolution treats undefined/null as
                     // misses at some class edges. Preserve that fallback, and
                     // the f64 entry's native-handle alias on undefined reads.
-                    if (inherited && (value.is_undefined() || value.is_null()))
+                    // A slot holding the hole is an absent optional key
+                    // (`key_view`): the generic read continues the chain.
+                    if value.bits() == crate::value::TAG_HOLE
+                        || (inherited && (value.is_undefined() || value.is_null()))
                         || (value.is_undefined()
                             && super::native_this_alias::object_alias(object).is_some())
                     {

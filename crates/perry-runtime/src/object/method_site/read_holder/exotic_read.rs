@@ -60,7 +60,8 @@ pub(super) unsafe fn on_prototype(proto: *const ObjectHeader, name: &[u8]) -> Op
         return None;
     }
     let shape = object_shape_descriptor(proto)?;
-    if !shape.object_kind.is_ordinary_layout() {
+    // Optional keys are own or absent per object (`key_view`).
+    if !shape.object_kind.is_ordinary_layout() || crate::object::key_view::summary_may_have_holes(shape.summary) {
         return None;
     }
     let stamp = object_shape_stamp(proto);

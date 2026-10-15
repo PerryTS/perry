@@ -118,13 +118,13 @@ pub(crate) struct ShapeRecord {
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-11: `ShapeObjectKind`.
-    /// Bits 12-14 and 21: births a keyless birth shape served while tracking its
+    /// Bits 12-14 and 30: births a keyless birth shape served while tracking its
     /// width (#10905). Bit 15: a weak-collection brand; bit 31 distinguishes WeakSet.
     /// Bit 22: immutable key prefix proves symbol absence (derived, not identity).
     /// Bit 23: immutable integrity facts are present in the cold extension.
-    /// attribute SUMMARY bits 16-20 (`key_attrs::SUMMARY_*`), an identity fact.
-    /// Bits 24-30: the inline width a keyless birth shape's descendants grow
-    /// to (#10905). The two #10905 fields are learned facts of the record,
+    /// attribute SUMMARY bits 16-21 (`key_attrs::SUMMARY_*`), an identity fact.
+    /// Bits 24-29: the inline width a keyless birth shape's descendants grow
+    /// to (#10905), stored minus one. The two #10905 fields are learned facts of the record,
     /// never identity.
     ///
     /// This word replaces the old `flags: u8` plus `_pad: [u8; 3]`. It is the
@@ -202,24 +202,27 @@ const _: () = assert!(RECORD_KIND_MAX_CODE <= 15);
 /// shape publishes no keys and carries its private list's conservative
 /// summary here instead.
 const RECORD_SUMMARY_SHIFT: u32 = 16;
-const RECORD_SUMMARY_MASK: u32 = 0x1F << RECORD_SUMMARY_SHIFT;
-const _: () = assert!(crate::object::key_attrs::SUMMARY_KEY_BITS == 0x1F);
+const RECORD_SUMMARY_MASK: u32 = 0x3F << RECORD_SUMMARY_SHIFT;
+const _: () = assert!(crate::object::key_attrs::SUMMARY_KEY_BITS == 0x3F);
 const _: () = assert!(RECORD_KIND_MASK & RECORD_SUMMARY_MASK == 0);
 const _: () = assert!(RECORD_KIND_MASK & 0xFF == 0);
 
-/// #10905: births served while tracking, low bits 12-14 and high bit 21.
+/// #10905: births served while tracking, low bits 12-14 and high bit 30.
 /// This count is decoded while tracking a keyless birth shape; move its
 /// high bit rather than making every shape-kind decode merge two fields.
 const RECORD_BIRTHS_SHIFT: u32 = 12;
-const RECORD_BIRTHS_HIGH: u32 = 1 << 21;
+const RECORD_BIRTHS_HIGH: u32 = 1 << 30;
 const RECORD_BIRTHS_MASK: u32 = (7 << RECORD_BIRTHS_SHIFT) | RECORD_BIRTHS_HIGH;
 const RECORD_BIRTHS_MAX: u32 = 15;
-/// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-30 (maximum 64).
+/// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-29
+/// (maximum 64), stored minus one: a learned width is always above the
+/// inline floor, so 0 still reads as "nothing learned".
 const RECORD_WIDTH_SHIFT: u32 = 24;
-const RECORD_WIDTH_MASK: u32 = 0x7F << RECORD_WIDTH_SHIFT;
+const RECORD_WIDTH_MASK: u32 = 0x3F << RECORD_WIDTH_SHIFT;
 const _: () = assert!(
-    super::shapes_birth_width::LEARNED_WIDTH_MAX <= RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT
+    super::shapes_birth_width::LEARNED_WIDTH_MAX <= (RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT) + 1
 );
+const _: () = assert!(crate::object::INLINE_SLOT_FLOOR >= 1);
 // The fields of `flags_and_kind` are pairwise disjoint.
 const _: () = {
     let fields = [
@@ -334,30 +337,34 @@ impl ShapeRecord {
     /// (#10905), or 0 when nothing was learned.
     #[inline]
     pub(super) fn descendant_width(&self) -> u32 {
-        (self.flags_and_kind & RECORD_WIDTH_MASK) >> RECORD_WIDTH_SHIFT
+        match (self.flags_and_kind & RECORD_WIDTH_MASK) >> RECORD_WIDTH_SHIFT {
+            0 => 0,
+            stored => stored + 1,
+        }
     }
 
     /// Raise [`ShapeRecord::descendant_width`] to `width` (monotone,
-    /// saturating at the seven-bit width).
+    /// saturating at the field's maximum, 64). A width of 1 or less teaches
+    /// nothing (it is below the inline floor).
     #[inline]
     pub(super) fn note_descendant_width(&mut self, width: u32) {
-        let width = width.min(RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT);
-        if width > self.descendant_width() {
-            self.flags_and_kind =
-                (self.flags_and_kind & !RECORD_WIDTH_MASK) | (width << RECORD_WIDTH_SHIFT);
+        let width = width.min((RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT) + 1);
+        if width > 1 && width > self.descendant_width() {
+            self.flags_and_kind = (self.flags_and_kind & !RECORD_WIDTH_MASK)
+                | ((width - 1) << RECORD_WIDTH_SHIFT);
         }
     }
 
     /// Births this keyless birth shape served while tracking (#10905).
     #[inline]
     pub(super) fn tracked_births(&self) -> u32 {
-        ((self.flags_and_kind >> RECORD_BIRTHS_SHIFT) & 7) | ((self.flags_and_kind >> 18) & 8)
+        ((self.flags_and_kind >> RECORD_BIRTHS_SHIFT) & 7) | ((self.flags_and_kind >> 27) & 8)
     }
 
     #[inline]
     pub(super) fn set_tracked_births(&mut self, births: u32) {
         let births = births.min(RECORD_BIRTHS_MAX);
-        let bits = ((births & 7) << RECORD_BIRTHS_SHIFT) | ((births & 8) << 18);
+        let bits = ((births & 7) << RECORD_BIRTHS_SHIFT) | ((births & 8) << 27);
         self.flags_and_kind = (self.flags_and_kind & !RECORD_BIRTHS_MASK) | bits;
     }
 
@@ -461,6 +468,8 @@ impl ShapeRecord {
     /// * no tombstones — the answer is only claimed for hole-free lists;
     /// * no ACCESSOR key in the attribute summary — an accessor key's slot
     ///   holds its accessor pair, not a value;
+    /// * no key whose slot may hold the hole (`SUMMARY_HOLES`): such a key
+    ///   is absent while its slot holds it (`key_view`);
     /// * a keys array at all.
     ///
     /// The field representation (`rep`) is deliberately NOT an input: an
@@ -477,7 +486,10 @@ impl ShapeRecord {
             && super::complete_layout_generation(self.semantic_generation)
             && self.hole_count == 0
             && self.keys != 0
-            && self.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR == 0
+            && self.summary()
+                & (crate::object::key_attrs::SUMMARY_ACCESSOR
+                    | crate::object::key_attrs::SUMMARY_HOLES)
+                == 0
     }
 
     /// Rewrite POSBOUND from the record's facts.

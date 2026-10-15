@@ -1707,7 +1707,15 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
         return None;
     }
     let obj = addr as *const ObjectHeader;
-    if !super::object_is_regular(obj)
+    // `object_is_regular` without its second header read: the record names
+    // the kind, and its summary says whether the layout can have holes, whose
+    // optional keys are own or absent per object (`key_view`): no site
+    // learns from such a receiver.
+    let Some(record) = super::shapes::shape_record_by_id((*obj).shape_word()) else {
+        return None;
+    };
+    if !record.object_kind().is_ordinary_layout()
+        || super::key_view::summary_may_have_holes(record.summary())
         || super::overflow::has_overflow(obj)
         || (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID
         || super::class_registry::is_class_object_ptr(obj.cast())

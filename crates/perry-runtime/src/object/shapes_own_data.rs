@@ -36,7 +36,9 @@ pub(crate) unsafe fn own_data_shape(dir: *const u8, shape_id: u32) -> Option<Opt
         }
     }
     let plain_bound = if record.proto_id == PROTO_ID_PER_OBJECT
-        || record.summary() & crate::object::key_attrs::SUMMARY_PRIVATE != 0
+        || record.summary()
+            & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
+            != 0
     {
         0
     } else {

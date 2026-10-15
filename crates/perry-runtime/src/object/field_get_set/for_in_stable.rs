@@ -166,6 +166,11 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     if descriptor.logical_key_count != 1 || descriptor.keys == 0 {
         return stable_miss("key_count");
     }
+    // A key whose slot may hold the hole is absent per object (`key_view`):
+    // the key list is no snapshot of the own keys.
+    if crate::object::key_view::summary_may_have_holes(descriptor.summary) {
+        return stable_miss("holes");
+    }
 
     let keys = descriptor.keys as usize as *mut ArrayHeader;
     let Some(keys_gc) = (unsafe { crate::value::addr_class::try_read_gc_header(keys as usize) })

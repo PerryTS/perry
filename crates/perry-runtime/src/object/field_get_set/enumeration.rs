@@ -1648,8 +1648,10 @@ pub(crate) unsafe fn instance_private_key_hidden(
         return false;
     }
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    crate::string::js_string_key_bytes(key_val, &mut buf)
-        .is_some_and(|bytes| own_key_hidden_bytes(obj, bytes))
+    match crate::string::js_string_key_bytes(key_val, &mut buf) {
+        Some(bytes) => own_key_hidden_bytes(obj, bytes),
+        None => crate::object::key_view::own_key_is_hole(obj, key_val),
+    }
 }
 
 /// Hide a physical private slot, independently of an equally spelled
@@ -1660,13 +1662,16 @@ pub(crate) unsafe fn own_slot_hidden(
     key: crate::JSValue,
 ) -> bool {
     let keys = crate::object::object_keys(obj);
-    if !keys.is_null()
-        && crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
-            keys.arr(),
-            slot,
-        ))
-    {
-        return true;
+    if !keys.is_null() {
+        let entry = crate::object::key_attrs::keys_entry(keys.arr(), slot);
+        // The entry says whether the key is optional: only then can its slot
+        // hold the hole that makes it absent (`key_view`).
+        if crate::object::key_attrs::entry_is_private(entry)
+            || (entry & crate::object::key_attrs::ENTRY_OPTIONAL != 0
+                && crate::object::key_view::position_is_hole(obj, keys, slot))
+        {
+            return true;
+        }
     }
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     (*obj).class_id != 0
@@ -1676,24 +1681,33 @@ pub(crate) unsafe fn own_slot_hidden(
 
 /// Can any own key of `obj` be hidden from reflection
 /// ([`own_key_hidden_bytes`])? One header and one shape-record load: a plain
-/// object no class installed a private field on answers `false`.
+/// object no class installed a private field on, whose layout has no holes
+/// (`key_view`), answers `false`.
 #[inline]
 pub(crate) unsafe fn own_keys_may_hide(obj: *const ObjectHeader) -> bool {
     !obj.is_null()
         && ((*obj).class_id != 0
             || crate::object::key_attrs::object_summary(obj)
-                & crate::object::key_attrs::SUMMARY_PRIVATE
+                & (crate::object::key_attrs::SUMMARY_PRIVATE
+                    | crate::object::key_attrs::SUMMARY_HOLES)
                 != 0)
 }
 
-/// [`instance_private_key_hidden`] for a key held as bytes.
+/// [`instance_private_key_hidden`] for a key held as bytes: a private field,
+/// a runtime-internal key, or a layout key whose slot holds the hole
+/// (`key_view`), which is absent.
 #[inline]
 pub(crate) unsafe fn own_key_hidden_bytes(obj: *const ObjectHeader, key: &[u8]) -> bool {
     if obj.is_null() {
         return false;
     }
-    crate::object::key_attrs::object_key_is_private(obj, key)
+    // One summary load answers both per-key questions for most objects.
+    let summary = crate::object::key_attrs::object_summary(obj);
+    (summary & crate::object::key_attrs::SUMMARY_PRIVATE != 0
+        && crate::object::key_attrs::object_key_is_private(obj, key))
         || ((*obj).class_id != 0 && is_internal_runtime_key_bytes(key))
+        || (crate::object::key_view::summary_may_have_holes(summary)
+            && crate::object::key_view::own_key_bytes_is_hole(obj, key))
 }
 
 /// True for perry's hidden runtime-internal own keys — the

@@ -121,6 +121,7 @@ mod constfn_key_add;
 pub(crate) mod field_rep;
 pub(crate) mod field_rep_store;
 pub(crate) mod key_attrs;
+pub(crate) mod key_view;
 pub(crate) use census::object_tables_census;
 #[cfg(test)]
 mod bound_method_receiver_tests;

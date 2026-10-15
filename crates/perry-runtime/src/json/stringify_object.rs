@@ -295,7 +295,8 @@ unsafe fn stringify_object_walk(
         && crate::object::key_attrs::object_summary(obj) == 0
         && !inherited_to_json_possible
         // A private field (#11791) is an own key no template may emit.
-        && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
+        && crate::object::key_attrs::object_summary(obj)
+            & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
             == 0
     {
         if let Some(tmpl_ptr) = shape_template_for(ptr) {
@@ -400,7 +401,8 @@ unsafe fn stringify_object_walk(
         && !inherited_to_json_possible
         && !crate::object::object_has_descriptors(ptr as usize)
         // A private field (#11791) is an own key the raw walk would emit.
-        && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
+        && crate::object::key_attrs::object_summary(obj)
+            & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
             == 0
         && super::stringify_primitive_object::try_emit(obj, keys_view, buf)
     {

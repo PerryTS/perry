@@ -197,6 +197,10 @@ pub extern "C" fn js_object_get_own_field_or_undef(
                         None => return f64::from_bits(TAG_UNDEF),
                     }
                 };
+                // A slot holding the hole is an absent optional key.
+                if val.bits() == crate::value::TAG_HOLE {
+                    return f64::from_bits(TAG_UNDEF);
+                }
                 return f64::from_bits(val.bits());
             }
         }

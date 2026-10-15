@@ -1227,6 +1227,8 @@ unsafe fn format_object_as_json(
         // non-enumerable JS properties, and these are runtime bookkeeping.
         if crate::object::is_internal_runtime_key(&key_str)
             || crate::object::key_attrs::object_key_is_private(obj_ptr, key_str.as_bytes())
+            // An optional key whose slot holds the hole is absent.
+            || crate::object::key_view::position_is_hole(obj_ptr, keys_array_view, i as u32)
         {
             continue;
         }

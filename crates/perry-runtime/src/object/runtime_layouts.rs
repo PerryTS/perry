@@ -156,6 +156,41 @@ macro_rules! runtime_layout {
 
 include!("runtime_layouts/records.rs");
 
+/// `child_process.spawnSync`'s result. Node gives it `error` first, and only
+/// when the spawn failed: the key is an optional member (object model §3.2),
+/// so a successful run leaves its slot holding the hole and the key is absent
+/// (`key_view`). Every other member is always present.
+mod spawn_sync_result {
+    use super::record_atoms::*;
+    use super::*;
+    runtime_atom!(SPAWN_SYNC_ATOM_ERROR, "error", "6572726f72");
+    runtime_atom!(SPAWN_SYNC_ATOM_OUTPUT, "output", "6f7574707574");
+    runtime_atom!(SPAWN_SYNC_ATOM_PID, "pid", "706964");
+    runtime_atom!(SPAWN_SYNC_ATOM_STDOUT, "stdout", "7374646f7574");
+    runtime_atom!(SPAWN_SYNC_ATOM_STDERR, "stderr", "737464657272");
+    runtime_layout!(SPAWN_SYNC_RESULT, 0x5350_5359, 0, 0, [
+        SPAWN_SYNC_ATOM_ERROR => crate::object::key_attrs::ENTRY_OPTIONAL,
+        RECORD_ATOM_88,
+        RECORD_ATOM_189,
+        SPAWN_SYNC_ATOM_OUTPUT,
+        SPAWN_SYNC_ATOM_PID,
+        SPAWN_SYNC_ATOM_STDOUT,
+        SPAWN_SYNC_ATOM_STDERR,
+    ]);
+    /// The slots of [`SPAWN_SYNC_RESULT`].
+    pub(crate) mod spawn_sync_slot {
+        pub(crate) const ERROR: u32 = 0;
+        pub(crate) const STATUS: u32 = 1;
+        pub(crate) const SIGNAL: u32 = 2;
+        pub(crate) const OUTPUT: u32 = 3;
+        pub(crate) const PID: u32 = 4;
+        pub(crate) const STDOUT: u32 = 5;
+        pub(crate) const STDERR: u32 = 6;
+    }
+}
+pub use spawn_sync_result::SPAWN_SYNC_RESULT;
+pub(crate) use spawn_sync_result::spawn_sync_slot;
+
 /// Allocate a fixed record with every declared property present, including undefined values.
 ///
 /// # Safety
@@ -2026,3 +2061,7 @@ pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
 #[cfg(test)]
 #[path = "runtime_layouts/slot_order_tests.rs"]
 mod slot_order_tests;
+
+#[cfg(test)]
+#[path = "runtime_layouts/hole_tests.rs"]
+mod hole_tests;

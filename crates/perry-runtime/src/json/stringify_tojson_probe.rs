@@ -534,7 +534,8 @@ pub(super) fn class_is_plain_record(class_id: u32) -> bool {
 #[inline]
 pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> bool {
     class_is_plain_record((*obj).class_id)
-        && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
+        && crate::object::key_attrs::object_summary(obj)
+            & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
             == 0
 }
 

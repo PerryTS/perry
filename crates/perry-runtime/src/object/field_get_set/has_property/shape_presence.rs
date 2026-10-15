@@ -83,6 +83,11 @@ pub(crate) unsafe fn own_position(
             Some(slot)
         }
     });
+    // A layout that can have holes: an optional key whose slot holds the
+    // hole is absent (`key_view`), and the answer is this object's alone.
+    let holey = !table_owned && crate::object::key_view::summary_may_have_holes(shape.summary);
+    let position = position
+        .filter(|&p| !holey || !crate::object::key_view::position_is_hole(obj, view, p));
 
     if position.is_some() {
         if class_id != 0 && super::super::is_internal_runtime_key_bytes(name) {
@@ -102,6 +107,7 @@ pub(crate) unsafe fn own_position(
         return None;
     }
     let reusable = !table_owned
+        && !holey
         && shape.hole_count == 0
         && shapes::is_site_matchable_shape_id(shapes::object_shape_stamp(obj));
     Some((position, shape.proto_id, shape.object_kind, reusable))

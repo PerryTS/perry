@@ -864,15 +864,11 @@ fn get_field_by_name_past_data_probe(
                                 keys_view.count(),
                             ) {
                                 let idx = keys_view.storage_slot(idx);
-                                prime_read_stub(o, key, idx, (idx as usize) < alloc_limit);
-                                return if (idx as usize) < alloc_limit {
-                                    super::accessors::js_object_get_field(o, idx)
-                                } else {
-                                    match super::super::overflow_get(raw, idx as usize) {
-                                        Some(b) => JSValue::from_bits(b),
-                                        None => JSValue::undefined(),
-                                    }
-                                };
+                                if let Some(value) =
+                                    fast_lane_own_read(o, key, raw, idx, alloc_limit)
+                                {
+                                    return value;
+                                }
                             }
                             let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                                 as *const crate::gc::GcHeader;
@@ -905,16 +901,12 @@ fn get_field_by_name_past_data_probe(
                                             key as usize,
                                             i,
                                         );
-                                        let i = keys_view.storage_slot(i) as usize;
-                                        prime_read_stub(o, key, i as u32, i < alloc_limit);
-                                        return if i < alloc_limit {
-                                            super::accessors::js_object_get_field(o, i as u32)
-                                        } else {
-                                            match super::super::overflow_get(raw, i) {
-                                                Some(b) => JSValue::from_bits(b),
-                                                None => JSValue::undefined(),
-                                            }
-                                        };
+                                        let i = keys_view.storage_slot(i);
+                                        if let Some(value) =
+                                            fast_lane_own_read(o, key, raw, i, alloc_limit)
+                                        {
+                                            return value;
+                                        }
                                     }
                                 }
                             }
@@ -2027,6 +2019,34 @@ mod wtf8_class_object_forwarding_tests {
             }
         }
     }
+}
+
+/// The fast lane's own data read of storage slot `slot`: primes the read stub
+/// and answers the value, or `None` when the slot holds the hole (an absent
+/// optional key, `key_view`), so the generic read continues to the
+/// prototype. Out of line so the lane's caller keeps its frame.
+#[inline(never)]
+unsafe fn fast_lane_own_read(
+    o: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    raw: usize,
+    slot: u32,
+    alloc_limit: usize,
+) -> Option<JSValue> {
+    let inline = (slot as usize) < alloc_limit;
+    let value = if inline {
+        super::accessors::js_object_get_field(o, slot)
+    } else {
+        match super::super::overflow_get(raw, slot as usize) {
+            Some(b) => JSValue::from_bits(b),
+            None => JSValue::undefined(),
+        }
+    };
+    if value.bits() == crate::value::TAG_HOLE {
+        return None;
+    }
+    prime_read_stub(o, key, slot, inline);
+    Some(value)
 }
 
 /// Record `(shape token, key content) -> slot` for the megamorphic read stub.

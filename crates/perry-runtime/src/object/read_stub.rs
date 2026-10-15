@@ -302,7 +302,10 @@ pub(crate) unsafe fn try_read_by_content_bits(
 /// under the exact shape id the caller's token match just re-proved, so no
 /// bound is fetched here. #9064's private stable-tombstone state is the one
 /// mutable shape epoch: its deleted slot contains `TAG_HOLE`, which must miss
-/// so the ordinary lookup can continue through the prototype chain.
+/// so the ordinary lookup can continue through the prototype chain. The same
+/// miss covers an optional layout key absent on this object (`key_view`), so
+/// an own-slot entry primed on one object of a layout that can have holes
+/// never answers for another whose slot is a hole.
 #[inline(always)]
 unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> Option<f64> {
     use crate::proxy::IC_SLOT_OVERFLOW_BIT;

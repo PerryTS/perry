@@ -33,7 +33,8 @@ impl ShapeRecordRef {
             && r.summary()
                 & (crate::object::key_attrs::SUMMARY_ACCESSOR
                     | crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
-                    | crate::object::key_attrs::SUMMARY_PRIVATE)
+                    | crate::object::key_attrs::SUMMARY_PRIVATE
+                    | crate::object::key_attrs::SUMMARY_HOLES)
                 == 0
             && r.proves_no_symbols()
     }

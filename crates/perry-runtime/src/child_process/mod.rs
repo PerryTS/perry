@@ -162,6 +162,8 @@ mod tests {
 
     #[test]
     fn test_spawn_sync_result_fields() {
+        // The result is a declared runtime layout: register them first.
+        crate::gc::initialize_runtime_fixture();
         // #1936: spawnSync result carries pid / output / stdout / stderr /
         // status / signal.
         //
@@ -203,6 +205,24 @@ mod tests {
         }
         // signal is null on a clean exit.
         assert_eq!(get(b"signal").to_bits(), TAG_NULL_BITS);
+        // A successful run has no `error` (node omits it): the record's
+        // optional slot holds the hole, and the key is absent.
+        unsafe {
+            assert!(crate::object::key_view::object_may_have_holes(result));
+            let keys = crate::object::js_object_keys(result);
+            let mut names = Vec::new();
+            for i in 0..crate::array::js_array_length(keys) {
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                let key = crate::array::js_array_get(keys, i);
+                names.push(
+                    String::from_utf8(crate::string::js_string_key_bytes(key, &mut sso).unwrap().to_vec())
+                        .unwrap(),
+                );
+            }
+            assert_eq!(names, ["status", "signal", "output", "pid", "stdout", "stderr"]);
+            assert!(crate::object::key_view::own_key_bytes_is_hole(result, b"error"));
+        }
+        assert_eq!(get(b"error").to_bits(), crate::value::TAG_UNDEFINED);
     }
 }
 

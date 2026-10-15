@@ -128,7 +128,8 @@ unsafe fn walk(receiver: *const ObjectHeader, name: &[u8]) -> Option<Proof> {
         }
         let shape = object_shape_descriptor(next)?;
         let stamp = object_shape_stamp(next);
-        if !shape.object_kind.is_ordinary_layout() || stamp == 0 {
+        // Optional keys are own or absent per object (`key_view`).
+        if !shape.object_kind.is_ordinary_layout() || stamp == 0 || crate::object::key_view::summary_may_have_holes(shape.summary) {
             return None;
         }
         if key_may_be_accessor(next, name) {

@@ -1107,6 +1107,13 @@ pub(super) fn get_field_ic_miss_impl(
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }
+            // A layout that can have holes (`key_view`): whether an optional
+            // key is own is a fact of this object's slot, not of its layout
+            // word, so the site primes nothing and the complete read answers.
+            if crate::object::key_view::summary_may_have_holes(shape.summary) {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            }
             let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
             if keys.is_null() || (keys as usize) <= 0x10000 {
                 if diag {

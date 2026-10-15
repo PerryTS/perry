@@ -10,8 +10,8 @@ use sync_run::{
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
-use crate::object::{js_object_set_field_by_name, ObjectHeader};
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::object::ObjectHeader;
+use crate::string::StringHeader;
 use crate::value::JSValue;
 
 /// `child_process.execSync(command[, options])` — run through the shell and
@@ -93,6 +93,15 @@ pub extern "C" fn js_child_process_spawn_sync(
     let run = cp_run_to_completion(command, &run_options);
 
     let spawn_failed_before_pid = run.spawn_error.is_some() && run.pid.is_none();
+    // The result is a `SPAWN_SYNC_RESULT` record: node's order is
+    // error,status,signal,output,pid,stdout,stderr, and `error` is present
+    // only on a spawn failure. Its slot keeps the hole otherwise, so the key
+    // is absent (`object::key_view`). The builder roots every value cell
+    // across the allocations below.
+    use crate::object::runtime_layouts::spawn_sync_slot as slot;
+    crate::object::runtime_layouts::runtime_record!(result, SPAWN_SYNC_RESULT);
+    let set = |s: u32, value: f64| result.set(s, JSValue::from_bits(value.to_bits()));
+    set(slot::ERROR, f64::from_bits(crate::value::TAG_HOLE));
     let stdout_box = if spawn_failed_before_pid {
         cp_undefined()
     } else if !run.stdout_piped {
@@ -100,6 +109,7 @@ pub extern "C" fn js_child_process_spawn_sync(
     } else {
         cp_box_output(&run.stdout, &mode)
     };
+    set(slot::STDOUT, stdout_box);
     let stderr_box = if spawn_failed_before_pid {
         cp_undefined()
     } else if !run.stderr_piped {
@@ -107,35 +117,32 @@ pub extern "C" fn js_child_process_spawn_sync(
     } else {
         cp_box_output(&run.stderr, &mode)
     };
+    set(slot::STDERR, stderr_box);
     let output = if spawn_failed_before_pid {
         TAG_NULL_F64
     } else {
+        let stdout_box = f64::from_bits(result.get(slot::STDOUT).bits());
+        let stderr_box = f64::from_bits(result.get(slot::STDERR).bits());
         cp_output_array(stdout_box, stderr_box)
     };
+    set(slot::OUTPUT, output);
     let status = match run.code {
         Some(c) => c as f64,
         None => TAG_NULL_F64,
     };
+    set(slot::STATUS, status);
     let signal = match run.signal {
         Some(s) => cp_box_string(cp_signal_name(s)),
         None => TAG_NULL_F64,
     };
+    set(slot::SIGNAL, signal);
     let pid = match run.pid {
         Some(p) => p as f64,
         None if spawn_failed_before_pid => 0.0,
         None => TAG_NULL_F64,
     };
+    set(slot::PID, pid);
 
-    // Assemble the result object. `error` is present only on spawn failure
-    // (Node omits it otherwise), and is inserted before the standard result
-    // fields. Node's observable order is error,status,signal,output,pid,stdout,
-    // stderr for spawn failures and status,signal,output,pid,stdout,stderr
-    // otherwise.
-    let result = crate::object::js_object_alloc(0, 7);
-    let set = |key: &str, value: f64| {
-        let kp = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        js_object_set_field_by_name(result, kp, value);
-    };
     if let Some((code, msg)) = &run.spawn_error {
         let syscall = format!("spawnSync {cmd_str}");
         let err = cp_make_error(
@@ -147,7 +154,7 @@ pub extern "C" fn js_child_process_spawn_sync(
                 ("path", cp_box_string(&cmd_str)),
             ],
         );
-        set("error", err);
+        set(slot::ERROR, err);
     } else if let Some(run_error) = run.run_error {
         let code = run_error.code();
         let syscall = format!("spawnSync {cmd_str}");
@@ -160,15 +167,9 @@ pub extern "C" fn js_child_process_spawn_sync(
                 ("syscall", cp_box_string(&syscall)),
             ],
         );
-        set("error", err);
+        set(slot::ERROR, err);
     }
-    set("status", status);
-    set("signal", signal);
-    set("output", output);
-    set("pid", pid);
-    set("stdout", stdout_box);
-    set("stderr", stderr_box);
-    result
+    result.finish()
 }
 
 /// Spawn a process asynchronously
