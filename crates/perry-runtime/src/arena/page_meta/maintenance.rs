@@ -18,7 +18,7 @@ pub(crate) fn shrink_page_tables() {
     flush_deferred_old_page_registrations();
     OLD_GEN_PAGE_OBJECTS.with(|m| m.borrow_mut().shrink_directory());
     OLD_GEN_PAGE_PROMOTED_RUNS.with(|m| shrink_sparse_map(&mut m.borrow_mut()));
-    PAGE_GENERATIONS.with(|m| shrink_sparse_map(&mut m.borrow_mut()));
+    with_page_generations(|m| shrink_sparse_map(&mut m.borrow_mut()));
     OLD_GEN_PAGE_META.with(|m| m.borrow_mut().shrink_directory());
 }
 
