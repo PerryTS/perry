@@ -846,6 +846,7 @@ js_console_warn_number	Leaf	no
 js_console_warn_spread	Reenters	yes
 js_count_queuing_strategy_new	Reenters	yes
 js_create_callback	Reenters	yes
+js_create_family_contract_check	Reenters	yes
 js_create_namespace	Reenters	yes
 js_create_native_module_namespace	Reenters	yes
 js_cron_timer_has_pending	Reenters	yes
@@ -1792,8 +1793,6 @@ js_method_direct_shape_guard	Leaf	no
 js_method_site_call_split	Reenters	yes
 js_method_site_call_value	Reenters	yes
 js_method_site_call_value_apply	Reenters	yes
-js_method_site_cert_contract_check	Reenters	yes
-js_method_site_certify	Reenters	yes
 js_method_site_chain_value	Leaf	no
 js_method_site_lookup	Reenters	yes
 js_method_site_miss	Reenters	yes
@@ -4215,6 +4214,7 @@ perry_array_attach_layout	AllocOnly	no
 perry_array_element_kind	Leaf	no
 perry_array_iteration_init	Leaf	no
 perry_array_read_cold_shared	Reenters	yes
+perry_bind_family_prototype	Reenters	no
 perry_build_runtime_record	Reenters	yes
 perry_class_value_dir_cell	Leaf	no
 perry_cluster_compute_key_id	Leaf	no
@@ -4223,6 +4223,7 @@ perry_cluster_worker_listening	Reenters	yes
 perry_cluster_worker_query_listen	Leaf	no
 perry_cluster_worker_recv_fd	Leaf	no
 perry_cluster_worker_sched_is_rr	Leaf	no
+perry_create_family	Reenters	yes
 perry_debug_trace_init	Leaf	no
 perry_debug_trace_init_done	Leaf	no
 perry_eh_personality	Leaf	no
