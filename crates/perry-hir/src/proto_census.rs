@@ -45,6 +45,19 @@
 //! the written object's shadow bit; with the bits clear, a class instance
 //! resolves the name to the body its class chain declared.
 //!
+//! Object model step 1 adds what a key add needs to know about the
+//! prototypes it could meet ([`ProtoCensus::create_add_free`]): which names
+//! a write can turn into an accessor or a non-writable property
+//! ([`ProtoCensus::defined`]: the static key of a `defineProperty`,
+//! `defineProperties` literal source, `Reflect.defineProperty`,
+//! `__defineGetter__`/`__defineSetter__`), whether such a definition has a
+//! key or descriptor source the scan cannot name
+//! ([`ProtoCensus::dynamic_define`]), and whether an integrity operation
+//! (`freeze`, `seal`, `preventExtensions`) exists anywhere
+//! ([`ProtoCensus::integrity`]), which makes every existing key of its target
+//! non-writable or non-addable. `Object.create(p, props)` defines only on the
+//! object it creates, so its descriptor bag is none of these.
+//!
 //! [`ProtoCensus::shadow_names`] are the constant class member names: the
 //! runtime sets the bit when one of them is added to, deleted from or
 //! redefined on an object (the entry module emits them, section
@@ -101,6 +114,14 @@ pub struct ProtoCensus {
     /// accessors' backing names and TS parameter properties): own keys every
     /// instance is born with, so never a constant method name.
     pub fields: BTreeSet<String>,
+    /// Names a static-key definition can make an accessor or non-writable
+    /// (object model step 1).
+    pub defined: BTreeSet<String>,
+    /// A definition whose key or descriptor source is not static, or a
+    /// definer named as a value.
+    pub dynamic_define: bool,
+    /// `freeze`/`seal`/`preventExtensions` called or named somewhere.
+    pub integrity: bool,
     /// Modules scanned (diagnostics only).
     pub modules: usize,
 }
@@ -113,6 +134,25 @@ impl ProtoCensus {
             && !self.written.contains(name)
             && !self.fields.contains(name)
             && !RUNTIME_WRITTEN_NAMES.contains(&name)
+    }
+
+    /// Object model step 1 (§3.2): can no `[[Set]]` of `name` on an object
+    /// whose [[Prototype]] chain is a closed object literal (data keys only,
+    /// born writable) and then `%Object.prototype%` be intercepted? Then a
+    /// key add of `name` at that object's creation point is a slot store.
+    ///
+    /// Intercepting needs an accessor or a non-writable property of `name`
+    /// on the chain, or a different chain. A closed literal is born with
+    /// neither, and `%Object.prototype%`'s only accessor is `__proto__`; so
+    /// only a definition of `name` (static, or one the scan cannot name), an
+    /// integrity operation, a relink, or dynamic code can make one.
+    pub fn create_add_free(&self, name: &str) -> bool {
+        !self.dynamic_code
+            && !self.relink
+            && !self.dynamic_define
+            && !self.integrity
+            && name != "__proto__"
+            && !self.defined.contains(name)
     }
 
     /// Can a dynamic write or a relink reach some object? Then a binding
@@ -149,6 +189,9 @@ impl ProtoCensus {
         self.members.extend(other.members.iter().cloned());
         self.methods.extend(other.methods.iter().cloned());
         self.fields.extend(other.fields.iter().cloned());
+        self.defined.extend(other.defined.iter().cloned());
+        self.dynamic_define |= other.dynamic_define;
+        self.integrity |= other.integrity;
         self.modules += other.modules;
     }
 
@@ -176,6 +219,14 @@ impl ProtoCensus {
             } else {
                 '|'
             });
+        }
+        key.push_str(&format!(
+            "#create-v1:d{}i{}:",
+            self.dynamic_define as u8, self.integrity as u8
+        ));
+        for name in &self.defined {
+            key.push_str(name);
+            key.push('|');
         }
         key
     }
@@ -297,6 +348,36 @@ impl CensusScanner<'_> {
             .and_then(|a| str_arg(&a.expr));
         self.write(key);
     }
+
+    /// A definition's key: written, and definable as an accessor or a
+    /// non-writable property.
+    fn define_key_arg(&mut self, call_args: &[ast::ExprOrSpread], i: usize) {
+        let key = call_args
+            .get(i)
+            .filter(|a| a.spread.is_none())
+            .and_then(|a| str_arg(&a.expr));
+        match &key {
+            Some(k) => {
+                self.out.defined.insert(k.clone());
+            }
+            None => self.out.dynamic_define = true,
+        }
+        self.write(key);
+    }
+
+    /// The literal descriptor sources of `defineProperties(t, …)`.
+    fn define_sources(&mut self, sources: &[ast::ExprOrSpread]) {
+        for src in sources {
+            match (src.spread.is_none())
+                .then(|| object_literal_keys(&src.expr))
+                .flatten()
+            {
+                Some(keys) => self.out.defined.extend(keys),
+                None => self.out.dynamic_define = true,
+            }
+        }
+        self.literal_sources(sources);
+    }
 }
 
 fn well_known_symbol(e: &ast::Expr) -> bool {
@@ -403,8 +484,13 @@ impl Visit for CensusScanner<'_> {
                 ("Reflect", "construct") => self.out.dynamic_code = true,
                 ("Object", "defineProperty" | "defineProperties" | "assign")
                 | ("Reflect", "defineProperty" | "set" | "deleteProperty") => {
-                    self.out.dynamic_write = true
+                    self.out.dynamic_write = true;
+                    if name.starts_with("define") {
+                        self.out.dynamic_define = true;
+                    }
                 }
+                ("Object", "freeze" | "seal" | "preventExtensions")
+                | ("Reflect", "preventExtensions") => self.out.integrity = true,
                 _ => {}
             }
         }
@@ -413,6 +499,7 @@ impl Visit for CensusScanner<'_> {
             Some("__defineGetter__" | "__defineSetter__" | "inherits")
         ) {
             self.out.dynamic_write = true;
+            self.out.dynamic_define = true;
             self.out.relink = true;
         }
         // `Function.prototype…` / `eval.x` name the value without calling or
@@ -562,12 +649,17 @@ impl Visit for CensusScanner<'_> {
                     (Some("Reflect"), "construct") if args.len() >= 3 => {
                         self.out.dynamic_code = true
                     }
-                    (Some("Object" | "Reflect"), "defineProperty")
-                    | (Some("Reflect"), "set" | "deleteProperty") => self.key_arg(args, 1),
-                    (Some("Object"), "defineProperties" | "assign") => {
+                    (Some("Object" | "Reflect"), "defineProperty") => self.define_key_arg(args, 1),
+                    (Some("Reflect"), "set" | "deleteProperty") => self.key_arg(args, 1),
+                    (Some("Object"), "defineProperties") => {
+                        self.define_sources(args.get(1..).unwrap_or(&[]))
+                    }
+                    (Some("Object"), "assign") => {
                         self.literal_sources(args.get(1..).unwrap_or(&[]))
                     }
-                    (_, "__defineGetter__" | "__defineSetter__") => self.key_arg(args, 0),
+                    (Some("Object"), "freeze" | "seal" | "preventExtensions")
+                    | (Some("Reflect"), "preventExtensions") => self.out.integrity = true,
+                    (_, "__defineGetter__" | "__defineSetter__") => self.define_key_arg(args, 0),
                     (Some("Error"), "captureStackTrace") => self.write(Some("stack".into())),
                     _ => {}
                 }
@@ -608,7 +700,9 @@ mod tests {
         let c = census("class A { m() {} k() {} } class B extends A { m = 1; static k = 2 }");
         assert!(!c.method_is_constant("m"));
         assert!(c.method_is_constant("k"));
-        let c = census("class A { m() {} } class B extends A { constructor(public m: number) { super() } }");
+        let c = census(
+            "class A { m() {} } class B extends A { constructor(public m: number) { super() } }",
+        );
         assert!(!c.method_is_constant("m"));
     }
 
@@ -691,6 +785,36 @@ mod tests {
             census("let f: Function; type F = Function; class C { m(g: Function) {} }")
                 .method_is_constant("m")
         );
+    }
+
+    #[test]
+    fn create_adds_answer_from_definitions() {
+        let c = census(
+            "const p = { a: 1 }; const o = Object.assign(Object.create(p), { v: 1 }); o.w = 2;",
+        );
+        assert!(c.create_add_free("v") && c.create_add_free("w") && c.create_add_free("a"));
+        assert!(!c.create_add_free("__proto__"));
+        let c = census("Object.defineProperty(p, 'v', { set(x) {} })");
+        assert!(!c.create_add_free("v") && c.create_add_free("w"));
+        let c = census("Object.defineProperties(p, { v: { value: 1 } })");
+        assert!(!c.create_add_free("v") && c.create_add_free("w"));
+        let c = census("p.__defineSetter__('v', f)");
+        assert!(!c.create_add_free("v"));
+        // `Object.create`'s descriptor bag defines only on the new object.
+        let c = census("const q = Object.create(p, descs)");
+        assert!(c.create_add_free("v"));
+        for src in [
+            "Object.defineProperty(p, k, d)",
+            "Object.defineProperties(p, ds)",
+            "const dp = Object.defineProperty",
+            "Object.freeze(p)",
+            "Object.seal(p)",
+            "Reflect.preventExtensions(p)",
+            "Object.setPrototypeOf(p, q)",
+            "eval(s)",
+        ] {
+            assert!(!census(src).create_add_free("v"), "{src}");
+        }
     }
 
     #[test]

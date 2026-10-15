@@ -14,6 +14,7 @@
 //! sizes and offsets the runtime pins with const asserts.
 
 pub(crate) mod array_families;
+pub(crate) mod create_families;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
@@ -508,12 +509,51 @@ pub(crate) fn emit_module_layouts(
             fam.rep,
             LAYOUT_ID_CARRIED,
             first_hash,
+            "0",
         );
         // The id word on its own, so a function loads it once at entry.
         llmod.add_raw_global(format!(
             "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
             layout_id_global(&fam.desc_global),
             fam.desc_global
+        ));
+        n += 1;
+    }
+    // Step 1: `Object.create(P)` families (`create_families`): each
+    // prototype binding's identity record, then each creation point's
+    // carried layout naming it.
+    let (protos, create_sites) = create_families::emission();
+    for global in &protos {
+        llmod.add_raw_global(format!("@{global} = internal global i64 0, align 8"));
+    }
+    for site in &create_sites {
+        let atom_names: Vec<String> = site
+            .keys
+            .iter()
+            .map(|k| {
+                atom(llmod, strings, &mut atoms, k)
+                    .expect("a create-family key is an atom (`create_families::layout_key`)")
+            })
+            .collect();
+        let family = (fnv1a(site.desc_global.as_bytes()) as u32) & 0x7FFF_FFFF;
+        emit_descriptor(
+            llmod,
+            &sect,
+            &site.desc_global,
+            &format!("{}_fam", site.desc_global),
+            &site.keys,
+            &atom_names,
+            family,
+            site.keys.len().max(1) as u32,
+            0,
+            LAYOUT_ID_CARRIED,
+            None,
+            &format!("ptrtoint (ptr @{} to i64)", site.proto_global),
+        );
+        llmod.add_raw_global(format!(
+            "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
+            layout_id_global(&site.desc_global),
+            site.desc_global
         ));
         n += 1;
     }
@@ -540,6 +580,7 @@ pub(crate) fn emit_module_layouts(
             0,
             0,
             None,
+            "0",
         );
         n += 1;
     }
@@ -575,6 +616,7 @@ pub(crate) fn emit_module_layouts(
             shape.rep,
             id,
             None,
+            "0",
         );
         n += 1;
     }
@@ -600,6 +642,7 @@ fn emit_descriptor(
     rep: u64,
     layout_id: u32,
     first_hash: Option<u64>,
+    proto: &str,
 ) {
     {
         let count = keys.len();
@@ -636,7 +679,7 @@ fn emit_descriptor(
             index_items.join(", ")
         ));
         llmod.add_raw_global(format!(
-            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name} }}, section \"{sect}\", align 8",
+            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, i64 {proto}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name} }}, section \"{sect}\", align 8",
             layout_id as i32,
             rep as i64,
             cap - 1

@@ -299,6 +299,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::ObjectCreate(p, props) => {
+            // Object model step 1: a `const a = Object.create(P)` family's birth.
+            if let Some(add) = crate::layout_desc::create_families::create_site(expr) {
+                return crate::layout_desc::create_families::lower_create(ctx, &add, expr);
+            }
             // #2816: route through `js_object_create_with_props` so prototype
             // validation + the optional descriptor bag are handled uniformly.
             // Pass `undefined` for the props arg when only one argument was

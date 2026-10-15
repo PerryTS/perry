@@ -580,6 +580,8 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.typed_element_locals.insert(*id);
             }
             lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
+            // Object model step 1: a family prototype's birth.
+            crate::layout_desc::create_families::lower_binding(ctx, *id)?;
             crate::codegen::global_transfer::emit_publish(ctx, *id);
             if ctx.suffix_cursor_locals.contains(id) {
                 crate::expr::suffix_cursor::initialize(ctx, *id);

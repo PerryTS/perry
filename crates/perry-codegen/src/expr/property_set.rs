@@ -514,6 +514,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     })
                 });
             }
+            // Object model step 1: adding an `Object.create(P)` family's key.
+            if let Some(add) = crate::layout_desc::create_families::add_site(object, property) {
+                return crate::layout_desc::create_families::lower_add(
+                    ctx,
+                    &add,
+                    object,
+                    value,
+                    assignment_strict,
+                );
+            }
             // Object model step 1: adding a literal family's key is a store.
             if let Some(site) = super::family_slot::site(ctx, object, property, true) {
                 return super::family_slot::lower_set(

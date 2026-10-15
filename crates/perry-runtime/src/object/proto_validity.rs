@@ -116,6 +116,34 @@ pub(crate) unsafe fn assign_intrinsic_prototype_serial(obj: usize, serial: u64) 
     }
 }
 
+/// A fresh prototype serial from the dynamic counter. Object model step 1:
+/// a family prototype's serial (`layout_desc::PerryProtoFamily`) is drawn
+/// here once, at layout registration, before any user code runs.
+pub(crate) fn next_prototype_serial() -> u64 {
+    PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Mark `obj`, born as the singleton prototype of a compile-time family, as
+/// a prototype carrying that family's `serial`: exactly
+/// [`mark_object_as_prototype`], with the family's serial in place of a
+/// counter draw. An object already carrying a serial keeps it. Returns the
+/// object's serial.
+///
+/// # Safety
+/// As [`mark_object_as_prototype`]: allocates, and may move the owner.
+pub(crate) unsafe fn mark_object_as_prototype_with_serial(obj: usize, serial: u64) -> Option<u64> {
+    debug_assert!(serial >= FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+    let meta = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE)?;
+    ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
+    // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
+    (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
+    if (*meta).proto_serial == 0 {
+        // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
+        (*meta).proto_serial = serial;
+    }
+    Some((*meta).proto_serial)
+}
+
 /// The serial a `[[Prototype]]` of NULL stands for. Distinct from every
 /// assigned serial, and from 0 ("none").
 pub(crate) const NULL_PROTOTYPE_SERIAL: u64 = u64::MAX;

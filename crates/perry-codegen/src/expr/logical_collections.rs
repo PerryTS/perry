@@ -1650,6 +1650,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `target` is evaluated exactly once and threaded through each source.
         // Refs #590.
         Expr::ObjectAssign { target, sources } => {
+            // Object model step 1: an `Object.create(P)` family's birth.
+            if let Some(site) = crate::layout_desc::create_families::site(expr) {
+                return crate::layout_desc::create_families::lower_assign(ctx, &site, expr);
+            }
             let target_box = lower_expr(ctx, target)?;
             let acc = ctx.block().call(
                 DOUBLE,

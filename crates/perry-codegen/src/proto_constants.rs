@@ -57,6 +57,22 @@ pub fn method_is_constant(name: &str) -> bool {
     with_census(|c| c.method_is_constant(name)).unwrap_or(false)
 }
 
+/// Object model step 1: is a key add of `name` on an object whose
+/// prototype is a closed literal never intercepted (`ProtoCensus::
+/// create_add_free`)? False with no census installed.
+pub(crate) fn create_add_free(name: &str) -> bool {
+    with_census(|c| c.create_add_free(name)).unwrap_or(false)
+}
+
+/// Is `name` a prototype name (`ProtoCensus::prototype_names`, the list the
+/// entry module emits as `perry_shadow_names`)? The runtime sets the shadow
+/// bit when one is added to an object with a recorded [[Prototype]]; a
+/// compile-time family birth never does, so its keys must not be one. True
+/// with no census installed.
+pub(crate) fn is_prototype_name(name: &str) -> bool {
+    with_census(|c| c.prototype_names().any(|n| n == name)).unwrap_or(true)
+}
+
 /// Must a binding site test the shadow bits (a dynamic write or a relink
 /// exists somewhere in the program)?
 pub(crate) fn shadow_tests() -> bool {
@@ -150,7 +166,11 @@ fn emit_value_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, value: &str) -> Strin
 /// method in a program with no dynamic write or relink. The select path
 /// (`dynamic_dispatch_select`), which proves only the receiver's class,
 /// still requires a constant name.
-pub(crate) fn holder_constant(ctx: &mut crate::expr::FnCtx<'_>, class: &str, method: &str) -> String {
+pub(crate) fn holder_constant(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class: &str,
+    method: &str,
+) -> String {
     if crate::target_layout::target_is_ilp32(ctx.target_triple) {
         return "false".into();
     }
@@ -284,7 +304,11 @@ fn emit_shadow_contract(ctx: &mut crate::expr::FnCtx<'_>, recv: &str, ok: &str, 
     let dispatch = ctx.strings.static_dispatch_global(key);
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
     let blk = ctx.block();
-    let ok32 = if ok == "true" { "1".to_string() } else { blk.zext(I1, ok, I32) };
+    let ok32 = if ok == "true" {
+        "1".to_string()
+    } else {
+        blk.zext(I1, ok, I32)
+    };
     blk.call_void(
         "js_proto_shadow_contract_check",
         &[(I32, &ok32), (DOUBLE, recv), (I64, &method_id)],

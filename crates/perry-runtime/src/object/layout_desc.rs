@@ -169,8 +169,9 @@ pub const LAYOUT_BASE: u32 =
     super::shapes::SHAPE_ID_BASE + crate::codegen_abi::STATIC_SHAPE_ID_COUNT / 2;
 const _: () = assert!(LAYOUT_BASE == crate::codegen_abi::SHAPE_ID_BASE + (1 << 19));
 
-/// `PerryLayoutDesc.proto` builtin tags (values below 4096; anything else
-/// is a `*const PerryLayoutDesc`, which step 1 introduces).
+/// `PerryLayoutDesc.proto` builtin tags (values below
+/// [`LAYOUT_PROTO_TAG_END`]; anything else is a `*const PerryProtoFamily`,
+/// the singleton prototype of an `Object.create(P)` family, step 1).
 pub const LAYOUT_PROTO_OBJECT: usize = 0;
 pub const LAYOUT_PROTO_NULL: usize = 1;
 pub const LAYOUT_PROTO_URL: usize = 2;
@@ -178,6 +179,49 @@ pub const LAYOUT_PROTO_READABLE_STATE: usize = 3;
 pub const LAYOUT_PROTO_WRITABLE_STATE: usize = 4;
 pub const LAYOUT_PROTO_TIMEOUT: usize = 5;
 pub const LAYOUT_PROTO_IMMEDIATE: usize = 6;
+/// `PerryLayoutDesc.proto` values at or above this are a
+/// `*const PerryProtoFamily`.
+pub const LAYOUT_PROTO_TAG_END: usize = 4096;
+
+/// Object model step 1 (§3.2, §3.6): the prototype of an `Object.create(P)`
+/// family whose `P` is a module's singleton literal (a top-level `const`
+/// bound once per agent). Codegen emits one per such binding, writable, and
+/// points the family's descriptors' `proto` at it.
+///
+/// `serial` is the prototype identity (`ObjectMeta::proto_serial`, the
+/// receiver shapes' `proto_id`) every object of the family names: drawn once
+/// from the dynamic serial counter by [`register_static_layouts`], before any
+/// user code runs, so the family's layouts are registered with it. `P` takes
+/// it at its birth ([`perry_bind_family_prototype`]); a birth of the family
+/// ([`perry_create_family`]) checks the prototype it is handed carries it,
+/// one compare, and otherwise takes the ordinary `Object.create`.
+#[repr(C)]
+pub struct PerryProtoFamily {
+    pub serial: u64,
+}
+
+/// The family's prototype serial, drawing it on first use (registration).
+unsafe fn proto_family_serial(fam: *const PerryProtoFamily) -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let word = AtomicU64::from_ptr(std::ptr::addr_of!((*fam).serial).cast_mut());
+    let current = word.load(Ordering::Acquire);
+    if current != 0 {
+        return current;
+    }
+    let fresh = super::proto_validity::next_prototype_serial();
+    match word.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => fresh,
+        Err(other) => other,
+    }
+}
+
+/// The serial registration drew for `fam`, or 0 when no family layout of
+/// this program names it.
+#[inline]
+unsafe fn proto_family_serial_registered(fam: *const PerryProtoFamily) -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    AtomicU64::from_ptr(std::ptr::addr_of!((*fam).serial).cast_mut()).load(Ordering::Acquire)
+}
 
 /// A program-named key (§6a). `kind` 0 is a string key: its precomputed
 /// FNV-1a hash (the runtime's key hash) and the immutable image string that
@@ -553,6 +597,7 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         LAYOUT_PROTO_OBJECT => super::shapes::PROTO_ID_DEFAULT,
         LAYOUT_PROTO_NULL => super::shapes::PROTO_ID_NULL,
         LAYOUT_PROTO_URL..=LAYOUT_PROTO_IMMEDIATE => super::shapes::fresh_unique_proto_id(),
+        fam if fam >= LAYOUT_PROTO_TAG_END => proto_family_serial(fam as *const PerryProtoFamily),
         _ => return 0,
     };
     let key_count = d.key_count;
@@ -660,6 +705,12 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
         );
         std::process::abort();
     };
+    alloc_layout_object(d, id)
+}
+
+/// Allocate an object of the registered layout `id` of `d` (see
+/// [`perry_alloc_layout`]). Can collect.
+unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader {
     let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
@@ -778,6 +829,173 @@ pub unsafe extern "C" fn perry_layout_index_probe(
     -1
 }
 
+/// Object model step 1: the birth of `P`, the singleton prototype of the
+/// `Object.create(P)` families naming `fam`. `P` takes the family's serial as
+/// its prototype identity (the mark every `Object.create(P)` makes, with the
+/// serial the family's layouts were registered under), and the identity's
+/// word names it. Codegen calls this once, right after the module-level
+/// `const` binding `P` is initialized, before any code can read `P`.
+///
+/// # Safety
+/// `fam` is a `PerryProtoFamily` of this program.
+#[no_mangle]
+pub unsafe extern "C" fn perry_bind_family_prototype(fam: *const PerryProtoFamily, proto: f64) {
+    let serial = proto_family_serial_registered(fam);
+    let bits = proto.to_bits();
+    if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return;
+    }
+    let p = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_above_handle_band(p) {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    // The mark can allocate its meta record and move `P`.
+    let marked = super::proto_validity::mark_object_as_prototype_with_serial(p, serial);
+    if marked == Some(serial) {
+        super::shapes::write_identity_word(serial, proto.get_nanbox_u64());
+    }
+}
+
+/// Object model step 1: `Object.create(P)` at a creation point whose family
+/// layout `desc` the compiler fixed (§3.2). When `P` is the family's
+/// singleton prototype (it carries the serial of `desc.proto`), the object is
+/// born on `desc`'s layout: every slot holds the hole marker and the caller
+/// stores each one before the object can be observed. Any other `P` (not
+/// bound yet, a different object, a primitive, null) takes the ordinary
+/// `Object.create`, which also throws its TypeError. The caller tells the
+/// two apart by the layout word.
+///
+/// # Safety
+/// `desc` is a descriptor of this program whose `proto` names a
+/// `PerryProtoFamily`.
+#[no_mangle]
+pub unsafe extern "C" fn perry_create_family(desc: *const PerryLayoutDesc, proto: f64) -> f64 {
+    let d = &*desc;
+    if let Some(obj) = family_birth(d, proto) {
+        return crate::value::js_nanbox_pointer(obj as i64);
+    }
+    super::js_object_create(proto)
+}
+
+unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHeader> {
+    if d.proto < LAYOUT_PROTO_TAG_END {
+        return None;
+    }
+    let id = registered_layout_id(d.layout_id)?;
+    let serial = proto_family_serial_registered(d.proto as *const PerryProtoFamily);
+    let bits = proto.to_bits();
+    if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return None;
+    }
+    let p = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_above_handle_band(p) {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(p)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let meta = (*(p as *const ObjectHeader)).meta;
+    if meta.is_null() || (*meta).proto_serial != serial {
+        return None;
+    }
+    // The identity names one prototype for its whole life; refill only an
+    // emptied word (`stamp_known_prototype_transition`).
+    if super::shapes::identity_prototype_word(serial) != bits {
+        super::shapes::write_identity_word(serial, bits);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let obj = alloc_layout_object(d, id);
+    // The prototype edge lives outside the heap. A black newborn must still
+    // shade it during an incremental mark (`object_alloc_created`).
+    crate::gc::runtime_shade_external_edge(proto.get_nanbox_u64());
+    Some(obj)
+}
+
+/// `PERRY_CHECK_CONTRACTS=1`: the witness of a family store the compiler
+/// emitted without `[[Set]]` (an `Object.create(P)` family's birth or key
+/// add, object model step 1). `obj` was found on the family layout `desc`:
+/// its [[Prototype]] must carry the family's serial, and no key of `desc`
+/// may be intercepted on its prototype chain (the census answer the store
+/// relies on).
+///
+/// # Safety
+/// `desc` is a family descriptor of this program; `obj` any value.
+#[no_mangle]
+#[inline(never)]
+pub unsafe extern "C-unwind" fn js_create_family_contract_check(
+    desc: *const PerryLayoutDesc,
+    obj: f64,
+) {
+    let d = &*desc;
+    let bits = obj.to_bits();
+    let violated = |why: &str, key: &[u8]| -> ! {
+        crate::entry_contracts::contract_violated(
+            "create_family_store",
+            "prototype carries the family serial && no layout key intercepted on the chain",
+            "prototype-write-census",
+            bits,
+            &format!(
+                " family={:#x} key={} why={why}",
+                d.family,
+                String::from_utf8_lossy(key)
+            ),
+        )
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let serial = if d.proto >= LAYOUT_PROTO_TAG_END {
+        proto_family_serial_registered(d.proto as *const PerryProtoFamily)
+    } else {
+        0
+    };
+    let proto = super::js_object_get_prototype_of(obj).to_bits();
+    let p = (proto & crate::value::POINTER_MASK) as *const ObjectHeader;
+    if serial == 0
+        || proto & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        || (*p).meta.is_null()
+        || (*(*p).meta).proto_serial != serial
+    {
+        violated("prototype is not the family's", b"");
+    }
+    let keys = if d.key_count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(d.keys, d.key_count as usize)
+    };
+    for key in keys {
+        let atom = key.atom;
+        let Some(name) = atom_bytes(atom) else {
+            continue;
+        };
+        let k = f64::from_bits(crate::value::JSValue::string_ptr((*atom).string.cast_mut()).bits());
+        if super::plain_custom_prototype_may_intercept(
+            bits as usize & crate::value::POINTER_MASK as usize,
+            k,
+        ) {
+            violated("the key is intercepted on the prototype chain", name);
+        }
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_CREATE_FAMILY_CONTRACT_CHECK: unsafe extern "C-unwind" fn(
+    *const PerryLayoutDesc,
+    f64,
+) = js_create_family_contract_check;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_PERRY_CREATE_FAMILY: unsafe extern "C" fn(*const PerryLayoutDesc, f64) -> f64 =
+    perry_create_family;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_PERRY_BIND_FAMILY_PROTOTYPE: unsafe extern "C" fn(*const PerryProtoFamily, f64) =
+    perry_bind_family_prototype;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_PERRY_ALLOC_LAYOUT: unsafe extern "C" fn(*const PerryLayoutDesc) -> *mut ObjectHeader =

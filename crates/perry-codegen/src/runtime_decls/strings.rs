@@ -1243,6 +1243,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I64, I32, PTR, I32, I32, I32, I32, I64, PTR, I32],
     );
     module.declare_function("perry_alloc_layout", PTR, &[PTR]);
+    module.declare_function("perry_create_family", DOUBLE, &[PTR, DOUBLE]);
+    module.declare_function("perry_bind_family_prototype", VOID, &[PTR, DOUBLE]);
+    // `PERRY_CHECK_CONTRACTS` builds only.
+    module.declare_function("js_create_family_contract_check", VOID, &[PTR, DOUBLE]);
     module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32, I64]);
     module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
     module.declare_function("js_shape_run_static_seed", VOID, &[]);

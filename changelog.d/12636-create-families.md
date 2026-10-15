@@ -1,0 +1,1 @@
+`Object.assign(Object.create(P), { … })` and `const a = Object.create(P); a.k = v`, with `P` a module-level object literal, are object families born with a compile-time layout: the object is allocated with its keys, and its key adds are slot stores answered from the prototype-write census instead of reading the prototype's layout at run time (#12636).

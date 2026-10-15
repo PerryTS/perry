@@ -74,6 +74,60 @@ fn source(e: &Expr) -> Option<Source> {
     }
 }
 
+/// Every body of the module (init, functions, class members), plus the
+/// bodies of the closures they contain, statement by statement.
+fn for_each_module_stmt(hir: &Module, f: &mut dyn FnMut(&Stmt)) {
+    let mut bodies: Vec<&[Stmt]> = vec![&hir.init];
+    bodies.extend(hir.functions.iter().map(|f| f.body.as_slice()));
+    for c in &hir.classes {
+        bodies.extend(
+            c.constructor
+                .iter()
+                .chain(&c.methods)
+                .chain(&c.static_methods)
+                .chain(c.getters.iter().map(|(_, f)| f))
+                .chain(c.setters.iter().map(|(_, f)| f))
+                .map(|f| f.body.as_slice()),
+        );
+    }
+    for body in &bodies {
+        super::ptr_shape_elements::walk_stmts(body, &mut |s| f(s));
+        super::scalar_method_dispatch::for_each_expr_in_stmts(body, &mut |e| {
+            if let Expr::Closure { body, .. } = e {
+                super::ptr_shape_elements::walk_stmts(body, &mut |s| f(s));
+            }
+        });
+    }
+}
+
+/// Object model step 1: the `const a = Object.create(P)` bindings whose `P`
+/// is a binding: `(a, the creation expression's address, P)`. A binding id
+/// bound more than once has no single creation point and is left out.
+pub(crate) fn object_create_bindings(hir: &Module) -> Vec<(u32, usize, u32)> {
+    let mut seen: HashMap<u32, Option<(usize, u32)>> = HashMap::new();
+    for_each_module_stmt(hir, &mut |stmt| {
+        if let Stmt::Let {
+            id, mutable, init, ..
+        } = stmt
+        {
+            let create = match (mutable, init) {
+                (false, Some(e @ Expr::ObjectCreate(proto, None))) => match proto.as_ref() {
+                    Expr::LocalGet(p) => Some((e as *const Expr as usize, *p)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            seen.entry(*id).and_modify(|b| *b = None).or_insert(create);
+        }
+    });
+    let mut out: Vec<(u32, usize, u32)> = seen
+        .into_iter()
+        .filter_map(|(id, b)| b.map(|(addr, p)| (id, addr, p)))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
 pub(crate) fn object_create_protos(hir: &Module) -> ObjectCreateProtos {
     // Every `const` binding with an initializer. A binding id bound twice has
     // no single source.

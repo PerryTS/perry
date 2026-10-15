@@ -1467,6 +1467,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Step 4b: a planned-bare store inside a region's F-body.
             if same_put_value_receiver_expr(target, receiver) {
                 if let Expr::String(k) = key.as_ref() {
+                    // Object model step 1: adding an `Object.create(P)` family's key.
+                    if let Some(add) = crate::layout_desc::create_families::add_site(target, k) {
+                        return crate::layout_desc::create_families::lower_add(
+                            ctx, &add, target, value, *strict,
+                        );
+                    }
                     // Object model step 1: adding a literal family's key.
                     if let Some(site) = super::family_slot::site(ctx, target, k, true) {
                         return super::family_slot::lower_set(

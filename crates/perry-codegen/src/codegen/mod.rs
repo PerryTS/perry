@@ -489,6 +489,7 @@ fn compile_module_impl(
     // No family facts of a previous module on this thread reach this one's
     // early analyses; this module's are installed once its births are known.
     crate::layout_desc::set_module_families(Default::default(), Vec::new());
+    crate::layout_desc::create_families::clear();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
     // The driver supplies whole-program ownership in opts. Direct callers
@@ -2641,8 +2642,10 @@ fn compile_module_impl(
                 hir,
                 &module_prefix,
             ));
+            crate::layout_desc::create_families::collect(hir, &module_prefix);
         } else {
             crate::layout_desc::array_families::clear();
+            crate::layout_desc::create_families::clear();
         }
         crate::layout_desc::set_module_families(adds, layouts);
     }
