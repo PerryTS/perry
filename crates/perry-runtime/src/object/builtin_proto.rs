@@ -439,7 +439,10 @@ fn note_family_write(family: usize, site: &'static str) {
         // SAFETY: a live intrinsic of this agent, or the static stand-in
         // (never written: nothing writes an intrinsic before sealing).
         unsafe {
-            if std::ptr::eq(p.cast::<u64>(), crate::agent_ptrs::PERRY_PRISTINE_PROTO.as_ptr()) {
+            if std::ptr::eq(
+                p.cast::<u64>(),
+                crate::agent_ptrs::PERRY_PRISTINE_PROTO.as_ptr(),
+            ) {
                 return false;
             }
             let fresh = !super::layout_desc::word_is_shadowed((*p).parent_class_id);
@@ -511,12 +514,16 @@ fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
         return Some((BuiltinProto::BigInt, false));
     }
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
-    if matches!(header.obj_type, crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY)
-        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    if matches!(
+        header.obj_type,
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+    ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         let array = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
-        if array.is_null() { return None; }
+        if array.is_null() {
+            return None;
+        }
         // SAFETY: clean_arr_ptr returns a live GC-headed array.
         header = unsafe { crate::value::addr_class::honest_header(array as usize) };
     }
@@ -528,7 +535,10 @@ fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
         crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
         _ => return None,
     };
-    Some((family, family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0))
+    Some((
+        family,
+        family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0,
+    ))
 }
 
 /// The family whose prototype a by-name builtin dispatch on `recv` reads.

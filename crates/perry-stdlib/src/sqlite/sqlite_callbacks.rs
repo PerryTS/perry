@@ -22,8 +22,6 @@ use rusqlite::ffi;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 
-perry_runtime::state_key_memo!(static MEMO_AGGSTATES);
-
 /// The authorizer's index in the `callbacks` array. Functions and aggregates
 /// take the following indices; an aggregate takes [`AGG_SLOTS`] of them.
 pub(crate) const AUTHORIZER_INDEX: u32 = 0;
@@ -365,7 +363,7 @@ pub(crate) unsafe extern "C" fn node_sqlite_authorizer_trampoline(
 // only `slot + 1` (0 = the group has not started).
 
 unsafe fn agg_states(owner: f64) -> f64 {
-    native_payload::state_get_memo(owner, &DB_FAMILY, b"aggStates", &MEMO_AGGSTATES)
+    native_payload::state_get(owner, &DB_FAMILY, b"aggStates")
 }
 
 unsafe fn agg_get(target: Target, slot: u32) -> f64 {
@@ -394,24 +392,17 @@ unsafe fn agg_set(target: Target, slot: u32, value: f64) {
     let mut states = agg_states(owner.get_nanbox_f64());
     if !value_from_f64(states).is_pointer() {
         let fresh = perry_runtime::js_nanbox_pointer(perry_runtime::js_array_alloc(0) as i64);
-        native_payload::state_set_memo(
-            owner.get_nanbox_f64(),
-            &DB_FAMILY,
-            b"aggStates",
-            fresh,
-            &MEMO_AGGSTATES,
-        );
+        native_payload::state_set(owner.get_nanbox_f64(), &DB_FAMILY, b"aggStates", fresh);
         states = agg_states(owner.get_nanbox_f64());
     }
     let arr = raw_addr_from_value(states) as *mut ArrayHeader;
     let updated = perry_runtime::array::js_array_set_f64_extend(arr, slot, value.get_nanbox_f64());
     if updated != arr {
-        native_payload::state_set_memo(
+        native_payload::state_set(
             owner.get_nanbox_f64(),
             &DB_FAMILY,
             b"aggStates",
             perry_runtime::js_nanbox_pointer(updated as i64),
-            &MEMO_AGGSTATES,
         );
     }
 }

@@ -830,58 +830,6 @@ fn u31_bitset_clone_uses_one_guarded_uint32_load_and_keeps_dynamic_miss() {
 }
 
 #[test]
-fn u31_transition_clone_returns_a_proved_cached_array_hit_without_second_get() {
-    const TRANSITION_INDEX_ID: u32 = 71;
-    let _native = crate::codegen::helpers::NativeRootsPin::native();
-    let class = transition_class();
-    assert_eq!(
-        super::typed_abi::nonnegative_index_method_params(&class.methods[0]),
-        vec![TRANSITION_INDEX_ID]
-    );
-
-    let ir = emit_transition();
-    let public = "perry_method_cached_transition_method_clone_ts__TransitionCache__transition";
-    let clone = function_body(&ir, &format!("@{public}$idx_u31_{TRANSITION_INDEX_ID}("));
-    let generic = function_body(&ir, &format!("@{public}$generic("));
-
-    assert!(
-        clone.contains("cached_field_index.object_header")
-            && clone.contains("cached_field_index.exact_token")
-            && !clone.contains("cached_field_index.prefix_token")
-            && clone.contains("cached_field_index.array_header")
-            && clone.contains("cached_field_index.array_load")
-            && clone.contains("cached_field_index.return")
-            && clone
-                .split("\ncached_field_index.return.")
-                .nth(1)
-                .and_then(|tail| tail.split("\ncached_field_index.normal.").next())
-                .is_some_and(|fast_return| fast_return.contains("ret double"))
-            && clone.contains("cached_field_index.normal")
-            && clone.contains("arrlike.ic.header")
-            && clone.contains("if.then"),
-        "the proved truthy hit must return directly while the complete original body remains as fallback:\n{clone}"
-    );
-    let first_cache = clone
-        .lines()
-        .find(|line| line.contains("cached_field_index") && line.contains("@perry_ic_"))
-        .or_else(|| clone.lines().find(|line| line.contains("@perry_ic_")))
-        .and_then(|line| line.split('@').nth(1))
-        .and_then(|tail| {
-            tail.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .next()
-        })
-        .unwrap_or_else(|| panic!("guard has no property cache reference:\n{clone}"));
-    assert!(
-        clone.matches(&format!("@{first_cache}")).count() >= 6,
-        "the speculative guard and original property reads must share one primed cache ({first_cache}):\n{clone}"
-    );
-    assert!(
-        !generic.contains("cached_field_index"),
-        "an unproved/negative index must retain only the original generic behavior:\n{generic}"
-    );
-}
-
-#[test]
 fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
     let candidate = read_method();
     assert_eq!(

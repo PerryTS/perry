@@ -5,9 +5,9 @@ use crate::gc::RuntimeHandleScope;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
 
+const PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
+    crate::object::IntrinsicPrivateReadSite::new("[[RegExpPrototype]]");
 crate::perry_thread_local! {
-    static PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
-        const { crate::object::IntrinsicPrivateReadSite::new("[[RegExpPrototype]]") };
     static BIRTH_SHAPE: Cell<u32> = const { Cell::new(0) };
 }
 
@@ -103,7 +103,7 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
             crate::object::proto_validity::mark_object_as_prototype(p as usize)
         })
         .expect("intrinsic prototype has a stable identity");
-    let private_key = super::MATCHER_READ.with(|site| site.birth_key());
+    let private_key = super::MATCHER_READ.birth_key();
     let proof = SharedLayout::shape_cache_entry();
     let keys = unsafe {
         crate::object::canonical_keys::extend_key_with_entry(
@@ -151,20 +151,15 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
             "the fixed RegExp birth must have only Any lanes"
         );
         BIRTH_SHAPE.with(|memo| memo.set(shape));
-        // The canonical keys above prove both namespaces and positions.
-        // Prime the existing generic read sites from those birth facts so the
-        // first access does not rediscover the layout we just constructed.
-        super::MATCHER_READ.with(|site| site.prime_birth(shape, 0, 2));
-        super::LAST_INDEX_READ.with(|site| site.prime_own_inline(shape, 1, 2));
     });
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
 }
 
 // Read the realm intrinsic through the same private slot machinery as matcher
-// data. Neither this site nor BIRTH_SHAPE retains a managed pointer.
+// data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
 pub(crate) fn intrinsic_prototype() -> f64 {
     let global = crate::object::js_get_global_this();
     PROTOTYPE_READ
-        .with(|site| site.read(global))
+        .read(global)
         .expect("realm has installed the RegExp intrinsic")
 }

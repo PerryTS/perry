@@ -83,9 +83,10 @@ mod tests {
             );
             assert_eq!(
                 ir.lines()
-                    .filter(
-                        |line| line.contains("call double @js_value_length_property_key_ic_f64(")
-                    )
+                    .filter(|line| {
+                        line.contains("call double @js_value_length_property_key_ic_f64(")
+                            || line.contains("call double @js_value_length_property_f64(")
+                    })
                     .count(),
                 2,
                 "each site keeps ordinary override and getter semantics"

@@ -378,7 +378,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_in_operator", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_in_operator_presence_ic", DOUBLE, &[DOUBLE, DOUBLE, PTR]);
     module.declare_function(
         "js_private_brand_check",
         DOUBLE,
@@ -718,9 +717,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I64, I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
-        "js_object_get_field_by_key_site",
+        "js_object_get_keyed_slow",
         DOUBLE,
-        &[PTR, I64, I64, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, I64, I32],
     );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // PERRY_CHECK_CONTRACTS: the witness of the declared-kind element proof.
@@ -730,12 +729,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "perry_wpfacts_check_field",
         I32,
         &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I64],
-    );
-    module.declare_function("js_dyn_index_get_site", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
-    module.declare_function(
-        "js_region_holder_read",
-        I32,
-        &[PTR, DOUBLE, PTR, I32, PTR, I32],
     );
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,

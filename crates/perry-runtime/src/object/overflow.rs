@@ -445,15 +445,6 @@ pub(crate) unsafe fn get(obj: *const ObjectHeader, slot: u32) -> Option<u64> {
     get_from(t, obj, slot)
 }
 
-/// Physical fixed storage referenced by an ordered entry, when one exists.
-pub(crate) unsafe fn fixed_slot_at(t: *const Table, entry: u32) -> Option<u32> {
-    if entry >= (*t).length || *key_at(t, entry) == TAG_HOLE || *attrs_at(t, entry) & SLOT_REF == 0
-    {
-        return None;
-    }
-    Some(*value_at(t, entry) as u32)
-}
-
 pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u32) -> Option<u64> {
     if slot >= (*t).length {
         return None;

@@ -90,46 +90,6 @@ impl SharedEntry {
         ));
     }
 
-    /// The same shape validator serves keyed and runtime read entries.
-    #[inline]
-    pub(super) unsafe fn valid_shapes(&self) -> bool {
-        if self.depth == 0 {
-            return true;
-        }
-        if self.depth > 1 {
-            for &(addr, shape) in std::slice::from_raw_parts(self.hops, self.depth - 1) {
-                if addr == 0 || shape_word(addr) != shape {
-                    return false;
-                }
-            }
-        }
-        self.holder != 0 && shape_word(self.holder) == self.holder_shape
-    }
-
-    #[inline]
-    pub(super) unsafe fn slot_value(&self, recv: *const ObjectHeader) -> Option<u64> {
-        if self.absent {
-            return Some(crate::value::TAG_UNDEFINED);
-        }
-        holder_slot_value(
-            if self.holder == 0 {
-                recv as usize
-            } else {
-                self.holder
-            },
-            self.slot & !(1 << 30),
-        )
-    }
-
-    #[inline]
-    pub(super) unsafe fn read_value(&self, recv: *const ObjectHeader) -> Option<u64> {
-        if !self.valid_shapes() {
-            return None;
-        }
-        self.slot_value(recv)
-            .filter(|&bits| bits != crate::value::TAG_HOLE)
-    }
-
     /// The objects a method proof names: its holder, then each heap hop.
     pub(crate) unsafe fn method_referents(&self) -> Vec<usize> {
         debug_assert!(self.exact_chain);

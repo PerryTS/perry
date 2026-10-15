@@ -253,25 +253,6 @@ fn strict_literal_method_binds_the_raw_receiver() {
 }
 
 #[test]
-fn literal_method_this_field_is_a_shape_site_read() {
-    let ir = compile_ir(&literal_module(method(METHOD, false, false)));
-    let body = closure_body(&ir, METHOD);
-    // `this` names the literal's shape class, and that names no read path of
-    // its own (#12483): `this.a` is the shape site, whose word follows the
-    // receiver's ShapeId, never a guard against the literal's birth shape.
-    assert!(
-        body.contains("_packed_get"),
-        "`this.a` must be served by the shape site's word:\n{body}"
-    );
-    // (The method's store keeps its own class write guard, which names the
-    // literal's shape; the READ tower's blocks are what must be gone.)
-    assert!(
-        !body.contains("class_field_get.") && !body.contains("@js_class_field_get_ic"),
-        "`this.a` must not guard against the literal's birth shape:\n{body}"
-    );
-}
-
-#[test]
 fn arrow_keeps_its_per_use_receiver_reads() {
     // An arrow with no captured `this` is outside the change: lexical `this`
     // is `captures_this`'s job. It never reads the receiver parameter; with

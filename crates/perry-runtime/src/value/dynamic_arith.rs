@@ -729,9 +729,9 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 #[inline]
 pub extern "C" fn js_number_mod(a: f64, b: f64) -> f64 {
     const EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0; // 2^53
-    // u32 tier. Rejects negative zero, so every signed, fractional or
-    // exceptional case falls through; cast round trips also reject infinity
-    // and NaN, and a negative divisor saturates to 0 and is refused.
+                                                          // u32 tier. Rejects negative zero, so every signed, fractional or
+                                                          // exceptional case falls through; cast round trips also reject infinity
+                                                          // and NaN, and a negative divisor saturates to 0 and is refused.
     if !a.is_sign_negative() {
         let dividend = a as u32;
         let divisor = b as u32;
@@ -1154,7 +1154,11 @@ mod tests {
     /// `js_dynamic_mod` must route plain doubles through the same slow path.
     #[test]
     fn dynamic_mod_plain_doubles_use_number_mod() {
-        for &(a, b) in &[(103_524_123_456_789.0, 2_147_483_647.0), (-4.0, 2.0), (5.0, 0.0)] {
+        for &(a, b) in &[
+            (103_524_123_456_789.0, 2_147_483_647.0),
+            (-4.0, 2.0),
+            (5.0, 0.0),
+        ] {
             let got = unsafe { js_dynamic_mod(a, b) };
             let want = js_number_mod(a, b);
             assert!((got.is_nan() && want.is_nan()) || got.to_bits() == want.to_bits());

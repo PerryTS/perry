@@ -461,7 +461,8 @@ pub(crate) unsafe fn holder_word_blocks_store(bits: u64, name: &[u8]) -> Option<
     // POINTER_TAG value): its header is read directly. Other encodings use
     // the admitting reader.
     let payload = bits & crate::value::POINTER_MASK;
-    let header = if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && payload != 0 {
+    let header = if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && payload != 0
+    {
         &*crate::gc::header_from_trusted_user_ptr(payload as *const u8)
     } else {
         crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()

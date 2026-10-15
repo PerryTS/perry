@@ -206,10 +206,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_write_barrier_root_nanbox",
     "perry_transition_cache_base",
     "js_transition_ic_note_hit",
-    // S2 GC-leaf IC hits; proven `Leaf` by the generated call-effects table.
-    "js_object_get_field_ic_fast",
-    // First-read D3: a generic read's miss front, proven `Leaf` likewise.
-    "js_object_get_field_ic_front",
     // Object model step 5: the unknown-receiver probe, proven `Leaf`.
     "perry_probe_get",
     "perry_probe_get_value",

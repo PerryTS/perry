@@ -12,12 +12,12 @@ use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I32, I64};
 
-#[path = "dynamic_dispatch_select.rs"]
-mod select;
 #[path = "dynamic_dispatch_collapse.rs"]
 mod collapse;
 #[path = "dispatch_receiver_class.rs"]
 mod dispatch_receiver_class;
+#[path = "dynamic_dispatch_select.rs"]
+mod select;
 #[path = "dynamic_dispatch_tower.rs"]
 mod tower;
 use collapse::method_dispatch_collapse_enabled;
@@ -870,7 +870,9 @@ pub(crate) fn try_lower_instance_method_call(
                 .map(|class| {
                     class.is_some_and(|class| {
                         !class_chain_has_field_named(ctx, class, property)
-                            && crate::proto_constants::class_method_is_constant(ctx, class, property)
+                            && crate::proto_constants::class_method_is_constant(
+                                ctx, class, property,
+                            )
                     })
                 })
                 .collect();
@@ -913,15 +915,14 @@ pub(crate) fn try_lower_instance_method_call(
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
-                let selected =
-                    select::select_with_word(
-                        ctx,
-                        &recv,
-                        property,
-                        &constant_candidates,
-                        &constant_cased,
-                        &word,
-                    );
+                let selected = select::select_with_word(
+                    ctx,
+                    &recv,
+                    property,
+                    &constant_candidates,
+                    &constant_cased,
+                    &word,
+                );
                 let lookup = if static_split {
                     let claimed = ctx.block().icmp_ne(I32, &selected, "0");
                     crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);

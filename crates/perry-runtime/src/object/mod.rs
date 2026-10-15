@@ -269,8 +269,8 @@ pub mod layout_desc;
 pub(crate) use shapes::layout_probe;
 #[cfg(test)]
 mod layout_desc_tests;
-pub(crate) mod shadow;
 pub mod runtime_layouts;
+pub(crate) mod shadow;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
@@ -425,9 +425,7 @@ pub(crate) use this_binding::{
     static_this_arm_if_unarmed, static_this_disarm, SuperNewTargetScope,
 };
 #[cfg(test)]
-pub(crate) use this_binding::{
-    derived_super_scope_push_at, static_private_owner_depth,
-};
+pub(crate) use this_binding::{derived_super_scope_push_at, static_private_owner_depth};
 pub use this_binding::{
     js_new_target_enter, js_new_target_get, js_new_target_leave, js_new_target_set,
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,

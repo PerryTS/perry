@@ -58,4 +58,3 @@ fn marking_is_visible_and_arms_the_latch() {
         );
     }
 }
-

@@ -361,7 +361,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
         .expect("the property-key dispatch block exists");
     assert_eq!(
         property
-            .matches("call double @js_dyn_index_get_site(")
+            .matches("call double @perry_probe_get_keyed(")
             .count(),
         1
     );
@@ -585,36 +585,13 @@ fn dynamic_symbol_read_ir(symbol_init: Expr) -> String {
 fn proven_symbol_key_uses_the_keyed_shape_guard() {
     let ir = dynamic_symbol_read_ir(Expr::SymbolNew(None));
     assert!(
-        ir.contains("symic.hit")
-            && ir.contains("4611686018427387904")
-            && ir.contains("call double @js_object_get_field_by_key_site(")
+        ir.contains("call double @perry_probe_get_keyed(")
             && !ir.contains("@PERRY_SYMBOL_PROPERTY_IC_EPOCH"),
-        "the exact-key ShapeId Symbol guard was not emitted:\n{ir}"
+        "the Symbol read must take the keyed probe:\n{ir}"
     );
     assert!(
         !ir.contains("call i32 @js_is_symbol("),
         "compiler-owned Symbol provenance must remove the registry probe:\n{ir}"
-    );
-}
-
-#[test]
-fn proven_symbol_then_named_field_composes_identity_and_shape_caches() {
-    let ir = dynamic_symbol_access_ir(Expr::SymbolNew(None), Some("id"));
-    assert!(
-        ir.contains("symfield.identity")
-            && ir.contains("symfield.hit")
-            && ir.contains("load atomic i64, ptr @PERRY_SYMBOL_PROPERTY_IC_EPOCH acquire")
-            && ir.contains("call double @js_object_get_symbol_then_field_ic_miss(")
-            && ir.contains("4611686018427387904"),
-        "the weak Symbol identity and exact ShapeId field caches were not composed:\n{ir}"
-    );
-    assert!(
-        ir.contains("and i16") && ir.contains("2048"),
-        "the composed hit must reject descriptor-bearing metadata objects:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call i32 @js_is_symbol("),
-        "compiler-owned Symbol provenance must retain its registry-free route:\n{ir}"
     );
 }
 
@@ -627,7 +604,7 @@ fn erased_symbol_annotation_does_not_bypass_runtime_validation() {
     });
     assert!(
         ir.contains("dynkey.property")
-            && ir.contains("call double @js_dyn_index_get_site(")
+            && ir.contains("call double @perry_probe_get_keyed(")
             && !ir.contains("symic.hit")
             && !ir.contains("call double @js_object_get_symbol_property_ic_miss("),
         "a TypeScript Symbol annotation without initializer provenance must not enter the exact-Symbol IC:\n{ir}"

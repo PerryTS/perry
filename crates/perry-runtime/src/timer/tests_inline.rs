@@ -413,30 +413,22 @@ mod honest_tag_tests {
     }
 
     /// The COMPILED read path. An emitted `t.unref` value read is a per-site
-    /// inline cache whose miss edge calls `js_object_get_field_ic_slow` with the
+    /// read whose slow edge calls `js_object_get_field_slow` with the
     /// receiver's 48-bit payload — not `js_object_get_field_by_name`. The
     /// prototype method has to resolve through THAT entry too; measured on the
     /// text family, a program whose reads took this edge answered `undefined`
     /// while every by-name test passed.
     #[test]
     fn a_method_value_read_resolves_through_the_ic_miss_entry() {
-        use crate::object::{PicCache, PicCacheSlot, PIC_CACHE_WORDS};
-        use std::sync::atomic::AtomicU64;
-
         let _serial = crate::gc::global_side_table_test_lock();
         test_clear_all_timer_scanner_roots();
 
         let handle = js_set_timeout_callback(0, 50_000.0);
         for name in ["ref", "unref", "hasRef", "refresh", "close"] {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let mut cache: PicCache = [0; PIC_CACHE_WORDS];
-            let mut slot: PicCacheSlot = &mut cache;
-            let packed = AtomicU64::new(0);
-            let value = crate::object::js_object_get_field_ic_slow(
+            let value = crate::object::js_object_get_field_slow(
                 (handle as u64 & crate::value::POINTER_MASK) as i64,
                 key,
-                &mut slot,
-                &packed,
             );
             let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
             assert!(

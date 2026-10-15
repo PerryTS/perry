@@ -31,9 +31,6 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
 use std::rc::Rc;
 
-perry_runtime::state_key_memo!(static MEMO_DB);
-perry_runtime::state_key_memo!(static MEMO_STMT);
-perry_runtime::state_key_memo!(static MEMO_ROWS);
 perry_runtime::birth_memo!(static STMT_BIRTH);
 perry_runtime::birth_memo!(static ITER_BIRTH);
 
@@ -173,7 +170,7 @@ unsafe fn live_stmt<'a>(this: f64) -> (&'a mut NodeStmt, f64) {
         Err(PayloadMiss::Closed) => throw_invalid_state("statement has been finalized"),
         Err(PayloadMiss::Foreign) => throw_illegal_invocation(),
     };
-    let db = native_payload::state_get_memo(this, &STMT_FAMILY, b"db", &MEMO_DB);
+    let db = native_payload::state_get(this, &STMT_FAMILY, b"db");
     match native_payload::payload_mut::<NodeDb>(db, &DB_FAMILY) {
         Ok(open) if open.serial == stmt.serial => (stmt, db),
         _ => throw_invalid_state("statement has been finalized"),
@@ -709,22 +706,12 @@ extern "C" fn iter_next_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
         let expected = iter.epoch;
         let scope = RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this);
-        let stmt_value = native_payload::state_get_memo(
-            this.get_nanbox_f64(),
-            &ITER_FAMILY,
-            b"stmt",
-            &MEMO_STMT,
-        );
+        let stmt_value = native_payload::state_get(this.get_nanbox_f64(), &ITER_FAMILY, b"stmt");
         let (stmt, _) = live_stmt(stmt_value);
         if stmt.epoch != expected {
             throw_invalid_state("iterator was invalidated");
         }
-        let rows = native_payload::state_get_memo(
-            this.get_nanbox_f64(),
-            &ITER_FAMILY,
-            b"rows",
-            &MEMO_ROWS,
-        );
+        let rows = native_payload::state_get(this.get_nanbox_f64(), &ITER_FAMILY, b"rows");
         let arr = raw_addr_from_value(rows) as *const ArrayHeader;
         let Ok(iter) =
             native_payload::payload_mut::<NodeStmtIter>(this.get_nanbox_f64(), &ITER_FAMILY)
@@ -733,12 +720,11 @@ extern "C" fn iter_next_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
         };
         if arr.is_null() || iter.index >= js_array_length(arr) {
             iter.done = true;
-            native_payload::state_set_memo(
+            native_payload::state_set(
                 this.get_nanbox_f64(),
                 &ITER_FAMILY,
                 b"rows",
                 undefined_f64(),
-                &MEMO_ROWS,
             );
             return done_result();
         }
@@ -756,7 +742,7 @@ extern "C" fn iter_return_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
             Err(PayloadMiss::Closed) => {}
             Err(PayloadMiss::Foreign) => throw_illegal_invocation(),
         }
-        native_payload::state_set_memo(this, &ITER_FAMILY, b"rows", undefined_f64(), &MEMO_ROWS);
+        native_payload::state_set(this, &ITER_FAMILY, b"rows", undefined_f64());
         done_result()
     }
 }

@@ -59,9 +59,19 @@ fn assert_checked_modulo(ir: &str) {
     let fallbacks: Vec<&str> = ir
         .split("\nmod.f64.fallback")
         .skip(1)
-        .map(|rest| rest.split("\n\n").next().unwrap_or(rest).split("\nmod.merge").next().unwrap_or(rest))
+        .map(|rest| {
+            rest.split("\n\n")
+                .next()
+                .unwrap_or(rest)
+                .split("\nmod.merge")
+                .next()
+                .unwrap_or(rest)
+        })
         .collect();
-    assert!(!fallbacks.is_empty(), "checked modulo must emit a mod.f64.fallback block:\n{ir}");
+    assert!(
+        !fallbacks.is_empty(),
+        "checked modulo must emit a mod.f64.fallback block:\n{ir}"
+    );
     for block in &fallbacks {
         assert!(
             block.contains("call double @js_number_mod(") && !block.contains("frem double"),

@@ -1,7 +1,6 @@
 use super::*;
-use crate::object::{ObjectHeader, PicCache, PicCacheSlot, PIC_CACHE_WORDS};
-use crate::value::TAG_HOLE;
-use std::sync::atomic::AtomicU64;
+use crate::object::ObjectHeader;
+use crate::value::{TAG_HOLE, TAG_UNDEFINED};
 
 /// The materialization hook forces a copying minor if a read accidentally
 /// enters the general array resolver. No generated root mechanism is changed.
@@ -35,9 +34,10 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
     let live = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     live.with_mut_ptr(|p| crate::object::js_object_set_field(p, 0, crate::JSValue::number(73.0)));
     let key = scope.root_raw_mut_ptr(crate::string::canonical_key(b"icLeafJson"));
-    let mut cache: PicCache = [0; PIC_CACHE_WORDS];
-    let mut slot: PicCacheSlot = &mut cache;
-    let packed = AtomicU64::new(0xFFFF_FFFF);
+    let atom = scope.root_raw_mut_ptr(unsafe {
+        crate::string::property_atom(key.get_raw_mut_ptr::<crate::StringHeader>())
+            as *mut crate::StringHeader
+    });
     let hook =
         JsonTapeSafepointHookGuard::new(crate::json_tape::JsonTapeSafepoint::ForceLazyHeaderRooted);
 
@@ -53,37 +53,18 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
         assert_ne!(original, witness.get_raw_mut_ptr::<ObjectHeader>());
         let before = gc_collection_count();
         let raw = lazy.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
-        let receiver = f64::from_bits(ptr_bits(raw as usize));
-        let k = key.get_raw_mut_ptr::<crate::StringHeader>();
         unsafe {
             assert_eq!(crate::object::shapes::object_shape_stamp(raw.cast()), 0);
-            // Exercise the shared probe even though unit-test feedback makes
-            // the public outlined entries decline before probing the cache.
-            assert!(
-                crate::object::field_get_set::pic_outlined_mru_hit(raw.cast(), &mut slot,)
-                    .is_none()
+            // The emitted read's probe is a GC leaf: it answers or declines
+            // without materializing the lazy array.
+            let atom = atom.get_raw_mut_ptr::<crate::StringHeader>();
+            let probed = crate::object::layout_probe::perry_probe_get(
+                crate::object::shapes::ordinary_dir_addr(),
+                (raw as i64).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR as i64),
+                string_bits(atom as usize),
+                crate::string::property_atom_hash(atom),
             );
-            assert_eq!(
-                crate::object::js_object_get_field_ic_front(
-                    crate::object::shapes::ordinary_dir_addr(),
-                    (raw as i64).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR as i64),
-                    string_bits(k as usize),
-                    &mut slot,
-                    &packed,
-                )
-                .to_bits(),
-                TAG_HOLE
-            );
-            assert_eq!(
-                crate::object::js_object_get_field_ic_fast(
-                    receiver.to_bits() as i64,
-                    k,
-                    0,
-                    &mut slot,
-                )
-                .to_bits(),
-                TAG_HOLE
-            );
+            assert!(matches!(probed.to_bits(), TAG_HOLE | TAG_UNDEFINED));
             assert!((*raw).materialized.is_null());
         }
         assert_eq!(

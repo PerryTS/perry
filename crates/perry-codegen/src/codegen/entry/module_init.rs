@@ -513,7 +513,6 @@ pub(super) fn compile_module_init(
         was_unrolled: hir.init_was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
-        property_get_ic_override: None,
         typed_parse_rodata: Vec::new(),
         buffer_data_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),

@@ -1369,29 +1369,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // first enforces ECMA-262 13.10.1 step 5: a non-Object right operand
         // (`"x" in 5`, `... in null`, `... in Symbol()`, …) throws a TypeError.
         Expr::In { property, object } => {
-            // Fixed keys retain the inline own-hit arm. Dynamic keys share
-            // the existing keyed entry through the one runtime operation.
-            let constant_key = matches!(&**property, Expr::String(_))
-                && !crate::codegen::full_outline_ic_enabled();
+            // HasProperty through the object's own layout (the shape
+            // presence answer), then the complete operation; no site state.
             rooting::with_operands_rooted(ctx, &[property, object], |ctx, vals| {
-                if constant_key {
-                    return Ok(super::in_presence_ic::lower_in_presence_ic(
-                        ctx, &vals[1], &vals[0],
-                    ));
-                }
-                let site = ctx.ic_site_counter;
-                ctx.ic_site_counter += 1;
-                let name = super::inline_cache_global_name(ctx, site);
-                ctx.ic_globals.push(name.clone());
-                let slot_ref = format!("@{name}");
                 Ok(ctx.block().call(
                     DOUBLE,
-                    "js_in_operator_presence_ic",
-                    &[
-                        (DOUBLE, &vals[1]),
-                        (DOUBLE, &vals[0]),
-                        (crate::types::PTR, &slot_ref),
-                    ],
+                    "js_in_operator",
+                    &[(DOUBLE, &vals[1]), (DOUBLE, &vals[0])],
                 ))
             })
         }

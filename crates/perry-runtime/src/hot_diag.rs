@@ -1214,9 +1214,6 @@ const RECV_ROUTE_NAMES: [&str; 35] = [
     "rloop_f_rep",
 ];
 
-/// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
-pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
-pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
 pub(crate) const RT_ROUTE_OVERWRITE_KEPT_TYPED: u32 = 31;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;

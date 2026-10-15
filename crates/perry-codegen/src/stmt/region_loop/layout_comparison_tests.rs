@@ -126,7 +126,7 @@ fn left_getter_chain_is_evaluated_once_before_right_getter() {
         assert_eq!(targets.len(), 1, "all operand reads share the active pad");
         assert_eq!(
             body.lines()
-                .filter(|l| l.contains("@js_object_get_field_ic_slow("))
+                .filter(|l| l.contains("@js_object_get_field_slow("))
                 .count(),
             3,
             "data, length and right value have one GetValue lowering each"

@@ -47,9 +47,8 @@ fn array_annexb_named_and_indexed_accessors_read() {
             43.0,
             "{name}: array key ABI"
         );
-        let mut cache: object::PicCacheSlot = std::ptr::null_mut();
         assert_eq!(
-            object::js_object_get_field_ic(receiver.to_bits() as i64, key(name), 0, &mut cache),
+            crate::object::js_object_get_field_value(receiver.to_bits() as i64, key(name), 0),
             43.0,
             "{name}: IC ABI"
         );

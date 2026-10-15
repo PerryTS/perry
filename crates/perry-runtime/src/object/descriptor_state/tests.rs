@@ -66,25 +66,12 @@ fn accessor_installed_after_a_holder_memo_retires_that_memo() {
             crate::object::js_object_create(crate::value::js_nanbox_pointer(holder as i64));
         let receiver = crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader;
         crate::object::js_object_set_field_by_name(receiver, key("pad"), 0.0);
-        // Sites retain their PIC words in the registered root list.
-        let site = Box::leak(Box::new(
-            crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new(),
-        ));
-        assert_eq!(site.read(receiver, b"laneAccessor"), 10.0);
-        assert_eq!(
-            site.read_leaf(receiver),
-            Some(10.0),
-            "subject: the holder memo must have primed"
-        );
+        use crate::object::field_get_set::runtime_read_site::get;
+        assert_eq!(get(receiver, b"laneAccessor"), 10.0);
         let shape = super::super::shapes::object_shape_stamp(holder);
         set_accessor_descriptor(holder as usize, "laneAccessor".into(), getter());
         assert_ne!(shape, super::super::shapes::object_shape_stamp(holder));
-        assert_ne!(
-            site.read_leaf(receiver),
-            Some(10.0),
-            "an old holder shape cannot serve the data memo"
-        );
-        assert_eq!(site.read(receiver, b"laneAccessor"), 41.0);
+        assert_eq!(get(receiver, b"laneAccessor"), 41.0);
     }
 }
 

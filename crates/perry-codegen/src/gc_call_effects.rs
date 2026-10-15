@@ -736,9 +736,9 @@ mod tests {
             "js_native_call_value",
             "js_to_primitive",
             "js_number_coerce",
-            // IC miss tower: slow arms can run getters and throw.
-            "js_object_get_field_ic_slow",
-            "js_object_get_field_ic_miss",
+            // The read entries behind the probe run getters and throw.
+            "js_object_get_field_slow",
+            "js_object_get_field_value",
             // not in any table: user code, a new helper
             "user_function_not_in_any_archive",
         ] {
@@ -901,42 +901,17 @@ mod tests {
     /// `CannotCollect` SIGSEGVs S2's evacuating slow-path test.
     #[test]
     fn ic_fast_split_hits_are_leaf_and_their_continuations_collect() {
-        for name in [
-            "js_object_get_field_ic_fast",
-            "js_put_value_set_packed_fast",
-        ] {
+        for name in ["js_put_value_set_packed_fast"] {
             assert_eq!(runtime_class(name), RuntimeClass::Leaf, "{name}");
             assert!(external_callee_cannot_collect(name), "{name}");
         }
-        for name in [
-            "js_object_get_field_ic_fast_miss",
-            "js_put_value_set_packed_miss",
-        ] {
+        for name in ["js_put_value_set_packed_miss"] {
             assert_eq!(
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,
                 "{name}"
             );
         }
-    }
-
-    /// First-read D3: a generic read's miss front must be a proven GC leaf
-    /// (`read_confirm.rs` says why). If the generated table ever classifies
-    /// it otherwise, the front grew a collecting path — a design error in the
-    /// front, not a table update. Its decline continuation still collects.
-    #[test]
-    fn the_generic_read_miss_front_is_leaf_and_its_continuation_collects() {
-        assert_eq!(
-            runtime_class("js_object_get_field_ic_front"),
-            RuntimeClass::Leaf
-        );
-        assert!(external_callee_cannot_collect(
-            "js_object_get_field_ic_front"
-        ));
-        assert!(external_callee_cannot_collect("perry_shape_dir_cell"));
-        assert!(!external_callee_cannot_collect(
-            "js_object_get_field_ic_slow"
-        ));
     }
 
     #[test]
@@ -962,9 +937,9 @@ mod tests {
             "js_string_compare_value",
             "js_rel_lt",
             "js_rel_gt",
-            "js_object_get_field_ic_miss_packed",
-            "js_object_get_field_ic_slow",
-            "js_object_get_field_ic_nonptr",
+            "js_object_get_field_slow",
+            "js_object_get_field_value",
+            "js_object_get_field_nonptr",
             "js_this_coerce_sloppy",
             "js_box_get_bits",
             "js_box_get_bits_trusted",

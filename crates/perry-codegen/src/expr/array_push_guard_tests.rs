@@ -761,9 +761,8 @@ fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
         .find("call double @js_process_memory_usage(")
         .expect("allocating argument");
     assert!(
-        slow.contains("@js_object_get_field_ic")
-            && slow[..arg].contains("phi double")
-            && slow[..arg].contains("pget.recv_merge"),
+        (slow.contains("@perry_probe_get") || slow.contains("@js_object_get_field_"))
+            && slow[..arg].contains("phi double"),
         "the argument block must receive the method read's merged value before evaluating the \
          argument:\n{slow}"
     );

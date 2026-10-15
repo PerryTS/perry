@@ -11,7 +11,10 @@ thread_local! {
 // Record a failed check and continue, so one run names every reader that
 // fails; `finish` panics with the whole list.
 fn fail(line: u32, what: String, note: &str) {
-    let msg = format!("[{}] line {line}: {what} {note}", CTX.with(|c| c.borrow().clone()));
+    let msg = format!(
+        "[{}] line {line}: {what} {note}",
+        CTX.with(|c| c.borrow().clone())
+    );
     FAILURES.with(|f| f.borrow_mut().push(msg));
 }
 macro_rules! soft_eq {
@@ -47,7 +50,12 @@ fn ctx(label: &str) {
 
 fn finish() {
     let failures = FAILURES.with(|f| std::mem::take(&mut *f.borrow_mut()));
-    assert!(failures.is_empty(), "{} failed checks:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failed checks:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 runtime_atom!(H_A, "holes_a", "686f6c65735f61");
 runtime_atom!(H_B, "holes_b", "686f6c65735f62");
@@ -106,7 +114,9 @@ unsafe fn array_of(value: f64) -> *mut crate::ArrayHeader {
 }
 
 unsafe fn json(value: f64) -> String {
-    string(crate::JSValue::string_ptr(crate::json::js_json_stringify(value, 0)))
+    string(crate::JSValue::string_ptr(crate::json::js_json_stringify(
+        value, 0,
+    )))
 }
 
 /// Every enumeration reader lists exactly `expected`, in order.
@@ -217,8 +227,15 @@ unsafe fn born(
 #[test]
 fn layout_holes_are_absent_for_every_reader() {
     crate::gc::initialize_runtime_fixture();
-    for desc in [std::ptr::addr_of!(HOLEY), std::ptr::addr_of!(HOLEY_PERMUTED)] {
-        soft_ne!(unsafe { layout_id(desc) }, 0, "holey descriptor must register");
+    for desc in [
+        std::ptr::addr_of!(HOLEY),
+        std::ptr::addr_of!(HOLEY_PERMUTED),
+    ] {
+        soft_ne!(
+            unsafe { layout_id(desc) },
+            0,
+            "holey descriptor must register"
+        );
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = unsafe { born(desc, &scope) };
         unsafe {
@@ -284,10 +301,16 @@ fn layout_holes_are_absent_for_every_reader() {
                 soft_eq!(get(obj, &H_A), 7.0f64.to_bits(), "inherited through a hole");
                 assert_absent_own(obj, &H_A);
                 // for-in also lists the inherited key the hole lets through.
-                assert_order_in(obj, &["holes_b", "holes_d"], &["holes_b", "holes_d", "holes_a"]);
-                let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
+                assert_order_in(
+                    obj,
+                    &["holes_b", "holes_d"],
+                    &["holes_b", "holes_d", "holes_a"],
+                );
                 for _ in 0..3 {
-                    soft_eq!(site.read(obj, b"holes_a"), 7.0);
+                    soft_eq!(
+                        crate::object::field_get_set::runtime_read_site::get(obj, b"holes_a"),
+                        7.0
+                    );
                 }
             });
             ctx(&format!("fill {:#x}", (*desc).family));
@@ -307,13 +330,21 @@ fn layout_holes_are_absent_for_every_reader() {
             // stays absent.
             object.with_mut_ptr(|obj| {
                 soft_eq!(js_object_delete_field(obj, H_B.string), 1);
-                assert_order_in(obj, &["holes_c", "holes_d"], &["holes_c", "holes_d", "holes_a"]);
+                assert_order_in(
+                    obj,
+                    &["holes_c", "holes_d"],
+                    &["holes_c", "holes_d", "holes_a"],
+                );
                 assert_absent_own(obj, &H_A);
                 soft_eq!(get(obj, &H_A), 7.0f64.to_bits());
             });
             crate::gc::js_gc_collect();
             object.with_mut_ptr(|obj| {
-                assert_order_in(obj, &["holes_c", "holes_d"], &["holes_c", "holes_d", "holes_a"])
+                assert_order_in(
+                    obj,
+                    &["holes_c", "holes_d"],
+                    &["holes_c", "holes_d", "holes_a"],
+                )
             });
         }
     }
@@ -330,10 +361,11 @@ unsafe fn assert_absent_own(object: *mut ObjectHeader, key: &StaticAtom) {
     finish();
 }
 
-/// A word-keyed cache primed on an object whose optional key is present
-/// must not answer for one of the same layout whose slot is a hole.
+/// The state-free reads answer each object of a layout that can have holes
+/// from its own slot: a read of an object whose optional key is present says
+/// nothing about one of the same layout whose slot is a hole.
 #[test]
-fn layout_hole_caches_decline() {
+fn layout_hole_reads_answer_per_object() {
     crate::gc::initialize_runtime_fixture();
     let desc = std::ptr::addr_of!(HOLEY);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -341,46 +373,41 @@ fn layout_hole_caches_decline() {
     let holey = unsafe { born(desc, &scope) };
     unsafe {
         full.with_mut_ptr(|obj| js_object_set_field_by_name(obj, H_A.string, 1.0));
-        let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
+        let read = crate::object::field_get_set::runtime_read_site::get;
         for _ in 0..3 {
-            full.with_mut_ptr(|obj| soft_eq!(site.read(obj, b"holes_a"), 1.0));
+            full.with_mut_ptr(|obj| soft_eq!(read(obj, b"holes_a"), 1.0));
         }
         holey.with_mut_ptr(|obj| {
-            soft_eq!(
-                site.read(obj, b"holes_a").to_bits(),
-                crate::value::TAG_UNDEFINED
-            )
+            soft_eq!(read(obj, b"holes_a").to_bits(), crate::value::TAG_UNDEFINED)
         });
-        use std::sync::atomic::{AtomicU64, Ordering};
-        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
-        let mut cache_slot: PicCacheSlot = &mut cache;
-        let packed = AtomicU64::new(u64::MAX);
+        // The entry a site's declined probe calls.
         full.with_mut_ptr(|obj| {
             soft_eq!(
-                js_object_get_field_ic_miss_packed(obj, H_A.string, &mut cache_slot, &packed),
+                crate::object::field_get_set::js_object_get_field_slow(
+                    obj as *mut ObjectHeader as i64,
+                    H_A.string
+                ),
                 1.0
             )
         });
-        // An emitted way must not be primed on a layout that can have holes.
-        soft_eq!(packed.load(Ordering::Relaxed), u64::MAX, "packed way primed");
         holey.with_mut_ptr(|obj| {
-            let hit = crate::object::field_get_set::pic_outlined_mru_hit(obj, &mut cache_slot);
-            soft!(
-                hit.is_none_or(|v| v.to_bits() != crate::value::TAG_HOLE),
-                "a hole answered from a cache"
-            );
             soft_eq!(
-                js_object_get_field_ic_miss_packed(obj, H_A.string, &mut cache_slot, &packed)
-                    .to_bits(),
+                crate::object::field_get_set::js_object_get_field_slow(
+                    obj as *mut ObjectHeader as i64,
+                    H_A.string
+                )
+                .to_bits(),
                 crate::value::TAG_UNDEFINED
-            );
+            )
         });
         let k = crate::js_nanbox_string(H_A.string as i64);
         for _ in 0..3 {
-            let v = full.with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
+            let v = full
+                .with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
             soft_eq!(js_in_operator(v, k).to_bits(), TRUE);
         }
-        let v = holey.with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
+        let v =
+            holey.with_const_ptr(|obj: *const ObjectHeader| crate::js_nanbox_pointer(obj as i64));
         soft_ne!(js_in_operator(v, k).to_bits(), TRUE);
     }
     finish();

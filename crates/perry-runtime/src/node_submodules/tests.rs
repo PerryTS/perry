@@ -467,13 +467,8 @@ fn test_default_and_named_exports_share_the_self_alias() {
     let property =
         crate::object::js_object_get_field_by_name_f64(closure as *const ObjectHeader, key);
     assert_eq!(property.to_bits(), default.to_bits());
-    let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
-    let property = crate::object::js_object_get_field_ic_miss(
-        closure as *const ObjectHeader,
-        key,
-        &mut cache_slot,
-    );
+    let property =
+        crate::object::field_get_set::get_field_miss(closure as *const ObjectHeader, key);
     assert_eq!(property.to_bits(), default.to_bits());
 }
 

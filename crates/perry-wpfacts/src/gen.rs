@@ -279,7 +279,8 @@ impl<'a> Gen<'a> {
                         (ImportSpecifier::Named { local, .. }, None)
                         | (ImportSpecifier::Default { local }, None)
                         | (ImportSpecifier::Namespace { local }, None) => {
-                            let why = format!("import from native/unresolved module {}", imp.source);
+                            let why =
+                                format!("import from native/unresolved module {}", imp.source);
                             (local.clone(), self.m.top_val(&why))
                         }
                     };
@@ -675,7 +676,9 @@ impl<'a> Gen<'a> {
                                 let src = self.export_node(t, b);
                                 self.m.edge(src, en);
                             }
-                            None => self.m.add_top(en, |_| format!("unresolved re-export source {source}")),
+                            None => self
+                                .m
+                                .add_top(en, |_| format!("unresolved re-export source {source}")),
                         }
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
@@ -691,7 +694,8 @@ impl<'a> Gen<'a> {
                         }
                         None => {
                             let fa = self.m.field_any(ns);
-                            self.m.add_top(fa, |_| format!("unresolved export * source {source}"));
+                            self.m
+                                .add_top(fa, |_| format!("unresolved export * source {source}"));
                         }
                     },
                     Export::NamespaceReExport { source, name } => {
@@ -702,7 +706,9 @@ impl<'a> Gen<'a> {
                                 let tns = self.mods[t as usize].ns_tok;
                                 self.m.add_tok(en, tns);
                             }
-                            None => self.m.add_top(en, |_| format!("unresolved re-export source {source}")),
+                            None => self
+                                .m
+                                .add_top(en, |_| format!("unresolved re-export source {source}")),
                         }
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
@@ -927,7 +933,9 @@ impl<'a> Gen<'a> {
         if f.is_async || f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
-            self.m.add_top(info.ret, |_| "async/generator function result (untransformed)".into());
+            self.m.add_top(info.ret, |_| {
+                "async/generator function result (untransformed)".into()
+            });
         }
         self.stmts(&fx, &f.body);
     }

@@ -22,7 +22,6 @@ mod boxed_frame_release_tests;
 mod boxed_local_init;
 #[cfg(test)]
 mod boxed_slot_no_root_tests;
-mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
 mod class_first_loop;
@@ -57,7 +56,6 @@ mod prealloc_tdz_path_tests;
 #[cfg(test)]
 mod range_loop_dense_store_tests;
 pub(crate) mod region_loop;
-pub(crate) mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
 mod stable_packed_typed_array;
@@ -235,14 +233,6 @@ fn lower_stmts_list(
         {
             return Ok(());
         }
-        // A common memo-table method shape is
-        // `if (!owner.table[i]) { ...fill... } return owner.table[i]`.
-        // Before lowering the untouched statements, add a guarded direct
-        // data-field/Array probe that can return the first truthy value. Every
-        // miss falls into the ordinary lowering below, including accessors,
-        // proxies, sparse/OOB arrays and the falsy fill branch.
-        cached_field_index_return::try_emit_cached_field_index_return(ctx, &stmts[i..limit])?;
-
         // Channel-reduction fusion: detect a length-3-or-4 sequence of
         // `acc[c] += arr[idx + c] * k` accumulator updates and emit a
         // single `<4 x i32>` SIMD multiply-add. The canonical hot shape
@@ -306,24 +296,6 @@ fn lower_stmts_list(
                 emit_shadow_clears,
                 &region,
             )?;
-            i = end;
-            if ctx.block().is_terminated() {
-                break;
-            }
-            continue;
-        }
-        // Step 4b slice 2 (#10884): a run of reads on ONE receiver bound
-        // across statements is guarded ONCE, not once per read. Slice 1 takes
-        // the runs that sit inside one `+` tree; this takes the runs spelled
-        // across statements, which a tsc census puts at 3.7x as many reads.
-        if let Some(run) = region_read_stmts::try_match(ctx, &stmts[i..limit]) {
-            let end = i + run.len;
-            region_read_stmts::lower(ctx, &stmts[i..end], &run)?;
-            if emit_shadow_clears {
-                for j in i..end {
-                    emit_shadow_clears_after_stmt(ctx, j);
-                }
-            }
             i = end;
             if ctx.block().is_terminated() {
                 break;

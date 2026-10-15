@@ -2829,12 +2829,8 @@ mod receiver_repr_guard_tests {
             crate::value::TAG_UNDEFINED,
         );
         assert_eq!(
-            crate::object::field_get_set::js_object_get_field_ic_miss(
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null_mut(),
-            )
-            .to_bits(),
+            crate::object::field_get_set::get_field_miss(std::ptr::null(), std::ptr::null())
+                .to_bits(),
             crate::value::TAG_UNDEFINED,
         );
 

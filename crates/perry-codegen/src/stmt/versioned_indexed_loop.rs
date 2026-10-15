@@ -582,11 +582,8 @@ pub(super) fn lower(
         .expect("matched method body has this storage")
         .clone();
     let this_box = ctx.block().load(DOUBLE, &this_slot);
-    let holder_ok = crate::proto_constants::holder_constant(
-        ctx,
-        &candidate.class_name,
-        &candidate.method_name,
-    );
+    let holder_ok =
+        crate::proto_constants::holder_constant(ctx, &candidate.class_name, &candidate.method_name);
     crate::lower_call::emit_inline_direct_method_shape_guard(
         ctx,
         &this_box,

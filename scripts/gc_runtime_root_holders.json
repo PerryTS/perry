@@ -2741,13 +2741,6 @@
       "why": "#11791 (ShapeId, class id, access-site name) -> private-field/brand proof cache (successor of PRIVATE_MARKER_CACHE). PrivateShapeProof holds u32 ShapeId/class id, the caller's .rodata name address (compared as an integer, plus a byte compare of the name on hit), an interned &'static str and a bool. No NaN-boxed value or GC heap address; ShapeIds are never reused, so a stale entry can only miss."
     },
     {
-      "file": "crates/perry-runtime/src/promise/assimilate.rs",
-      "name": "THEN_SITE",
-      "verdict": "covered_elsewhere",
-      "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
-      "why": "A RuntimeReadSite is two atomics: the compact MRU word (ShapeId low, slot index high, no heap address) and a pointer to a PIC-arena PicCache that is never freed. The only GC pointers a site can come to hold are the holder entry words inside that PicCache; read_holder::prime_read_holder registers the cache in HOLDER_SITES and scan_read_holder_roots_mut visits each entry as a strong, rewritable root (primary agent only, until a worker starts, after which entry_answer declines before touching an entry word). See runtime_read_site.rs module docs."
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_value.rs",
       "name": "CLASS_VALUES",
       "verdict": "covered_elsewhere",
@@ -2825,33 +2818,6 @@
       "name": "BEFORE_RESULT_ALLOC",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only Cell<Option<fn()>> containing a native function pointer with no closure environment. The one-shot allocation-point witness takes it before invocation, and its test guard restores the prior callback on unwind. It holds no managed value or address; production builds contain neither the holder nor the hook."
-    },
-    {
-      "file": "crates/perry-runtime/src/regex/instance.rs",
-      "name": "PROTOTYPE_READ",
-      "verdict": "not_a_gc_pointer",
-      "why": "IntrinsicPrivateReadSite stores a Rust-static key spelling and RuntimeReadSite's scalar ShapeId/slot word. Its private read only uses read_own_inline and the namespace-aware private miss; it never primes a holder PIC. The actual intrinsic prototype is an ordinary private field of the realm global and is traced and relocated with that object. This site retains no managed pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/regex.rs",
-      "name": "LAST_INDEX_READ",
-      "verdict": "covered_elsewhere",
-      "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
-      "why": "A RuntimeReadSite is two atomics: the compact MRU word (ShapeId low, slot index high, no heap address) and a pointer to a PIC-arena PicCache that is never freed. The only GC pointers a site can come to hold are the holder entry words inside that PicCache; read_holder::prime_read_holder registers the cache in HOLDER_SITES and scan_read_holder_roots_mut visits each entry as a strong, rewritable root (primary agent only, until a worker starts, after which entry_answer declines before touching an entry word). See runtime_read_site.rs module docs."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_read_sites.rs",
-      "name": "SYMBOL_READS",
-      "verdict": "covered_elsewhere",
-      "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
-      "why": "An array of RuntimeReadSite pairs, each containing a scalar ShapeId/slot word and a never-freed native PIC-arena pointer. Managed holder and accessor-pair edges reside only in those PICs. read_holder::publish, used by both normal reads and non-observable probes, registers every populated PIC in HOLDER_SITES. scan_read_holder_roots_mut traces and rewrites those edges. Worker admission is gated before accessing holder entries, as on emitted read sites. No separate RegExp heap-pointer cache exists."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_read_sites.rs",
-      "name": "EXEC_READ",
-      "verdict": "covered_elsewhere",
-      "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
-      "why": "A RuntimeReadSite pair containing a scalar ShapeId/slot word and a never-freed native PIC-arena pointer. Managed holder and accessor-pair edges reside only in those PICs. read_holder::publish, used by both normal reads and non-observable probes, registers every populated PIC in HOLDER_SITES. scan_read_holder_roots_mut traces and rewrites those edges. Worker admission is gated before accessing holder entries, as on emitted read sites. No separate RegExp heap-pointer cache exists."
     },
     {
       "file": "crates/perry-runtime/src/array/iterator_close.rs",

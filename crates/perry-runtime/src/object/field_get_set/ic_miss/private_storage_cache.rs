@@ -455,20 +455,29 @@ mod private_storage_cache_tests {
     }
 }
 
-/// A builtin's fixed intrinsic private read. The hit is the existing runtime
-/// read site's packed shape/slot word; namespace/ENTRY_PRIVATE validation and
-/// Rust key spelling live only on the miss. No receiver or value is retained.
+/// A builtin's fixed intrinsic private read: the receiver's layout lists the
+/// qualified private key (found as the probe finds a public one), else the
+/// complete own lookup. Nothing is kept: no receiver, value or slot.
 pub(crate) struct IntrinsicPrivateReadSite {
     name: &'static str,
-    site: super::runtime_read_site::RuntimeReadSite,
+}
+
+/// `private_storage_spelling(0, 0, name)` in `buf`, without allocating.
+fn intrinsic_spelling<'b>(name: &str, buf: &'b mut [u8; 128]) -> Option<&'b [u8]> {
+    const HEAD: &[u8] = b"#<perry:private-value:0:@0:";
+    let len = HEAD.len() + name.len() + 1;
+    if len > buf.len() {
+        return None;
+    }
+    buf[..HEAD.len()].copy_from_slice(HEAD);
+    buf[HEAD.len()..len - 1].copy_from_slice(name.as_bytes());
+    buf[len - 1] = b'>';
+    Some(&buf[..len])
 }
 
 impl IntrinsicPrivateReadSite {
     pub(crate) const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            site: super::runtime_read_site::RuntimeReadSite::new(),
-        }
+        Self { name }
     }
 
     /// The same evaluation-qualified spelling used by class private slots.
@@ -476,17 +485,6 @@ impl IntrinsicPrivateReadSite {
     #[cfg(feature = "regex-engine")]
     pub(crate) fn birth_key(&self) -> *const crate::StringHeader {
         crate::string::intern_ascii_literal(private_storage_spelling(0, 0, self.name).as_bytes())
-    }
-
-    /// Publish the same own-inline read word from a namespace-aware birth.
-    ///
-    /// # Safety
-    /// The caller has established that this shape owns this site's qualified
-    /// private key at `slot`, flagged PRIVATE_FIELD_ENTRY, with `live` inline
-    /// slots. No object or key address is retained by the site.
-    #[cfg(feature = "regex-engine")]
-    pub(crate) unsafe fn prime_birth(&self, shape: u32, slot: u32, live: u32) {
-        self.site.prime_own_inline(shape, slot, live);
     }
 
     /// The slot of this intrinsic's qualified private key in `keys`, if the
@@ -515,8 +513,22 @@ impl IntrinsicPrivateReadSite {
             return None;
         }
         let object = addr as *const ObjectHeader;
-        if let Some(value) = unsafe { self.site.read_own_inline(object) } {
-            return Some(value);
+        let mut buf = [0u8; 128];
+        if let Some(spelling) = intrinsic_spelling(self.name, &mut buf) {
+            let hash = crate::object::key_bytes_hash(spelling.as_ptr(), spelling.len());
+            if let Some(atom) = crate::string::atom_lookup(spelling, hash) {
+                if unsafe { crate::string::is_property_atom(atom) } {
+                    if let Some(value) = unsafe {
+                        crate::object::layout_probe::own_private_value(
+                            object,
+                            crate::value::STRING_TAG | atom as u64,
+                            crate::string::property_atom_hash(atom),
+                        )
+                    } {
+                        return Some(value);
+                    }
+                }
+            }
         }
         // Honest tags reject unshaped cells without private-name lookup.
         if !crate::object::shapes::is_shape_id(crate::object::layout_desc::layout_id_of_word(
@@ -537,9 +549,9 @@ impl IntrinsicPrivateReadSite {
         {
             return None;
         }
-        // This site already owns the shape/slot memo. A second private-name
-        // cache would duplicate it and activate the class namespace cache for
-        // every intrinsic-only program.
+        // The complete own lookup by spelling: no private-name cache, which
+        // would activate the class namespace cache for every intrinsic-only
+        // program.
         let spelling = private_storage_spelling(0, 0, self.name);
         let keys = unsafe { crate::object::object_keys(object) };
         let index = unsafe {
@@ -550,9 +562,7 @@ impl IntrinsicPrivateReadSite {
             )
         }?;
         let live = unsafe { crate::object::object_live_slot_count(object) };
-        let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
         let index = unsafe { keys.storage_slot(index) };
-        self.site.prime_own_inline(shape, index, live);
         Some(f64::from_bits(unsafe {
             super::object_field_at_with_live(object, index, live).bits()
         }))

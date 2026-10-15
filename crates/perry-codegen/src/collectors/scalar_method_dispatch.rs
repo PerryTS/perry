@@ -533,7 +533,8 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     // two `defineProperty` sites every `cjs_wrap`-compiled module contains.
     let cjs = super::cjs_scaffolding::collect(hir);
     let read_only_prototype_reads = read_only_prototype_reads(hir);
-    (facts.new_bindings, facts.ocreate_bindings) = super::spec_abi_sites::single_binding_families(hir);
+    (facts.new_bindings, facts.ocreate_bindings) =
+        super::spec_abi_sites::single_binding_families(hir);
 
     note_stmts(&hir.init, &mut facts, &cjs, &read_only_prototype_reads);
     for function in &hir.functions {

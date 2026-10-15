@@ -44,34 +44,6 @@ pub(crate) unsafe fn try_data_get_by_name(
     try_data_lookup_key(receiver, key_bits, bytes).flatten()
 }
 
-/// [`try_data_get_by_name`] that also answers a definite miss: `Some(None)`
-/// when the receiver and every prototype hop are ordinary layouts (or
-/// overflow tables) that do not hold `key` and the chain ends at null.
-/// `None` when the shapes cannot answer and the caller must take the full
-/// `[[Get]]`.
-#[inline]
-pub(crate) unsafe fn try_data_lookup_by_name(
-    object: *const ObjectHeader,
-    key: *const crate::StringHeader,
-) -> Option<Option<JSValue>> {
-    if key.is_null() || !crate::value::addr_class::is_plausible_heap_addr(key as usize) {
-        return None;
-    }
-    if (*key).byte_len > (*key).capacity || (*key).byte_len >= 1 << 28 {
-        return None;
-    }
-    let bits = object as u64;
-    let receiver = match bits >> 48 {
-        0 => JSValue::pointer(object as *mut u8),
-        0x7FFD => JSValue::from_bits(bits),
-        _ => return None,
-    };
-    let bytes =
-        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    let key_bits = crate::value::nanbox_string_key(key).to_bits();
-    try_data_lookup_key(receiver, key_bits, bytes)
-}
-
 /// Borrowed-name API for native callers. The keys lookup is consult-only:
 /// it never builds a shape index, materializes a key, or resolves a builtin.
 #[inline]

@@ -43,12 +43,6 @@ fn typed_feedback_enabled() -> bool {
     }
 }
 
-/// Whether typed-feedback tracing is active. Instrumented runtime guards
-/// record observations through their collecting continuation in this mode.
-pub(crate) fn typed_feedback_active() -> bool {
-    typed_feedback_enabled()
-}
-
 /// Numeric loop guards only decline when tracing was requested. Unit tests
 /// collect site observations unconditionally, without enabling trace mode.
 pub(crate) fn typed_feedback_trace_requested() -> bool {

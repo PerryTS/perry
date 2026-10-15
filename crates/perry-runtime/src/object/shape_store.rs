@@ -271,7 +271,12 @@ pub(crate) unsafe fn try_warm_transition(
         || bytes
             .first()
             .is_some_and(|b| *b == b'#' || b.is_ascii_digit())
-        || inherited_store_blocked(record, obj, crate::value::js_nanbox_string(key as i64), bytes)
+        || inherited_store_blocked(
+            record,
+            obj,
+            crate::value::js_nanbox_string(key as i64),
+            bytes,
+        )
     {
         return None;
     }
@@ -1639,15 +1644,10 @@ mod tests {
         let receiver = crate::value::js_nanbox_pointer(arr as i64);
         assert_eq!(unsafe { try_store(receiver, key_value, 23.0) }, Some(23.0));
         let arr_root = scope.root_raw_mut_ptr(arr);
-        let mut cache: crate::object::PicCache = [0; crate::object::PIC_CACHE_WORDS];
-        let mut cache_slot = &mut cache as *mut _;
-        let packed = std::sync::atomic::AtomicU64::new(0xFFFF_FFFF);
         assert_eq!(
-            crate::object::field_get_set::js_object_get_field_ic_miss_packed(
+            crate::object::field_get_set::get_field_miss(
                 arr_root.get_raw_mut_ptr::<crate::ArrayHeader>().cast(),
-                key,
-                &mut cache_slot,
-                &packed
+                key
             ),
             23.0
         );
@@ -1663,11 +1663,9 @@ mod tests {
         }
         let spill_key = crate::string::canonical_key(b"transformFlags");
         assert_eq!(
-            crate::object::field_get_set::js_object_get_field_ic_miss_packed(
+            crate::object::field_get_set::get_field_miss(
                 arr_root.get_raw_mut_ptr::<crate::ArrayHeader>().cast(),
-                spill_key,
-                &mut cache_slot,
-                &packed
+                spill_key
             ),
             29.0
         );
@@ -1773,8 +1771,12 @@ pub(crate) unsafe fn try_store_with_refresh(
     // A transition edge only exists for an absent own key. The prototype
     // fact is attached to its predecessor shape, never to the call site.
     let record = shape.record_ref()?;
-    let blocked =
-        inherited_store_blocked(record, obj, crate::value::js_nanbox_string(key_ptr as i64), bytes);
+    let blocked = inherited_store_blocked(
+        record,
+        obj,
+        crate::value::js_nanbox_string(key_ptr as i64),
+        bytes,
+    );
     if blocked {
         return None;
     }
@@ -2026,7 +2028,8 @@ unsafe fn try_function_store(
 /// writable data) and its own link; `%Object.prototype%` answers from its
 /// own word. Anything else walks the chain.
 unsafe fn array_bag_chain_blocks(bag: *mut ObjectHeader, key: &[u8]) -> bool {
-    let array = crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Array as usize);
+    let array =
+        crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Array as usize);
     let word = (*array).parent_class_id;
     if word >= shapes::SHAPE_ID_BASE
         && word < super::layout_desc::UNSHADOWED_WORD_END

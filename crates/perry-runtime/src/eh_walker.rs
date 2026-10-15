@@ -793,7 +793,9 @@ fn image_generation() -> ImageGeneration {
 }
 
 fn walker() -> Option<&'static Mutex<Walker>> {
-    WALKER.get_or_init(|| Walker::build().map(Mutex::new)).as_ref()
+    WALKER
+        .get_or_init(|| Walker::build().map(Mutex::new))
+        .as_ref()
 }
 
 /// Lock the walker with its image index current: if objects were loaded or
@@ -1666,8 +1668,7 @@ mod tests {
         drop(locked_walker().expect("walker"));
         let mut opened = None;
         for (cname, name) in candidates {
-            let handle =
-                unsafe { libc::dlopen(cname.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+            let handle = unsafe { libc::dlopen(cname.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
             if handle.is_null() {
                 continue;
             }
@@ -1681,7 +1682,8 @@ mod tests {
                 }
             }
         }
-        let (handle, addr) = opened.expect("one of the candidate system libraries must be loadable and indexable");
+        let (handle, addr) =
+            opened.expect("one of the candidate system libraries must be loadable and indexable");
 
         let before = image_generation();
         let (generation, indexed) = {
@@ -1689,7 +1691,10 @@ mod tests {
             (guard.generation, guard.image_for(addr).is_some())
         };
         assert_eq!(generation, before, "refresh left a stale generation");
-        assert!(indexed, "dlopen'ed object {addr:#x} is not indexed after refresh");
+        assert!(
+            indexed,
+            "dlopen'ed object {addr:#x} is not indexed after refresh"
+        );
 
         assert_eq!(unsafe { libc::dlclose(handle) }, 0);
         let after = image_generation();
@@ -1699,6 +1704,9 @@ mod tests {
             (guard.generation, guard.image_for(addr).is_some())
         };
         assert_eq!(generation, after);
-        assert!(!indexed, "range of the dlclose'd object {addr:#x} is still indexed");
+        assert!(
+            !indexed,
+            "range of the dlclose'd object {addr:#x} is still indexed"
+        );
     }
 }

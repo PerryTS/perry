@@ -54,7 +54,8 @@ pub(super) fn select_with_word(
     let cid = if receiver_ok == "true" {
         cid
     } else {
-        ctx.block().select(crate::types::I1, &receiver_ok, I32, &cid, "0")
+        ctx.block()
+            .select(crate::types::I1, &receiver_ok, I32, &cid, "0")
     };
     let done = ctx.new_block("pconst.selected");
     let done_l = ctx.block_label(done);
@@ -92,8 +93,13 @@ pub(super) fn select_with_word(
         let answer = if holders_ok == "true" {
             (i + 1).to_string()
         } else {
-            ctx.block()
-                .select(crate::types::I1, &holders_ok, I32, &(i + 1).to_string(), "0")
+            ctx.block().select(
+                crate::types::I1,
+                &holders_ok,
+                I32,
+                &(i + 1).to_string(),
+                "0",
+            )
         };
         if crate::codegen::helpers::check_contracts() {
             crate::proto_constants::emit_selected_contract(

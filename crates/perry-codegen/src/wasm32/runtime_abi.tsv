@@ -3449,8 +3449,8 @@ js_runtime_install_regex_engine	void
 js_runtime_install_temporal	void	
 js_runtime_install_url_engine	void	
 js_runtime_register_feature_installer	void	ptr
-js_runtime_state_key_call	f64	f64,ptr,usize,ptr,ptr,usize
-js_runtime_state_key_get	f64	f64,ptr,usize,ptr
+js_runtime_state_key_call	f64	f64,ptr,usize,ptr,usize
+js_runtime_state_key_get	f64	f64,ptr,usize
 js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u

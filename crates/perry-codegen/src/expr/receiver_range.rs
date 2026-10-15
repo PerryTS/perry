@@ -126,7 +126,10 @@ pub(crate) fn emit_field_ptr(blk: &mut LlBlock, biased: &str, offset: i64) -> St
 pub(crate) enum Route {
     /// A generic read (any key but `.length`) that passed the receiver test.
     Generic = 0,
-    /// ...and was served by the compact MRU word.
+    /// ...and was served by the compact MRU word. No longer emitted: reads
+    /// hold no site words (object model step 5). The number stays reserved:
+    /// it indexes `RECV_ROUTE_NAMES`.
+    #[allow(dead_code)]
     GenericMruHit = 1,
     /// ...and was served by one of the polymorphic ways. No longer emitted:
     /// the ways are read by the runtime's miss entry (first-read D3). The
@@ -145,7 +148,9 @@ pub(crate) enum Route {
     /// Reserved: presence validation now belongs to the shared runtime exit.
     #[allow(dead_code)]
     InPresence = 6,
-    /// The cached field-index early return's receiver test passed.
+    /// The cached field-index early return's receiver test passed. No longer
+    /// emitted (object model step 5); the number stays reserved.
+    #[allow(dead_code)]
     CachedFieldIndex = 7,
     /// A generic read served from the receiver's SPILL buffer by the compact
     /// word's flipped entry (S5). No longer emitted: the runtime's miss entry

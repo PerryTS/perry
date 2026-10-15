@@ -67,7 +67,9 @@ fn static_layout_zero_slots_expand_without_an_inline_floor() {
         assert_eq!(
             shape_store::try_store(
                 crate::value::js_nanbox_pointer(object as i64),
-                crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+                crate::value::js_nanbox_string(
+                    key.get_raw_const_ptr::<crate::StringHeader>() as i64
+                ),
                 23.0,
             ),
             Some(23.0),

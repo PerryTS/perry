@@ -21,16 +21,10 @@
 use super::*;
 use perry_hir::{Class, ClassField};
 
-const FAST_SLOW: [(&str, &str); 2] = [
-    (
-        "js_put_value_set_packed_fast",
-        "js_put_value_set_packed_miss",
-    ),
-    (
-        "js_object_get_field_ic_fast",
-        "js_object_get_field_ic_fast_miss",
-    ),
-];
+const FAST_SLOW: [(&str, &str); 1] = [(
+    "js_put_value_set_packed_fast",
+    "js_put_value_set_packed_miss",
+)];
 
 fn point_class() -> Class {
     Class {

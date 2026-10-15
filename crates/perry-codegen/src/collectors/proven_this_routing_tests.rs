@@ -1649,7 +1649,10 @@ fn tower_receiver_word_is_a_native_scalar() {
         .to_string();
     let compare = caller
         .lines()
-        .find(|line| line.trim_start().starts_with(&format!("{class_id} = trunc i64 ")))
+        .find(|line| {
+            line.trim_start()
+                .starts_with(&format!("{class_id} = trunc i64 "))
+        })
         .unwrap_or_else(|| panic!("no receiver-word class id:\n{caller}"));
     let word = compare
         .split("trunc i64 ")

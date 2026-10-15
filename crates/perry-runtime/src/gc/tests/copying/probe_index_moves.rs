@@ -40,14 +40,17 @@ fn probe_index_answers_symbol_and_plain_string_keys_after_a_copying_minor() {
     js_shadow_slot_set(1, sym.to_bits());
     let o = js_shadow_slot_get(0) & POINTER_MASK;
     unsafe {
-        crate::symbol::js_object_set_symbol_property(f64::from_bits(ptr_bits(o as usize)), sym, 99.0)
+        crate::symbol::js_object_set_symbol_property(
+            f64::from_bits(ptr_bits(o as usize)),
+            sym,
+            99.0,
+        )
     };
 
     let obj_before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let sym_before = js_shadow_slot_get(1);
-    let sym_id = unsafe {
-        (*((sym_before & POINTER_MASK) as *const crate::symbol::SymbolHeader)).id
-    };
+    let sym_id =
+        unsafe { (*((sym_before & POINTER_MASK) as *const crate::symbol::SymbolHeader)).id };
     let string_word_before = unsafe { list_word(obj_before, 5) };
     assert_eq!(string_word_before & 0xFFFF_0000_0000_0000, STRING_TAG);
     let string_before = (string_word_before & POINTER_MASK) as usize;
@@ -61,7 +64,10 @@ fn probe_index_answers_symbol_and_plain_string_keys_after_a_copying_minor() {
     );
 
     // Derive the index: the first probe of the record answers the symbol.
-    assert_eq!(unsafe { probe(obj_before, sym_before, sym_id) }, 99f64.to_bits());
+    assert_eq!(
+        unsafe { probe(obj_before, sym_before, sym_id) },
+        99f64.to_bits()
+    );
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
@@ -70,10 +76,16 @@ fn probe_index_answers_symbol_and_plain_string_keys_after_a_copying_minor() {
     let sym_after = js_shadow_slot_get(1);
     assert_ne!(sym_after, sym_before, "the symbol must have moved");
     let string_after = (unsafe { list_word(obj_after, 5) } & POINTER_MASK) as usize;
-    assert_ne!(string_after, string_before, "the plain-string key must have moved");
+    assert_ne!(
+        string_after, string_before,
+        "the plain-string key must have moved"
+    );
 
     // The symbol key: the moved symbol is found; the index holds no copy.
-    assert_eq!(unsafe { probe(obj_after, sym_after, sym_id) }, 99f64.to_bits());
+    assert_eq!(
+        unsafe { probe(obj_after, sym_after, sym_id) },
+        99f64.to_bits()
+    );
     // The plain-string key: an atom of its text created after the move
     // matches the moved list word by text.
     let n = names[5].as_bytes();
@@ -81,5 +93,9 @@ fn probe_index_answers_symbol_and_plain_string_keys_after_a_copying_minor() {
     let atom = unsafe { crate::string::property_atom(text) };
     let hash = unsafe { crate::string::property_atom_hash(atom) };
     let got = unsafe { probe(obj_after, STRING_TAG | atom as u64, hash) };
-    assert_eq!(got, 5f64.to_bits(), "the moved plain-string key answers by text");
+    assert_eq!(
+        got,
+        5f64.to_bits(),
+        "the moved plain-string key answers by text"
+    );
 }

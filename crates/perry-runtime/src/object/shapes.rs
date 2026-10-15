@@ -530,115 +530,7 @@ impl ShapeRecordRef {
     }
 }
 
-/// Test instrument: reads the receiver's shape answered at a latched
-/// megamorphic site (compiled into test builds only).
-#[cfg(test)]
-pub(crate) static SHAPE_ANSWERED_READS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-/// Test instrument: SPILL-located reads the receiver's shape answered at a
-/// latched megamorphic site (S5; test builds only).
-#[cfg(test)]
-pub(crate) static SHAPE_ANSWERED_SPILL_READS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
 impl ShapeRecordRef {
-    /// The INLINE slot at which this shape stores `key`, answered from the
-    /// shape's own canonical key list — or `None` when the shape cannot answer
-    /// by position alone.
-    ///
-    /// The shape's [`ShapeRecord::position_bound`] says how many leading key
-    /// positions ARE inline slots of every receiver carrying it (0 for a
-    /// dictionary, class, descriptor/prototype-generation or tombstoned
-    /// shape). The list is bounded by that — never by the backing's length
-    /// (#10969: one backing per growth chain).
-    ///
-    /// Key compares go identity first: canonical lists hold their text's ATOM
-    /// (`string::intern::AtomTable`), which is also what a read site's pooled
-    /// key is, so the site's guess, and then any position, matches by one
-    /// pointer compare. A byte pass remains for a list written before its
-    /// atom existed (and for SSO slots) — a pointer MISmatch proves nothing.
-    /// Allocation-free, never calls user code.
-    #[inline]
-    pub(crate) unsafe fn inline_slot_of_key(
-        self,
-        key: *const crate::StringHeader,
-        hint: usize,
-    ) -> Option<usize> {
-        let r = &*self.0.as_ptr();
-        let bound = r.position_bound() as usize;
-        if bound == 0 {
-            return None;
-        }
-        super::key_attrs::debug_assert_positional(r.keys as usize as *const ArrayHeader, bound as u32);
-        let (slots, len) =
-            super::keys_array_dense_slots_resolved(r.keys as usize as *const ArrayHeader);
-        if slots.is_null() {
-            return None;
-        }
-        let bound = bound.min(len);
-        let heap_bits = crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
-        // The site's slot guess, confirmed by the receiver's own key.
-        if hint < bound {
-            let bits = (*slots.add(hint)).to_bits();
-            if bits == heap_bits {
-                return Some(hint);
-            }
-            if stored_key_matches(key, bits) {
-                super::canonical_keys::adopt_image_key(r.keys as *mut ArrayHeader, hint, key);
-                return Some(hint);
-            }
-        }
-        // Identity over the whole list before any byte is compared.
-        if let Some(i) = (0..bound).find(|&i| (*slots.add(i)).to_bits() == heap_bits) {
-            return Some(i);
-        }
-        let slot = (0..bound).find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))?;
-        super::canonical_keys::adopt_image_key(r.keys as *mut ArrayHeader, slot, key);
-        Some(slot)
-    }
-
-    /// The SPILL position at which this shape stores `key` as an own DATA
-    /// property — a position at or past `live_inline_slot_count`, which is
-    /// also the key's index in the receiver's spill buffer — or `None` when
-    /// the shape cannot answer by position alone (the same refusals as
-    /// [`Self::inline_slot_of_key`]), the key is not spill-located, or it is
-    /// an accessor.
-    ///
-    /// Scanned back to front, as the read cache's prime scans (#10595: a
-    /// shadowed field's most-derived position wins). Only meaningful after
-    /// [`Self::inline_slot_of_key`] declined, which is the one order the
-    /// megamorphic read asks in. Allocation-free, never calls user code.
-    #[inline]
-    pub(crate) unsafe fn spill_position_of_key(
-        self,
-        key: *const crate::StringHeader,
-    ) -> Option<usize> {
-        let r = &*self.0.as_ptr();
-        if !r.object_kind().is_ordinary_layout()
-            || !complete_layout_generation(r.semantic_generation)
-            || r.hole_count != 0
-            || r.keys == 0
-        {
-            return None;
-        }
-        let keys = r.keys as usize as *const ArrayHeader;
-        let (slots, len) = super::keys_array_dense_slots_resolved(keys);
-        if slots.is_null() {
-            return None;
-        }
-        let lo = r.live_inline_slot_count as usize;
-        let hi = len.min(r.logical_key_count as usize);
-        let pos = (lo..hi)
-            .rev()
-            .find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))?;
-        let accessor = r.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
-            && crate::object::key_attrs::keys_entry(keys, pos as u32)
-                & crate::object::key_attrs::ENTRY_ACCESSOR
-                != 0;
-        (!accessor).then_some(pos)
-    }
-
     /// The own DATA property named by the string value `key_bits` (whose
     /// text is `key_bytes`) on an ordinary receiver carrying this shape:
     /// `Some(Some(slot))` when it is inline slot `slot`, `Some(None)` when the
@@ -648,7 +540,7 @@ impl ShapeRecordRef {
     /// generation (a descriptor, prototype or tombstone epoch re-keys the
     /// shape, not the layout).
     ///
-    /// Unlike [`Self::inline_slot_of_key`] it answers through tombstones: a
+    /// It answers through tombstones: a
     /// `TAG_HOLE` entry names no key, and every live key keeps its position as
     /// its slot. The caller still reads the slot and treats a `TAG_HOLE` value
     /// as no answer. Identity compares first, then bytes, as for
@@ -838,45 +730,6 @@ pub(crate) fn test_position_bound_of_id(id: u32) -> Option<u32> {
     shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
 }
 
-/// Shape `shape_id`'s positional key words, for the megamorphic read confirm
-/// (`ic_miss::read_confirm::js_object_get_field_ic_front`): `(the keys
-/// array, POSBOUND)` when the record answers by position — key position
-/// `i < POSBOUND` IS inline slot `i` of every receiver carrying the shape —
-/// and `None` otherwise (no ordinary record under that id in this agent, or
-/// POSBOUND 0: a dictionary, class, descriptor/prototype-generation,
-/// tombstoned or accessor-keyed shape).
-///
-/// A canonical list holds its text's ATOM, boxed exactly as a site's pool
-/// entry holds it, so the caller compares key WORDS: equality is identity,
-/// and a mismatch proves nothing (a list written before its atom existed, an
-/// SSO slot), which the caller answers by declining to the slow entry.
-///
-/// `dir` is this thread's ordinary directory mirror ([`ordinary_dir_addr`]),
-/// as the agent's pointer block holds it.
-///
-/// Allocation-free, no user code, no formatting path: it is part of a
-/// GC-leaf stub.
-///
-/// # Safety
-/// `dir` is this thread's [`ordinary_dir_addr`] or `PERRY_EMPTY_SHAPE_DIR` (never
-/// null); any `shape_id`.
-/// The words are valid until the next safepoint.
-#[inline(always)]
-pub(crate) unsafe fn positional_key_words(
-    dir: *const u8,
-    shape_id: u32,
-) -> Option<(PositionalKeys, usize)> {
-    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
-    super::key_attrs::debug_assert_positional(
-        r.keys as usize as *const ArrayHeader,
-        r.position_bound_raw(),
-    );
-    Some((
-        PositionalKeys(r.keys as usize as *const ArrayHeader),
-        r.position_bound_raw() as usize,
-    ))
-}
-
 /// [`positional_key_words`] for the computed-key read
 /// (`object::dynamic_key_read`), which also refuses a shape whose
 /// [[Prototype]] identity is PER-OBJECT.
@@ -1014,6 +867,26 @@ impl PositionalKeys {
     pub(crate) unsafe fn words(&self) -> *const u64 {
         crate::array::array_elements_ptr(self.0) as *const u64
     }
+}
+
+/// The keys of shape `shape_id` that are positional, and the position bound.
+///
+/// # Safety
+/// `dir` is this agent's ordinary directory.
+#[cfg(test)]
+pub(crate) unsafe fn positional_key_words(
+    dir: *const u8,
+    shape_id: u32,
+) -> Option<(PositionalKeys, usize)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    super::key_attrs::debug_assert_positional(
+        r.keys as usize as *const ArrayHeader,
+        r.position_bound_raw(),
+    );
+    Some((
+        PositionalKeys(r.keys as usize as *const ArrayHeader),
+        r.position_bound_raw() as usize,
+    ))
 }
 
 /// Does shape `shape_id` store the key whose NaN-boxed bits are `key_bits`
@@ -2715,7 +2588,7 @@ pub(crate) fn layout_record(shape_id: u32) -> Option<ShapeRecordRef> {
 /// this agent's shape table. ShapeIds are never reused: a retired receiver
 /// cannot compete with a live one in a read cache.
 /// Miss paths only; hit paths validate their existing shape/holder/lane facts.
-#[inline]
+#[cfg(test)]
 pub(crate) fn shape_is_retired(shape_id: u32) -> bool {
     ShapeSlab::agent_record_present(shape_id).is_none()
 }
@@ -3204,9 +3077,8 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 /// hole-free shape (the caller checked all three) keep `key` — `(false,
 /// slot)` in the inline block, or `(true, position)` in the spill buffer: a
 /// position at or past the live inline bound IS the key's index in the
-/// buffer (`ShapeRecordRef::spill_position_of_key`). Answered in the same
-/// order the megamorphic read asks: the inline range front to back
-/// (`inline_slot_of_key`), then the spill range back to front (#10595: a
+/// buffer. Answered the inline range front to back, then the spill range
+/// back to front (#10595: a
 /// shadowed field's most-derived position wins). The list is bounded by the
 /// shape's own key count, never its backing's length (#10969).
 /// Allocation-free; never calls user code.
@@ -3371,8 +3243,8 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// guard itself, on the object, not here.
 ///
 /// SPILL-located keys (the S5 facts): a key at or past the shape's live
-/// inline bound lives at index `position` of the object's spill buffer
-/// (`ShapeRecordRef::spill_position_of_key`), and every carrier of the shape
+/// inline bound lives at index `position` of the object's spill buffer,
+/// and every carrier of the shape
 /// has that storage — the same claim
 /// the emitted `pic.spill.hit` rests on, published under the same conditions
 /// (object-owned spill storage, an index it can address). Such a word carries

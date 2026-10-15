@@ -15,7 +15,6 @@ use perry_runtime::{js_array_get, js_array_is_array, js_array_length, ArrayHeade
 use std::collections::VecDeque;
 use std::ffi::CString;
 
-perry_runtime::state_key_memo!(static MEMO_DB);
 perry_runtime::birth_memo!(static TAG_STORE_BIRTH);
 
 macro_rules! builtin {
@@ -223,7 +222,7 @@ extern "C" fn tag_store_capacity_getter(_c: *const ClosureHeader, this: JsThis) 
 extern "C" fn tag_store_db_getter(_c: *const ClosureHeader, this: JsThis) -> f64 {
     unsafe {
         store_payload(this.as_f64());
-        native_payload::state_get_memo(this.as_f64(), &TAG_STORE_FAMILY, b"db", &MEMO_DB)
+        native_payload::state_get(this.as_f64(), &TAG_STORE_FAMILY, b"db")
     }
 }
 

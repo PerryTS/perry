@@ -28,9 +28,6 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
-    gc_register_mutable_root_scanner(
-        crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut,
-    );
     gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
     // The pending exception is a root. gc_init registers this in
     // production; the isolation guard clears that registry too.

@@ -390,7 +390,10 @@ fn stmts_return_value(stmts: &[Stmt]) -> bool {
             then_branch,
             else_branch,
             ..
-        } => stmts_return_value(then_branch) || else_branch.as_deref().is_some_and(stmts_return_value),
+        } => {
+            stmts_return_value(then_branch)
+                || else_branch.as_deref().is_some_and(stmts_return_value)
+        }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
             stmts_return_value(body)
         }

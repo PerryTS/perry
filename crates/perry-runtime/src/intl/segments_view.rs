@@ -108,12 +108,11 @@ fn bump(c: &AtomicU64) {
 /// the campaign reads is the COMPILER-side `PERRY_SEGVIEW_DIAG` one. Wire a
 /// runtime-side printer when a rig run needs these numbers, not before.
 #[cfg(test)]
-fn counters() -> [u64; 4] {
+fn counters() -> [u64; 3] {
     [
         OPENS.load(Ordering::Relaxed),
         DECLINE_NOT_STRING.load(Ordering::Relaxed),
         NEXTS.load(Ordering::Relaxed),
-        crate::object::method_site::read_holder::read_holder_stats().0,
     ]
 }
 
@@ -900,28 +899,15 @@ mod view_mode_tests {
         let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
         assert_eq!(js_segments_view_next(cursor), 1.0);
         assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
-        let before = counters()[3];
         for _ in 0..50 {
             let v = js_segments_view_regexp_test(cursor, re_v);
             assert!(!is_undefined(v), "a plain regex must keep being accepted");
         }
-        assert_eq!(
-            counters()[3],
-            before,
-            "50 accepted calls must add ZERO by-name walks"
-        );
-        // A second cursor and a second regex must not add one either: the
-        // recorded site belongs to the realm, not to the call or the receiver.
         let cursor2 = js_segments_view_open(grapheme_segmenter(), js_string("xy"));
         assert_eq!(js_segments_view_next(cursor2), 1.0);
         let re2 = crate::regex::js_regexp_construct(js_string("[x-z]"), js_string(""));
         let re2_v = f64::from_bits(JSValue::pointer(re2 as *const u8).bits());
         assert!(!is_undefined(js_segments_view_regexp_test(cursor2, re2_v)));
-        assert_eq!(
-            counters()[3],
-            before,
-            "a second cursor and regex must add no walks either"
-        );
         // NOT asserted: an absolute bound like `walks <= 1`. The unit harness
         // resets arenas between tests and builds the prototype tower more than
         // once in a process, so the per-process total counts REALMS, not calls.

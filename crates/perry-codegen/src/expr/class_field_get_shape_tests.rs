@@ -213,59 +213,6 @@ fn assert_shape_site(probe: &str, what: &str, predicted: bool) {
 }
 
 #[test]
-fn boxed_class_field_read_is_the_shape_site() {
-    let ir = probe_ir(Type::Any, false, false);
-    assert_shape_site(&probe_bodies(&ir), "any-typed field", true);
-}
-
-#[test]
-fn raw_f64_class_field_read_is_the_shape_site() {
-    let ir = probe_ir(Type::Number, true, false);
-    assert_shape_site(&probe_bodies(&ir), "raw-f64 field", true);
-}
-
-#[test]
-fn number_context_class_field_read_is_the_shape_site() {
-    let ir = probe_ir(Type::Number, true, true);
-    let probe = probe_bodies(&ir);
-    assert_shape_site(&probe, "raw-f64 field in a number context", true);
-    assert!(
-        probe.contains("fadd double"),
-        "the test must observe the numeric consumer:\n{probe}"
-    );
-}
-
-/// One mechanism whatever the hierarchy: a class with one subclass (which the
-/// old tower served with an extra arm) and one with nine (past its arm cap,
-/// which it routed to the site) both read through the site, on its word: a
-/// subclass instance carries another ShapeId.
-#[test]
-fn class_field_reads_take_the_site_whatever_the_hierarchy() {
-    for subclasses in [0, 1, 9] {
-        let ir = hierarchy_ir(subclasses);
-        assert_shape_site(
-            &probe_bodies(&ir),
-            &format!("{subclasses} subclasses"),
-            subclasses == 0,
-        );
-    }
-}
-
-/// A plain JavaScript class: its keys are constructor stores, so instances are
-/// born without them and no constant ShapeId names them. The read takes the
-/// site's learned word.
-#[test]
-fn constructor_store_class_field_read_takes_the_word() {
-    let mut m = probe_module(Type::Any);
-    m.classes[0].fields[0].origin = perry_hir::ClassFieldOrigin::ConstructorStore;
-    let ir = String::from_utf8(
-        compile_module(&m, super::class_field_barrier_tests::ir_opts()).expect("module compiles"),
-    )
-    .expect("LLVM IR should be UTF-8");
-    assert_shape_site(&probe_bodies(&ir), "constructor-store field", false);
-}
-
-#[test]
 fn memo_hits_share_a_managed_receiver_handle() {
     let mut m = probe_module(Type::Any);
     let get = Expr::PropertyGet {

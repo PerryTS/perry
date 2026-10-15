@@ -98,57 +98,6 @@ fn computed_accessor_admission_preserves_kind_and_cache_identity() {
 }
 
 #[test]
-fn computed_accessors_take_the_named_guarded_arms() {
-    let emit = |names: ClassAccessorNames| {
-        let mut module = module_reading("price");
-        module.init.push(Stmt::Expr(Expr::PropertySet {
-            object: Box::new(Expr::LocalGet(1)),
-            property: "price".into(),
-            value: Box::new(Expr::Number(1.0)),
-        }));
-        let mut opts = ir_opts(false, None);
-        opts.program_class_accessor_names = Some(std::sync::Arc::new(names));
-        String::from_utf8(compile_module(&module, opts).unwrap()).unwrap()
-    };
-    let getter = emit(names(Expr::LocalGet(1), ClassComputedMemberKind::Getter));
-    assert!(getter.contains("pic.acc.empty"));
-    assert!(!getter.contains("put.pic.acc"));
-    let setter = emit(names(Expr::LocalGet(1), ClassComputedMemberKind::Setter));
-    assert!(!setter.contains("pic.acc.empty"));
-    assert!(setter.contains("put.pic.acc"));
-}
-
-#[test]
-fn presence_uses_shared_layout_only_on_lp64() {
-    let mut module = module_reading("price");
-    module.init.push(Stmt::Expr(Expr::In {
-        property: Box::new(Expr::String("price".into())),
-        object: Box::new(Expr::LocalGet(1)),
-    }));
-    let emit = |target| {
-        let mut opts = ir_opts(false, None);
-        opts.target = target;
-        compile_module(&module, opts)
-    };
-    let native = String::from_utf8(emit(None).unwrap()).unwrap();
-    let blocks = super::tower_blocks(&native);
-    let (_, body) = super::tower_block(&blocks, "in.pic.guard");
-    let guard = body.join("\n");
-    assert_eq!(guard.matches("icmp eq i64").count(), 1);
-    assert!(
-        !guard.contains("load i8"),
-        "no kind/flag/presence guards at the site"
-    );
-    assert!(!guard.contains("load i16"));
-    assert!(native.contains("call double @js_in_operator_presence_ic"));
-    // The backend currently rejects ILP32 before expression lowering. Keep
-    // that public gate explicit instead of pretending a full wasm module can
-    // already be compiled to exercise this operation's outlined path.
-    let wasm = emit(Some("wasm32-wasip1".into())).unwrap_err();
-    assert!(wasm.to_string().contains("32-bit pointers"));
-}
-
-#[test]
 fn object_computed_accessors_admit_literal_property_choices_without_symbol_names() {
     let mut module = Module::new("object-computed.ts");
     module.init.push(Stmt::Let {

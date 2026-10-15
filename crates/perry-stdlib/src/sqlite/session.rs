@@ -24,8 +24,6 @@ use std::os::raw::{c_int, c_void};
 perry_runtime::birth_memo!(static SESSION_BIRTH);
 use std::rc::Rc;
 
-perry_runtime::state_key_memo!(static MEMO_DB);
-
 macro_rules! builtin {
     ($body:path, $n:tt) => {
         perry_runtime::fn_info!($body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN))
@@ -116,7 +114,7 @@ unsafe fn live_session(this: f64) -> *mut ffi::sqlite3_session {
     if !native_payload::is_instance(this, &SESSION_FAMILY) {
         throw_illegal_invocation();
     }
-    let db = native_payload::state_get_memo(this, &SESSION_FAMILY, b"db", &MEMO_DB);
+    let db = native_payload::state_get(this, &SESSION_FAMILY, b"db");
     let db_serial = match native_payload::payload_mut::<NodeDb>(db, &DB_FAMILY) {
         Ok(open) => open.serial,
         Err(_) => throw_invalid_state("database is not open"),
@@ -139,7 +137,7 @@ unsafe fn session_blob(
     ) -> c_int,
 ) -> f64 {
     let raw_session = live_session(this);
-    let db = native_payload::state_get_memo(this, &SESSION_FAMILY, b"db", &MEMO_DB);
+    let db = native_payload::state_get(this, &SESSION_FAMILY, b"db");
     let raw_db = db_payload(db).raw;
     let mut len: c_int = 0;
     let mut data: *mut c_void = std::ptr::null_mut();

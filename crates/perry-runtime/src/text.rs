@@ -910,16 +910,13 @@ mod tests {
 
     /// The COMPILED read path, which is not the one the other tests take.
     /// An emitted `td.decode` value read is a per-site inline cache whose miss
-    /// edge calls `js_object_get_field_ic_slow` with the receiver's 48-bit
+    /// edge calls `js_object_get_field_slow` with the receiver's 48-bit
     /// payload — not `js_object_get_field_by_name`. The method has to resolve
     /// on the family prototype through THAT entry too, and nothing else in this
     /// file would notice if it did not: measured, a program whose reads took
     /// this edge answered `undefined` while every by-name test passed.
     #[test]
     fn a_method_value_read_resolves_through_the_ic_miss_entry() {
-        use crate::object::{PicCache, PicCacheSlot, PIC_CACHE_WORDS};
-        use std::sync::atomic::AtomicU64;
-
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         for (raw, name) in [
             (js_text_decoder_new(undef, undef, undef), "decode"),
@@ -927,14 +924,9 @@ mod tests {
             (js_text_encoder_new(), "encodeInto"),
         ] {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let mut cache: PicCache = [0; PIC_CACHE_WORDS];
-            let mut slot: PicCacheSlot = &mut cache;
-            let packed = AtomicU64::new(0);
-            let value = crate::object::js_object_get_field_ic_slow(
+            let value = crate::object::js_object_get_field_slow(
                 (raw as u64 & crate::value::POINTER_MASK) as i64,
                 key,
-                &mut slot,
-                &packed,
             );
             let jsv = crate::value::JSValue::from_bits(value.to_bits());
             assert!(

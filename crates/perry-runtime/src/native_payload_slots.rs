@@ -28,7 +28,7 @@ pub fn callback_at(owner: f64, family: &NativePayloadFamily, index: u32) -> f64 
         } else {
             let obj = instance_of(owner, family.class_id).unwrap();
             raw_js_state(obj).map_or_else(undefined, |state| {
-                let array = raw_field_memo(state, b"callbacks", &CALLBACKS_MEMO);
+                let array = raw_field(state, b"callbacks");
                 if !is_callback_array(crate::JSValue::from_bits(array.to_bits())) {
                     return undefined();
                 }

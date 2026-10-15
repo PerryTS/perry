@@ -1151,7 +1151,6 @@ pub fn gc_init() {
     // alive (`gc::never_move`, `read_holder.rs` "Weak entries"). A keyed
     // entry's KEY is still compared by identity and is rooted here until
     // keys are immortal atoms.
-    reg_scanner!(crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
     reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);

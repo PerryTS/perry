@@ -224,7 +224,10 @@ fn lower_string_method_from_box(
     let result = match proof {
         StringProof::Entry | StringProof::EntryPreRead => {
             let patched_before = (proof == StringProof::EntryPreRead).then(|| {
-                crate::builtin_proto::emit_patched_test(ctx, crate::builtin_proto::BuiltinProto::String)
+                crate::builtin_proto::emit_patched_test(
+                    ctx,
+                    crate::builtin_proto::BuiltinProto::String,
+                )
             });
             let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let recv_box = reread_recv(ctx, &group, recv);

@@ -104,19 +104,18 @@ mod tests {
     #[test]
     fn cold_property_miss_is_still_throwing() {
         for name in [
-            "js_object_get_field_ic_miss_packed",
-            // T1: the generic-get tower's two slow exits carry the same `cold`
-            // placement hint — and the same ability to throw, now including
-            // the nullish-receiver TypeError the emitted arm used to raise
-            // inline. A `cold` helper that lost its invoke edge would silently
-            // swallow every `Cannot read properties of undefined`.
-            "js_object_get_field_ic_slow",
-            "js_object_get_field_ic_nonptr",
+            // The named read's entries behind the probe carry the `cold`
+            // placement hint and the ability to throw (the nullish-receiver
+            // TypeError, a getter). A `cold` helper that lost its invoke edge
+            // would silently swallow every `Cannot read properties of
+            // undefined`.
+            "js_object_get_field_slow",
+            "js_object_get_field_nonptr",
+            "js_object_get_field_value",
         ] {
             assert_eq!(crate::module::helper_decl_attrs(name), " cold", "{name}");
             assert!(!nothrow_callee(name), "{name}");
         }
-        assert!(!nothrow_callee("js_object_get_field_ic_miss"));
         assert!(!nothrow_callee("unknown_runtime_helper"));
     }
 

@@ -176,9 +176,9 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     byte_offset: 0,
                 };
                 let with_envs = ctx.active_with_envs_for_ident(n);
-                return Ok(Expr::TypeOf(Box::new(
-                    super::helpers::wrap_with_gets(n, global, with_envs),
-                )));
+                return Ok(Expr::TypeOf(Box::new(super::helpers::wrap_with_gets(
+                    n, global, with_envs,
+                ))));
             }
         }
         // #1395: `typeof process.memoryUsage.rss` is a nested member

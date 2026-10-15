@@ -628,7 +628,10 @@ unsafe fn assert_positional(keys: *const ArrayHeader, count: u32) {
     }
     let (w, len) = words(attrs);
     for pos in 0..(count as usize).min(len) {
-        if let Some(slot) = Word::decode(*w.add(pos)).slot().filter(|&s| s != pos as u32) {
+        if let Some(slot) = Word::decode(*w.add(pos))
+            .slot()
+            .filter(|&s| s != pos as u32)
+        {
             panic!("positional lane on a layout whose key {pos} keeps storage slot {slot}");
         }
     }

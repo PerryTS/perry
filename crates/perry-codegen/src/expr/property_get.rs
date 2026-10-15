@@ -50,7 +50,7 @@ pub(crate) mod globalget;
 mod helpers;
 
 mod composed_ics;
-use composed_ics::{emit_array_subclass_length_ic, lower_symbol_then_named_property_ic};
+use composed_ics::emit_array_subclass_length_ic;
 #[cfg(test)]
 mod tests;
 
@@ -80,9 +80,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             return super::family_slot::lower_get(ctx, &site, expr, object, property);
         }
     }
-    if let Some(v) = crate::stmt::region_read_stmts::lower_keyed_get(ctx, expr)? {
-        return Ok(v);
-    }
     // Step 4b: a planned-bare read inside a region's F-body.
     if let Some(v) = crate::stmt::region_loop::try_lower_bare_get(ctx, expr)? {
         return Ok(v);
@@ -103,25 +100,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         byte_offset,
     } = expr
     {
-        if let Expr::IndexGet {
-            object: base,
-            index: symbol,
-        } = object.as_ref()
-        {
-            // #10509: an elided `arguments[sym]` must see the object's own
-            // symbol surface, not the raw bundle Array's.
-            if super::compare::is_proven_symbol_expr(ctx, symbol)
-                && !crate::codegen::arguments::is_elided_arguments_index_get(ctx, object)
-            {
-                return lower_symbol_then_named_property_ic(
-                    ctx,
-                    base,
-                    symbol,
-                    property,
-                    *byte_offset,
-                );
-            }
-        }
         if let Some(value) =
             crate::codegen::arguments::lower_arguments_length(ctx, object, property)?
         {

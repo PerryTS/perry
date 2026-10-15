@@ -64,24 +64,21 @@ unsafe fn assert_order(object: *mut ObjectHeader, expected: &[&str]) {
     );
 }
 
-unsafe fn assert_emitted_read_slot(
-    obj: *mut ObjectHeader,
-    key: *const crate::StringHeader,
-    value: f64,
-    slot: u32,
-) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    let mut cache: PicCache = [0; PIC_CACHE_WORDS];
-    let mut cache_slot: PicCacheSlot = &mut cache;
-    let packed = AtomicU64::new(u64::MAX);
+/// The emitted read's answer: the probe (when the key has its atom) and the
+/// cacheless complete read.
+unsafe fn assert_emitted_read(obj: *mut ObjectHeader, key: *const crate::StringHeader, value: f64) {
+    if let Some(atom) = crate::string::existing_property_atom(key) {
+        let probed = crate::object::layout_probe::perry_probe_get(
+            crate::object::shapes::ordinary_dir_addr(),
+            (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+            crate::value::STRING_TAG | atom as u64,
+            crate::string::property_atom_hash(atom),
+        );
+        assert!(probed.to_bits() == crate::value::TAG_HOLE || probed == value);
+    }
     assert_eq!(
-        crate::object::js_object_get_field_ic_miss_packed(obj, key, &mut cache_slot, &packed),
+        crate::object::js_object_get_field_slow(obj as i64, key),
         value
-    );
-    assert_eq!((packed.load(Ordering::Relaxed) >> 32) as u32, slot);
-    assert_eq!(
-        crate::object::field_get_set::pic_outlined_mru_hit(obj, &mut cache_slot),
-        Some(value)
     );
 }
 
@@ -135,11 +132,11 @@ fn static_layout_slot_order_registration_reflection_values_and_transitions() {
             assert!(second.write_existing(obj, 44.0));
             assert_eq!(js_object_get_field(obj, 0).as_number(), 44.0);
             assert_eq!(first.read_own(obj), Some(11.0));
-            assert_emitted_read_slot(obj, SECOND.string, 44.0, 0);
-            let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
-            for _ in 0..3 { assert_eq!(site.read(obj, b"slotorder_second"), 44.0); }
-            let answer = site.probe(obj, crate::object::method_site::read_holder::probe::Key::Name(b"slotorder_second"));
-            assert!(matches!(answer, Some(crate::object::method_site::read_holder::probe::Answer::Data(bits)) if crate::JSValue::from_bits(bits).as_number() == 44.0));
+            assert_emitted_read(obj, SECOND.string, 44.0);
+            use crate::object::field_get_set::runtime_read_site as read;
+            for _ in 0..3 { assert_eq!(read::get(obj, b"slotorder_second"), 44.0); }
+            let answer = read::probe(obj, read::Key::Name(b"slotorder_second"));
+            assert!(matches!(answer, Some(read::Answer::Data(bits)) if crate::JSValue::from_bits(bits).as_number() == 44.0));
         });
         let child = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
         crate::object::js_object_set_prototype_of(
@@ -147,9 +144,11 @@ fn static_layout_slot_order_registration_reflection_values_and_transitions() {
             crate::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
         );
         child.with_mut_ptr(|obj| {
-            let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
             for _ in 0..3 {
-                assert_eq!(site.read(obj, b"slotorder_second"), 44.0);
+                assert_eq!(
+                    crate::object::field_get_set::runtime_read_site::get(obj, b"slotorder_second"),
+                    44.0
+                );
             }
         });
         let json = object.with_const_ptr(|obj: *const ObjectHeader| {
@@ -310,10 +309,12 @@ fn static_layout_slot_order_pointer_slot_survives_full_gc() {
             let pointer = js_object_get_field_by_name(obj, FIRST.string);
             assert_eq!(string(pointer), "mapped-pointer-value");
             assert_eq!(js_object_get_field_by_name_f64(obj, THIRD.string), 33.0);
-            assert_emitted_read_slot(obj, THIRD.string, 33.0, 1);
-            let site = crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new();
+            assert_emitted_read(obj, THIRD.string, 33.0);
             for _ in 0..3 {
-                assert_eq!(site.read(obj, b"slotorder_third"), 33.0);
+                assert_eq!(
+                    crate::object::field_get_set::runtime_read_site::get(obj, b"slotorder_third"),
+                    33.0
+                );
             }
         });
         let json = object.with_const_ptr(|obj: *const ObjectHeader| {
@@ -413,30 +414,11 @@ fn static_layout_slot_order_symbol_reads_writes_reflection_and_delete() {
                 crate::symbol::js_object_get_symbol_property(value, f64::from_bits(symbol)),
                 77.0
             );
-            let mut cache = [0u64; 4];
-            let mut cache_slot = &mut cache as *mut [u64; 4];
-            assert_eq!(
-                crate::symbol::js_object_get_symbol_property_ic_miss(
-                    value,
-                    f64::from_bits(symbol),
-                    &mut cache_slot
-                ),
-                77.0
-            );
-            assert_eq!(
-                cache[3] as u32, 0,
-                "the emitted Symbol hit addresses storage slot 0"
-            );
             crate::proxy::js_put_value_set(value, f64::from_bits(symbol), 88.0, value, 1);
             assert_eq!(
-                crate::symbol::js_object_get_symbol_property_ic_miss(
-                    value,
-                    f64::from_bits(symbol),
-                    &mut cache_slot
-                ),
+                crate::symbol::js_object_get_symbol_property(value, f64::from_bits(symbol)),
                 88.0
             );
-            assert_eq!(cache[3] as u32, 0);
 
             assert_eq!(js_object_get_field(obj, 0).as_number(), 88.0);
             assert_eq!(js_object_get_field(obj, 1).as_number(), 11.0);

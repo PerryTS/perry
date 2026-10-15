@@ -103,7 +103,8 @@ pub(crate) fn publish_patched_intrinsic(family: usize) {
 /// This agent's intrinsic prototype of `family` (the stand-in until sealed).
 #[inline(always)]
 pub(crate) fn intrinsic_proto(family: usize) -> *const crate::object::ObjectHeader {
-    PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family].get() as *const crate::object::ObjectHeader
+    PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family].get()
+        as *const crate::object::ObjectHeader
 }
 
 /// Publish this agent's intrinsic prototype of `family` (`seal_realm`).

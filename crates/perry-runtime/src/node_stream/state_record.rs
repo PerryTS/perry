@@ -308,18 +308,15 @@ impl StateData {
     }
 }
 
-/// `stream`'s own `_readableState` / `_writableState` object, through that
-/// name's site word. Each side names its own static site.
+/// `stream`'s own `_readableState` / `_writableState` object, read from its
+/// layout.
 fn state_data_object(stream: f64, readable: bool) -> Option<*mut ObjectHeader> {
     #[inline(always)]
     fn own(
         object: *mut ObjectHeader,
         side: crate::runtime_state_key::NamedStateKey,
     ) -> Option<f64> {
-        side.memo.with(|site| unsafe {
-            site.read_own_inline(object)
-                .or_else(|| side.read_own(object))
-        })
+        unsafe { side.read_own(object) }
     }
     let object = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
     let value = if readable {

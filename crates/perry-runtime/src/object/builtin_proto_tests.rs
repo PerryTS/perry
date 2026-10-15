@@ -55,8 +55,12 @@ fn a_sealed_object_withdraws_its_family_on_a_slot_store_and_never_reopens() {
         crate::object::store_object_field_slot(proto, 0, 1.0f64.to_bits());
         assert!(!pristine(BuiltinProto::Map));
         assert!(pristine(BuiltinProto::Set), "other families stay pristine");
-        assert!(super::super::layout_desc::word_is_shadowed((*proto).parent_class_id));
-        assert!(!super::super::layout_desc::word_is_shadowed((*set).parent_class_id));
+        assert!(super::super::layout_desc::word_is_shadowed(
+            (*proto).parent_class_id
+        ));
+        assert!(!super::super::layout_desc::word_is_shadowed(
+            (*set).parent_class_id
+        ));
         crate::object::store_object_field_slot(proto, 0, 8.0f64.to_bits());
         assert!(!pristine(BuiltinProto::Map), "set-only");
     }

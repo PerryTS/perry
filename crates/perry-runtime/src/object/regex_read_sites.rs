@@ -1,7 +1,6 @@
 //! RegExp builtin operations share the ordinary method-site shape proof.
 //! Observable Gets retain the ordinary runtime read sites.
-use super::field_get_set::runtime_read_site::{object_receiver, RuntimeReadSite};
-use super::method_site::read_holder::probe::{Answer, Key};
+use super::field_get_set::runtime_read_site::{self as read, object_receiver, Answer, Key};
 use super::regex_proto_thunks as thunks;
 use std::cell::Cell;
 
@@ -10,9 +9,6 @@ crate::perry_thread_local! {
     // succeeds. A hit on that same receiver shape also carries the brand;
     // the general observable Get below uses its separate site.
     static BUILTIN: Cell<super::method_site::MethodSiteSlot> = const { Cell::new(std::ptr::null_mut()) };
-    static EXEC_READ: RuntimeReadSite = const { RuntimeReadSite::new() };
-    static READS: [RuntimeReadSite; 16] = const { [const { RuntimeReadSite::new() }; 16] };
-    static SYMBOL_READS: [RuntimeReadSite; 7] = const { [const { RuntimeReadSite::new() }; 7] };
 }
 
 const NAMES: [&[u8]; 16] = [
@@ -44,7 +40,7 @@ fn native(bits: u64, function: *const u8) -> bool {
 
 fn probe(value: f64, index: usize) -> Option<Answer> {
     let obj = object_receiver(value)?;
-    READS.with(|sites| unsafe { sites[index].probe(obj, Key::Name(NAMES[index])) })
+    unsafe { read::probe(obj, Key::Name(NAMES[index])) }
 }
 
 fn data_is(value: f64, index: usize, function: *const u8) -> bool {
@@ -72,16 +68,10 @@ pub(crate) fn builtin_exec_data(value: f64) -> Option<*const crate::regex::RegEx
         crate::regex::regexp_data_of(value)
     } else {
         crate::regex::regexp_data_of(value).filter(|_| {
-            EXEC_READ.with(|site| unsafe {
-                let object =
-                    (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
-                match site.read_leaf(object) {
-                    Some(method) => thunks::is_builtin_regexp_exec(method),
-                    None => matches!(site.probe(object, Key::Name(b"exec")),
-                        Some(Answer::Data(bits))
-                        if thunks::is_builtin_regexp_exec(f64::from_bits(bits))),
-                }
-            })
+            let object = (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
+            matches!(unsafe { read::probe(object, Key::Name(b"exec")) },
+                Some(Answer::Data(bits))
+                if thunks::is_builtin_regexp_exec(f64::from_bits(bits)))
         })
     };
     if crate::hot_diag::regex_on() {
@@ -211,8 +201,7 @@ unsafe fn prove_builtin_behavior(
     .into_iter()
     .enumerate()
     {
-        if !READS
-            .with(|sites| sites[index + 2].probe_getter_code(holder, Key::Name(NAMES[index + 2])))
+        if !read::getter_code(holder, Key::Name(NAMES[index + 2]))
             .is_some_and(|actual| actual == code as usize)
         {
             return None;
@@ -305,17 +294,11 @@ fn symbol_probe(value: f64, index: usize) -> Option<Answer> {
         // Functions' symbol properties are already ordinary shaped bags.
         super::shaped_symbols::owner(crate::value::js_nanbox_get_pointer(value) as usize)
     })?;
-    SYMBOL_READS.with(|sites| unsafe {
-        let site = &sites[index];
-        if let Some(answer) = site.probe_leaf(obj) {
-            return Some(answer);
-        }
-        let symbol = crate::symbol::well_known_symbol_if_cached(SYMBOLS[index]);
-        if symbol.is_null() {
-            return None;
-        }
-        site.probe(obj, Key::Symbol(symbol as usize))
-    })
+    let symbol = crate::symbol::well_known_symbol_if_cached(SYMBOLS[index]);
+    if symbol.is_null() {
+        return None;
+    }
+    unsafe { read::probe(obj, Key::Symbol(symbol as usize)) }
 }
 
 pub(crate) fn method(value: f64, _method: Method) -> bool {
@@ -343,8 +326,8 @@ pub(crate) fn read_named(
 ) -> Option<Result<f64, crate::regex::perex_runtime::EngineError>> {
     let index = NAMES.iter().position(|n| *n == name)?;
     let obj = object_receiver(owner.get_nanbox_f64())?;
-    Some(crate::regex::perex_api::caught(|| {
-        READS.with(|sites| unsafe { sites[index].read(obj, NAMES[index]) })
+    Some(crate::regex::perex_api::caught(|| unsafe {
+        read::get(obj, NAMES[index])
     }))
 }
 

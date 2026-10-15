@@ -87,7 +87,8 @@ impl<'a> Gen<'a> {
             let v = self.expr(fx, c);
             self.to_sink(v, &why);
         }
-        self.m.top_val(&format!("result of unmodeled HIR construct {name}"))
+        self.m
+            .top_val(&format!("result of unmodeled HIR construct {name}"))
     }
 
     pub(crate) fn evaluate_all(&mut self, fx: &Fx, es: &[Expr]) -> Vec<NodeId> {

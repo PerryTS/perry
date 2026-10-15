@@ -281,12 +281,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // Any global, the Function constructor included (E14).
                 let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
                 m.add_tok(dst, f);
-                m.add_top(dst, |_| format!("globalThis.{}", name.as_deref().unwrap_or("[computed]")));
+                m.add_top(dst, |_| {
+                    format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
+                });
                 m.add_prim(dst, prim::ALL);
             }
         },
         TokKind::Builtin(BuiltinNs::Process) => {
-            m.add_top(dst, |_| format!("process.{}", name.as_deref().unwrap_or("[computed]")));
+            m.add_top(dst, |_| {
+                format!("process.{}", name.as_deref().unwrap_or("[computed]"))
+            });
             m.add_prim(dst, prim::ALL);
         }
         TokKind::Builtin(_) => match name.as_deref() {

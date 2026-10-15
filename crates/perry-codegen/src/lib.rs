@@ -20,7 +20,6 @@ pub mod ext_registry;
 pub(crate) mod fn_info;
 pub mod function;
 pub mod function_order;
-pub(crate) mod proto_constants;
 pub(crate) mod gc_call_effects;
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
@@ -28,6 +27,7 @@ pub mod inprocess;
 pub mod inst;
 pub(crate) mod layout_desc;
 pub mod layout_families;
+pub(crate) mod proto_constants;
 pub use layout_families::ProgramLayouts;
 pub mod linker;
 pub(crate) mod loop_purity;

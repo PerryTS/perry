@@ -37,8 +37,13 @@ fn read(key: NamedStateKey, obj: &RuntimeHandle<'_>) -> f64 {
     obj.with_mut_ptr(|p| unsafe { key.read_object(p) })
 }
 
+/// The probe's non-observable answer (a data value), if it gives one.
 fn leaf(key: NamedStateKey, obj: &RuntimeHandle<'_>) -> Option<f64> {
-    obj.with_mut_ptr(|p| key.memo.with(|site| unsafe { site.read_leaf(p) }))
+    use crate::object::field_get_set::runtime_read_site::{probe, Answer, Key};
+    obj.with_mut_ptr(|p| match unsafe { probe(p, Key::Name(key.bytes)) } {
+        Some(Answer::Data(bits)) => Some(f64::from_bits(bits)),
+        _ => None,
+    })
 }
 
 macro_rules! fresh_gate {
@@ -78,10 +83,8 @@ fn own_spill_read_and_write_share_the_state_memo_word() {
     assert_eq!(
         leaf(key, &obj),
         Some(41.0),
-        "read must prime the shared site"
+        "the probe answers the own spill key"
     );
-    let slot = obj.with_mut_ptr(|p| key.memo.with(|site| unsafe { site.own_slot(p).unwrap() }));
-    obj.with_mut_ptr(|p| assert!(slot >= unsafe { crate::object::object_live_slot_count(p) }));
     key.write_value(obj.with_mut_ptr(boxed), 42.0);
     assert_eq!(leaf(key, &obj), Some(42.0));
     crate::object::js_object_freeze(obj.with_mut_ptr(boxed));
@@ -97,9 +100,9 @@ fn own_spill_read_and_write_share_the_state_memo_word() {
 }
 
 #[test]
-fn deep_absence_and_holder_reads_validate_every_hop() {
+fn deep_absence_and_holder_reads_follow_every_hop() {
     if !crate::object::method_site::run_with_fresh_worker_gate(
-        "deep_absence_and_holder_reads_validate_every_hop",
+        "deep_absence_and_holder_reads_follow_every_hop",
     ) {
         return;
     }
@@ -111,7 +114,6 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     for scanner in [
-        crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut,
         crate::object::scan_object_cache_roots_mut,
         crate::object::scan_shape_cache_roots_mut,
         crate::object::shapes::scan_shape_table_rekey_mut,
@@ -128,46 +130,17 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
     for _ in 0..270 {
         chain.push(inherit(&scope, chain.last().unwrap()));
     }
-    // Site memos name only stable holders (`gc::never_move`): let one minor
-    // promote the freshly linked prototypes before the sites prime.
-    let _ = crate::gc::gc_collect_minor();
     let obj = chain.last().unwrap();
     let key = crate::runtime_state_key!(NAME);
     assert_eq!(read(key, obj).to_bits(), TAG_UNDEFINED);
-    assert_eq!(
-        leaf(key, obj).map(f64::to_bits),
-        Some(TAG_UNDEFINED),
-        "absence must be memoized beyond the short holder entry"
-    );
     set(&chain[6], NAME, 7.0);
-    assert_ne!(
-        leaf(key, obj).map(f64::to_bits),
-        Some(TAG_UNDEFINED),
-        "an intermediate key add invalidates absence"
-    );
-    assert_eq!(read(key, obj), 7.0);
-    assert_eq!(leaf(key, obj), Some(7.0));
+    assert_eq!(read(key, obj), 7.0, "an intermediate key add is seen");
     set(&chain[6], NAME, 8.0);
-    assert_eq!(
-        leaf(key, obj),
-        Some(8.0),
-        "holder values are loaded on every use"
-    );
-    let old_shape =
-        chain[6].with_mut_ptr(|p| unsafe { crate::object::shapes::object_shape_stamp(p) });
+    assert_eq!(read(key, obj), 8.0, "holder values are loaded on every use");
     set(&chain[6], NAME, f64::from_bits(TAG_NULL));
-    if leaf(key, obj).is_none() {
-        assert_ne!(
-            chain[6].with_mut_ptr(|p| unsafe { crate::object::shapes::object_shape_stamp(p) }),
-            old_shape,
-            "a value-store miss must be a holder shape change"
-        );
-    }
     assert_eq!(read(key, obj).to_bits(), TAG_NULL);
-    assert_eq!(leaf(key, obj).map(f64::to_bits), Some(TAG_NULL));
     set(&chain[6], NAME, f64::from_bits(TAG_UNDEFINED));
     assert_eq!(read(key, obj).to_bits(), TAG_UNDEFINED);
-    assert_eq!(leaf(key, obj).map(f64::to_bits), Some(TAG_UNDEFINED));
     let name = scope.root_string_ptr(crate::string::js_string_from_bytes(
         NAME.as_ptr(),
         NAME.len() as u32,
@@ -180,40 +153,17 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
         chain[9].with_mut_ptr(boxed),
         replacement.with_mut_ptr(boxed),
     );
-    // The replacement holder is young: the site answers through the generic
-    // read and publishes nothing that names it (`gc::never_move`).
     assert_eq!(read(key, obj), 9.0);
-    assert_eq!(leaf(key, obj), None, "a young holder is never published");
     let before = obj.with_mut_ptr(boxed).to_bits();
-    let holder_before = replacement.with_mut_ptr(boxed).to_bits();
     crate::gc::gc_collect_minor();
     assert_ne!(
         obj.with_mut_ptr(boxed).to_bits(),
         before,
         "the control must actually move the receiver"
     );
-    // The minor promoted the never-move holder once; from now on it stays.
-    assert_ne!(replacement.with_mut_ptr(boxed).to_bits(), holder_before);
-    assert_eq!(read(key, obj), 9.0, "the read after the minor primes");
-    assert_eq!(leaf(key, obj), Some(9.0), "and the entry then hits");
-    let holder_old = replacement.with_mut_ptr(boxed).to_bits();
-    crate::gc::gc_collect_minor();
-    assert_eq!(
-        replacement.with_mut_ptr(boxed).to_bits(),
-        holder_old,
-        "an old never-move holder does not move again"
-    );
-    assert_eq!(
-        leaf(key, obj),
-        Some(9.0),
-        "the entry survives the collection"
-    );
+    assert_eq!(read(key, obj), 9.0, "the read after a moving minor");
     set(obj, NAME, 10.0);
-    assert_eq!(
-        read(key, obj),
-        10.0,
-        "an own property shadows the cached holder"
-    );
+    assert_eq!(read(key, obj), 10.0, "an own property shadows the holder");
 }
 
 #[test]
@@ -330,8 +280,6 @@ fn extension_method_site_preserves_this_and_reads_the_getter_once() {
             },
         )
     });
-    let site = crate::native_payload::StateKeySite::new();
-    assert_eq!(std::mem::size_of_val(&site), 16);
     for arg in [5.0, 6.0] {
         let args = [arg];
         assert_eq!(
@@ -340,7 +288,6 @@ fn extension_method_site_preserves_this_and_reads_the_getter_once() {
                     obj.with_mut_ptr(boxed),
                     NAME.as_ptr(),
                     NAME.len(),
-                    &site,
                     args.as_ptr(),
                     args.len(),
                 )

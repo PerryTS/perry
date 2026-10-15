@@ -180,7 +180,8 @@ impl<'a> Gen<'a> {
             }
             self.params(&cfx, params);
             if *is_async || *is_generator {
-                self.m.add_top(info.ret, |_| "async/generator closure result".into());
+                self.m
+                    .add_top(info.ret, |_| "async/generator closure result".into());
             }
             self.stmts(&cfx, body);
             let _: &Vec<Stmt> = body;
@@ -294,7 +295,8 @@ impl<'a> Gen<'a> {
             }
         }
         let fa = self.m.field_any(holder);
-        self.m.add_top(fa, |_| "computed-key accessor on a class".into());
+        self.m
+            .add_top(fa, |_| "computed-key accessor on a class".into());
         self.m.add_prim(fa, prim::ALL);
         let star = self.m.atom(crate::STAR_KEY);
         crate::gen::push_unique(self.m.accessor_keys.entry(holder).or_default(), star);
@@ -620,7 +622,8 @@ impl<'a> Gen<'a> {
         for a in args.iter().chain(spread.iter()) {
             self.to_sink(*a, &why);
         }
-        self.m.top_val(&format!("result of unmodeled runtime entry {name}"))
+        self.m
+            .top_val(&format!("result of unmodeled runtime entry {name}"))
     }
 
     /// The literal template born by an object-literal IIFE when the first

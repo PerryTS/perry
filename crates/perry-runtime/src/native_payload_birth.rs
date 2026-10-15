@@ -195,15 +195,12 @@ unsafe fn shared_pairs<'s>(
         );
         pairs.set_raw_mut_ptr(next);
     }
-    let mut state = proto
-        .with_mut_ptr::<ObjectHeader, _>(|p| raw_field_memo(p, JS_STATE_KEY, &PROTO_STATE_MEMO));
+    let mut state = proto.with_mut_ptr::<ObjectHeader, _>(|p| raw_field(p, JS_STATE_KEY));
     if !crate::JSValue::from_bits(state.to_bits()).is_pointer() {
         let fresh = crate::object::js_object_alloc_null_proto(0, 1);
         state = crate::value::js_nanbox_pointer(fresh as i64);
         set_state_field(scope, &proto, JS_STATE_KEY, state);
-        state = proto.with_mut_ptr::<ObjectHeader, _>(|p| {
-            raw_field_memo(p, JS_STATE_KEY, &PROTO_STATE_MEMO)
-        });
+        state = proto.with_mut_ptr::<ObjectHeader, _>(|p| raw_field(p, JS_STATE_KEY));
     }
     let state = root_pointer::<ObjectHeader>(scope, state);
     let value = pairs.with_mut_ptr::<crate::array::ArrayHeader, _>(|a| {
@@ -214,20 +211,17 @@ unsafe fn shared_pairs<'s>(
 }
 
 const OWN_PAIRS_KEY: &[u8] = b"ownAccessorPairs";
-crate::state_key_memo!(static PROTO_STATE_MEMO);
-crate::state_key_memo!(static OWN_PAIRS_MEMO);
 
 /// The pairs array a prototype's JS state holds (`undefined` when none).
 unsafe fn proto_pairs(proto: *mut ObjectHeader) -> f64 {
-    let state = raw_field_memo(proto, JS_STATE_KEY, &PROTO_STATE_MEMO);
+    let state = raw_field(proto, JS_STATE_KEY);
     let js = crate::JSValue::from_bits(state.to_bits());
     if !js.is_pointer() {
         return undefined();
     }
-    raw_field_memo(
+    raw_field(
         js.as_pointer::<ObjectHeader>() as *mut ObjectHeader,
         OWN_PAIRS_KEY,
-        &OWN_PAIRS_MEMO,
     )
 }
 

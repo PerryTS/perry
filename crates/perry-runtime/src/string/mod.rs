@@ -250,7 +250,9 @@ pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
 pub(crate) use intern::IMAGE_ATOM_FLAGS;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
-pub(crate) use intern::{atom_colour, atom_for_key, atom_lookup, seed_static_atom, set_atom_colour};
+pub(crate) use intern::{
+    atom_colour, atom_for_key, atom_lookup, seed_static_atom, set_atom_colour,
+};
 #[cfg(test)]
 pub(crate) use intern::{is_atom_for_test, test_evict_interned};
 #[cfg(test)]

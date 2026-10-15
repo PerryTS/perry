@@ -396,8 +396,10 @@ fn guarded_call(
     let pristine = match kind {
         ReceiverKind::Date | ReceiverKind::Array => None,
         ReceiverKind::Number => {
-            let patched =
-                crate::builtin_proto::emit_patched_test(ctx, crate::builtin_proto::BuiltinProto::Number);
+            let patched = crate::builtin_proto::emit_patched_test(
+                ctx,
+                crate::builtin_proto::BuiltinProto::Number,
+            );
             Some(ctx.block().xor(I1, &patched, "true"))
         }
         ReceiverKind::LocaleValue => {

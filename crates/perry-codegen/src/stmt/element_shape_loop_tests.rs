@@ -1093,6 +1093,9 @@ fn object_literal_element_resolution_does_not_escape_the_clone() {
         .expect("the merge block should be DEFINED in the emitted IR")..];
     assert!(
         after.contains("js_object_get_field_by_name_f64")
+            || after.contains("perry_probe_get")
+            || after.contains("js_object_get_field_slow")
+            || after.contains("js_object_get_field_value")
             || after.contains("js_object_get_field_ic_miss")
             // T1: the generic tower's cold arms are behind these two entries now.
             || after.contains("js_object_get_field_ic_slow")

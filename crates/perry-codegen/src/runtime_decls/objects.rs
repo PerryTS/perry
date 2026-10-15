@@ -394,53 +394,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
-    module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
-    module.declare_function(
-        "js_object_get_field_ic_miss_packed",
-        DOUBLE,
-        &[I64, I64, PTR, PTR],
-    );
-    // #5391 path 3: full-outlined generic property GET. Collapses the inline
-    // receiver-routing + monomorphic-IC + feedback + nullish-throw diamond to a
-    // single call for oversized modules. Args: (obj_bits, key_handle, site_id,
-    // per-site IC cache global) -> field value.
-    module.declare_function("js_object_get_field_ic", DOUBLE, &[I64, I64, I64, PTR]);
-    // S2: its MRU hit as a GC-leaf call answering TAG_HOLE on a decline, and
-    // the collecting rest of the ladder. Same operands as the full helper.
-    module.declare_function("js_object_get_field_ic_fast", DOUBLE, &[I64, I64, I64, PTR]);
-    module.declare_function(
-        "js_object_get_field_ic_fast_miss",
-        DOUBLE,
-        &[I64, I64, I64, PTR],
-    );
-    // T1: the two exits of the inline generic-get tower. Every guard failure —
-    // SSO / INT32 class ref / nullish / non-object receiver / overflow slot /
-    // deleted slot / named prefix / miss+prime — branches to one of these
-    // instead of expanding its own arm and its own call.
-    //
-    // Non-pointer receiver (the emitted tag test failed): (obj_bits, key_handle,
-    // site_id) -> field value. No cache: none of its arms can prime one.
-    module.declare_function("js_object_get_field_ic_nonptr", DOUBLE, &[I64, I64, I64]);
-    // Heap-pointer receiver: (masked obj_handle, key_handle, per-site IC cache
-    // SLOT, per-site packed MRU word) -> field value.
-    module.declare_function("js_object_get_field_ic_slow", DOUBLE, &[I64, I64, PTR, PTR]);
-    module.declare_function("js_global_get_field_ic_slow", DOUBLE, &[I64, I64, PTR, PTR]);
-    // First-read D3: a generic read site's ShapeId miss asks this GC leaf
-    // first (the agent's shape-directory mirror or null, receiver payload,
-    // the key as its pool global holds it, the site's cache slot and compact
-    // word); `TAG_HOLE` = declined, and the site calls the slow entry.
-    // `perry_shape_dir_cell` is the directory's accessor where emitted code
-    // cannot read the agent's pointer block inline. Both GC leaves.
-    module.declare_function(
-        "js_object_get_field_ic_front",
-        DOUBLE,
-        &[PTR, I64, I64, PTR, PTR],
-    );
-    module.declare_function(
-        "js_object_get_own_field_ic_front",
-        DOUBLE,
-        &[PTR, I64, I64, PTR, PTR],
-    );
+    // The named read's entries behind the probe (`object/field_get_set/
+    // get_slow.rs`): the complete read of a heap receiver the probe declined
+    // (payload, key handle); the complete read of any value (bits, key handle,
+    // site id); the non-pointer tag ladder (bits, key handle, site id); and a
+    // global environment reference's binding read.
+    module.declare_function("js_object_get_field_slow", DOUBLE, &[I64, I64]);
+    module.declare_function("js_object_get_field_value", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_object_get_field_nonptr", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_global_get_field_slow", DOUBLE, &[I64, I64]);
     module.declare_function("perry_shape_dir_cell", PTR, &[]);
     // Object model step 5: the unknown-receiver probe (agent directory,
     // receiver payload minus the handle floor, key atom bits, atom hash).
@@ -688,11 +650,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         VOID,
         &[DOUBLE, DOUBLE, I64],
     );
-    module.declare_function(
-        "js_proto_shadow_contract_check",
-        VOID,
-        &[I32, DOUBLE, I64],
-    );
+    module.declare_function("js_proto_shadow_contract_check", VOID, &[I32, DOUBLE, I64]);
     module.declare_function(
         "js_method_site_lookup",
         DOUBLE,
@@ -743,12 +701,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "js_put_value_set_ic_miss",
         DOUBLE,
         &[DOUBLE, I64, DOUBLE, I32, PTR, I32],
-    );
-    // #9287: MRU-hit load for a get-IC slot word carrying the overflow bit.
-    module.declare_function(
-        "js_object_get_field_ic_overflow_load",
-        DOUBLE,
-        &[I64, I64, I32, PTR],
     );
     module.declare_function(
         "js_object_array_numeric_write_guard",

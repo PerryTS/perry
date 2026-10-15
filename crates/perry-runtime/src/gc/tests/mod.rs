@@ -160,7 +160,6 @@ mod buffer_bytes;
 mod buffer_b4;
 
 mod census_two_mib;
-mod holder_memo;
 
 mod shared_slot_custody;
 

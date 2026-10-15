@@ -75,7 +75,7 @@ fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
         "a base member must not directly call its base getter: {ir}"
     );
     assert!(
-        ir.contains("call double @js_object_get_field_ic_slow("),
+        ir.contains("call double @js_object_get_field_slow("),
         "the property read must use runtime lookup: {ir}"
     );
 }

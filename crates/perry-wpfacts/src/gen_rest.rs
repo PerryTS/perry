@@ -95,7 +95,8 @@ impl<'a> Gen<'a> {
                     for n in o.into_iter().chain(a) {
                         self.to_sink(n, &why);
                     }
-                    self.m.top_val(&format!("result of native module {module}.{method}"))
+                    self.m
+                        .top_val(&format!("result of native module {module}.{method}"))
                 }
             }
             Expr::PrivateLexicalBrand(x) | Expr::PrivateLexicalBrandPush(x) => {
@@ -247,7 +248,9 @@ impl<'a> Gen<'a> {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                 self.tok_node(t)
             }
-            Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr => self.m.top_val("process stdio"),
+            Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr => {
+                self.m.top_val("process stdio")
+            }
             Expr::ProcessNextTick { callback, args } => {
                 let cb = self.expr(fx, callback);
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();

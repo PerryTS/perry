@@ -500,14 +500,17 @@ pub(crate) fn lower_ident_assignment(
             object: Box::new(Expr::GlobalGet(0)),
             property: "globalThis".to_string(),
         };
-        let target = with_envs.iter().rev().fold(global, |outer, env| Expr::Conditional {
-            condition: Box::new(Expr::ObjectHasOwn(
-                Box::new(Expr::LocalGet(*env)),
-                Box::new(Expr::String(name.clone())),
-            )),
-            then_expr: Box::new(Expr::LocalGet(*env)),
-            else_expr: Box::new(outer),
-        });
+        let target = with_envs
+            .iter()
+            .rev()
+            .fold(global, |outer, env| Expr::Conditional {
+                condition: Box::new(Expr::ObjectHasOwn(
+                    Box::new(Expr::LocalGet(*env)),
+                    Box::new(Expr::String(name.clone())),
+                )),
+                then_expr: Box::new(Expr::LocalGet(*env)),
+                else_expr: Box::new(outer),
+            });
         return Ok(Expr::PropertySet {
             object: Box::new(target),
             property: name,

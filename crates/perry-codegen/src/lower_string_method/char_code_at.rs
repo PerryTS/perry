@@ -130,8 +130,10 @@ fn lower_inline(
     // arguments and the slow arm is the unchecked body.
     let prove_here = matches!(entry, Some((_, _, true)));
     let string_pristine = if prove_here {
-        let patched =
-            crate::builtin_proto::emit_patched_test(ctx, crate::builtin_proto::BuiltinProto::String);
+        let patched = crate::builtin_proto::emit_patched_test(
+            ctx,
+            crate::builtin_proto::BuiltinProto::String,
+        );
         Some(ctx.block().xor(I1, &patched, "true"))
     } else {
         None

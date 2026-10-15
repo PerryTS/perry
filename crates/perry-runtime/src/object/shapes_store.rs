@@ -423,6 +423,7 @@ impl ShapeRecord {
     /// (construction, `with_summary`, slab insert, the in-place
     /// stable-tombstone update), and debug builds assert the stored bound
     /// against the definition on every read.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn position_bound(&self) -> u32 {
         debug_assert_eq!(

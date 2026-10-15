@@ -748,34 +748,21 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
     js_array_push_f64(obj as *mut ArrayHeader, 11.0);
     js_array_push_f64(obj as *mut ArrayHeader, 22.0);
     let mask_key = crate::string::js_string_from_bytes(b"mask".as_ptr(), 4);
-    let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
-    crate::object::js_object_get_field_ic_miss(obj, mask_key, &mut cache_slot);
-    // S6: the proof lives on the OBJECT only; the site holds just the
-    // `(ShapeId, slot)` pair it primed, never the class-wide token.
-    assert_eq!(cache[2], 0, "the site must not hold the named-prefix token");
-    assert_ne!(
-        cache[0], 0,
-        "the descriptor-bearing receiver still primes the site"
-    );
-    let token = unsafe { (*(*obj).meta).array_subclass_named_prefix_token };
-    assert_ne!(token, 0);
-    assert!(unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id) });
-    assert!(
-        !unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id.wrapping_add(1)) },
-        "the token must pin the exact class rather than merely the Array-subclass family"
-    );
-    assert_eq!(
-        unsafe { array_subclass_named_prefix_token_for_slot(obj, 1) },
-        token,
-        "the IC miss must publish the owner-side token"
-    );
+    crate::object::field_get_set::get_field_miss(obj, mask_key);
 
     let mut index_ic: super::ArrayLikePicCache = [0; super::ARRAYLIKE_PIC_WORDS];
     let mut index_ic_slot: super::ArrayLikePicCacheSlot = &mut index_ic;
     assert_eq!(
         js_packed_arraylike_index_get(receiver, 0.0, &mut index_ic_slot),
         11.0
+    );
+    // S6: the proof lives on the OBJECT only.
+    let token = unsafe { (*(*obj).meta).array_subclass_named_prefix_token };
+    assert_ne!(token, 0);
+    assert!(unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id) });
+    assert!(
+        !unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id.wrapping_add(1)) },
+        "the token must pin the exact class rather than merely the Array-subclass family"
     );
     assert_eq!(
         index_ic[0], token,
@@ -791,15 +778,9 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
     );
 
     let zero_key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
-    let mut element_cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    let mut element_cache_slot: crate::object::PicCacheSlot = &mut element_cache;
     assert_eq!(
-        crate::object::js_object_get_field_ic_miss(obj, zero_key, &mut element_cache_slot),
+        crate::object::field_get_set::get_field_miss(obj, zero_key),
         11.0
-    );
-    assert_eq!(
-        element_cache[2], 0,
-        "a numeric-element site must never borrow the stable named-prefix identity"
     );
     assert_eq!(
         unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
@@ -948,25 +929,17 @@ fn empty_array_subclass_named_prefix_token_survives_warm_tail_cycle() {
     assert_eq!(array_subclass_fast_pop(receiver), Some(11.0));
 
     let change_key = crate::string::js_string_from_bytes(b"change".as_ptr(), 6);
-    let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
-    let via_ic = crate::object::js_object_get_field_ic_miss(obj, change_key, &mut cache_slot);
+    let via_ic = crate::object::field_get_set::get_field_miss(obj, change_key);
     let via_ladder = crate::object::js_object_get_field_by_name_f64(obj, change_key);
     assert_eq!(via_ic.to_bits(), via_ladder.to_bits());
-    // S6: the site holds the `(ShapeId, slot)` pair; the proof stays on the
-    // object.
-    assert_eq!(cache[2], 0, "the site must not hold the named-prefix token");
-    assert_ne!(
-        cache[0], 0,
-        "an empty subclass must arm the declared-field PIC"
-    );
-    let token = unsafe { (*(*obj).meta).array_subclass_named_prefix_token };
+    // S6: the proof stays on the object; a declared-slot read publishes it.
+    let token = unsafe { array_subclass_named_prefix_token_for_slot(obj, 2) };
     assert_ne!(
         token, 0,
         "an empty subclass must carry the declared-prefix proof"
     );
     assert_eq!(
-        unsafe { array_subclass_named_prefix_token_for_slot(obj, 2) },
+        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
         token
     );
 
@@ -1027,10 +1000,7 @@ fn dense_array_subclass_tail_cache_preserves_a_1024_shape_lattice() {
             Some(f64::from(length - 1)),
             "reverse edge at length {length} must survive unrelated hash collisions"
         );
-        assert_eq!(
-            unsafe { (*obj).shape_word() },
-            shapes[length as usize - 1]
-        );
+        assert_eq!(unsafe { (*obj).shape_word() }, shapes[length as usize - 1]);
     }
     for value in 0u32..1024 {
         assert_eq!(
@@ -1038,10 +1008,7 @@ fn dense_array_subclass_tail_cache_preserves_a_1024_shape_lattice() {
             Some(f64::from(value + 1)),
             "forward edge at length {value} must remain reusable"
         );
-        assert_eq!(
-            unsafe { (*obj).shape_word() },
-            shapes[value as usize + 1]
-        );
+        assert_eq!(unsafe { (*obj).shape_word() }, shapes[value as usize + 1]);
     }
 }
 

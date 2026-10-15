@@ -6,8 +6,7 @@
 //! rejoins it (design doc §L7.1–L7.3). What varies between slices is only
 //! WHERE the run is found and what is done with the loaded values:
 //!
-//! * slice 1 (`crate::expr::region_read_run`) — a run inside one `+` tree;
-//! * slice 2 (`crate::stmt::region_read_stmts`) — a run across statements.
+//! * slice 1 (`crate::expr::region_read_run`) — a run inside one `+` tree.
 //!
 //! Everything else — the state word, R1, R2, the bounded prime, the miss
 //! edges — lives here, so the two slices cannot drift into two guards with two
@@ -103,11 +102,6 @@ pub(crate) fn emission_allowed() -> bool {
 pub(crate) fn note_expr_region(reads: u64) {
     REGIONS_EXPR.with(|c| c.set(c.get() + 1));
     READS_EXPR.with(|c| c.set(c.get() + reads));
-}
-
-pub(crate) fn note_stmt_region(reads: u64) {
-    REGIONS_STMT.with(|c| c.set(c.get() + 1));
-    READS_STMT.with(|c| c.set(c.get() + reads));
 }
 
 /// One region's state: the learned word and its bounded attempt counter.

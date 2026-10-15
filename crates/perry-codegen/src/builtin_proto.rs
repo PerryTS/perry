@@ -64,7 +64,8 @@ pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: Builti
     let patched = if family == BuiltinProto::Object {
         own
     } else {
-        let object = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, BuiltinProto::Object as usize);
+        let object =
+            crate::expr::agent_ptr::emit_intrinsic_proto(ctx, BuiltinProto::Object as usize);
         let at = ctx.block().gep(crate::types::I8, &object, &[(I64, "4")]);
         let parent = ctx.block().load(I32, &at);
         let parent = ctx.block().icmp_uge(I32, &parent, &end);
@@ -79,7 +80,10 @@ pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: Builti
 
 /// [`emit_patched_test`] over several families (a borrowed call also reads
 /// `Function.prototype.call`; `toLocaleString()` admits several primitives).
-pub(crate) fn emit_patched_any(ctx: &mut crate::expr::FnCtx<'_>, families: &[BuiltinProto]) -> String {
+pub(crate) fn emit_patched_any(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    families: &[BuiltinProto],
+) -> String {
     let mut acc: Option<String> = None;
     for family in families {
         let t = emit_patched_test(ctx, *family);

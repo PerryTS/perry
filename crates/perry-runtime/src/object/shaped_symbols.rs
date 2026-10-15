@@ -64,7 +64,6 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
                 value.get_nanbox_u64(),
                 entry,
             );
-            crate::symbol::symbol_property_ic_epoch_bump();
             return true;
         }
         // Otherwise a symbol key is a key of the object's layout, as a
@@ -125,7 +124,6 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
             (symbol.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
             entry,
         );
-        crate::symbol::symbol_property_ic_epoch_bump();
         true
     })
 }
@@ -176,7 +174,6 @@ pub(crate) unsafe fn set_entry(addr: usize, symbol: usize, entry: u8) {
     let table = super::overflow::table(obj);
     if !table.is_null() {
         super::overflow::set_entry_attrs(obj as *mut ObjectHeader, table, pos, entry);
-        crate::symbol::symbol_property_ic_epoch_bump();
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
@@ -199,7 +196,6 @@ pub(crate) unsafe fn set_entry(addr: usize, symbol: usize, entry: u8) {
         set_object_keys(obj, ObjectKeys::owned(next));
         shapes::transition_object_shape_semantics(obj);
     }
-    crate::symbol::symbol_property_ic_epoch_bump();
 }
 
 pub(crate) unsafe fn accessor(addr: usize, symbol: usize) -> Option<(u64, u64)> {
@@ -300,7 +296,6 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
     if !super::overflow::delete_key_bits(obj, crate::value::POINTER_TAG | symbol as u64) {
         return false;
     }
-    crate::symbol::symbol_property_ic_epoch_bump();
     true
 }
 

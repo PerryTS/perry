@@ -1,315 +1,168 @@
-//! Runtime read sites: a builtin's spec `Get(O, key)` on the one-shape path.
+//! Runtime reads: a builtin's spec `Get(O, key)` on the one path.
 //!
 //! A builtin that reads a fixed key off a receiver it was handed (the promise
-//! resolution's `Get(resolution, "then")`; later the RegExp builtins'
-//! `Get(R, "exec")` and flag reads) holds a [`RuntimeReadSite`]. The site is
-//! exactly the pair of words an emitted `o.key` site holds — the compact MRU
-//! word and the full-cache slot — and it is read through exactly the entries
-//! an emitted site's tower calls:
-//!
-//! 1. the compact word: the receiver's ShapeId compared with its low half,
-//!    then one load of the inline slot its high half names (an own key);
-//! 2. on a ShapeId miss, the GC-leaf front
-//!    ([`super::js_object_get_field_ic_front`]): the polymorphic ways, a spill
-//!    entry, and the holder entry (`method_site::read_holder::entry_answer`,
-//!    then the declared-class entry) for a key that is NOT own;
-//! 3. on `TAG_HOLE`, the collecting slow entry
-//!    ([`super::js_object_get_field_ic_slow`]), whose miss handler primes the
-//!    words (`packed_get::prime_get` for an own key,
-//!    `read_holder::prime_read_holder` for an inherited or absent one).
-//!
-//! So "the builtin reads `then`" costs what `o.then` costs in compiled code:
-//! one shape compare and one load for an own key, the receiver's and the
-//! holder's ShapeId compares and one load for an inherited one. There is no
-//! second path: every fact the site answers from is a shape fact the emitted
-//! site would answer from, invalidated the same way (a key add, delete,
-//! descriptor change or `setPrototypeOf` moves a ShapeId; a value store to the
-//! holder is seen because the hit loads the slot).
-//!
-//! # Per agent
-//!
-//! A site's words are declared with [`crate::perry_thread_local`], so every
-//! agent (the main thread and each `perry/thread` worker) has its own pair and
-//! no agent ever reads another's words. The full cache the slot points to is a
-//! PIC-arena allocation, never freed, exactly as an emitted site's is, so the
-//! holder entry's root registration (`read_holder`'s site list) names memory
-//! that outlives the thread. Holder entries keep their existing rule: they are
-//! primed and answered only by the primary agent until a worker starts; a
-//! worker's site answers its own keys from its own words and takes the slow
-//! entry for the rest.
+//! resolution's `Get(resolution, "then")`, the RegExp builtins' `Get(R,
+//! "exec")` and flag reads, a stream's state fields) reads it exactly as an
+//! emitted `o.key` site whose receiver no compile-time fact names: the
+//! unknown-receiver probe (`layout_probe::perry_probe_get`) with the agent's
+//! directory, and, when the probe declines, the cacheless complete read
+//! (`js_object_get_field_slow`). Nothing is remembered between reads: every
+//! word the probe reads is the receiver's own data or immutable layout data,
+//! so there is nothing to prime, validate or root.
 //!
 //! # The key
 //!
-//! The front confirms nothing by key position here: the site passes the empty
-//! shape directory, as a `length` site does, so it never needs the key on the
-//! leaf path. The slow entry gets the key's ATOM (`string::js_string_pool_atom`),
-//! the one string per key text the agent holds strongly for its lifetime. A
-//! site's key is a fixed builtin name, so the runtime's sites add a bounded
-//! set of atoms, as the program's pools do. The atom is looked up per slow
-//! call, never cached in the site: the atom table is what the collector
-//! rewrites.
+//! The probe compares key words: a property atom (one per text per agent) or
+//! a symbol. A read looks its key's atom up per call (no allocation); a key
+//! whose text has no atom yet cannot be a key of any list the probe answers
+//! from, so the observable read mints it (an allocation, with the receiver
+//! rooted) and the non-observable [`probe`] declines.
+use crate::object::ObjectHeader;
 
-use super::{js_object_get_field_ic_front, js_object_get_field_ic_slow};
-use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-
-/// The value an emitted site's compact word is born holding
-/// (`ic_miss::PACKED_GET_EMPTY`): above every ShapeId, so no receiver's
-/// `+4` word can match an unprimed site.
-const PACKED_EMPTY: u64 = 0xFFFF_FFFF;
-
-/// One builtin's read site for one key: an emitted read site's two words.
-/// Declare one per (builtin, key) with [`crate::perry_thread_local`].
-#[repr(C)]
-pub struct RuntimeReadSite {
-    /// The compact MRU word (`@perry_ic_N_packed_get`): ShapeId low, slot high.
-    packed: AtomicU64,
-    /// The full-cache slot (`@perry_ic_N`): null until the first prime.
-    slot: AtomicPtr<PicCache>,
+/// A fixed key of a runtime read: a name or a symbol (its address).
+#[derive(Clone, Copy)]
+pub(crate) enum Key<'a> {
+    Name(&'a [u8]),
+    Symbol(usize),
 }
 
-impl RuntimeReadSite {
-    pub const fn new() -> Self {
-        RuntimeReadSite {
-            packed: AtomicU64::new(PACKED_EMPTY),
-            slot: AtomicPtr::new(std::ptr::null_mut()),
+/// What `Get(O, key)` would do, found without running anything.
+#[derive(Clone, Copy)]
+pub(crate) enum Answer {
+    /// It returns this value (an own or inherited data property, or
+    /// `undefined` for a proven absence).
+    Data(u64),
+    /// It calls this getter (NaN-boxed closure bits).
+    Getter(u64),
+}
+
+/// The probe's key word and hash for `key`, when one exists without
+/// allocating.
+#[inline]
+unsafe fn key_word(key: Key<'_>) -> Option<(u64, u64)> {
+    match key {
+        Key::Name(name) => {
+            let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+            let atom = crate::string::atom_lookup(name, hash)?;
+            if !crate::string::is_property_atom(atom) {
+                return None;
+            }
+            Some((
+                crate::value::STRING_TAG | atom as u64,
+                crate::string::property_atom_hash(atom),
+            ))
+        }
+        Key::Symbol(symbol) => {
+            if symbol == 0 {
+                return None;
+            }
+            let bits = crate::value::POINTER_TAG | symbol as u64;
+            if crate::symbol::js_is_symbol(f64::from_bits(bits)) == 0 {
+                return None;
+            }
+            Some((bits, (*(symbol as *const crate::symbol::SymbolHeader)).id))
         }
     }
+}
 
-    #[inline(always)]
-    fn slot_ptr(&self) -> *mut PicCacheSlot {
-        self.slot.as_ptr() as *mut PicCacheSlot
+/// The probe's answer for `key_bits` on `obj`, or `TAG_HOLE`.
+#[inline(always)]
+unsafe fn probe_word(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> f64 {
+    crate::object::layout_probe::perry_probe_get(
+        crate::object::shapes::ordinary_dir_addr(),
+        (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+        key_bits,
+        hash,
+    )
+}
+
+/// `Get(obj, key)` without running anything, when the receiver's layouts
+/// answer it: a data value, or the getter it would call. `None` when only
+/// the complete (observable) read can answer.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` above the handle band (see
+/// [`object_receiver`]).
+pub(crate) unsafe fn probe(obj: *const ObjectHeader, key: Key<'_>) -> Option<Answer> {
+    let Some((key_bits, hash)) = key_word(key) else {
+        return crate::object::method_site::read_holder::shape_answer(obj, key);
+    };
+    let v = probe_word(obj, key_bits, hash);
+    if v.to_bits() != crate::value::TAG_HOLE {
+        return Some(Answer::Data(v.to_bits()));
     }
-
-    /// Own data slot recorded in the emitted compact word, including spill.
-    #[inline]
-    pub(crate) unsafe fn own_slot(&self, obj: *const ObjectHeader) -> Option<u32> {
-        let (shape, slot, _) =
-            super::ic_miss::packed_get_decode(self.packed.load(Ordering::Relaxed))?;
-        (crate::object::shapes::object_shape_stamp(obj) == shape).then_some(slot)
-    }
-
-    /// Publish the same own-slot word used by generated reads.
-    pub(crate) fn prime_own_slot(&self, shape: u32, slot: u32, live: u32) {
-        if crate::object::shapes::is_site_matchable_shape_id(shape) {
-            let stamp = if slot < live {
-                shape
-            } else {
-                shape ^ super::ic_miss::PACKED_SPILL_FLIP
-            };
-            self.packed.store(
-                (u64::from(slot) << 32) | u64::from(stamp),
-                Ordering::Relaxed,
-            );
-        }
-    }
-
-    /// The emitted own-inline hit. The honest +4 word of any live heap cell
-    /// can be compared here: only a primed ordinary ShapeId admits the load.
-    #[inline(always)]
-    pub(crate) unsafe fn read_own_inline(&self, obj: *const ObjectHeader) -> Option<f64> {
-        let word = self.packed.load(Ordering::Relaxed);
-        if (*obj).parent_class_id != word as u32 {
+    if let Some(acc) = crate::object::layout_probe::probe_accessor_word(obj, key_bits, hash) {
+        // A pair this word cannot read (`Accessor::default()`), a compiled
+        // class getter or a setter-only pair: the observable read decides.
+        if acc.raw_get != 0 || acc.static_get != 0 || acc.get == 0 {
             return None;
         }
-        let bits = *((obj as *const u8)
-            .add(std::mem::size_of::<ObjectHeader>() + (word >> 32) as usize * 8)
-            as *const u64);
-        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
+        return Some(Answer::Getter(acc.get));
     }
+    // A receiver or holder the probe declines (a builtin prototype): the
+    // shapes' walk by key position.
+    crate::object::method_site::read_holder::shape_answer(obj, key)
+}
 
-    /// Publish an own data slot established by a namespace-aware lookup.
-    /// The caller has proved that this shape owns the key as a data entry.
-    /// Dictionaries and overflow slots stay on that lookup's slow path.
-    pub(crate) fn prime_own_inline(&self, shape: u32, index: u32, live: u32) {
-        if crate::object::shapes::is_site_matchable_shape_id(shape) && index < live {
-            self.packed.store(
-                (u64::from(index) << 32) | u64::from(shape),
-                Ordering::Relaxed,
-            );
-        }
-    }
-
-    /// The site's answer for `obj` when the shapes give it, without
-    /// collecting: the compact word, then the GC-leaf front. `None` when the
-    /// site must take [`Self::read_slow`].
-    ///
-    /// # Safety
-    /// `obj` is a live `GC_TYPE_OBJECT` above the handle band (see
-    /// [`object_receiver`]).
-    #[inline(always)]
-    pub(crate) unsafe fn read_leaf(&self, obj: *const ObjectHeader) -> Option<f64> {
-        if let Some(value) = self.read_own_inline(obj) {
-            return Some(value);
-        }
-        self.read_leaf_inherited(obj)
-    }
-
-    /// [`Self::read_leaf`] past the compact word: the holder entry the front
-    /// would consult first, read in place (an inherited data hit is the
-    /// receiver's and the holder's ShapeId compares and one load, without the
-    /// front's call), then the front itself.
-    #[inline(never)]
-    unsafe fn read_leaf_inherited(&self, obj: *const ObjectHeader) -> Option<f64> {
-        let cache = self.slot.load(Ordering::Relaxed);
-        if !cache.is_null() {
-            let stamp = crate::object::shapes::object_shape_stamp(obj);
-            let token = (u64::from(stamp) | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
-            if let Some(bits) =
-                crate::object::method_site::read_holder::entry_answer(&*cache, token)
-            {
-                return Some(f64::from_bits(bits));
-            }
-        }
-        let dir = std::ptr::addr_of!(crate::object::shapes::PERRY_EMPTY_SHAPE_DIR) as *const u8;
-        let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
-        let v = js_object_get_field_ic_front(dir, biased, 0, self.slot_ptr(), &self.packed);
-        (v.to_bits() != crate::value::TAG_HOLE).then_some(v)
-    }
-
-    /// The native entry of a getter, after the ordinary accessor lane checks.
-    /// An inherited immutable pair owns the memo; own accessors are inspected
-    /// on every call because equal receiver shapes do not imply equal pairs.
-    #[inline]
-    #[cfg(any(test, feature = "regex-engine"))]
-    pub(crate) unsafe fn probe_getter_code(
-        &self,
-        obj: *const ObjectHeader,
-        key: crate::object::method_site::read_holder::probe::Key<'_>,
-    ) -> Option<usize> {
-        use crate::object::method_site::read_holder::probe::{self, Answer};
-        let cache = self.slot.load(Ordering::Relaxed);
-        if !cache.is_null() {
-            if let Some(code) = probe::probe_accessor_code(&*cache, obj) {
-                return Some(code);
-            }
-        }
-        match self.probe(obj, key)? {
-            Answer::Getter(bits) => Some(probe::getter_code(bits)),
-            Answer::Data(_) => None,
-        }
-    }
-
-    /// Inspect the already primed entry without resolving its key. Symbol
-    /// identities, like name atoms, are needed only when priming a miss.
-    /// # Safety
-    /// As Self::read_leaf.
-    #[inline]
-    #[cfg(any(test, feature = "regex-engine"))]
-    pub(crate) unsafe fn probe_leaf(
-        &self,
-        obj: *const ObjectHeader,
-    ) -> Option<crate::object::method_site::read_holder::probe::Answer> {
-        use crate::object::method_site::read_holder::{self, probe::Answer};
-        if let Some(value) = self.read_own_inline(obj) {
-            return Some(Answer::Data(value.to_bits()));
-        }
-        let cache = self.slot.load(Ordering::Relaxed);
-        if !cache.is_null() {
-            let stamp = crate::object::shapes::object_shape_stamp(obj);
-            let token = (u64::from(stamp) | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
-            if let Some(bits) = read_holder::entry_answer(&*cache, token) {
-                return Some(Answer::Data(bits));
-            }
-            if let Some(answer) = read_holder::probe::probe_accessor_entry(&*cache, obj) {
-                return Some(answer);
-            }
-        }
-        None
-    }
-
-    /// Inspect a data property or accessor without running user code.
-    /// Uses the emitted read's PIC and accessor lane validation.
-    #[cfg(any(test, feature = "regex-engine"))]
-    pub(crate) unsafe fn probe(
-        &self,
-        obj: *const ObjectHeader,
-        key: crate::object::method_site::read_holder::probe::Key<'_>,
-    ) -> Option<crate::object::method_site::read_holder::probe::Answer> {
-        use crate::object::method_site::read_holder::{
-            self,
-            probe::{Answer, Key},
-        };
-        if let Some(answer) = self.probe_leaf(obj) {
-            return Some(answer);
-        }
-        let answer = read_holder::probe::prime(obj, key, self.slot_ptr())?;
-        if matches!(answer, Answer::Data(_)) {
-            let keys = crate::object::object_keys(obj);
-            let index = match key {
-                Key::Name(name) => {
-                    crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
-                }
-                Key::Symbol(symbol) => crate::object::shaped_symbols::position(obj, symbol),
-            };
-            if let Some(index) = index.map(|position| keys.storage_slot(position)) {
-                self.prime_own_inline(
-                    crate::object::shapes::object_shape_stamp(obj),
-                    index,
-                    crate::object::object_live_slot_count(obj),
-                );
-            }
-        }
-        Some(answer)
-    }
-
-    /// The collecting read: the slow entry an emitted site calls on a front
-    /// miss, which also primes the words. It can run a getter, collect and
-    /// throw. Returns the value and the receiver's address after the call.
-    ///
-    /// # Safety
-    /// As [`Self::read_leaf`]; `key` is the site's fixed key text.
-    #[cold]
-    #[inline(never)]
-    pub(crate) unsafe fn read_slow(
-        &self,
-        obj: *mut ObjectHeader,
-        key: &[u8],
-    ) -> (f64, *mut ObjectHeader) {
-        let hash = crate::object::key_bytes_hash(key.as_ptr(), key.len());
-        let (atom, obj) = match crate::string::atom_lookup(key, hash) {
-            Some(atom) => (atom, obj),
-            None => {
-                // The first read per agent mints the atom: an allocation, so
-                // the receiver is rooted across it.
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let handle = scope.root_raw_mut_ptr(obj);
-                let (atom, obj) = handle.across_mut::<ObjectHeader, _>(|| {
-                    crate::string::js_string_pool_atom(key.as_ptr(), key.len() as u32, hash, 0)
-                        as *const crate::StringHeader
-                });
-                (atom, obj)
-            }
-        };
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let handle = scope.root_raw_mut_ptr(obj);
-        if let Some(value) =
-            crate::object::method_site::read_holder::read_runtime_chain(obj, key, self.slot_ptr())
-        {
-            return (value, obj);
-        }
-        handle.across_mut::<ObjectHeader, _>(|| {
-            js_object_get_field_ic_slow(obj as i64, atom, self.slot_ptr(), &self.packed)
-        })
-    }
-
-    /// `Get(obj, key)`: [`Self::read_leaf`], else [`Self::read_slow`].
-    ///
-    /// # Safety
-    /// As [`Self::read_slow`].
-    #[inline]
-    pub(crate) unsafe fn read(&self, obj: *mut ObjectHeader, key: &[u8]) -> f64 {
-        match self.read_leaf(obj) {
-            Some(v) => v,
-            None => self.read_slow(obj, key).0,
-        }
+/// The native entry of the getter `Get(obj, key)` would call, when the
+/// layouts name one (see [`probe`]).
+///
+/// # Safety
+/// As [`probe`].
+#[cfg(any(test, feature = "regex-engine"))]
+pub(crate) unsafe fn getter_code(obj: *const ObjectHeader, key: Key<'_>) -> Option<usize> {
+    match probe(obj, key)? {
+        Answer::Getter(bits) => Some(getter_code_of(bits)),
+        Answer::Data(_) => None,
     }
 }
 
-/// The ordinary-object receiver a site reads from: `value` is a pointer above
-/// the handle band whose validated GC header says `GC_TYPE_OBJECT`. Every
-/// other value (primitives, proxies and handles, arrays, closures, promises,
-/// exotic cells) keeps its caller's generic `Get`.
+/// The native entry of a getter closure, or zero for a value that is not
+/// one. A scalar, never a GC edge.
+pub(crate) fn getter_code_of(bits: u64) -> usize {
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return 0;
+    }
+    crate::closure::get_valid_func_ptr(
+        (bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader,
+    ) as usize
+}
+
+/// `Get(obj, key)`: the probe, else the complete read. It can run a getter,
+/// collect and throw.
+///
+/// # Safety
+/// As [`probe`]; `key` is the read's fixed key text.
+pub(crate) unsafe fn get(obj: *mut ObjectHeader, key: &[u8]) -> f64 {
+    let hash = crate::object::key_bytes_hash(key.as_ptr(), key.len());
+    let (atom, obj) = match crate::string::atom_lookup(key, hash) {
+        Some(atom) if crate::string::is_property_atom(atom) => (atom, obj),
+        _ => {
+            // The first read per agent mints the atom: an allocation, so
+            // the receiver is rooted across it.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let handle = scope.root_raw_mut_ptr(obj);
+            handle.across_mut::<ObjectHeader, _>(|| {
+                crate::string::js_string_pool_atom(key.as_ptr(), key.len() as u32, hash, 0)
+                    as *const crate::StringHeader
+            })
+        }
+    };
+    let v = probe_word(
+        obj,
+        crate::value::STRING_TAG | atom as u64,
+        crate::string::property_atom_hash(atom),
+    );
+    if v.to_bits() != crate::value::TAG_HOLE {
+        return v;
+    }
+    super::js_object_get_field_slow(obj as i64, atom)
+}
+
+/// The ordinary-object receiver a read reads from: `value` is a pointer
+/// above the handle band whose validated GC header says `GC_TYPE_OBJECT`.
+/// Every other value (primitives, proxies and handles, arrays, closures,
+/// promises, exotic cells) keeps its caller's generic `Get`.
 #[inline]
 pub(crate) fn object_receiver(value: f64) -> Option<*mut ObjectHeader> {
     let v = crate::value::JSValue::from_bits(value.to_bits());

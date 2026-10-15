@@ -1,12 +1,10 @@
 use super::super::*;
 use super::support::*;
 use std::cell::Cell;
-mod accessor_shape_expiry;
 mod arraylike_callbacks;
 mod bound_method_builder;
 mod call_argument_lists;
 mod callback_scanners;
-mod class_shape_expiry;
 mod explicit_this_forwarding;
 mod fs_options_object;
 mod fs_stream_registry;

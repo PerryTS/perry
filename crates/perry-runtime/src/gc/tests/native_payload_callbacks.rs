@@ -566,13 +566,11 @@ fn callback_cell_slot_moves_grows_replaces_and_clears() {
         TAG_UNDEFINED
     );
     np::set_callback(value.get_nanbox_f64(), &FAMILY, 0, cb.get_nanbox_f64());
-    crate::state_key_memo!(static MEMO_TEST_CALLBACKS);
-    np::state_set_memo(
+    np::state_set(
         value.get_nanbox_f64(),
         &FAMILY,
         b"callbacks",
         f64::from_bits(TAG_UNDEFINED),
-        &MEMO_TEST_CALLBACKS,
     );
     assert_eq!(
         unsafe { np::callback_from_link(link, 0) }.to_bits(),

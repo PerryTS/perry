@@ -448,14 +448,7 @@ fn builtin_constructor_name_and_length_are_own_runtime_properties() {
         let value = f64::from_bits(js_object_get_field_by_name(global_ptr, ctor_key).bits());
         let key = crate::string::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
         let key_value = f64::from_bits(JSValue::string_ptr(key).bits());
-        let mut global_slot: crate::object::PicCacheSlot = std::ptr::null_mut();
-        let packed = std::sync::atomic::AtomicU64::new(u64::from(u32::MAX));
-        let ic_value = crate::object::field_get_set::js_object_get_field_ic_slow(
-            global_ptr as i64,
-            ctor_key,
-            &mut global_slot,
-            &packed,
-        );
+        let ic_value = crate::object::js_object_get_field_slow(global_ptr as i64, ctor_key);
         assert_eq!(
             crate::object::js_object_has_own(ic_value, key_value).to_bits(),
             crate::value::TAG_TRUE,

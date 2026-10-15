@@ -314,13 +314,13 @@ const COLD_HELPERS: &[&str] = &[
     // register saves and code layout focused on the inline continuation.
     // `cold` is only a profitability hint: both calls remain fully
     // memory-clobbering and the cache miss remains GC-capable/throwing.
-    "js_object_get_field_ic_miss_packed",
-    "js_object_get_field_ic_slow",
-    "js_object_get_field_ic_nonptr",
+    "js_object_get_field_slow",
+    "js_object_get_field_nonptr",
+    "js_object_get_field_value",
+    "js_global_get_field_slow",
     "js_write_barrier_root_nanbox",
     // S2 (`expr/ic_fast_split.rs`): the collecting continuations behind
     // a declined GC-leaf hit. Still throwing, still GC-capable.
-    "js_object_get_field_ic_fast_miss",
     // The prologue stack check's overflow arm (`expr/stack_guard.rs`).
     // `-> !` in the runtime, but declared without `noreturn` here: the
     // clone-call check rejoins its call after it.
@@ -366,14 +366,6 @@ const READONLY_HELPERS: &[&str] = &[
 
 /// Group `#4`: nounwind, willreturn.
 const NOUNWIND_HELPERS: &[&str] = &[
-    // First-read D3 (`object/field_get_set/ic_miss/read_confirm.rs`): a
-    // generic read site's miss front. Loads, compares and at most one
-    // store (D3b re-aims the site's compact word); no allocation, lock,
-    // throw, call or unbounded loop (the ways and the second-chance scan
-    // are bounded). NOT readonly: it writes the site word. Also a proven
-    // `Leaf` in the generated call-effects table, so the call is
-    // `"gc-leaf-function"`.
-    "js_object_get_field_ic_front",
     // Object model step 5 (`object/layout_probe.rs`): the unknown-receiver
     // probe. Loads and compares, one bounded probe of a key index; its only
     // store derives a record's probe word (one malloc on a record's first
@@ -410,7 +402,6 @@ const NOUNWIND_HELPERS: &[&str] = &[
     // continuation instead — and no loop outside the audited guards'
     // bounded ones. Being nounwind is also what keeps them a plain `call`
     // inside a `try`, so the leaf marking never depends on the invoke arm.
-    "js_object_get_field_ic_fast",
     "js_property_rmw_fast",
     // `js_put_value_set_packed_fast`: `throws=no` since the generated table
     // cuts `StateOwner::drop` as thread teardown (seeds.txt, `teardown`).

@@ -39,15 +39,33 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
         .then(|| ordinary_receiver(addr))
         .flatten()
     else {
-        abort(recv, name, class_id, info, "receiver is not an ordinary object");
+        abort(
+            recv,
+            name,
+            class_id,
+            info,
+            "receiver is not an ordinary object",
+        );
     };
     if class_id != 0 && (*obj).class_id != class_id as u32 {
-        abort(recv, name, class_id, info, "receiver class is outside the proven family");
+        abort(
+            recv,
+            name,
+            class_id,
+            info,
+            "receiver class is outside the proven family",
+        );
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     let key = crate::string::canonical_key(name);
     if crate::object::obj_value_has_own_key(recv, crate::value::js_nanbox_string(key as i64)) {
-        abort(recv, name, class_id, info, "receiver has an own property of the method name");
+        abort(
+            recv,
+            name,
+            class_id,
+            info,
+            "receiver has an own property of the method name",
+        );
     }
     let proto = crate::object::js_object_get_prototype_of(recv).to_bits();
     let start = (proto & !crate::value::POINTER_MASK == crate::value::POINTER_TAG)
@@ -57,7 +75,13 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
         abort(recv, name, class_id, info, "receiver has no prototype");
     };
     let ChainMethod::Data { value, .. } = chain_method(start, &MethodKey::bytes(name)) else {
-        abort(recv, name, class_id, info, "chain does not resolve a data method");
+        abort(
+            recv,
+            name,
+            class_id,
+            info,
+            "chain does not resolve a data method",
+        );
     };
     let f = (value & crate::value::POINTER_MASK) as usize;
     let live = if value & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
@@ -69,7 +93,13 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
         0
     };
     if live != info {
-        abort(recv, name, class_id, info, "the holder slot holds another body");
+        abort(
+            recv,
+            name,
+            class_id,
+            info,
+            "the holder slot holds another body",
+        );
     }
 }
 
@@ -96,7 +126,11 @@ unsafe fn abort(recv: f64, name: &[u8], class_id: i32, info: u64, why: &str) -> 
 /// `recv`/`holder` are any values; `method_id` a static dispatch id.
 #[no_mangle]
 #[inline(never)]
-pub unsafe extern "C-unwind" fn js_proto_holder_contract_check(recv: f64, holder: f64, method_id: i64) {
+pub unsafe extern "C-unwind" fn js_proto_holder_contract_check(
+    recv: f64,
+    holder: f64,
+    method_id: i64,
+) {
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let name = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
         .map(|r| std::slice::from_raw_parts(r.ptr, r.len))
@@ -104,7 +138,13 @@ pub unsafe extern "C-unwind" fn js_proto_holder_contract_check(recv: f64, holder
     let _no_move = crate::gc::GcSuppressScope::new();
     let proto = crate::object::js_object_get_prototype_of(recv);
     if proto.to_bits() != holder.to_bits() {
-        abort(recv, name, 0, 0, "receiver's prototype is not the known holder");
+        abort(
+            recv,
+            name,
+            0,
+            0,
+            "receiver's prototype is not the known holder",
+        );
     }
     let key = crate::string::canonical_key(name);
     if crate::object::obj_value_has_own_key(recv, crate::value::js_nanbox_string(key as i64)) {
@@ -134,7 +174,13 @@ pub unsafe extern "C-unwind" fn js_proto_shadow_contract_check(ok: i32, recv: f6
     let _no_move = crate::gc::GcSuppressScope::new();
     let key = crate::string::canonical_key(name);
     if crate::object::obj_value_has_own_key(recv, crate::value::js_nanbox_string(key as i64)) {
-        abort(recv, name, 0, 0, "an unshadowed receiver has an own property of the bound name");
+        abort(
+            recv,
+            name,
+            0,
+            0,
+            "an unshadowed receiver has an own property of the bound name",
+        );
     }
 }
 
@@ -160,12 +206,17 @@ mod tests {
             panic!("a false shadow answer returned");
         }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "object::method_site::proto_constant::tests::shadow_contract_rejects_false_answer", "--nocapture"])
+            .args([
+                "--exact",
+                "object::method_site::proto_constant::tests::shadow_contract_rejects_false_answer",
+                "--nocapture",
+            ])
             .env(CHILD, "1")
             .output()
             .unwrap();
         use std::os::unix::process::ExitStatusExt;
         assert_eq!(output.status.signal(), Some(libc::SIGABRT));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("an unshadowed receiver has an own property"));
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("an unshadowed receiver has an own property"));
     }
 }

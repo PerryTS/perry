@@ -93,15 +93,14 @@ pub(crate) unsafe fn accessor_walk(
                 shape.live_inline_slot_count,
             )?;
             let lane = holder_slot_value(addr, slot)?;
-            let getter = crate::object::accessor_pair::site_getter_word_of_value(lane)?;
+            // The lane must hold an accessor pair a site could call.
+            crate::object::accessor_pair::site_getter_word_of_value(lane)?;
             return Some(HolderAccessor {
                 hops,
                 depth,
                 holder: addr,
                 shape: object_shape_stamp(holder),
                 slot,
-                pair: (lane & crate::value::POINTER_MASK) as usize,
-                getter,
             });
         }
         if depth == HOLDER_MAX_DEPTH {

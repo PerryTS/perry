@@ -32,9 +32,6 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::rc::Rc;
 
-perry_runtime::state_key_memo!(static MEMO_DB);
-perry_runtime::state_key_memo!(static MEMO_LIMITS);
-
 macro_rules! builtin {
     ($body:path, $n:tt) => {
         perry_runtime::fn_info!($body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN))
@@ -1293,19 +1290,18 @@ extern "C" fn db_limits_getter(_c: *const ClosureHeader, this: JsThis) -> f64 {
         if !native_payload::is_instance(this, &DB_FAMILY) {
             throw_illegal_invocation();
         }
-        let existing = native_payload::state_get_memo(this, &DB_FAMILY, b"limits", &MEMO_LIMITS);
+        let existing = native_payload::state_get(this, &DB_FAMILY, b"limits");
         if value_from_f64(existing).is_pointer() {
             return existing;
         }
         let scope = RuntimeHandleScope::new();
         let db = scope.root_nanbox_f64(this);
         let limits = scope.root_nanbox_f64(native_payload::alloc(&LIMITS_FAMILY, (), 0, &[]));
-        native_payload::state_set_memo(
+        native_payload::state_set(
             limits.get_nanbox_f64(),
             &LIMITS_FAMILY,
             b"db",
             db.get_nanbox_f64(),
-            &MEMO_DB,
         );
         for (name, get, set) in limit_accessors() {
             native_payload::define_own_accessor(
@@ -1317,12 +1313,11 @@ extern "C" fn db_limits_getter(_c: *const ClosureHeader, this: JsThis) -> f64 {
                 false,
             );
         }
-        native_payload::state_set_memo(
+        native_payload::state_set(
             db.get_nanbox_f64(),
             &DB_FAMILY,
             b"limits",
             limits.get_nanbox_f64(),
-            &MEMO_LIMITS,
         );
         limits.get_nanbox_f64()
     }
@@ -1332,7 +1327,7 @@ unsafe fn limit_get(this: f64, idx: usize) -> f64 {
     if !native_payload::is_instance(this, &LIMITS_FAMILY) {
         throw_illegal_invocation();
     }
-    let db = native_payload::state_get_memo(this, &LIMITS_FAMILY, b"db", &MEMO_DB);
+    let db = native_payload::state_get(this, &LIMITS_FAMILY, b"db");
     let raw = db_payload(db).raw;
     f64_from_jsvalue(JSValue::number(
         ffi::sqlite3_limit(raw, limit_id(idx), -1) as f64
@@ -1343,7 +1338,7 @@ unsafe fn limit_set(this: f64, idx: usize, name: &str, value: f64) -> f64 {
     if !native_payload::is_instance(this, &LIMITS_FAMILY) {
         throw_illegal_invocation();
     }
-    let db = native_payload::state_get_memo(this, &LIMITS_FAMILY, b"db", &MEMO_DB);
+    let db = native_payload::state_get(this, &LIMITS_FAMILY, b"db");
     db_payload(db);
     let new_value = non_negative_i32_value(value_from_f64(value), name, true);
     let raw = db_payload(db).raw;

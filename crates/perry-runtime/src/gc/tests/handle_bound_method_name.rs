@@ -263,11 +263,8 @@ fn a_bound_timer_method_from_the_ic_miss_path_never_captures_the_key() {
             sites_before + 1,
             "the fixture must use the production cache allocator"
         );
-        let bits = crate::object::js_object_get_field_ic_miss(
-            id as *const crate::ObjectHeader,
-            key,
-            &mut site.0,
-        );
+        let bits =
+            crate::object::field_get_set::get_field_miss(id as *const crate::ObjectHeader, key);
         assert_names_the_installed_method(
             crate::value::JSValue::from_bits(bits.to_bits()),
             "hasRef",

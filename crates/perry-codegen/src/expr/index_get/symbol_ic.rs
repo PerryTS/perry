@@ -10,33 +10,15 @@ pub(crate) fn lower_symbol_property_get_ic(
     obj_box: &str,
     sym_box: &str,
 ) -> String {
-    let slot = super::keyed_slot(ctx);
     if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        return ctx.block().call(
-            DOUBLE,
-            "js_dyn_index_get_site",
-            &[(PTR, &slot), (DOUBLE, obj_box), (DOUBLE, sym_box)],
-        );
+        return keyed_slow(ctx, obj_box, sym_box, "0", true);
     }
 
     // Object model step 5 (§3.7 case 3): the receiver's own layout answers
     // the symbol key (`perry_probe_get_keyed`); a decline takes the complete
     // keyed read.
-    let bits = ctx.block().bitcast_double_to_i64(obj_box);
-    let receiver = emit_fused_receiver_test(ctx.block(), &bits);
-    let raw = emit_handle(ctx.block(), &receiver.biased);
     emit_keyed_probe(ctx, obj_box, sym_box, |ctx| {
-        ctx.block().call(
-            DOUBLE,
-            "js_object_get_field_by_key_site",
-            &[
-                (PTR, &slot),
-                (I64, "0"),
-                (I64, &raw),
-                (DOUBLE, sym_box),
-                (DOUBLE, obj_box),
-            ],
-        )
+        keyed_slow(ctx, obj_box, sym_box, "0", false)
     })
 }
 
@@ -61,14 +43,7 @@ pub(super) fn lower_unknown_key_get(ctx: &mut FnCtx<'_>, obj: &str, key: &str) -
     // Object model step 5 (§3.7 case 3): the receiver's own layout answers a
     // string or symbol key through the key's atom (`perry_probe_get_keyed`);
     // only a decline calls the complete keyed read.
-    let named_value = emit_keyed_probe(ctx, obj, key, |ctx| {
-        let slot = super::keyed_slot(ctx);
-        ctx.block().call(
-            DOUBLE,
-            "js_dyn_index_get_site",
-            &[(PTR, &slot), (DOUBLE, obj), (DOUBLE, key)],
-        )
-    });
+    let named_value = emit_keyed_probe(ctx, obj, key, |ctx| keyed_slow(ctx, obj, key, "0", true));
     let named_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = numeric;
@@ -119,4 +94,24 @@ pub(crate) fn emit_keyed_probe(
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(&probed, &probe_end), (&slow_value, &slow_end)])
+}
+
+/// The complete keyed read after the probe declined (`js_object_get_keyed_slow`).
+pub(crate) fn keyed_slow(
+    ctx: &mut FnCtx<'_>,
+    obj: &str,
+    key: &str,
+    site_id: &str,
+    dynamic: bool,
+) -> String {
+    ctx.block().call(
+        DOUBLE,
+        "js_object_get_keyed_slow",
+        &[
+            (DOUBLE, obj),
+            (DOUBLE, key),
+            (I64, site_id),
+            (crate::types::I32, if dynamic { "1" } else { "0" }),
+        ],
+    )
 }

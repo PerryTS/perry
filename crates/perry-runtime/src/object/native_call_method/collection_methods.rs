@@ -464,10 +464,11 @@ pub(super) unsafe fn dispatch_raw_pointer(
                         for i in 0..key_count {
                             let key_val = crate::array::js_array_get(keys, i as u32);
                             if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
-                                let field_val = crate::object::field_get_set::js_object_get_key_field(
-                                    obj as *mut _,
-                                    i as u32,
-                                );
+                                let field_val =
+                                    crate::object::field_get_set::js_object_get_key_field(
+                                        obj as *mut _,
+                                        i as u32,
+                                    );
                                 if field_val.is_pointer() {
                                     return Some(crate::closure::js_native_call_value(
                                         f64::from_bits(field_val.bits()),

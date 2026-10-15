@@ -12,31 +12,27 @@ use super::combinators::{
     callable_closure_value, combinator_catch_js, PROMISE_REJECT_FN_INFO, PROMISE_RESOLVE_FN_INFO,
 };
 use super::*;
-use crate::object::field_get_set::runtime_read_site::{object_receiver, RuntimeReadSite};
+use crate::object::field_get_set::runtime_read_site::{self, object_receiver, Answer, Key};
 
-crate::perry_thread_local! {
-    /// `Get(resolution, "then")` (27.2.1.3.2 step 8) for a resolution
-    /// `then_probe::definitely_no_then` could not prove: a runtime read site,
-    /// answered from the resolution's shape (and its holder's) as a compiled
-    /// `resolution.then` is.
-    static THEN_SITE: RuntimeReadSite = const { RuntimeReadSite::new() };
-}
-
-/// The `then` site's answer for an ordinary-object resolution when the shapes
-/// give it: no `setjmp`, no key, no collection. `None` takes
-/// [`get_then_collecting`].
+/// `Get(resolution, "then")` (27.2.1.3.2 step 8) for an ordinary-object
+/// resolution `then_probe::definitely_no_then` could not prove, when its
+/// layouts answer it without running anything: no `setjmp`, no collection.
+/// `None` takes [`get_then_collecting`].
 #[inline]
 fn then_site_leaf(value: f64) -> Option<f64> {
     let obj = object_receiver(value)?;
-    THEN_SITE.with(|site| unsafe { site.read_leaf(obj) })
+    match unsafe { runtime_read_site::probe(obj, Key::Name(b"then")) }? {
+        Answer::Data(bits) => Some(f64::from_bits(bits)),
+        Answer::Getter(_) => None,
+    }
 }
 
-/// The collecting `Get(value, "then")`: the site's slow entry (which primes
-/// it) for an ordinary object, the generic dynamic getter for every other
-/// value. Can run a getter and throw; callers catch.
+/// The collecting `Get(value, "then")`: the runtime read for an ordinary
+/// object, the generic dynamic getter for every other value. Can run a
+/// getter and throw; callers catch.
 fn get_then_collecting(value: f64) -> f64 {
     match object_receiver(value) {
-        Some(obj) => THEN_SITE.with(|site| unsafe { site.read_slow(obj, b"then").0 }),
+        Some(obj) => unsafe { runtime_read_site::get(obj, b"then") },
         None => unsafe {
             crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
         },

@@ -297,30 +297,22 @@ fn global_binding_scope<'scope>(
 }
 
 #[no_mangle]
-pub extern "C-unwind" fn js_global_get_field_ic_slow(
+pub extern "C-unwind" fn js_global_get_field_slow(
     obj_handle: i64,
     key: *const crate::StringHeader,
-    cache_slot: *mut crate::object::PicCacheSlot,
-    packed: *const std::sync::atomic::AtomicU64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let (receiver, name) =
         global_binding_scope(&scope, crate::value::js_nanbox_pointer(obj_handle), key);
     name.with_const_ptr(|key| {
-        crate::object::field_get_set::js_object_get_field_ic_slow(
+        crate::object::field_get_set::js_object_get_field_slow(
             crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()),
             key,
-            cache_slot,
-            packed,
         )
     })
 }
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_GLOBAL_GET_FIELD_IC_SLOW: extern "C-unwind" fn(
-    i64,
-    *const crate::StringHeader,
-    *mut crate::object::PicCacheSlot,
-    *const std::sync::atomic::AtomicU64,
-) -> f64 = js_global_get_field_ic_slow;
+static KEEP_JS_GLOBAL_GET_FIELD_SLOW: extern "C-unwind" fn(i64, *const crate::StringHeader) -> f64 =
+    js_global_get_field_slow;

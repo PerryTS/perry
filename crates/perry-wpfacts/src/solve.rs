@@ -1174,7 +1174,9 @@ impl Model {
             if t == TOP {
                 self.add_tok(c.ret, TOP);
             } else {
-                self.add_top(c.ret, |_| "result of an opaque builtin function value".into());
+                self.add_top(c.ret, |_| {
+                    "result of an opaque builtin function value".into()
+                });
             }
             self.add_prim(c.ret, prim::ALL);
             return;
@@ -1374,7 +1376,9 @@ impl Model {
                 if t == TOP {
                     self.add_tok(c.ret, TOP);
                 } else {
-                    self.add_top(c.ret, |_| "`new` of an opaque builtin function value".into());
+                    self.add_top(c.ret, |_| {
+                        "`new` of an opaque builtin function value".into()
+                    });
                 }
             }
             TokKind::Bound(b) => {
@@ -1530,7 +1534,13 @@ impl Model {
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
         let any = self.field_any(t);
-        self.add_top(any, |m| format!("field of escaped {}: {}", m.tok_kind_word(t), m.reasons[reason as usize]));
+        self.add_top(any, |m| {
+            format!(
+                "field of escaped {}: {}",
+                m.tok_kind_word(t),
+                m.reasons[reason as usize]
+            )
+        });
         self.add_prim(any, prim::ALL);
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
@@ -1544,7 +1554,8 @@ impl Model {
         match self.toks[t as usize].clone() {
             TokKind::Func(f) => {
                 let fi = self.funcs[f as usize].clone();
-                let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
+                let why =
+                    |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
                 for &p in fi.params.iter().chain(fi.rest.iter()) {
                     self.add_top(p, why);
                     self.add_prim(p, prim::ALL);
@@ -1555,7 +1566,9 @@ impl Model {
                 }
                 self.add_top(fi.args_all, why);
                 if !fi.lexical_this {
-                    self.add_top(fi.this, |m| format!("this of escaped function: {}", m.reasons[reason as usize]));
+                    self.add_top(fi.this, |m| {
+                        format!("this of escaped function: {}", m.reasons[reason as usize])
+                    });
                     self.add_prim(fi.this, prim::ALL);
                 }
                 self.sink_node(fi.ret, reason);

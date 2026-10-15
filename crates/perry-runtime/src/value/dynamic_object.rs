@@ -1014,18 +1014,15 @@ mod length_handle_band_tests {
         };
         let console_ptr = crate::value::js_nanbox_get_pointer(console_ctor) as usize;
         let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-        let mut cache = [0_i64; crate::object::PIC_CACHE_WORDS];
-        let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
         assert_eq!(js_value_length_f64(console_ctor), 1.0);
         assert_eq!(
             crate::closure::closure_get_dynamic_prop(console_ptr, "length"),
             1.0
         );
         assert_eq!(
-            crate::object::js_object_get_field_ic_miss(
+            crate::object::field_get_set::get_field_miss(
                 console_ptr as *const crate::ObjectHeader,
-                length_key,
-                &mut cache_slot,
+                length_key
             ),
             1.0
         );

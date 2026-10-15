@@ -340,10 +340,8 @@ pub(crate) unsafe fn publish_key_add_word(
     let Some(names) = names() else {
         return word;
     };
-    let bytes = std::slice::from_raw_parts(
-        crate::string::string_data(key),
-        (*key).byte_len as usize,
-    );
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
     let any_member = prototype
         || (*obj).class_id == 0
         || (*obj).class_id >= super::class_registry::SYNTHETIC_CLASS_ID_BASE;
@@ -384,8 +382,8 @@ unsafe fn key_add_slow(
         return id;
     }
     let receiver_class = if any_member { 0 } else { (*obj).class_id };
-    let shadows = receiver_class == 0
-        || receiver_family_declares_name(receiver_class, bytes).unwrap_or(true);
+    let shadows =
+        receiver_class == 0 || receiver_family_declares_name(receiver_class, bytes).unwrap_or(true);
     if shadows && !super::own_override::in_builtin_definition() {
         id | LAYOUT_SHADOW_BIT
     } else {

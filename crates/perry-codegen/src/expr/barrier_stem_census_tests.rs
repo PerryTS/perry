@@ -1447,7 +1447,8 @@ fn generator_fixed_slot_store_uses_the_shared_barrier_operation() {
         "no per-site barrier scaffold"
     );
     assert!(
-        ir.contains("call double @js_object_get_field_ic("),
+        (ir.contains("call double @js_object_get_field_value(")
+            || ir.contains("call double @js_object_get_field_slow(")),
         "generic continuation reads call the complete collecting operation"
     );
     assert!(

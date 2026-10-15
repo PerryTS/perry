@@ -117,7 +117,6 @@ pub(crate) mod collection_receiver;
 mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
-mod in_presence_ic;
 mod index;
 pub(crate) mod nanbox_inline;
 mod native_memory;
@@ -338,20 +337,6 @@ pub(crate) struct InlineCtorReturn {
     /// `return`s a non-object, non-undefined value throws a TypeError; a base
     /// ctor silently ignores it and keeps `this`.
     pub is_derived: bool,
-}
-
-/// One statement-region-owned property IC shared by equivalent reads.
-///
-/// The owner emits a speculative, side-effect-free cache probe before the
-/// original statements, then leaves the original generic property reads in
-/// place as the semantic fallback. Those reads must prime the *same* cache or
-/// the speculative probe would remain cold forever. Sharing is safe only for
-/// the exact `(base local, static property name)` pair recorded here.
-#[derive(Clone)]
-pub(crate) struct PropertyGetIcOverride {
-    pub base_local_id: u32,
-    pub property: String,
-    pub cache_name: String,
 }
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
@@ -1709,11 +1694,6 @@ pub(crate) struct FnCtx<'a> {
     /// site's first priming miss (#9708) — for each entry.
     pub ic_globals: Vec<String>,
 
-    /// Region-scoped cache selected by a guarded statement fusion. Generic
-    /// property reads matching the exact base local and key reuse it instead
-    /// of allocating independent per-expression caches.
-    pub property_get_ic_override: Option<PropertyGetIcOverride>,
-
     /// Issue #179 typed-parse: raw rodata globals emitted by
     /// `JsonParseTyped` codegen. Each entry is the full LLVM IR line
     /// `@<name> = private unnamed_addr constant [N x i8] c"..."` to
@@ -2811,13 +2791,6 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
-    /// May some compiled class of the program declare a getter named `name`?
-    /// Where this is false a read site emits no class-getter arm.
-    pub(crate) fn program_may_declare_getter(&self, name: &str) -> bool {
-        self.program_class_accessor_names
-            .is_none_or(|names| names.may_get(name))
-    }
-
     /// May some compiled class of the program declare a setter named `name`?
     /// Where this is false a store site emits no class-setter arm.
     pub(crate) fn program_may_declare_setter(&self, name: &str) -> bool {

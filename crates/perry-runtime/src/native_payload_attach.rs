@@ -144,7 +144,7 @@ pub(crate) fn attach_external_rooted(
             // GC_STORE_AUDIT(BARRIERED): malloc cell -> nursery owner.
             (*cell).owner = owner;
             if let Some(state) = raw_js_state(obj) {
-                store_callbacks(cell, raw_field_memo(state, b"callbacks", &CALLBACKS_MEMO));
+                store_callbacks(cell, raw_field(state, b"callbacks"));
             }
             #[cfg(test)]
             if callback_sabotage("barrier") {
@@ -191,46 +191,6 @@ pub fn state_get(value: f64, family: &NativePayloadFamily, key: &[u8]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let state = root_pointer::<ObjectHeader>(&scope, state);
     state_field(&state, key)
-}
-
-/// [`state_get`] through a per-site [`StateKeyMemo`] (hot keys).
-pub fn state_get_memo(
-    value: f64,
-    family: &NativePayloadFamily,
-    key: &[u8],
-    memo: &'static StateKeyMemo,
-) -> f64 {
-    let Some(obj) = instance_of(value, family.class_id) else {
-        return undefined();
-    };
-    unsafe { raw_js_state(obj).map_or_else(undefined, |state| raw_field_memo(state, key, memo)) }
-}
-
-/// [`state_set`] through a per-site [`StateKeyMemo`] (hot keys).
-pub fn state_set_memo(
-    value: f64,
-    family: &NativePayloadFamily,
-    key: &[u8],
-    v: f64,
-    memo: &'static StateKeyMemo,
-) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let v = scope.root_nanbox_f64(v);
-    let owner = scope.root_nanbox_f64(value);
-    let state = js_state(owner.get_nanbox_f64(), family, true);
-    if !crate::value::JSValue::from_bits(state.to_bits()).is_pointer() {
-        return;
-    }
-    let state = root_pointer::<ObjectHeader>(&scope, state);
-    let slot = state
-        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { state_key_index_memo(obj, key, memo) });
-    match slot {
-        Some(i) => state.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-            state_slot_set(obj, i, v.get_nanbox_f64())
-        }),
-        None => set_state_field(&scope, &state, key, v.get_nanbox_f64()),
-    }
-    sync_callbacks(owner.get_nanbox_f64(), family, key, v.get_nanbox_f64());
 }
 
 /// Store `v` as the field `key` of an instance's JS state (created on
