@@ -1497,7 +1497,7 @@ mod const_tls_tests {
                 assert_eq!(arena.blocks[0].size, BLOCK_SIZE);
                 assert_eq!(arena.blocks[0].offset, 0);
                 let data = arena.blocks[0].data;
-                assert_eq!((*cell.get()).blocks[0].data, data);
+                assert_eq!((&*cell.get()).blocks[0].data, data);
             });
             OLD_ARENA.with(|cell| unsafe {
                 assert!((*cell.0.get()).blocks.is_empty());
