@@ -40,7 +40,7 @@ fn a_plain_objects_shape_stamp_is_not_serialized_as_a_parent_class_id() {
         }
         let _ = crate::object::js_object_get_field_by_name(obj, key("thr6759_b"));
 
-        let stamp = (*obj).parent_class_id;
+        let stamp = (*obj).shape_word();
         assert!(
             is_shape_id(stamp),
             "fixture is vacuous — the object carries no shape stamp to leak (got {stamp:#x})"

@@ -738,7 +738,7 @@ pub(crate) fn test_arguments_registry_probe_count() -> u64 {
 unsafe fn born_arguments_len(obj: *const ObjectHeader) -> Option<u32> {
     let tail = &*arguments_tail(obj);
     let born = tail.birth_shape;
-    (born != 0 && (*obj).parent_class_id == born).then_some(tail.len)
+    (born != 0 && (*obj).shape_word() == born).then_some(tail.len)
 }
 
 unsafe fn born_arguments_index(obj: *const ObjectHeader, index: u32) -> f64 {

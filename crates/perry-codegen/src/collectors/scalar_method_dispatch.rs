@@ -124,6 +124,12 @@ pub struct ModuleDispatchFacts {
     /// (`single_binding_closure_locals`), beside the module-wide reassignment
     /// scan it rests on.
     closure_bindings: HashMap<u32, u32>,
+    /// Object model step 3: `const` bindings proven to hold exactly an
+    /// instance of one class (`spec_abi_sites::single_binding_families`).
+    new_bindings: HashMap<u32, String>,
+    /// Object model step 3: `const` bindings to `Object.create(P)` -> the
+    /// binding id of `P` (`spec_abi_sites::single_binding_families`).
+    ocreate_bindings: HashMap<u32, u32>,
     /// Bindings whose typed array or buffer some use could hand to code that
     /// reads its `.buffer` (`collectors/sealed_buffers.rs`). `None` when never
     /// computed, which seals nothing.
@@ -151,6 +157,8 @@ impl Default for ModuleDispatchFacts {
             imported_return_shapes: HashMap::new(),
             argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
+            new_bindings: HashMap::new(),
+            ocreate_bindings: HashMap::new(),
             buffer_exposure: None,
         }
     }
@@ -352,6 +360,17 @@ impl ModuleDispatchFacts {
     pub(crate) fn closure_binding_func(&self, local_id: u32) -> Option<u32> {
         self.closure_bindings.get(&local_id).copied()
     }
+
+    /// Object model step 3: the `const` bindings that hold exactly an
+    /// instance of one class.
+    pub(crate) fn new_bindings(&self) -> &HashMap<u32, String> {
+        &self.new_bindings
+    }
+
+    /// Object model step 3: `const` bindings to `Object.create(P)` -> `P`.
+    pub(crate) fn ocreate_bindings(&self) -> &HashMap<u32, u32> {
+        &self.ocreate_bindings
+    }
 }
 
 /// Exact `Class.prototype` expression nodes whose value is held by one
@@ -504,6 +523,8 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         // `None` as "take no seed". Computed here rather than lazily so the one
         // module-wide walk it needs happens once.
         closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
+        new_bindings: HashMap::new(),
+        ocreate_bindings: HashMap::new(),
         buffer_exposure: Some(super::sealed_buffers::buffer_exposure(hir)),
     };
 
@@ -512,6 +533,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     // two `defineProperty` sites every `cjs_wrap`-compiled module contains.
     let cjs = super::cjs_scaffolding::collect(hir);
     let read_only_prototype_reads = read_only_prototype_reads(hir);
+    (facts.new_bindings, facts.ocreate_bindings) = super::spec_abi_sites::single_binding_families(hir);
 
     note_stmts(&hir.init, &mut facts, &cjs, &read_only_prototype_reads);
     for function in &hir.functions {
@@ -1089,6 +1111,8 @@ mod tests {
             imported_return_shapes: HashMap::new(),
             argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
+            new_bindings: HashMap::new(),
+            ocreate_bindings: HashMap::new(),
             buffer_exposure: None,
         }
     }

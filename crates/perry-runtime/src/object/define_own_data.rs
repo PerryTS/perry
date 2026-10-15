@@ -50,7 +50,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // Reuse the named store's own-slot proof before probing a key-ADD edge:
     // the latter cannot answer an overwrite and was doing its full key
     // interning, transition and receiver checks first on every literal tail.
-    let id = (*obj).parent_class_id;
+    let id = (*obj).shape_word();
     // Declared class fields commonly CREATE; retain their key-add-first
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0

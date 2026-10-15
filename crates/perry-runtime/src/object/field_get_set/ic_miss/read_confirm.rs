@@ -125,14 +125,16 @@ unsafe fn read_site_front(
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     let shape_id = (*obj).parent_class_id;
-    // The layout id without the shadow bit. A key the layout holds lives in
-    // its fixed slot whether or not the object has an overflow (the overflow
-    // records a slot reference, §3.4), so the own-slot answers below (ways,
-    // spill, latched confirm) compare the layout id; a deleted fixed key
-    // leaves the hole marker there, which reads as a miss. Answers about keys
-    // that are NOT own (the holder entries) keep the full word: an overflow
-    // entry may shadow an inherited key, and the shadow bit makes them miss.
-    let layout_id = shape_id & !crate::object::overflow::SHADOW_BIT;
+    // The layout id without the shadow bit (`layout_desc::LAYOUT_SHADOW_BIT`).
+    // A key the layout holds lives in its fixed slot whether the bit was set
+    // by an overflow or by a dynamic write (the overflow records a slot
+    // reference, §3.4), so the own-slot answers below (ways, spill, latched
+    // confirm) compare the layout id; a deleted fixed key leaves the hole
+    // marker there, which reads as a miss. Answers about keys that are NOT
+    // own (the holder entries) keep the full word: an overflow entry or a
+    // dynamically added own key may shadow an inherited key, and the bit
+    // makes them miss.
+    let layout_id = crate::object::layout_desc::layout_id_of_word(shape_id);
     // `pic_slot_peek` without its null test: the slot is the site's global.
     let cache = (*(cache_slot as *const std::sync::atomic::AtomicPtr<crate::object::PicCache>))
         .load(Ordering::Acquire);
@@ -326,7 +328,7 @@ mod tests {
                 js_object_read_confirm(
                     dir,
                     o as i64,
-                    (*o).parent_class_id,
+                    (*o).shape_word(),
                     &packed,
                     crate::value::js_nanbox_string(k as i64).to_bits(),
                 )
@@ -546,7 +548,7 @@ mod tests {
         });
         let hole = crate::value::TAG_HOLE;
         obj.with_mut_ptr(|o: *mut ObjectHeader| {
-            let shape_id = unsafe { (*o).parent_class_id };
+            let shape_id = unsafe { (*o).shape_word() };
             assert!(super::is_shape_id(shape_id), "premise: a shaped receiver");
             let mut cache: crate::object::PicCache = [0; crate::object::PIC_CACHE_WORDS];
             cache[super::PIC_WAY_STATE] = 1;
@@ -613,7 +615,7 @@ mod tests {
         assert_eq!(primed, 13.0, "the priming read");
         let word = packed.load(Ordering::Relaxed);
         obj.with_mut_ptr(|o: *mut ObjectHeader| {
-            let shape_id = unsafe { (*o).parent_class_id };
+            let shape_id = unsafe { (*o).shape_word() };
             assert_eq!(
                 (word as u32) ^ super::PACKED_SPILL_FLIP,
                 shape_id,

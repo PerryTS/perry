@@ -744,6 +744,10 @@ fn collect_module_one(
     if ctx.patched_builtins.len() != patched_before && ctx.patched_builtins_lowered_modules > 0 {
         ctx.patched_builtins_grew_after_lower = true;
     }
+    perry_hir::scan_proto_census(
+        solid_module.as_ref().unwrap_or(ast_module),
+        &mut ctx.proto_census,
+    );
     perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),

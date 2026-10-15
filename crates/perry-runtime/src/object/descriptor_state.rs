@@ -81,9 +81,27 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
     }) else {
         return true;
     };
+    object_proto_may_intercept_name(bytes)
+}
+
+/// The realm-default answer for an already decoded property name.
+#[inline]
+pub(crate) fn object_proto_may_intercept_name(bytes: &[u8]) -> bool {
     // The intrinsic Annex-B setter is implemented by the ordinary Set walk.
     if bytes == b"__proto__" {
         return true;
+    }
+    // The sealed intrinsic's immutable layout has no store-blocking key
+    // except the Annex-B accessor above. Its own shadow word is the census
+    // answer until a program write changes that object. This is the same
+    // fact builtin call sites read, with no separate chain verdict.
+    let intrinsic =
+        crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Object as usize);
+    let word = unsafe { (*intrinsic).parent_class_id };
+    // A zero startup stand-in proves nothing about an already built but
+    // unsealed intrinsic (including runtime fixtures).
+    if word >= super::shapes::SHAPE_ID_BASE && word < super::layout_desc::UNSHADOWED_WORD_END {
+        return false;
     }
     let proto = crate::array::object_prototype_addr_if_resolved();
     proto != 0
@@ -110,11 +128,28 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 ) -> bool {
     // Decode the key once — used for both the class-chain and per-prototype
     // accessor probes below.
-    let name = match reflect_support::key_to_rust_string(key) {
-        Some(n) => n,
-        // Non-decodable / non-string key: do not risk the fast path.
-        None => return true,
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(bytes) =
+        crate::string::js_string_key_bytes(crate::JSValue::from_bits(key.to_bits()), &mut scratch)
+    else {
+        return true;
     };
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return true;
+    };
+    // Object model step 3: an `Object.create(P)` object (a synthetic class
+    // id) answers from `P`'s layout, with no chain walk.
+    if name != "__proto__" {
+        if let Some(blocked) = holder_layout_blocks_store(obj_addr, key, name.as_bytes()) {
+            return blocked;
+        }
+        if let Some(blocked) = declared_class_layout_blocks_store(obj_addr, name.as_bytes()) {
+            return blocked;
+        }
+    }
+    // The generic walk can materialize a holder, so retain the name by
+    // value before it can collect. Layout answers above allocate nothing.
+    let name = name.to_owned();
     // Walk the actual prototype objects; their shapes own all accessors.
     let mut proto = js_object_get_prototype_of(crate::value::js_nanbox_pointer(obj_addr as i64));
     let mut depth = 0u32;
@@ -395,6 +430,170 @@ include!("descriptor_state/skip_key.rs");
 /// proxies and handle prototypes, non-object prototypes (functions, arrays),
 /// typed arrays, exotic expando hosts, class objects, native-module receivers,
 /// frozen prototypes, and any chain deeper than [`CUSTOM_PROTO_WALK_LIMIT`].
+/// Object model step 3 (`OBJECT_MODEL_2026-10-13.md` §3.6): can an inherited
+/// setter or non-writable property block adding `key` to the class-less
+/// object at `obj_addr` whose recorded [[Prototype]] is an ordinary object
+/// `P`? Answered from `P`'s layout (its keys carry their attributes) and from
+/// `P`'s own link: `%Object.prototype%` (the per-key default answer), null,
+/// or `P`'s class (the class-chain answer). `None` when `P` is anything else
+/// (an exotic, a class object, a frozen or descriptor-bearing holder, a
+/// deeper recorded chain): the caller walks.
+///
+/// # Safety
+/// `obj_addr` is a live `ObjectHeader`.
+pub(crate) unsafe fn holder_layout_blocks_store(
+    obj_addr: usize,
+    _key: f64,
+    name: &[u8],
+) -> Option<bool> {
+    holder_word_blocks_store(
+        super::shapes::object_prototype_word(obj_addr as *const ObjectHeader),
+        name,
+    )
+}
+
+/// The same holder-layout answer for a caller already carrying the recorded
+/// prototype edge from its live shape. Reads metadata only; unknown links
+/// return None rather than materializing or walking a chain here.
+#[inline]
+pub(crate) unsafe fn holder_word_blocks_store(bits: u64, name: &[u8]) -> Option<bool> {
+    // A recorded prototype word is a traced edge naming a live heap cell (a
+    // POINTER_TAG value): its header is read directly. Other encodings use
+    // the admitting reader.
+    let payload = bits & crate::value::POINTER_MASK;
+    let header = if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && payload != 0 {
+        &*crate::gc::header_from_trusted_user_ptr(payload as *const u8)
+    } else {
+        crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let p = (bits & crate::value::POINTER_MASK) as usize;
+    let holder = p as *const ObjectHeader;
+    let record = super::shapes::object_shape_record(holder)?;
+    // The layout owns ordinary-store admission and the key attributes.
+    // Exotics/unmarked layouts use the generic operation.
+    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    let meta = (*holder).meta;
+    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
+        return None;
+    }
+    if super::key_attrs::object_key_blocks_plain_store_from_record(holder, record, name) {
+        return Some(true);
+    }
+    match record.proto_id() {
+        super::shapes::PROTO_ID_NULL => Some(false),
+        super::shapes::PROTO_ID_DEFAULT => Some(object_proto_may_intercept_name(name)),
+        proto
+            if (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED).contains(&proto) =>
+        {
+            declared_class_chain_blocks_store(proto as u32, name)
+        }
+        _ => None,
+    }
+}
+
+/// The ordinary receiver's layout is the store authority: own attributes,
+/// recorded prototype edge and declared class chain. Unknown links have no
+/// answer here; the generic operation walks them without storing a verdict.
+#[inline]
+pub(crate) unsafe fn layout_store_may_intercept(
+    record: super::shapes::ShapeRecordRef,
+    obj: *const ObjectHeader,
+    name: &[u8],
+) -> Option<bool> {
+    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    if super::key_attrs::object_key_blocks_plain_store_from_record(obj, record, name) {
+        return Some(true);
+    }
+    match record.proto_id() {
+        super::shapes::PROTO_ID_NULL => Some(false),
+        super::shapes::PROTO_ID_DEFAULT => Some(object_proto_may_intercept_name(name)),
+        _ if name == b"__proto__" => None,
+        class
+            if (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED).contains(&class) =>
+        {
+            declared_class_chain_blocks_store(class as u32, name)
+        }
+        _ => holder_word_blocks_store(record.prototype_word(), name),
+    }
+}
+
+/// A class-instance family names its declared prototype set in its layout.
+pub(crate) unsafe fn declared_class_layout_blocks_store(
+    obj_addr: usize,
+    name: &[u8],
+) -> Option<bool> {
+    let obj = obj_addr as *const ObjectHeader;
+    let record = super::shapes::object_shape_record(obj)?;
+    let proto = record.proto_id();
+    if !(super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED).contains(&proto) {
+        return None;
+    }
+    declared_class_chain_blocks_store(proto as u32, name)
+}
+
+/// The declaration's immutable layouts answer without materializing a chain.
+/// A materialized holder must still carry that exact declared layout. Changed
+/// variants, relinks or unknown/native declarations use the generic operation.
+pub(crate) unsafe fn declared_class_chain_blocks_store(
+    mut class: u32,
+    name: &[u8],
+) -> Option<bool> {
+    for _ in 0..64 {
+        class = super::class_generic_origin(class).unwrap_or(class);
+        let id = class_registry::declarations::class_birth_shape(class);
+        let record = super::shapes::shape_record_by_id(id)?;
+        let holder = class_registry::class_decl_prototype_object(class);
+        if !holder.is_null() {
+            if (*holder).parent_class_id != id {
+                return None;
+            }
+            let meta = (*holder).meta;
+            let recorded = if meta.is_null() { 0 } else { (*meta).prototype };
+            if recorded != 0 {
+                let parent_agrees = if record.proto_id() == super::shapes::PROTO_ID_NULL {
+                    recorded == crate::value::TAG_NULL
+                } else {
+                    super::shapes::declaration_parent_identity(holder, recorded)
+                        == Some(record.proto_id())
+                };
+                if !parent_agrees {
+                    return None;
+                }
+            }
+        }
+        if record.summary() & super::key_attrs::SUMMARY_BLOCKS_STORE != 0 {
+            if holder.is_null() {
+                return None;
+            }
+            if super::key_attrs::object_key_blocks_plain_store_from_record(holder, record, name) {
+                return Some(true);
+            }
+        }
+        match record.proto_id() {
+            super::shapes::PROTO_ID_NULL => return Some(false),
+            super::shapes::PROTO_ID_DEFAULT => return Some(object_proto_may_intercept_name(name)),
+            parent
+                if (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED)
+                    .contains(&parent) =>
+            {
+                class = parent as u32;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: f64) -> bool {
     const CUSTOM_PROTO_WALK_LIMIT: u32 = 8;
     let mut name_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -411,6 +610,12 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
     // never as a materialized descriptor (see `object_proto_may_intercept_key`).
     if name == "__proto__" {
         return true;
+    }
+    // Object model step 3: `Object.create(P)` with `P` an ordinary object of
+    // a known layout (a prototype literal, a class instance) answers from
+    // `P`'s layout and `P`'s own link, with no chain walk.
+    if let Some(blocked) = holder_layout_blocks_store(obj_addr, key, name.as_bytes()) {
+        return blocked;
     }
     let mut proto = js_object_get_prototype_of(crate::value::js_nanbox_pointer(obj_addr as i64));
     let mut depth = 0u32;
@@ -539,6 +744,23 @@ pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) ->
 /// `caller` must have already established that `addr` is a `GC_TYPE_OBJECT`
 /// whose frozen/sealed/non-extensible flags are clear.
 pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, key: f64) -> bool {
+    // A live ordinary layout already proves receiver admission. Consume
+    // that proof before the general typed/exotic admission and key walk.
+    if let Some(record) = super::shapes::object_shape_record(addr as *const ObjectHeader) {
+        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary {
+            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            if let Some(name) = crate::string::js_string_key_bytes(
+                crate::JSValue::from_bits(key.to_bits()),
+                &mut scratch,
+            ) {
+                if let Some(blocked) =
+                    layout_store_may_intercept(record, addr as *const ObjectHeader, name)
+                {
+                    return blocked;
+                }
+            }
+        }
+    }
     // The own holder shape first proves whether this key is ordinary data.
     if object_has_descriptors(addr) && !own_descriptors_skip_key(addr, key) {
         return true;

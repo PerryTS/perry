@@ -298,6 +298,117 @@ pub(crate) fn single_binding_closure_locals(hir: &Module) -> HashMap<u32, u32> {
         .collect()
 }
 
+/// Object model step 3, `single_binding_families`: `const` bindings whose value is EXACTLY an instance
+/// of a module class: bound by one `Stmt::Let { mutable: false, init: new C(…) }`
+/// and nothing else, never written, and `C`'s constructor chain cannot return
+/// another object (no `return <expr>` in any constructor of the chain, every
+/// class of the chain declared in this module, no expression heritage). The
+/// binding's family set is then `{C}`: whatever else happens to the object,
+/// its class identity and [[Prototype]] are those `new C` gave it, unless the
+/// program relinks prototypes, which the prototype-write census records.
+/// Also the `Object.create` family: `const`
+/// bindings (and `const` aliases of them) bound to `Object.create(P)` with no
+/// descriptors, where `P` is itself an exact-class binding.
+/// The value is `P`'s binding id: the object's [[Prototype]] is exactly the
+/// object `P` names, for its whole life unless the program relinks
+/// prototypes, which the prototype-write census records.
+pub(crate) fn single_binding_families(hir: &Module) -> (HashMap<u32, String>, HashMap<u32, u32>) {
+    let scan = scan_whole_module(hir);
+    let classes: HashMap<&str, &perry_hir::Class> =
+        hir.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let sound = |id: &u32| {
+        scan.let_counts.get(id).copied() == Some(1)
+            && !scan.writes.contains(id)
+            && !scan.other_bindings.contains(id)
+            && !scan.with_fallback_writes.contains(id)
+    };
+    let mut news: HashMap<u32, String> = scan
+        .let_news
+        .iter()
+        .filter(|(id, class)| sound(id) && class_construction_is_exact(&classes, class))
+        .map(|(id, class)| (*id, class.clone()))
+        .collect();
+    let mut creates: HashMap<u32, u32> = scan
+        .let_ocreates
+        .iter()
+        .filter(|(id, _)| sound(id))
+        .map(|(id, p)| (*id, *p))
+        .collect();
+    // `const` aliases, to a fixpoint (a chain of aliases is bounded by the
+    // number of bindings).
+    loop {
+        let mut grew = false;
+        for (id, target) in &scan.let_aliases {
+            if !sound(id) || news.contains_key(id) || creates.contains_key(id) {
+                continue;
+            }
+            if let Some(class) = news.get(target).cloned() {
+                news.insert(*id, class);
+                grew = true;
+            } else if let Some(p) = creates.get(target).copied() {
+                creates.insert(*id, p);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    creates.retain(|_, p| news.contains_key(p));
+    (news, creates)
+}
+
+fn class_construction_is_exact(classes: &HashMap<&str, &perry_hir::Class>, name: &str) -> bool {
+    let mut current = Some(name);
+    for _ in 0..64 {
+        let Some(n) = current else {
+            return true;
+        };
+        let Some(class) = classes.get(n) else {
+            return false;
+        };
+        if class.extends_expr.is_some() || class.native_extends.is_some() {
+            return false;
+        }
+        if class
+            .constructor
+            .as_ref()
+            .is_some_and(|ctor| stmts_return_value(&ctor.body))
+        {
+            return false;
+        }
+        current = class.extends_name.as_deref();
+    }
+    false
+}
+
+/// Any `return <expr>` outside nested closures.
+fn stmts_return_value(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match s {
+        Stmt::Return(Some(_)) => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => stmts_return_value(then_branch) || else_branch.as_deref().is_some_and(stmts_return_value),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            stmts_return_value(body)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_return_value(body)
+                || catch.as_ref().is_some_and(|c| stmts_return_value(&c.body))
+                || finally.as_deref().is_some_and(stmts_return_value)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| stmts_return_value(&c.body)),
+        Stmt::Labeled { body, .. } => stmts_return_value(std::slice::from_ref(body.as_ref())),
+        _ => false,
+    })
+}
+
 /// Module-wide structural facts gathered in one walk.
 #[derive(Default)]
 struct ModuleScan {
@@ -325,6 +436,16 @@ struct ModuleScan {
     /// unconditionally; [`single_binding_closure_locals`] applies the
     /// uniqueness and no-reassignment conditions.
     let_closures: HashMap<u32, u32>,
+    /// Object model step 3: `Stmt::Let { mutable: false, init: Expr::New {
+    /// class_name } }` — the class a `const` binding is constructed from.
+    /// [`single_binding_new_locals`] applies the uniqueness and no-write
+    /// conditions.
+    let_news: HashMap<u32, String>,
+    /// `Stmt::Let { mutable: false, init: Object.create(LocalGet(p)) }` (no
+    /// property descriptors): the binding whose prototype is `p`'s object.
+    let_ocreates: HashMap<u32, u32>,
+    /// `Stmt::Let { mutable: false, init: LocalGet(q) }`: a `const` alias.
+    let_aliases: HashMap<u32, u32>,
     /// #7170 R1: ids bound by something that is not a `Stmt::Let` — a function
     /// or closure **parameter**, or a `catch` clause binding. `let_counts`
     /// cannot see either, and `var` hoisting can reuse a parameter's id for a
@@ -563,7 +684,9 @@ fn walk_stmts(stmts: &[Stmt], depth: u32, scan: &mut ModuleScan) {
 
 fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
     match s {
-        Stmt::Let { id, init, .. } => {
+        Stmt::Let {
+            id, init, mutable, ..
+        } => {
             *scan.let_counts.entry(*id).or_insert(0) += 1;
             if depth > 0 {
                 scan.closure_refs.insert(*id);
@@ -571,6 +694,20 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             // #7170 R1: which closure literal this binding names, if any.
             if let Some(Expr::Closure { func_id, .. }) = init {
                 scan.let_closures.insert(*id, *func_id);
+            }
+            match (*mutable, init) {
+                (false, Some(Expr::New { class_name, .. })) => {
+                    scan.let_news.insert(*id, class_name.clone());
+                }
+                (false, Some(Expr::ObjectCreate(proto, None))) => {
+                    if let Expr::LocalGet(p) = proto.as_ref() {
+                        scan.let_ocreates.insert(*id, *p);
+                    }
+                }
+                (false, Some(Expr::LocalGet(q))) => {
+                    scan.let_aliases.insert(*id, *q);
+                }
+                _ => {}
             }
             if let Some(e) = init {
                 if is_string_literal(e) {

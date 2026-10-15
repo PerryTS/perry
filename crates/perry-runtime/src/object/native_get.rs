@@ -112,10 +112,12 @@ unsafe fn try_data_lookup_key(
     if crate::value::addr_class::is_above_handle_band(addr)
         && addr.is_multiple_of(std::mem::align_of::<ObjectHeader>())
     {
-        // The shadow bit says the receiver's own keys extend past its layout:
-        // its overflow (the order authority) then answers the own lookup.
-        let shadowed = (*object).parent_class_id & super::overflow::SHADOW_BIT != 0;
-        let shape_id = (*object).parent_class_id & !super::overflow::SHADOW_BIT;
+        // Bit 30 (`layout_desc::LAYOUT_SHADOW_BIT`) clear proves there is no
+        // overflow. With an overflow installed, it is the order authority and
+        // answers the own lookup; a bit set by a dynamic write or relink alone
+        // (object model step 3) leaves the layout complete for own keys.
+        let shadowed = !super::overflow::table(object).is_null();
+        let shape_id = super::layout_desc::layout_id_of_word((*object).parent_class_id);
         // Non-object cells, unstamped receivers and dictionary/exotic shapes
         // cannot supply this proof. Decline from the owner word before paying
         // for the agent directory; no registry determines this classification.

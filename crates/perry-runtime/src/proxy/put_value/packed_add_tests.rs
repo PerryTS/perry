@@ -238,7 +238,6 @@ fn unrelated_generation_keeps_the_memo_but_a_changed_holder_refuses_it() {
     let site = leaked_site();
     miss(site, first, key, 1.0);
     assert_ne!(site.add_shapes.load(Ordering::Relaxed), PACKED_SET_EMPTY);
-    crate::object::proto_validity::bump_proto_validity();
     assert_eq!(unsafe { packed_add_try(site, second, 2.0) }, Some(2.0));
     let third = record(b"{\"g\":3}");
     let proto = crate::array::object_prototype_addr_if_resolved() as *mut crate::ObjectHeader;

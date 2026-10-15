@@ -78,7 +78,7 @@ fn ordinary_shape_links_are_complete_and_exotic_links_decline() {
         realm.to_bits()
     );
     // Sabotage the receiver's live owner word: no old link may be served.
-    let stamp = unsafe { (*child_ptr).parent_class_id };
+    let stamp = unsafe { (*child_ptr).shape_word() };
     unsafe {
         (*child_ptr).parent_class_id = 0;
     }

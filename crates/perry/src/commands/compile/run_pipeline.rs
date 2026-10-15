@@ -1303,6 +1303,11 @@ pub fn run_with_parse_cache(
     } else {
         Vec::new()
     };
+    // Object model step 3: prototype slots written once are constants.
+    if std::env::var_os("PERRY_PROTO_CENSUS_REPORT").is_some() {
+        eprintln!("{}", ctx.proto_census.summary());
+    }
+    perry_codegen::set_program_proto_census(Some(ctx.proto_census.clone()));
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(

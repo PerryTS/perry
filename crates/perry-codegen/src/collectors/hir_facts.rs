@@ -238,6 +238,13 @@ pub(crate) struct ShapeStabilityFacts {
     /// in `expr/index_get.rs` / `expr/index_set.rs` at sites with an
     /// additional per-site in-bounds proof.
     pub num_array_locals: HashMap<u32, super::NumArrayLocal>,
+    /// Object model step 3: `const` bindings (module-wide ids) proven to hold
+    /// exactly an instance of one class
+    /// (`spec_abi_sites::single_binding_families`).
+    pub exact_class_bindings: HashMap<u32, String>,
+    /// Object model step 3: `const` bindings to `Object.create(P)` -> the
+    /// binding id of `P`, their one known prototype holder.
+    pub ocreate_holder_bindings: HashMap<u32, u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -973,6 +980,8 @@ pub(crate) fn collect_type_facts(
             shape_lineage_locals,
             guarded_argument_route_locals,
             num_array_locals,
+            exact_class_bindings: module_dispatch.new_bindings().clone(),
+            ocreate_holder_bindings: module_dispatch.ocreate_bindings().clone(),
         },
         materialization_hazards,
     };

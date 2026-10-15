@@ -114,7 +114,7 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
             proto_bits,
         );
     }
-    stamp_object_shape_id_with_carrier_note(obj, id);
+    stamp_birth_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     true
 }

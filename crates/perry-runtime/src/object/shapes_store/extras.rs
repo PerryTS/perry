@@ -1,4 +1,4 @@
-use super::{new_extras, ConstFnSlotInfo, ShapeRecord, StoreChainFact};
+use super::{new_extras, ConstFnSlotInfo, ShapeRecord};
 
 /// Optional, record-owned extension. It has no keyed lookup: a method-site
 /// hit reads only the receiver's shape and current closure slot. The learned
@@ -29,12 +29,24 @@ pub(in crate::object) struct ShapeExtras {
     pub(in crate::object) integrity_targets: [u32; 3],
     /// Exact immutable integrity identity, reached only behind its packed bit.
     pub(in crate::object) integrity_flags: u16,
-    /// Per-key inherited [[Set]] facts of this shape. The existing prototype
-    /// validity word retires them after a descriptor or link mutation.
-    pub(in crate::object) store_chain: Option<Box<std::cell::RefCell<Vec<StoreChainFact>>>>,
 }
 
 impl ShapeRecord {
+    /// Native allocations owned by this record, observed only by the heap
+    /// census: `(records, bytes, store facts, store fact bytes)`. These are
+    /// outside the managed heap's live-byte count. Records own no store
+    /// facts (object model step 3 deleted the chain-verdict cache).
+    pub(crate) fn extension_census(&self) -> (usize, usize, usize, usize) {
+        if self.extras == 0 || self.extras & 1 != 0 {
+            return (0, 0, 0, 0);
+        }
+        let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
+        let bytes = std::mem::size_of::<ShapeExtras>()
+            + std::mem::size_of_val(extras.constfn_infos.as_ref())
+            + std::mem::size_of_val(extras.brands.as_ref());
+        (1, bytes, 0, 0)
+    }
+
     #[inline]
     pub(in crate::object) fn created_birth_shape(&self) -> u32 {
         if !self.has_boxed_extras() {

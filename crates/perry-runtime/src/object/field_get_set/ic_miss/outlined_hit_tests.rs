@@ -16,7 +16,7 @@ fn outlined_ways_match_inline_front_and_respect_way_state() {
         key.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 17.0))
     });
     obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe {
-        let token = (u64::from((*o).parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+        let token = (u64::from((*o).shape_word()) | PIC_ID_TOKEN_BIT) as i64;
         assert_ne!(object_shape_stamp(o), 0);
         for w in 0..PIC_WAYS {
             let mut cache: PicCache = [0; PIC_CACHE_WORDS];

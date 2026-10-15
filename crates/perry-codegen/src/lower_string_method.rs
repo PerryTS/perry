@@ -224,10 +224,7 @@ fn lower_string_method_from_box(
     let result = match proof {
         StringProof::Entry | StringProof::EntryPreRead => {
             let patched_before = (proof == StringProof::EntryPreRead).then(|| {
-                crate::builtin_proto::emit_patched_test(
-                    ctx.block(),
-                    crate::builtin_proto::BuiltinProto::String,
-                )
+                crate::builtin_proto::emit_patched_test(ctx, crate::builtin_proto::BuiltinProto::String)
             });
             let (arg_values, arg_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
             let recv_box = reread_recv(ctx, &group, recv);
@@ -303,9 +300,8 @@ fn lower_string_method_pristine(
     let generic_label = ctx.block_label(generic_idx);
     let merge_label = ctx.block_label(merge_idx);
     {
-        let blk = ctx.block();
-        let patched = emit_patched_test(blk, BuiltinProto::String);
-        blk.cond_br(&patched, &generic_label, &direct_label);
+        let patched = emit_patched_test(ctx, BuiltinProto::String);
+        ctx.block().cond_br(&patched, &generic_label, &direct_label);
     }
 
     ctx.current_block = generic_idx;

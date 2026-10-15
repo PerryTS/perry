@@ -647,7 +647,7 @@ mod tests {
             // keys array is privately owned. This was the false assumption in
             // the old clone condition.
             set_object_live_slot_count(first, 1);
-            let sibling_shape = (*sibling).parent_class_id;
+            let sibling_shape = (*sibling).shape_word();
             let key = crate::string::js_string_from_bytes(b"ALIAS_KEYS".as_ptr(), 10);
             ensure_key_in_keys_array(first, key);
 
@@ -657,7 +657,7 @@ mod tests {
                 crate::object::object_keys(first).arr(),
                 crate::object::object_keys(sibling).arr()
             );
-            assert_ne!((*first).parent_class_id, sibling_shape);
+            assert_ne!((*first).shape_word(), sibling_shape);
             let sibling_descriptor = crate::object::shapes::shape_descriptor_by_id(sibling_shape)
                 .expect("sibling descriptor must remain installed");
             assert_eq!(
@@ -666,7 +666,7 @@ mod tests {
             );
             assert_eq!(sibling_descriptor.logical_key_count, 0);
             let first_descriptor =
-                crate::object::shapes::shape_descriptor_by_id((*first).parent_class_id)
+                crate::object::shapes::shape_descriptor_by_id((*first).shape_word())
                     .expect("defineProperty growth must install an exact descriptor");
             assert_eq!(
                 first_descriptor.keys,

@@ -1,33 +1,13 @@
-//! Prototype-mutation validity for cached key-add store verdicts.
+//! Prototype identity: which objects are prototypes, and their serials.
 //!
-//! A chain-store verdict records that no inherited setter or non-writable
-//! property blocks a key add. It may depend on prototype hops, so the
-//! [[Prototype]] installation funnel and chain-store prime mark those objects.
-//! A structural mutation of a marked hop, or a semantic property event,
-//! advances the global word. The receiver's own ShapeId covers changes to
-//! its own keys and prototype edge. A plain value overwrite does not change
-//! the chain-store verdict; readers of inherited values load the holder slot
-//! under holder-shape guards and do not use this word.
-//!
-//! The remaining global word can be replaced by per-hop shape facts in the
-//! key-add store path (design decision D-A2).
+//! An object becomes a marked prototype when something inherits from it; the
+//! mark gives it a stable serial that receiver ShapeIds name as their
+//! [[Prototype]] identity. Marks are identity, not validity: no global word
+//! records or invalidates anything about prototype contents (object model
+//! step 3 deleted `PERRY_PROTO_VALIDITY`; key adds walk unknown chains,
+//! method calls bind compile-time prototype constants).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-per_test_global! {
-    // #10944: a test asserts this counter's value, and libtest runs tests
-    // in one process — any sibling touching the same path made the
-    // assertion fail by one. `per_test_global!` gives each test thread its
-    // own instance in a TEST build and expands to the plain `static`,
-    // byte for byte, outside one.
-    /// Monotonic counter standing for "nothing structural has changed on any
-    /// object somebody inherits from, and no semantic property event has
-    /// happened". Starts at 1 so a zeroed cache entry never matches.
-    /// Read by emitted code (the key-add hit, `perry-codegen`'s
-    /// `put_value_store_ic.rs`) as `@PERRY_PROTO_VALIDITY`.
-    #[cfg_attr(not(test), export_name = "PERRY_PROTO_VALIDITY")]
-    static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
-}
+use std::sync::atomic::{AtomicBool, Ordering};
 
 per_test_global! {
     // #10944: a test asserts this counter's value, and libtest runs tests
@@ -39,20 +19,6 @@ per_test_global! {
     /// [`note_object_shape_stamped`] cannot possibly need to bump, so it does not
     /// read the object's `GcHeader` at all.
     static ANY_PROTOTYPE_MARKED: AtomicBool = AtomicBool::new(false);
-}
-
-/// The current validity word. One relaxed load.
-#[inline]
-pub(crate) fn proto_validity() -> u64 {
-    PROTO_VALIDITY.load(Ordering::Relaxed)
-}
-
-/// Invalidate every cached chain-store verdict. Callers are rare, cold paths by
-/// construction: a structural mutation of an object used as a prototype, or a
-/// semantic property event.
-#[inline]
-pub(crate) fn bump_proto_validity() {
-    PROTO_VALIDITY.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Whether anything has been marked. Exposed for the shape hook's gate and
@@ -322,7 +288,7 @@ unsafe fn keep_prototype_in_record(
     meta: *mut crate::object::ObjectMeta,
 ) {
     if (*meta).prototype != 0
-        || !crate::object::shapes::shape_word_may_be_linked((*object).parent_class_id)
+        || !crate::object::shapes::shape_word_may_be_linked((*object).shape_word())
     {
         return;
     }
@@ -364,39 +330,6 @@ pub(crate) unsafe fn object_is_marked_prototype(obj: usize) -> bool {
     meta_flag_is_set(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE)
 }
 
-/// Can a descriptor install or clear, or a `delete`, on `owner` change what
-/// a cached chain verdict answers?
-///
-/// A chain verdict (the key-add memo `proxy::put_value::packed_add`, the
-/// shape store `object::shape_store`) records through MARKED ordinary
-/// prototype hops; `object::store_key::mark_chain_hops` marks each hop it
-/// depends on before recording. What such a mutation can
-/// change on its RECEIVER is covered by the receiver's own ShapeId, which
-/// every descriptor install, clear and delete transitions. So the mutation
-/// matters to a verdict only when `owner` can be one of those hops: a marked
-/// ordinary object, or something this function cannot classify. An unmarked
-/// ordinary object is not a hop of any recorded chain yet — linking it into
-/// one marks it first — and a function object is never recorded as a hop.
-///
-/// This is what keeps `Function.prototype.bind` (which names every bound
-/// function through descriptor installs) from invalidating every cached
-/// inherited verdict in the process on every call.
-///
-/// # Safety
-/// `owner` is a live heap address, or 0.
-pub(crate) unsafe fn mutation_owner_may_be_a_recorded_hop(owner: usize) -> bool {
-    if owner == 0 || !crate::value::addr_class::is_plausible_heap_addr(owner) {
-        return true;
-    }
-    match crate::value::addr_class::try_read_gc_header(owner) {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
-            object_is_marked_prototype(owner)
-        }
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_CLOSURE => false,
-        _ => true,
-    }
-}
-
 /// The hook in the structural-mutation publication funnel
 /// (`shapes::stamp_object_shape_id_with_carrier_note`): a shape word that
 /// CHANGED on a MARKED object invalidates every cached chain-store verdict.
@@ -421,13 +354,13 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
             obj as *const crate::object::ObjectHeader,
             "shape publication",
         );
-        bump_proto_validity();
     }
 }
 
 /// An own-key change that publishes no new layout word: an overflow entry
-/// appended or deleted. On a marked prototype it is the same structural
-/// mutation as a shape change, and invalidates the same verdicts.
+/// appended or deleted. The object's own shadow bit already records it
+/// (`overflow::install` sets bit 30); on a sealed builtin prototype it is
+/// also the family write builtin sites test.
 ///
 /// # Safety
 /// `obj` is a live object with a `GcHeader`.
@@ -438,7 +371,6 @@ pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
             obj as *const crate::object::ObjectHeader,
             "overflow key change",
         );
-        bump_proto_validity();
     }
 }
 

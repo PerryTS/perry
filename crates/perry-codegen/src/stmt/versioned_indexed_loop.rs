@@ -407,7 +407,7 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
         live_handles.insert(array.local_id, array_handle);
     }
 
-    let holder_ok = crate::lower_call::holder_shape_guard::method_guard(
+    let holder_ok = crate::proto_constants::holder_constant(
         ctx,
         &fact.method.class_name,
         &fact.method.method_name,
@@ -582,7 +582,7 @@ pub(super) fn lower(
         .expect("matched method body has this storage")
         .clone();
     let this_box = ctx.block().load(DOUBLE, &this_slot);
-    let holder_ok = crate::lower_call::holder_shape_guard::method_guard(
+    let holder_ok = crate::proto_constants::holder_constant(
         ctx,
         &candidate.class_name,
         &candidate.method_name,

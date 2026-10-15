@@ -267,6 +267,7 @@ pub mod layout_desc;
 pub mod runtime_layouts;
 #[cfg(test)]
 mod layout_desc_tests;
+pub(crate) mod shadow;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
@@ -1661,7 +1662,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && shapes::shape_object_kind_by_id((*obj).parent_class_id)
+        && shapes::shape_object_kind_by_id((*obj).shape_word())
             .is_some_and(|kind| kind.is_ordinary_layout())
 }
 

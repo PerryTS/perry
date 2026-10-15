@@ -214,26 +214,24 @@ unsafe fn store_proven_own_slot_slow(
     false
 }
 
-/// Null and realm-default chains already have an authoritative answer. Reuse
-/// that answer rather than resolving and recording a second chain fact for
-/// each plain-object predecessor. Custom and class chains use record facts.
+/// Can an inherited setter, accessor or non-writable property block adding
+/// `key` to `obj`? Null and realm-default chains have an authoritative
+/// answer. Known holders and declared class chains answer from their shapes;
+/// unknown chains use the generic operation. No chain answer is cached.
 #[inline]
 unsafe fn inherited_store_blocked(
     record: shapes::ShapeRecordRef,
+    obj: *const ObjectHeader,
     key: f64,
     bytes: &[u8],
-) -> Option<bool> {
-    // The prototype identity also covers anonymous closed-literal class ids.
-    // Header class_id alone cannot distinguish their DEFAULT link from a
-    // declaration's CLASS link; shape minting already made that distinction.
-    match record.proto_id() {
-        shapes::PROTO_ID_NULL => return Some(false),
-        shapes::PROTO_ID_DEFAULT => {
-            return Some(super::object_proto_may_intercept_key(key));
-        }
-        _ => {}
+) -> bool {
+    if let Some(blocked) = super::descriptor_state::layout_store_may_intercept(record, obj, bytes) {
+        return blocked;
     }
-    record.store_chain_blocks(bytes, super::proto_validity::proto_validity())
+    // Unknown chains use the generic operation. The caller holds an unrooted
+    // receiver, so suppress collection over any materialization in that walk.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::plain_data_write_may_intercept(obj as usize, (*obj).class_id, key)
 }
 
 /// A warm shape proof needs no outer PutValue scope or key conversion. The
@@ -268,8 +266,7 @@ pub(crate) unsafe fn try_warm_transition(
         || bytes
             .first()
             .is_some_and(|b| *b == b'#' || b.is_ascii_digit())
-        || inherited_store_blocked(record, crate::value::js_nanbox_string(key as i64), bytes)
-            != Some(false)
+        || inherited_store_blocked(record, obj, crate::value::js_nanbox_string(key as i64), bytes)
     {
         return None;
     }
@@ -309,7 +306,19 @@ pub(crate) unsafe fn try_dynamic_store(
     {
         return None;
     }
-    if inherited_store_blocked(record, key, bytes) != Some(false) {
+    // The overflow takes dynamic keys of realm-default and null-prototype
+    // bags, as step 4 landed it. A receiver with a class or recorded
+    // prototype keeps its layout transitions until the unknown-receiver probe
+    // (step 5) serves reads of overflowed objects: an overflowed object
+    // primes no own-slot way, so routing those receivers here would send
+    // every later read of them to the generic lookup (Effect +92%).
+    if !matches!(
+        record.proto_id(),
+        shapes::PROTO_ID_DEFAULT | shapes::PROTO_ID_NULL
+    ) {
+        return None;
+    }
+    if inherited_store_blocked(record, obj, key, bytes) {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -419,10 +428,7 @@ unsafe fn try_warm_array_transition(
     {
         return None;
     }
-    if shapes::object_shape_record(bag)?
-        .store_chain_blocks(bytes, super::proto_validity::proto_validity())
-        != Some(false)
-    {
+    if array_bag_chain_blocks(bag, bytes) {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -581,10 +587,9 @@ unsafe fn try_array_store(
         // through the ordinary bag store; later receivers reuse that edge.
         let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
         let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
-        let record = shapes::object_shape_record(bag)?;
+        shapes::object_shape_record(bag)?;
         let bytes = crate::string::header_str_checked(key)?.as_bytes();
-        if record.store_chain_blocks(bytes, super::proto_validity::proto_validity()) == Some(false)
-        {
+        if !array_bag_chain_blocks(bag, bytes) {
             super::object_ops::define_property_force_store_value(
                 bag,
                 key,
@@ -640,23 +645,14 @@ mod tests {
             ] {
                 super::super::alloc_plain::mark_object_plain_ordinary(obj);
                 let before = shapes::object_shape_record(obj).unwrap();
-                assert_eq!(
-                    inherited_store_blocked(
-                        before,
-                        crate::value::js_nanbox_string(key as i64),
-                        b"plainShapeAnswerOnly"
-                    ),
-                    Some(false)
-                );
+                assert!(!inherited_store_blocked(
+                    before,
+                    obj,
+                    crate::value::js_nanbox_string(key as i64),
+                    b"plainShapeAnswerOnly"
+                ));
                 let owner = crate::value::js_nanbox_pointer(obj as i64);
                 assert_eq!(try_store(owner, boxed_key, 17.0), Some(17.0));
-                assert_eq!(
-                    before.store_chain_blocks(
-                        b"plainShapeAnswerOnly",
-                        super::super::proto_validity::proto_validity()
-                    ),
-                    None
-                );
                 assert_eq!(
                     super::super::js_object_get_field_by_name_f64(obj, key),
                     17.0
@@ -1690,26 +1686,13 @@ mod tests {
         let key_value = crate::value::js_nanbox_string(key as i64);
         let a_value = crate::value::js_nanbox_pointer(a as i64);
         crate::proxy::js_put_value_set(a_value, key_value, 1.0, a_value, 0);
-        let validity = super::super::proto_validity::proto_validity();
-        assert_eq!(
-            shape.store_chain_blocks(b"rangePos", validity),
-            Some(false),
-            "the proof must be live"
-        );
-        let b_shape = unsafe { shapes::object_shape_record(b) }.unwrap();
-        assert_eq!(
-            b_shape.store_chain_blocks(b"rangePos", validity),
-            Some(false),
-            "a different receiver uses its shape's fact"
-        );
+        assert!(super::super::obj_value_has_own_key(a_value, key_value));
+        let _ = shape;
         super::super::set_property_attrs(
             proto as usize,
             "rangePos".into(),
             super::super::PropertyAttrs::new(false, true, true),
         );
-        let new_validity = super::super::proto_validity::proto_validity();
-        assert_ne!(new_validity, validity);
-        assert_eq!(b_shape.store_chain_blocks(b"rangePos", new_validity), None);
         let b_value = crate::value::js_nanbox_pointer(b as i64);
         crate::proxy::js_put_value_set(b_value, key_value, 2.0, b_value, 0);
         assert!(!super::super::obj_value_has_own_key(b_value, key_value));
@@ -1785,33 +1768,8 @@ pub(crate) unsafe fn try_store_with_refresh(
     // A transition edge only exists for an absent own key. The prototype
     // fact is attached to its predecessor shape, never to the call site.
     let record = shape.record_ref()?;
-    let blocked = match inherited_store_blocked(record, key, bytes) {
-        Some(blocked) => blocked,
-        None => {
-            *may_move = true;
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_root = scope.root_raw_mut_ptr(obj);
-            let key_root = scope.root_string_ptr(key_ptr);
-            let value_root = scope.root_nanbox_f64(value);
-            if !super::store_key::mark_chain_hops(&scope, target) {
-                return None;
-            }
-            let obj = obj_root.get_raw_mut_ptr::<ObjectHeader>();
-            let key_ptr = key_root.get_raw_const_ptr::<crate::StringHeader>();
-            let key = crate::value::js_nanbox_string(key_ptr as i64);
-            let blocked = super::plain_data_write_may_intercept(obj as usize, (*obj).class_id, key);
-            let record = shapes::object_shape_record(obj)?;
-            record.note_store_chain(
-                crate::string::header_str_checked(key_ptr)?.as_bytes(),
-                super::proto_validity::proto_validity(),
-                blocked,
-            );
-            if blocked {
-                return None;
-            }
-            return apply_proven_add(&obj_root, &key_root, &value_root);
-        }
-    };
+    let blocked =
+        inherited_store_blocked(record, obj, crate::value::js_nanbox_string(key_ptr as i64), bytes);
     if blocked {
         return None;
     }
@@ -2016,28 +1974,9 @@ unsafe fn try_function_store(
         if super::key_attrs::object_key_blocks_plain_store(proto, name.as_bytes()) {
             return None;
         }
-        let validity = super::proto_validity::proto_validity();
-        match record.store_chain_blocks(name.as_bytes(), validity) {
-            Some(true) => return None,
-            Some(false) => {}
-            None => {
-                if !super::store_key::mark_chain_hops(&scope, owner.get_nanbox_f64()) {
-                    return None;
-                }
-                let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
-                let name = crate::string::header_str_checked(key)?;
-                let blocked = chain_blocks(prototype.get_nanbox_f64(), name.as_bytes());
-                let proto = (prototype.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
-                    as *const ObjectHeader;
-                shapes::object_shape_record(proto)?.note_store_chain(
-                    name.as_bytes(),
-                    super::proto_validity::proto_validity(),
-                    blocked,
-                );
-                if blocked {
-                    return None;
-                }
-            }
+        // The prototype's own attributes were answered above; walk the rest.
+        if chain_blocks(prototype.get_nanbox_f64(), name.as_bytes()) {
+            return None;
         }
     }
     let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
@@ -2075,6 +2014,25 @@ unsafe fn try_function_store(
 
 /// Prototype key summaries are the proof: ordinary writable data cannot
 /// intercept a named add. Unknown kinds and Proxy hops keep the full Set.
+/// May the chain of an array's named-property `bag` intercept a store of
+/// `key`? The bag inherits from the `%Array.prototype%` bag, then
+/// `%Object.prototype%`. While the sealed Array intrinsic's layout word is
+/// unshadowed, that bag still holds exactly the runtime's definitions (all
+/// writable data) and its own link; `%Object.prototype%` answers from its
+/// own word. Anything else walks the chain.
+unsafe fn array_bag_chain_blocks(bag: *mut ObjectHeader, key: &[u8]) -> bool {
+    let array = crate::agent_ptrs::intrinsic_proto(super::builtin_proto::BuiltinProto::Array as usize);
+    let word = (*array).parent_class_id;
+    if word >= shapes::SHAPE_ID_BASE
+        && word < super::layout_desc::UNSHADOWED_WORD_END
+        && super::prototype_chain::object_static_prototype(bag as usize)
+            == Some(crate::value::js_nanbox_pointer(array as i64).to_bits())
+    {
+        return super::descriptor_state::object_proto_may_intercept_name(key);
+    }
+    chain_blocks(crate::value::js_nanbox_pointer(bag as i64), key)
+}
+
 unsafe fn chain_blocks(receiver: f64, key: &[u8]) -> bool {
     let mut hop = super::js_object_get_prototype_of(receiver);
     for _ in 0..64 {

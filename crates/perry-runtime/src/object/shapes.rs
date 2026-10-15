@@ -375,34 +375,6 @@ impl ShapeRecordRef {
         }
     }
 
-    /// A shape-owned inherited [[Set]] fact, valid under the same mutation
-    /// counter used by the existing key-add transition machinery.
-    pub(crate) fn store_chain_blocks(self, key: &[u8], validity: u64) -> Option<bool> {
-        unsafe { (*self.0.as_ptr()).store_chain_facts() }.and_then(|facts| {
-            facts
-                .borrow()
-                .iter()
-                .find(|fact| fact.key.as_ref() == key)
-                .filter(|fact| fact.validity == validity)
-                .map(|fact| fact.blocked)
-        })
-    }
-
-    pub(crate) fn note_store_chain(self, key: &[u8], validity: u64, blocked: bool) {
-        let facts = unsafe { (*self.0.as_ptr()).ensure_store_chain_facts() };
-        let mut facts = facts.borrow_mut();
-        if let Some(fact) = facts.iter_mut().find(|fact| fact.key.as_ref() == key) {
-            fact.validity = validity;
-            fact.blocked = blocked;
-        } else {
-            facts.push(shapes_store::StoreChainFact {
-                key: key.into(),
-                validity,
-                blocked,
-            });
-        }
-    }
-
     #[inline]
     pub(crate) fn proto_id(self) -> u64 {
         // A live slab record; the identity is immutable.
@@ -2872,17 +2844,76 @@ pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
 /// an epoch and recomputed by every full trace, so arming a receiver that
 /// dies young roots one record for at most one full collection — exactly
 /// the generational contract (#8112).
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
     id: u32,
+) {
+    stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::Write)
+}
+
+/// Publish a fresh, unobserved object's declared layout. Birth is stated by
+/// its caller, never inferred from how many keys a publication adds.
+#[inline(always)]
+pub(crate) unsafe fn stamp_birth_shape_id_with_carrier_note(
+    obj: *mut crate::object::ObjectHeader,
+    id: u32,
+) {
+    stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::Carry)
+}
+
+/// Publish a transition that keeps every own key: a [[Prototype]] or private
+/// brand change. The shadow bit is carried, never admitted. A relink of a
+/// live object was already marked by the link funnel (`shadow::note_relink`);
+/// a birth link is not a write, and a brand names no property.
+#[inline(always)]
+pub(crate) unsafe fn stamp_same_keys_shape_id_with_carrier_note(
+    obj: *mut crate::object::ObjectHeader,
+    id: u32,
+) {
+    stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::Carry)
+}
+
+/// Publish a key add whose key the producer holds: `id` is the receiver's
+/// layout plus `key` appended (a transition keyed on that key), so shadow
+/// admission tests the key itself instead of re-deriving it from the two
+/// layouts.
+#[inline(always)]
+pub(crate) unsafe fn stamp_key_add_shape_id_with_carrier_note(
+    obj: *mut crate::object::ObjectHeader,
+    id: u32,
+    key: *const crate::StringHeader,
+) {
+    stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::KeyAdd(key))
+}
+
+/// How a stamp publishes the layout word's shadow bit.
+#[derive(Clone, Copy)]
+enum Publish {
+    /// A structural change of unknown content: admission derives it.
+    Write,
+    /// A birth or a [[Prototype]]-only change: the bit is carried.
+    Carry,
+    /// An append of exactly this key.
+    KeyAdd(*const crate::StringHeader),
+}
+
+#[inline(always)]
+unsafe fn stamp_object_shape_id_with_carrier_note_impl(
+    obj: *mut crate::object::ObjectHeader,
+    id: u32,
+    publish: Publish,
 ) {
     // Charter step 3 (R5): a receiver carrying the Array-subclass numeric
     // proof loses it on every stamp but its own proof shape's.
     store_kind::retire_proof_before_stamp(obj, id);
     let previous = (*obj).parent_class_id;
-    debug_assert_brands_carried(previous, id);
-    (*obj).parent_class_id = super::overflow::stamped_word(obj, id);
+    debug_assert_brands_carried(super::layout_desc::layout_id_of_word(previous), id);
+    (*obj).parent_class_id = match publish {
+        Publish::Carry => super::layout_desc::carry_shadow(previous, id),
+        Publish::Write => super::shadow::publish_word(obj, previous, id),
+        Publish::KeyAdd(key) => super::shadow::publish_key_add_word(obj, previous, id, key),
+    };
     // A structural change to an object somebody INHERITS from is invisible to
     // every instance below it: no instance is touched, no epoch moves, and the
     // instances' own ShapeIds are unchanged. This is the one place every such
@@ -3649,9 +3680,17 @@ pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHea
 /// The receiver's ShapeId, or 0 when it is not a shaped object.
 #[inline]
 pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
+    // A shadowed word (`layout_desc` documents bit 30) stamps as its FULL
+    // word when an overflow is installed (object model step 4: its own
+    // contents are not its layout's, so every cache keyed by this stamp
+    // misses, and own-slot ways compare the layout id themselves); with the
+    // bit alone it stamps as the layout id, which still changes with every
+    // own-key or [[Prototype]] change of the object.
     let word = (*obj).parent_class_id;
-    if is_shape_id(word & !super::overflow::SHADOW_BIT) {
+    if is_shape_id(word) {
         word
+    } else if crate::object::layout_desc::word_is_shadowed(word) {
+        (*obj).shape_word()
     } else {
         0
     }
@@ -3707,6 +3746,28 @@ pub(crate) unsafe fn install_cached_object_shape_version(
         _target_keys,
         _target_key_count,
         false,
+        None,
+    )
+}
+
+/// [`install_cached_object_shape_transition`] for a transition looked up by
+/// its key (`transition_cache_lookup(prev, key)`): the target appends `key`.
+#[inline]
+pub(crate) unsafe fn install_cached_object_shape_key_add(
+    obj: *mut crate::object::ObjectHeader,
+    expected_predecessor_shape_id: u32,
+    target_shape_id: u32,
+    target_keys: crate::object::ObjectKeys,
+    key: *const crate::StringHeader,
+) -> bool {
+    install_cached_object_shape_version_impl(
+        obj,
+        expected_predecessor_shape_id,
+        target_shape_id,
+        target_keys.arr(),
+        target_keys.count(),
+        false,
+        Some(key),
     )
 }
 
@@ -3734,6 +3795,7 @@ pub(crate) unsafe fn install_cache_carried_object_shape_version(
         _target_keys,
         _target_key_count,
         true,
+        None,
     )
 }
 
@@ -3745,6 +3807,7 @@ unsafe fn install_cached_object_shape_version_impl(
     _target_keys: *mut ArrayHeader,
     _target_key_count: u32,
     target_is_cache_carried: bool,
+    added_key: Option<*const crate::StringHeader>,
 ) -> bool {
     if obj.is_null()
         || !shape_word_is_writable(obj)
@@ -3778,7 +3841,13 @@ unsafe fn install_cached_object_shape_version_impl(
         // descriptor probe (see the function doc above). The proof retire
         // (R5) is not skipped: it is one header load without a proof.
         store_kind::retire_proof_before_stamp(obj, target_shape_id);
-        (*obj).parent_class_id = super::overflow::stamped_word(obj, target_shape_id);
+        let previous = (*obj).parent_class_id;
+        (*obj).parent_class_id = match added_key {
+            Some(key) => super::shadow::publish_key_add_word(obj, previous, target_shape_id, key),
+            None => super::shadow::publish_word(obj, previous, target_shape_id),
+        };
+    } else if let Some(key) = added_key {
+        stamp_key_add_shape_id_with_carrier_note(obj, target_shape_id, key);
     } else {
         stamp_object_shape_id_with_carrier_note(obj, target_shape_id);
     }
@@ -3874,7 +3943,7 @@ pub(crate) unsafe fn stamp_object_shape(
         rep,
         None,
     ));
-    if id != (*obj).parent_class_id {
+    if id != (*obj).shape_word() {
         // Read-side lookup_ways also calls `stamp_object_shape` to populate its
         // field cache. Preserve a proved Array-subclass prefix when that call
         // merely republishes the exact current descriptor; retire it only for
@@ -4021,7 +4090,8 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         }
         return false;
     }
-    (*obj).parent_class_id = super::overflow::stamped_word(obj, runtime_shape_id);
+    (*obj).parent_class_id =
+        super::layout_desc::carry_shadow((*obj).parent_class_id, runtime_shape_id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
         note_old_generation_carrier(descriptor.record_ref());
     }
@@ -4677,7 +4747,7 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         super::field_rep::normalized_without_special(current.rep),
         None,
     ));
-    stamp_object_shape_id_with_carrier_note(obj, id);
+    stamp_same_keys_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id
 }
@@ -4704,7 +4774,7 @@ pub(crate) unsafe fn stamp_known_prototype_transition(
     if shapes_prototype::identity_prototype_word(proto_id) != proto_bits {
         shapes_prototype::write_identity_word(proto_id, proto_bits);
     }
-    stamp_object_shape_id_with_carrier_note(obj, linked);
+    stamp_same_keys_shape_id_with_carrier_note(obj, linked);
     debug_assert_object_shape_parity(obj);
 }
 
@@ -5081,8 +5151,9 @@ pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHead
         return (*meta).prototype;
     }
     // A default, class or per-object identity answers 0 from the id alone,
-    // and a null link from the header.
-    let word = (*obj).parent_class_id & !super::overflow::SHADOW_BIT;
+    // and a null link from the header. The link is the layout's (an overflow
+    // never holds [[Prototype]]), so the layout id answers under the bit.
+    let word = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
     match shape_word_kind(word) {
         SHAPE_ID_KIND_PLAIN => 0,
         SHAPE_ID_KIND_NULL if is_shape_id(word) => null_linked_prototype_word(obj),
@@ -5342,7 +5413,7 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
             None,
         ))
     });
-    stamp_object_shape_id_with_carrier_note(obj, id);
+    stamp_same_keys_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     true
 }
@@ -5533,7 +5604,7 @@ pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
 #[cfg(test)]
 #[inline]
 pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHeader) -> bool {
-    if is_shape_id((*obj).parent_class_id) {
+    if is_shape_id((*obj).shape_word()) {
         (*obj).parent_class_id = 0;
         true
     } else {

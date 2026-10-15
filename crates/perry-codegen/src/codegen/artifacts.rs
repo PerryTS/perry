@@ -711,6 +711,11 @@ pub(super) fn emit_module_artifacts(
     // Object model step 0: the module's layout descriptors and static atoms
     // (interns each key, so the pool below emits its image string).
     crate::layout_desc::emit_module_layouts(llmod, strings, hir, module_prefix, output_type);
+    // Object model step 3 (§3.6): the names whose dynamic add, delete or
+    // redefinition sets the shadow bit, once per program.
+    if opts.is_entry_module {
+        crate::layout_desc::emit_shadow_names(llmod, strings, output_type);
+    }
 
     // After all user code is lowered, the string pool's contents are final.
     // Emit the bytes globals, handle globals, and the

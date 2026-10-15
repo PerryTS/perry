@@ -81,7 +81,7 @@ pub(super) fn own_slot_in(
         {
             return None;
         }
-        let id = (*obj).parent_class_id;
+        let id = (*obj).shape_word();
         if !crate::object::shapes::is_site_matchable_shape_id(id) {
             return None;
         }

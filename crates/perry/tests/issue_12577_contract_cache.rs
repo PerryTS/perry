@@ -18,7 +18,6 @@ fn compile(project: &Path, contracts: bool) -> Value {
         .env_remove("PERRY_NO_CACHE")
         .env_remove("PERRY_DISABLE_BUILD_CACHE")
         .env_remove("PERRY_CHECK_CONTRACTS")
-        .env_remove("PERRY_METHOD_CERT_SABOTAGE")
         .env_remove("PERRY_B4_SABOTAGE")
         .env_remove("PERRY_ASSERT_CAPTURE_CELLS")
         .env_remove("PERRY_OBJECT_CACHE_BUILD_ID");

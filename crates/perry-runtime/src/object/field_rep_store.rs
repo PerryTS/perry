@@ -143,7 +143,6 @@ fn deprecate_lane(record: super::shapes::ShapeRecordRef, slot: u32) {
         record.deprecate_rep_slot(slot)
     };
     if changed {
-        crate::object::proto_validity::bump_proto_validity();
         crate::proxy::store_census(crate::proxy::C_REP_VALIDITY_BUMP);
     }
 }

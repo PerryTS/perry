@@ -436,7 +436,7 @@ mod tests {
         );
         assert!(
             hdr.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")
-                && !hdr.contains("@PERRY_BUILTIN_PROTO_PATCHED"),
+                && !hdr.contains("perry_intrinsic_proto"),
             "{what}: the header gate's summary byte, whole, proves `Pristine(Array)` \
              (#11915, `ARRAY_METHODS_MODIFIED`) with no load of its own:\n{hdr}"
         );

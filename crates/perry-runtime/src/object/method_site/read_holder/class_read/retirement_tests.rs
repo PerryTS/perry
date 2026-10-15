@@ -75,7 +75,7 @@ fn retired_absent_replacement_does_not_arm_sharing() {
     let holder = shaped(pinned_shape(91_000));
     let w = Walk {
         holder: &*holder as *const ObjectHeader as usize,
-        holder_shape: holder.parent_class_id,
+        holder_shape: holder.shape_word(),
         slot: None,
         hops: NO_HOPS,
         depth: 1,

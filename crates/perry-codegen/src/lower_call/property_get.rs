@@ -93,9 +93,8 @@ fn try_lower_tag_guarded_string_method(
     // compare and an unlikely branch, ahead of the tag test and the arguments.
     {
         use crate::builtin_proto::{emit_patched_test, BuiltinProto};
-        let blk = ctx.block();
-        let patched = emit_patched_test(blk, BuiltinProto::String);
-        blk.cond_br(&patched, &generic_label, &tag_label);
+        let patched = emit_patched_test(ctx, BuiltinProto::String);
+        ctx.block().cond_br(&patched, &generic_label, &tag_label);
     }
 
     ctx.current_block = tag_idx;
@@ -222,10 +221,7 @@ fn lower_tag_guarded_string_entry(
 ) -> Result<String> {
     let patched_before =
         (proof == crate::lower_string_method::StringProof::EntryPreRead).then(|| {
-            crate::builtin_proto::emit_patched_test(
-                ctx.block(),
-                crate::builtin_proto::BuiltinProto::String,
-            )
+            crate::builtin_proto::emit_patched_test(ctx, crate::builtin_proto::BuiltinProto::String)
         });
     let mut group = open_rooted_group(args.len() + 1);
     let recv_collects = any_operand_may_collect(ctx, args.iter());

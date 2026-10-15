@@ -165,53 +165,25 @@ fn instance_explicit_prototype_method_and_shape_miss_ir() {
     let binary = compile(dir.path(), GAP);
     assert_eq!(run(&binary), "104\n");
     let ir = read_ir(&dir.path().join(".perry-trace/llvm"));
+    // The program relinks a prototype (`Object.setPrototypeOf`), so the
+    // prototype-write census proves no method constant (object model step 3):
+    // the class tower keeps no compiled case and every receiver, the
+    // re-parented one included, takes the generic method site.
     let call_at = ir
         .split("\ndefine ")
-        .find(|f| f.contains("callAt") && f.contains("mcert."))
-        .expect("fixture must emit a certified class-dispatch site");
-    // The receiver word carries the full runtime ShapeId: a receiver whose
-    // prototype edge is not the nominal one (explicit/foreign, kind bits
-    // 0x300000) yields word 0, which no certificate names.
-    let word = block(call_at, "method_probe.read");
+        .find(|f| f.contains("callAt") && f.contains("idispatch.generic"))
+        .expect("fixture must emit the class-dispatch site");
     assert!(
-        !word.contains("call ") && word.matches("load ").count() == 1,
-        "the receiver word is one header load: {word}"
+        !call_at.contains("pconst.case"),
+        "a relinking program has no prototype constants: {call_at}"
     );
     assert!(
-        word.contains("load i64")
-            && word.contains("and i32")
-            && word.contains(", 3145728")
-            && word
-                .lines()
-                .any(|l| l.contains("select i1") && l.contains("i64 0")),
-        "a non-nominal prototype edge must zero the receiver word: {word}"
+        !call_at.contains("certify") && !call_at.contains("@PERRY_PROTO_VALIDITY"),
+        "no runtime proof remains: {call_at}"
     );
-    let merge = block(call_at, "method_probe.merge");
-    assert!(
-        merge.contains("switch i32") && merge.contains("label %mcert.got"),
-        "word 0 must skip the certificates: {merge}"
-    );
-    // A certificate hit compares the whole word and the one epoch.
-    let way = block(call_at, "mcert.way");
-    assert!(
-        way.contains("icmp eq i64") && way.contains("@PERRY_PROTO_VALIDITY"),
-        "certificate fact: {way}"
-    );
-    // The own-property probe is gone; every miss re-proves in the runtime.
     assert!(
         !call_at.contains("@js_object_get_own_field_or_undef("),
-        "the certified site must not probe own properties"
-    );
-    assert!(
-        call_at.contains("call i64 @js_method_site_certify("),
-        "every miss must reach the generic entry"
-    );
-    // A receiver no certificate names takes the generic method site.
-    assert!(
-        call_at
-            .lines()
-            .any(|l| l.contains("switch i32") && l.contains("label %idispatch.generic")),
-        "generic operation must remain emitted"
+        "the site must not probe own properties"
     );
 }
 

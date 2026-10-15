@@ -10,10 +10,10 @@ use perry_hir::Expr;
 use crate::expr::{nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I32, I64};
 
-#[path = "dynamic_dispatch_cert.rs"]
-mod cert;
+#[path = "dynamic_dispatch_select.rs"]
+mod select;
 #[path = "dynamic_dispatch_collapse.rs"]
 mod collapse;
 #[path = "dispatch_receiver_class.rs"]
@@ -362,19 +362,15 @@ pub(crate) fn try_lower_instance_method_call(
             if collapse_dynamic {
                 return Ok(None);
             }
-            // A compiled case is a candidate only for a class whose prototype
-            // chain the compiler names (`static_prototype::chain`: a declared
-            // class with a complete static prototype shape); the certificate,
-            // not this, proves it. Receivers of any other class keep the
-            // universal method site, and a site with no candidate is that
-            // generic arm alone (no certificate record).
+            // A compiled case is a class whose method is a prototype constant
+            // (`select::cased`: a chain the compiler names, a slot the write
+            // census proves written once). Receivers of any other class keep
+            // the universal method site, and a site with no case is that
+            // generic arm alone.
             let cased: Vec<bool> = implementors
                 .iter()
                 .zip(&impl_class)
-                .map(|((_, f), class)| {
-                    !f.starts_with("perry_static_")
-                        && crate::codegen::static_prototype::chain(ctx, class, property).is_some()
-                })
+                .map(|((_, f), class)| select::cased(ctx, class, property, f))
                 .collect();
             let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
                 || impl_meta
@@ -391,12 +387,11 @@ pub(crate) fn try_lower_instance_method_call(
             let key_idx = ctx.strings.intern(property);
             let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
             let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-            // Decision 129 slice 2: the site's certificate selects the body
-            // (`PristineReceiverFact::Shape`, two compares and one load), or
-            // its one generic entry re-resolves and rewrites it. 0 = no
-            // compiled body: the call takes the site's generic arm.
+            // Object model step 3: the receiver's class id selects the
+            // constant body, a branch over the compile-time set of cased
+            // classes. 0 = no compiled body: the site's generic arm.
             let selected = if cased.contains(&true) {
-                cert::select(ctx, &recv, &method_id, &implementors, &cased)
+                select::select(ctx, &recv, property, &implementors, &cased)
             } else {
                 "0".to_string()
             };
@@ -854,18 +849,18 @@ pub(crate) fn try_lower_instance_method_call(
             };
             let shape_only_guard = typed_receiver_direct_name.is_none()
                 && !class_chain_has_field_named(ctx, &class_name, property);
-            let mut certificate_candidates = vec![(
+            let mut constant_candidates = vec![(
                 *ctx.class_ids.get(&class_name).unwrap_or(&0),
                 fallback_fn.clone(),
             )];
-            certificate_candidates.extend(
+            constant_candidates.extend(
                 subclass_arms
                     .iter()
                     .map(|a| (a.class_id, a.target_fn.clone())),
             );
             // Match the dynamic consumer and the holder proof being replaced:
             // an incomplete prototype never acquired a compiled fast arm.
-            let certificate_cased: Vec<bool> = std::iter::once(Some(class_name.as_str()))
+            let constant_cased: Vec<bool> = std::iter::once(Some(class_name.as_str()))
                 .chain(subclass_arms.iter().map(|arm| {
                     ctx.class_ids
                         .iter()
@@ -874,20 +869,21 @@ pub(crate) fn try_lower_instance_method_call(
                 }))
                 .map(|class| {
                     class.is_some_and(|class| {
-                        crate::codegen::static_prototype::chain(ctx, class, property).is_some()
+                        !class_chain_has_field_named(ctx, class, property)
+                            && crate::proto_constants::class_method_is_constant(ctx, class, property)
                     })
                 })
                 .collect();
-            let certified_static = shape_only_guard
+            let constant_static = shape_only_guard
                 && !subclass_arms.is_empty()
-                && certificate_cased.contains(&true)
+                && constant_cased.contains(&true)
                 && !fallback_fn.starts_with("perry_static_")
                 && !fallback_has_rest
                 && !fallback_has_synthetic_arguments
                 && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
                 && ctx.ptr_shape_receiver_fact(object).is_none();
             let static_split =
-                certified_static && crate::expr::method_site::args_may_observe_lookup(ctx, args);
+                constant_static && crate::expr::method_site::args_may_observe_lookup(ctx, args);
 
             // #9417, same defect as the dynamic-dispatch site above and for the
             // same reason: the receiver is lowered first (JS evaluation order)
@@ -909,7 +905,7 @@ pub(crate) fn try_lower_instance_method_call(
                 || post_args_may_collect
                 || crate::rooting::any_operand_may_collect(ctx, args.iter());
             let recv_idx = roots.lower(ctx, object, recv_collects)?;
-            let selection = if certified_static {
+            let selection = if constant_static {
                 let recv = roots.reread(ctx, recv_idx)?;
                 let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(
                     ctx, &recv,
@@ -917,14 +913,15 @@ pub(crate) fn try_lower_instance_method_call(
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
-                let selected = cert::select_with_word(
-                    ctx,
-                    &recv,
-                    &method_id,
-                    &certificate_candidates,
-                    &certificate_cased,
-                    &word,
-                );
+                let selected =
+                    select::select_with_word(
+                        ctx,
+                        &recv,
+                        property,
+                        &constant_candidates,
+                        &constant_cased,
+                        &word,
+                    );
                 let lookup = if static_split {
                     let claimed = ctx.block().icmp_ne(I32, &selected, "0");
                     crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
@@ -934,7 +931,7 @@ pub(crate) fn try_lower_instance_method_call(
                         &method_id,
                         args.len(),
                         &claimed,
-                        false,
+                        true,
                     );
                     let value = lookup.value.clone();
                     let value_root = roots.adopt_emitted(
@@ -994,6 +991,37 @@ pub(crate) fn try_lower_instance_method_call(
             );
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+
+            // Object model step 3 (§3.6): the receiver's family set is proven
+            // to be exactly `{class_name}` and the method a prototype
+            // constant, so the call binds the body with no load for dispatch
+            // and no guard. The body is the public method, which accepts any
+            // receiver layout. A `Ptr<Shape>` receiver keeps its own route,
+            // which also proves the layout and calls the layout-specialised
+            // body.
+            // With a dynamic write or relink in the program the binding needs
+            // the shadow-bit test; the guarded direct call below makes it
+            // (exact receiver word compare + `holder_constant`).
+            if ctx.exact_receiver_class(object).as_deref() == Some(class_name.as_str())
+                && !crate::proto_constants::shadow_tests()
+                && ctx.ptr_shape_receiver_fact(object).is_none()
+                && !fallback_fn.starts_with("perry_static_")
+                && !class_chain_has_field_named(ctx, &class_name, property)
+                && crate::proto_constants::class_method_is_constant(ctx, &class_name, property)
+            {
+                if crate::codegen::helpers::check_contracts() {
+                    crate::proto_constants::emit_exact_family_contract(
+                        ctx,
+                        &recv_box,
+                        &class_name,
+                        property,
+                        &fallback_fn,
+                    );
+                }
+                let value = ctx.block().call(DOUBLE, &fallback_fn, &arg_slices);
+                roots.release(ctx);
+                return Ok(Some(value));
+            }
 
             // A synthesized `arguments` slot is rest-shaped in the HIR, but
             // it does not prevent a same-class guarded direct call.  The
@@ -1413,7 +1441,7 @@ pub(crate) fn try_lower_instance_method_call(
                     .and_then(|(_, _, lookup)| lookup.as_ref())
                     .map(|(_, root)| roots.reread_emitted(ctx, *root));
                 let certificate = selection.as_ref().map(|(selected, word, lookup)| {
-                    crate::lower_call::method_override::CertifiedMethodSelection {
+                    crate::lower_call::method_override::ConstantMethodSelection {
                         selected,
                         receiver_word: (!static_split).then_some(word.as_str()),
                         lookup: lookup

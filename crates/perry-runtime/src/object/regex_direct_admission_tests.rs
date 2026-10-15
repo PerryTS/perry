@@ -43,7 +43,6 @@ fn a_constfn_exec_lane_must_name_the_builtin_body() {
                 rollback_parent: std::sync::atomic::AtomicU32::new(0),
                 created_birth_shape: std::sync::atomic::AtomicU32::new(0),
                 field_define_target: 0,
-                store_chain: None,
                 integrity_targets: [0; 3],
                 integrity_flags: 0,
             };

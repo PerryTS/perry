@@ -573,11 +573,12 @@ pub(crate) fn set_field_by_name_object_tail(
                 } else {
                     vbits
                 };
-                if !super::shapes::install_cached_object_shape_transition(
+                if !super::shapes::install_cached_object_shape_key_add(
                     obj,
                     prev_shape_id,
                     target_shape_id,
                     next_keys,
+                    interned_key,
                 ) {
                     set_object_keys(obj, next_keys);
                 }

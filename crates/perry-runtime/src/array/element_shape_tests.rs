@@ -233,9 +233,9 @@ fn a_same_class_different_exact_shape_keeps_the_class_level_invariant() {
     let before = proof(arr).expect("proven");
     let variant = instance(CLASS_SAME_CLASS_VARIANT);
     let obj = (variant.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
-    let original_shape = unsafe { (*obj).parent_class_id };
+    let original_shape = unsafe { (*obj).shape_word() };
     unsafe { crate::object::shapes::transition_object_shape_semantics(obj) };
-    assert_ne!(unsafe { (*obj).parent_class_id }, original_shape);
+    assert_ne!(unsafe { (*obj).shape_word() }, original_shape);
     assert_eq!(
         element_identity_of_bits(variant.to_bits()).map(|identity| identity.0),
         Some(CLASS_SAME_CLASS_VARIANT),
@@ -723,7 +723,7 @@ fn json_like_record(keys: *mut ArrayHeader, shape_id: u32, field_count: u32) -> 
             "test premise: the fixture record must be class 0"
         );
         assert_eq!(
-            (*obj).parent_class_id,
+            (*obj).shape_word(),
             shape_id,
             "test premise: the fixture record must carry the requested shape"
         );

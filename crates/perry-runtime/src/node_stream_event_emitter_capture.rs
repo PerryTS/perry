@@ -53,7 +53,7 @@ pub(super) fn emitter_capture_default_with_birth(birth: Option<(f64, f64)>) -> b
     };
     let closure = JSValue::from_bits(ctor.to_bits()).as_pointer::<ClosureHeader>();
     let bag = unsafe { (*closure).props };
-    let stamp = unsafe { (*bag).parent_class_id };
+    let stamp = unsafe { (*bag).shape_word() };
     let proto = birth
         .map(|(_, proto)| proto)
         .or_else(|| crate::node_stream::constructors::own_prototype_by_bag(ctor));
@@ -113,8 +113,8 @@ fn read_default_slow(ctor: f64, proto: Option<f64>) -> bool {
                         let bag = (*closure).props;
                         CAPTURE_DEFAULT.with(|memo| {
                             memo.set(Some(CaptureSite {
-                                bag: (*bag).parent_class_id,
-                                proto: (*obj).parent_class_id,
+                                bag: (*bag).shape_word(),
+                                proto: (*obj).shape_word(),
                                 value_slot: slot,
                                 value_live: shape.live_inline_slot_count,
                             }))

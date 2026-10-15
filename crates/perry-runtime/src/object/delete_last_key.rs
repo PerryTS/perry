@@ -62,7 +62,7 @@ unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::Sha
     {
         return None;
     }
-    let id = (*obj).parent_class_id;
+    let id = (*obj).shape_word();
     if !super::shapes::is_site_matchable_shape_id(id) {
         return None;
     }

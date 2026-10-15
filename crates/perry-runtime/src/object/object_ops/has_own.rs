@@ -108,7 +108,7 @@ unsafe fn ordinary_own_key_present(obj_bits: u64, key_bits: u64) -> Option<bool>
     let text = crate::string::js_string_key_bytes(key, &mut sso)?;
     let (present, kind) = super::super::shapes::plain_own_key_present(
         super::super::shapes::ordinary_dir_addr(),
-        (*obj).parent_class_id,
+        (*obj).shape_word(),
         key_bits,
         text,
     )
@@ -180,7 +180,7 @@ unsafe fn shape_may_answer(obj_bits: u64, key_bits: u64) -> bool {
         && (key.is_string() || key.is_short_string())
         && (obj_bits & crate::value::POINTER_MASK) as usize >= perry_abi::RECEIVER_HANDLE_FLOOR
         && super::super::shapes::is_shape_id(
-            (*((obj_bits & crate::value::POINTER_MASK) as *const ObjectHeader)).parent_class_id,
+            (*((obj_bits & crate::value::POINTER_MASK) as *const ObjectHeader)).shape_word(),
         )
 }
 

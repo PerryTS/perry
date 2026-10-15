@@ -20,6 +20,7 @@ pub mod ext_registry;
 pub(crate) mod fn_info;
 pub mod function;
 pub mod function_order;
+pub(crate) mod proto_constants;
 pub(crate) mod gc_call_effects;
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
@@ -122,6 +123,8 @@ pub use function_order::{
 pub use collectors::segview::{
     segview_diag_enabled, segview_lowering_enabled, segview_rewrite_module, SegViewDiag,
 };
+// Object model step 3: the program-wide prototype-write census.
+pub use proto_constants::{program_proto_census_key, set_program_proto_census};
 // #11394: whole-program set of methods written onto a builtin prototype.
 pub use lower_call::property_get::patched_proto::{
     program_patched_proto_methods, set_program_patched_proto_methods,

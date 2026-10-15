@@ -59,16 +59,16 @@ fn stationary_backing_rewrites_young_keys_through_remembered_slots() {
     let scope = RuntimeHandleScope::new();
     // An explicitly installed young child keeps the four-evacuation control.
     // Production publication requests first-copy tenure for these leaves.
-    let backing = crate::array::js_array_alloc_canonical_keys(1, true, false);
+    let keys_array = crate::array::js_array_alloc_canonical_keys(1, true, false);
     let key = crate::string::js_string_from_bytes(
         b"a_young_heap_key_longer_than_sso".as_ptr(),
         b"a_young_heap_key_longer_than_sso".len() as u32,
     );
     unsafe {
-        crate::array::note_array_slot(backing, 0, crate::JSValue::string_ptr(key).bits());
-        (*backing).length = 1;
+        crate::array::note_array_slot(keys_array, 0, crate::JSValue::string_ptr(key).bits());
+        (*keys_array).length = 1;
     }
-    let keys = CanonicalKeys::from_rooted(backing, 1);
+    let keys = CanonicalKeys::from_rooted(keys_array, 1);
     let root = scope.root_raw_mut_ptr(keys.as_ptr());
     let mut before = unsafe { crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr() };
     for _ in 0..4 {

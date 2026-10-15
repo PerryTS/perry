@@ -2782,6 +2782,9 @@ js_promise_with_resolvers	Reenters	yes
 js_promise_with_resolvers_spec	Reenters	yes
 js_property_rmw	Reenters	yes
 js_property_rmw_fast	Leaf	no
+js_proto_constant_contract_check	Reenters	yes
+js_proto_holder_contract_check	Reenters	yes
+js_proto_shadow_contract_check	Reenters	yes
 js_proxy_apply	Reenters	yes
 js_proxy_construct	Reenters	yes
 js_proxy_delete	Reenters	yes
@@ -4300,6 +4303,7 @@ perry_i18n_set_currencies	Leaf	no
 perry_i18n_set_locale_index	Leaf	no
 perry_i18n_set_plural_locales	Leaf	no
 perry_init_guard_check_and_set	Leaf	no
+perry_intrinsic_proto	Leaf	no
 perry_key_content_hash	Leaf	no
 perry_layout_index_probe	Leaf	no
 perry_macos_bundle_chdir	Reenters	yes

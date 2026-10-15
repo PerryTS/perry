@@ -376,7 +376,7 @@ fn ic_slow_body(
                         && (*cache)[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] < 0
                     {
                         if let Some(rec) =
-                            crate::object::shapes::shape_record_by_id((*obj).parent_class_id)
+                            crate::object::shapes::shape_record_by_id((*obj).shape_word())
                         {
                             // The site's last primed slot is the guess (the
                             // compact word's high half; a spill entry's

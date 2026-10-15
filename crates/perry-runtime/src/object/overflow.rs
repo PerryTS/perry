@@ -34,25 +34,13 @@ pub(crate) const UNIQUE_RUN_TO_OVERFLOW: u32 = 1024;
 const EMPTY: u32 = u32::MAX;
 pub(crate) const SHADOW_BIT: u32 = super::layout_desc::LAYOUT_SHADOW_BIT;
 
-/// The shadow bit: the object's own contents extend past its layout's fixed
-/// keys, so a layout-only answer about absence must also ask the overflow.
+/// The shadow bit (`layout_desc::LAYOUT_SHADOW_BIT`, which documents its one
+/// meaning for steps 3 and 4). Clear proves the object has no overflow; set
+/// does NOT prove one (a step-3 dynamic write sets it too): use
+/// [`has_overflow`] / [`table`] for that.
 #[inline(always)]
 pub(crate) unsafe fn shadowed(obj: *const ObjectHeader) -> bool {
     (*obj).parent_class_id & SHADOW_BIT != 0
-}
-
-/// The layout word that stamps layout `id` onto `obj`: the shadow bit
-/// carries over exactly when `obj` has an overflow installed. A restamp never
-/// changes the overflow, and a birth word that is not yet a layout word (a
-/// class's parent id, which may have bit 30 set) carries nothing.
-#[inline(always)]
-pub(crate) unsafe fn stamped_word(obj: *const ObjectHeader, id: u32) -> u32 {
-    let meta = (*obj).meta;
-    if !meta.is_null() && (*meta).overflow != 0 {
-        id | SHADOW_BIT
-    } else {
-        id
-    }
 }
 
 #[inline]
@@ -64,9 +52,10 @@ pub(crate) unsafe fn is_table(keys: *const ArrayHeader) -> bool {
 }
 
 /// The object's overflow, or null. `install` sets the shadow bit in the
-/// layout word when it installs an overflow and every restamp keeps the bit,
-/// so a word without it means no overflow: one load of the word, before any
-/// header classification.
+/// layout word when it installs an overflow and every restamp keeps the bit
+/// (`layout_desc::carry_shadow`), so a word without it means no overflow: one
+/// load of the word, before any header classification. A word with it still
+/// needs the `meta.overflow` load.
 #[inline]
 pub(crate) unsafe fn table(obj: *const ObjectHeader) -> *mut Table {
     if obj.is_null()

@@ -15,6 +15,11 @@ pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
 /// assigns ids there by content and generated code embeds them as immediates;
 /// the runtime's counter never draws from it (design step 4).
 pub const STATIC_SHAPE_ID_COUNT: u32 = 1 << 20;
+/// Object model step 3 (§3.6): a layout word (`ObjectHeader` +4) below this
+/// is an unshadowed ordinary layout (or a word no write stamped); shadowed,
+/// dictionary and exotic words lie at or above it. The site test of a
+/// prototype constant or a known-holder read is one unsigned compare.
+pub const UNSHADOWED_WORD_END: u32 = 0xB000_0000;
 
 /// `array::ArrayHeader` size: element 0 follows it.
 pub const ARRAY_HEADER_SIZE: usize = 16;
@@ -65,7 +70,15 @@ pub const fn well_known_symbol_atom_hash(number: u32) -> u64 {
 }
 
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
-pub const AGENT_PTR_SLOTS: usize = 4;
+pub const AGENT_PTR_SLOTS: usize = 4 + BUILTIN_PROTO_FAMILIES;
+/// Slots `AGENT_PTR_INTRINSIC_PROTO + k`: this agent's intrinsic prototype of
+/// builtin family `k` (`object::builtin_proto::BuiltinProto`; for Array the
+/// sealed named-property bag), whose layout word's shadow bit
+/// (`UNSHADOWED_WORD_END`) is `Pristine(k)`. Never null: until the realm is
+/// sealed every slot names `PERRY_PRISTINE_PROTO`, whose word is 0.
+pub const AGENT_PTR_INTRINSIC_PROTO: usize = 4;
+/// Number of builtin prototype families.
+pub const BUILTIN_PROTO_FAMILIES: usize = 16;
 /// Slot 0: the address of this agent's ordinary shape-directory mirror
 /// (`shapes_store::AGENT_SHAPE_DIR[0]`), which a generic read site passes to its
 /// GC-leaf miss front (`js_object_get_field_ic_front`) so the front reads no
@@ -848,16 +861,6 @@ pub const METHOD_SITE_VALUE_INFO: u64 = 1;
 /// kind or info load after the shape compare.
 pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
 pub const METHOD_SITE_CHAIN: u64 = 1 << 58;
-/// A certified class-dispatch site's record (`method_site/cert.rs`,
-/// `MethodCertSite`): one proof epoch, a replacement cursor, then
-/// `METHOD_CERT_WAYS` (receiver word, certified body info) pairs. The same
-/// footprint as a method site's record.
-pub const METHOD_CERT_EPOCH_OFFSET: usize = 0;
-pub const METHOD_CERT_WAYS_OFFSET: usize = 16;
-pub const METHOD_CERT_WAY_SIZE: usize = 16;
-pub const METHOD_CERT_WORD_OFFSET: usize = 0;
-pub const METHOD_CERT_INFO_OFFSET: usize = 8;
-pub const METHOD_CERT_WAYS: usize = 6;
 /// Entry-owned shape proof ABI: native (address, shape word) pairs.
 pub const SHAPE_CHAIN_LEN_OFFSET: usize = 8;
 pub const SHAPE_CHAIN_HOP_BYTES: usize = 24;

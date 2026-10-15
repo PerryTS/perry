@@ -1066,9 +1066,7 @@ pub(crate) fn emit_method_site_lookup_unless(
     let looked = if memoize {
         emit_method_site_lookup(ctx, recv_box, method_id, argc, &[])
     } else {
-        // A certified static site already owns its one MethodCertSite.
-        // Its generic read uses the existing no-slot operation, rather than
-        // allocating a second selector record beside the certificate.
+        // The no-slot operation: a caller that keeps no site record.
         let value = ctx.block().call(
             DOUBLE,
             "js_method_site_prepare",

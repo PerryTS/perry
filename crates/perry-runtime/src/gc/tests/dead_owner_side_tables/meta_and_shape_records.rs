@@ -514,8 +514,8 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
     let descriptor = crate::object::shapes::shape_descriptor_by_id(id)
         .expect("live shared descriptor disappeared during evacuation");
     unsafe {
-        assert_eq!((*a_after).parent_class_id, id);
-        assert_eq!((*b_after).parent_class_id, id);
+        assert_eq!((*a_after).shape_word(), id);
+        assert_eq!((*b_after).shape_word(), id);
         assert_eq!(
             crate::object::object_keys(a_after).arr(),
             crate::object::object_keys(b_after).arr()

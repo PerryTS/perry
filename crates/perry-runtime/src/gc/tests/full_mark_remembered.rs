@@ -210,7 +210,7 @@ fn old_only_rebuild_matches_whole_heap(require_marked: bool) {
     let child = young_leaf();
     raw_store(parent, fields, string_bits(child));
     activate_malloc_registry_for_tests();
-    let shape = unsafe { (*(parent as *const crate::object::ObjectHeader)).parent_class_id };
+    let shape = unsafe { (*(parent as *const crate::object::ObjectHeader)).shape_word() };
     let header_size = std::mem::size_of::<crate::object::ObjectHeader>();
     let malloc_parent = gc_malloc(header_size + 16, GC_TYPE_OBJECT);
     unsafe {
@@ -421,7 +421,7 @@ fn folded_full_mark_matches_the_reference_for_arena_and_malloc_parents() {
         let (parent, fields) = rooted_old_parent();
         let child = young_leaf();
         raw_store(parent, fields, string_bits(child));
-        let shape = unsafe { (*(parent as *const crate::object::ObjectHeader)).parent_class_id };
+        let shape = unsafe { (*(parent as *const crate::object::ObjectHeader)).shape_word() };
         let size = std::mem::size_of::<crate::object::ObjectHeader>();
         let malloc_parent = gc_malloc(size + 16, GC_TYPE_OBJECT);
         unsafe {

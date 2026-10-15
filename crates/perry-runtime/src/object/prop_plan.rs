@@ -42,24 +42,14 @@ static PROP_PLAN_SEMANTIC_EPOCH: AtomicU64 = AtomicU64::new(1);
 pub(crate) fn prop_plan_epoch_bump() {
     PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
     PROP_PLAN_SEMANTIC_EPOCH.fetch_add(1, Ordering::Relaxed);
-    // The inherited-read cache re-proves its entries against ONE word, so the
-    // semantic half is folded into it rather than loaded and compared beside
-    // it (`object::proto_validity`). Every event that bumps the semantic epoch
-    // is one that can change what an inherited read ANSWERS.
-    crate::object::proto_validity::bump_proto_validity();
 }
 
 /// [`prop_plan_epoch_bump`] for a mutation of ONE object — a descriptor
-/// install or clear, or a `delete`. Both plan epochs move exactly as before;
-/// the inherited-access validity word moves only when `owner` can be a hop of
-/// a recorded chain (`proto_validity::mutation_owner_may_be_a_recorded_hop`).
+/// install or clear, or a `delete`.
 #[inline]
-pub(crate) fn prop_plan_epoch_bump_for_owner(owner: usize) {
+pub(crate) fn prop_plan_epoch_bump_for_owner(_owner: usize) {
     PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
     PROP_PLAN_SEMANTIC_EPOCH.fetch_add(1, Ordering::Relaxed);
-    if unsafe { crate::object::proto_validity::mutation_owner_may_be_a_recorded_hop(owner) } {
-        crate::object::proto_validity::bump_proto_validity();
-    }
 }
 
 /// Invalidate cached store plans for a reason that is NOT a semantic property

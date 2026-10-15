@@ -1,7 +1,6 @@
-// Method certificates (decision 129 slice 2): a prototype method replaced
-// IN PLACE after the site certified it. The receiver's word is unchanged;
-// only PERRY_PROTO_VALIDITY moves. Contract-mode sabotage `PERRY_METHOD_CERT_SABOTAGE=epoch` must
-// abort here; every build must print node's output.
+// Class dispatch with a prototype method replaced IN PLACE after the site
+// first ran. The program writes the method name, so the write census proves
+// it no constant (object model step 3); every build must print node's output.
 class A { n = 2; step(x: number) { return this.n + x; } }
 class B extends A { step(x: number) { return this.n * x; } }
 class C extends A {}

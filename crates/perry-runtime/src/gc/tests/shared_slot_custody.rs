@@ -180,7 +180,7 @@ fn old_same_shape_graph_survives_copying_minors_and_full_cycles_without_external
                     valid.contains(&(obj as usize)),
                     "full must retain every remaining receiver"
                 );
-                assert_eq!((*obj).parent_class_id, id);
+                assert_eq!((*obj).shape_word(), id);
                 let fields = (obj as *const u8)
                     .add(std::mem::size_of::<crate::ObjectHeader>())
                     .cast::<u64>();

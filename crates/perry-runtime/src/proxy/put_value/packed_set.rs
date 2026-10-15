@@ -502,7 +502,7 @@ unsafe fn prime_packed_set(
     // #11915: never learn a marked prototype's shape (it is on a private
     // lineage, so no other receiver shares it). Every store to a prototype
     // then reaches `store_object_field_slot`, whose hook advances
-    // `PERRY_PROTO_VALIDITY` on a method replacement and withdraws a sealed
+    // nothing on a method replacement and withdraws a sealed
     // builtin prototype's `Pristine` fact — an emitted hit could do neither.
     let meta = (*obj).meta;
     if !meta.is_null()

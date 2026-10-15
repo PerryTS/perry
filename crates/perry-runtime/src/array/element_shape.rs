@@ -287,7 +287,7 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        let shape_id = (*obj).parent_class_id;
+        let shape_id = (*obj).shape_word();
         if !crate::object::shapes::shape_descriptor_by_id(shape_id)
             .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
         {
@@ -337,7 +337,7 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
         if (*obj).class_id != record.class_id {
             return false;
         }
-        if (*obj).parent_class_id == record.ordinary_shape_id {
+        if (*obj).shape_word() == record.ordinary_shape_id {
             #[cfg(test)]
             EXACT_SHAPE_STORE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
             return true;
@@ -378,7 +378,7 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
 unsafe fn element_identity_of_validated_object(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<(u32, u32)> {
-    let shape_id = (*obj).parent_class_id;
+    let shape_id = (*obj).shape_word();
     if !crate::object::shapes::shape_object_kind_by_id(shape_id)
         .is_some_and(|kind| kind.is_ordinary_layout())
     {

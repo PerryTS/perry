@@ -50,7 +50,7 @@ fn empty_site_has_no_facts_or_roots() {
     assert_eq!(unsafe { (*record).next }, 0);
     assert!(unsafe { &*record }.class_entries().all(|e| e.token == 0));
     let recv = shaped(pinned_shape(39_000));
-    let token = (PIC_ID_TOKEN_BIT | u64::from(recv.parent_class_id)) as i64;
+    let token = (PIC_ID_TOKEN_BIT | u64::from(recv.shape_word())) as i64;
     assert_eq!(unsafe { leaf_answer(&cache, &*recv, token) }, None);
     for e in unsafe { &*record }.class_entries() {
         assert!(e.hops.is_null());
@@ -77,7 +77,7 @@ fn primary_ways_stay_single_until_churn() {
         .collect();
     let w = Walk {
         holder: &*terminal as *const ObjectHeader as usize,
-        holder_shape: terminal.parent_class_id,
+        holder_shape: terminal.shape_word(),
         slot: None,
         hops: NO_HOPS,
         depth: 1,
@@ -105,7 +105,7 @@ fn primary_ways_stay_single_until_churn() {
     assert_eq!(s.class_entry(0).slot & !MULTI_ABSENT, (WAYS + 2) as u32);
     assert_eq!((s.next >> CURSOR_BITS) & SHARED_MASK, 1);
     for r in &receivers {
-        let token = (u64::from(r.parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+        let token = (u64::from(r.shape_word()) | PIC_ID_TOKEN_BIT) as i64;
         assert_eq!(
             unsafe { leaf_answer(&cache, &**r, token) },
             Some(crate::value::TAG_UNDEFINED)
@@ -134,7 +134,7 @@ fn primary_ways_stay_single_until_churn() {
     assert_eq!((unsafe { (*record).next } >> CURSOR_BITS) & SHARED_MASK, 1);
     assert_ne!(unsafe { (*record).next } & ABSENT_CHURN, 0);
     for r in &receivers {
-        let token = (u64::from(r.parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+        let token = (u64::from(r.shape_word()) | PIC_ID_TOKEN_BIT) as i64;
         assert_eq!(
             unsafe { leaf_answer(&cache, &**r, token) },
             Some(crate::value::TAG_UNDEFINED)
@@ -243,7 +243,7 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
     // Fake hops are not registered shapes. Exercise the same pinned
     // shape comparisons the real admitted walk proves.
     for r in &receivers {
-        let token = (PIC_ID_TOKEN_BIT | u64::from(r.parent_class_id)) as i64;
+        let token = (PIC_ID_TOKEN_BIT | u64::from(r.shape_word())) as i64;
         assert_eq!(
             unsafe { answer(e, &**r) },
             Some(crate::value::TAG_UNDEFINED)
@@ -254,9 +254,9 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
         );
     }
     let r = &mut *receivers[47];
-    let original = r.parent_class_id;
+    let original = r.shape_word();
     r.parent_class_id = receiver_shape(CID, 1000);
-    let token = (PIC_ID_TOKEN_BIT | u64::from(r.parent_class_id)) as i64;
+    let token = (PIC_ID_TOKEN_BIT | u64::from(r.shape_word())) as i64;
     assert_eq!(
         unsafe { answer(e, r) },
         None,
@@ -267,7 +267,7 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
     let token = (PIC_ID_TOKEN_BIT | u64::from(original)) as i64;
     for (i, hop) in chain.iter().enumerate() {
         let ptr = &**hop as *const ObjectHeader as *mut ObjectHeader;
-        let original = unsafe { (*ptr).parent_class_id };
+        let original = unsafe { (*ptr).shape_word() };
         unsafe { (*ptr).parent_class_id = base + 500 };
         assert_eq!(unsafe { answer(e, r) }, None, "hop {i} changed");
         assert_eq!(
@@ -336,7 +336,7 @@ fn multi_absent_bound_and_prototype_identity_are_enforced() {
     unsafe { publish(&mut cache, &*other, &w) };
     assert_eq!(s.class_entries().filter(|e| e.token != 0).count(), 3);
     for r in &receivers {
-        let token = (PIC_ID_TOKEN_BIT | u64::from(r.parent_class_id)) as i64;
+        let token = (PIC_ID_TOKEN_BIT | u64::from(r.shape_word())) as i64;
         assert!(s
             .class_entries()
             .any(|e| unsafe { e.matches_receiver(token, CID) }));
@@ -480,7 +480,7 @@ fn collecting_shared_reads_check_receiver_and_chain() {
         unsafe { try_shared_hit(record, r) },
         Some(crate::value::TAG_UNDEFINED)
     );
-    let shape = r.parent_class_id;
+    let shape = r.shape_word();
     r.parent_class_id = receiver_shape(CID, 1000);
     assert_eq!(
         unsafe { try_shared_hit(record, r) },
@@ -495,11 +495,11 @@ fn collecting_shared_reads_check_receiver_and_chain() {
         "different class"
     );
     r.class_id = CID;
-    let shape = chain[0].parent_class_id;
+    let shape = chain[0].shape_word();
     chain[0].parent_class_id = crate::object::shapes::SHAPE_ID_BASE + 301;
     assert_eq!(unsafe { try_shared_hit(record, r) }, None, "hop restamped");
     chain[0].parent_class_id = shape;
-    let shape = holder.parent_class_id;
+    let shape = holder.shape_word();
     holder.parent_class_id = crate::object::shapes::SHAPE_ID_BASE + 302;
     assert_eq!(
         unsafe { try_shared_hit(record, r) },
@@ -557,11 +557,11 @@ pub(super) fn shaped(shape: u32) -> Box<ObjectHeader> {
 fn deep_walk(chain: &[Box<ObjectHeader>], holder: &ObjectHeader) -> Walk {
     let mut hops = NO_HOPS;
     for (i, h) in chain.iter().enumerate() {
-        hops[i] = ((&**h as *const ObjectHeader) as usize, h.parent_class_id);
+        hops[i] = ((&**h as *const ObjectHeader) as usize, h.shape_word());
     }
     Walk {
         holder: (holder as *const ObjectHeader) as usize,
-        holder_shape: holder.parent_class_id,
+        holder_shape: holder.shape_word(),
         slot: None,
         hops,
         depth: chain.len() + 1,
@@ -617,7 +617,7 @@ fn deep_entry_compares_every_hop() {
         CLASS_READ_MAX_DEPTH - 2,
     ] {
         let hop = &*chain[i] as *const ObjectHeader as *mut ObjectHeader;
-        let original = unsafe { (*hop).parent_class_id };
+        let original = unsafe { (*hop).shape_word() };
         unsafe { (*hop).parent_class_id = base + 300 };
         assert_eq!(unsafe { pinned_answer(&e) }, None, "hop {i} moved");
         unsafe { (*hop).parent_class_id = original };

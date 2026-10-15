@@ -1,7 +1,6 @@
-// Method certificates: two receiver words at one site, each with its own
-// certificate. A forged receiver word (sabotage `PERRY_METHOD_CERT_SABOTAGE=word`: the hit compares
-// the proof word with itself) must abort in contract mode; every build must
-// call each receiver's own body.
+// Class dispatch with two receiver classes at one site: every build must call
+// each receiver's own body (object model step 3: a branch over the class id
+// against the prototype constants the write census proves).
 class Shape { area() { return 0; } }
 class Sq extends Shape { s = 3; area() { return this.s * this.s; } }
 class Ci extends Shape { r = 2; area() { return 3 * this.r * this.r; } }

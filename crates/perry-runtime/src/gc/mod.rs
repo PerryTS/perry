@@ -1017,6 +1017,7 @@ macro_rules! reg_budgeted_scanner {
 /// build can run inside that window.
 pub(crate) fn register_prototype_addr_cache_scanner() {
     reg_scanner!(crate::array::scan_prototype_addr_cache_roots_mut);
+    reg_scanner!(crate::agent_ptrs::scan_intrinsic_proto_roots_mut);
 }
 
 /// The agent's property atom table (`string::intern`, §3.5) is weak runtime

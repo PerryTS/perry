@@ -39,6 +39,9 @@ use std::sync::Arc;
 use swc_ecma_ast as ast;
 use swc_ecma_visit::{Visit, VisitWith};
 
+#[path = "proto_census.rs"]
+pub mod proto_census;
+
 /// Member wildcard: a dynamic-key write, or the whole namespace replaced.
 pub const ANY_MEMBER: &str = "*";
 
@@ -68,7 +71,7 @@ pub fn is_builtin_namespace(name: &str) -> bool {
     BUILTIN_NAMESPACES.contains(&name)
 }
 
-fn peel(mut e: &ast::Expr) -> &ast::Expr {
+pub(crate) fn peel(mut e: &ast::Expr) -> &ast::Expr {
     loop {
         e = match e {
             ast::Expr::Paren(x) => &x.expr,
@@ -136,7 +139,7 @@ fn prop_name_key(p: &ast::PropName) -> Option<String> {
 }
 
 /// Static keys an object literal defines, or `None` if any key is dynamic.
-fn object_literal_keys(e: &ast::Expr) -> Option<Vec<String>> {
+pub(crate) fn object_literal_keys(e: &ast::Expr) -> Option<Vec<String>> {
     let ast::Expr::Object(obj) = peel(e) else {
         return None;
     };
@@ -164,7 +167,7 @@ fn is_index_key(key: &str) -> bool {
 
 /// A literal property key: a string, or an integer-valued number (`[7]`,
 /// `defineProperty(o, 7, …)` — an index, which no method call can name).
-fn str_arg(e: &ast::Expr) -> Option<String> {
+pub(crate) fn str_arg(e: &ast::Expr) -> Option<String> {
     match peel(e) {
         ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(str::to_string),
         ast::Expr::Lit(ast::Lit::Num(n))

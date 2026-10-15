@@ -1276,7 +1276,6 @@ fn key_changes_with_contract_mode() {
 fn key_changes_with_contract_sabotage_selectors() {
     let opts = empty_opts();
     for (var, first, second) in [
-        ("PERRY_METHOD_CERT_SABOTAGE", "epoch", "word"),
         ("PERRY_B4_SABOTAGE", "spec_owner", "spec_extent"),
         ("PERRY_ASSERT_CAPTURE_CELLS", "0", "1"),
     ] {

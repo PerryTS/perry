@@ -14,9 +14,9 @@ fn function_attribute_writes_are_owned_by_the_bag() {
     let closure = crate::closure::js_closure_alloc(crate::fn_info!(body, 0), 0) as usize;
     crate::object::set_bound_native_closure_name(closure as *mut _, "original");
     let bag = unsafe { crate::closure::props::bag_of(closure) };
-    let before = unsafe { (*bag).parent_class_id };
+    let before = unsafe { (*bag).shape_word() };
     set_property_attrs(closure, "name".into(), PropertyAttrs::new(true, true, true));
-    assert_ne!(before, unsafe { (*bag).parent_class_id });
+    assert_ne!(before, unsafe { (*bag).shape_word() });
     assert_eq!(
         get_property_attrs(closure, "name").unwrap().bits,
         PropertyAttrs::new(true, true, true).bits,

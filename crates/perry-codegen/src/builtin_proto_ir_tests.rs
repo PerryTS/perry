@@ -1,14 +1,17 @@
 //! #11915: IR census for the builtin-prototype `Pristine` proof. Every direct
-//! builtin lowering on a proven or kind-tested receiver must read
-//! `@PERRY_BUILTIN_PROTO_PATCHED` on the way in, and its failure must reach
-//! the ONE shared generic path — never a per-site fallback body.
+//! builtin lowering on a proven or kind-tested receiver must test the shadow
+//! bit of the agent's intrinsic prototype (object model step 3: the layout
+//! word compared with `UNSHADOWED_WORD_END`) on the way in, and its failure
+//! must reach the ONE shared generic path — never a per-site fallback body.
 
 use perry_hir::types::Type;
 use perry_hir::{ArrayLikeSource, Expr, Stmt};
 
 use crate::temp_root_coverage::main_ir_for;
 
-const PATCHED: &str = "@PERRY_BUILTIN_PROTO_PATCHED";
+/// The shadow-bit compare: `icmp uge i32 %word, UNSHADOWED_WORD_END`.
+const PATCHED: &str = "-1342177280";
+const _: () = assert!(crate::runtime_abi::UNSHADOWED_WORD_END as i32 == -1342177280);
 
 fn let_local(id: u32, name: &str, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {

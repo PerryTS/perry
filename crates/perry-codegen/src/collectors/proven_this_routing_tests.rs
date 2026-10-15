@@ -1120,7 +1120,8 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
 }
 
 /// The single-pair shape-only arm is small enough to inline at the call site.
-/// Pin the complete safety gate: compare the live holder ShapeId, accept
+/// Pin the complete safety gate: the holder is a prototype constant (no
+/// load), accept
 /// both the boxed-pointer and
 /// internal raw-pointer ABIs, reject addresses outside the target heap range
 /// before dereference, reject own descriptors, then compare the exact
@@ -1130,8 +1131,8 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
     let ir = emit_static(&guarded_site_module(), false);
     let probe = function_body(&ir, "__probe(");
     assert!(
-        probe.contains("holder.shape") && probe.contains("icmp eq i32"),
-        "the live holder P must be compared before the direct arm:\n{probe}"
+        !probe.contains("holder.") && !probe.contains("@perry_class_value_dir_cell"),
+        "a prototype constant needs no holder load before the direct arm:\n{probe}"
     );
     assert!(
         !ir.contains("PERRY_CLASS_PROTOTYPE_FAST_GUARDS"),
@@ -1627,22 +1628,32 @@ fn tower_route_is_guarded_by_the_class_shape_id() {
 fn tower_receiver_word_is_a_native_scalar() {
     let _native = crate::codegen::helpers::NativeRootsPin::native();
     let ir = emit_static(&tower_site_module(), false);
-    // The tower selects through its method certificates: the receiver's
-    // header word (class_id | ShapeId) is compared as an i64 scalar.
+    // The tower selects by the receiver's class id against the prototype
+    // constants: the header word (class_id | ShapeId) is an i64 scalar.
     let caller = ir
         .split("\ndefine ")
-        .find(|f| f.contains("\nmcert.way"))
-        .unwrap_or_else(|| panic!("the tower site has no certificate compare:\n{ir}"));
-    let way = caller.split("\nmcert.way").nth(1).unwrap();
-    let way = way.split("\n\n").next().unwrap();
-    let compare = way
+        .find(|f| f.contains("\npconst.selected"))
+        .unwrap_or_else(|| panic!("the tower site has no constant selection:\n{ir}"));
+    // The selection switches on `trunc i64 <word> to i32`.
+    let switch = caller
         .lines()
-        .find(|line| line.contains("icmp eq i64"))
-        .unwrap_or_else(|| panic!("no receiver-word compare:\n{way}"));
-    let word = compare
-        .split("icmp eq i64 ")
+        .find(|line| line.contains("switch i32") && line.contains("label %pconst.selected"))
+        .unwrap_or_else(|| panic!("no class-id selection switch:\n{caller}"));
+    let class_id = switch
+        .split("switch i32 ")
         .nth(1)
         .and_then(|rest| rest.split(',').next())
+        .expect("switch operand")
+        .trim()
+        .to_string();
+    let compare = caller
+        .lines()
+        .find(|line| line.trim_start().starts_with(&format!("{class_id} = trunc i64 ")))
+        .unwrap_or_else(|| panic!("no receiver-word class id:\n{caller}"));
+    let word = compare
+        .split("trunc i64 ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
         .expect("compare operand")
         .trim()
         .to_string();
@@ -1751,8 +1762,8 @@ fn polymorphic_array_site_module() -> Module {
 fn class_array_dispatch_consumes_own_subclass_shape_without_a_second_tower() {
     let ir = emit_static(&polymorphic_array_site_module(), false);
     let caller = function_body(&ir, "__probe(");
-    assert!(caller.contains("method_direct.layout") && caller.contains("mcert.hit"));
-    assert!(caller.contains("@PERRY_PROTO_VALIDITY") && !caller.contains("holder."));
+    assert!(caller.contains("method_direct.layout") && caller.contains("pconst.selected"));
+    assert!(!caller.contains("@PERRY_PROTO_VALIDITY") && !caller.contains("holder."));
     assert!(!caller.contains("idispatch.") && !caller.contains("msite."));
     let subclass = blocks(&caller)
         .into_iter()
@@ -1838,11 +1849,9 @@ fn class_array_observable_args_keep_lookup_before_call() {
     }
     let ir = emit_static(&m, false);
     let caller = function_body(&ir, "__probe(");
-    // The method is read before the arguments: certificate selection, then
+    // The method is read before the arguments: constant selection, then
     // the split lookup for a receiver no compiled body claims.
-    let select = caller
-        .find("@js_method_site_certify(")
-        .expect("certified selection");
+    let select = caller.find("pconst.selected").expect("constant selection");
     let lookup = caller
         .find("@js_method_site_lookup(")
         .expect("split lookup half");
@@ -1921,29 +1930,36 @@ fn class_array_subclass_callback_keeps_its_public_body() {
     assert!(!subclass.1.iter().any(|line| line.contains("$pshape(")));
 }
 
-/// Decision 129 slice 2: the class-id tower selects its body from the site's
-/// method certificate (`PristineReceiverFact::Shape`: receiver word against the
-/// proof word, the proof epoch against `PERRY_PROTO_VALIDITY`) and its one
-/// generic entry; no own-property probe or holder-directory read remains, and
-/// release code carries no contract check.
+/// Object model step 3: the class-id tower selects its body by the
+/// receiver's class id against the classes whose method is a prototype
+/// constant; no runtime proof, epoch, own-property probe or holder-directory
+/// read remains, and release code carries no contract check.
 #[test]
-fn tower_selects_by_method_certificate() {
+fn tower_selects_by_prototype_constant() {
     let ir = emit_static(&tower_site_module(), false);
     assert!(ir.contains("idispatch.case"), "{ir}");
-    assert!(ir.contains("mcert.hit") && ir.contains("@js_method_site_certify("));
-    assert!(ir.contains("@PERRY_PROTO_VALIDITY"));
-    assert!(
-        ir.contains("__eclo$info"),
-        "selection compares the compiled bodies"
-    );
+    assert!(ir.contains("pconst.selected") && !ir.contains("certify"));
+    assert!(!ir.contains("@PERRY_PROTO_VALIDITY"));
     let site = ir
         .split("\ndefine ")
-        .find(|f| f.contains("mcert.hit"))
-        .expect("the function holding the certified site");
+        .find(|f| f.contains("pconst.selected"))
+        .expect("the function holding the selecting site");
     assert!(
         !site.contains("@js_object_get_own_field_or_undef("),
         "{site}"
     );
     assert!(!site.contains("holder.tower"), "{site}");
-    assert!(!site.contains("call void @js_method_site_cert_contract_check("));
+    assert!(!site.contains("call void @js_proto_constant_contract_check("));
+}
+
+/// A census that writes the method name withdraws the constant: the tower
+/// keeps no compiled case and every receiver takes the generic site.
+#[test]
+fn a_written_method_name_is_not_a_prototype_constant() {
+    let mut census = perry_hir::ProtoCensus::default();
+    census.dynamic_write = true;
+    let ir = crate::proto_constants::with_test_census(census, || {
+        emit_static(&tower_site_module(), false)
+    });
+    assert!(!ir.contains("pconst.case"), "{ir}");
 }

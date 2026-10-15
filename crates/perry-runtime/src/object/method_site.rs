@@ -96,9 +96,11 @@
 use crate::object::ObjectHeader;
 
 mod builtin_receiver;
-mod cert;
+mod proto_constant;
 pub(crate) use builtin_receiver::shape_proof as builtin_shape_proof;
-pub use cert::*;
+pub use proto_constant::{
+    js_proto_constant_contract_check, js_proto_holder_contract_check, js_proto_shadow_contract_check,
+};
 pub(crate) mod chain_memo;
 mod function_receiver;
 mod holder_prime;
@@ -256,11 +258,8 @@ pub fn note_worker_agent() {
     let _sites = PUBLISH_GATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let first = WORKER_AGENTS_EXIST.swap(1, Ordering::SeqCst) == 0;
+    WORKER_AGENTS_EXIST.store(1, Ordering::SeqCst);
     drop(_sites);
-    if first {
-        super::proto_validity::bump_proto_validity();
-    }
 }
 
 /// Why a miss did not prime (diagnostic; `PERRY_METHOD_SITE_STATS` prints it),

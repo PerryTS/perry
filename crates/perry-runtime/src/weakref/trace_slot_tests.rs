@@ -65,7 +65,7 @@ fn weak_trace_slot_rejects_null_nonobject_and_absent_shape() {
             let header = (obj as *mut u8)
                 .sub(crate::gc::GC_HEADER_SIZE)
                 .cast::<crate::gc::GcHeader>();
-            let stamp = (*obj).parent_class_id;
+            let stamp = (*obj).shape_word();
             assert_eq!(crate::object::object_live_slot_count(obj), 2);
             assert!(is_weak_target_trace_slot(header, object_field_slot(obj, 0)));
             if class_id == CLASS_ID_FINALIZATION_RECORD {

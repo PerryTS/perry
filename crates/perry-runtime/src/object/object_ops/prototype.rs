@@ -257,7 +257,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // Rule 3: a live ordinary ShapeId proves this cell's layout.
                 // Arrays, closures, handles, class and exotic identities
                 // decline without consulting their registries on this arm.
-                let id = unsafe { (*addr).parent_class_id };
+                let id = unsafe { (*addr).shape_word() };
                 if id.wrapping_sub(crate::object::shapes::SHAPE_ID_BASE)
                     < crate::object::shapes::SITE_SHAPE_ID_END
                         - crate::object::shapes::SHAPE_ID_BASE

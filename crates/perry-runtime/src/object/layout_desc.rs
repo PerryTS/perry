@@ -26,17 +26,138 @@
 //!
 //! The layout word is `ObjectHeader.parent_class_id`: the LayoutId is the
 //! full ShapeId value, and bit 30 ([`LAYOUT_SHADOW_BIT`]) is the shadow bit,
-//! which no ShapeId carries. Nothing sets the shadow bit before step 4.
+//! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
 use super::ObjectHeader;
 use crate::string::StringHeader;
 
-/// The shadow bit of the layout word (§3.6). Never part of a ShapeId.
+/// Bit 30 of the layout word: THE shadow bit (object model §3.6, §6a). One
+/// bit, one meaning, one stamping rule, shared by step 3 and step 4.
+///
+/// **Meaning.** Set: the object's own contents may differ from what its
+/// layout id and the program's static facts say. Clear: they do not; the
+/// layout alone answers every own-key question (presence, absence,
+/// attributes) and the object's [[Prototype]] is the one its birth recorded.
+///
+/// **Who sets it** (never cleared; a delete may leave it set: one wasted
+/// probe, never a wrong answer):
+/// * `overflow::install`: the object gets an overflow (§3.4, step 4): own
+///   keys extend past the layout, or a fixed key was deleted;
+/// * `object::shadow` (step 3): a dynamic write adds, deletes or redefines a
+///   source-named key on the object, or replaces a marked prototype's
+///   member in place; a [[Prototype]] relink; any write to an intrinsic
+///   prototype (`builtin_proto`);
+/// * every restamp carries it ([`carry_shadow`]); no store of a layout word
+///   bypasses that rule.
+///
+/// **What each reader concludes:**
+/// * `overflow::table` / `has_overflow`: clear proves no overflow (one load,
+///   no meta); set means *load* `meta.overflow`, which may still be null (the
+///   bit was set by a step-3 write). Nothing concludes "overflow" from the
+///   bit alone.
+/// * Step-3 prototype-constant sites and inherited loads (`proto_constants`,
+///   `builtin_proto`, `UNSHADOWED_WORD_END`): clear proves the receiver has no
+///   own copy of the bound name and every holder still holds its declared
+///   member; set takes the generic call/load.
+/// * Runtime caches key on `shapes::object_shape_stamp` /
+///   [`ObjectHeader::shape_word`]: with an overflow installed that is the
+///   full word, so every way answering ABSENT or INHERITED keys misses (an
+///   overflow entry may shadow them); with the bit alone it is the layout id,
+///   which is exact there (every own-key or [[Prototype]] change of an object
+///   without an overflow still changes its layout id). Ways answering an OWN
+///   fixed slot compare [`layout_id_of_word`] in every case (`read_confirm`:
+///   the key's slot is the same with or without the bit; a deleted key leaves
+///   the hole marker, which misses).
+/// * Compiled inline guards compare the full word (unmasked): a shadowed
+///   object takes the generic path (step 5 replaces those guards).
+/// * Readers that only ask "may the own keys extend past the layout?"
+///   (`overflow::shadowed`: closure-bag own reads, descriptor-key snapshots,
+///   the IC slow position guess, symbol-absence proofs) decline on the bit
+///   alone: conservative, one load.
 pub const LAYOUT_SHADOW_BIT: u32 = 1 << 30;
-/// The LayoutId of a layout word.
+/// The LayoutId of a layout word: a shadowed word ([`word_is_shadowed`])
+/// names the ShapeId below its bit 30; every other word (an unshadowed
+/// ShapeId, a class id an allocation wrote before stamping, 0) is itself.
 #[inline(always)]
 pub const fn layout_id_of_word(word: u32) -> u32 {
-    word & !LAYOUT_SHADOW_BIT
+    // Every unshadowed ShapeId and every small class id lies below the
+    // shadowed band: one compare on the common path.
+    if word < SHADOWED_WORD_BASE || word >= SHADOWED_WORD_END {
+        word
+    } else {
+        word & !LAYOUT_SHADOW_BIT
+    }
+}
+
+/// Shadowed words: an ordinary-band ShapeId (`is_site_matchable_shape_id`)
+/// with bit 30 set, `[0xC000_0000, 0xF000_0000)`. Only those ids carry the
+/// bit, so the band is exact: the word never holds a class id from it
+/// (class ids are small counters, `0x7FFF_FFxx` or `0xFFFF_xxxx`; synthetic
+/// class ids live only in `ObjectHeader.class_id`).
+pub const SHADOWED_WORD_BASE: u32 = super::shapes::SHAPE_ID_BASE | LAYOUT_SHADOW_BIT;
+pub const SHADOWED_WORD_END: u32 = super::shapes::SITE_SHAPE_ID_END | LAYOUT_SHADOW_BIT;
+const _: () = assert!(SHADOWED_WORD_BASE == 0xC000_0000 && SHADOWED_WORD_END == 0xF000_0000);
+/// The emitted site test (`perry-codegen` `proto_constants`): a layout word
+/// below this is an unshadowed ordinary layout or a word no write stamped.
+/// Shadowed and exotic words all lie at or above it.
+pub const UNSHADOWED_WORD_END: u32 = super::shapes::SITE_SHAPE_ID_END;
+const _: () = assert!(UNSHADOWED_WORD_END == crate::codegen_abi::UNSHADOWED_WORD_END);
+
+/// Is `word` a shadowed ordinary layout word?
+#[inline(always)]
+pub const fn word_is_shadowed(word: u32) -> bool {
+    word.wrapping_sub(SHADOWED_WORD_BASE) < SHADOWED_WORD_END - SHADOWED_WORD_BASE
+}
+
+impl ObjectHeader {
+    /// The ShapeId whose layout describes ALL of the object's own keys: the
+    /// word itself when unshadowed; the layout id below bit 30 when the bit
+    /// was set by a step-3 write alone (every own-key change of such an object
+    /// still changes its layout id); and the raw shadowed word, which no
+    /// `is_shape_id` accepts, when an overflow is installed (no layout
+    /// describes its own keys, so a shape reader declines, as it did before
+    /// step 3). `shapes::object_shape_stamp` agrees with it on every shadowed
+    /// word; readers that handle the overflow themselves use
+    /// [`layout_id_of_word`]. Restamps keep the bit ([`carry_shadow`]). One
+    /// range compare on every unshadowed word; a shadowed one also reads
+    /// `meta.overflow`.
+    #[inline(always)]
+    pub fn shape_word(&self) -> u32 {
+        let w = self.parent_class_id;
+        if word_is_shadowed(w) && !self.overflow_installed() {
+            w & !LAYOUT_SHADOW_BIT
+        } else {
+            w
+        }
+    }
+
+    /// Does this ordinary object carry an overflow (`overflow::install`)? Only
+    /// meaningful for a word in the shadowed band, which only ordinary
+    /// objects carry, so `meta` is theirs.
+    #[inline(always)]
+    pub fn overflow_installed(&self) -> bool {
+        let meta = self.meta;
+        !meta.is_null() && unsafe { (*meta).overflow } != 0
+    }
+}
+
+/// The word a restamp from `previous` to `id` publishes: the only rule for
+/// carrying [`LAYOUT_SHADOW_BIT`]. The bit summarizes the object's own
+/// history (its overflow included: `overflow::install` sets it), so it
+/// survives every restamp to an ordinary layout. A birth word that is not a
+/// layout word yet (a class id, which may have bit 30 set) carries nothing.
+/// Only ordinary-band objects carry the bit: overflows and dynamic writes
+/// reach `GC_TYPE_OBJECT` receivers with ordinary layouts only.
+#[inline(always)]
+pub const fn carry_shadow(previous: u32, id: u32) -> u32 {
+    if word_is_shadowed(previous)
+        && id >= super::shapes::SHAPE_ID_BASE
+        && id < super::shapes::SITE_SHAPE_ID_END
+    {
+        id | LAYOUT_SHADOW_BIT
+    } else {
+        id
+    }
 }
 // Every ShapeId lies in [0x8000_0000, 0xC000_0000): bit 30 is always clear.
 const _: () = assert!(super::shapes::SHAPE_ID_BASE == 0x8000_0000);
@@ -191,6 +312,25 @@ section_sentinel!(
     "__DATA,__perry_atoms",
     ".perryatm$m"
 );
+
+/// The entry module supplies the strong, immutable program descriptor.
+/// Runtime-only binaries use this empty weak definition. Its address is
+/// resolved by the linker, never registered, memoized or changed at startup.
+#[used(linker)]
+#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+#[export_name = "perry_shadow_name_descriptor"]
+static SHADOW_NAME_DESCRIPTOR: StaticAtom = StaticAtom {
+    hash: 0,
+    string: std::ptr::null(),
+    kind: 0,
+    _pad: [0; 3],
+    index: 0,
+};
+
+#[inline(always)]
+pub(crate) fn shadow_name_descriptor() -> &'static StaticAtom {
+    &SHADOW_NAME_DESCRIPTOR
+}
 
 #[cfg(target_os = "windows")]
 #[used(linker)]
@@ -542,7 +682,13 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
         *fields.add(i) = crate::value::TAG_HOLE;
     }
     mark_layout_object_facts(obj, d);
-    super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+    // The unpublished header already carries this declared layout. Birth
+    // creates carrier duty, not a structural mutation: it must not enter
+    // the mutation publisher (which can inspect lazily materialized keys).
+    if !crate::arena::pointer_in_nursery(obj as usize) {
+        super::shapes::note_old_generation_carrier(super::shapes::shape_record_by_id(id));
+    }
+    super::shapes::store_kind::check_store_facts(obj);
     obj
 }
 
@@ -593,7 +739,8 @@ pub(crate) unsafe fn alloc_layout_prototype(
     };
     let obj = super::object_alloc_prototype_old(0, room.max(d.slot_count));
     mark_layout_object_facts(obj, d);
-    super::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+    // A birth: the bit is carried, never admitted.
+    super::shapes::stamp_birth_shape_id_with_carrier_note(obj, id);
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     for i in 0..d.slot_count as usize {
         // GC_STORE_AUDIT(INIT): the hole marker is a scalar.

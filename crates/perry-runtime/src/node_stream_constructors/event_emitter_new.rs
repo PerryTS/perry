@@ -87,7 +87,7 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
                 if !meta.is_null() && (*meta).elements != 0 {
                     return None;
                 }
-                let id = (*bag).parent_class_id;
+                let id = (*bag).shape_word();
                 if !crate::object::shapes::is_site_matchable_shape_id(id) {
                     return None;
                 }

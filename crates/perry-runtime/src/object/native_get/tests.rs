@@ -41,7 +41,7 @@ fn own_data_slot_proof_comes_from_live_shape_and_retires_on_accessor() {
     let object = object("value", 7.0);
     let key = key("value");
     let slot = || unsafe {
-        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*object).parent_class_id)
+        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*object).shape_word())
             .flatten()
             .and_then(|shape| {
                 shape.plain_slot(crate::value::nanbox_string_key(key).to_bits(), b"value")
@@ -197,7 +197,7 @@ fn an_own_absence_proof_is_not_searched_again_before_the_holder() {
     let child_ptr = crate::value::js_nanbox_get_pointer(child) as *mut ObjectHeader;
     js_object_set_field_by_name(child_ptr, key("other"), 1.0);
     let shape = unsafe {
-        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*child_ptr).parent_class_id)
+        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*child_ptr).shape_word())
             .flatten()
             .unwrap()
     };

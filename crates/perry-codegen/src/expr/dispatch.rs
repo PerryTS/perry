@@ -138,7 +138,16 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.string_length_read_of = saved;
                 result
             }
-            _ => super::property_get::lower(ctx, expr),
+            _ => {
+                // Object model step 3 (§3.6): inherited data through a known
+                // prototype is a read of the known holder.
+                if let Some(read) =
+                    crate::proto_constants::lower_known_holder_read(ctx, object, property, expr)
+                {
+                    return read;
+                }
+                super::property_get::lower(ctx, expr)
+            }
         },
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => {

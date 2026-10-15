@@ -1480,7 +1480,7 @@ mod shape_transition_tests_6759 {
                 crate::object::js_object_set_field_by_name(obj, key(name), value);
             }
             let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_b"));
-            let before = (*obj).parent_class_id;
+            let before = (*obj).shape_word();
             assert!(
                 is_shape_id(before),
                 "fixture is vacuous — no shape stamp to transition (got {before:#x})"
@@ -1570,7 +1570,7 @@ mod shape_transition_tests_6759 {
             let keys_before_view = crate::object::object_keys(obj);
             let keys_before = keys_before_view.arr();
             assert_eq!((*obj).class_id, CID, "test premise: a class instance");
-            let before = (*obj).parent_class_id;
+            let before = (*obj).shape_word();
             assert!(
                 is_shape_id(before),
                 "test premise: a class instance is stamped AT BIRTH (got \
@@ -1583,7 +1583,7 @@ mod shape_transition_tests_6759 {
             // the id every later resolve would have minted.
             let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_y"));
             assert_eq!(
-                (*obj).parent_class_id,
+                (*obj).shape_word(),
                 before,
                 "a resolve re-stamped an already-stamped instance with a \
                  DIFFERENT id — every site holding the birth token would miss"
@@ -1629,8 +1629,8 @@ mod shape_transition_tests_6759 {
             let b = mk();
             let _ = crate::object::js_object_get_field_by_name(a, key("sib6759_b"));
             let _ = crate::object::js_object_get_field_by_name(b, key("sib6759_b"));
-            let id_a = (*a).parent_class_id;
-            let id_b = (*b).parent_class_id;
+            let id_a = (*a).shape_word();
+            let id_b = (*b).shape_word();
             assert!(
                 is_shape_id(id_a) && is_shape_id(id_b),
                 "both must be stamped"
@@ -1644,12 +1644,12 @@ mod shape_transition_tests_6759 {
             assert_eq!(js_object_delete_field(a, key("sib6759_a")), 1);
             let _ = crate::object::js_object_get_field_by_name(a, key("sib6759_c"));
             assert_ne!(
-                (*a).parent_class_id,
+                (*a).shape_word(),
                 id_b,
                 "the compacted instance kept its siblings' ShapeId"
             );
             assert_eq!(
-                (*b).parent_class_id,
+                (*b).shape_word(),
                 id_b,
                 "the untouched sibling's stamp moved — a delete is not a \
                  class-wide shape transition"
@@ -1691,7 +1691,7 @@ mod shape_transition_tests_6759 {
             // makes this test stronger than when the word still started as
             // inheritance data — there is no window in which it was correct.
             assert!(
-                is_shape_id((*leaf).parent_class_id),
+                is_shape_id((*leaf).shape_word()),
                 "test premise: the newborn's header word was not clobbered by a \
                  birth stamp, so the chain is not actually being stressed"
             );
@@ -1705,7 +1705,7 @@ mod shape_transition_tests_6759 {
             // …and it stays clobbered across a resolve.
             let _ = crate::object::js_object_get_field_by_name(leaf, key("chain6759_p"));
             assert!(
-                is_shape_id((*leaf).parent_class_id),
+                is_shape_id((*leaf).shape_word()),
                 "test premise: the word stopped being a stamp, so nothing is being tested"
             );
 

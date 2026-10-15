@@ -122,22 +122,25 @@ fn lower_inline(
         .block()
         .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    // #11915: with `prove_here`, the heap arm's handle bound is the runtime's
-    // `PERRY_STRING_INLINE_MIN_HANDLE` — 4096 while `%String.prototype%` and
-    // `%Object.prototype%` are unmodified, the largest address once either
-    // is — so the compare the heap arm already makes also proves
-    // `Pristine(String)`, at no extra instruction (an immediate operand
-    // becomes a memory one); the short-string arm tests the byte itself. A
-    // modified prototype reaches only the slow arm, the checked entry. With
-    // `prove_here == false` the caller proved it before the arguments and the
-    // slow arm is the unchecked body.
+    // #11915 / object model step 3: with `prove_here`, both inline arms also
+    // prove `Pristine(String)` — the shadow bit of the agent's
+    // `%String.prototype%` (`builtin_proto::emit_patched_test`), tested once
+    // here. A modified prototype reaches only the slow arm, the checked
+    // entry. With `prove_here == false` the caller proved it before the
+    // arguments and the slow arm is the unchecked body.
     let prove_here = matches!(entry, Some((_, _, true)));
-    let min_handle = if prove_here {
-        ctx.block().load(I64, "@PERRY_STRING_INLINE_MIN_HANDLE")
+    let string_pristine = if prove_here {
+        let patched =
+            crate::builtin_proto::emit_patched_test(ctx, crate::builtin_proto::BuiltinProto::String);
+        Some(ctx.block().xor(I1, &patched, "true"))
     } else {
-        "4096".to_string()
+        None
     };
-    let handle_ok = ctx.block().icmp_uge(I64, &handle, &min_handle);
+    let handle_ok = ctx.block().icmp_uge(I64, &handle, "4096");
+    let handle_ok = match &string_pristine {
+        Some(p) => ctx.block().and(I1, &handle_ok, p),
+        None => handle_ok,
+    };
     let idx_ge0 = ctx.block().fcmp("oge", idx_d, "0.0");
     let idx_lt_max = ctx
         .block()
@@ -177,16 +180,9 @@ fn lower_inline(
         .block()
         .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
     let sso_ok = ctx.block().and(I1, &is_sso, &idx_ok);
-    let sso_ok = if prove_here {
-        let blk = ctx.block();
-        let patched = crate::builtin_proto::emit_patched_test(
-            blk,
-            crate::builtin_proto::BuiltinProto::String,
-        );
-        let pristine = blk.xor(I1, &patched, "true");
-        blk.and(I1, &sso_ok, &pristine)
-    } else {
-        sso_ok
+    let sso_ok = match &string_pristine {
+        Some(pristine) => ctx.block().and(I1, &sso_ok, pristine),
+        None => sso_ok,
     };
     ctx.block().cond_br(&sso_ok, &sso_label, &slow_label);
 

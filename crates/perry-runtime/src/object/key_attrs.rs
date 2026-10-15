@@ -1234,9 +1234,25 @@ pub(crate) unsafe fn object_key_blocks_plain_store(
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return false;
     };
-    // An object with an overflow records its keys' attributes in its
-    // entries, whose summary the overflow keeps (object model step 4).
-    let summary = object_summary(obj);
+    object_key_blocks_plain_store_from_record(obj, record, key)
+}
+
+/// The same attribute operation when the caller already holds the layout.
+/// An object with an overflow records its keys' attributes in its entries,
+/// whose summary the overflow keeps (object model step 4), so the answer
+/// covers the object's whole own contents, not only its layout's keys.
+#[inline]
+pub(crate) unsafe fn object_key_blocks_plain_store_from_record(
+    obj: *const crate::object::ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+    key: &[u8],
+) -> bool {
+    let table = crate::object::overflow::table(obj);
+    let summary = if table.is_null() {
+        record.summary()
+    } else {
+        (*table).summary as u8
+    };
     if summary & SUMMARY_BLOCKS_STORE == 0 {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("read.store_check_summary_clear");

@@ -27,7 +27,7 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
         return None;
     }
     let obj = addr as *mut ObjectHeader;
-    let record = shapes::shape_record_by_id((*obj).parent_class_id)?;
+    let record = shapes::shape_record_by_id((*obj).shape_word())?;
     if record.object_kind() != shapes::ShapeObjectKind::Ordinary || record.summary() != 0 {
         return None;
     }
@@ -83,7 +83,17 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     {
         return false;
     }
-    shapes::stamp_object_shape_id_with_carrier_note(obj, target);
+    // DefineField of a class body: the census never makes an instance field
+    // name a constant method (`proto_census::ProtoCensus::fields`), so the
+    // add names nothing a binding site relies on and needs no shadow
+    // admission. A receiver already marked as a prototype keeps the full
+    // publication (its member slots are what holder tests prove).
+    let meta = (*obj).meta;
+    if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
+        shapes::stamp_birth_shape_id_with_carrier_note(obj, target);
+    } else {
+        shapes::stamp_object_shape_id_with_carrier_note(obj, target);
+    }
     // Capacity and representation were proved above. This store cannot collect.
     let stored = crate::object::shape_store::store_proven_own_slot(obj, to, slot as usize, value);
     debug_assert!(stored);
@@ -91,7 +101,7 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
 }
 
 pub(super) unsafe fn predecessor(receiver: f64) -> u32 {
-    receiver_record(receiver).map_or(0, |(obj, _)| (*obj).parent_class_id)
+    receiver_record(receiver).map_or(0, |(obj, _)| (*obj).shape_word())
 }
 
 /// Only a completed generic append may teach an edge. Immutable prefixes
@@ -103,7 +113,7 @@ pub(super) unsafe fn learn(predecessor: u32, receiver: f64, key: f64) {
     let Some((obj, _)) = receiver_record(receiver) else {
         return;
     };
-    let target = (*obj).parent_class_id;
+    let target = (*obj).shape_word();
     if target == predecessor {
         return;
     }

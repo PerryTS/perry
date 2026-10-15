@@ -190,6 +190,93 @@ fn atom(
     Some(name)
 }
 
+/// A bounded spelling fingerprint: length and its first six bytes. Full
+/// byte equality resolves every collision; it is not a name's identity.
+fn shadow_name_fingerprint(bytes: &[u8]) -> u64 {
+    let mut key = (bytes.len() as u64) << 48;
+    for (i, byte) in bytes.iter().take(6).enumerate() {
+        key |= u64::from(*byte) << (8 * i);
+    }
+    key & !1
+}
+
+fn shadow_name_bucket(key: u64, mask: usize) -> usize {
+    (((key ^ (key >> 32)).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32) as usize) & mask
+}
+
+/// The program's immutable shadow-name descriptor. Its spelling index and
+/// admission masks are emitted by the entry module, never learned at run time.
+/// Bit 0 of each fingerprint marks receiver names.
+pub(crate) fn emit_shadow_names(llmod: &mut LlModule, strings: &mut StringPool, output_type: &str) {
+    if output_type == "dylib" || output_type == "staticlib" || llmod.target_triple.contains("wasm")
+    {
+        return;
+    }
+    let mut names = crate::proto_constants::shadow_names();
+    if names.is_empty() {
+        return;
+    }
+    names.sort_by_key(|(name, _)| shadow_name_fingerprint(name.as_bytes()));
+    let index_len = (2 * names.len()).next_power_of_two();
+    let mut index = vec![u32::MAX; index_len];
+    let mut masks = [[0u64; 64]; 2];
+    let mut records = Vec::with_capacity(names.len());
+    for (position, (name, receiver)) in names.iter().enumerate() {
+        let bytes = name.as_bytes();
+        let row = bytes.len() & 63;
+        let prefix = u64::from(bytes.first().copied().unwrap_or(0)) * 33
+            ^ u64::from(bytes.get(1).copied().unwrap_or(0));
+        let bit = 1u64 << (prefix & 63);
+        masks[1][row] |= bit;
+        if *receiver {
+            masks[0][row] |= bit;
+        }
+        let idx = strings.intern(name);
+        let image = crate::codegen::string_pool_image_pointer(strings.entry(idx));
+        let fingerprint = shadow_name_fingerprint(bytes);
+        records.push(format!(
+            "{ATOM_TY} {{ i64 {}, ptr {image}, i8 0, [3 x i8] zeroinitializer, i32 0 }}",
+            (fingerprint | u64::from(*receiver)) as i64
+        ));
+        let mut bucket = shadow_name_bucket(fingerprint, index_len - 1);
+        while index[bucket] != u32::MAX {
+            bucket = (bucket + 1) & (index_len - 1);
+        }
+        index[bucket] = position as u32;
+    }
+    let count = names.len();
+    llmod.add_raw_global(format!(
+        "@perry_shadow_name_records = private constant [{count} x {ATOM_TY}] [{}], align 8",
+        records.join(", ")
+    ));
+    let index_words = index
+        .iter()
+        .map(|w| format!("i32 {}", *w as i32))
+        .collect::<Vec<_>>()
+        .join(", ");
+    llmod.add_raw_global(format!(
+        "@perry_shadow_name_index = private constant [{index_len} x i32] [{index_words}], align 8"
+    ));
+    let masks = masks
+        .iter()
+        .flatten()
+        .map(|w| format!("i64 {}", *w as i64))
+        .collect::<Vec<_>>()
+        .join(", ");
+    llmod.add_raw_global(format!(
+        "@perry_shadow_name_data = private constant {{ [128 x i64], ptr, ptr, i64 }} {{ [128 x i64] [{masks}], ptr @perry_shadow_name_index, ptr @perry_shadow_name_records, i64 {} }}, align 8", index_len - 1
+    ));
+    let sect = section(
+        &llmod.target_triple,
+        "perry_shadow_names",
+        "__DATA,__perry_shnames",
+        ".perryshn$m",
+    );
+    llmod.add_raw_global(format!(
+        "@perry_shadow_name_descriptor = constant {ATOM_TY} {{ i64 {count}, ptr @perry_shadow_name_data, i8 0, [3 x i8] zeroinitializer, i32 0 }}, section \"{sect}\", align 8"
+    ));
+}
+
 /// The static key list of a literal family, or `None` when it is not one.
 fn literal_keys(props: &[(String, Expr)]) -> Option<Vec<String>> {
     let mut keys: Vec<String> = Vec::new();

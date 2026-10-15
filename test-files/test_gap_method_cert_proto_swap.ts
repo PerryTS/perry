@@ -1,7 +1,6 @@
-// Method certificates: prototypes swapped after the site certified a body.
-// A swapped intermediate prototype moves only PERRY_PROTO_VALIDITY
-// (sabotage `PERRY_METHOD_CERT_SABOTAGE=epoch` must abort); a swapped receiver prototype changes
-// the receiver's own word (sabotage `PERRY_METHOD_CERT_SABOTAGE=word` must abort).
+// Class dispatch with prototypes swapped after the site first ran. The
+// program relinks prototypes, so the write census proves no method constant
+// (object model step 3) and every call must follow the live chain.
 class A { tag() { return "A"; } }
 class B extends A { tag() { return "B"; } }
 class C extends A {}

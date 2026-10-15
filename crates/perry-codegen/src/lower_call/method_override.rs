@@ -862,7 +862,7 @@ fn class_chain_may_declare_method_field(ctx: &FnCtx<'_>, class_name: &str, prope
 /// has no own-property method replacement, and still resolves the method name
 /// to the direct function pointer in the runtime vtable. Failures branch to the
 /// existing dynamic method dispatcher and record a fallback once.
-pub(super) struct CertifiedMethodSelection<'a> {
+pub(super) struct ConstantMethodSelection<'a> {
     pub selected: &'a str,
     /// Reuse the lookup word only across order-free argument evaluation.
     pub receiver_word: Option<&'a str>,
@@ -888,7 +888,7 @@ pub(super) fn emit_guarded_direct_method_call(
     typed_string_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     shape_only_guard: bool,
     subclass_arms: &[SubclassDispatchArm],
-    certificate: Option<&CertifiedMethodSelection<'_>>,
+    certificate: Option<&ConstantMethodSelection<'_>>,
 ) -> Option<String> {
     // `class C { m = fn; m() {} }` and an inherited field with the same name
     // both require ordinary own-property lookup. Falling back here reaches
@@ -993,8 +993,8 @@ pub(super) fn emit_guarded_direct_method_call(
         && !multi_arm
         && !crate::expr::typed_feedback_emission_enabled()
         && method_inline_probe_enabled();
-    // Legacy feedback sites keep their learned arm. Certified sites use
-    // only MethodCertSite and never allocate this separate memo.
+    // Legacy feedback sites keep their learned arm. Constant-selected sites
+    // never allocate this separate memo.
     let learned_joins_fast_arm = typed_f64_receiver_direct_fn.is_none()
         && pshape_fn.is_none()
         && (typed_direct_fn.is_some()
@@ -1016,7 +1016,7 @@ pub(super) fn emit_guarded_direct_method_call(
     let holder_ok = if multi_arm || certificate.is_some() {
         "true".to_string()
     } else {
-        super::holder_shape_guard::method_guard(ctx, receiver_class_name, property)
+        crate::proto_constants::holder_constant(ctx, receiver_class_name, property)
     };
     if let Some(cert) = certificate {
         // Method identity was selected before the arguments. The exact
@@ -1923,7 +1923,7 @@ pub(super) fn emit_guarded_direct_method_call(
                 // chain memo slot, from which a receiver the arms decline repeats
                 // its by-name answer instead of walking the prototype chain.
                 let prototype_ok =
-                    super::holder_shape_guard::method_guard(ctx, receiver_class_name, property);
+                    crate::proto_constants::holder_constant(ctx, receiver_class_name, property);
                 let blk = ctx.block();
                 let no_learn = blk.gep(I8, word, &[(I64, "1")]);
                 let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, &no_learn);

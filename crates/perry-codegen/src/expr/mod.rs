@@ -2933,6 +2933,36 @@ impl<'a> FnCtx<'a> {
         }
     }
 
+    /// Object model step 3: the one class `e` is EXACTLY an instance of, when
+    /// its family set is proven: a `Ptr<Shape>` local or proven `this`, or a
+    /// `const` binding constructed by `new C(…)`
+    /// (`spec_abi_sites::single_binding_families`).
+    pub(crate) fn exact_receiver_class(&self, e: &perry_hir::Expr) -> Option<String> {
+        match e {
+            perry_hir::Expr::LocalGet(id) => self
+                .native_facts
+                .shape_stability
+                .exact_class_bindings
+                .get(id)
+                .cloned(),
+            _ => None,
+        }
+    }
+
+    /// Object model step 3: the binding id of the one prototype holder `e`'s
+    /// family is created with (`const o = Object.create(P)`).
+    pub(crate) fn known_holder_binding(&self, e: &perry_hir::Expr) -> Option<u32> {
+        match e {
+            perry_hir::Expr::LocalGet(id) => self
+                .native_facts
+                .shape_stability
+                .ocreate_holder_bindings
+                .get(id)
+                .copied(),
+            _ => None,
+        }
+    }
+
     /// The `Ptr<Shape>` proof a STORE to `e` may act on.
     ///
     /// An admitted loop/body region owns its receivers' stores

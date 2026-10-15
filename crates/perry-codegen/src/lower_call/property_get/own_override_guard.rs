@@ -208,7 +208,7 @@ pub(crate) fn emit_own_override_branch(
             if let Some(family) = pristine {
                 // One compare and an unlikely branch to the ask arm, whose
                 // predicate answers for a modified prototype.
-                let patched = crate::builtin_proto::emit_patched_test(ctx.block(), family);
+                let patched = crate::builtin_proto::emit_patched_test(ctx, family);
                 let header_idx = ctx.new_block("ownoverride.header");
                 let header_label = ctx.block_label(header_idx);
                 ctx.block().cond_br(&patched, &ask_label, &header_label);

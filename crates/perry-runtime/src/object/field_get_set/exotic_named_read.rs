@@ -35,7 +35,7 @@ pub(super) fn named_read_receiver_kind(obj: *const ObjectHeader) -> NamedReadKin
             crate::gc::GC_TYPE_OBJECT => {
                 let kind = if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
                     super::super::shapes::shape_object_kind_by_id(
-                        (*(addr as *const ObjectHeader)).parent_class_id,
+                        (*(addr as *const ObjectHeader)).shape_word(),
                     )
                 } else {
                     None

@@ -191,7 +191,7 @@ unsafe fn owner_cached_dense_layout(obj: *const ObjectHeader) -> Option<DenseSub
     if meta.is_null() {
         return None;
     }
-    let key = dense_cache_key((*obj).class_id, (*obj).parent_class_id);
+    let key = dense_cache_key((*obj).class_id, (*obj).shape_word());
     if key == 0 || (*meta).array_subclass_dense_key != key {
         return None;
     }
@@ -218,7 +218,7 @@ unsafe fn publish_owner_dense_layout(obj: *const ObjectHeader, layout: DenseSubc
         ((layout.length_slot as u64) << 32) | layout.element_base as u64;
     (*meta).array_subclass_dense_bounds =
         ((layout.live_inline_slots as u64) << 32) | layout.dense_prefix_len as u64;
-    (*meta).array_subclass_dense_key = dense_cache_key((*obj).class_id, (*obj).parent_class_id);
+    (*meta).array_subclass_dense_key = dense_cache_key((*obj).class_id, (*obj).shape_word());
 }
 
 fn decimal_u32<'a>(mut value: u32, buf: &'a mut [u8; 10]) -> &'a [u8] {
@@ -365,7 +365,7 @@ fn dense_layout_for_validated_object(obj: *const ObjectHeader) -> Option<DenseSu
     if let Some(layout) = unsafe { owner_cached_dense_layout(obj) } {
         return Some(layout);
     }
-    let (class_id, shape_id) = unsafe { ((*obj).class_id, (*obj).parent_class_id) };
+    let (class_id, shape_id) = unsafe { ((*obj).class_id, (*obj).shape_word()) };
     let key = dense_cache_key(class_id, shape_id);
     let layout = cached_dense_layout(key).or_else(|| {
         let layout = unsafe { build_dense_layout(obj) }?;
@@ -450,7 +450,7 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     let (element_base, dense_prefix_len, length_slot) = if elements_backed {
         (u32::MAX, 0, u32::MAX)
     } else {
-        let shape_id = (*obj).parent_class_id;
+        let shape_id = (*obj).shape_word();
         let cache_key = dense_cache_key(class_id, shape_id);
         let layout = cached_dense_layout(cache_key).or_else(|| {
             let layout = build_dense_layout(obj)?;
@@ -803,7 +803,7 @@ unsafe fn ensure_subclass_numeric_prefix(
     if bound == 0 {
         return true;
     }
-    let shape_id = (*obj).parent_class_id;
+    let shape_id = (*obj).shape_word();
     if subclass_numeric_prefix_is_proven(obj, shape_id, bound, require_u32) {
         return true;
     }
@@ -875,7 +875,7 @@ unsafe fn ensure_subclass_numeric_prefix(
     // back to its unproven twin (charter step 3), so `shape_id` may name the
     // proof shape it no longer carries.
     let _ = shape_id;
-    publish_subclass_numeric_prefix(obj, (*obj).parent_class_id, bound, require_u32)
+    publish_subclass_numeric_prefix(obj, (*obj).shape_word(), bound, require_u32)
 }
 
 #[inline]
@@ -978,7 +978,7 @@ pub(crate) fn array_subclass_fast_length_with_ic(
             cache.write(if family_token != 0 {
                 family_token
             } else {
-                dense_cache_key((*obj).class_id, (*obj).parent_class_id)
+                dense_cache_key((*obj).class_id, (*obj).shape_word())
             });
         }
     }
@@ -1336,7 +1336,7 @@ fn array_subclass_fast_push_one_validated(
     // A numeric-proof sibling has no learned tail edge. Restore the ordinary
     // shape before the exact-shape transition lookup, including on a miss.
     unsafe { clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader) };
-    let predecessor_shape_id = unsafe { (*obj).parent_class_id };
+    let predecessor_shape_id = unsafe { (*obj).shape_word() };
     let transition = crate::object::array_tail_transition::lookup_forward_for_owner(
         obj,
         predecessor_shape_id,
@@ -1467,7 +1467,7 @@ fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Optio
     if unsafe { clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader) } {
         crate::object::prop_plan::prop_plan_epoch_bump();
     }
-    let successor_shape_id = unsafe { (*obj).parent_class_id };
+    let successor_shape_id = unsafe { (*obj).shape_word() };
     let transition =
         crate::object::array_tail_transition::lookup_reverse_for_owner(obj, successor_shape_id)?;
     if transition.array_index != index

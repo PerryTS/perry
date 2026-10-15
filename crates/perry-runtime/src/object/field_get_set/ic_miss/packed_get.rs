@@ -243,7 +243,7 @@ mod tests {
             // The emitted hit: `+4` word == the compact word's low half.
             assert_ne!(
                 word as u32,
-                (*obj).parent_class_id,
+                (*obj).shape_word(),
                 "the compact word must never hold a dictionary receiver's id"
             );
             assert_eq!(word, empty, "nothing may be published for it");

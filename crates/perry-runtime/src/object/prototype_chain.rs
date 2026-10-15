@@ -286,6 +286,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // definitions and do not count.
     if matches!(link_kind, PrototypeLinkKind::UserOverride) {
         super::builtin_proto::note_write_addr(obj_ptr, "[[Prototype]] link");
+        // Object model step 3 (§3.6): every chain a binding site proved
+        // through this object changed.
+        super::shadow::note_relink(obj_ptr);
     }
     crate::typedarray_named::note_prototype_mutation(obj_ptr, user_override);
     // Whatever else this link does, the TARGET is now somebody's prototype, so
@@ -678,7 +681,7 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         let Some(obj) = meta_capable_object(obj_ptr) else {
             return false;
         };
-        let word = (*obj).parent_class_id;
+        let word = (*obj).shape_word();
         // Plain shapes cannot replace a class surface. Preserve this
         // header-only admission before validating a linked ShapeId.
         if !crate::object::shapes::shape_word_may_be_linked(word) {

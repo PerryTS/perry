@@ -3,17 +3,20 @@
 //!
 //! # The fact
 //!
-//! [`PERRY_BUILTIN_PROTO_PATCHED`] is ONE process-global, immortal byte
-//! array, one byte per [`BuiltinProto`] family. Byte `k` becomes nonzero once
-//! the realm's intrinsic prototype of family `k` — or `%Object.prototype%`,
-//! which every family inherits from — has been written, defined, deleted or
-//! relinked after the runtime sealed it at startup. It is set-only: restoring
-//! a method never reopens the fact.
+//! Object model step 3 (`OBJECT_MODEL_2026-10-13.md` §3.6): the fact is the
+//! **shadow bit** of each family's intrinsic prototype, bit 30 of its layout
+//! word (`object::layout_desc`). It is set once the realm's intrinsic
+//! prototype of family `k` has been written,
+//! defined, deleted or relinked after the runtime sealed it at startup. It is
+//! set-only: restoring a method never reopens the fact.
 //!
-//! So `Pristine(k)` is `PERRY_BUILTIN_PROTO_PATCHED[k] == 0`: one byte load
-//! and compare (`cmpb $0, sym+k(%rip)`), with no per-site state — the bytes
-//! are monotone, so a site has no epoch to remember. A receiver of a builtin
-//! kind resolves its builtin methods through its family's prototype and then
+//! So `Pristine(k)` is "the layout word of agent slot
+//! `AGENT_PTR_INTRINSIC_PROTO + k` and `%Object.prototype%` are below
+//! `UNSHADOWED_WORD_END`": read the objects' own words and combine their
+//! shadow bits in one compare. A write marks only the object it writes;
+//! no family invalidation, per-site state or second copy is maintained.
+//! Each agent's realm carries its own bits. A receiver of a builtin kind
+//! resolves its builtin methods through its family's prototype and then
 //! `%Object.prototype%`; the receiver's own keys and `[[Prototype]]` edge are
 //! the receiver's own proof (shape or header). A site that has proven the
 //! receiver's KIND and has `Pristine(kind)` knows the method it would read is
@@ -30,8 +33,8 @@
 //!
 //! [`seal_realm`] gives each sealed prototype's meta record its family
 //! (`OBJECT_META_FLAG_SEALED_INTRINSIC` and the family bits of
-//! `ObjectMeta::flags`) once the realm is
-//! populated. Every mutation funnel then calls [`note_write`] (one meta load,
+//! `ObjectMeta::flags`) and publishes it into its agent slot once the realm
+//! is populated. Every mutation funnel then calls [`note_write`] (one meta load,
 //! null-checked) or [`note_array_prototype_write`]: the slot and spill stores,
 //! the shape publication funnel (key add, delete, descriptor and attribute
 //! changes, `[[Prototype]]` relinks), the descriptor, delete and
@@ -41,42 +44,14 @@
 //! The runtime's own definitions (`own_override::as_builtin_definition`, the
 //! lazy populations) do not count: they install the builtin itself.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use super::ObjectHeader;
 
-/// Number of [`BuiltinProto`] families (bytes of the fact).
-pub const FAMILIES: usize = 16;
-
-/// The byte after the families: nonzero once ANY family was withdrawn — the
-/// runtime dispatcher's one-load early exit.
-const ANY_PATCHED: usize = FAMILIES;
-
-per_test_global! {
-    // #10944: tests run in one process; a test that patches a prototype must
-    // not make a sibling's pristine assertion fail. Outside a test build this
-    // is the plain exported static, byte for byte.
-    /// Byte `k` nonzero: family `k`'s intrinsic prototype, or
-    /// `%Object.prototype%`, was modified after sealing. Read by emitted code
-    /// as `@PERRY_BUILTIN_PROTO_PATCHED`.
-    #[cfg_attr(not(test), export_name = "PERRY_BUILTIN_PROTO_PATCHED")]
-    pub static PERRY_BUILTIN_PROTO_PATCHED: [AtomicU8; FAMILIES + 1] =
-        [const { AtomicU8::new(0) }; FAMILIES + 1];
-}
-
-/// #11915: the heap-handle bound of the emitted inline `charCodeAt`: 4096
-/// (the handle band) while `%String.prototype%` and `%Object.prototype%` are
-/// unmodified, `u64::MAX` once either is. The inline heap arm admits a handle
-/// only at or above it, so this one value — a mirror of the String byte, set
-/// with it — is how that arm proves `Pristine(String)` with the compare it
-/// already makes. Set-only.
-#[no_mangle]
-pub static PERRY_STRING_INLINE_MIN_HANDLE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(4096);
+/// Number of [`BuiltinProto`] families.
+pub const FAMILIES: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 
 /// A family of intrinsic prototypes whose methods compiled code calls by
-/// name. The discriminant is the family's byte in
-/// [`PERRY_BUILTIN_PROTO_PATCHED`]; `perry-codegen` mirrors these values
+/// name. The discriminant is the family's agent slot offset
+/// (`AGENT_PTR_INTRINSIC_PROTO + k`); `perry-codegen` mirrors these values
 /// (`builtin_proto.rs`), and a test pins the two lists together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -126,10 +101,21 @@ impl BuiltinProto {
 }
 
 /// `Pristine(family)`: neither `family`'s prototype nor `%Object.prototype%`
-/// has been modified. One relaxed byte load.
+/// has been modified: the shadow bit of this agent's intrinsic prototype.
 #[inline(always)]
 pub fn pristine(family: BuiltinProto) -> bool {
-    PERRY_BUILTIN_PROTO_PATCHED[family as usize].load(Ordering::Relaxed) == 0
+    // SAFETY: the slot names a live intrinsic of this agent or the static
+    // stand-in; the word read is the header's `+4`.
+    unsafe {
+        let own = (*crate::agent_ptrs::intrinsic_proto(family as usize)).parent_class_id;
+        let parent = if family == BuiltinProto::Object {
+            0
+        } else {
+            (*crate::agent_ptrs::intrinsic_proto(BuiltinProto::Object as usize)).parent_class_id
+        };
+        own < super::layout_desc::UNSHADOWED_WORD_END
+            && parent < super::layout_desc::UNSHADOWED_WORD_END
+    }
 }
 
 /// `Pristine` for a borrowed call (`Array.prototype.m.call(x, …)`), which
@@ -139,29 +125,12 @@ pub fn pristine_borrowed(family: BuiltinProto) -> bool {
     pristine(family) && pristine(BuiltinProto::Function)
 }
 
-/// What a direct-call memo has proven about its receiver — the runtime side
-/// of the ONE pristine-receiver guard (`perry-codegen`'s
-/// `builtin_proto::PristineReceiverFact` emits the same checks inline).
-///
-/// * `Intrinsic(family)`: the receiver's KIND is proven; its methods are
-///   `family`'s builtins while [`pristine`]`(family)` holds.
-/// * `Shape`: a site / holder memo proved, at `PERRY_PROTO_VALIDITY ==
-///   proof_epoch`, that a receiver with word `proof_word` (`class_id |
-///   ShapeId << 32`, [`receiver_word`]) has no own method, accessor or
-///   interceptor for the name and resolves it to the memo's pinned inherited
-///   method. The receiver's `[[Prototype]]` is part of its ShapeId; a marked
-///   prototype's structural changes and in-place method replacements
-///   ([`note_value_store`]) advance the epoch.
-///
-/// Checking either is loads and compares only: Leaf, NoCollect, NoThrow.
+/// What a direct-call site has proven about its receiver: its KIND, so its
+/// methods are `family`'s builtins while [`pristine`]`(family)` holds.
+/// Checking it is one load and one compare: Leaf, NoCollect, NoThrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PristineReceiverFact {
     Intrinsic(BuiltinProto),
-    Shape {
-        receiver_word: u64,
-        proof_word: u64,
-        proof_epoch: u64,
-    },
 }
 
 impl PristineReceiverFact {
@@ -171,46 +140,14 @@ impl PristineReceiverFact {
     pub fn holds(self) -> bool {
         match self {
             PristineReceiverFact::Intrinsic(family) => pristine(family),
-            PristineReceiverFact::Shape {
-                receiver_word,
-                proof_word,
-                proof_epoch,
-            } => {
-                receiver_word == proof_word
-                    && super::proto_validity::proto_validity() == proof_epoch
-            }
         }
     }
 }
 
-/// The word a [`PristineReceiverFact::Shape`] proof is keyed on: an ordinary
-/// object's first header word, `class_id | ShapeId << 32`.
-///
-/// # Safety
-/// `obj` is a live `ObjectHeader`.
-#[inline(always)]
-pub unsafe fn receiver_word(obj: *const ObjectHeader) -> u64 {
-    u64::from((*obj).class_id) | (u64::from((*obj).parent_class_id) << 32)
-}
-
-/// The current `PERRY_PROTO_VALIDITY`, for a memo recording its proof.
-#[inline(always)]
-pub fn proof_epoch() -> u64 {
-    super::proto_validity::proto_validity()
-}
-
-/// Is every family pristine and no Array re-parented? (The runtime
-/// dispatcher's one-load early exit.)
-#[inline(always)]
-fn all_pristine() -> bool {
-    PERRY_BUILTIN_PROTO_PATCHED[ANY_PATCHED].load(Ordering::Relaxed) == 0
-}
-
-/// An Array took its own `[[Prototype]]` (`GC_ARRAY_CUSTOM_PROTO`): the
-/// dispatcher's early exit can no longer answer without reading the receiver.
-/// No family is withdrawn — every other array still reads `%Array.prototype%`.
+/// An Array took its own `[[Prototype]]` (`GC_ARRAY_CUSTOM_PROTO`, the
+/// receiver's own proof). No family is withdrawn — every other array still
+/// reads `%Array.prototype%`.
 pub(crate) fn note_array_custom_proto() {
-    PERRY_BUILTIN_PROTO_PATCHED[ANY_PATCHED].store(1, Ordering::Relaxed);
     super::own_override::note_builtin_proto_modified();
 }
 
@@ -238,6 +175,25 @@ pub(crate) unsafe fn seal_object(obj: *mut ObjectHeader, family: BuiltinProto) {
         | ((family as u64) << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
 }
 
+/// Seal one family's intrinsic the moment its builder completes it, before
+/// any program code can reach it. `%Object.prototype%` is built on first use
+/// (`ensure_object_intrinsics`), often long before the realm global is
+/// populated or in a program that never populates it; until it is sealed, its
+/// intrinsic slot names the stand-in, which proves nothing, so every default
+/// store would walk its keys. [`seal_realm`] later seals the same object again
+/// (idempotent).
+pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeader) {
+    if proto.is_null() {
+        return;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::own_override::as_builtin_definition(|| unsafe {
+        trace_seal(family, (*proto).parent_class_id);
+        seal_object(proto, family);
+        crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
+    });
+}
+
 /// Seal every family's intrinsic prototype of THIS thread's realm. Called once
 /// at the end of `populate_global_this_builtins`, after every runtime-owned
 /// install, link and the prototype-address priming.
@@ -257,7 +213,14 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 continue;
             };
             match header.obj_type {
-                crate::gc::GC_TYPE_OBJECT => seal_object(proto as *mut ObjectHeader, family),
+                crate::gc::GC_TYPE_OBJECT => {
+                    trace_seal(family, (*(proto as *const ObjectHeader)).parent_class_id);
+                    seal_object(proto as *mut ObjectHeader, family);
+                    crate::agent_ptrs::publish_intrinsic_proto(
+                        family as usize,
+                        proto as *const ObjectHeader,
+                    );
+                }
                 // `Array.prototype` is an Array exotic: its named members live
                 // in its property bag, an ordinary object. Materialise the bag
                 // now so every later named write reaches a sealed object, and
@@ -268,6 +231,10 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                         proto as *mut crate::array::ArrayHeader,
                     );
                     seal_object(bag, family);
+                    if !bag.is_null() {
+                        trace_seal(family, (*bag).parent_class_id);
+                        crate::agent_ptrs::publish_intrinsic_proto(family as usize, bag);
+                    }
                 }
                 _ => {}
             }
@@ -343,71 +310,44 @@ fn sealed_family(flags: u64) -> usize {
     ((flags >> super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT) & 0xF) as usize
 }
 
-/// Where a value store's previous value lives, for [`note_value_store`]'s
-/// out-of-line half.
-#[derive(Clone, Copy)]
-pub(crate) enum StoredSlot {
-    /// An inline field slot.
-    Inline(*const u64),
-    /// A spill slot of `obj` at absolute field index `index`.
-    Spill { obj: usize, index: usize },
-}
-
 /// The value-store hook (slot and spill stores): [`note_write`] for a sealed
-/// builtin prototype, and — for ANY object used as a prototype — the
-/// method-identity half of `PERRY_PROTO_VALIDITY`: replacing a function value
-/// held by a prototype (or putting one there) in place, on the same shape,
-/// advances the epoch, so a memo proven by `(ShapeId, PERRY_PROTO_VALIDITY)`
-/// ([`PristineReceiverFact::Shape`]) can never call a replaced method. A data
-/// overwrite that involves no function does not move it.
+/// builtin prototype.
 ///
 /// Inline: one meta-pointer load and one flag test (a sealed builtin
 /// prototype is always marked); everything else is out of line.
 ///
 /// # Safety
-/// `obj` is a live `ObjectHeader`; `slot` names the slot about to be written,
-/// still holding its previous value.
+/// `obj` is a live `ObjectHeader`.
 #[inline(always)]
 pub(crate) unsafe fn note_value_store(
     obj: *const ObjectHeader,
-    slot: StoredSlot,
-    new_bits: u64,
+    field_index: usize,
+    spill: bool,
     site: &'static str,
 ) {
     let meta = (*obj).meta;
     if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         return;
     }
-    note_prototype_value_store(meta, slot, new_bits, site);
+    note_prototype_value_store(obj, meta, field_index, spill, site);
 }
 
 #[cold]
 #[inline(never)]
 #[optimize(size)]
 unsafe fn note_prototype_value_store(
+    obj: *const ObjectHeader,
     meta: *const super::ObjectMeta,
-    slot: StoredSlot,
-    new_bits: u64,
+    field_index: usize,
+    spill: bool,
     site: &'static str,
 ) {
     let flags = (*meta).flags;
     if flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
         note_family_write(sealed_family(flags), site);
     }
-    let old_bits = match slot {
-        StoredSlot::Inline(ptr) => Some(*ptr),
-        StoredSlot::Spill { obj, index } => super::spill::spill_get(obj, index),
-    };
-    if old_bits == Some(new_bits) {
-        return;
-    }
-    let callable = |bits: u64| {
-        bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-            && crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
-    };
-    if old_bits.is_some_and(callable) || callable(new_bits) {
-        super::proto_validity::bump_proto_validity();
-    }
+    // A method body replaced in place publishes no layout (§3.6).
+    super::shadow::note_prototype_slot_store(obj as *mut ObjectHeader, field_index, spill);
 }
 
 /// [`note_write`] for an owner of unknown kind (descriptor, delete and
@@ -450,8 +390,8 @@ pub(crate) fn note_array_prototype_write(arr: usize, site: &'static str) {
     }
 }
 
-/// Withdraw `Pristine(family)` — every family's for `%Object.prototype%`,
-/// which all of them inherit from. Set-only.
+/// Mark the written intrinsic's own shadow bit. A site's chain proof reads
+/// the actual parent word; no write propagates state into other families.
 #[cold]
 #[inline(never)]
 #[optimize(size)]
@@ -459,27 +399,40 @@ fn note_family_write(family: usize, site: &'static str) {
     if super::own_override::in_builtin_definition() {
         return;
     }
-    let first = if family == BuiltinProto::Object as usize {
-        PERRY_BUILTIN_PROTO_PATCHED[..FAMILIES]
-            .iter()
-            .fold(false, |any, b| b.swap(1, Ordering::Relaxed) == 0 || any)
-    } else if family < FAMILIES {
-        PERRY_BUILTIN_PROTO_PATCHED[family].swap(1, Ordering::Relaxed) == 0
-    } else {
-        false
+    let set = |k: usize| -> bool {
+        let p = crate::agent_ptrs::intrinsic_proto(k) as *mut ObjectHeader;
+        // SAFETY: a live intrinsic of this agent, or the static stand-in
+        // (never written: nothing writes an intrinsic before sealing).
+        unsafe {
+            if std::ptr::eq(p.cast::<u64>(), crate::agent_ptrs::PERRY_PRISTINE_PROTO.as_ptr()) {
+                return false;
+            }
+            let fresh = !super::layout_desc::word_is_shadowed((*p).parent_class_id);
+            super::shadow::set_bit(p);
+            fresh
+        }
     };
-    PERRY_BUILTIN_PROTO_PATCHED[ANY_PATCHED].store(1, Ordering::Relaxed);
+    let first = family < FAMILIES && set(family);
     super::own_override::note_builtin_proto_modified();
     if family == BuiltinProto::Array as usize || family == BuiltinProto::Object as usize {
         crate::array::note_array_methods_modified();
-    }
-    if family == BuiltinProto::String as usize || family == BuiltinProto::Object as usize {
-        PERRY_STRING_INLINE_MIN_HANDLE.store(u64::MAX, Ordering::Relaxed);
     }
     // A program that patches nothing must print nothing.
     if first {
         trace_withdrawal(family, site);
     }
+}
+
+/// `PERRY_BUILTIN_PROTO_TRACE=1`: the layout word each sealed intrinsic
+/// starts with (it must be an ordinary layout, or its family is never
+/// pristine).
+#[cold]
+fn trace_seal(family: BuiltinProto, word: u32) {
+    // SAFETY: a NUL-terminated literal; `getenv` only reads the environment.
+    if unsafe { libc::getenv(c"PERRY_BUILTIN_PROTO_TRACE".as_ptr()) }.is_null() {
+        return;
+    }
+    eprintln!("[builtin-proto] sealed {family:?} word={word:#x}");
 }
 
 /// `PERRY_BUILTIN_PROTO_TRACE=1` names the funnel of each first withdrawal.
@@ -504,81 +457,58 @@ fn trace_withdrawal(family: usize, site: &'static str) {
     }
 }
 
-/// The family whose prototype a by-name builtin dispatch on `recv` answers
-/// for, or `None` for a receiver whose methods are always read through its
-/// own shape and real `[[Prototype]]` chain (ordinary objects, class
-/// instances).
-pub(crate) fn receiver_family(recv: f64) -> Option<BuiltinProto> {
-    let v = crate::value::JSValue::from_bits(recv.to_bits());
+/// The builtin family and receiver-owned custom-link fact, obtained from
+/// one classification of the value and (for a heap receiver) its header.
+#[inline]
+fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
+    let bits = recv.to_bits();
+    let v = crate::value::JSValue::from_bits(bits);
     if v.is_any_string() {
-        return Some(BuiltinProto::String);
+        return Some((BuiltinProto::String, false));
     }
     if v.is_number() || v.is_int32() {
-        return Some(BuiltinProto::Number);
+        return Some((BuiltinProto::Number, false));
     }
     if v.is_bool() {
-        return Some(BuiltinProto::Boolean);
+        return Some((BuiltinProto::Boolean, false));
     }
     if v.is_bigint() {
-        return Some(BuiltinProto::BigInt);
+        return Some((BuiltinProto::BigInt, false));
     }
-    if !v.is_pointer() {
-        return None;
+    let mut header = crate::value::addr_class::pointer_value_header(bits)?;
+    if matches!(header.obj_type, crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY)
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        let array = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+        if array.is_null() { return None; }
+        // SAFETY: clean_arr_ptr returns a live GC-headed array.
+        header = unsafe { crate::value::addr_class::honest_header(array as usize) };
     }
-    let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) {
-        return None;
-    }
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => Some(BuiltinProto::Array),
-        crate::gc::GC_TYPE_MAP => Some(BuiltinProto::Map),
-        crate::gc::GC_TYPE_SET => Some(BuiltinProto::Set),
-        crate::gc::GC_TYPE_DATE_CELL => Some(BuiltinProto::Date),
-        crate::gc::GC_TYPE_CLOSURE => Some(BuiltinProto::Function),
-        _ => None,
-    }
+    let family = match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
+        crate::gc::GC_TYPE_MAP => BuiltinProto::Map,
+        crate::gc::GC_TYPE_SET => BuiltinProto::Set,
+        crate::gc::GC_TYPE_DATE_CELL => BuiltinProto::Date,
+        crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
+        _ => return None,
+    };
+    Some((family, family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0))
 }
 
-/// `Pristine(family(recv))`, for the runtime's own by-name dispatch. `true`
-/// for a receiver that has no by-name builtin family.
-///
-/// An Array whose own `[[Prototype]]` was retargeted (`GC_ARRAY_CUSTOM_PROTO`)
-/// is never pristine: its methods are not `%Array.prototype%`'s.
+/// The family whose prototype a by-name builtin dispatch on `recv` reads.
+pub(crate) fn receiver_family(recv: f64) -> Option<BuiltinProto> {
+    receiver_fact(recv).map(|(family, _)| family)
+}
+
+/// The intrinsic's shadow bit and the receiver's own prototype link are
+/// the complete builtin proof; both use the same receiver classification.
 #[inline]
 pub(crate) fn receiver_pristine(recv: f64) -> bool {
-    all_pristine() || receiver_pristine_slow(recv)
-}
-
-/// [`receiver_pristine`] once anything was modified.
-#[cold]
-#[inline(never)]
-#[optimize(size)]
-fn receiver_pristine_slow(recv: f64) -> bool {
-    match receiver_family(recv) {
-        Some(BuiltinProto::Array) if array_with_custom_proto(recv) => false,
-        Some(family) => pristine(family),
+    match receiver_fact(recv) {
+        Some((_, true)) => false,
+        Some((family, false)) => pristine(family),
         None => true,
-    }
-}
-
-/// A plain Array receiver whose header records a custom `[[Prototype]]`.
-#[inline]
-fn array_with_custom_proto(recv: f64) -> bool {
-    let bits = recv.to_bits();
-    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return false;
-    }
-    let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) {
-        return false;
-    }
-    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) => {
-            h.obj_type == crate::gc::GC_TYPE_ARRAY
-                && h._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
-        }
-        None => false,
     }
 }
 

@@ -502,7 +502,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
             && !unsafe {
                 subclass_numeric_prefix_is_proven(
                     object,
-                    (*object).parent_class_id,
+                    (*object).shape_word(),
                     admitted_bound,
                     require_numeric >= 2,
                 )
@@ -643,7 +643,7 @@ fn revalidate_admitted_subclass_live(
             && !unsafe {
                 subclass_numeric_prefix_is_proven(
                     object,
-                    (*object).parent_class_id,
+                    (*object).shape_word(),
                     admitted_bound,
                     require_numeric >= 2,
                 )

@@ -153,7 +153,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
                                 cache.write(if family_token != 0 {
                                     family_token
                                 } else {
-                                    dense_cache_key((*obj).class_id, (*obj).parent_class_id)
+                                    dense_cache_key((*obj).class_id, (*obj).shape_word())
                                 });
                             }
                         }

@@ -1003,6 +1003,10 @@ pub struct CompilationContext {
     /// #10848: a module scanned AFTER others were already lowered added a
     /// patch they could not see, so the walk must be re-run with the final set.
     pub patched_builtins_grew_after_lower: bool,
+    /// Object model step 3: the program-wide prototype-write census
+    /// (`perry_hir::patched_builtins::proto_census`), scanned with the
+    /// builtin patches and handed to codegen before any module is lowered.
+    pub proto_census: perry_hir::ProtoCensus,
     /// Cross-module class accessor names collected alongside field types.
     /// HIR lowering uses this to avoid inferring subclass `this.x = ...`
     /// constructor writes as data fields when `x` is an inherited accessor
@@ -1371,6 +1375,7 @@ impl CompilationContext {
             patched_builtins: Default::default(),
             patched_builtins_lowered_modules: 0,
             patched_builtins_grew_after_lower: false,
+            proto_census: Default::default(),
             cross_module_class_accessors: HashMap::new(),
             min_windows_version: "10".to_string(),
             windows_subsystem: "auto".to_string(),

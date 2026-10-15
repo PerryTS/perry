@@ -24,7 +24,7 @@ unsafe fn ordinary_shape(value: f64) -> Option<(*const ObjectHeader, u32)> {
         return None;
     }
     let object = addr as *const ObjectHeader;
-    let id = (*object).parent_class_id;
+    let id = (*object).shape_word();
     if id.wrapping_sub(shapes::SHAPE_ID_BASE)
         >= shapes::EXOTIC_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE
     {

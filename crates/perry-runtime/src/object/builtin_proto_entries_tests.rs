@@ -67,7 +67,7 @@ fn the_fast_path_admits_only_operands_that_need_no_allocation() {
 }
 
 #[test]
-fn the_array_admission_reads_the_family_byte_and_the_cell() {
+fn the_array_admission_reads_the_prototype_word_and_the_cell() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
@@ -79,6 +79,7 @@ fn the_array_admission_reads_the_family_byte_and_the_cell() {
         );
         let proto = crate::object::js_object_alloc(0, 1);
         crate::object::builtin_proto::seal_object(proto, BuiltinProto::Array);
+        crate::agent_ptrs::publish_intrinsic_proto(BuiltinProto::Array as usize, proto);
         crate::object::store_object_field_slot(proto, 0, 1.0f64.to_bits());
         assert!(
             !array_admits(&mut recv, b"map", &mut []),

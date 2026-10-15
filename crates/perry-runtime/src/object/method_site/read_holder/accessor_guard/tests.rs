@@ -175,7 +175,7 @@ fn emitted_spill_contract_rejects_missing_storage_bounds_and_replaced_pair() {
             parent_class_id: crate::object::shapes::SHAPE_ID_BASE + 1,
             meta: std::ptr::null_mut(),
         };
-        let token = (u64::from(recv.parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+        let token = (u64::from(recv.shape_word()) | PIC_ID_TOKEN_BIT) as i64;
         let mut words = HolderEntry([0; HOLDER_STATE - HOLDER_RECV]);
         words[HOLDER_RECV] = token;
         words[HOLDER_OBJ] = holder as i64;

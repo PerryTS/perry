@@ -65,6 +65,11 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
         crate::array::note_object_prototype_intrinsic(proto as usize);
+        // Complete: every later write to it is the program's.
+        crate::object::builtin_proto::seal_built_intrinsic(
+            crate::object::builtin_proto::BuiltinProto::Object,
+            proto,
+        );
     }
     OBJECT_INTRINSICS_BUILDING.with(|b| b.store(false, Ordering::Release));
     built.unwrap_or((std::ptr::null_mut(), std::ptr::null_mut()))

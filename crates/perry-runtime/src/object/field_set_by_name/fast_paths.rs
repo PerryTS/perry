@@ -354,11 +354,12 @@ pub(crate) unsafe fn add_absent_key_to_null_proto_object(
     let Some((next_keys, slot_idx, target_shape_id)) = edge.transition() else {
         return true;
     };
-    if !super::shapes::install_cached_object_shape_transition(
+    if !super::shapes::install_cached_object_shape_key_add(
         obj,
         prev_shape_id,
         target_shape_id,
         next_keys,
+        key,
     ) {
         set_object_keys(obj, next_keys);
     }
@@ -860,11 +861,12 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
             return Some(value);
         };
 
-        let cached_install = super::shapes::install_cached_object_shape_transition(
+        let cached_install = super::shapes::install_cached_object_shape_key_add(
             obj,
             prev_shape_id,
             target_shape_id,
             next_keys,
+            interned_key,
         );
         if !cached_install {
             // A remint is not covered by the non-collecting cached stamp.

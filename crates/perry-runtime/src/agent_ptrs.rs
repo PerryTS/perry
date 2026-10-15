@@ -58,8 +58,67 @@ pub static PERRY_AGENT_PTRS: AgentPtrs = AgentPtrs({
     // miss front reads it without a null test.
     slots[AGENT_PTR_SHAPE_DIR] =
         Cell::new(std::ptr::addr_of!(crate::object::shapes::PERRY_EMPTY_SHAPE_DIR) as *const u8);
+    // The intrinsic-prototype slots are never null either: until the realm is
+    // sealed they name the pristine stand-in, whose layout word is 0.
+    let mut family = 0;
+    while family < crate::codegen_abi::BUILTIN_PROTO_FAMILIES {
+        slots[AGENT_PTR_INTRINSIC_PROTO + family] =
+            Cell::new(std::ptr::addr_of!(PERRY_PRISTINE_PROTO) as *const u8);
+        family += 1;
+    }
     slots
 });
+
+/// Slots `AGENT_PTR_INTRINSIC_PROTO + k`: this agent's intrinsic prototype of
+/// builtin family `k` (object model step 3, §3.6). Emitted code reads the
+/// layout word at `+4` of the object a slot names; the shadow bit there is
+/// `Pristine(k)` (`object::builtin_proto`).
+pub use crate::codegen_abi::AGENT_PTR_INTRINSIC_PROTO;
+
+/// The stand-in a family slot names before the realm is sealed: a header
+/// whose layout word is 0 (unshadowed). Nothing can have written an
+/// intrinsic before it exists. Exported for emitted code that reads the
+/// block through a path that may be unavailable (Apple's TSD fast path).
+#[no_mangle]
+pub static PERRY_PRISTINE_PROTO: [u64; 3] = [0; 3];
+
+/// This agent's intrinsic prototype of `family` (the stand-in until sealed).
+#[inline(always)]
+pub(crate) fn intrinsic_proto(family: usize) -> *const crate::object::ObjectHeader {
+    PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family].get() as *const crate::object::ObjectHeader
+}
+
+/// Publish this agent's intrinsic prototype of `family` (`seal_realm`).
+pub(crate) fn publish_intrinsic_proto(family: usize, obj: *const crate::object::ObjectHeader) {
+    PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family].set(obj as *const u8);
+}
+
+/// The accessor for targets whose emitted code cannot read the block inline:
+/// the object family `family`'s slot names. A leaf: one TLS read.
+#[no_mangle]
+pub extern "C" fn perry_intrinsic_proto(family: u32) -> *const u8 {
+    let family = (family as usize).min(crate::codegen_abi::BUILTIN_PROTO_FAMILIES - 1);
+    PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family].get()
+}
+
+/// The registered root scanner of the intrinsic-prototype slots: a moving
+/// collection rewrites each slot that names a relocated prototype (the
+/// stand-in is not a heap object and is skipped).
+pub fn scan_intrinsic_proto_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let standin = std::ptr::addr_of!(PERRY_PRISTINE_PROTO) as usize;
+    for family in 0..crate::codegen_abi::BUILTIN_PROTO_FAMILIES {
+        let cell = &PERRY_AGENT_PTRS.0[AGENT_PTR_INTRINSIC_PROTO + family];
+        let mut addr = cell.get() as usize;
+        if addr == 0 || addr == standin {
+            continue;
+        }
+        if visitor.visit_usize_slot(&mut addr) {
+            // GC_STORE_AUDIT(ROOT): the collector's own root rewrite of a
+            // registered slot, inside a root scan with the mutator stopped.
+            cell.set(addr as *const u8);
+        }
+    }
+}
 
 // Windows x86-64: `PERRY_AGENT_PTRS`'s section-relative offset in this image's
 // TLS block (`.tls$`), as a 4-byte constant under a stable name. The static

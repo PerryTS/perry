@@ -519,7 +519,7 @@ mod tests {
         // Nothing wrote into the object's header.
         assert_eq!(unsafe { (*obj).class_id }, 9003);
         assert!(crate::object::shapes::is_shape_id(unsafe {
-            (*obj).parent_class_id
+            (*obj).shape_word()
         }));
         assert_eq!(unsafe { crate::object::object_live_slot_count(obj) }, 3);
     }

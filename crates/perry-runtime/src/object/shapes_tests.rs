@@ -99,7 +99,7 @@ mod c3c_tests {
 
         let obj =
             crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 2, keys, shape_id, 0);
-        let birth_word = unsafe { (*obj).parent_class_id };
+        let birth_word = unsafe { (*obj).shape_word() };
         assert_eq!(
             birth_word, shape_id,
             "a fresh compiled class instance waited for a by-name lookup to stamp"
@@ -152,7 +152,7 @@ mod c3c_tests {
                 crate::object::ObjectKeys::owned(keys),
                 2
             ));
-            assert_eq!((*obj).parent_class_id, shape_id);
+            assert_eq!((*obj).shape_word(), shape_id);
             assert_eq!(crate::object::object_keys(obj).arr(), keys);
             debug_assert_object_shape_parity(obj);
         }
@@ -178,7 +178,7 @@ mod c3c_tests {
 
         let obj =
             crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id, 0);
-        let actual_id = unsafe { (*obj).parent_class_id };
+        let actual_id = unsafe { (*obj).shape_word() };
         assert_ne!(
             actual_id, narrow_id,
             "a narrow module ShapeId must not describe a wider allocation"
@@ -217,7 +217,7 @@ mod c3c_tests {
         }
         let obj =
             crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, stale_id, 0);
-        let actual_id = unsafe { (*obj).parent_class_id };
+        let actual_id = unsafe { (*obj).shape_word() };
         assert_ne!(
             actual_id, stale_id,
             "a stale logical key count must not be published on the newborn"
@@ -246,7 +246,7 @@ mod c3c_tests {
             }
             assert_eq!((*obj).class_id, 0, "test premise: plain object");
             let _ = crate::object::js_object_get_field_by_name(obj, key("c3c_b"));
-            let stamp = (*obj).parent_class_id;
+            let stamp = (*obj).shape_word();
             assert!(
                 is_shape_id(stamp),
                 "read resolution must stamp a shape id, got {stamp:#x}"
@@ -254,7 +254,7 @@ mod c3c_tests {
 
             crate::object::js_object_set_field_by_name(obj, key("c3c_d"), 2.0);
             crate::object::js_object_set_field_by_name(obj, key("c3c_e"), 3.0);
-            let stamp2 = (*obj).parent_class_id;
+            let stamp2 = (*obj).shape_word();
             if stamp2 != 0 {
                 assert!(is_shape_id(stamp2));
                 let descriptor = shape_descriptor_by_id(stamp2)
@@ -304,8 +304,8 @@ mod c6804_tests {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let stamp_a = (*a).parent_class_id;
-            let stamp_b = (*b).parent_class_id;
+            let stamp_a = (*a).shape_word();
+            let stamp_b = (*b).shape_word();
             assert!(
                 is_shape_id(stamp_a),
                 "newborn literal must carry a runtime ShapeId, got {stamp_a:#x}"
@@ -344,7 +344,7 @@ mod c6804_tests {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let birth_stamp = (*obj).parent_class_id;
+            let birth_stamp = (*obj).shape_word();
             assert!(is_shape_id(birth_stamp), "every literal is birth-stamped");
             assert_eq!(
                 crate::typed_feedback::test_object_shape_token(obj as usize),
@@ -368,7 +368,7 @@ mod c6804_tests {
                 "an unstamped receiver must miss closed, not be re-stamped"
             );
             assert_eq!(
-                (*obj).parent_class_id,
+                (*obj).shape_word(),
                 0,
                 "observation must not publish a descriptor for an unstamped receiver"
             );
@@ -388,7 +388,7 @@ mod c6804_tests {
             let obj = crate::object::js_object_alloc(0, 8);
             let key = crate::string::js_string_from_bytes(b"m6804_first".as_ptr(), 11);
             crate::object::js_object_set_field_by_name(obj, key, 42.0);
-            let stamp = (*obj).parent_class_id;
+            let stamp = (*obj).shape_word();
             // Either stamped at the null-branch birth, or (for a sibling
             // adopting a cached transition edge) still 0 until first read
             // — but THIS test allocates a unique key, so the null branch
@@ -996,12 +996,12 @@ mod descriptor_tests_8067 {
                 packed.len() as u32,
             );
             let keys = crate::object::object_keys(obj).arr() as usize;
-            let before = (*obj).parent_class_id;
+            let before = (*obj).shape_word();
             let before_descriptor = shape_descriptor_by_id(before).expect("birth descriptor");
             assert_eq!(before_descriptor.live_inline_slot_count, 1);
 
             crate::object::js_object_set_field(obj, 1, crate::JSValue::string_ptr(key("value")));
-            let after = (*obj).parent_class_id;
+            let after = (*obj).shape_word();
             assert_ne!(before, after);
             let after_descriptor = shape_descriptor_by_id(after).expect("grown descriptor");
             assert_eq!(after_descriptor.keys, keys as u64);
@@ -1029,16 +1029,16 @@ mod descriptor_tests_8067 {
                 packed.len() as u32,
             );
             let shared_keys = crate::object::object_keys(a).arr();
-            let shared_id = (*a).parent_class_id;
+            let shared_id = (*a).shape_word();
             assert_eq!(shared_keys, crate::object::object_keys(b).arr());
-            assert_eq!(shared_id, (*b).parent_class_id);
+            assert_eq!(shared_id, (*b).shape_word());
 
             crate::object::js_object_set_field_by_name(a, key("sib8067_b"), 2.0);
 
             assert_ne!(crate::object::object_keys(a).arr(), shared_keys);
             assert_eq!(crate::object::object_keys(b).arr(), shared_keys);
-            assert_eq!((*b).parent_class_id, shared_id);
-            assert_ne!((*a).parent_class_id, shared_id);
+            assert_eq!((*b).shape_word(), shared_id);
+            assert_ne!((*a).shape_word(), shared_id);
             assert_eq!(
                 shape_descriptor_by_id(shared_id)
                     .expect("untouched sibling descriptor")
@@ -1046,7 +1046,7 @@ mod descriptor_tests_8067 {
                 1
             );
             let transitioned =
-                shape_descriptor_by_id((*a).parent_class_id).expect("transitioned descriptor");
+                shape_descriptor_by_id((*a).shape_word()).expect("transitioned descriptor");
             assert_eq!(
                 transitioned.keys,
                 crate::object::object_keys(a).arr() as u64
@@ -1264,7 +1264,7 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         // step 3).
         let obj =
             crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
-        assert_eq!((*obj).parent_class_id, ordinary, "test premise: stamped");
+        assert_eq!((*obj).shape_word(), ordinary, "test premise: stamped");
         let class_kind = transition_object_shape_to_class(obj);
         assert_ne!(
             ordinary, class_kind,

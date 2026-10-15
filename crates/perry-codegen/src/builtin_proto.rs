@@ -1,18 +1,20 @@
 //! Emitted half of the "builtin prototype unmodified" proof (#11915):
 //! `Pristine(P)` of the typed-entry contracts (decision 129).
 //!
-//! The runtime keeps ONE immortal byte array, `PERRY_BUILTIN_PROTO_PATCHED`
-//! (`perry-runtime/src/object/builtin_proto.rs`): byte `k` becomes nonzero,
-//! and stays so, once family `k`'s intrinsic prototype — or
-//! `%Object.prototype%`, which every family inherits — is written, defined,
-//! deleted or relinked after startup. A site that has proven its receiver's
-//! KIND (shape, header type byte, NaN-box tag or representation) proves the
-//! method it is about to call is still that kind's builtin with
+//! Object model step 3 (`OBJECT_MODEL_2026-10-13.md` §3.6): the fact is the
+//! shadow bit of each family's intrinsic prototype, bit 30 of its layout word
+//! (header `+4`). The runtime sets it once family `k`'s intrinsic prototype —
+//! or `%Object.prototype%`, which every family inherits — is written,
+//! defined, deleted or relinked after it sealed the realm, and publishes each
+//! agent's intrinsic of family `k` in its agent-pointer slot
+//! `AGENT_PTR_INTRINSIC_PROTO + k` (never null). A site that has proven its
+//! receiver's KIND proves the method it is about to call is still that
+//! kind's builtin with
 //!
 //! ```llvm
-//! %p = getelementptr i8, ptr @PERRY_BUILTIN_PROTO_PATCHED, i64 K
-//! %b = load atomic i8, ptr %p unordered, align 1     ; cmpb $0, sym+K(%rip)
-//! %patched = icmp ne i8 %b, 0
+//! %p = load ptr, ptr <slot>                       ; mov %fs:off, %rax
+//! %w = load i32, ptr %p+4                         ; cmpl $0xB0000000, 4(%rax)
+//! %patched = icmp uge i32 %w, UNSHADOWED_WORD_END
 //! ```
 //!
 //! folded into the branch the site already has (the own-override test, the
@@ -20,16 +22,12 @@
 //! is the site's generic arm: ONE call into the shared runtime path
 //! (`js_builtin_proto_generic_call*` / the universal dispatcher), which
 //! performs the real `Get(recv, name)` and call. No per-site fallback body, no
-//! per-site state, no name classification.
-//!
-//! Reuse: any lowering that calls a builtin by name for a proven receiver
-//! kind asks [`emit_patched_test`] for that kind's `i1`; `cc` sitememo3 and
-//! `ump` classvirt2 compose it with their own shape compare the same way.
+//! per-site state, no name classification, and no second copy of the fact.
 
 use crate::block::LlBlock;
-use crate::types::{I1, I64, I8};
+use crate::types::{I1, I32, I64};
 
-/// The runtime's `BuiltinProto` discriminants (the byte index). A runtime
+/// The runtime's `BuiltinProto` discriminants (the agent slot offset). A runtime
 /// test pins the two lists together (`builtin_proto_tests.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -54,42 +52,39 @@ pub(crate) enum BuiltinProto {
     WeakSet = 15,
 }
 
-/// The exported byte array emitted code reads.
-pub(crate) const PATCHED_GLOBAL: &str = "@PERRY_BUILTIN_PROTO_PATCHED";
-
-/// `i1`: true when `family`'s prototype (or `Object.prototype`) was modified,
-/// i.e. the direct builtin call is NOT proven. One byte load and compare.
-pub(crate) fn emit_patched_test(blk: &mut LlBlock, family: BuiltinProto) -> String {
-    let byte_ptr = blk.gep(I8, PATCHED_GLOBAL, &[(I64, &(family as u8).to_string())]);
-    let byte = blk.load_atomic_unordered(I8, &byte_ptr, 1);
-    let patched = blk.icmp_ne(I8, &byte, "0");
+/// `i1`: true when `family`'s intrinsic prototype (or `%Object.prototype%`)
+/// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of
+/// the agent's intrinsic, two loads and a compare.
+pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
+    let end = (crate::runtime_abi::UNSHADOWED_WORD_END as i32).to_string();
+    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
+    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
+    let own = ctx.block().load(I32, &at);
+    let own = ctx.block().icmp_uge(I32, &own, &end);
+    let patched = if family == BuiltinProto::Object {
+        own
+    } else {
+        let object = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, BuiltinProto::Object as usize);
+        let at = ctx.block().gep(crate::types::I8, &object, &[(I64, "4")]);
+        let parent = ctx.block().load(I32, &at);
+        let parent = ctx.block().icmp_uge(I32, &parent, &end);
+        ctx.block().or(I1, &own, &parent)
+    };
+    let blk = ctx.block();
     // Unlikely, and said so: a guard's generic arm must not cost the
     // function's hot loops their register assignment (the same reason
     // `array_push_own`'s exit carries the hint).
     blk.call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
 }
 
-/// Byte 16 of the array (runtime `ANY_PATCHED`): nonzero once ANY family was
-/// withdrawn (or an array took its own `[[Prototype]]`). The conservative
-/// one-byte test for a site whose receiver may be of several families.
-pub(crate) const ANY_PATCHED: u8 = 16;
-
-/// `i1`: true when any family may be modified ([`ANY_PATCHED`]).
-pub(crate) fn emit_any_patched_test(blk: &mut LlBlock) -> String {
-    let byte_ptr = blk.gep(I8, PATCHED_GLOBAL, &[(I64, &ANY_PATCHED.to_string())]);
-    let byte = blk.load_atomic_unordered(I8, &byte_ptr, 1);
-    let patched = blk.icmp_ne(I8, &byte, "0");
-    blk.call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
-}
-
 /// [`emit_patched_test`] over several families (a borrowed call also reads
 /// `Function.prototype.call`; `toLocaleString()` admits several primitives).
-pub(crate) fn emit_patched_any(blk: &mut LlBlock, families: &[BuiltinProto]) -> String {
+pub(crate) fn emit_patched_any(ctx: &mut crate::expr::FnCtx<'_>, families: &[BuiltinProto]) -> String {
     let mut acc: Option<String> = None;
     for family in families {
-        let t = emit_patched_test(blk, *family);
+        let t = emit_patched_test(ctx, *family);
         acc = Some(match acc {
-            Some(prev) => blk.or(I1, &prev, &t),
+            Some(prev) => ctx.block().or(I1, &prev, &t),
             None => t,
         });
     }
@@ -97,55 +92,26 @@ pub(crate) fn emit_patched_any(blk: &mut LlBlock, families: &[BuiltinProto]) -> 
 }
 
 /// What a direct-call site has proven about its receiver — the input of the
-/// ONE pristine-receiver guard ([`emit_pristine_receiver`]).
-///
-/// * `Intrinsic(family)`: the receiver's KIND is proven (HIR fold, type,
-///   NaN-box tag, header type byte) and its methods are `family`'s builtins
-///   while `Pristine(family)` holds.
-/// * `Shape { .. }`: a site / holder memo proved, at `PERRY_PROTO_VALIDITY ==
-///   proof_epoch`, that a receiver with word `proof_word` (`class_id |
-///   ShapeId << 32`, the `ObjectHeader`'s first word) has no own method,
-///   accessor or interceptor for the name and resolves it to the memo's
-///   pinned inherited method. The receiver's `[[Prototype]]` is part of its
-///   ShapeId, and every structural change of a marked prototype — and every
-///   in-place method replacement on one (`builtin_proto::note_value_store`)
-///   — advances the epoch.
-///
-/// Both checks are loads and compares: Leaf, NoCollect, NoThrow. A hit
-/// takes the direct body; a miss takes the ONE generic operation.
-#[allow(dead_code)] // `Shape` is classvirt2's / sitememo3's entry point.
-pub(crate) enum PristineReceiverFact<'a> {
+/// ONE pristine-receiver guard ([`emit_pristine_receiver`]): its KIND (HIR
+/// fold, type, NaN-box tag, header type byte), so its methods are `family`'s
+/// builtins while `Pristine(family)` holds. The check is one load and one
+/// loads and one compare: Leaf, NoCollect, NoThrow.
+#[allow(dead_code)]
+pub(crate) enum PristineReceiverFact {
     Intrinsic(BuiltinProto),
-    Shape {
-        /// `i64` SSA value: the receiver's admitted `class_id | ShapeId << 32`.
-        receiver_word: &'a str,
-        /// `i64` SSA value: the word the memo's proof was taken for.
-        proof_word: &'a str,
-        /// `i64` SSA value: the `PERRY_PROTO_VALIDITY` that proof recorded.
-        proof_epoch: &'a str,
-    },
 }
 
 /// `i1`: true when the fact HOLDS (the direct body is admitted). Emits no
 /// call besides the `llvm.expect` hint on the intrinsic test.
-#[allow(dead_code)] // the intrinsic arm is `!emit_patched_test`.
-pub(crate) fn emit_pristine_receiver(blk: &mut LlBlock, fact: &PristineReceiverFact<'_>) -> String {
+#[allow(dead_code)]
+pub(crate) fn emit_pristine_receiver(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    fact: &PristineReceiverFact,
+) -> String {
     match fact {
         PristineReceiverFact::Intrinsic(family) => {
-            let patched = emit_patched_test(blk, *family);
-            blk.xor(I1, &patched, "true")
-        }
-        PristineReceiverFact::Shape {
-            receiver_word,
-            proof_word,
-            proof_epoch,
-        } => {
-            let same_receiver = blk.icmp_eq(I64, receiver_word, proof_word);
-            // One atomic, unordered load: the runtime advances the word with an
-            // atomic RMW, and unordered lets the backend fold the compare.
-            let epoch = blk.load_atomic_unordered(I64, "@PERRY_PROTO_VALIDITY", 8);
-            let same_epoch = blk.icmp_eq(I64, &epoch, proof_epoch);
-            blk.and(I1, &same_receiver, &same_epoch)
+            let patched = emit_patched_test(ctx, *family);
+            ctx.block().xor(I1, &patched, "true")
         }
     }
 }
@@ -354,9 +320,8 @@ pub(crate) fn emit_guarded_direct(
     let generic_label = ctx.block_label(generic_idx);
     let merge_label = ctx.block_label(merge_idx);
     {
-        let blk = ctx.block();
-        let patched = emit_patched_any(blk, families);
-        blk.cond_br(&patched, &generic_label, &direct_label);
+        let patched = emit_patched_any(ctx, families);
+        ctx.block().cond_br(&patched, &generic_label, &direct_label);
     }
 
     ctx.current_block = generic_idx;
@@ -378,49 +343,6 @@ pub(crate) fn emit_guarded_direct(
             (generic_value.as_str(), generic_end.as_str()),
         ],
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_shape_fact_is_one_word_compare_and_one_epoch_load() {
-        let mut blk = LlBlock::new("t", std::rc::Rc::new(crate::block::RegCounter::new()));
-        let ok = emit_pristine_receiver(
-            &mut blk,
-            &PristineReceiverFact::Shape {
-                receiver_word: "%w",
-                proof_word: "%p",
-                proof_epoch: "%e",
-            },
-        );
-        let ir = blk.to_ir();
-        assert!(!ok.is_empty());
-        assert_eq!(ir.matches("@PERRY_PROTO_VALIDITY").count(), 1, "{ir}");
-        assert!(ir.contains("unordered"), "{ir}");
-        assert_eq!(ir.matches("call ").count(), 0, "Leaf: no call:\n{ir}");
-    }
-
-    #[test]
-    fn the_test_is_one_byte_load_and_one_compare() {
-        let mut blk = LlBlock::new("t", std::rc::Rc::new(crate::block::RegCounter::new()));
-        let _ = emit_patched_test(&mut blk, BuiltinProto::String);
-        let ir = blk.to_ir();
-        assert!(ir.contains("@PERRY_BUILTIN_PROTO_PATCHED"), "{ir}");
-        assert!(ir.contains("i64 3"), "String is byte 3:\n{ir}");
-        assert!(
-            ir.contains("load atomic i8") && ir.contains("unordered"),
-            "{ir}"
-        );
-        assert!(ir.contains("icmp ne i8"), "{ir}");
-        assert_eq!(
-            ir.matches("call ").count(),
-            1,
-            "only the `llvm.expect` hint, no runtime call:\n{ir}"
-        );
-        assert!(ir.contains("@llvm.expect.i1"), "{ir}");
-    }
 }
 
 #[cfg(test)]
