@@ -750,22 +750,18 @@ fn an_overflow_receiver_never_publishes_a_store_site_word() {
     assert_eq!(f64::from_bits(n.bits()), 8.0);
 }
 
-/// A `JSON.parse` record is born with an overflow (object model step 4,
-/// §3.4): a store through the miss entry is performed and read back by the
-/// generic Get, for an existing key and for an added one, and the site word
-/// stays empty.
+/// A `JSON.parse` record is born with its exact layout and no overflow
+/// (#12618): a store through the miss entry is performed and read back by the
+/// generic Get, for an existing key and for an added one, and the record never
+/// gains an overflow from them.
 #[test]
-fn a_json_record_is_stored_through_its_overflow_and_never_published() {
+fn a_json_record_is_born_without_an_overflow_and_stores_read_back() {
     let target = json(SRC);
-    assert!(unsafe { crate::object::overflow::has_overflow(object_of(target)) });
+    assert!(!unsafe { crate::object::overflow::has_overflow(object_of(target)) });
     for (name, value) in [(b"n".as_slice(), 7.0), (b"json_added", 9.0)] {
         let key = interned(name);
-        let (stored, word) = store_fresh(target, key, value);
+        let (stored, _) = store_fresh(target, key, value);
         assert_eq!(stored, value, "the miss performs the store");
-        assert_eq!(
-            word, PACKED_SET_EMPTY,
-            "an overflow receiver must not publish"
-        );
         let read = crate::object::js_object_get_field_by_name(object_of(target), key);
         assert_eq!(f64::from_bits(read.bits()), value);
     }
