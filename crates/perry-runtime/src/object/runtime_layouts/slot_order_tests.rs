@@ -515,3 +515,45 @@ fn static_layout_slot_order_holes_use_the_main_presence_readers() {
         assert_eq!(js_object_get_field_by_name_f64(copied, THIRD.string), 33.0);
     }
 }
+
+#[test]
+fn static_layout_slot_order_by_name_scans_read_storage_slots() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(PERMUTED))
+    });
+    unsafe {
+        object.with_mut_ptr(|obj| {
+            js_object_set_field(obj, 2, crate::JSValue::number(11.0));
+            js_object_set_field(obj, 0, crate::JSValue::number(22.0));
+            js_object_set_field(obj, 1, crate::JSValue::number(33.0));
+        });
+        let value = crate::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64);
+        for (name, expected) in [
+            (b"slotorder_first".as_slice(), 11.0),
+            (b"slotorder_second".as_slice(), 22.0),
+            (b"slotorder_third".as_slice(), 33.0),
+        ] {
+            assert_eq!(
+                crate::fs::options_field_value(value, name).map(|v| v.as_number()),
+                Some(expected)
+            );
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "positional lane on a layout whose key 0 keeps storage slot 2")]
+fn static_layout_slot_order_positional_lane_invariant_fails_loudly() {
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(PERMUTED))
+    });
+    unsafe {
+        let keys = crate::object::object_keys(object.get_raw_mut_ptr::<ObjectHeader>());
+        crate::object::key_attrs::debug_assert_positional(keys.arr(), keys.count());
+    }
+}

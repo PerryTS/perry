@@ -78,6 +78,7 @@ unsafe fn emit<const VALIDATE: bool>(
     buf: &mut String,
 ) -> bool {
     let keys = keys_view.arr() as *const crate::ArrayHeader;
+    crate::object::key_attrs::debug_assert_positional(keys, keys_view.count());
     let saved_len = buf.len();
     let fields = (obj as *const u8)
         .add(std::mem::size_of::<crate::ObjectHeader>())

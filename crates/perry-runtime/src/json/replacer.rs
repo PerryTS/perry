@@ -406,6 +406,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     };
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
+    if !slotted {
+        crate::object::key_attrs::debug_assert_positional(keys_view.arr(), keys_view.count());
+    }
     let keys_arr = keys_view.arr() as *const crate::ArrayHeader;
     let keys_root = gc_scope.root_raw_const_ptr(keys_arr);
     let keys_len = keys_view.count();
@@ -1044,6 +1047,9 @@ pub(crate) unsafe fn stringify_object_pretty(
     };
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
+    if !slotted {
+        crate::object::key_attrs::debug_assert_positional(keys_view.arr(), keys_view.count());
+    }
     let keys_len = keys_view.count();
     let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
     let fields_ptr =
@@ -1270,6 +1276,9 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     };
     // A layout that keeps its own storage slots reads each key through them.
     let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
+    if !slotted {
+        crate::object::key_attrs::debug_assert_positional(keys_view.arr(), keys_view.count());
+    }
     let keys_len = keys_view.count();
     let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
     let fields_ptr =

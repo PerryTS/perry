@@ -568,6 +568,7 @@ impl ShapeRecordRef {
         if bound == 0 {
             return None;
         }
+        super::key_attrs::debug_assert_positional(r.keys as usize as *const ArrayHeader, bound as u32);
         let (slots, len) =
             super::keys_array_dense_slots_resolved(r.keys as usize as *const ArrayHeader);
         if slots.is_null() {
@@ -864,6 +865,10 @@ pub(crate) unsafe fn positional_key_words(
     shape_id: u32,
 ) -> Option<(PositionalKeys, usize)> {
     let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    super::key_attrs::debug_assert_positional(
+        r.keys as usize as *const ArrayHeader,
+        r.position_bound_raw(),
+    );
     Some((
         PositionalKeys(r.keys as usize as *const ArrayHeader),
         r.position_bound_raw() as usize,
@@ -892,6 +897,10 @@ pub(crate) unsafe fn plain_positional_key_words(
     if r.proto_id == PROTO_ID_PER_OBJECT {
         return None;
     }
+    super::key_attrs::debug_assert_positional(
+        r.keys as usize as *const ArrayHeader,
+        r.position_bound_raw(),
+    );
     Some((
         PositionalKeys(r.keys as usize as *const ArrayHeader),
         r.position_bound_raw() as usize,

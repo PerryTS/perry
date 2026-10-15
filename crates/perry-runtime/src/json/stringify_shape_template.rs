@@ -177,6 +177,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         return None;
     }
     let shape_fields = keys_arr_view.count();
+    crate::object::key_attrs::debug_assert_positional(keys_arr, shape_fields);
     if shape_fields == 0 || shape_fields > 32 {
         return None;
     }
@@ -361,6 +362,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     if keys_arr.arr() != template.keys_arr.get() || keys_arr.count() != template.shape_fields {
         return false;
     }
+    crate::object::key_attrs::debug_assert_positional(keys_arr.arr(), keys_arr.count());
 
     if template.data_record_candidate && !*data_record_global_proof {
         *data_record_global_proof =

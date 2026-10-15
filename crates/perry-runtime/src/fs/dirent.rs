@@ -241,7 +241,7 @@ pub(crate) unsafe fn options_field_value(
             let key_val = crate::array::js_array_get_f64(keys, i as u32);
             if let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key_val, &mut scratch) {
                 if !ptr.is_null() && std::slice::from_raw_parts(ptr, len as usize) == field {
-                    return Some(crate::object::js_object_get_field(
+                    return Some(crate::object::field_get_set::js_object_get_key_field(
                         obj_ptr as *mut _,
                         i as u32,
                     ));

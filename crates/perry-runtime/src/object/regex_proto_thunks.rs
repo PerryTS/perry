@@ -389,6 +389,10 @@ pub(crate) unsafe fn method_site_test_code(
     if keys.is_null()
         || own.live_inline_slot_count < 2
         || crate::object::key_attrs::keys_have_slots(keys, count)
+        || {
+            crate::object::key_attrs::debug_assert_positional(keys, count);
+            false
+        }
         || crate::regex::matcher_slot(keys, count) != Some(0)
         || crate::object::keys_find_slot_by_bytes_resolved(keys, count, b"lastIndex") != Some(1)
         || crate::object::key_attrs::key_is_accessor_at(keys, 1)

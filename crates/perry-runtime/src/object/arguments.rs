@@ -1299,6 +1299,7 @@ unsafe fn read_ordinary_own_value(
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {
+            let i = keys_view.storage_slot(i as u32) as usize;
             if i < alloc_limit {
                 return js_object_get_field(obj, i as u32);
             }
@@ -1325,6 +1326,7 @@ unsafe fn write_ordinary_own_value(
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {
+            let i = keys_view.storage_slot(i as u32) as usize;
             if i < alloc_limit {
                 js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
             } else {

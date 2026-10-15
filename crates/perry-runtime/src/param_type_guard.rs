@@ -441,6 +441,7 @@ impl GuardState<'_> {
         {
             return ObjectKeys::Invalid;
         }
+        crate::object::key_attrs::debug_assert_positional(keys, key_len as u32);
         ObjectKeys::Present {
             slots: crate::array::array_elements_ptr(keys as *const ArrayHeader) as *const f64,
             len: key_len,

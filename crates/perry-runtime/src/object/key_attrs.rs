@@ -586,6 +586,40 @@ pub(crate) unsafe fn keys_have_slots_checked(keys: *const ArrayHeader, count: u3
     !attrs.is_null() && prefix_word(attrs, count).summary & SUMMARY_SLOTS != 0
 }
 
+/// Debug invariant of every lane that reads key position `i` as storage slot
+/// `i`: each of the first `count` positions of `keys` is its own slot. It
+/// reads every position's own word, not the cumulative summary a lane's gate
+/// trusts, so a reader that misses the slot mapping fails here in debug
+/// builds. Release builds compile it away.
+///
+/// # Safety
+/// `keys` is any address.
+#[inline(always)]
+pub(crate) unsafe fn debug_assert_positional(keys: *const ArrayHeader, count: u32) {
+    #[cfg(debug_assertions)]
+    assert_positional(keys, count);
+    #[cfg(not(debug_assertions))]
+    let _ = (keys, count);
+}
+
+#[cfg(debug_assertions)]
+#[inline(never)]
+unsafe fn assert_positional(keys: *const ArrayHeader, count: u32) {
+    if count == 0 || crate::object::overflow::is_table(keys) {
+        return;
+    }
+    let attrs = keys_attrs_checked(keys);
+    if attrs.is_null() {
+        return;
+    }
+    let (w, len) = words(attrs);
+    for pos in 0..(count as usize).min(len) {
+        if let Some(slot) = Word::decode(*w.add(pos)).slot().filter(|&s| s != pos as u32) {
+            panic!("positional lane on a layout whose key {pos} keeps storage slot {slot}");
+        }
+    }
+}
+
 /// [`keys_summary`] through [`keys_attrs_checked`].
 ///
 /// # Safety

@@ -974,6 +974,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     {
         return None;
     }
+    super::key_attrs::debug_assert_positional(keys, shape.logical_key_count);
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
     if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
         || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED) != 0

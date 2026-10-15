@@ -147,6 +147,13 @@ unsafe fn copy_slots(
 ) {
     let prefix_count = prefix.map_or(0, |(_, r)| r.logical_key_count());
     if let Some((object, r)) = prefix {
+        key_attrs::debug_assert_positional(r.keys() as usize as *const ArrayHeader, prefix_count);
+        if let Some(result) = result {
+            key_attrs::debug_assert_positional(
+                result.keys() as usize as *const ArrayHeader,
+                result.logical_key_count(),
+            );
+        }
         for slot in 0..prefix_count as usize {
             let bits = if slot < r.live_inline_slot_count() as usize {
                 *fields(object).add(slot)
@@ -207,6 +214,25 @@ unsafe fn source_slot(source_keys: *const ArrayHeader, position: usize) -> usize
     } else {
         key_attrs::key_storage_slot(source_keys, position as u32) as usize
     }
+}
+
+/// Debug invariant of a learned edge: it copies slot for slot, so the source
+/// keeps the result's storage slots (one shared list) or none of its own.
+#[inline(always)]
+unsafe fn debug_assert_edge(source: *const ObjectHeader, target_shape: u32) {
+    #[cfg(debug_assertions)]
+    {
+        let source = crate::object::object_keys(source);
+        if let Some(target) = shapes::shape_record_by_id(target_shape) {
+            let target_keys = target.keys() as usize as *const ArrayHeader;
+            if target_keys != source.arr() {
+                key_attrs::debug_assert_positional(source.arr(), source.count());
+                key_attrs::debug_assert_positional(target_keys, target.logical_key_count());
+            }
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (source, target_shape);
 }
 
 /// Non-null when `source`'s keys keep their own storage slots but the result
@@ -271,6 +297,7 @@ pub unsafe extern "C" fn js_object_spread_fresh_leading(_prefix: f64, source: f6
                 std::mem::size_of::<ObjectHeader>() + (count as usize).max(INLINE_SLOT_FLOOR) * 8;
             let raw = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
             if !raw.is_null() {
+                debug_assert_edge(src, entry.target_shape_id);
                 let object = finish_header(raw.cast(), entry.target_shape_id);
                 if entry.slot_idx & NUMBER_COPY != 0 {
                     // GC_STORE_AUDIT(POINTER_FREE): the learned source
@@ -330,6 +357,7 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
                     let raw =
                         crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
                     if !raw.is_null() {
+                        debug_assert_edge(src, entry.target_shape_id);
                         let object = finish_header(raw.cast(), entry.target_shape_id);
                         copy_slots(object, previous, src, record, result, ptr::null());
                         initialize_slack(object, entry.target_len as usize);
