@@ -33,23 +33,24 @@ pub(crate) const OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: u64 = 1 << 6;
 /// an ordinary read yields undefined. Projected into the shape kind.
 pub(crate) const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
 /// #11915: this object is a SEALED intrinsic of the realm
-/// (`builtin_proto::seal_realm`): a prototype, a builtin namespace's member
-/// holder, or the realm global; its family is in bits 8..12
-/// ([`OBJECT_META_SEALED_FAMILY_SHIFT`]). Every mutation funnel reads it
-/// (`builtin_proto::note_write`) and withdraws that family's
-/// `Pristine` byte.
+/// (`builtin_proto::seal_realm`, `seal_runtime_prototype`): a prototype, a
+/// builtin namespace's member holder, or the realm global; its family is in
+/// bits 8..13 ([`OBJECT_META_SEALED_FAMILY_SHIFT`]). Every mutation funnel
+/// reads it (`builtin_proto::note_write`): a builtin family withdraws its
+/// `Pristine` byte, a runtime prototype (`builtin_proto::RUNTIME_FAMILY`)
+/// sets its own shadow bit.
 ///
-/// Bits 8..12 are the packed-numeric payload's on an Array-subclass
+/// Bits 8..13 are the packed-numeric payload's on an Array-subclass
 /// instance, which a sealed prototype never is. The encoding is fail-safe:
 /// a cleared family field reads as family 0, `Object`, which withdraws every
 /// family.
 pub(crate) const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
-/// Shift of the sealed intrinsic's family (5 bits): a `BuiltinProto`
-/// (0..16), a builtin namespace (16..31, `builtin_namespace`), or the realm
-/// global (31).
+/// Shift of the sealed intrinsic's family (6 bits): a `BuiltinProto`
+/// (0..16), a builtin namespace (16..31, `builtin_namespace`), the realm
+/// global (31), or a runtime prototype (32, `builtin_proto::RUNTIME_FAMILY`).
 pub(crate) const OBJECT_META_SEALED_FAMILY_SHIFT: u32 = 8;
 /// Mask of the sealed intrinsic's family after the shift.
-pub(crate) const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x1F;
+pub(crate) const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;
 //
 // `ObjectMeta::flags` bit map (u64), verified against #8690's comment in
 // `array/subclass.rs` and every reader in the tree:
@@ -63,7 +64,7 @@ pub(crate) const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x1F;
 //   bit 6      exotic read receiver               (here)
 //   bit 7      *** THE LAST FREE BIT IN THIS WORD ***
 //   bits 8..31 verified prefix bound              (#8690)
-//              — on a sealed intrinsic (bit 3), bits 8..12 are its
+//              — on a sealed intrinsic (bit 3), bits 8..13 are its
 //              family instead (#11915; never both)
 //   bits 32..63 exact semantic ShapeId            (#8690)
 //

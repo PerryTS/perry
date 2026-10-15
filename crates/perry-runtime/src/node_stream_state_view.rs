@@ -305,13 +305,18 @@ fn state_proto(kind: usize) -> f64 {
         );
     }
     let proto = f64::from_bits(STATE_PROTOS.with(|protos| protos.borrow()[kind]));
-    let desc = if kind == READABLE_KIND {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
+    // Built: the READABLE_STATE / WRITABLE_STATE layouts name this prototype.
+    // It keeps its declared layout, so it is named, not sealed.
+    let serial = if kind == READABLE_KIND {
+        crate::closure::shape::INTRINSIC_SERIAL_READABLE_STATE
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
+        crate::closure::shape::INTRINSIC_SERIAL_WRITABLE_STATE
     };
     unsafe {
-        crate::object::runtime_layouts::bind_builtin_prototype(desc, proto.to_bits());
+        crate::object::builtin_proto::name_runtime_prototype(
+            crate::value::js_nanbox_get_pointer(proto) as *mut crate::object::ObjectHeader,
+            serial,
+        );
     }
     proto
 }

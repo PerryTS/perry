@@ -31,11 +31,14 @@ pub(crate) struct BuiltinConstructorDeclaration {
     pub prototype_class: Option<u32>,
     pub prototype_serial: Option<u64>,
     pub prototype_callable: bool,
+    /// A sealed runtime prototype's reserved serial (`builtin_proto::seal_runtime_prototype`),
+    /// which a runtime layout descriptor names.
+    pub sealed_serial: Option<u64>,
     pub instance_identity: Option<BuiltinInstanceIdentity>,
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
@@ -67,6 +70,7 @@ macro_rules! builtin_constructors {
                 prototype_class: builtin_constructors!(@optional $($class)?),
                 prototype_serial: builtin_constructors!(@optional $($serial)?),
                 prototype_callable: builtin_constructors!(@callable $($callable)?),
+                sealed_serial: builtin_constructors!(@optional $($sealed)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
             },)*
         ];
@@ -144,7 +148,7 @@ builtin_constructors! {
     WritableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0061),
     TransformStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0062),
     Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID),
-    URL => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0063),
+    URL => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL; instance BuiltinInstanceIdentity::Class(0xFFFF0063),
     URLSearchParams => NOOP_CONSTRUCTOR_INFO,
     URLPattern => crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2)),
     AbortController => NOOP_CONSTRUCTOR_INFO,

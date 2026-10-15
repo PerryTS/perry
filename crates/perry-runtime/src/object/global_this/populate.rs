@@ -373,6 +373,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     );
                 }
             }
+            if let Some(serial) = declaration.sealed_serial {
+                // SAFETY: as above; runtime layouts name it by this serial.
+                unsafe { crate::object::builtin_proto::seal_runtime_prototype(proto_obj, serial) };
+            }
             if name == "Function" {
                 crate::closure::shape::FUNCTION_PROTOTYPE_PTR
                     .store(proto_obj as i64, std::sync::atomic::Ordering::Release);

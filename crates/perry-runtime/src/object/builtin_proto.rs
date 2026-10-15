@@ -41,6 +41,11 @@
 //! `[[Prototype]]` funnels, and the Array-prototype named-property set and
 //! delete. Nothing is paid until a sealed prototype is written.
 //!
+//! [`seal_runtime_prototype`] seals a prototype the runtime builds (URL,
+//! timers) under family [`RUNTIME_FAMILY`]: a write sets that prototype's own
+//! shadow bit and nothing else. [`name_runtime_prototype`] only gives one its
+//! reserved identity.
+//!
 //! The runtime's own definitions (`own_override::as_builtin_definition`, the
 //! lazy populations) do not count: they install the builtin itself.
 
@@ -218,6 +223,68 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
     });
 }
 
+/// The meta family field of a sealed RUNTIME prototype (one the runtime
+/// builds, such as `%URL.prototype%` or a timer prototype; not a
+/// [`BuiltinProto`]). A write marks only that prototype.
+pub(crate) const RUNTIME_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+const _: () = assert!(
+    RUNTIME_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
+    "the meta family field holds every sealed family"
+);
+
+/// Seal a runtime prototype the moment its builder completes it, before any
+/// program code can reach it (§3.6: builtin prototypes are families with
+/// runtime-defined layouts). It takes its reserved intrinsic `serial`, the
+/// identity a layout descriptor names through its prototype family, and
+/// writes that identity's word, which every shape of the identity reads as its
+/// [[Prototype]]: a layout-born object needs no link. From now on every
+/// mutation of the prototype sets its own shadow bit, so an unshadowed word
+/// proves it still holds exactly the runtime's definitions and [[Prototype]].
+///
+/// # Safety
+/// `proto` is a live, fully built ordinary object with no serial yet.
+#[inline(never)]
+#[optimize(size)]
+pub(crate) unsafe fn seal_runtime_prototype(proto: *mut ObjectHeader, serial: u64) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
+    let Some(meta) = name_runtime_prototype(proto, serial) else {
+        return;
+    };
+    // GC_STORE_AUDIT(POINTER_FREE): scalar flag bits, never a reference.
+    (*meta).flags |= super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
+        | ((RUNTIME_FAMILY as u64) << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
+}
+
+/// Give a runtime prototype its reserved intrinsic `serial` as its identity
+/// and write the identity's word, without marking it or changing its shape:
+/// a prototype born on its own declared layout keeps that layout (the
+/// stream-state prototypes). Its layout word then proves nothing about
+/// writes; only [`seal_runtime_prototype`] adds that. Returns its meta record.
+///
+/// # Safety
+/// `proto` is a live ordinary object whose serial is 0 or `serial`.
+#[inline(never)]
+#[optimize(size)]
+pub(crate) unsafe fn name_runtime_prototype(
+    proto: *mut ObjectHeader,
+    serial: u64,
+) -> Option<*mut super::ObjectMeta> {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let meta = super::object_meta_ensure(proto);
+    if meta.is_null() {
+        return None;
+    }
+    debug_assert!((*meta).proto_serial == 0 || (*meta).proto_serial == serial);
+    // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
+    (*meta).proto_serial = serial;
+    super::shapes::write_identity_word(
+        serial,
+        crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+    );
+    Some(meta)
+}
+
 /// Seal every family's intrinsic prototype of THIS thread's realm. Called once
 /// at the end of `populate_global_this_builtins`, after every runtime-owned
 /// install, link and the prototype-address priming.
@@ -336,9 +403,10 @@ fn sealed_family(flags: u64) -> usize {
         & super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK) as usize
 }
 
-/// A write reached a sealed intrinsic: a prototype family's own bit, or a
-/// namespace holder or the realm global (`builtin_namespace`). `field` is
-/// the inline or spill slot a value store is about to write, when known.
+/// A write reached a sealed intrinsic: a prototype family's own bit, a
+/// runtime prototype's own shadow bit, or a namespace holder or the realm
+/// global (`builtin_namespace`). `field` is the inline or spill slot a value
+/// store is about to write, when known.
 #[cold]
 #[inline(never)]
 #[optimize(size)]
@@ -351,6 +419,10 @@ unsafe fn note_sealed_write(
     let family = sealed_family(flags);
     if family < FAMILIES {
         note_family_write(family, site);
+    } else if family == RUNTIME_FAMILY {
+        if !super::own_override::in_builtin_definition() {
+            super::shadow::set_bit(obj.cast_mut());
+        }
     } else {
         super::builtin_namespace::note_write(obj as *mut ObjectHeader, family, field, site);
     }

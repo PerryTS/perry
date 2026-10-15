@@ -169,17 +169,14 @@ pub const LAYOUT_BASE: u32 =
     super::shapes::SHAPE_ID_BASE + crate::codegen_abi::STATIC_SHAPE_ID_COUNT / 2;
 const _: () = assert!(LAYOUT_BASE == crate::codegen_abi::SHAPE_ID_BASE + (1 << 19));
 
-/// `PerryLayoutDesc.proto` builtin tags (values below
-/// [`LAYOUT_PROTO_TAG_END`]; anything else is a `*const PerryProtoFamily`,
-/// the singleton prototype of an `Object.create(P)` family, step 1).
-pub const LAYOUT_PROTO_OBJECT: usize = 0;
-pub const LAYOUT_PROTO_NULL: usize = 1;
-pub const LAYOUT_PROTO_URL: usize = 2;
-pub const LAYOUT_PROTO_READABLE_STATE: usize = 3;
-pub const LAYOUT_PROTO_WRITABLE_STATE: usize = 4;
-pub const LAYOUT_PROTO_TIMEOUT: usize = 5;
-pub const LAYOUT_PROTO_IMMEDIATE: usize = 6;
-/// `PerryLayoutDesc.proto` values at or above this are a
+/// `PerryLayoutDesc.proto`: a tag (address below [`LAYOUT_PROTO_TAG_END`]),
+/// `%Object.prototype%` or null, or a `PerryProtoFamily`, the one prototype
+/// every object of the layout inherits from: the singleton of an
+/// `Object.create(P)` family (step 1), or a runtime prototype
+/// (`runtime_layouts::*_PROTO_FAMILY`, whose serial is a reserved intrinsic one).
+pub const LAYOUT_PROTO_OBJECT: *const PerryProtoFamily = std::ptr::null();
+pub const LAYOUT_PROTO_NULL: *const PerryProtoFamily = std::ptr::without_provenance(1);
+/// `PerryLayoutDesc.proto` addresses at or above this are a
 /// `*const PerryProtoFamily`.
 pub const LAYOUT_PROTO_TAG_END: usize = 4096;
 
@@ -195,6 +192,12 @@ pub const LAYOUT_PROTO_TAG_END: usize = 4096;
 /// it at its birth ([`perry_bind_family_prototype`]); a birth of the family
 /// ([`perry_create_family`]) checks the prototype it is handed carries it,
 /// one compare, and otherwise takes the ordinary `Object.create`.
+///
+/// A runtime prototype's family is static data with its reserved intrinsic
+/// serial already in place (registration keeps a serial it finds); the
+/// runtime gives the prototype that serial when it builds it
+/// (`builtin_proto::seal_runtime_prototype`, `name_runtime_prototype`), so an
+/// object born on the layout needs no link.
 #[repr(C)]
 pub struct PerryProtoFamily {
     pub serial: u64,
@@ -268,7 +271,7 @@ pub struct PerryLayoutDesc {
     /// register it) and as 0 for static data no object carries.
     pub layout_id: u32,
     pub rep: u64,
-    pub proto: usize,
+    pub proto: *const PerryProtoFamily,
     pub keys: *const PerryLayoutKey,
     pub key_count: u32,
     /// Index capacity - 1 (a power of two minus one).
@@ -332,7 +335,7 @@ section_sentinel!(
         slot_count: 0,
         layout_id: 0,
         rep: 0,
-        proto: 0,
+        proto: LAYOUT_PROTO_OBJECT,
         keys: std::ptr::null(),
         key_count: 0,
         index_mask: 0,
@@ -616,11 +619,10 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
             _ => return 0,
         }
     }
-    let proto_id = match d.proto {
-        LAYOUT_PROTO_OBJECT => super::shapes::PROTO_ID_DEFAULT,
-        LAYOUT_PROTO_NULL => super::shapes::PROTO_ID_NULL,
-        LAYOUT_PROTO_URL..=LAYOUT_PROTO_IMMEDIATE => super::shapes::fresh_unique_proto_id(),
-        fam if fam >= LAYOUT_PROTO_TAG_END => proto_family_serial(fam as *const PerryProtoFamily),
+    let proto_id = match d.proto.addr() {
+        0 => super::shapes::PROTO_ID_DEFAULT,
+        1 => super::shapes::PROTO_ID_NULL,
+        fam if fam >= LAYOUT_PROTO_TAG_END => proto_family_serial(d.proto),
         _ => return 0,
     };
     let key_count = d.key_count;
@@ -906,11 +908,11 @@ pub unsafe extern "C" fn perry_create_family(desc: *const PerryLayoutDesc, proto
 }
 
 unsafe fn family_birth(d: &PerryLayoutDesc, proto: f64) -> Option<*mut ObjectHeader> {
-    if d.proto < LAYOUT_PROTO_TAG_END {
+    if d.proto.addr() < LAYOUT_PROTO_TAG_END {
         return None;
     }
     let id = registered_layout_id(d.layout_id)?;
-    let serial = proto_family_serial_registered(d.proto as *const PerryProtoFamily);
+    let serial = proto_family_serial_registered(d.proto);
     let bits = proto.to_bits();
     if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         return None;
@@ -974,8 +976,8 @@ pub unsafe extern "C-unwind" fn js_create_family_contract_check(
         )
     };
     let _no_move = crate::gc::GcSuppressScope::new();
-    let serial = if d.proto >= LAYOUT_PROTO_TAG_END {
-        proto_family_serial_registered(d.proto as *const PerryProtoFamily)
+    let serial = if d.proto.addr() >= LAYOUT_PROTO_TAG_END {
+        proto_family_serial_registered(d.proto)
     } else {
         0
     };

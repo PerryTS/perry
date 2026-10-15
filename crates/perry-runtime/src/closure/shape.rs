@@ -38,6 +38,13 @@ pub(crate) const INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION: u64 = 4;
 /// object is ever assigned this serial; a class constructor's real
 /// [[Prototype]] lives on the object (dictionary kind: "ask the object").
 pub(crate) const INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER: u64 = 5;
+/// Runtime prototypes that runtime layout descriptors name
+/// (`runtime_layouts::*_PROTO_FAMILY`).
+pub(crate) const INTRINSIC_SERIAL_URL: u64 = 6;
+pub(crate) const INTRINSIC_SERIAL_READABLE_STATE: u64 = 7;
+pub(crate) const INTRINSIC_SERIAL_WRITABLE_STATE: u64 = 8;
+pub(crate) const INTRINSIC_SERIAL_TIMEOUT: u64 = 9;
+pub(crate) const INTRINSIC_SERIAL_IMMEDIATE: u64 = 10;
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -265,7 +265,7 @@ fn static_layout_misc_dump_registered_contracts() {
                 d.slot_count,
                 d.layout_id,
                 d.rep,
-                d.proto,
+                d.proto.addr(),
                 d.key_count,
                 d.index_mask,
                 index
