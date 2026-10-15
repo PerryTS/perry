@@ -20,15 +20,18 @@ fn replace_all(
     let input = text(&scope, input);
     let replacement = scope.root_nanbox_f64(replacement(&scope, &re));
     let before = direct_replaces();
+    let exits = crate::regex::perex_replace_direct::unmatched_exits();
     let result = scope.root_nanbox_f64(crate::regex::js_string_replace_js(
         input.get_nanbox_f64(),
         re.get_nanbox_f64(),
         replacement.get_nanbox_f64(),
     ));
+    // Served without the ordinary loop: the direct loop, or the leading-unit
+    // exit for a subject the pattern cannot match.
     (
         bytes(result.get_nanbox_f64()),
         get(&re, b"lastIndex"),
-        direct_replaces() > before,
+        direct_replaces() > before || crate::regex::perex_replace_direct::unmatched_exits() > exits,
     )
 }
 
@@ -333,15 +336,15 @@ fn short_no_match_keeps_subject_and_defers_substitution_preparation() {
         let input = text(&scope, source);
         put(&re, b"lastIndex", 5.0);
         let before = crate::regex::perex_replace_direct::template_parse_calls();
-        let served = direct_replaces();
+        let exits = crate::regex::perex_replace_direct::unmatched_exits();
         let result = crate::regex::js_string_replace_js(
             input.get_nanbox_f64(),
             re.get_nanbox_f64(),
             replacement.get_nanbox_f64(),
         );
         assert!(
-            direct_replaces() > served,
-            "must exercise the builtin direct loop"
+            crate::regex::perex_replace_direct::unmatched_exits() > exits,
+            "a subject without `+` must take the leading-unit exit"
         );
         assert_eq!(result.to_bits(), input.get_nanbox_f64().to_bits());
         assert_eq!(get(&re, b"lastIndex").to_bits(), 0.0f64.to_bits());

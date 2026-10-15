@@ -118,6 +118,19 @@ pub fn pristine(family: BuiltinProto) -> bool {
     }
 }
 
+/// `family`'s intrinsic prototype itself has not been written since the realm
+/// sealed it: its own shadow bit, one load. Unlike [`pristine`] this does not
+/// cover `%Object.prototype%`, so it proves only keys that prototype defines
+/// itself (a write to it, including a delete, sets the bit).
+#[inline(always)]
+pub fn prototype_unwritten(family: BuiltinProto) -> bool {
+    // SAFETY: as in `pristine`.
+    unsafe {
+        (*crate::agent_ptrs::intrinsic_proto(family as usize)).parent_class_id
+            < super::layout_desc::UNSHADOWED_WORD_END
+    }
+}
+
 /// `Pristine` for a borrowed call (`Array.prototype.m.call(x, …)`), which
 /// also reads `Function.prototype.call`.
 #[inline(always)]

@@ -116,6 +116,10 @@ unsafe fn publish(
         (*re).dot_all = flags.contains('s');
         (*re).unicode = flags.contains('u') || flags.contains('v');
         (*re).has_indices = flags.contains('d');
+        let (lead, lead_len) =
+            source.with_string_bytes(|source| super::perex_lead::derive(source, flags));
+        (*re).lead = lead;
+        (*re).lead_len = lead_len;
         for (slot, value) in [
             (
                 std::ptr::addr_of!((*re).pattern_ptr) as usize,
@@ -185,7 +189,9 @@ fn new_data_miss<'s>(
             dot_all: false,
             unicode: false,
             has_indices: false,
+            lead_len: 0,
             perex_program: std::ptr::null(),
+            lead: [[0; 2]; super::perex_lead::LEAD_MAX],
         });
     }
     let receiver = scope.root_raw_mut_ptr(re);
@@ -212,6 +218,8 @@ pub(crate) unsafe fn test_install_program(receiver: &RuntimeHandle<'_>, program:
     // GC_STORE_AUDIT(INIT): copy traced strings into an unpublished cell,
     // then barrier both edges before any collecting action.
     data.write(old.with_const_ptr::<RegExpData, _>(|old| std::ptr::read(old)));
+    // The installed program need not be the copied source's: derive nothing.
+    (*data).lead_len = 0;
     for (slot, value) in [
         (
             std::ptr::addr_of!((*data).pattern_ptr) as usize,

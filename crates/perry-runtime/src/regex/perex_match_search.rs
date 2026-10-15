@@ -89,22 +89,11 @@ pub(super) fn match_flags(
     receiver: &RuntimeHandle<'_>,
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
-    match_flags_proven(receiver, budget, false)
-}
-
-/// Reuse a complete receiver proof after the operation's coercions. The
-/// ordinary flag proof and observable Get remain this same algorithm.
-pub(super) fn match_flags_proven(
-    receiver: &RuntimeHandle<'_>,
-    budget: &mut Budget,
-    builtin: bool,
-) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
-    if let Some(data) = crate::regex::regexp_data_of(value) {
-        if builtin || crate::object::regex_read_sites::flags(value) {
-            // The canonicality check neither collects nor calls user code.
-            return Ok(unsafe { ((*data).global, (*data).unicode) });
-        }
+    if let Some(re) = crate::regex::instance::builtin(value) {
+        // The builtin fact neither collects nor calls user code.
+        let data = unsafe { &*crate::regex::instance::builtin_data(re) };
+        return Ok((data.global, data.unicode));
     }
     let scope = RuntimeHandleScope::new();
     let flags = scope.root_nanbox_f64(dispatch::get(receiver, b"flags")?);

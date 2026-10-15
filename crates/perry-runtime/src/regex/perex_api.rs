@@ -590,6 +590,20 @@ pub(crate) fn execute_rooted(
     .map(Start::at) else {
         return Ok(None);
     };
+    // A string without the pattern's leading units (`perex_lead`) has no
+    // start a match can take: the search fails before anything is bound.
+    let excluded = unsafe {
+        super::perex_lead::excludes_header(
+            &*super::regexp_data_ptr(regexp(receiver)),
+            input.with_const_ptr::<StringHeader, _>(|s| s),
+        )
+    };
+    if excluded {
+        if stateful {
+            store_last_index(regexp(receiver), 0)?;
+        }
+        return Ok(None);
+    }
     let mut captures = None;
     // Bindings this operation already holds for this receiver's current
     // program and this same string, if any. Looked up after `lastIndex`,

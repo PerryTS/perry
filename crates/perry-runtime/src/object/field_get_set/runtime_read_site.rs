@@ -104,30 +104,6 @@ pub(crate) unsafe fn probe(obj: *const ObjectHeader, key: Key<'_>) -> Option<Ans
     crate::object::method_site::read_holder::shape_answer(obj, key)
 }
 
-/// The native entry of the getter `Get(obj, key)` would call, when the
-/// layouts name one (see [`probe`]).
-///
-/// # Safety
-/// As [`probe`].
-#[cfg(any(test, feature = "regex-engine"))]
-pub(crate) unsafe fn getter_code(obj: *const ObjectHeader, key: Key<'_>) -> Option<usize> {
-    match probe(obj, key)? {
-        Answer::Getter(bits) => Some(getter_code_of(bits)),
-        Answer::Data(_) => None,
-    }
-}
-
-/// The native entry of a getter closure, or zero for a value that is not
-/// one. A scalar, never a GC edge.
-pub(crate) fn getter_code_of(bits: u64) -> usize {
-    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
-        return 0;
-    }
-    crate::closure::get_valid_func_ptr(
-        (bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader,
-    ) as usize
-}
-
 /// `Get(obj, key)`: the probe, else the complete read. It can run a getter,
 /// collect and throw.
 ///

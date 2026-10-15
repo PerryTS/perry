@@ -967,48 +967,8 @@ mod tests {
     }
 }
 
-/// A builtin operation can consume several inherited slots under the same
-/// ordinary method-site holder entry. The cold proof supplies declared body
-/// identities, absence of own overrides and the intrinsic prototype link;
-/// the hit validates exactly those receiver/holder words. No slot values or
-/// accessor pairs outlive their shape proof outside the existing site.
-#[inline]
-pub(crate) unsafe fn shape_proof(
-    slot: *mut MethodSiteSlot,
-    receiver: *const ObjectHeader,
-    prove: impl FnOnce(*const ObjectHeader) -> Option<*const ObjectHeader>,
-) -> bool {
-    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
-        return false;
-    }
-    let word = std::ptr::read(receiver as *const u64);
-    let site = crate::object::pic_slot_peek(slot);
-    if !site.is_null() {
-        for entry in &(*site).entries {
-            if entry.word == word && holder_word_matches(entry) {
-                return true;
-            }
-        }
-    }
-    let _stable = crate::gc::GcSuppressScope::new();
-    let Some(holder) = prove(receiver) else {
-        return false;
-    };
-    publish(
-        slot,
-        MethodEntry {
-            word,
-            slot: METHOD_SITE_INHERITED | METHOD_SITE_CONSTFN,
-            info: 0,
-            closure: holder as usize,
-            gen: std::ptr::read(holder as *const u64),
-            code: 0,
-        },
-    )
-}
-
-/// The holder word is the same authority for single-slot and aggregate
-/// builtin proofs. Its address is rooted and repaired by method-site GC.
+/// The holder word is the authority for a single-slot builtin proof. Its
+/// address is rooted and repaired by method-site GC.
 #[inline(always)]
 unsafe fn holder_word_matches(entry: &MethodEntry) -> bool {
     entry.closure != 0 && std::ptr::read(entry.closure as *const u64) == entry.gen

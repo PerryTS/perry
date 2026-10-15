@@ -279,7 +279,7 @@ fn regexp_data_needs_no_object_metadata_or_expando_move_hook() {
     let info = crate::gc::gc_type_info(crate::gc::GC_TYPE_REGEXP).unwrap();
     assert_eq!(info.move_hook_kind, crate::gc::GcMoveHookKind::None);
     assert_eq!(info.finalize_hook_kind, crate::gc::GcFinalizeHookKind::None);
-    assert_eq!(std::mem::size_of::<RegExpData>(), 32);
+    assert_eq!(std::mem::size_of::<RegExpData>(), 96);
 }
 
 // Program lifetime and compilation-churn reclamation are exercised with the

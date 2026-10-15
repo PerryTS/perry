@@ -475,10 +475,7 @@ pub(crate) fn string(receiver: f64, separator: f64, limit_value: f64) -> Result<
     let limit_value = scope.root_nanbox_f64(limit_value);
     let mut budget = Budget::new(api::WORK);
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
-    if crate::object::regex_read_sites::method(
-        separator.get_nanbox_f64(),
-        crate::object::regex_read_sites::Method::Split,
-    ) {
+    if crate::object::regex_read_sites::builtin_behavior(separator.get_nanbox_f64()) {
         // `Get(separator, @@split)` would reach the builtin without running
         // code (#10518). Call what it would have returned.
         return regexp(

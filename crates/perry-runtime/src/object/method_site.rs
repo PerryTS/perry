@@ -97,7 +97,6 @@ use crate::object::ObjectHeader;
 
 mod builtin_receiver;
 mod proto_constant;
-pub(crate) use builtin_receiver::shape_proof as builtin_shape_proof;
 pub use proto_constant::{
     js_proto_constant_contract_check, js_proto_holder_contract_check,
     js_proto_shadow_contract_check,

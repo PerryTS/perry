@@ -57,7 +57,61 @@ pub(super) fn index_property(
     dispatch::get(result, &key[start..])
 }
 
+/// RegExp.prototype[@@replace] over a subject the pattern provably cannot
+/// match: the subject itself, with a failed RegExpBuiltinExec's `lastIndex`,
+/// before any handle scope, binding or coercion frame. `None` leaves the call
+/// to the ordinary algorithm below.
+///
+/// Steps 2-5 (ToString of the subject; IsCallable and ToString of the
+/// replacement) run no user code for a string subject and a string
+/// replacement. The builtin RegExp fact proves that steps 6-8 read the
+/// builtin flags getters, Set a writable data `lastIndex` and call the
+/// builtin exec, and the pattern's leading units (`perex_lead`) prove that
+/// exec fails from every start. A failed exec of a global or sticky RegExp
+/// leaves `lastIndex` 0; a non-stateful one only reads it, which is
+/// unobservable for a Number (anything else takes the ordinary path).
+#[inline]
+fn unmatched(receiver: f64, argument: f64, replacement: f64) -> Option<f64> {
+    use crate::value::JSValue;
+    #[cfg(test)]
+    if super::perex_replace_direct::direct_disabled() {
+        return None;
+    }
+    if !JSValue::from_bits(argument.to_bits()).is_any_string()
+        || !JSValue::from_bits(replacement.to_bits()).is_any_string()
+    {
+        return None;
+    }
+    let re = crate::regex::instance::builtin(receiver)?;
+    // SAFETY: admitted just now; nothing below collects.
+    unsafe {
+        let data = &*crate::regex::instance::builtin_data(re);
+        if !super::perex_lead::excludes_value(data, argument) {
+            return None;
+        }
+        if data.global {
+            crate::regex::instance::builtin_reset_last_index(re);
+        } else {
+            let last_index = crate::regex::instance::builtin_last_index(re);
+            if !JSValue::from_bits(last_index.to_bits()).is_number() {
+                return None;
+            }
+            if data.sticky {
+                crate::regex::instance::builtin_reset_last_index(re);
+            }
+        }
+    }
+    // The result aliases the subject: no later in-place append may reuse it.
+    crate::string::js_string_addref_if_heap_string(argument);
+    #[cfg(test)]
+    super::perex_replace_direct::note_unmatched_exit();
+    Some(argument)
+}
+
 pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f64, EngineError> {
+    if let Some(unchanged) = unmatched(receiver, argument, replacement) {
+        return Ok(unchanged);
+    }
     dispatch::require_object(receiver)?;
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
@@ -76,15 +130,25 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
     // This one proof authorizes both the flags read and direct-loop admission.
     // A builtin RegExp's nonconfigurable own lastIndex is data: its reset
     // either stores without user code or throws, even when nonwritable.
-    let builtin = crate::object::regex_read_sites::builtin_behavior(receiver.get_nanbox_f64());
-    let (global, unicode) =
-        super::perex_match_search::match_flags_proven(&receiver, &mut budget, builtin)?;
+    let builtin = crate::regex::instance::builtin(receiver.get_nanbox_f64());
+    let (global, unicode) = match builtin {
+        // SAFETY: admitted just now; nothing collected since.
+        Some(re) => unsafe {
+            let data = &*crate::regex::instance::builtin_data(re);
+            (data.global, data.unicode)
+        },
+        None => super::perex_match_search::match_flags(&receiver, &mut budget)?,
+    };
     if global {
-        dispatch::set_last_index(&receiver, 0.0)?;
+        match builtin {
+            // SAFETY: as above; reading the flags collected nothing.
+            Some(re) => unsafe { crate::regex::instance::builtin_reset_last_index(re) },
+            None => dispatch::set_last_index(&receiver, 0.0)?,
+        }
     }
     let bound = subject(input)?;
     let reuse = api::Reuse::new(&scope, &receiver, input, &bound, &mut budget);
-    if super::perex_replace_direct::admissible(&receiver, &reuse, builtin) {
+    if super::perex_replace_direct::admissible(&receiver, &reuse) {
         return super::perex_replace_direct::replace(
             &scope,
             &receiver,
@@ -313,11 +377,9 @@ impl Parts for Literal {
 /// String.prototype.replace/replaceAll makes of it is unobservable. The flag
 /// accessors are part of the proof, so `global` is read from the header.
 fn builtin_replace(_all: bool, search: f64) -> Option<bool> {
-    if !crate::object::regex_read_sites::builtin_behavior(search) {
-        return None;
-    }
-    let re = crate::value::js_nanbox_get_pointer(search) as *const super::RegExpHeader;
-    Some(unsafe { (*crate::regex::regexp_data_ptr(re)).global })
+    let re = crate::regex::instance::builtin(search)?;
+    // SAFETY: admitted just now; nothing collected since.
+    Some(unsafe { (*crate::regex::instance::builtin_data(re)).global })
 }
 
 pub(crate) fn string(

@@ -155,6 +155,78 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
 }
 
+/// The builtin-RegExp fact: `value` is a RegExp still on this agent's birth
+/// layout, and `%RegExp.prototype%` has not been written since the realm
+/// sealed it. Then every property the RegExp operations read is the builtin:
+/// the birth layout's own keys are only `[[RegExpMatcher]]` (slot 0) and a
+/// writable data `lastIndex` (slot 1), its `[[Prototype]]` is the intrinsic,
+/// and `exec`, `test`, the flag getters and the `@@replace`/`@@match`/
+/// `@@split`/`@@search`/`@@matchAll` methods are that prototype's own builtins.
+/// An own key, an attribute change, a `[[Prototype]]` relink or a subclass
+/// birth gives the receiver another layout word; a prototype write sets its
+/// shadow bit. Both are set where the change happens; this reads them.
+///
+/// Leaf, NoCollect, NoThrow. Returns the receiver for the slot accessors.
+#[inline(always)]
+pub(crate) fn builtin(value: f64) -> Option<*mut RegExpHeader> {
+    let header = crate::value::addr_class::pointer_value_header(value.to_bits())?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let shape = BIRTH_SHAPE.with(Cell::get);
+    let receiver = (value.to_bits() & crate::value::POINTER_MASK) as *mut RegExpHeader;
+    // The header's first word is `class_id` (0 for every RegExp) and the
+    // layout word, whose shadow bit is clear on the birth layout.
+    (shape != 0
+        && unsafe { std::ptr::read(receiver as *const u64) } == u64::from(shape) << 32
+        && crate::object::builtin_proto::prototype_unwritten(
+            crate::object::builtin_proto::BuiltinProto::RegExp,
+        ))
+    .then_some(receiver)
+}
+
+/// The birth layout's inline slot `index` of a receiver [`builtin`] admitted.
+#[inline(always)]
+unsafe fn slot(receiver: *mut RegExpHeader, index: usize) -> *mut u64 {
+    receiver
+        .cast::<u8>()
+        .add(std::mem::size_of::<RegExpHeader>())
+        .cast::<u64>()
+        .add(index)
+}
+
+/// The matcher data of a receiver [`builtin`] admitted.
+///
+/// # Safety
+/// `receiver` was admitted by [`builtin`] with no collection since.
+#[inline(always)]
+pub(crate) unsafe fn builtin_data(receiver: *mut RegExpHeader) -> *const RegExpData {
+    crate::value::js_nanbox_get_pointer(f64::from_bits(*slot(receiver, 0))) as *const RegExpData
+}
+
+/// `lastIndex` of a receiver [`builtin`] admitted: its own data slot.
+///
+/// # Safety
+/// As for [`builtin_data`].
+#[inline(always)]
+pub(crate) unsafe fn builtin_last_index(receiver: *mut RegExpHeader) -> f64 {
+    f64::from_bits(*slot(receiver, 1))
+}
+
+/// `Set(R, "lastIndex", 0, true)` on a receiver [`builtin`] admitted: its
+/// lastIndex is a writable data property in an `Any` slot, so the Set is this
+/// store, and a Number needs no write barrier.
+///
+/// # Safety
+/// As for [`builtin_data`].
+#[inline(always)]
+pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
+    // GC_STORE_AUDIT(POINTER_FREE): a Number into an Any lane; no barrier.
+    *slot(receiver, 1) = 0.0f64.to_bits();
+}
+
 // Read the realm intrinsic through the same private slot machinery as matcher
 // data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
 pub(crate) fn intrinsic_prototype() -> f64 {

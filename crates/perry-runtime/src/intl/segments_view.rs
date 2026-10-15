@@ -1060,10 +1060,11 @@ mod view_mode_tests {
         );
     }
 
-    /// SABOTAGE-SHAPED: the exported entry validates a RegExp pointer once;
-    /// the bounded matcher must trust that precondition instead of repeating
-    /// heap-space classification. Reintroducing the old check makes the delta
-    /// two, so this test cannot pass merely because the regex is valid.
+    /// SABOTAGE-SHAPED: the exported entry validates a RegExp pointer at most
+    /// once; the bounded matcher must trust that precondition instead of
+    /// repeating heap-space classification. Reintroducing the old check makes
+    /// the delta two, so this test cannot pass merely because the regex is
+    /// valid.
     #[cfg(feature = "regex-engine")]
     #[test]
     fn bounded_regex_test_does_not_repeat_entry_pointer_validation() {
@@ -1083,10 +1084,11 @@ mod view_mode_tests {
         let before = crate::regex::test_regex_ptr_validation_calls();
         assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
         let after = crate::regex::test_regex_ptr_validation_calls();
-        assert_eq!(
-            after - before,
-            1,
-            "one exported view call must validate its regex exactly once"
+        // The builtin RegExp fact reads the matcher from the birth layout's
+        // slot, so a pristine receiver needs no pointer validation at all.
+        assert!(
+            after - before <= 1,
+            "one exported view call must validate its regex at most once"
         );
     }
 

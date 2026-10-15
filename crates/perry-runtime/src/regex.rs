@@ -44,6 +44,8 @@ mod perex_display;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_glob;
 #[cfg(feature = "regex-engine")]
+pub(crate) mod perex_lead;
+#[cfg(feature = "regex-engine")]
 pub(crate) mod perex_literal_bytes;
 #[cfg(feature = "regex-engine")]
 mod perex_literal_search;
@@ -320,7 +322,14 @@ pub struct RegExpData {
     pub dot_all: bool,
     pub unicode: bool,
     pub has_indices: bool,
+    /// Terms in `lead` (`perex_lead`): zero when the pattern's leading
+    /// units were not derived.
+    pub(crate) lead_len: u8,
     pub(crate) perex_program: *const u8,
+    /// The ASCII units every match begins with, one set per unit, derived
+    /// from the source when the cell is published (`perex_lead::derive`).
+    #[cfg(feature = "regex-engine")]
+    pub(crate) lead: [perex_lead::AsciiSet; perex_lead::LEAD_MAX],
 }
 
 impl RegExpData {

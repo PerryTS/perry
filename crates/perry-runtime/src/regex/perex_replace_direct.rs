@@ -32,7 +32,6 @@ use super::perex_replace_storage::{boxed, call, call_native, length, List, Nativ
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::perex_strings::SpanCopies;
 use super::perex_substitution::{emit, parse, Parts, Token};
-use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
 use crate::value::{JSValue, TAG_UNDEFINED};
@@ -43,11 +42,30 @@ use perex::Budget;
 crate::perry_thread_local! {
     static DIRECT_REPLACES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static DIRECT_DISABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static UNMATCHED_EXITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(crate) fn direct_replaces() -> usize {
     DIRECT_REPLACES.with(std::cell::Cell::get)
+}
+
+/// Replacements answered by the leading-unit exit (`perex_replace::unmatched`).
+#[cfg(test)]
+pub(crate) fn unmatched_exits() -> usize {
+    UNMATCHED_EXITS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn note_unmatched_exit() {
+    UNMATCHED_EXITS.with(|n| n.set(n.get() + 1));
+}
+
+/// Whether a test holds [`DisableDirectReplaceForTest`]; the leading-unit
+/// exit steps aside as well, so the ordinary loop is what runs.
+#[cfg(test)]
+pub(super) fn direct_disabled() -> bool {
+    DIRECT_DISABLED.with(std::cell::Cell::get)
 }
 
 /// The ordinary loop runs while this is held, so a test can compare the two.
@@ -69,22 +87,20 @@ impl Drop for DisableDirectReplaceForTest {
 }
 
 /// Whether this replacement may skip exec result objects and `lastIndex`
-/// traffic. Non-observable: the brand and `exec` are shape proofs, the name
-/// count is the program's, and `lastIndex` is an own data property.
-pub(super) fn admissible(
-    receiver: &RuntimeHandle<'_>,
-    reuse: &Reuse<'_, '_>,
-    builtin: bool,
-) -> bool {
+/// traffic. Non-observable: the builtin RegExp fact proves the brand, `exec`
+/// and an own data `lastIndex` slot; the name count is the program's.
+pub(super) fn admissible(receiver: &RuntimeHandle<'_>, reuse: &Reuse<'_, '_>) -> bool {
     #[cfg(test)]
     if DIRECT_DISABLED.with(std::cell::Cell::get) {
         return false;
     }
-    let value = receiver.get_nanbox_f64();
-    let re = crate::value::js_nanbox_get_pointer(value) as *const RegExpHeader;
-    (builtin || crate::object::regex_read_sites::builtin_behavior(value))
-        && reuse.name_count(re) == Some(0)
-        && JSValue::from_bits(crate::regex::get_last_index(re).to_bits()).is_number()
+    let Some(re) = crate::regex::instance::builtin(receiver.get_nanbox_f64()) else {
+        return false;
+    };
+    reuse.name_count(re) == Some(0)
+        // SAFETY: admitted just now; nothing collected since.
+        && JSValue::from_bits(unsafe { crate::regex::instance::builtin_last_index(re) }.to_bits())
+            .is_number()
 }
 
 /// One collection-loop round in this many runs the GC safepoint poll.
