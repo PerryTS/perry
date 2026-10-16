@@ -3271,7 +3271,7 @@ js_string_append	Reenters	yes
 js_string_append_chain	Reenters	yes
 js_string_append_known_heap	Reenters	yes
 js_string_array_range_loop_guard	Leaf	no
-js_string_at	Reenters	yes
+js_string_at	AllocOnly	no
 js_string_b_at0	Reenters	yes
 js_string_b_at1	Reenters	yes
 js_string_b_charAt0	Reenters	yes
@@ -3339,7 +3339,7 @@ js_string_big	AllocOnly	no
 js_string_blink	AllocOnly	no
 js_string_bold	AllocOnly	no
 js_string_builder_new	AllocOnly	no
-js_string_char_at	Reenters	yes
+js_string_char_at	AllocOnly	no
 js_string_char_code_at	Leaf	no
 js_string_code_point_at	Leaf	no
 js_string_coerce	Reenters	yes

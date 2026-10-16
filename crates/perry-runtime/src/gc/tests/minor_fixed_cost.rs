@@ -114,7 +114,7 @@ fn array_tail_tables_are_skipped_only_while_unarmed() {
     crate::object::array_tail_transition::test_clear();
 }
 
-/// The small-int / ASCII-char caches are skipped by a minor outright. Their
+/// The small-int cache is skipped by a minor outright. Its
 /// real entries (longlived, pinned) satisfy the skip's precondition.
 #[test]
 fn small_string_caches_hold_only_pinned_non_young_strings() {

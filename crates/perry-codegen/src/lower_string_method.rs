@@ -350,8 +350,8 @@ fn lower_string_method_pristine(
 ///   one `js_builtin_proto_generic_call*`; clear, the unchecked body
 ///   `js_string_b_<method><argc>`.
 ///
-/// `charCodeAt` keeps its inline body: the proof joins the index test the body
-/// already has, and the entry is its slow arm.
+/// `charCodeAt` and `charAt` keep an inline body: the proof joins the index
+/// test the body already has, and the entry is its slow arm.
 pub(crate) fn emit_string_entry_call(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -376,6 +376,23 @@ pub(crate) fn emit_string_entry_call(
                 .cloned()
                 .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
             if let Some(value) = char_code_at::lower_char_code_at_inline_entry(
+                ctx,
+                object,
+                recv_box,
+                &idx_d,
+                callee,
+                arg_values,
+                patched_before.is_none(),
+            ) {
+                return value;
+            }
+        }
+        if property == "charAt" {
+            let idx_d = arg_values
+                .first()
+                .cloned()
+                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            if let Some(value) = char_code_at::lower_char_at_inline_entry(
                 ctx,
                 object,
                 recv_box,

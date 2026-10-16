@@ -680,6 +680,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_fontcolor", I64, &[I64, I64]);
     module.declare_function("js_string_fontsize", I64, &[I64, I64]);
     module.declare_function("js_string_char_at", I64, &[I64, I32]);
+    // The runtime's 128 canonical one-character strings (image strings, each
+    // the agent's atom of its text): emitted `charAt` loads its result here.
+    module.add_external_global("PERRY_ASCII_CHARS", "[128 x ptr]");
     // #3987: `s[key]` canonical-index read — returns the char (NaN-boxed string)
     // for a valid array index, else NaN-boxed `undefined`. Takes the raw key.
     module.declare_function("js_string_index_get", DOUBLE, &[I64, DOUBLE]);

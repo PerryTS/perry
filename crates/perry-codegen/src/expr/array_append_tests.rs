@@ -75,12 +75,23 @@ fn numeric_append_has_only_store_and_length_publication_in_its_fast_arm() {
 }
 
 #[test]
-fn strings_share_the_complete_continuation_without_inline_metadata() {
+fn values_append_inline_with_their_barrier_and_share_the_runtime_continuation() {
     let ir = append_ir(Type::Any, Expr::String("heap string append".into()));
+    // Growth, layout changes, a unique string and every unproven receiver
+    // keep the one runtime continuation.
     assert!(ir.contains("call double @js_array_append_set("));
-    assert!(!ir.lines().any(|line| line.starts_with("append.fast.")));
+    // The note-free append (`note_noop`) is inline: one store, the slot
+    // barrier, the length.
+    let label = ir
+        .lines()
+        .find(|line| line.starts_with("append.fast.") && line.contains(':'))
+        .expect("a value append has the inline note-free arm");
+    let block = ir.split_once(label).unwrap().1;
+    assert!(block.contains("store double"));
+    assert!(ir.contains("@js_write_barrier_slot_validated_parent("));
     assert!(!ir.contains("call i64 @js_array_append_grow("));
     assert!(!ir.contains("call double @js_array_note_numeric_write_value("));
+    assert!(!ir.contains("call void @js_string_addref_if_heap_string("));
     let llvm = inkwell::context::Context::create();
     let parsed = crate::inprocess::parse_ir_text(&llvm, &ir, "shared string append").unwrap();
     parsed.verify().unwrap();

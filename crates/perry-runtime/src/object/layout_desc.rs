@@ -533,6 +533,7 @@ pub(crate) unsafe fn well_known_atom_symbol(
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
 /// agent from `js_shape_run_static_seed`, after the hash-band literal seeds.
 pub(crate) fn seed_static_atoms() {
+    super::runtime_layouts::seed_ascii_char_atoms();
     unsafe {
         for atom in records::<StaticAtom>(atom_bounds()) {
             if let Some(bytes) = atom_bytes(atom) {

@@ -172,6 +172,7 @@ runtime_prototype_family!(
 );
 
 include!("runtime_layouts/records.rs");
+include!("runtime_layouts/ascii_chars.rs");
 
 /// The qualified private keys of the runtime's intrinsic slots
 /// (`private_storage_spelling(0, 0, name)`), as static atoms. A builtin's

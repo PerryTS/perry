@@ -34,33 +34,14 @@ crate::perry_thread_local! {
 /// caller sound), pinned out of the young generation, and scanned by
 /// [`scan_small_int_cache_roots_mut`] so the collector rewrites the slot if
 /// the longlived object is ever relocated.
-const ASCII_CHAR_CACHE_SIZE: usize = 128;
-crate::perry_thread_local! {
-    static ASCII_CHAR_CACHE: std::cell::UnsafeCell<[*mut StringHeader; ASCII_CHAR_CACHE_SIZE]> =
-        const { std::cell::UnsafeCell::new([std::ptr::null_mut(); ASCII_CHAR_CACHE_SIZE]) };
-}
-
-/// The canonical one-character string for an ASCII byte. Allocates at most
-/// once per byte value per thread; every later call is a load.
+/// The canonical one-character string for an ASCII byte: its immortal image
+/// string (`runtime_layouts::PERRY_ASCII_CHARS`), this agent's atom of the
+/// text. `refcount = 0` (an image is never mutated in place), which is what
+/// makes handing the SAME pointer to every caller sound.
+#[inline]
 pub(crate) fn ascii_char_string(byte: u8) -> *mut StringHeader {
     debug_assert!(byte < 0x80);
-    let idx = (byte & 0x7f) as usize;
-    let cached = ASCII_CHAR_CACHE.with(|c| unsafe { (*c.get())[idx] });
-    if !cached.is_null() {
-        return cached;
-    }
-    let ptr = js_string_from_bytes_longlived(&byte as *const u8, 1);
-    unsafe {
-        (*ptr).refcount = 0;
-        let gc_header =
-            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        crate::gc::pin_object_non_young(gc_header);
-    }
-    ASCII_CHAR_CACHE.with(|c| unsafe {
-        // GC_STORE_AUDIT(ROOT): ASCII_CHAR_CACHE is scanned by scan_small_int_cache_roots_mut.
-        crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[idx], ptr);
-    });
-    ptr
+    crate::object::runtime_layouts::PERRY_ASCII_CHARS.0[(byte & 0x7f) as usize] as *mut StringHeader
 }
 
 /// Normalize a `Number.prototype` format-method receiver to its underlying
@@ -338,11 +319,10 @@ pub fn scan_small_int_cache_roots(mark: &mut dyn FnMut(f64)) {
 pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // A minor-scoped pass can neither move nor free a longlived object, and
     // it does not trace through a pinned one (`mark_classified` skips a
-    // `Longlived` header carrying `GC_FLAG_PINNED`). Both writers of these
-    // caches (`small_int_cache_fill`, `ascii_char_string`) publish only
-    // longlived, pinned leaf strings, so every visit a minor would make here
-    // is a no-op: 384 classifications per pass, two passes per copying minor.
-    // Full-scope passes (which can relocate longlived space) still walk both.
+    // `Longlived` header carrying `GC_FLAG_PINNED`). The cache's writer
+    // (`small_int_cache_fill`) publishes only longlived, pinned leaf strings,
+    // so every visit a minor would make here is a no-op. Full-scope passes
+    // (which can relocate longlived space) still walk it.
     if visitor.young_scope() {
         #[cfg(any(debug_assertions, test))]
         debug_assert_small_string_caches_not_minor_relevant();
@@ -356,24 +336,11 @@ pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
             }
         }
     });
-    // The single-character table rides the same scanner rather than
-    // registering a 96th root scanner: both are per-thread arrays of
-    // canonical `StringHeader*` with identical residency rules, and the
-    // per-collection cost of every additional registered scanner is the
-    // thing the collector is trying to shed.
-    ASCII_CHAR_CACHE.with(|c| unsafe {
-        for slot in (*c.get()).iter_mut() {
-            let mut addr = *slot as usize;
-            if visitor.visit_tagged_usize_slot(&mut addr, crate::value::STRING_TAG) {
-                *slot = addr as *mut StringHeader;
-            }
-        }
-    });
 }
 
 /// The proof obligation behind the minor skip above, checked where it is
 /// relied on: a writer that ever publishes a young or unpinned string into
-/// either cache fails here instead of leaving an unvisited young root.
+/// the cache fails here instead of leaving an unvisited young root.
 #[cfg(any(debug_assertions, test))]
 pub(crate) fn debug_assert_small_string_caches_not_minor_relevant() {
     let check = |cache: &'static str, ptr: *mut StringHeader| {
@@ -394,11 +361,6 @@ pub(crate) fn debug_assert_small_string_caches_not_minor_relevant() {
     SMALL_INT_CACHE.with(|c| unsafe {
         for &ptr in (*c.get()).iter() {
             check("SMALL_INT_CACHE", ptr);
-        }
-    });
-    ASCII_CHAR_CACHE.with(|c| unsafe {
-        for &ptr in (*c.get()).iter() {
-            check("ASCII_CHAR_CACHE", ptr);
         }
     });
 }
