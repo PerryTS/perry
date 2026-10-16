@@ -1,0 +1,1 @@
+- runtime: the trap shim no longer uses `llvm.stacksave.p0`, which an older clang (Xcode 15) compiled as an external symbol and broke the macOS release link (#12683).
