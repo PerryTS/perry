@@ -8149,9 +8149,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0df7cb580227c4381eafa7e864e1196378d4ec751ad5aef4ac639e3ef38e9cff"
+checksum = "1c31584700d452b02385d31829045ac5a5369080617761cc2f368baf50f98782"
 dependencies = [
  "js-sys",
  "libc",
@@ -8163,9 +8163,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-http"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f987647bbe17162ee86afbdfe6d816ee1a56332fac254e0e0a7f1f1f5552d560"
+checksum = "7dc14bd5b84fd4b7f99251eb35764949eeba7c34e2b799c1a7cd6354a58b3381"
 dependencies = [
  "base64 0.22.1",
  "brotli 8.0.4",
@@ -8182,9 +8182,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-smtp"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a7748a6d8de3ad6cf0413e68c55efd50d52687eba0bc9cbfaf377dfa12fa05b"
+checksum = "80f27404f276cf22d7b622eda17adb9390cf3eca60633b06c19200b342dab47f"
 dependencies = [
  "base64 0.22.1",
  "email-encoding",
@@ -8193,9 +8193,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-tls"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78914709655dfeb8ec22092a6c3f4bd04747e83c349cf66ff1a7a5b19bc9b6f8"
+checksum = "5eaf0347a3e2f9bb6b41d279c81008c206c155bb28e489913f1e81c7d167a72f"
 dependencies = [
  "ring",
  "rustls",
@@ -8205,9 +8205,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-wasi-random"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14338681210328e1615ff532657d4afc32cae9143df43cb7eee8a5ea2b5366ac"
+checksum = "3d8c3ed99aa6b0a51deeb5d84343429b9345d7d9b6f242a6548aa3449ebf1c28"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",
@@ -8215,9 +8215,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-websocket"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913e22ea69fe122a366732a63f9fd71128ea6fe3a0dc37a152621a7c1ca52988"
+checksum = "3515aca297ec16b09c45be8912dd2da689e54f18b5773924fac8c30acea41ab5"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -8230,9 +8230,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-zstd-decoder"
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2d8115e434249a0a11c3411c8422369113723e80298ad4e3b12a06a1eca278f"
+checksum = "a7e01a0da61b511c891847364765aa2fd9d4fe4b1ae3738d6c3afe3f1c0dce8c"
 dependencies = [
  "twox-hash",
 ]
