@@ -85,7 +85,19 @@ fn finish_for_with_property_array_hoist(
 /// thread before expression lowering gets a chance to grow the stack (#9196).
 pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
     stacker::maybe_grow(BODY_STMT_STACK_RED_ZONE, BODY_STMT_STACK_SEGMENT, || {
-        lower_body_stmt_impl(ctx, stmt)
+        // #12663: a loop/switch is the target of unlabeled jumps inside it;
+        // one that crosses a labeled block names it by a synthetic label.
+        let Some(kind) = crate::lower::jump_frame_kind(stmt) else {
+            return lower_body_stmt_impl(ctx, stmt);
+        };
+        let depth = ctx.push_jump_frame(kind, Some(stmt));
+        let lowered = lower_body_stmt_impl(ctx, stmt);
+        let label = ctx.pop_jump_frame(depth);
+        let mut lowered = lowered?;
+        if let Some(label) = label {
+            crate::lower::label_lowered_loop(&mut lowered, label);
+        }
+        Ok(lowered)
     })
 }
 
@@ -777,11 +789,16 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // desugaring `outer` to a run-once do-while.
             let body_is_loop = labeled_body_targets_loop(&labeled_stmt.body);
             if !body_is_loop {
+                // #12663: the run-once do-while is a target of `break label`
+                // only; unlabeled jumps inside bind past it (jump_targets.rs).
+                let depth = ctx.push_jump_frame(crate::lower::JumpFrameKind::LabeledBlock, None);
                 let body = if let ast::Stmt::Block(block) = &*labeled_stmt.body {
-                    lower_block_stmt_scoped(ctx, block)?
+                    lower_block_stmt_scoped(ctx, block)
                 } else {
-                    lower_body_stmt(ctx, &labeled_stmt.body)?
+                    lower_body_stmt(ctx, &labeled_stmt.body)
                 };
+                let _ = ctx.pop_jump_frame(depth);
+                let body = body?;
                 result.push(Stmt::Labeled {
                     label,
                     body: Box::new(Stmt::DoWhile {
@@ -793,42 +810,25 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
             let label_scope = ctx.iterator_loop_labels.len();
             crate::lower::record_iterator_loop_label(ctx, &labeled_stmt.body, &label);
-            let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
+            let mut inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
             ctx.iterator_loop_labels.truncate(label_scope);
-            // If the body lowered to a single statement, wrap it directly.
-            // Otherwise wrap the first statement (preserving any hoisted lets before it).
-            if inner.len() == 1 {
-                let body = inner.into_iter().next().unwrap();
-                result.push(Stmt::Labeled {
-                    label,
-                    body: Box::new(body),
-                });
-            } else {
-                // Multiple statements — take the last "real" loop/block as the labeled target,
-                // and emit any preceding statements (e.g., hoisted lets from for-of/for-in desugar) first.
-                let mut inner = inner;
-                let last = inner.pop().unwrap();
-                for s in inner {
-                    result.push(s);
-                }
-                result.push(Stmt::Labeled {
-                    label,
-                    body: Box::new(last),
-                });
-            }
+            // Preceding statements (hoisted lets of a for-of/for-in desugar)
+            // stay before the labeled loop.
+            crate::lower::label_lowered_loop(&mut inner, label);
+            result.extend(inner);
         }
         ast::Stmt::Break(break_stmt) => {
             if let Some(ref label) = break_stmt.label {
                 result.push(Stmt::LabeledBreak(label.sym.to_string()));
             } else {
-                result.push(Stmt::Break);
+                result.push(ctx.lower_unlabeled_break());
             }
         }
         ast::Stmt::Continue(continue_stmt) => {
             if let Some(ref label) = continue_stmt.label {
                 result.push(Stmt::LabeledContinue(label.sym.to_string()));
             } else {
-                result.push(Stmt::Continue);
+                result.push(ctx.lower_unlabeled_continue());
             }
         }
         ast::Stmt::For(for_stmt) => {

@@ -98,6 +98,8 @@ pub(crate) use widget_decl::*;
 // rather than via `use foo::*;` glob — globs don't always propagate
 // transitively when downstream files reach into `crate::lower::Name`,
 // so spelling them out keeps the public-and-internal API stable.
+mod jump_targets;
+pub(crate) use jump_targets::{jump_frame_kind, label_lowered_loop, JumpFrameKind};
 mod lowering_context;
 pub(crate) use lowering_context::{
     LoweringContext, MixinFn, PrivKind, PrivMember, PrivateScope, WithEnvFrame,

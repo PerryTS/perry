@@ -44,6 +44,8 @@ impl LoweringContext {
         let tagged_template_site_salt = super::context::stable_module_salt(&module_identity);
         Self {
             iterator_loop_labels: Vec::new(),
+            jump_frames: Vec::new(),
+            next_jump_label: 0,
             next_local_id: 0,
             local_source_spans: HashMap::new(),
             classic_for_lexical_bindings: HashSet::new(),

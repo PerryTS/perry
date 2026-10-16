@@ -403,6 +403,25 @@ pub(crate) fn lower_stmt(
     module: &mut Module,
     stmt: &ast::Stmt,
 ) -> Result<()> {
+    // #12663: a loop/switch is the target of unlabeled jumps inside it; one
+    // that crosses a labeled block names it by a synthetic label.
+    let Some(kind) = crate::lower::jump_frame_kind(stmt) else {
+        return lower_stmt_inner(ctx, module, stmt);
+    };
+    let depth = ctx.push_jump_frame(kind, Some(stmt));
+    let start = module.init.len();
+    let lowered = lower_stmt_inner(ctx, module, stmt);
+    if let Some(label) = ctx.pop_jump_frame(depth) {
+        crate::lower::label_lowered_loop(&mut module.init[start..], label);
+    }
+    lowered
+}
+
+fn lower_stmt_inner(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    stmt: &ast::Stmt,
+) -> Result<()> {
     match stmt {
         ast::Stmt::Decl(decl) => {
             match decl {
@@ -1258,11 +1277,16 @@ pub(crate) fn lower_stmt(
             // `continue outer` would target that instead of the real loop.
             let body_is_loop = labeled_body_targets_loop(&labeled_stmt.body);
             if !body_is_loop {
+                // #12663: the run-once do-while is a target of `break label`
+                // only; unlabeled jumps inside bind past it (jump_targets.rs).
+                let depth = ctx.push_jump_frame(crate::lower::JumpFrameKind::LabeledBlock, None);
                 let body = if let ast::Stmt::Block(block) = &*labeled_stmt.body {
-                    lower_block_stmt_scoped(ctx, block)?
+                    lower_block_stmt_scoped(ctx, block)
                 } else {
-                    lower_body_stmt(ctx, &labeled_stmt.body)?
+                    lower_body_stmt(ctx, &labeled_stmt.body)
                 };
+                let _ = ctx.pop_jump_frame(depth);
+                let body = body?;
                 module.init.push(Stmt::Labeled {
                     label,
                     body: Box::new(Stmt::DoWhile {
@@ -1274,31 +1298,16 @@ pub(crate) fn lower_stmt(
             }
             let label_scope = ctx.iterator_loop_labels.len();
             crate::lower::record_iterator_loop_label(ctx, &labeled_stmt.body, &label);
-            let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
+            let mut inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
             ctx.iterator_loop_labels.truncate(label_scope);
-            if inner.len() == 1 {
-                let body = inner.into_iter().next().unwrap();
-                module.init.push(Stmt::Labeled {
-                    label,
-                    body: Box::new(body),
-                });
-            } else {
-                let mut inner = inner;
-                let last = inner.pop().unwrap();
-                for s in inner {
-                    module.init.push(s);
-                }
-                module.init.push(Stmt::Labeled {
-                    label,
-                    body: Box::new(last),
-                });
-            }
+            crate::lower::label_lowered_loop(&mut inner, label);
+            module.init.extend(inner);
         }
         ast::Stmt::Break(break_stmt) => {
             if let Some(ref label) = break_stmt.label {
                 module.init.push(Stmt::LabeledBreak(label.sym.to_string()));
             } else {
-                module.init.push(Stmt::Break);
+                module.init.push(ctx.lower_unlabeled_break());
             }
         }
         ast::Stmt::Continue(continue_stmt) => {
@@ -1307,7 +1316,7 @@ pub(crate) fn lower_stmt(
                     .init
                     .push(Stmt::LabeledContinue(label.sym.to_string()));
             } else {
-                module.init.push(Stmt::Continue);
+                module.init.push(ctx.lower_unlabeled_continue());
             }
         }
         ast::Stmt::For(for_stmt) => {

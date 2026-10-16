@@ -232,7 +232,7 @@ fn collect_number_at_read_after_undefined(
     // initial flow state.  Declared `number` parameters remain untrusted in a
     // generic body.  The same set is the conservative numeric-key evidence
     // passed to the shared typed-array write predicate.
-    let mut numberish = spec_numeric_params.clone();
+    let numberish = spec_numeric_params.clone();
     let invalid = {
         let mut flow = NumberAtReadFlow {
             candidates: &candidates,
@@ -240,8 +240,11 @@ fn collect_number_at_read_after_undefined(
             ta_lens: &ta_lens,
             numeric_index_locals: spec_numeric_params,
             invalid: HashSet::new(),
+            targets: Vec::new(),
+            pending_labels: Vec::new(),
+            finally_stack: Vec::new(),
         };
-        flow.stmts(stmts, &mut numberish);
+        flow.stmts(stmts, &mut FlowState::live(numberish));
         flow.invalid
     };
 
@@ -251,67 +254,170 @@ fn collect_number_at_read_after_undefined(
         .collect()
 }
 
-struct NumberAtReadFlow<'a> {
+/// Flow state of [`NumberAtReadFlow`]: the locals that hold a Number on every
+/// path reaching this point. A state is dead after `break`/`continue`/
+/// `return`/`throw`; joins ignore dead states. A dead state keeps the set it
+/// had at the jump so reads in the unreachable rest of the block are still
+/// judged conservatively.
+#[derive(Clone, PartialEq, Eq)]
+struct FlowState {
+    set: HashSet<u32>,
+    live: bool,
+}
+
+impl FlowState {
+    fn live(set: HashSet<u32>) -> Self {
+        Self { set, live: true }
+    }
+
+    fn dead_copy(&self) -> Self {
+        Self {
+            set: self.set.clone(),
+            live: false,
+        }
+    }
+
+    /// Merge `other` into `self` at a join point.
+    fn meet(&mut self, other: &FlowState) {
+        if !other.live {
+            return;
+        }
+        if !self.live {
+            *self = other.clone();
+            return;
+        }
+        self.set.retain(|id| other.set.contains(id));
+    }
+
+    fn meet_opt(&mut self, other: &Option<FlowState>) {
+        if let Some(other) = other {
+            self.meet(other);
+        }
+    }
+}
+
+fn meet_into(slot: &mut Option<FlowState>, state: &FlowState) {
+    match slot {
+        Some(existing) => existing.meet(state),
+        None => *slot = Some(state.clone()),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JumpTargetKind {
+    /// Target of `break`, `continue` and their labeled forms. The HIR run-once
+    /// `L: do { .. } while (false)` of a labeled block is one too, as codegen
+    /// binds it.
+    Loop,
+    /// Target of unlabeled `break`.
+    Switch,
+    /// A labeled statement that is neither: target of `break label` only.
+    Block,
+}
+
+/// A statement `break`/`continue` can jump to: the states of the jumps that
+/// reach it join its end (`breaks`) or its next iteration (`continues`).
+struct JumpTarget {
+    kind: JumpTargetKind,
+    labels: Vec<String>,
+    breaks: Option<FlowState>,
+    continues: Option<FlowState>,
+    /// `finally_stack` depth when the target was entered: a jump to it runs
+    /// every finally pushed since.
+    finally_depth: usize,
+}
+
+struct NumberAtReadFlow<'a, 'h> {
     candidates: &'a HashSet<u32>,
     types: &'a HashMap<u32, HirType>,
     ta_lens: &'a HashMap<u32, i64>,
     numeric_index_locals: &'a HashSet<u32>,
     invalid: HashSet<u32>,
+    targets: Vec<JumpTarget>,
+    /// Labels of a `Stmt::Labeled` chain waiting for the loop/switch it names.
+    pending_labels: Vec<String>,
+    /// Finally blocks of the enclosing `try` statements (innermost last).
+    finally_stack: Vec<&'h [Stmt]>,
 }
 
-impl NumberAtReadFlow<'_> {
-    fn stmts(&mut self, stmts: &[Stmt], numberish: &mut HashSet<u32>) {
+impl<'h> NumberAtReadFlow<'_, 'h> {
+    fn stmts(&mut self, stmts: &'h [Stmt], state: &mut FlowState) {
         for stmt in stmts {
-            self.stmt(stmt, numberish);
+            self.stmt(stmt, state);
         }
     }
 
-    fn stmt(&mut self, stmt: &Stmt, numberish: &mut HashSet<u32>) {
+    fn stmt(&mut self, stmt: &'h Stmt, state: &mut FlowState) {
+        // Labels attach to the statement directly under the `Labeled`.
+        let labels = if matches!(stmt, Stmt::Labeled { .. }) {
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.pending_labels)
+        };
         match stmt {
             Stmt::Let { id, init, .. } => match init {
-                Some(rhs) => self.write(*id, rhs, numberish),
+                Some(rhs) => self.write(*id, rhs, &mut state.set),
                 None => {
-                    numberish.remove(id);
+                    state.set.remove(id);
                 }
             },
-            Stmt::Expr(expr) | Stmt::Throw(expr) => self.expr(expr, numberish, true),
-            Stmt::Return(Some(expr)) => self.expr(expr, numberish, false),
+            Stmt::Expr(expr) => self.expr(expr, &mut state.set, true),
+            Stmt::Throw(expr) => {
+                self.expr(expr, &mut state.set, true);
+                *state = state.dead_copy();
+            }
+            Stmt::Return(value) => {
+                if let Some(expr) = value {
+                    self.expr(expr, &mut state.set, false);
+                }
+                self.run_finallies(0, state);
+                *state = state.dead_copy();
+            }
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                self.expr(condition, numberish, false);
-                let mut then_state = numberish.clone();
+                self.expr(condition, &mut state.set, false);
+                let mut then_state = state.clone();
                 self.stmts(then_branch, &mut then_state);
-                let mut else_state = numberish.clone();
+                let mut else_state = state.clone();
                 if let Some(else_branch) = else_branch {
                     self.stmts(else_branch, &mut else_state);
                 }
-                *numberish = then_state.intersection(&else_state).copied().collect();
+                then_state.meet(&else_state);
+                if !then_state.live {
+                    // Both arms jumped: keep the jump state of the then arm for
+                    // the unreachable rest.
+                    then_state.set.retain(|id| else_state.set.contains(id));
+                }
+                *state = then_state;
             }
             Stmt::While { condition, body } => {
-                let entry = numberish.clone();
-                self.expr(condition, numberish, false);
-                let mut backedge = numberish.clone();
-                self.stmts(body, &mut backedge);
-                // Re-check the condition under the back-edge state.  This is
-                // what prevents a body write from invalidating a value read
-                // by the next iteration's condition without being noticed.
-                self.expr(condition, &mut backedge, false);
-                *numberish = entry.intersection(&backedge).copied().collect();
+                let always = matches!(condition, Expr::Bool(true));
+                *state = self.run_loop(labels, state, |flow, head| {
+                    let mut s = head.clone();
+                    flow.expr(condition, &mut s.set, false);
+                    let exit = if always { s.dead_copy() } else { s.clone() };
+                    flow.stmts(body, &mut s);
+                    let continues = flow.targets.last_mut().and_then(|t| t.continues.take());
+                    s.meet_opt(&continues);
+                    (exit, s)
+                });
             }
             Stmt::DoWhile { body, condition } => {
-                let entry = numberish.clone();
-                let mut backedge = numberish.clone();
-                self.stmts(body, &mut backedge);
-                self.expr(condition, &mut backedge, false);
-                // A second conservative body walk covers later iterations
-                // whose entry state is the meet of the first entry/back-edge.
-                let mut loop_entry: HashSet<u32> = entry.intersection(&backedge).copied().collect();
-                self.stmts(body, &mut loop_entry);
-                self.expr(condition, &mut loop_entry, false);
-                *numberish = backedge.intersection(&loop_entry).copied().collect();
+                // `L: do { .. } while (false)` is the lowered labeled block:
+                // the body runs once and there is no back edge.
+                let once = matches!(condition, Expr::Bool(false));
+                *state = self.run_loop(labels, state, |flow, head| {
+                    let mut s = head.clone();
+                    flow.stmts(body, &mut s);
+                    let continues = flow.targets.last_mut().and_then(|t| t.continues.take());
+                    s.meet_opt(&continues);
+                    flow.expr(condition, &mut s.set, false);
+                    let back = if once { s.dead_copy() } else { s.clone() };
+                    (s, back)
+                });
             }
             Stmt::For {
                 init,
@@ -320,74 +426,249 @@ impl NumberAtReadFlow<'_> {
                 body,
             } => {
                 if let Some(init) = init {
-                    self.stmt(init, numberish);
+                    self.stmt(init, state);
                 }
-                let entry = numberish.clone();
-                if let Some(condition) = condition {
-                    self.expr(condition, numberish, false);
-                }
-                let mut backedge = numberish.clone();
-                self.stmts(body, &mut backedge);
-                if let Some(update) = update {
-                    self.expr(update, &mut backedge, false);
-                }
-                if let Some(condition) = condition {
-                    self.expr(condition, &mut backedge, false);
-                }
-                let mut loop_entry: HashSet<u32> = entry.intersection(&backedge).copied().collect();
-                self.stmts(body, &mut loop_entry);
-                if let Some(update) = update {
-                    self.expr(update, &mut loop_entry, false);
-                }
-                *numberish = entry.intersection(&loop_entry).copied().collect();
+                *state = self.run_loop(labels, state, |flow, head| {
+                    let mut s = head.clone();
+                    if let Some(condition) = condition {
+                        flow.expr(condition, &mut s.set, false);
+                    }
+                    let exit = if condition.is_none() || matches!(condition, Some(Expr::Bool(true)))
+                    {
+                        s.dead_copy()
+                    } else {
+                        s.clone()
+                    };
+                    flow.stmts(body, &mut s);
+                    let continues = flow.targets.last_mut().and_then(|t| t.continues.take());
+                    s.meet_opt(&continues);
+                    if let Some(update) = update {
+                        flow.expr(update, &mut s.set, false);
+                    }
+                    (exit, s)
+                });
             }
-            Stmt::Labeled { body, .. } => self.stmt(body, numberish),
+            Stmt::Labeled { label, body } => {
+                if matches!(
+                    **body,
+                    Stmt::Labeled { .. }
+                        | Stmt::While { .. }
+                        | Stmt::DoWhile { .. }
+                        | Stmt::For { .. }
+                        | Stmt::Switch { .. }
+                ) {
+                    self.pending_labels.push(label.clone());
+                    self.stmt(body, state);
+                    self.pending_labels.clear();
+                } else {
+                    let mut block_labels = std::mem::take(&mut self.pending_labels);
+                    block_labels.push(label.clone());
+                    self.push_target(JumpTargetKind::Block, block_labels);
+                    self.stmt(body, state);
+                    let target = self.targets.pop().expect("labeled block target");
+                    state.meet_opt(&target.breaks);
+                }
+            }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                let entry = numberish.clone();
-                let mut try_state = numberish.clone();
-                self.stmts(body, &mut try_state);
-                let mut merged: HashSet<u32> = entry.intersection(&try_state).copied().collect();
-                if let Some(catch) = catch {
-                    let mut catch_state = entry.clone();
-                    self.stmts(&catch.body, &mut catch_state);
-                    merged.retain(|id| catch_state.contains(id));
-                }
+                let entry = state.clone();
                 if let Some(finally) = finally {
-                    self.stmts(finally, &mut merged);
+                    self.finally_stack.push(finally);
                 }
-                *numberish = merged;
+                let mut try_state = state.clone();
+                self.stmts(body, &mut try_state);
+                let mut merged = try_state;
+                if let Some(catch) = catch {
+                    // The catch is entered from the entry state, as before.
+                    let mut catch_state = FlowState::live(entry.set.clone());
+                    self.stmts(&catch.body, &mut catch_state);
+                    merged.meet(&catch_state);
+                    if !merged.live {
+                        merged.set.retain(|id| catch_state.set.contains(id));
+                    }
+                }
+                // An exception escaping body or catch also runs the finally;
+                // its own state is at most the entry state.
+                merged.set.retain(|id| entry.set.contains(id));
+                if let Some(finally) = finally {
+                    self.finally_stack.pop();
+                    let was_live = merged.live;
+                    let mut finally_state = FlowState::live(merged.set.clone());
+                    self.stmts(finally, &mut finally_state);
+                    if !finally_state.live {
+                        merged = finally_state;
+                    } else {
+                        merged = FlowState {
+                            set: finally_state.set,
+                            live: was_live,
+                        };
+                    }
+                }
+                *state = merged;
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                self.expr(discriminant, numberish, false);
-                let entry = numberish.clone();
-                let mut merged = entry.clone();
+                self.expr(discriminant, &mut state.set, false);
+                // Tests run in source order until one matches; a case body is
+                // entered with the state after its own test or by fallthrough,
+                // the default with the state after every test.
+                let mut tests = state.clone();
+                let mut after_test = Vec::with_capacity(cases.len());
                 for case in cases {
                     if let Some(test) = &case.test {
-                        let mut test_state = entry.clone();
-                        self.expr(test, &mut test_state, false);
-                        merged.retain(|id| test_state.contains(id));
+                        self.expr(test, &mut tests.set, false);
                     }
-                    let mut case_state = entry.clone();
-                    self.stmts(&case.body, &mut case_state);
-                    merged.retain(|id| case_state.contains(id));
+                    after_test.push(tests.clone());
                 }
-                *numberish = merged;
+                let has_default = cases.iter().any(|case| case.test.is_none());
+                self.push_target(JumpTargetKind::Switch, labels);
+                let mut fall = FlowState {
+                    set: state.set.clone(),
+                    live: false,
+                };
+                for (case, test_state) in cases.iter().zip(after_test) {
+                    let mut entered = if case.test.is_some() {
+                        test_state
+                    } else {
+                        tests.clone()
+                    };
+                    entered.meet(&fall);
+                    self.stmts(&case.body, &mut entered);
+                    fall = entered;
+                }
+                let target = self.targets.pop().expect("switch target");
+                if !has_default {
+                    fall.meet(&tests);
+                }
+                fall.meet_opt(&target.breaks);
+                *state = fall;
             }
-            Stmt::Break
-            | Stmt::Continue
-            | Stmt::LabeledBreak(_)
-            | Stmt::LabeledContinue(_)
-            | Stmt::Return(None)
-            | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => {}
+            Stmt::Break => {
+                let index = self
+                    .targets
+                    .iter()
+                    .rposition(|t| t.kind != JumpTargetKind::Block);
+                self.jump(index, false, state);
+            }
+            Stmt::Continue => {
+                let index = self
+                    .targets
+                    .iter()
+                    .rposition(|t| t.kind == JumpTargetKind::Loop);
+                self.jump(index, true, state);
+            }
+            Stmt::LabeledBreak(label) => {
+                // Codegen falls back to the innermost loop/switch for a label
+                // it cannot resolve; mirror that.
+                let index = self
+                    .targets
+                    .iter()
+                    .rposition(|t| t.labels.iter().any(|l| l == label))
+                    .or_else(|| {
+                        self.targets
+                            .iter()
+                            .rposition(|t| t.kind != JumpTargetKind::Block)
+                    });
+                self.jump(index, false, state);
+            }
+            Stmt::LabeledContinue(label) => {
+                let index = self
+                    .targets
+                    .iter()
+                    .rposition(|t| {
+                        t.kind == JumpTargetKind::Loop && t.labels.iter().any(|l| l == label)
+                    })
+                    .or_else(|| {
+                        self.targets
+                            .iter()
+                            .rposition(|t| t.kind == JumpTargetKind::Loop)
+                    });
+                self.jump(index, true, state);
+            }
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+
+    fn push_target(&mut self, kind: JumpTargetKind, labels: Vec<String>) {
+        self.targets.push(JumpTarget {
+            kind,
+            labels,
+            breaks: None,
+            continues: None,
+            finally_depth: self.finally_stack.len(),
+        });
+    }
+
+    /// A jump to `targets[index]`: run the finally blocks it leaves, join its
+    /// state into the target, and continue dead.
+    fn jump(&mut self, index: Option<usize>, is_continue: bool, state: &mut FlowState) {
+        if !state.live {
+            return;
+        }
+        if let Some(index) = index {
+            let mut jumped = state.clone();
+            self.run_finallies(self.targets[index].finally_depth, &mut jumped);
+            if jumped.live {
+                let target = &mut self.targets[index];
+                let slot = if is_continue {
+                    &mut target.continues
+                } else {
+                    &mut target.breaks
+                };
+                meet_into(slot, &jumped);
+            }
+        }
+        *state = state.dead_copy();
+    }
+
+    /// Walk the finally blocks above `depth` (innermost first) on a jump path.
+    /// A finally walked here sees the enclosing targets as they are, so its
+    /// own jumps resolve as they would at run time.
+    fn run_finallies(&mut self, depth: usize, state: &mut FlowState) {
+        let pending: Vec<&'h [Stmt]> = self.finally_stack[depth..].iter().rev().copied().collect();
+        let saved = std::mem::take(&mut self.finally_stack);
+        for (i, finally) in pending.into_iter().enumerate() {
+            if !state.live {
+                break;
+            }
+            // While a finally runs, only the try statements around it are open.
+            self.finally_stack = saved[..saved.len() - 1 - i].to_vec();
+            self.stmts(finally, state);
+        }
+        self.finally_stack = saved;
+    }
+
+    /// Run a loop to its fixpoint. `iteration` walks one iteration from the
+    /// head state and returns (normal exit, back edge). The head is the meet
+    /// of the entry and the back edge; sets only shrink, so this converges.
+    fn run_loop(
+        &mut self,
+        labels: Vec<String>,
+        entry: &FlowState,
+        mut iteration: impl FnMut(&mut Self, &FlowState) -> (FlowState, FlowState),
+    ) -> FlowState {
+        let mut head = entry.clone();
+        loop {
+            self.push_target(JumpTargetKind::Loop, labels.clone());
+            let (mut exit, back) = iteration(self, &head);
+            let target = self.targets.pop().expect("loop target");
+            let mut next = entry.clone();
+            next.meet(&back);
+            if next == head {
+                exit.meet_opt(&target.breaks);
+                if !exit.live {
+                    // No path leaves the loop normally: keep a conservative
+                    // set for the unreachable code after it.
+                    exit.set.retain(|id| head.set.contains(id));
+                }
+                return exit;
+            }
+            head = next;
         }
     }
 
@@ -566,6 +847,145 @@ mod tests {
         ];
 
         assert!(!run(&stmts).contains(&N));
+    }
+
+    fn labeled_block(label: &str, body: Vec<Stmt>) -> Stmt {
+        Stmt::Labeled {
+            label: label.to_string(),
+            body: Box::new(Stmt::DoWhile {
+                body,
+                condition: Expr::Bool(false),
+            }),
+        }
+    }
+
+    fn if_then(then_branch: Vec<Stmt>) -> Stmt {
+        Stmt::If {
+            condition: Expr::LocalGet(L),
+            then_branch,
+            else_branch: None,
+        }
+    }
+
+    /// #12662: `blk: { if (k) break blk; n = 1; } return n` reads undefined
+    /// on the break path.
+    #[test]
+    fn break_out_of_labeled_block_joins_the_block_end() {
+        let stmts = vec![
+            let_n(),
+            labeled_block(
+                "blk",
+                vec![
+                    if_then(vec![Stmt::LabeledBreak("blk".to_string())]),
+                    set_n(Expr::Integer(1)),
+                ],
+            ),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    /// The same shape with the write before the break is a Number on every path.
+    #[test]
+    fn labeled_block_written_on_every_path_is_number() {
+        let stmts = vec![
+            let_n(),
+            labeled_block(
+                "blk",
+                vec![
+                    set_n(Expr::Integer(1)),
+                    if_then(vec![Stmt::LabeledBreak("blk".to_string())]),
+                    set_n(Expr::Integer(2)),
+                ],
+            ),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(run(&stmts).contains(&N));
+    }
+
+    /// A real do-while: an unlabeled break skipping the write reaches the read.
+    #[test]
+    fn break_out_of_do_while_joins_the_loop_end() {
+        let stmts = vec![
+            let_n(),
+            Stmt::DoWhile {
+                body: vec![if_then(vec![Stmt::Break]), set_n(Expr::Integer(1))],
+                condition: Expr::LocalGet(L),
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    /// `n = 0; while (c) { n = undefined; if (k) break; n = 1; } return n`:
+    /// the loop entry and back edge hold a Number, the break path does not.
+    #[test]
+    fn break_after_undefined_write_reaches_the_loop_exit() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::Integer(0)),
+            Stmt::While {
+                condition: Expr::LocalGet(L),
+                body: vec![
+                    set_n(Expr::Undefined),
+                    if_then(vec![Stmt::Break]),
+                    set_n(Expr::Integer(1)),
+                ],
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    /// `switch (k) { case 1: blk: { if (c) break; n = 1; } n = 2; break; default: n = 3; }`
+    /// after the lowering fix: the unlabeled break is `break <switch label>`.
+    #[test]
+    fn labeled_break_to_a_labeled_switch_skips_the_case_tail() {
+        let stmts = vec![
+            let_n(),
+            Stmt::Labeled {
+                label: "sw".to_string(),
+                body: Box::new(Stmt::Switch {
+                    discriminant: Expr::LocalGet(L),
+                    cases: vec![
+                        perry_hir::SwitchCase {
+                            test: Some(Expr::Integer(1)),
+                            body: vec![
+                                labeled_block(
+                                    "blk",
+                                    vec![
+                                        if_then(vec![Stmt::LabeledBreak("sw".to_string())]),
+                                        set_n(Expr::Integer(1)),
+                                    ],
+                                ),
+                                set_n(Expr::Integer(2)),
+                                Stmt::Break,
+                            ],
+                        },
+                        perry_hir::SwitchCase {
+                            test: None,
+                            body: vec![set_n(Expr::Integer(3))],
+                        },
+                    ],
+                }),
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    /// A loop the body always leaves through `break` after writing.
+    #[test]
+    fn infinite_loop_exit_is_the_break_state() {
+        let stmts = vec![
+            let_n(),
+            Stmt::While {
+                condition: Expr::Bool(true),
+                body: vec![set_n(Expr::Integer(1)), if_then(vec![Stmt::Break])],
+            },
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(run(&stmts).contains(&N));
     }
 
     #[test]
