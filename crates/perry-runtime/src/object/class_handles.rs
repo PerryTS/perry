@@ -450,11 +450,17 @@ pub fn stream_handle_probe() -> Option<StreamHandleProbeFn> {
     }
 }
 
-/// The JS value a handle dispatcher's `i64` receiver stands for: every
-/// registry handle, Web Streams ids included, is a `POINTER_TAG` payload in
-/// the handle band, so the receiver re-boxes under `POINTER_TAG`.
+/// The JS value a dispatcher's `i64` receiver stands for. A receiver is
+/// either a native registry id (Web Streams ids included), which lives in the
+/// small handle band and boxes under `HANDLE_TAG`, or the address of a
+/// GC-headed cell (a native payload such as a `net.Socket`), which boxes
+/// under `POINTER_TAG`. The bands are disjoint, so the address decides.
 pub fn handle_receiver_value(handle: i64) -> f64 {
-    crate::value::js_nanbox_handle(handle)
+    if handle == 0 || crate::value::addr_class::is_small_handle(handle as usize) {
+        crate::value::js_nanbox_handle(handle)
+    } else {
+        crate::value::js_nanbox_pointer(handle)
+    }
 }
 
 /// The Web Streams registry id a JS value carries, if it carries one: a

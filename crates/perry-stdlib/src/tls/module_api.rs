@@ -329,7 +329,8 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
                 return undefined();
             }
             record_tls_client_handle(handle);
-            nanbox_handle(handle)
+            // A registry id or the address of a socket payload cell.
+            perry_runtime::object::handle_receiver_value(handle)
         }
         "createServer" | "Server" => nanbox_handle(js_tls_create_server(
             arg(0).to_bits() as i64,

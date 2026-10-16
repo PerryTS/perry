@@ -431,17 +431,22 @@ pub unsafe extern "C" fn napi_typeof(
     let js = JSValue::from_bits(bits);
     let value_type = if js.is_null() {
         NapiValueType::Null
-    } else if js.is_pointer() && super::metadata::is_external_owner(js.as_pointer::<u8>() as usize)
-    {
-        NapiValueType::External
     } else {
-        // Everything else classifies exactly as the `typeof` operator does,
-        // so Perry's other callable representations (INT32-tagged class
-        // refs, class objects, callable proxies) are functions here too
-        // (#10461).
+        // Everything classifies exactly as the `typeof` operator does, so
+        // Perry's other callable representations (INT32-tagged class refs,
+        // class objects, callable proxies) are functions here too (#10461).
+        // An external is an ordinary object (`napi_create_external`), so only
+        // an object can be one: asking the metadata of a symbol, bigint or
+        // string would route a cell that holds no descriptors.
         use crate::builtins::arithmetic::ValueTypeofTag;
         match crate::builtins::arithmetic::classify_value_typeof(f64::from_bits(bits)) {
             ValueTypeofTag::Undefined => NapiValueType::Undefined,
+            ValueTypeofTag::Object
+                if js.is_pointer()
+                    && super::metadata::is_external_owner(js.as_pointer::<u8>() as usize) =>
+            {
+                NapiValueType::External
+            }
             ValueTypeofTag::Object => NapiValueType::Object,
             ValueTypeofTag::Boolean => NapiValueType::Boolean,
             ValueTypeofTag::Number => NapiValueType::Number,
