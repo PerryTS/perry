@@ -320,16 +320,57 @@ pub fn scan_dispatch_binding_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             visitor.visit_nanbox_u64_slot(bits);
         }
     });
+    DERIVED_SUPER_BINDING_STACK.with(|stack| {
+        for entry in stack.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_u64_slot(&mut entry.this_bits);
+        }
+    });
+}
+
+/// One active derived-constructor activation: its `super()` binding cell, the
+/// object it constructs, and its class.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DerivedSuperBinding {
+    /// The constructor's `i1` binding cell (a native alloca).
+    slot: usize,
+    /// The receiver the activation constructs (NaN-boxed; a GC root, see
+    /// [`scan_dispatch_binding_roots_mut`]).
+    this_bits: u64,
+    /// The class whose constructor body this is (0 = not known to codegen).
+    class_id: u32,
 }
 
 crate::perry_thread_local! {
-    /// Active inline derived-constructor `super()` binding cells. An arrow
-    /// created inside a constructor has its own codegen context, so it cannot
-    /// name the outer function's alloca directly; this stack gives it the
-    /// exact live binding cell without turning the state into a process-global
-    /// boolean.
-    static DERIVED_SUPER_BINDING_STACK: std::cell::RefCell<crate::exception::CatchStack<usize>> =
+    /// Active derived-constructor `super()` binding cells. An arrow created
+    /// inside a constructor has its own codegen context, so it cannot name the
+    /// outer function's alloca directly; this stack gives it the exact live
+    /// binding cell without turning the state into a process-global boolean.
+    ///
+    /// An arrow finds ITS constructor's entry by the receiver it captured and
+    /// the class it was written in, never by position: the top entry belongs
+    /// to whichever derived constructor is running now, which is another
+    /// object's when the arrow (written in a constructor that finished long
+    /// ago) runs inside a different constructor's `super()`.
+    static DERIVED_SUPER_BINDING_STACK: std::cell::RefCell<crate::exception::CatchStack<DerivedSuperBinding>> =
         const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
+}
+
+/// The binding cell of the innermost active activation constructing
+/// `this_bits` as class `class_id` (0 on either side matches any class), or
+/// `None` when that constructor is not running: its binding is then settled
+/// and an arrow written in it reads `this` freely.
+fn derived_binding_slot_for(this_bits: u64, class_id: u32) -> Option<*mut u8> {
+    DERIVED_SUPER_BINDING_STACK.with(|stack| {
+        stack
+            .borrow()
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.this_bits == this_bits
+                    && (class_id == 0 || entry.class_id == 0 || entry.class_id == class_id)
+            })
+            .map(|entry| entry.slot as *mut u8)
+    })
 }
 
 /// Open the binding scope of the calling compiled constructor. The entry
@@ -338,12 +379,17 @@ crate::perry_thread_local! {
 /// by its pad action (perry-codegen `stmt::eh_actions`).
 #[no_mangle]
 #[inline(never)]
-pub extern "C" fn js_derived_super_scope_push(slot: *mut u8) {
-    derived_super_scope_push_at(crate::exception::caller_frame_mark(), slot);
+pub extern "C" fn js_derived_super_scope_push(slot: *mut u8, this: f64, class_id: u32) {
+    derived_super_scope_push_at(crate::exception::caller_frame_mark(), slot, this, class_id);
 }
 
-pub(crate) fn derived_super_scope_push_at(mark: usize, slot: *mut u8) {
-    DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow_mut().push(mark, slot as usize));
+pub(crate) fn derived_super_scope_push_at(mark: usize, slot: *mut u8, this: f64, class_id: u32) {
+    let entry = DerivedSuperBinding {
+        slot: slot as usize,
+        this_bits: this.to_bits(),
+        class_id,
+    };
+    DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow_mut().push(mark, entry));
 }
 
 #[no_mangle]
@@ -373,16 +419,15 @@ pub(crate) fn derived_super_binding_check_marks(sp: usize) {
     });
 }
 
-/// Bind the innermost derived constructor's `this` from a nested arrow. The
-/// base constructor has already run when this is called; a duplicate therefore
-/// throws at binding time, as required by EvaluateCall(super()).
+/// Bind the `this` of the derived constructor an arrow was written in (the
+/// activation constructing `this` as `class_id`) from that arrow's `super()`.
+/// The base constructor has already run when this is called; a duplicate
+/// therefore throws at binding time, as required by EvaluateCall(super()).
 #[no_mangle]
-pub extern "C" fn js_derived_super_bind_current() -> f64 {
-    let slot = DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow().last().copied());
-    let Some(slot) = slot else {
+pub extern "C" fn js_derived_super_bind_current(this: f64, class_id: u32) -> f64 {
+    let Some(slot) = derived_binding_slot_for(this.to_bits(), class_id) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    let slot = slot as *mut u8;
     unsafe {
         if slot.read() != 0 {
             return crate::error::js_throw_reference_error_this_before_super();
@@ -394,14 +439,13 @@ pub extern "C" fn js_derived_super_bind_current() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Throw when a separately-emitted arrow reads the active derived
-/// constructor's lexical `this` before `super()` has initialized it.
-/// Ordinary functions have no active binding stack entry, so the helper is a
-/// cheap no-op for their `this` reads.
+/// Throw when a separately-emitted arrow reads its derived constructor's
+/// lexical `this` (`this`, constructed as `class_id`) before that
+/// constructor's `super()` has initialized it. A constructor that is no
+/// longer running has no entry, and its arrows read `this` freely.
 #[no_mangle]
-pub extern "C" fn js_derived_this_check_current() -> f64 {
-    let slot = DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow().last().copied());
-    if let Some(slot) = slot {
+pub extern "C" fn js_derived_this_check_current(this: f64, class_id: u32) -> f64 {
+    if let Some(slot) = derived_binding_slot_for(this.to_bits(), class_id) {
         let slot = slot as *const u8;
         unsafe {
             if slot.read() == 0 {

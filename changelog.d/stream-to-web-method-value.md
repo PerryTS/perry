@@ -1,0 +1,1 @@
+`Readable.toWeb`, `Writable.toWeb` and `Duplex.toWeb` called through a `require("node:stream")` namespace return real web streams (with `tee`, `getReader` and async iteration) whenever the web-streams adapter is linked, as the direct import form already did. They returned a `{ getReader, cancel }` stub, and Next.js dynamic pages sent an empty reply.

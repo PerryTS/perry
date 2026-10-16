@@ -1,0 +1,1 @@
+Storing an object, function or string into an existing slot of an array literal no longer loses the value at the next garbage collection. The in-place store skipped the layout note that takes a literal out of its pointer-free birth state, so the collector did not trace the slot. Next.js's bundled p-queue hit it as `_resolveEmpty is not a function`.

@@ -201,8 +201,15 @@ pub extern "C" fn js_nm_install_assert() {
 /// before ANY module-scope code observes it. (Divergence note: Node itself
 /// does not expose AsyncLocalStorage on globalThis; programs feature-detecting
 /// its absence will see it present under Perry.)
+///
+/// The seed mints the constructor before any module init, so before the
+/// `js_nm_install_async_hooks()` an `async_hooks` import emits: it arms that
+/// bucket itself, or the mint is published without its statics and prototype
+/// (`AsyncLocalStorage.snapshot()` threw "value is not a function", and
+/// `AsyncLocalStorage.bind` fell through to `Function.prototype.bind`).
 #[no_mangle]
 pub extern "C" fn js_globalthis_seed_async_local_storage() {
+    js_nm_install_async_hooks();
     // #7497 (same shape as the proven site in `js_get_global_this_builtin_value`):
     // both the export-value lookup and the key allocation below can collect, and
     // `global` is the RECEIVER of the store that follows. Root it and re-read the
@@ -956,6 +963,45 @@ mod tests {
              its bound statics dispatch through nm_dispatch_lookup(\"buffer.Buffer\"), \
              and no import-emitted js_nm_install_buffer exists on the global-Buffer path"
         );
+    }
+
+    /// The `globalThis.AsyncLocalStorage` seed runs at the top of a Next.js
+    /// program's `main`, before any module init — so before any import-emitted
+    /// `js_nm_install_async_hooks`. It must arm the `async_hooks` attach bucket
+    /// itself: the constructor it mints is the canonical one every later read
+    /// returns, and a mint made with the bucket empty is published without its
+    /// statics (`snapshot`/`bind`) and its prototype. Resets as in the buffer
+    /// test: the thread-local export cache, the bucket slot, and the `cfg(test)`
+    /// lazy install-all (RAII-suppressed), else the lookup self-heals.
+    #[test]
+    fn async_local_storage_seed_arms_the_async_hooks_attach_bucket() {
+        struct LazyInstallGuard;
+        impl Drop for LazyInstallGuard {
+            fn drop(&mut self) {
+                NM_TEST_DISABLE_LAZY_INSTALL.store(false, Ordering::Relaxed);
+            }
+        }
+        NM_TEST_DISABLE_LAZY_INSTALL.store(true, Ordering::Relaxed);
+        let _guard = LazyInstallGuard;
+
+        super::super::native_module::NATIVE_CALLABLE_EXPORTS
+            .with(|c| c.borrow_mut().remove("async_hooks\0AsyncLocalStorage"));
+        NM_ATTACH_REGISTRY[NmBucket::AsyncHooks as usize]
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+
+        js_globalthis_seed_async_local_storage();
+
+        let ctor = super::super::native_module::bound_native_callable_export_value(
+            "async_hooks",
+            "AsyncLocalStorage",
+        );
+        let addr = crate::value::js_nanbox_get_pointer(ctor) as usize;
+        for method in ["snapshot", "bind"] {
+            assert!(
+                crate::closure::closure_get_own_dynamic_prop(addr, method).is_some(),
+                "the seeded AsyncLocalStorage must carry its own static `{method}`"
+            );
+        }
     }
 
     /// #9202: `node:test`'s `run()` hands the caller a `node:stream` Readable,

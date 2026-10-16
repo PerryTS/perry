@@ -453,10 +453,10 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // landing pad restores the displaced value if the call throws.
     module.declare_function("js_new_target_enter", DOUBLE, &[DOUBLE]);
     module.declare_function("js_new_target_leave", VOID, &[]);
-    module.declare_function("js_derived_super_scope_push", VOID, &[PTR]);
+    module.declare_function("js_derived_super_scope_push", VOID, &[PTR, DOUBLE, I32]);
     module.declare_function("js_derived_super_scope_pop", VOID, &[]);
-    module.declare_function("js_derived_super_bind_current", DOUBLE, &[]);
-    module.declare_function("js_derived_this_check_current", DOUBLE, &[]);
+    module.declare_function("js_derived_super_bind_current", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_derived_this_check_current", DOUBLE, &[DOUBLE, I32]);
 
     // ========== Runtime init / module loader ==========
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);

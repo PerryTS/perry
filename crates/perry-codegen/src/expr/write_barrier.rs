@@ -449,7 +449,14 @@ pub(crate) fn emit_scalar_aware_store_gated_on_pointerness(
         (old_bits, value_bits)
     };
     let write_barrier_emitted = write_barrier_needed && crate::codegen::write_barriers_enabled();
-    if !string_addref_needed && !write_barrier_emitted {
+    // The layout note is bookkeeping in its own right: an array literal is
+    // born `GC_LAYOUT_POINTER_FREE`, and the note is the only thing that takes
+    // it out of that state when a pointer is stored. The caller that emits the
+    // barrier itself (`index.rs`'s in-bounds arm) passes no barrier here, so
+    // returning early on "no addref, no barrier" dropped the note: the
+    // collector then skipped the slot and `a = [undefined]; a[0] = f` read a
+    // stale pointer after the next scavenge.
+    if !string_addref_needed && !layout_note_needed && !write_barrier_emitted {
         return value_bits;
     }
     let book_idx = ctx.new_block(&format!("{stem}.gc_bookkeeping"));

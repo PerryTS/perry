@@ -250,7 +250,12 @@ pub(super) mod derived_super_binding {
     pub(in super::super) fn push(_: u32, mark: usize) {
         // The production stack stores native alloca addresses. No binding is
         // evaluated here, so an empty address suffices for the lifetime witness.
-        crate::object::derived_super_scope_push_at(mark, std::ptr::null_mut());
+        crate::object::derived_super_scope_push_at(
+            mark,
+            std::ptr::null_mut(),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            0,
+        );
     }
 }
 

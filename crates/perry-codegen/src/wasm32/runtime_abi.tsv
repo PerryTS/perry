@@ -953,10 +953,10 @@ js_decode_uri	i64	f64
 js_decode_uri_component	i64	f64
 js_decompression_stream_new	f64	
 js_delete_result	f64	i32s,i32s
-js_derived_super_bind_current	f64	
+js_derived_super_bind_current	f64	f64,i32u
 js_derived_super_scope_pop	void	
-js_derived_super_scope_push	void	ptr
-js_derived_this_check_current	f64	
+js_derived_super_scope_push	void	ptr,f64,i32u
+js_derived_this_check_current	f64	f64,i32u
 js_dgram_create_socket	f64	ptr
 js_dgram_socket_add_membership	f64	i64,ptr
 js_dgram_socket_add_source_membership	f64	i64,ptr

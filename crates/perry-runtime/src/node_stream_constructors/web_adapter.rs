@@ -769,19 +769,23 @@ fn fallback_node_writable_to_web(node_stream: f64) -> f64 {
     ])
 }
 
+// `Readable.toWeb` read as a value (`stream.Readable.toWeb(s)` through a
+// `require("node:stream")` namespace, `const f = Readable.toWeb`) is the same
+// function as the direct call: a real `ReadableStream` when the web-streams
+// adapter is linked, the stub only when it is not. The value used to return
+// the stub unconditionally — no `tee`, no async iterator — so Next.js's
+// `nodeReadableToWebReadableStream(...).tee()` / `for await` over the prelude
+// failed and dynamic pages sent an empty reply.
 pub(crate) fn js_node_stream_readable_to_web_method_value(node_stream: f64) -> f64 {
-    fallback_node_readable_to_web(node_stream)
+    js_node_stream_readable_to_web(node_stream)
 }
 
 pub(crate) fn js_node_stream_writable_to_web_method_value(node_stream: f64) -> f64 {
-    fallback_node_writable_to_web(node_stream)
+    js_node_stream_writable_to_web(node_stream)
 }
 
 pub(crate) fn js_node_stream_duplex_to_web_method_value(node_stream: f64) -> f64 {
-    web_pair_object(
-        fallback_node_readable_to_web(node_stream),
-        fallback_node_writable_to_web(node_stream),
-    )
+    js_node_stream_duplex_to_web(node_stream)
 }
 
 fn web_pair_object(readable: f64, writable: f64) -> f64 {

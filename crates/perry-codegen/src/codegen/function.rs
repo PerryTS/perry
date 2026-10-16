@@ -1255,7 +1255,7 @@ pub(super) fn compile_function(
         this_stack,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
-        lexical_this_uses_derived_binding: false,
+        lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),

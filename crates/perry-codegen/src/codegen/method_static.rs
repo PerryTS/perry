@@ -289,7 +289,7 @@ pub(in crate::codegen) fn compile_static_method(
         this_stack: vec![this_slot],
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
-        lexical_this_uses_derived_binding: false,
+        lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
         // A static method's `this` is the class constructor (bound above to

@@ -540,8 +540,10 @@ pub(crate) struct FnCtx<'a> {
     /// to nested arrow functions through the runtime binding stack.
     pub shared_super_scope_active: bool,
     /// This separately-emitted closure captures lexical `this` from a derived
-    /// constructor and must consult that constructor's shared TDZ cell.
-    pub lexical_this_uses_derived_binding: bool,
+    /// constructor and must consult that constructor's shared TDZ cell:
+    /// `Some(class id)` of the constructor's class (0 when it has none), which
+    /// with the captured receiver names that constructor's activation.
+    pub lexical_this_uses_derived_binding: Option<u32>,
     /// Stack of lexical `new.target` slot pointers. Arrow closures that
     /// reference `new.target` capture the enclosing value here.
     pub new_target_stack: Vec<String>,

@@ -485,6 +485,28 @@ pub(crate) fn lower_class_from_ast(
                             });
                             continue;
                         }
+                        // `[Symbol.asyncIterator]()` (plain or `async *`) — the
+                        // same computed-symbol registration: the prototype holds
+                        // the method under its symbol, so `obj[Symbol.asyncIterator]`
+                        // reads it (React Flight's async-iterable test on Next.js's
+                        // VaryParamsAccumulator), and the registration installs the
+                        // `@@asyncIterator` dispatch alias `for await` uses.
+                        // Registered under the string name it was an own
+                        // "@@asyncIterator" key the source never declared, and the
+                        // symbol read found nothing.
+                        if prop_name == "@@asyncIterator" && !method.is_static {
+                            let ast::PropName::Computed(computed) = &method.key else {
+                                unreachable!("@@asyncIterator key must be computed");
+                            };
+                            computed_members.push(ClassComputedMember {
+                                key_expr: lower_expr(ctx, &computed.expr)?,
+                                function: func,
+                                is_static: false,
+                                kind: ClassComputedMemberKind::Method,
+                                source_order: member_index,
+                            });
+                            continue;
+                        }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx,

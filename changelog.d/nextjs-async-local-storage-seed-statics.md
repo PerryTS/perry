@@ -1,0 +1,1 @@
+In a Next.js program, the `globalThis.AsyncLocalStorage` constructor seeded before module init now carries its static `snapshot()` and `bind()` and its prototype. `/list` and API routes failed with `value is not a function` from `AsyncLocalStorage.snapshot()`.

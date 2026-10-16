@@ -1170,11 +1170,14 @@ pub(super) fn compile_closure(
         // there reads whichever derived constructor is running — e.g. a base
         // constructor calling an overridden method (Next.js `NextNodeServer`
         // during `super()`) — and threw "Must call super constructor".
-        lexical_this_uses_derived_binding: captures_this
-            && enclosing_class
-                .as_ref()
-                .and_then(|name| classes.get(name).copied())
-                .is_some_and(|class| {
+        // The class id names the constructor's activation together with the
+        // captured receiver: the runtime stack's top is whichever derived
+        // constructor is running, possibly another object's.
+        lexical_this_uses_derived_binding: enclosing_class
+            .as_ref()
+            .filter(|_| captures_this)
+            .filter(|name| {
+                classes.get(name.as_str()).copied().is_some_and(|class| {
                     (class.extends.is_some()
                         || class.extends_name.is_some()
                         || class.native_extends.is_some()
@@ -1184,7 +1187,9 @@ pub(super) fn compile_closure(
                                 &ctor.body, func_id,
                             )
                         })
-                }),
+                })
+            })
+            .map(|name| class_ids.get(name.as_str()).copied().unwrap_or(0)),
         inline_ctor_return: Vec::new(),
         methods,
         module_globals,

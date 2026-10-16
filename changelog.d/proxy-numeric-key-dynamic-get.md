@@ -1,0 +1,1 @@
+Reading `receiver[key]` with a numeric key from a Proxy whose type is not known statically now runs the Proxy's `get` trap with the canonical string key, instead of reading past the Proxy cell. Next.js dynamic pages (React Flight's client-reference lookup by numeric module id) failed with "Could not find the module ... in the React Server Consumer Manifest".

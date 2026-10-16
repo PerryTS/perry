@@ -1,0 +1,1 @@
+An arrow written in a derived constructor checks that constructor's own `this` binding, found by its receiver and class, instead of whichever derived constructor is currently inside `super()`. Calling such an arrow from inside another object's `super()` call no longer throws "Must call super constructor".

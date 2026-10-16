@@ -373,6 +373,18 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // before either thread-local registry/hash probe. The registry remains the
     // authority for a matching tag; the tag only selects which one to ask.
     let receiver_tag = receiver_gc_tag(raw_ptr);
+    // A Proxy's [[Get]] is its `get` trap with ToPropertyKey(key): `p[39756]`
+    // passes "39756". Below, a numeric key would take the element path and
+    // read a word past the Proxy cell (React Flight's client-reference lookup
+    // `bundlerConfig[id]` with a numeric module id read 0, so Next.js's
+    // dynamic pages failed with "Could not find the module").
+    if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_PROXY) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(value);
+        // SAFETY: a NaN-boxed key; ToPropertyKey may run user code.
+        let key = scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(index) });
+        return crate::proxy::js_proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
+    }
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         let Some(index) = finite_nonnegative_u32_index(index) else {
             return f64::from_bits(TAG_UNDEFINED);

@@ -25,6 +25,27 @@ pub(crate) fn push_super_called_slot(ctx: &mut FnCtx<'_>) {
     ctx.super_called_stack.push(slot);
 }
 
+/// The class id of the constructor body being lowered (0 when unknown, which
+/// the runtime matches against any class).
+fn current_class_id(ctx: &FnCtx<'_>) -> u32 {
+    ctx.class_stack
+        .last()
+        .and_then(|name| ctx.class_ids.get(name))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// `(this, class id)` arguments naming the derived-constructor activation a
+/// separately-emitted arrow was written in: its captured receiver and the
+/// class of that constructor.
+fn arrow_derived_activation(ctx: &mut FnCtx<'_>, class_id: u32) -> (String, String) {
+    let this_value = match ctx.this_stack.last().cloned() {
+        Some(slot) => ctx.block().load(DOUBLE, &slot),
+        None => super::body_call::unbound_this_value(ctx),
+    };
+    (this_value, class_id.to_string())
+}
+
 /// Leave the constructor scope established by [`push_super_called_slot`].
 pub(crate) fn pop_super_called_slot(ctx: &mut FnCtx<'_>) {
     ctx.super_called_stack.pop();
@@ -39,8 +60,18 @@ pub(crate) fn push_shared_super_called_slot(ctx: &mut FnCtx<'_>) {
         .last()
         .cloned()
         .expect("shared super binding slot");
-    ctx.block()
-        .call_void("js_derived_super_scope_push", &[(PTR, &slot)]);
+    // The activation is named by its receiver and class, so an arrow written
+    // here finds THIS constructor's cell even while another derived
+    // constructor (another object's) is the top of the runtime stack.
+    let this_value = match ctx.this_stack.last().cloned() {
+        Some(this_slot) => ctx.block().load(DOUBLE, &this_slot),
+        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+    };
+    let class_id = current_class_id(ctx).to_string();
+    ctx.block().call_void(
+        "js_derived_super_scope_push",
+        &[(PTR, &slot), (DOUBLE, &this_value), (I32, &class_id)],
+    );
     // The binding belongs to this frame. Opened inside one of this
     // function's handlers (an inlined constructor in a `try`), its pop must
     // run on that handler's unwind edge too: the frame's own pad keeps the
@@ -96,14 +127,18 @@ pub(crate) fn check_derived_this_initialized(ctx: &mut FnCtx<'_>) {
         ctx.block().unreachable();
 
         ctx.current_block = initialized_idx;
-    } else if ctx.lexical_this_uses_derived_binding {
+    } else if let Some(class_id) = ctx.lexical_this_uses_derived_binding {
         // Arrows are emitted as separate LLVM functions and therefore cannot
-        // name the enclosing constructor's alloca.  The runtime stack mirrors
-        // the active outer binding; outside a derived constructor this helper
-        // is deliberately a no-op.
-        let _ = ctx
-            .block()
-            .call(DOUBLE, "js_derived_this_check_current", &[]);
+        // name the enclosing constructor's alloca. The runtime stack holds
+        // the active bindings; the arrow's receiver and class pick its own
+        // constructor's, and a constructor no longer running has none (the
+        // helper is then a no-op).
+        let (this_value, class_id) = arrow_derived_activation(ctx, class_id);
+        let _ = ctx.block().call(
+            DOUBLE,
+            "js_derived_this_check_current",
+            &[(DOUBLE, &this_value), (I32, &class_id)],
+        );
     }
 }
 
@@ -126,10 +161,15 @@ pub(crate) fn load_private_brand_owner(ctx: &mut FnCtx<'_>) -> String {
 pub(crate) fn bind_derived_this_after_super(ctx: &mut FnCtx<'_>) {
     let Some(slot) = ctx.super_called_stack.last().cloned() else {
         // Arrow functions compile in their own FnCtx. If they lexically occur
-        // inside an inline derived constructor, bind that constructor's cell.
-        let _ = ctx
-            .block()
-            .call(DOUBLE, "js_derived_super_bind_current", &[]);
+        // inside an inline derived constructor, bind that constructor's cell
+        // (named by the arrow's receiver and the constructor's class).
+        let class_id = ctx.lexical_this_uses_derived_binding.unwrap_or(0);
+        let (this_value, class_id) = arrow_derived_activation(ctx, class_id);
+        let _ = ctx.block().call(
+            DOUBLE,
+            "js_derived_super_bind_current",
+            &[(DOUBLE, &this_value), (I32, &class_id)],
+        );
         return;
     };
     let duplicate_idx = ctx.new_block("super.bind.duplicate");
