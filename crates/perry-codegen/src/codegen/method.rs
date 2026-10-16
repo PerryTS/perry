@@ -468,6 +468,13 @@ pub(super) fn compile_method(
     for p in &method.params {
         local_types.insert(p.id, p.ty.clone());
     }
+    // The body's one seed set (`typed_locals::outer_proofs`); no captures.
+    let outer_proofs = crate::collectors::typed_locals::outer_proofs(
+        None,
+        &cross_module.definite_init,
+        Some(method.id),
+    );
+    crate::collectors::typed_locals::seed_local_types(&outer_proofs, &mut local_types);
     if let Some(index) = guarded_clone_param.filter(|_| guarded_undefined_clone) {
         local_types.insert(method.params[index].id, perry_hir::types::Type::Void);
     }
@@ -508,7 +515,7 @@ pub(super) fn compile_method(
     let typed_locals = crate::collectors::typed_locals::apply(
         method_body,
         &std::collections::HashMap::new(),
-        None,
+        &outer_proofs,
         &method_boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
@@ -590,6 +597,8 @@ pub(super) fn compile_method(
         local_types,
         proven_local_types: guarded_param_proofs,
         typed_locals,
+        confined_arrays: &cross_module.definite_init.confined,
+        confined_array_read: false,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,

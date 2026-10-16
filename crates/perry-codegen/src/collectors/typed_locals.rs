@@ -771,36 +771,129 @@ pub(crate) fn number_proof_params(
         .filter_map(|(id, ty)| matches!(ty, HirType::Number | HirType::Int32).then_some(*id))
 }
 
+/// The one seed set of a body: what it may assume about the bindings it
+/// reads but does not own, each holding its type at every read in the body.
+/// Two analyses contribute, over disjoint questions:
+/// - `capture_proofs` (this file): a local typed in an enclosing body, seen
+///   by the closures it creates;
+/// - `collectors::definite_init`: a top-level `var` of a module, CommonJS
+///   factory or function body written once before any reader can run, seen
+///   by every body but its declaring one (module globals are outside this
+///   file's walk, and a hoisted function declaration that reads the var is
+///   proven by the reader taint there rather than refused as an early read).
+///
+/// When both claim a binding the facts meet ([`meet`]): equal facts stand,
+/// the narrower of two comparable facts wins, and incomparable facts (one of
+/// the two would be unsound) leave the binding unproven. The set feeds both
+/// the body's lowering oracle ([`seed_local_types`]) and its proof map
+/// ([`apply`]); nothing else seeds either from these analyses.
+pub(crate) fn outer_proofs(
+    captures: Option<&HashMap<u32, HirType>>,
+    definite: &super::DefiniteInit,
+    body: Option<u32>,
+) -> HashMap<u32, HirType> {
+    let mut out: HashMap<u32, HirType> = captures.cloned().unwrap_or_default();
+    let mut refused: Vec<u32> = Vec::new();
+    for (id, ty) in definite.facts_for(body) {
+        match out.get(&id) {
+            None => {
+                out.insert(id, ty.clone());
+            }
+            Some(prev) => match meet(prev, ty) {
+                Some(m) => {
+                    out.insert(id, m);
+                }
+                None => refused.push(id),
+            },
+        }
+    }
+    for id in refused {
+        if std::env::var_os("PERRY_TYPED_LOCALS_TRACE").is_some() {
+            eprintln!(
+                "[typed_locals] outer proof conflict on {id}: {:?}",
+                out.get(&id)
+            );
+        }
+        debug_assert!(
+            false,
+            "typed_locals: incomparable outer proofs for local {id}"
+        );
+        out.remove(&id);
+    }
+    out
+}
+
+/// The meet of two facts about one binding: the narrower when comparable.
+fn meet(a: &HirType, b: &HirType) -> Option<HirType> {
+    if a == b {
+        return Some(a.clone());
+    }
+    match (a, b) {
+        (HirType::Array(x), HirType::Array(_)) if matches!(**x, HirType::Any) => Some(b.clone()),
+        (HirType::Array(_), HirType::Array(y)) if matches!(**y, HirType::Any) => Some(a.clone()),
+        (HirType::String, HirType::StringLiteral(_)) => Some(b.clone()),
+        (HirType::StringLiteral(_), HirType::String) => Some(a.clone()),
+        _ => None,
+    }
+}
+
+/// The part of an outer seed set the proof map and the oracle carry:
+/// Numbers answer through `number_by_construction` alone (THE Number
+/// query), and an outer binding's storage is not this body's to change.
+fn outer_non_number(outer: &HashMap<u32, HirType>) -> impl Iterator<Item = (u32, &HirType)> {
+    outer
+        .iter()
+        .filter(|(_, ty)| !matches!(ty, HirType::Number | HirType::Int32))
+        .map(|(id, ty)| (*id, ty))
+}
+
+/// Seed the body's binding oracle `local_types` (what picks the lowering,
+/// e.g. `is_array_expr`) from its outer seed set. Fills only `Any`/`Unknown`
+/// slots; a declared or inferred type is never overwritten.
+pub(crate) fn seed_local_types(
+    outer: &HashMap<u32, HirType>,
+    local_types: &mut HashMap<u32, HirType>,
+) {
+    for (id, ty) in outer_non_number(outer) {
+        match local_types.get(&id) {
+            None | Some(HirType::Any) | Some(HirType::Unknown) => {
+                local_types.insert(id, ty.clone());
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// `FnCtx::typed_locals` of a body that runs no local analysis (static
+/// methods): its outer seed set alone.
+pub(crate) fn outer_only(outer: &HashMap<u32, HirType>) -> HashMap<u32, HirType> {
+    outer_non_number(outer)
+        .map(|(id, ty)| (id, ty.clone()))
+        .collect()
+}
+
 /// Run the analysis for one compiled body: Number locals (and Number
 /// parameters proven at entry) join `number_by_construction`, and the
-/// returned map is the body's `FnCtx::typed_locals`.
+/// returned map is the body's `FnCtx::typed_locals`. `outer` is the body's
+/// seed set ([`outer_proofs`]).
 pub(crate) fn apply(
     body: &[Stmt],
     proofs: &HashMap<u32, HirType>,
-    captures: Option<&HashMap<u32, HirType>>,
+    outer: &HashMap<u32, HirType>,
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     number_by_construction: &mut HashSet<u32>,
 ) -> HashMap<u32, HirType> {
     let mut all = proofs.clone();
-    if let Some(c) = captures {
-        for (id, ty) in c {
-            all.entry(*id).or_insert_with(|| ty.clone());
-        }
+    for (id, ty) in outer {
+        all.entry(*id).or_insert_with(|| ty.clone());
     }
     let t = collect_typed_locals(body, &all, boxed_vars, module_globals);
     number_by_construction.extend(t.numbers.iter().copied());
     number_by_construction.extend(number_proof_params(proofs));
     // Numbers answer through `number_by_construction` alone (THE Number
     // query); the map carries the String and Array proofs.
-    let mut m: HashMap<u32, HirType> = captures
-        .map(|c| {
-            c.iter()
-                .filter(|(_, ty)| !matches!(ty, HirType::Number | HirType::Int32))
-                .map(|(id, ty)| (*id, ty.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut m = outer_only(outer);
     m.extend(t.strings.iter().map(|id| (*id, HirType::String)));
     m.extend(
         t.arrays

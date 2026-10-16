@@ -227,6 +227,23 @@ fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str, handle:
     emit_and_no_named_layout(blk, &word_ok, handle)
 }
 
+/// The guard for a CONFINED receiver (`collectors::definite_init::confined`):
+/// an ordinary, unforwarded array, and a default prototype chain that has never
+/// been modified. Only the array's construction and element/`length` reads ever
+/// name a confined array, so the one way user code could have defined an
+/// element descriptor on it is an accessor or patched method on
+/// `%Array.prototype%`/`%Object.prototype%` running with it as `this`; any
+/// such modification sets the (sticky) invalidation byte. That byte test
+/// replaces the receiver's descriptor-layout query, so it is used only in a
+/// program that emits that query (`program_writes_element_descriptors`).
+fn emit_confined_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> String {
+    let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
+    let word_ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
+    let chain = blk.load_volatile(crate::types::I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let pristine = blk.icmp_eq(crate::types::I8, &chain, "0");
+    blk.and(crate::types::I1, &word_ok, &pristine)
+}
+
 /// `ok` and "the array at `handle` has no named layout" (no element
 /// descriptors can intercept a raw slot access).
 pub(in crate::expr) fn emit_and_no_named_layout(
@@ -375,7 +392,15 @@ fn lower_guarded_array_index_get_with_index(
         ctx.block().and(I64, &bits, POINTER_MASK_I64)
     };
     let word = emit_array_guard_word(ctx.block(), &handle);
-    let live = emit_array_guard_word_ok(ctx.block(), &word, &handle);
+    // The confined guard replaces the descriptor query; a program without a
+    // descriptor writer emits no query, so the plain guard is already minimal.
+    let live = if ctx.confined_array_read
+        && crate::expr::array_proto_guard::program_writes_element_descriptors()
+    {
+        emit_confined_array_guard_word_ok(ctx.block(), &word)
+    } else {
+        emit_array_guard_word_ok(ctx.block(), &word, &handle)
+    };
     ctx.block().cond_br(&live, &range_label, &exotic_label);
 
     ctx.current_block = range_idx;

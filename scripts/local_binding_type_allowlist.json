@@ -74,6 +74,14 @@
       "reason": "Declared array kinds only seed packed-loop candidates; the loop entry guard validates the actual array kind and window."
     },
     {
+      "path": "crates/perry-codegen/src/collectors/typed_locals.rs",
+      "function": "seed_local_types",
+      "access": "raw:local_types",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The seed fills only Any/Unknown slots of the entry oracle with a String/Array fact of the body's one outer seed set (typed_locals::outer_proofs: 5d capture proofs met with collectors::definite_init facts), each holding at every read in the body; a declared or inferred type is never overwritten."
+    },
+    {
       "path": "crates/perry-codegen/src/collectors/pointer_locals.rs",
       "function": "collect_facts",
       "access": "raw:local_types",

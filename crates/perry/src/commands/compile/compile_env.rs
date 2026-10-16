@@ -39,6 +39,8 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_CONST_ARRAY_DESCRIPTOR",
     "PERRY_DEBUG_INIT",
     "PERRY_DEBUG_SYMBOLS",
+    "PERRY_DEFINITE_INIT",
+    "PERRY_DEFINITE_INIT_SABOTAGE",
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_DISABLE_WELL_KNOWN",
     "PERRY_DYNAMIC_ADD_PAIR_GUARD",
@@ -354,6 +356,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_DEBUG_CJS_WRAP",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_DEFINITE_INIT_TRACE",
+        "Prints definite-assignment verdicts; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_DEFOREST_DEBUG",

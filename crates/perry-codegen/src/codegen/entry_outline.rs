@@ -177,7 +177,7 @@ pub(crate) fn is_entry_chunk(function: &perry_hir::Function) -> bool {
 /// Every entry-chunk function in `hir.functions`, indexed by id. Chunks are
 /// origin-agnostic — this map does not distinguish a chunk split from
 /// `hir.init` from one split from an outlined function body (#10575).
-fn chunk_map(hir: &HirModule) -> std::collections::HashMap<u32, &perry_hir::Function> {
+pub(crate) fn chunk_map(hir: &HirModule) -> std::collections::HashMap<u32, &perry_hir::Function> {
     hir.functions
         .iter()
         .filter(|function| is_entry_chunk(function))
@@ -204,7 +204,7 @@ fn as_chunk_call<'a>(
 
 /// Reconstruct the source-order statement stream of `stmts` after outlining:
 /// every chunk-call site is replaced by that chunk's body, in place.
-fn logical_stmts_of<'a>(
+pub(crate) fn logical_stmts_of<'a>(
     stmts: &'a [perry_hir::Stmt],
     chunks: &std::collections::HashMap<u32, &'a perry_hir::Function>,
 ) -> Vec<&'a perry_hir::Stmt> {

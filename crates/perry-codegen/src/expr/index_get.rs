@@ -804,6 +804,25 @@ fn lower_bounded_array_index_get_checked(
     ))
 }
 
+/// Is `object` a confined array binding (`collectors::definite_init`)?
+fn confined_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(object, Expr::LocalGet(id) if ctx.confined_arrays.contains(id))
+}
+
+/// Run `f` (which emits the guarded element tier for an already-lowered
+/// receiver and key) with `FnCtx::confined_array_read` set to `confined`.
+/// Operands are lowered before this, so no nested read sees the flag.
+fn with_confined_read<'a, T>(
+    ctx: &mut FnCtx<'a>,
+    confined: bool,
+    f: impl FnOnce(&mut FnCtx<'a>) -> T,
+) -> T {
+    let previous = std::mem::replace(&mut ctx.confined_array_read, confined);
+    let result = f(ctx);
+    ctx.confined_array_read = previous;
+    result
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // Step 4b / array S3: a planned-bare element read inside a loop region.
 
@@ -1373,17 +1392,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // while retaining the boxed-receiver helper for every
                     // string, symbol, object and rejected number key.
                     let repair_slot = receiver_repair_slot(ctx, object);
+                    let confined = confined_receiver(ctx, object);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
-                        lower_array_index_get_via_canonical_i32_split(
-                            ctx,
-                            &vals[0],
-                            &vals[1],
-                            index,
-                            false,
-                            false,
-                            true,
-                            repair_slot.as_deref(),
-                        )
+                        with_confined_read(ctx, confined, |ctx| {
+                            lower_array_index_get_via_canonical_i32_split(
+                                ctx,
+                                &vals[0],
+                                &vals[1],
+                                index,
+                                false,
+                                false,
+                                true,
+                                repair_slot.as_deref(),
+                            )
+                        })
                     });
                 }
                 if numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
@@ -1394,17 +1416,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // but recover the guarded element tier for runtime-proven
                     // canonical signed-i32 keys (notably branded number IDs).
                     let repair_slot = receiver_repair_slot(ctx, object);
+                    let confined = confined_receiver(ctx, object);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
-                        lower_array_index_get_via_canonical_i32_split(
-                            ctx,
-                            &vals[0],
-                            &vals[1],
-                            index,
-                            false,
-                            false,
-                            false,
-                            repair_slot.as_deref(),
-                        )
+                        with_confined_read(ctx, confined, |ctx| {
+                            lower_array_index_get_via_canonical_i32_split(
+                                ctx,
+                                &vals[0],
+                                &vals[1],
+                                index,
+                                false,
+                                false,
+                                false,
+                                repair_slot.as_deref(),
+                            )
+                        })
                     });
                 }
                 let require_numeric_layout =
@@ -1482,11 +1507,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 let repair_slot = receiver_repair_slot(ctx, object);
+                let confined = confined_receiver(ctx, object);
                 if !numeric_index_has_integer_array_index_proof(ctx, index) {
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
-                        Ok(lower_array_index_get_via_runtime_key(
-                            ctx, &vals[0], &vals[1], false,
-                        ))
+                        Ok(with_confined_read(ctx, confined, |ctx| {
+                            lower_array_index_get_via_runtime_key(ctx, &vals[0], &vals[1], false)
+                        }))
                     });
                 }
                 // #6132: a member receiver of unknown type (e.g. `n.buf[i]` where
@@ -1504,15 +1530,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[index],
                     |ctx| lower_expr_as_i32(ctx, index),
                     |ctx, vals, idx_i32| {
-                        lower_guarded_array_index_get(
-                            ctx,
-                            &vals[0],
-                            &idx_i32,
-                            "arr",
-                            require_numeric_layout,
-                            false,
-                            repair_slot.as_deref(),
-                        )
+                        with_confined_read(ctx, confined, |ctx| {
+                            lower_guarded_array_index_get(
+                                ctx,
+                                &vals[0],
+                                &idx_i32,
+                                "arr",
+                                require_numeric_layout,
+                                false,
+                                repair_slot.as_deref(),
+                            )
+                        })
                     },
                 );
             }

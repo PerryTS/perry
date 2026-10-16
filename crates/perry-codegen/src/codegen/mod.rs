@@ -2970,6 +2970,7 @@ fn compile_module_impl(
         compiler_private_async_i1_control_locals,
         scope_map: Default::default(),
         string_accumulator_locals: Default::default(),
+        definite_init: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
             crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
@@ -3192,6 +3193,7 @@ fn compile_module_impl(
     cross_module.string_accumulator_locals = crate::collectors::string_accumulator_locals(hir);
     cross_module.capture_type_proofs =
         crate::collectors::typed_locals::capture_proofs(hir, &module_boxed_vars, &module_globals);
+    cross_module.definite_init = crate::collectors::definite_init::collect(hir);
     // #6369: the *receiver-type oracle* for closure bodies — every module-wide
     // `Stmt::Let` type, with NO representation-driven filtering. `FnCtx.
     // local_types` is what `static_type_of` / `is_array_expr` /

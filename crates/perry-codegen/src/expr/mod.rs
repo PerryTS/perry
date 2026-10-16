@@ -403,6 +403,13 @@ pub(crate) struct FnCtx<'a> {
     /// every executable write produces this type by construction and whose
     /// every read follows a write. Holds at every read, reassigned or not.
     pub typed_locals: std::collections::HashMap<u32, HirType>,
+    /// Proven Array bindings no code but their construction and element /
+    /// `length` reads names (`collectors::definite_init::confined`): their
+    /// guarded element reads drop the per-read descriptor-layout query.
+    pub confined_arrays: &'a std::collections::HashSet<u32>,
+    /// Set only while the guarded element tier lowers a read whose receiver
+    /// is a confined array (`index_get::with_confined_read`).
+    pub confined_array_read: bool,
     /// Immutable CSE/local aliases of a property read from another local,
     /// recorded as `alias_id -> (owner_id, property)`. Guarded discriminant
     /// narrowing uses this only after proving the owner at runtime; the alias

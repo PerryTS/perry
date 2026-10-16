@@ -317,3 +317,58 @@ fn an_iife_that_always_returns_its_array_local_types_the_binding() {
     let body = vec![let_(5, Some(maybe)), Stmt::Return(Some(get(5)))];
     assert!(run(&body, &[]).arrays.is_empty());
 }
+
+fn arr_any() -> HirType {
+    HirType::Array(Box::new(HirType::Any))
+}
+
+#[test]
+fn outer_proofs_meet_capture_and_definite_facts() {
+    let mut definite = crate::collectors::DefiniteInit::default();
+    definite.kinds.insert(7, arr_any());
+    definite.kinds.insert(8, arr_any());
+    // 8 is declared by body 3: body 3 gets no definite fact for it.
+    definite
+        .declaring
+        .insert(8, [Some(3)].into_iter().collect());
+    let captures: HashMap<u32, HirType> = [
+        (7, HirType::Array(Box::new(HirType::String))),
+        (9, HirType::String),
+    ]
+    .into_iter()
+    .collect();
+    let seed = outer_proofs(Some(&captures), &definite, Some(3));
+    // Comparable facts: the narrower one wins.
+    assert_eq!(
+        seed.get(&7),
+        Some(&HirType::Array(Box::new(HirType::String)))
+    );
+    assert_eq!(seed.get(&9), Some(&HirType::String));
+    assert!(!seed.contains_key(&8));
+    // Another body sees 8; equal facts stand.
+    let seed = outer_proofs(None, &definite, Some(4));
+    assert_eq!(seed.get(&7), Some(&arr_any()));
+    assert_eq!(seed.get(&8), Some(&arr_any()));
+}
+
+#[test]
+fn incomparable_outer_facts_do_not_meet() {
+    assert_eq!(meet(&HirType::String, &arr_any()), None);
+    assert_eq!(meet(&arr_any(), &arr_any()), Some(arr_any()));
+}
+
+#[test]
+fn outer_seed_fills_only_unknown_oracle_slots_and_never_numbers() {
+    let outer: HashMap<u32, HirType> = [(1, arr_any()), (2, arr_any()), (3, HirType::Number)]
+        .into_iter()
+        .collect();
+    let mut local_types: HashMap<u32, HirType> =
+        [(1, HirType::Any), (2, HirType::Named("Foo".into()))]
+            .into_iter()
+            .collect();
+    seed_local_types(&outer, &mut local_types);
+    assert_eq!(local_types.get(&1), Some(&arr_any()));
+    assert_eq!(local_types.get(&2), Some(&HirType::Named("Foo".into())));
+    assert!(!local_types.contains_key(&3));
+    assert!(!outer_only(&outer).contains_key(&3));
+}

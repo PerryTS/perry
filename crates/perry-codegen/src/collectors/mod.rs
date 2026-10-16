@@ -14,6 +14,7 @@ mod cjs_scaffolding;
 mod clamp_detect;
 mod class_accessors;
 mod closures;
+pub(crate) mod definite_init;
 mod escape_arrays;
 mod escape_check;
 mod escape_news;
@@ -80,6 +81,7 @@ pub use clamp_detect::{detect_clamp3, detect_clamp_u8, returns_i32_identity_arg,
 pub(crate) use byte_read_key::{collect_numeric_typed_locals, uint8array_get_reads_a_byte};
 pub(crate) use class_accessors::{is_class_getter, is_class_setter};
 pub(crate) use closures::{collect_closures_in_expr, collect_closures_in_stmts};
+pub(crate) use definite_init::DefiniteInit;
 pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
 pub(crate) use escape_news::MAX_SCALAR_ARRAY_LEN;

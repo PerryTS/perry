@@ -732,6 +732,14 @@ pub(super) fn compile_closure(
             local_types.entry(*id).or_insert_with(|| ty.clone());
         }
     }
+    // The body's one seed set: captured-local proofs (5d) met with the
+    // definite-assignment facts (`typed_locals::outer_proofs`).
+    let outer_proofs = crate::collectors::typed_locals::outer_proofs(
+        cross_module.capture_type_proofs.get(&func_id),
+        &cross_module.definite_init,
+        Some(func_id),
+    );
+    crate::collectors::typed_locals::seed_local_types(&outer_proofs, &mut local_types);
 
     // Build the capture map: each captured LocalId gets the index it
     // occupies in the closure's capture array. Identical logic to the
@@ -919,7 +927,7 @@ pub(super) fn compile_closure(
     let typed_locals = crate::collectors::typed_locals::apply(
         body,
         &typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
-        cross_module.capture_type_proofs.get(&func_id),
+        &outer_proofs,
         &closure_boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
@@ -1104,6 +1112,8 @@ pub(super) fn compile_closure(
         // A typed body's entry check (the public dispatcher) proved these.
         proven_local_types: typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
         typed_locals,
+        confined_arrays: &cross_module.definite_init.confined,
+        confined_array_read: false,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,

@@ -926,6 +926,13 @@ pub(super) fn compile_function(
     for p in &f.params {
         local_types.insert(p.id, p.ty.clone());
     }
+    // The body's one seed set (`typed_locals::outer_proofs`); no captures.
+    let outer_proofs = crate::collectors::typed_locals::outer_proofs(
+        None,
+        &cross_module.definite_init,
+        Some(f.id),
+    );
+    crate::collectors::typed_locals::seed_local_types(&outer_proofs, &mut local_types);
     // Specialized entry: stamp the proven reps over the (usually `Any`)
     // declared types BEFORE the native-fact collectors run, so every type
     // predicate (int-valued locals, typed-array receiver classification,
@@ -1110,7 +1117,7 @@ pub(super) fn compile_function(
             &f.body,
             &boxed_vars,
         ),
-        None,
+        &outer_proofs,
         &boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
@@ -1211,6 +1218,8 @@ pub(super) fn compile_function(
         local_types,
         proven_local_types: spec_param_proofs,
         typed_locals,
+        confined_arrays: &cross_module.definite_init.confined,
+        confined_array_read: false,
         guarded_discriminant_aliases: HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,

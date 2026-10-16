@@ -576,13 +576,22 @@ mod tests {
     }
 
     fn store_ir(value: Expr, ty: Type) -> String {
+        let unknown_receiver = matches!(ty, Type::Any);
         let mut module = perry_hir::Module::new("terminated_guarded_store");
         module.init = vec![Stmt::Let {
             id: 1,
             name: "items".into(),
             ty,
             mutable: true,
-            init: Some(Expr::Array(vec![])),
+            // A module binding initialised with an array literal is proven an
+            // array for every reader (collectors::definite_init), which takes
+            // the array arm; the unknown-receiver arm needs a binding that is
+            // not.
+            init: Some(if unknown_receiver {
+                Expr::Undefined
+            } else {
+                Expr::Array(vec![])
+            }),
         }];
         module.classes.push(abrupt_derived_class());
         module.functions.push(perry_hir::Function {

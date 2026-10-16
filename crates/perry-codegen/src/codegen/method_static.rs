@@ -178,6 +178,13 @@ pub(in crate::codegen) fn compile_static_method(
     for p in &f.params {
         local_types.insert(p.id, p.ty.clone());
     }
+    // The body's one seed set (`typed_locals::outer_proofs`); no captures.
+    let outer_proofs = crate::collectors::typed_locals::outer_proofs(
+        None,
+        &cross_module.definite_init,
+        Some(f.id),
+    );
+    crate::collectors::typed_locals::seed_local_types(&outer_proofs, &mut local_types);
 
     let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
         .clamp3_functions
@@ -249,7 +256,9 @@ pub(in crate::codegen) fn compile_static_method(
         locals,
         local_types,
         proven_local_types: std::collections::HashMap::new(),
-        typed_locals: std::collections::HashMap::new(),
+        typed_locals: crate::collectors::typed_locals::outer_only(&outer_proofs),
+        confined_arrays: &cross_module.definite_init.confined,
+        confined_array_read: false,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,

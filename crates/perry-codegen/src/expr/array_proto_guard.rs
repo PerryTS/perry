@@ -75,13 +75,19 @@ pub(crate) fn emit_array_has_named_layout(blk: &mut LlBlock, arr_addr: &str) -> 
     blk.icmp_ne(crate::types::I64, &named, "0")
 }
 
+/// Does any code of the program define an element descriptor on an array
+/// (`patched_builtins::ARRAY_ELEMENT_DESCRIPTORS`)? Without one no array has
+/// element descriptors and the per-read query is not emitted at all.
+pub(crate) fn program_writes_element_descriptors() -> bool {
+    crate::program_patched_proto_methods()
+        .iter()
+        .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
+}
+
 /// Closed World excludes indexed descriptors in programs which never obtain
 /// a descriptor writer. Otherwise query the receiver's layout element kind.
 pub(crate) fn emit_array_element_descriptors(blk: &mut LlBlock, arr_addr: &str) -> String {
-    if !crate::program_patched_proto_methods()
-        .iter()
-        .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
-    {
+    if !program_writes_element_descriptors() {
         return "false".to_owned();
     }
     let kind = blk.call(
