@@ -726,8 +726,10 @@ pub fn lower_class_method_with_name(
     // binding inside the lazy state-machine body, so a throwing default
     // initializer never fires at call time (test262 class/dstr async-gen-meth-*).
     if method.function.is_generator {
-        let prologue_len =
-            default_prologue_len + destructuring_prologue_len + usize::from(method_home.is_some());
+        // The method's home binding is not part of this count: the generator
+        // transform lifts it by its own shape (perry-transform
+        // `generator/lower.rs`), wherever it sits in the body.
+        let prologue_len = default_prologue_len + destructuring_prologue_len;
         if prologue_len > 0 {
             ctx.gen_param_prologue_len.insert(func_id, prologue_len);
         }

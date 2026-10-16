@@ -331,12 +331,32 @@ pub fn transform_generator_function_with_extra_captures(
     // outer wrapper (run-at-call) rather than state 0 of the state machine.
     // `gen_prologue_len` returns 0 for generators with no destructuring/default
     // params, leaving this fully inert for the common case.
-    let prologue_len = super::gen_prologue_len(func.id);
-    let param_prologue: Vec<Stmt> = if prologue_len > 0 && prologue_len <= func.body.len() {
-        func.body.drain(..prologue_len).collect()
-    } else {
-        Vec::new()
+    //
+    // A method that reads `super` binds its lexical home
+    // (`let __perry_method_home = ClassMethodHome`, perry-hir
+    // `lower_decl/class_home.rs`). That expression names the CALLED method
+    // object, so it runs in the outer wrapper too: evaluated inside the state
+    // machine it names the step closure, and `super.m()` after an `await`
+    // threw "value is not a function". It is found by its shape, not its
+    // index: class-capture rebinds can be inserted ahead of it. It reads only
+    // the callee, so running it first is order-preserving.
+    let method_home: Vec<Stmt> = match func.body.iter().position(|stmt| {
+        matches!(
+            stmt,
+            Stmt::Let {
+                init: Some(Expr::ClassMethodHome { .. }),
+                ..
+            }
+        )
+    }) {
+        Some(at) => vec![func.body.remove(at)],
+        None => Vec::new(),
     };
+    let prologue_len = super::gen_prologue_len(func.id);
+    let mut param_prologue: Vec<Stmt> = method_home;
+    if prologue_len > 0 && prologue_len <= func.body.len() {
+        param_prologue.extend(func.body.drain(..prologue_len));
+    }
     // Locals the prologue binds (destructured targets + scaffolding temps). They
     // are written in the outer wrapper but read by the state machine, so they
     // must be boxed captures like any other cross-state local.
