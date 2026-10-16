@@ -381,34 +381,76 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // which made LLVM's mem2reg quadratic (tsc compiled 3-4x slower).
             let protect = crate::rooting::any_operand_may_collect(ctx, captures.iter());
             let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
-            let caps_arr = crate::rooting::with_rooted_accumulator(
-                ctx,
-                crate::rooting::Repr::Ptr,
-                &arr,
-                protect,
-                |ctx, acc| {
-                    ctx.block().call_void("js_tdz_suppress_begin", &[]);
-                    for (index, capture) in captures.iter().enumerate() {
-                        let value = lower_expr(ctx, capture)?;
-                        if let Some(env_class) = env_class {
-                            super::class_env::store_class_env_slot(
-                                ctx,
-                                env_class,
-                                index as u32,
-                                &value,
-                                capture,
-                            );
-                        }
-                        acc.advance(
+            // No capture can collect, so nothing between the allocation and
+            // the fill can move the array or a lowered value: stage the values
+            // and store them in ONE non-allocating call, not one
+            // `js_array_push_f64` safepoint per capture (tsc's module closure
+            // held ~54k of them). Each value is staged as soon as it is
+            // lowered, so none stays live across the others.
+            let staged = if !protect && !captures.is_empty() {
+                ctx.func.acquire_staging_values(captures.len())
+            } else {
+                None
+            };
+            let caps_arr = if let Some(buf) = staged {
+                ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                for (index, capture) in captures.iter().enumerate() {
+                    let value = lower_expr(ctx, capture)?;
+                    if let Some(env_class) = env_class {
+                        super::class_env::store_class_env_slot(
                             ctx,
-                            "js_array_push_f64",
-                            &[crate::rooting::Arg::Plain(DOUBLE, &value)],
+                            env_class,
+                            index as u32,
+                            &value,
+                            capture,
                         );
                     }
-                    Ok(())
-                },
-                |_, current| Ok(current.to_string()),
-            )?;
+                    let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &index.to_string())]);
+                    // GC_STORE_AUDIT(INIT): a stack staging buffer, not a heap
+                    // edge; `js_array_fill_values` performs each element's
+                    // layout note and write barrier.
+                    ctx.block().store(DOUBLE, &value, &slot);
+                }
+                let filled = ctx.block().call(
+                    I64,
+                    "js_array_fill_values",
+                    &[(I64, &arr), (PTR, &buf), (I32, &cap_len)],
+                );
+                ctx.func.release_staging_values();
+                filled
+            } else if !protect && captures.is_empty() {
+                ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                arr
+            } else {
+                crate::rooting::with_rooted_accumulator(
+                    ctx,
+                    crate::rooting::Repr::Ptr,
+                    &arr,
+                    protect,
+                    |ctx, acc| {
+                        ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                        for (index, capture) in captures.iter().enumerate() {
+                            let value = lower_expr(ctx, capture)?;
+                            if let Some(env_class) = env_class {
+                                super::class_env::store_class_env_slot(
+                                    ctx,
+                                    env_class,
+                                    index as u32,
+                                    &value,
+                                    capture,
+                                );
+                            }
+                            acc.advance(
+                                ctx,
+                                "js_array_push_f64",
+                                &[crate::rooting::Arg::Plain(DOUBLE, &value)],
+                            );
+                        }
+                        Ok(())
+                    },
+                    |_, current| Ok(current.to_string()),
+                )?
+            };
             ctx.block().call_void("js_tdz_suppress_end", &[]);
             let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
             // Lower after the allocating array operations so a movable class

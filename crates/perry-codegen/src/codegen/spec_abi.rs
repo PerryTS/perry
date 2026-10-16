@@ -112,6 +112,21 @@ pub(crate) fn spec_abi_max() -> usize {
     })
 }
 
+/// Upper bound on a specialized clone's body, in HIR nodes (statements and
+/// expressions, nested closures excluded: `collectors::count_body_nodes`).
+/// A body above it is not cloned: the clone would be a second giant for
+/// facts bound once at entry. Measured on the bigfn fixtures, a node lowers
+/// to 10-80 IR instructions (idiomatic_1k `big`: 7.6k nodes, 73k IR;
+/// big_switch `step`: 9.9k nodes, 280k IR; straight_line `run`: 18k nodes,
+/// 1.41M IR), so the bound sits at the 100k-IR regime where one function's
+/// LLVM time turns superlinear.
+pub(crate) const SPEC_MAX_BODY_NODES: usize = 8_000;
+
+/// Whether `body` is too large to get a specialized copy.
+pub(crate) fn spec_body_too_large(body: &[perry_hir::Stmt]) -> bool {
+    crate::collectors::count_body_nodes(body) > SPEC_MAX_BODY_NODES
+}
+
 /// How proven call sites reach the specialized entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpecDispatch {

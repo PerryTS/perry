@@ -115,6 +115,11 @@ pub struct LlFunction {
     /// into (`expr/method_site.rs`), allocated once per function: each site
     /// loads it right after the call.
     method_site_code_slot: Option<String>,
+    /// The function's one buffer of staged `double` values (register, the
+    /// largest count requested). See [`LlFunction::acquire_staging_values`].
+    staging_values: Option<(String, usize)>,
+    /// Whether a site currently holds `staging_values`.
+    staging_values_held: bool,
     /// Hoisted setup instructions (loads, stores, calls) that must run
     /// AFTER the entry block's "init prelude" — `js_gc_init` and the
     /// `__perry_init_strings_*` calls — but BEFORE any user code, so
@@ -309,6 +314,8 @@ impl LlFunction {
             fp_flags,
             entry_allocas: Vec::new(),
             method_site_code_slot: None,
+            staging_values: None,
+            staging_values_held: false,
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
             shadow_frame_slot: None,
@@ -534,6 +541,38 @@ impl LlFunction {
         let slot = self.alloca_entry(crate::types::I64);
         self.method_site_code_slot = Some(slot.clone());
         slot
+    }
+
+    /// The function's one entry-block buffer of at least `count` doubles, for
+    /// values staged immediately before the ONE runtime call that consumes
+    /// them. Every such site shares it, so a body with hundreds of sites holds
+    /// one buffer of the largest size, not one per site.
+    ///
+    /// `None` while another site holds it: a site acquires the buffer before
+    /// lowering its first value, so a staging site nested in one of those
+    /// values is refused and takes its unstaged path instead of overwriting
+    /// the outer site's values. Release right after the consuming call.
+    pub(crate) fn acquire_staging_values(&mut self, count: usize) -> Option<String> {
+        if self.staging_values_held {
+            return None;
+        }
+        self.staging_values_held = true;
+        Some(match &mut self.staging_values {
+            Some((reg, max)) => {
+                *max = (*max).max(count);
+                reg.clone()
+            }
+            None => {
+                let reg = format!("%r{}", self.reg_counter.next());
+                self.staging_values = Some((reg.clone(), count));
+                reg
+            }
+        })
+    }
+
+    /// Give the staging buffer back once its consuming call is emitted.
+    pub(crate) fn release_staging_values(&mut self) {
+        self.staging_values_held = false;
     }
 
     /// Allocate a fresh stack slot in the function entry block. Returns
@@ -983,7 +1022,7 @@ impl LlFunction {
             .map(|b| b.insts().iter().map(|i| i.text_len() + 1).sum::<usize>() + b.label.len() + 4)
             .sum();
         let allocas: usize = self.entry_allocas.iter().map(|a| a.len() + 1).sum();
-        body + allocas + self.name.len() + 64
+        body + allocas + self.name.len() + 64 + usize::from(self.staging_values.is_some()) * 48
     }
 
     /// The `define ... {` line, and the ONLY place it is rendered.
@@ -1220,6 +1259,10 @@ impl LlFunction {
             sink(FinalItem::Label(&blk.label))?;
             let is_entry = i == 0;
             if is_entry {
+                if let Some((reg, count)) = &self.staging_values {
+                    let alloca = format!("  {reg} = alloca [{count} x double], align 8");
+                    self.text_item(&alloca, rewrite_rets, &mut seq, sink)?;
+                }
                 for alloca in &self.entry_allocas {
                     self.text_item(alloca, rewrite_rets, &mut seq, sink)?;
                 }

@@ -131,6 +131,7 @@ js_array_fill_f64_iota_len_extend	Reenters	yes
 js_array_fill_generic	Reenters	yes
 js_array_fill_range	Reenters	yes
 js_array_fill_range_strided_tagged	Reenters	yes
+js_array_fill_values	Leaf	no
 js_array_filter	Reenters	yes
 js_array_find	Reenters	yes
 js_array_findIndex	Reenters	yes

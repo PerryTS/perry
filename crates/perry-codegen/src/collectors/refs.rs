@@ -62,20 +62,62 @@ pub fn collect_let_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
 }
 
 /// Walk a sequence of statements and collect all LocalIds referenced via
-/// `LocalGet`, `LocalSet`, or `Update`. Used together with `collect_let_ids`
-/// to detect references to module-level lets that need globalization.
+/// `LocalGet`, `LocalSet`, or `Update`, including every reference inside a
+/// nested closure body. Used together with `collect_let_ids` to detect
+/// references to module-level lets that need globalization.
 pub fn collect_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+    refs_stmts::<false>(stmts, out);
+}
+
+pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
+    refs_expr::<false>(e, out);
+}
+
+/// The LocalIds `stmts` reads or writes from OUTSIDE themselves, as seen by a
+/// closure whose body they are: every reference at this level, plus what each
+/// nested closure needs from its creation site (its explicit captures and its
+/// own free references, minus its parameters and its own `let`s). A binding
+/// declared inside a nested closure is that closure's own and never a free
+/// reference of an enclosing one, however deep it is used.
+///
+/// Callers subtract the body's own parameters and `let`s, exactly as
+/// [`compute_auto_captures_with_globals`](crate::type_analysis) does for each
+/// nested closure here.
+pub fn collect_free_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+    refs_stmts::<true>(stmts, out);
+}
+
+/// What a nested closure needs from the scope that creates it: its explicit
+/// captures plus its free references that are neither its parameters nor its
+/// own `let`s. Mirrors `compute_auto_captures_with_globals` before module
+/// globals are dropped and scope groups collapse (the caller does both).
+fn nested_closure_free_ids(
+    params: &[perry_hir::Param],
+    body: &[perry_hir::Stmt],
+    captures: &[u32],
+    out: &mut HashSet<u32>,
+) {
+    let mut referenced = HashSet::new();
+    refs_stmts::<true>(body, &mut referenced);
+    let mut own = HashSet::new();
+    collect_let_ids(body, &mut own);
+    own.extend(params.iter().map(|p| p.id));
+    out.extend(captures.iter().copied());
+    out.extend(referenced.into_iter().filter(|id| !own.contains(id)));
+}
+
+fn refs_stmts<const FREE: bool>(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     for s in stmts {
         match s {
-            perry_hir::Stmt::Expr(e) | perry_hir::Stmt::Throw(e) => collect_ref_ids_in_expr(e, out),
+            perry_hir::Stmt::Expr(e) | perry_hir::Stmt::Throw(e) => refs_expr::<FREE>(e, out),
             perry_hir::Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    collect_ref_ids_in_expr(e, out);
+                    refs_expr::<FREE>(e, out);
                 }
             }
             perry_hir::Stmt::Let { init, .. } => {
                 if let Some(e) = init {
-                    collect_ref_ids_in_expr(e, out);
+                    refs_expr::<FREE>(e, out);
                 }
             }
             perry_hir::Stmt::If {
@@ -83,19 +125,19 @@ pub fn collect_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
                 then_branch,
                 else_branch,
             } => {
-                collect_ref_ids_in_expr(condition, out);
-                collect_ref_ids_in_stmts(then_branch, out);
+                refs_expr::<FREE>(condition, out);
+                refs_stmts::<FREE>(then_branch, out);
                 if let Some(eb) = else_branch {
-                    collect_ref_ids_in_stmts(eb, out);
+                    refs_stmts::<FREE>(eb, out);
                 }
             }
             perry_hir::Stmt::While { condition, body } => {
-                collect_ref_ids_in_expr(condition, out);
-                collect_ref_ids_in_stmts(body, out);
+                refs_expr::<FREE>(condition, out);
+                refs_stmts::<FREE>(body, out);
             }
             perry_hir::Stmt::DoWhile { body, condition } => {
-                collect_ref_ids_in_stmts(body, out);
-                collect_ref_ids_in_expr(condition, out);
+                refs_stmts::<FREE>(body, out);
+                refs_expr::<FREE>(condition, out);
             }
             perry_hir::Stmt::For {
                 init,
@@ -104,15 +146,15 @@ pub fn collect_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
                 body,
             } => {
                 if let Some(init_stmt) = init {
-                    collect_ref_ids_in_stmts(std::slice::from_ref(init_stmt), out);
+                    refs_stmts::<FREE>(std::slice::from_ref(init_stmt), out);
                 }
                 if let Some(cond) = condition {
-                    collect_ref_ids_in_expr(cond, out);
+                    refs_expr::<FREE>(cond, out);
                 }
                 if let Some(upd) = update {
-                    collect_ref_ids_in_expr(upd, out);
+                    refs_expr::<FREE>(upd, out);
                 }
-                collect_ref_ids_in_stmts(body, out);
+                refs_stmts::<FREE>(body, out);
             }
             // Try/Switch/Labeled: previously fell through to `_ => {}` and
             // every LocalGet/LocalSet inside their body was invisible to the
@@ -130,41 +172,41 @@ pub fn collect_ref_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
                 catch,
                 finally,
             } => {
-                collect_ref_ids_in_stmts(body, out);
+                refs_stmts::<FREE>(body, out);
                 if let Some(c) = catch {
                     if let Some((id, _)) = c.param {
                         out.insert(id);
                     }
-                    collect_ref_ids_in_stmts(&c.body, out);
+                    refs_stmts::<FREE>(&c.body, out);
                 }
                 if let Some(f) = finally {
-                    collect_ref_ids_in_stmts(f, out);
+                    refs_stmts::<FREE>(f, out);
                 }
             }
             perry_hir::Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                collect_ref_ids_in_expr(discriminant, out);
+                refs_expr::<FREE>(discriminant, out);
                 for case in cases {
                     if let Some(t) = &case.test {
-                        collect_ref_ids_in_expr(t, out);
+                        refs_expr::<FREE>(t, out);
                     }
-                    collect_ref_ids_in_stmts(&case.body, out);
+                    refs_stmts::<FREE>(&case.body, out);
                 }
             }
             perry_hir::Stmt::Labeled { body, .. } => {
-                collect_ref_ids_in_stmts(std::slice::from_ref(body.as_ref()), out);
+                refs_stmts::<FREE>(std::slice::from_ref(body.as_ref()), out);
             }
             _ => {}
         }
     }
 }
 
-pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
+fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
     use perry_hir::{ArrayElement, CallArg, Expr};
     let walk = |sub: &Expr, out: &mut HashSet<u32>| {
-        collect_ref_ids_in_expr(sub, out);
+        refs_expr::<FREE>(sub, out);
     };
     match e {
         Expr::LocalGet(id) => {
@@ -606,14 +648,23 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(property_key, out);
             }
         }
-        Expr::Closure { body, captures, .. } => {
+        Expr::Closure {
+            body,
+            captures,
+            params,
+            ..
+        } => {
+            if FREE {
+                nested_closure_free_ids(params, body, captures, out);
+                return;
+            }
             // Closure literals don't introduce captures into the outer
             // scope, but their explicit captures + body references may
             // mention outer locals that need to be globalized.
             for c in captures {
                 out.insert(*c);
             }
-            collect_ref_ids_in_stmts(body, out);
+            refs_stmts::<FREE>(body, out);
         }
         Expr::ParseInt { string, radix } => {
             walk(string, out);
@@ -963,7 +1014,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         // here, so RegisterClass family doesn't double-walk.
         _ => {
             perry_hir::walker::walk_expr_children(e, &mut |sub| {
-                collect_ref_ids_in_expr(sub, out);
+                refs_expr::<FREE>(sub, out);
             });
         }
     }

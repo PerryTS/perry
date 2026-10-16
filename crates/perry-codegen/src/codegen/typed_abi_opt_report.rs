@@ -38,6 +38,14 @@ impl TypedCloneRejectionReason {
                 Tier::CompilerLimitation,
                 None,
             ),
+            Self::SpecBodyTooLarge => (
+                "the body is too large for a second, specialized copy: it \
+                 would double the function's compile time and code for \
+                 parameter facts a body this size cannot win back; every call \
+                 uses the boxed entry.",
+                Tier::CompilerLimitation,
+                None,
+            ),
             Self::SpecTypedCloneOverlap => (
                 "the function already carries a typed_abi clone family, which \
                  is mutually exclusive with a specialized entry in this phase.",

@@ -1045,8 +1045,15 @@ pub(crate) fn compute_auto_captures_with_globals(
         .copied()
         .filter(|id| !module_globals.contains_key(id))
         .collect();
+    // Free references only: a binding a NESTED closure declares (its
+    // parameters, its own `let`s) is that closure's, however deep it is
+    // used. Collecting every reference in the subtree instead made each
+    // enclosing closure capture all of its nested functions' locals: the
+    // CommonJS wrapper of typescript.js captured 62,226 of them, copied
+    // slot by slot at every level of the wrapper (`__0`, `__1`: ~500k IR
+    // instructions each), every one `undefined` and never read.
     let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
+    crate::collectors::collect_free_ref_ids_in_stmts(body, &mut referenced);
     let mut inner_lets: std::collections::HashSet<u32> = std::collections::HashSet::new();
     crate::collectors::collect_let_ids(body, &mut inner_lets);
     let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
@@ -1066,3 +1073,7 @@ pub(crate) fn compute_auto_captures_with_globals(
     // A scope group is one capture slot, keyed by its representative.
     scope_map.collapse_captures(out)
 }
+
+#[cfg(test)]
+#[path = "auto_captures_tests.rs"]
+mod auto_captures_tests;

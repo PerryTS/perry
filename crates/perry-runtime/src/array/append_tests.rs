@@ -124,3 +124,40 @@ fn append_heals_forwarding_without_replacing_a_rebound_home() {
         assert_eq!(js_array_get_f64(arr, 5), 5.0);
     }
 }
+
+/// `js_array_fill_values` leaves a fresh array exactly as the same values
+/// pushed one by one would: elements, length and the header's layout flags.
+#[test]
+fn fill_values_matches_one_push_per_value() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let object = crate::object::js_object_alloc(0, 0);
+        let boxed = crate::value::js_nanbox_pointer(object as i64);
+        for values in [
+            vec![1.0, 2.5, -3.0],
+            vec![1.0, boxed, 2.5, f64::from_bits(crate::value::TAG_UNDEFINED)],
+            vec![boxed],
+        ] {
+            let n = values.len() as u32;
+            let mut pushed = js_array_alloc(n);
+            for v in &values {
+                pushed = js_array_push_f64(pushed, *v);
+            }
+            let fresh = js_array_alloc(n);
+            let filled = super::push_pop::js_array_fill_values(fresh, values.as_ptr(), n);
+            assert_eq!(filled, fresh, "a fill never reallocates");
+            assert_eq!((*filled).length, (*pushed).length);
+            for i in 0..n {
+                assert_eq!(
+                    js_array_get_f64(filled, i).to_bits(),
+                    js_array_get_f64(pushed, i).to_bits()
+                );
+            }
+            assert_eq!(
+                array_object_flags_resolved(filled),
+                array_object_flags_resolved(pushed)
+            );
+        }
+    }
+}

@@ -640,9 +640,11 @@ fn class_expr_capture_refresh_roots_one_slot_for_any_capture_count() {
     );
 }
 
-/// Captures that cannot collect leave no collection point between two pushes,
-/// so the refresh emits no root at all: the same slot width as a refresh with
-/// no captures.
+/// Captures that cannot collect leave no collection point between the
+/// allocation and the array's fill, so the refresh emits no root at all (the
+/// same slot width as a refresh with no captures) and no safepoint per
+/// capture: the values are staged and stored by ONE non-allocating
+/// `js_array_fill_values`, not one `js_array_push_f64` each.
 #[test]
 fn class_expr_capture_refresh_over_inert_captures_emits_no_root() {
     let none = capture_refresh("refresh_none", vec![]);
@@ -650,7 +652,9 @@ fn class_expr_capture_refresh_over_inert_captures_emits_no_root() {
         "refresh_inert",
         vec![Expr::Number(1.0), Expr::Number(2.0), Expr::Undefined],
     );
-    assert_eq!(call_count(&inert, "js_array_push_f64"), 3, "{inert}");
+    assert_eq!(call_count(&inert, "js_array_push_f64"), 0, "{inert}");
+    assert_eq!(call_count(&inert, "js_array_fill_values"), 1, "{inert}");
+    assert_eq!(call_count(&none, "js_array_fill_values"), 0, "{none}");
     assert_eq!(
         temp_root_slot_width(&inert),
         temp_root_slot_width(&none),

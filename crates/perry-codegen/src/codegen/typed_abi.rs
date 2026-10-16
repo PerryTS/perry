@@ -464,6 +464,10 @@ pub(crate) enum TypedCloneRejectionReason {
     /// Spec-ABI: the module-wide `PERRY_SPECIALIZED_ABI_MAX` budget was
     /// exhausted before this function's turn.
     SpecBudgetExceeded,
+    /// Spec-ABI: the body has more HIR nodes than `SPEC_MAX_BODY_NODES`; a
+    /// second copy of it costs more compile time and code than its
+    /// entry-bound facts can win back.
+    SpecBodyTooLarge,
     /// Spec-ABI: the callee reads dynamic `this`, so direct call sites must
     /// juggle the implicit-this slot and never take the raw-ABI route.
     SpecReadsDynamicThis,
@@ -507,6 +511,7 @@ impl TypedCloneRejectionReason {
             Self::SpecTupleUnproven => "spec_tuple_unproven",
             Self::SpecTypedCloneOverlap => "spec_typed_clone_overlap",
             Self::SpecBudgetExceeded => "spec_budget_exceeded",
+            Self::SpecBodyTooLarge => "spec_body_too_large",
             Self::SpecReadsDynamicThis => "spec_reads_dynamic_this",
         }
     }

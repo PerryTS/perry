@@ -780,6 +780,44 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     unsafe { js_array_push_f64_resolved(cleaned, value) }
 }
 
+/// Fill a FRESH array with `n` staged values, exactly as `n` successive
+/// [`js_array_push_f64`] calls would, in one call.
+///
+/// `arr` must be the untouched result of `js_array_alloc(n)` (or larger):
+/// an ordinary, extensible array with length 0 and room for `n` elements, so
+/// no element store ever has to grow it. This allocates nothing and runs no
+/// JavaScript. That is what lets codegen stage the values in an untraced
+/// stack buffer: it does so only when lowering them could not collect, and
+/// nothing between the staging stores and this call can either.
+///
+/// # Safety
+///
+/// `arr` as above; `values` points at `n` readable `f64`s.
+#[no_mangle]
+pub unsafe extern "C" fn js_array_fill_values(
+    arr: *mut ArrayHeader,
+    values: *const f64,
+    n: u32,
+) -> *mut ArrayHeader {
+    assert!(
+        !arr.is_null() && (*arr).length == 0 && n <= (*arr).capacity,
+        "js_array_fill_values: not a fresh array with room for {n} elements"
+    );
+    for i in 0..n {
+        let value = *values.add(i as usize);
+        // The same demotion `js_array_push_f64` applies before its store.
+        crate::string::js_string_addref_if_heap_string(value);
+        // Re-read per element: a pointer store changes the numeric layout
+        // flags the next canonicalization reads, as it does across pushes.
+        let flags = array_object_flags_resolved(arr);
+        // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout
+        // note and write barrier as part of the slot write.
+        store_array_slot_resolved(arr, i as usize, value, flags);
+        (*arr).length = i + 1;
+    }
+    arr
+}
+
 /// The dense object-backed Array-subclass append, dispatched off the receiver's
 /// `GC_TYPE_OBJECT` header tag before any allocator/registry resolution. The
 /// caller has already demoted a uniquely-owned heap string in `value`.

@@ -3574,6 +3574,18 @@ fn compile_module_impl(
                 );
                 continue;
             }
+            // A specialized entry is a second full copy of the body. For a
+            // giant body (a generated straight-line driver, a 400-case
+            // switch) that doubles the dominant LLVM cost and its `.text`
+            // for entry-bound parameter facts that a body this size
+            // amortizes to nothing.
+            if spec_abi::spec_body_too_large(&f.body) {
+                reject(
+                    typed_abi::TypedCloneRejectionReason::SpecBodyTooLarge,
+                    &mut typed_clone_rejection_records,
+                );
+                continue;
+            }
             // Callee-side demotion: params the raw ABI cannot accept keep the
             // boxed protocol (reassigned params would stale the entry-bound
             // proofs; closure-referenced params feed the capture machinery).
