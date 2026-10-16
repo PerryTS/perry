@@ -11,8 +11,8 @@
 
 use std::collections::BTreeSet;
 
-/// Dynamic stream dispatch must use the same provider as the routed wrapper.
-/// Shared by automatic specialization and the coherent no-auto build.
+/// Dynamic stream dispatch must use the same provider as the routed wrapper:
+/// the stdlib adapter installs for a routed `http` / `https`.
 pub fn routed_stream_dispatch_features(module: &str) -> &'static [&'static str] {
     match module.strip_prefix("node:").unwrap_or(module) {
         "http" | "https" => &["external-http-client-pump"],

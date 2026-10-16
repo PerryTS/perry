@@ -107,6 +107,10 @@ cargo_build=(mbx build)
 "${cargo_build[@]}" --profile prod --target "$target" -p perry
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
+# The WebAssembly host archive, co-built with the archives it links beside:
+# perry links it for a WebAssembly program and never builds it while compiling.
+"${cargo_build[@]}" --profile prod --target "$target" \
+  -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host
 
 # Ship the panic=abort runtime variant from the same sysroot.
 env CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \

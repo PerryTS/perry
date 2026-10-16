@@ -804,6 +804,10 @@ jobs:
         run: |
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
+          # The WebAssembly host archive, co-built with the archives it links
+          # beside: perry links it for a WebAssembly program and never builds
+          # it while compiling one.
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -849,7 +853,7 @@ jobs:
           while IFS= read -r name; do
             echo "::group::build $name"
             mbx build --profile prod --target ${{ matrix.target }} \
-              -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
+              -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done <<< "$governed_ext_packages"
@@ -898,7 +902,7 @@ jobs:
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
-          for archive in "$src"/libperry_ext_*.a; do
+          for archive in "$src"/libperry_ext_*.a "$src"/libperry_wasm_host.a; do
             [ -f "$archive" ] && cp "$archive" "$dst/"
           done
 
@@ -942,7 +946,8 @@ jobs:
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
           for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a \
-              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects libperry_runtime_core.a.gc-effects; do
+              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects libperry_runtime_core.a.gc-effects \
+              libperry_wasm_host.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -1105,7 +1110,7 @@ jobs:
           mkdir -p staging
           cp target/${{ matrix.target }}/prod/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
-          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
+          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/prod/$lib" ]; then
               cp "target/${{ matrix.target }}/prod/$lib" staging/
               # The GC effects sidecar travels beside its runtime archive.
@@ -1257,7 +1262,7 @@ jobs:
           Copy-Item $llvmRuntime staging/
           Copy-Item "xwin-install/bin/xwin.exe" staging/
           # Include static libraries for linking (runtime, stdlib, UI)
-          $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_ui_windows.lib")
+          $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_wasm_host.lib", "perry_ui_windows.lib")
           foreach ($lib in $libs) {
             $path = "target/${{ matrix.target }}/prod/$lib"
             if (Test-Path $path) {

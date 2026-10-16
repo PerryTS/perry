@@ -29,12 +29,16 @@
 //!   `webassembly_error_ctor_instanceof`, consulted from
 //!   `js_instanceof_dynamic`).
 //!
-//! When the runtime is built with the `wasm-host` cargo feature (the opt-in
-//! `--enable-wasm-runtime` wasmi path, issue #76), `validate` / `compile` /
-//! `instantiate`, the `Module` constructor + metadata statics, and the
-//! synchronous `Instance(module, imports)` constructor route to the real host
-//! shims in `crate::webassembly` instead. The streaming entry points still
-//! reject (no `Response`-driven compile in the host MVP).
+//! When the program installs the WebAssembly engine (the opt-in
+//! `--enable-wasm-runtime` wasmi path, issue #76: perry links
+//! `perry-wasm-host` and the generated installer calls
+//! `js_runtime_install_wasm_host`), `validate` / `compile` / `instantiate`,
+//! the `Module` constructor + metadata statics, and the synchronous
+//! `Instance(module, imports)` constructor route to the real host shims in
+//! `crate::webassembly` through [`WasmEngine`] instead. The namespace names the
+//! engine only through that table, so a program without WebAssembly links
+//! none of it. The streaming entry points still reject (no `Response`-driven
+//! compile in the host MVP).
 //!
 //! NOTE: the statically-recognized spellings (`WebAssembly.compile(bytes)`
 //! etc. written literally against the global) lower to dedicated HIR
@@ -55,6 +59,38 @@ const WASM_PAGE_BYTES: u32 = 65536;
 /// Largest page count whose byte size still fits the `i32` ArrayBuffer
 /// allocator (`js_array_buffer_new`): 32767 pages = 2GiB - 64KiB.
 const WASM_MAX_PAGES: u32 = (i32::MAX as u32) / WASM_PAGE_BYTES;
+
+/// The engine entry points the namespace dispatches to once
+/// `js_runtime_install_wasm_host` installed them (`crate::webassembly::ENGINE`).
+pub(crate) struct WasmEngine {
+    pub(crate) validate: extern "C" fn(f64) -> f64,
+    pub(crate) compile: extern "C" fn(f64) -> f64,
+    pub(crate) instantiate: extern "C" fn(f64, f64) -> f64,
+    pub(crate) module_new: extern "C" fn(f64) -> f64,
+    pub(crate) instance_new: extern "C" fn(f64, f64, f64) -> f64,
+    pub(crate) table_new: extern "C" fn(f64, f64) -> f64,
+    pub(crate) global_new: extern "C" fn(f64, f64, f64) -> f64,
+    pub(crate) memory_new: extern "C" fn(u32, u32, f64) -> f64,
+    pub(crate) memory_grow: extern "C" fn(f64, u32) -> f64,
+    pub(crate) module_exports: extern "C" fn(f64) -> f64,
+    pub(crate) module_imports: extern "C" fn(f64) -> f64,
+    pub(crate) module_custom_sections: extern "C" fn(f64, f64) -> f64,
+}
+
+/// A feature-hook slot, not an `AtomicPtr`: LLVM rewrites a pointer global
+/// with one non-null store into a direct reference to the stored value, which
+/// would keep the whole engine in every program that builds the namespace.
+static ENGINE: crate::feature_hooks::Hook<&'static WasmEngine> =
+    crate::feature_hooks::Hook::empty();
+
+pub(crate) fn install_engine(engine: &'static WasmEngine) {
+    ENGINE.set(engine);
+}
+
+#[inline]
+fn engine() -> Option<&'static WasmEngine> {
+    ENGINE.peek()
+}
 
 #[inline]
 fn undefined() -> f64 {
@@ -147,17 +183,14 @@ fn wasm_unsupported_rejection(api: &str) -> f64 {
 // __wasm* properties remain compatibility data, never the brand.
 #[path = "webassembly_wrapper_state.rs"]
 pub(crate) mod owned_wrappers;
-#[cfg(any(test, feature = "wasm-host"))]
 pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
     owned_wrappers::attach(wrapper, owned_wrappers::Kind::Module, host_handle);
 }
-#[cfg(feature = "wasm-host")]
 pub(crate) fn register_extern_wrapper(wrapper: usize, kind: &'static [u8], host_handle: usize) {
     if let Some(kind) = owned_wrappers::Kind::from_bytes(kind) {
         owned_wrappers::attach(wrapper, kind, host_handle);
     }
 }
-#[cfg(feature = "wasm-host")]
 pub(crate) fn registered_extern_handle(wrapper: usize, expected_kind: &[u8]) -> Option<usize> {
     owned_wrappers::handle(wrapper, owned_wrappers::Kind::from_bytes(expected_kind)?)
 }
@@ -346,64 +379,42 @@ fn throw_requires_new(what: &str) -> ! {
 // Async entry points: compile / instantiate / *Streaming
 // ────────────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_compile_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     bytes: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_compile(bytes)
+    match engine() {
+        Some(engine) => (engine.compile)(bytes),
+        None => wasm_unsupported_rejection("WebAssembly.compile"),
+    }
 }
 
-#[cfg(not(feature = "wasm-host"))]
-extern "C" fn webassembly_compile_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    _bytes: f64,
-) -> f64 {
-    wasm_unsupported_rejection("WebAssembly.compile")
-}
-
-#[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_instantiate_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     bytes: f64,
     imports: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_instantiate(bytes, imports)
+    match engine() {
+        Some(engine) => (engine.instantiate)(bytes, imports),
+        None => wasm_unsupported_rejection("WebAssembly.instantiate"),
+    }
 }
 
-#[cfg(not(feature = "wasm-host"))]
-extern "C" fn webassembly_instantiate_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    _bytes: f64,
-    _imports: f64,
-) -> f64 {
-    wasm_unsupported_rejection("WebAssembly.instantiate")
-}
-
-#[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_validate_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     bytes: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_validate(bytes)
-}
-
-#[cfg(not(feature = "wasm-host"))]
-extern "C" fn webassembly_validate_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    _bytes: f64,
-) -> f64 {
-    f64::from_bits(crate::value::JSValue::bool(false).bits())
+    match engine() {
+        Some(engine) => (engine.validate)(bytes),
+        None => f64::from_bits(crate::value::JSValue::bool(false).bits()),
+    }
 }
 
 /// Streaming compiles need a `Response`-driven source; the wasmi host MVP
-/// has no streaming path either, so these reject under both cfgs.
+/// has no streaming path either, so these reject with or without the engine.
 extern "C" fn webassembly_compile_streaming_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -441,18 +452,13 @@ extern "C" fn webassembly_module_ctor_thunk(
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Module");
     }
-    #[cfg(feature = "wasm-host")]
-    {
+    match engine() {
         // Real wasmi compile; throws CompileError itself on invalid bytes.
-        crate::webassembly::js_webassembly_module_new(bytes)
-    }
-    #[cfg(not(feature = "wasm-host"))]
-    {
-        let _ = bytes;
-        crate::exception::js_throw(wasm_unsupported_error(
+        Some(engine) => (engine.module_new)(bytes),
+        None => crate::exception::js_throw(wasm_unsupported_error(
             b"CompileError",
             "WebAssembly.Module",
-        ));
+        )),
     }
 }
 
@@ -465,14 +471,11 @@ extern "C" fn webassembly_instance_ctor_thunk(
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Instance");
     }
-    #[cfg(feature = "wasm-host")]
-    {
-        crate::webassembly::js_webassembly_instance_new(module, imports, this.as_f64())
-    }
-    #[cfg(not(feature = "wasm-host"))]
-    {
-        let _ = (this, module, imports);
-        crate::exception::js_throw(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"));
+    match engine() {
+        Some(engine) => (engine.instance_new)(module, imports, this.as_f64()),
+        None => {
+            crate::exception::js_throw(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"))
+        }
     }
 }
 
@@ -484,14 +487,11 @@ extern "C" fn webassembly_table_ctor_thunk(
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Table");
     }
-    #[cfg(feature = "wasm-host")]
-    {
-        crate::webassembly::js_webassembly_table_new(descriptor, this.as_f64())
-    }
-    #[cfg(not(feature = "wasm-host"))]
-    {
-        let _ = (this, descriptor);
-        crate::exception::js_throw(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"));
+    match engine() {
+        Some(engine) => (engine.table_new)(descriptor, this.as_f64()),
+        None => {
+            crate::exception::js_throw(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"))
+        }
     }
 }
 
@@ -504,17 +504,12 @@ extern "C" fn webassembly_global_ctor_thunk(
     if !invoked_as_constructor(closure) {
         throw_requires_new("WebAssembly.Global");
     }
-    #[cfg(feature = "wasm-host")]
-    {
-        crate::webassembly::js_webassembly_global_new(descriptor, initial, this.as_f64())
-    }
-    #[cfg(not(feature = "wasm-host"))]
-    {
-        let _ = (this, descriptor, initial);
-        crate::exception::js_throw(wasm_unsupported_error(
+    match engine() {
+        Some(engine) => (engine.global_new)(descriptor, initial, this.as_f64()),
+        None => crate::exception::js_throw(wasm_unsupported_error(
             b"RuntimeError",
             "WebAssembly.Global",
-        ));
+        )),
     }
 }
 
@@ -565,10 +560,6 @@ fn wasm_memory_descriptor_pages(descriptor: f64) -> Result<u32, MemoryCtorError>
     Ok(pages)
 }
 
-// Read only from `wasm-host`-gated call sites (this file's Memory thunks and
-// `crate::webassembly`), so the definition carries the same gate: without it a
-// build fails `-D warnings` as dead code.
-#[cfg(feature = "wasm-host")]
 fn wasm_memory_descriptor_maximum(descriptor: f64) -> u32 {
     let Some(obj) = value_object_ptr(descriptor) else {
         return u32::MAX;
@@ -583,7 +574,6 @@ fn wasm_memory_descriptor_maximum(descriptor: f64) -> u32 {
     }
 }
 
-#[cfg(not(feature = "wasm-host"))]
 fn wasm_memory_new_buffer(pages: u32) -> f64 {
     let buf = crate::buffer::js_array_buffer_new((pages * WASM_PAGE_BYTES) as i32);
     crate::value::js_nanbox_pointer(buf as i64)
@@ -611,16 +601,9 @@ extern "C" fn webassembly_memory_ctor_thunk(
     // The dynamic construct path pre-allocated the receiver with
     // `Memory.prototype` linked (so `instanceof` works); fill it in place.
     let this = f64::from_bits(this.bits());
-    #[cfg(feature = "wasm-host")]
-    {
-        crate::webassembly::js_webassembly_memory_new(
-            pages,
-            wasm_memory_descriptor_maximum(descriptor),
-            this,
-        )
-    }
-    #[cfg(not(feature = "wasm-host"))]
-    {
+    if let Some(engine) = engine() {
+        (engine.memory_new)(pages, wasm_memory_descriptor_maximum(descriptor), this)
+    } else {
         let buffer = wasm_memory_new_buffer(pages);
         if let Some(this_obj) = value_object_ptr(this) {
             js_object_set_field_by_name(this_obj, named_key(b"buffer"), buffer);
@@ -652,15 +635,14 @@ fn memory_buffer_ptr(value: f64) -> Option<*mut crate::buffer::BufferHeader> {
 /// copy (the spec detaches the old buffer; perry's baseline leaves the old
 /// buffer intact — stale aliases keep reading the pre-grow bytes).
 fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
-    #[cfg(feature = "wasm-host")]
-    if let Some(object) = value_object_ptr(this) {
+    if let (Some(engine), Some(object)) = (engine(), value_object_ptr(this)) {
         if registered_extern_handle(object as usize, b"memory").is_some() {
             if !delta.is_finite() || delta < 0.0 {
                 return Err(MemoryCtorError::Type(
                     "WebAssembly.Memory.grow(): argument must be a non-negative number",
                 ));
             }
-            let old = crate::webassembly::js_webassembly_memory_grow(this, delta.trunc() as u32);
+            let old = (engine.memory_grow)(this, delta.trunc() as u32);
             if old >= 0.0 {
                 return Ok(old as u32);
             }
@@ -768,68 +750,46 @@ extern "C" fn webassembly_runtime_error_ctor_thunk(
 
 // ── Module metadata statics ─────────────────────────────────────────────
 
-#[cfg(feature = "wasm-host")]
+/// Without the engine no `WebAssembly.Module` instance can exist, so any
+/// argument fails the spec's brand check → synchronous TypeError.
 extern "C" fn webassembly_module_exports_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     module: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_module_exports(module)
+    match engine() {
+        Some(engine) => (engine.module_exports)(module),
+        None => super::super::object_ops::throw_object_type_error(
+            b"WebAssembly.Module.exports(): argument must be a WebAssembly.Module",
+        ),
+    }
 }
 
-#[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_module_imports_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     module: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_module_imports(module)
+    match engine() {
+        Some(engine) => (engine.module_imports)(module),
+        None => super::super::object_ops::throw_object_type_error(
+            b"WebAssembly.Module.imports(): argument must be a WebAssembly.Module",
+        ),
+    }
 }
 
-#[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_module_custom_sections_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
     module: f64,
     name: f64,
 ) -> f64 {
-    crate::webassembly::js_webassembly_module_custom_sections(module, name)
-}
-
-/// Without an engine no `WebAssembly.Module` instance can exist, so any
-/// argument fails the spec's brand check → synchronous TypeError.
-#[cfg(not(feature = "wasm-host"))]
-extern "C" fn webassembly_module_exports_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    _module: f64,
-) -> f64 {
-    super::super::object_ops::throw_object_type_error(
-        b"WebAssembly.Module.exports(): argument must be a WebAssembly.Module",
-    )
-}
-
-#[cfg(not(feature = "wasm-host"))]
-extern "C" fn webassembly_module_imports_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    _module: f64,
-) -> f64 {
-    super::super::object_ops::throw_object_type_error(
-        b"WebAssembly.Module.imports(): argument must be a WebAssembly.Module",
-    )
-}
-
-#[cfg(not(feature = "wasm-host"))]
-extern "C" fn webassembly_module_custom_sections_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    _module: f64,
-    _name: f64,
-) -> f64 {
-    super::super::object_ops::throw_object_type_error(
-        b"WebAssembly.Module.customSections(): argument must be a WebAssembly.Module",
-    )
+    match engine() {
+        Some(engine) => (engine.module_custom_sections)(module, name),
+        None => super::super::object_ops::throw_object_type_error(
+            b"WebAssembly.Module.customSections(): argument must be a WebAssembly.Module",
+        ),
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1256,10 +1216,6 @@ mod tests {
         }
     }
 
-    // Only `async_members_reject_with_compile_error` calls this, and that test
-    // is `cfg(not(wasm-host))`: without the same gate the helper is dead code
-    // in a wasm-host test build.
-    #[cfg(not(feature = "wasm-host"))]
     fn assert_rejected_with_compile_error(promise_value: f64, api_fragment: &str) {
         let ptr = value_heap_ptr(promise_value).expect("promise pointer");
         let promise = ptr as *const crate::promise::Promise;
@@ -1357,7 +1313,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "wasm-host"))]
     #[test]
     fn async_members_reject_with_compile_error() {
         let closure = std::ptr::null();
@@ -1392,7 +1347,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "wasm-host"))]
     #[test]
     fn validate_reports_false() {
         let result = webassembly_validate_thunk(
@@ -1593,10 +1547,8 @@ mod tests {
         assert_eq!(webassembly_value_ctor_instanceof(genuine, 2.0), None);
     }
 
-    // Exercises the ArrayBuffer-backed memory fallback, which #10138 gated to
-    // `not(wasm-host)` — with the feature on, memory comes from the real host
-    // and `wasm_memory_new_buffer` does not exist.
-    #[cfg(not(feature = "wasm-host"))]
+    // Exercises the ArrayBuffer-backed memory fallback (#10138): the unit
+    // tests never install the engine.
     #[test]
     fn memory_descriptor_validation_and_buffer_backing() {
         // Valid: 1 page → 65536-byte zero-filled ArrayBuffer.
@@ -1654,7 +1606,6 @@ mod tests {
         ));
     }
 
-    #[cfg(not(feature = "wasm-host"))]
     #[test]
     fn memory_grow_replaces_buffer_and_returns_old_page_count() {
         let instance = js_object_alloc(0, 1);

@@ -294,11 +294,6 @@ pub(crate) fn build_and_run_link(
     // perry-runtime may not include all symbols (e.g., perry_init_guard_check_and_set).
     // watchOS: swiftc treats duplicate symbols as errors (not warnings like clang),
     // so skip the standalone runtime when the UI lib already bundles it.
-    // Note: even when bitcode_linked is true, we still link the .a archives.
-    // The merged .o contains the crate code but NOT the Rust standard library
-    // symbols (alloc, std::thread_local, etc.). The .a archive provides those
-    // as a fallback — the linker only pulls object files from the .a that
-    // resolve still-undefined symbols (first-definition-wins on macOS).
     let skip_runtime = (is_android || is_watchos || is_visionos)
         && (ctx.needs_ui || is_watchos)
         && find_ui_library(target).is_some();
@@ -443,6 +438,24 @@ pub(crate) fn build_and_run_link(
                         cmd.arg(wk);
                     }
                 }
+                // The stdlib's `external-*` adapters name wrapper symbols that
+                // carry weak defaults on MSVC (perry-stdlib
+                // `common::wrapper_imports`), and a weak reference does not
+                // pull an archive member. Force each linked wrapper's own
+                // object in through its install hook, so its definitions
+                // always replace the defaults whatever else references it.
+                if is_windows {
+                    for wk in &well_known_libs {
+                        let hook = wk
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .map(|stem| stem.trim_start_matches("lib"))
+                            .and_then(perry_codegen::ext_registry::wrapper_install_hook);
+                        if let Some(hook) = hook {
+                            cmd.arg(format!("/INCLUDE:{hook}"));
+                        }
+                    }
+                }
                 // Tier-3 (tvOS/watchOS) std-duplication dedup; no-op elsewhere.
                 cmd.arg(dedup_stdlib_for_tier3(target, stdlib));
                 // #466 Phase 4 step 2: well-known bindings normally join the
@@ -460,15 +473,7 @@ pub(crate) fn build_and_run_link(
                 }
                 // Also link runtime for symbols DCE'd from stdlib's bundled
                 // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
-                if !is_android && is_windows && ctx.needs_wasm_runtime {
-                    // The normal Windows link deliberately lets stdlib's
-                    // bundled runtime be authoritative. A wasm program's
-                    // on-demand runtime archive is the one exception: stdlib
-                    // is built without `wasm-host`, so append the feature-
-                    // augmented archive after stdlib to fill only the still-
-                    // unresolved `js_webassembly_*` surface.
-                    cmd.arg(runtime_lib);
-                } else if !is_android && !is_windows {
+                if !is_android && !is_windows {
                     // #5000 (macOS/Linux): the standalone runtime archive is built
                     // WITHOUT the `stdlib` feature, so it also defines the no-op
                     // stdlib_stubs (js_fetch_with_options, js_headers_new,

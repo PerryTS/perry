@@ -11,7 +11,6 @@ pub(crate) enum Kind {
     Global,
 }
 impl Kind {
-    #[cfg(feature = "wasm-host")]
     pub(crate) fn from_bytes(kind: &[u8]) -> Option<Self> {
         match kind {
             b"memory" => Some(Self::Memory),
@@ -26,16 +25,13 @@ struct WrapperState {
     handle: usize,
 }
 const TYPE_ID: u64 = 0x1179_8efb_4213_c8ae;
-#[cfg(any(test, feature = "wasm-host"))]
 static VTABLE: crate::native_payload::PayloadVTable = crate::native_payload::PayloadVTable {
     drop: drop_state,
     stream: None,
 };
-#[cfg(any(test, feature = "wasm-host"))]
 unsafe extern "C" fn drop_state(resource: *mut c_void, _: *mut c_void) {
     drop(Box::from_raw(resource.cast::<WrapperState>()));
 }
-#[cfg(any(test, feature = "wasm-host"))]
 pub(crate) fn attach(wrapper: usize, kind: Kind, handle: usize) {
     if wrapper == 0 || handle == 0 {
         return;

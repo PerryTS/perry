@@ -5765,6 +5765,7 @@ dependencies = [
 name = "perry-wasm-host"
 version = "0.5.1659"
 dependencies = [
+ "perry-abi",
  "wasmi",
 ]
 

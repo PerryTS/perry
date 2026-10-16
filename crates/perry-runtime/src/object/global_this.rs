@@ -19,13 +19,12 @@ use super::*;
 
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
+pub(crate) use global_this_webassembly::{install_engine as install_wasm_engine, WasmEngine};
 pub(crate) use global_this_webassembly::{
     is_registered_wasm_module, webassembly_error_ctor_instanceof, webassembly_value_ctor_instanceof,
 };
-// Only the `wasm-host` engine constructs real modules (via
-// `webassembly::make_module_object`), so registration and trusted-handle
-// extraction are reachable only under that feature.
-#[cfg(feature = "wasm-host")]
+// Only the WebAssembly engine constructs real modules (via
+// `webassembly::make_module_object`).
 pub(crate) use global_this_webassembly::{
     register_extern_wrapper as register_wasm_extern_wrapper,
     register_module_wrapper as register_wasm_module_wrapper, registered_extern_handle,

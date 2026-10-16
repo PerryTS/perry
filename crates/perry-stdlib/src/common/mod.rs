@@ -16,6 +16,7 @@ pub(crate) mod dispatch_http;
 pub mod feature_hooks;
 pub mod net_method_values;
 mod net_socket_bridge;
+pub(crate) mod wrapper_imports;
 
 #[cfg(feature = "async-bridge")]
 pub use async_bridge::*;

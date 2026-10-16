@@ -207,110 +207,20 @@ pub unsafe fn dispatch_tls_handle(handle: i64, method: &str, args: &[f64]) -> f6
     }
 
     if is_tls_socket_handle(handle) {
-        // Client TLSSockets returned by tls.connect are backed by the selected
-        // net provider. Keep their stream/event methods in that provider's
-        // listener and command maps; the TLS-local maps below belong to
-        // accepted/server-side and directly constructed TLS sockets.
-        //
-        // The provider is perry-ext-net, the only one since tokio lane L4
-        // deleted bundled `net`, so these arms exist only in a build that
-        // links it (every `external-*` net / TLS feature implies it). The
-        // prebuilt `full` archive has none of them and must still link
-        // without libperry_ext_net.a; when ext-net IS linked beside it, its
-        // handle-method extension (`dispatch.rs`, registered with the
-        // runtime) answers these calls before this dispatcher is asked.
-        #[cfg(any(
-            feature = "external-net-tls",
-            feature = "external-tls-server",
-            feature = "external-net-pump"
-        ))]
-        if perry_runtime::tls::is_tls_client_handle(handle) {
-            match method {
-                "write" if !args.is_empty() => {
-                    extern "C" {
-                        fn js_net_socket_write(handle: i64, chunk_bits: i64);
-                    }
-                    js_net_socket_write(handle, args[0].to_bits() as i64);
-                    return undefined();
-                }
-                "end" => {
-                    extern "C" {
-                        fn js_net_socket_end(handle: i64, chunk_bits: i64);
-                    }
-                    js_net_socket_end(
-                        handle,
-                        args.first().copied().unwrap_or(undefined()).to_bits() as i64,
-                    );
-                    return undefined();
-                }
-                "destroy" => {
-                    extern "C" {
-                        fn js_net_socket_destroy(handle: i64);
-                    }
-                    js_net_socket_destroy(handle);
-                    return undefined();
-                }
-                "on" | "addListener" => {
-                    extern "C" {
-                        fn js_net_socket_on(handle: i64, event_ptr: i64, cb: i64);
-                    }
-                    js_net_socket_on(
-                        handle,
-                        event_arg(args, 0),
-                        pointer_addr(f64_from_raw_bits(callback_bits(args, 1))).unwrap_or(0) as i64,
-                    );
-                    return nanbox_handle(handle);
-                }
-                "once" => {
-                    extern "C" {
-                        fn js_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64;
-                    }
-                    js_net_socket_once(
-                        handle,
-                        event_arg(args, 0),
-                        pointer_addr(f64_from_raw_bits(callback_bits(args, 1))).unwrap_or(0) as i64,
-                    );
-                    return nanbox_handle(handle);
-                }
-                "off" | "removeListener" => {
-                    extern "C" {
-                        fn js_net_socket_remove_listener(
-                            handle: i64,
-                            event_ptr: i64,
-                            cb: i64,
-                        ) -> i64;
-                    }
-                    js_net_socket_remove_listener(
-                        handle,
-                        event_arg(args, 0),
-                        pointer_addr(f64_from_raw_bits(callback_bits(args, 1))).unwrap_or(0) as i64,
-                    );
-                    return nanbox_handle(handle);
-                }
-                "removeAllListeners" => {
-                    extern "C" {
-                        fn js_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
-                    }
-                    js_net_socket_remove_all_listeners(handle, event_arg(args, 0));
-                    return nanbox_handle(handle);
-                }
-                "listenerCount" => {
-                    extern "C" {
-                        fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
-                    }
-                    return js_net_socket_listener_count(handle, event_arg(args, 0));
-                }
-                "eventNames" => {
-                    extern "C" {
-                        fn js_net_socket_event_names(handle: i64) -> *mut StringHeader;
-                    }
-                    let json = string_from_header(js_net_socket_event_names(handle))
-                        .unwrap_or_else(|| "[]".to_string());
-                    return json_value_from_str(&json);
-                }
-                _ => {}
+        // Client TLSSockets returned by tls.connect are backed by perry-ext-net
+        // (the only net provider since tokio lane L4). Keep their stream/event
+        // methods in that provider's listener and command maps; the TLS-local
+        // maps below belong to accepted/server-side and directly constructed
+        // TLS sockets. The ext-net arm is installed with the adapters for a
+        // program that links perry-ext-net (`install_client_socket_arm`); when
+        // ext-net is linked its own handle-method extension (`dispatch.rs`,
+        // registered with the runtime) also answers these calls first.
+        if let Some(arm) = TLS_CLIENT_SOCKET.get() {
+            if let Some(value) = arm(handle, method, args) {
+                return value;
             }
         }
+
         match method {
             "write" if !args.is_empty() => {
                 if has_live_transport(handle) {
@@ -416,6 +326,78 @@ pub unsafe fn dispatch_tls_handle(handle: i64, method: &str, args: &[f64]) -> f6
         }
     }
     undefined()
+}
+
+/// The perry-ext-net arm of [`dispatch_tls_handle`] (see there), installed
+/// with the `external-net-pump` / `external-net-tls` / `external-tls-server`
+/// adapters.
+static TLS_CLIENT_SOCKET: crate::common::feature_hooks::Hook<
+    crate::common::feature_hooks::MethodArm,
+> = crate::common::feature_hooks::Hook::empty();
+
+pub(crate) fn install_client_socket_arm() {
+    TLS_CLIENT_SOCKET.set(dispatch_ext_net_client_socket);
+}
+
+unsafe fn dispatch_ext_net_client_socket(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
+    if !perry_runtime::tls::is_tls_client_handle(handle) {
+        return None;
+    }
+    match method {
+        "write" if !args.is_empty() => {
+            js_net_socket_write(handle, args[0].to_bits() as i64);
+            return Some(undefined());
+        }
+        "end" => {
+            js_net_socket_end(
+                handle,
+                args.first().copied().unwrap_or(undefined()).to_bits() as i64,
+            );
+            return Some(undefined());
+        }
+        "destroy" => {
+            js_net_socket_destroy(handle);
+            return Some(undefined());
+        }
+        "on" | "addListener" => {
+            js_net_socket_on(
+                handle,
+                event_arg(args, 0),
+                pointer_addr(f64_from_raw_bits(callback_bits(args, 1))).unwrap_or(0) as i64,
+            );
+            return Some(nanbox_handle(handle));
+        }
+        "once" => {
+            js_net_socket_once(
+                handle,
+                event_arg(args, 0),
+                pointer_addr(f64_from_raw_bits(callback_bits(args, 1))).unwrap_or(0) as i64,
+            );
+            return Some(nanbox_handle(handle));
+        }
+        "off" | "removeListener" => {
+            js_net_socket_remove_listener(
+                handle,
+                event_arg(args, 0),
+                pointer_addr(f64_from_raw_bits(callback_bits(args, 1))).unwrap_or(0) as i64,
+            );
+            return Some(nanbox_handle(handle));
+        }
+        "removeAllListeners" => {
+            js_net_socket_remove_all_listeners(handle, event_arg(args, 0));
+            return Some(nanbox_handle(handle));
+        }
+        "listenerCount" => {
+            return Some(js_net_socket_listener_count(handle, event_arg(args, 0)));
+        }
+        "eventNames" => {
+            let json = string_from_header(js_net_socket_event_names(handle))
+                .unwrap_or_else(|| "[]".to_string());
+            return Some(json_value_from_str(&json));
+        }
+        _ => {}
+    }
+    None
 }
 
 pub unsafe fn dispatch_tls_property(handle: i64, property: &str) -> Option<f64> {
@@ -655,3 +637,6 @@ mod static_method_name_tests {
         );
     }
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;

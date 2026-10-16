@@ -15,7 +15,6 @@ mod registry;
 pub(crate) mod shape;
 mod unbox;
 mod v8_stubs;
-#[cfg(any(feature = "wasm-host", test))]
 pub(crate) mod wasm_funcref;
 mod wide_call;
 

@@ -32,9 +32,9 @@ with a performance threshold.
 
 `tests/cc-parity/manifest.json` pins the npm tarball and extracted `package/cli.js`
 by both size and SHA-256. Only that regular file is extracted; no package install
-hooks run. The compiler is built first, then the runtime, stdlib, Wasm host, and
-all native extension archives are built together with `perry-runtime/wasm-host`.
-This avoids stale runtime copies in extension archives (#6303). Compilation uses
+hooks run. The compiler, runtime, stdlib, Wasm host, and all native extension
+archives are built together in one Cargo graph. This avoids stale runtime copies
+in extension archives (#6303). Compilation uses
 `--no-auto-optimize --no-cache --enable-wasm-runtime`, with four LLVM workers
 (`PERRY_CODEGEN_UNIT_JOBS=4`) to use the Intel runner's four cores within its
 memory budget.

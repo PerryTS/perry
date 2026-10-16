@@ -85,11 +85,11 @@ pub(crate) fn run_feature_installer() {
     js_stdlib_install_compiled();
 }
 
-/// Install every optional feature this archive was compiled with. An
-/// auto-optimized link calls this: its archive holds exactly the program's
-/// features, so installing all of them is the pre-hook behavior. A prebuilt
-/// link calls it too when the program has dynamic code the compiler cannot see
-/// through.
+/// Install every optional feature this archive was compiled with, except the
+/// `external-*` adapters: those call a wrapper archive (perry-ext-net / -http
+/// / -zlib) and are installed only by perry's generated installer, for a
+/// program that links the wrapper. A Rust binary linking this crate directly
+/// calls this; perry's link step installs the program's selected features.
 #[no_mangle]
 pub extern "C" fn js_stdlib_install_compiled() {
     #[cfg(feature = "bundled-streams")]
@@ -106,14 +106,6 @@ pub extern "C" fn js_stdlib_install_compiled() {
     js_stdlib_install_tls_runtime();
     #[cfg(feature = "compression-gzip")]
     js_stdlib_install_compression_gzip();
-    #[cfg(feature = "external-zlib-pump")]
-    js_stdlib_install_external_zlib_pump();
-    #[cfg(feature = "external-http-client-pump")]
-    js_stdlib_install_external_http_client_pump();
-    #[cfg(feature = "external-http-server-pump")]
-    js_stdlib_install_external_http_server_pump();
-    #[cfg(feature = "external-net-pump")]
-    js_stdlib_install_external_net_pump();
     #[cfg(feature = "web-fetch")]
     js_stdlib_install_web_fetch();
     #[cfg(feature = "turnloop-http-client")]
@@ -212,6 +204,38 @@ pub extern "C" fn js_stdlib_install_external_net_pump() {
     install_once!({
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         super::dispatch::install_external_net();
+        #[cfg(all(
+            feature = "tls-runtime",
+            not(any(target_os = "ios", target_os = "android"))
+        ))]
+        crate::tls::install_client_socket_arm();
+    });
+}
+
+/// `tls` routed to perry-ext-net: bind `tls.connect` to its `js_tls_connect`
+/// and its client TLSSockets' methods to its socket commands.
+#[cfg(feature = "external-net-tls")]
+#[no_mangle]
+pub extern "C" fn js_stdlib_install_external_net_tls() {
+    install_once!({
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        {
+            crate::tls::install_ext_net_connect();
+            crate::tls::install_client_socket_arm();
+        }
+    });
+}
+
+/// The TLS server / TLSSocket surface beside a perry-ext-net transport.
+#[cfg(feature = "external-tls-server")]
+#[no_mangle]
+pub extern "C" fn js_stdlib_install_external_tls_server() {
+    install_once!({
+        #[cfg(all(
+            feature = "tls-runtime",
+            not(any(target_os = "ios", target_os = "android"))
+        ))]
+        crate::tls::install_client_socket_arm();
     });
 }
 

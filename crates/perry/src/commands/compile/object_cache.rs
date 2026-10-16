@@ -308,9 +308,7 @@ fn compute_object_cache_key_with_env(
 ) -> u64 {
     let mut h = Djb2Hasher::new();
 
-    // Perry version + bitcode_link gate (we shouldn't be called when
-    // emit_ir_only=true, but include it so key-space is disjoint if the
-    // caller ever forgets to check).
+    // Perry version.
     h.field("v", perry_version);
     // Build id of the running perry binary (issue #544). Hashed once per
     // process; see `perry_build_id` for rationale. The version field above
@@ -1222,7 +1220,7 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
 /// source hash). Atomic counters track hit/miss/store for verbose reporting.
 pub struct ObjectCache {
     /// Where to read/write cached objects. `None` when the cache is
-    /// disabled (via `--no-cache`, bitcode-link mode, or non-writable
+    /// disabled (via `--no-cache`, or a non-writable
     /// project root).
     cache_dir: Option<PathBuf>,
     hits: AtomicUsize,
@@ -1467,7 +1465,7 @@ impl ObjectCache {
     }
 
     /// Whether the cache is actually writing to disk. `false` when
-    /// disabled by `--no-cache`, by bitcode-link mode, or by a
+    /// disabled by `--no-cache`, or by a
     /// create-dir failure.
     pub fn is_enabled(&self) -> bool {
         self.cache_dir.is_some()

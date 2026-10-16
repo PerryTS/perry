@@ -719,7 +719,7 @@ fn main() {
         .filter(|name| !name.is_empty() && !name.starts_with('#'))
         .collect::<Vec<_>>();
     let mut anchors = format!(
-        "#[used]\nstatic NODE_API_HOST_SYMBOL_ANCHORS: [NodeApiSymbol; {}] = [\n",
+        "static NODE_API_HOST_SYMBOL_ANCHORS: [NodeApiSymbol; {}] = [\n",
         names.len()
     );
     for name in names {

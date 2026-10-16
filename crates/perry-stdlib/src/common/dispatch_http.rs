@@ -41,17 +41,6 @@ pub(super) unsafe fn dispatch_client_request_method(
         return None;
     }
 
-    extern "C" {
-        fn js_ext_http_client_request_is_handle(handle: i64) -> i32;
-        fn js_ext_http_client_request_dispatch_method(
-            handle: i64,
-            method_ptr: *const u8,
-            method_len: usize,
-            args_ptr: *const f64,
-            args_len: usize,
-        ) -> f64;
-    }
-
     if unsafe { js_ext_http_client_request_is_handle(handle) } == 0 {
         return None;
     }
@@ -117,15 +106,6 @@ pub(super) unsafe fn dispatch_client_request_property(
         return None;
     }
 
-    extern "C" {
-        fn js_ext_http_client_request_is_handle(handle: i64) -> i32;
-        fn js_ext_http_client_request_dispatch_property(
-            handle: i64,
-            property_ptr: *const u8,
-            property_len: usize,
-        ) -> f64;
-    }
-
     if unsafe { js_ext_http_client_request_is_handle(handle) } == 0 {
         return None;
     }
@@ -150,25 +130,6 @@ pub(super) unsafe fn dispatch_client_incoming_method(
         "setEncoding" | "on" | "once" | "addListener" | "pipe"
     ) {
         return None;
-    }
-
-    extern "C" {
-        fn js_http_is_incoming_message(handle: i64) -> i32;
-        fn js_http_incoming_message_set_encoding(
-            handle: i64,
-            encoding_ptr: *const perry_runtime::StringHeader,
-        ) -> i64;
-        fn js_http_on(
-            handle: i64,
-            event_ptr: *const perry_runtime::StringHeader,
-            callback: i64,
-        ) -> i64;
-        fn js_http_once(
-            handle: i64,
-            event_ptr: *const perry_runtime::StringHeader,
-            callback: i64,
-        ) -> i64;
-        fn js_http_incoming_message_pipe(handle: i64, dest: f64) -> f64;
     }
 
     if unsafe { js_http_is_incoming_message(handle) } == 0 {
@@ -247,18 +208,6 @@ pub(super) unsafe fn dispatch_client_incoming_property(
             method_name_ptr: *const u8,
             method_name_len: usize,
         ) -> f64;
-        fn js_http_is_incoming_message(handle: i64) -> i32;
-        fn js_http_status_code(handle: i64) -> f64;
-        fn js_http_status_message(handle: i64) -> *mut perry_runtime::StringHeader;
-        fn js_http_response_headers(handle: i64) -> f64;
-        fn js_http_response_trailers(handle: i64) -> f64;
-        fn js_http_incoming_message_socket(handle: i64) -> f64;
-        fn js_http_incoming_message_req(handle: i64) -> f64;
-        fn js_http_response_raw_headers(handle: i64) -> f64;
-        fn js_http_response_http_version(handle: i64) -> *mut perry_runtime::StringHeader;
-        fn js_http_response_http_version_major(handle: i64) -> f64;
-        fn js_http_response_http_version_minor(handle: i64) -> f64;
-        fn js_http_response_complete(handle: i64) -> f64;
     }
 
     if unsafe { js_http_is_incoming_message(handle) } == 0 {
@@ -301,3 +250,6 @@ pub(super) unsafe fn dispatch_client_incoming_property(
     };
     Some(value)
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;

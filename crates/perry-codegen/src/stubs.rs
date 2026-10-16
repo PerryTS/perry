@@ -164,9 +164,15 @@ pub fn generate_stub_object_full(
 /// the stdlib). Naming only the program's features is what lets the linker
 /// drop every other optional subsystem from the prebuilt full-feature archives;
 /// see perry-runtime `feature_hooks` and perry-stdlib `common::feature_hooks`.
+///
+/// `registrations` are `void()` functions of linked archives the constructor
+/// calls first, before `main` (they may only store pointers): an optional
+/// archive the runtime never names, such as `perry-wasm-host`, registers its
+/// entry points with the runtime this way (`perry_wasm_host_register`).
 pub fn generate_feature_installer_object(
     runtime_installs: &[String],
     stdlib_installs: Option<&[String]>,
+    registrations: &[String],
     target: Option<&str>,
 ) -> Result<Vec<u8>> {
     let mut ll = String::new();
@@ -176,6 +182,10 @@ pub fn generate_feature_installer_object(
         halves.push(("stdlib", stdlib));
     }
     let mut ctor = String::from("define internal void @perry_register_feature_installers() {\n");
+    for symbol in registrations {
+        ll.push_str(&format!("declare void @{}()\n", symbol));
+        ctor.push_str(&format!("  call void @{}()\n", symbol));
+    }
     for (half, symbols) in &halves {
         ll.push_str(&format!(
             "declare void @js_{half}_register_feature_installer(ptr)\n"

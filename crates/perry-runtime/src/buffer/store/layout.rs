@@ -696,7 +696,6 @@ pub(crate) fn alloc_foreign(brand: u8, data: *mut u8, length: u32) -> *mut Buffe
         (*ptr).header.link = 0;
         (*ptr).data = data;
         std::ptr::write(&mut (*ptr).owned, None);
-        #[cfg(feature = "node-api-host")]
         {
             (*ptr).finalizer = None;
         }
@@ -801,11 +800,9 @@ struct ForeignBuffer {
     header: BufferHeader,
     data: *mut u8,
     owned: Option<super::super::backing::Backing>,
-    #[cfg(feature = "node-api-host")]
     finalizer: Option<crate::node_api_host::FinalizerRecord>,
 }
 
-#[cfg(feature = "node-api-host")]
 crate::perry_thread_local! {
     /// Foreign-backed buffers on this thread that hold a pending Node-API
     /// finalizer: the native resources shutdown must release. Not a brand (the
@@ -815,7 +812,6 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
-#[cfg(feature = "node-api-host")]
 pub(crate) fn set_foreign_finalizer(
     buffer: *mut BufferHeader,
     finalizer: Option<crate::node_api_host::FinalizerRecord>,
@@ -834,7 +830,6 @@ pub(crate) fn set_foreign_finalizer(
     });
 }
 
-#[cfg(feature = "node-api-host")]
 fn enqueue_foreign_finalizer(addr: usize) {
     if is_foreign_backed_buffer(addr) {
         if let Some(finalizer) = unsafe { (*(addr as *mut ForeignBuffer)).finalizer.take() } {
@@ -849,7 +844,6 @@ fn enqueue_foreign_finalizer(addr: usize) {
 /// Node-API shutdown releases live native resources before unloading addons.
 /// Finalizer state itself lives only in the cell. Taking it also prevents a
 /// later sweep running it twice.
-#[cfg(feature = "node-api-host")]
 pub(crate) fn enqueue_all_foreign_finalizers() {
     let owners: Vec<usize> =
         FOREIGN_FINALIZER_OWNERS.with(|owners| owners.borrow().iter().copied().collect());
@@ -859,7 +853,6 @@ pub(crate) fn enqueue_all_foreign_finalizers() {
 }
 
 /// Rebind a wasm linear-memory wrapper after memory.grow relocates its bytes.
-#[cfg(feature = "wasm-host")]
 pub(crate) fn rebind_foreign_buffer(addr: usize, data: *mut u8, length: u32) -> bool {
     if !is_foreign_backed_buffer(addr) {
         return false;
@@ -899,7 +892,6 @@ pub(crate) fn is_foreign_backed_buffer(addr: usize) -> bool {
 /// would leak and a recycled address would inherit them (the #6080 ABA class).
 pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     drop(take_owned_backing(addr));
-    #[cfg(feature = "node-api-host")]
     enqueue_foreign_finalizer(addr);
     CRYPTO_KEY_META_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
@@ -954,7 +946,6 @@ pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
             header,
             data,
             owned: Some(backing),
-            #[cfg(feature = "node-api-host")]
             finalizer: None,
         },
     );

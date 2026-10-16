@@ -170,7 +170,6 @@ mod native_stack;
 pub mod native_value_profile;
 pub mod navigator;
 pub mod net_validate;
-#[cfg(feature = "node-api-host")]
 pub mod node_api_host;
 mod param_type_guard;
 pub(crate) mod runtime_state_key;
@@ -281,21 +280,13 @@ pub mod v8;
 pub mod validators;
 pub mod value;
 pub mod wasi;
-/// WebAssembly host shims (issue #76). Forward-declares the
-/// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
-/// the separate `perry-wasm-host` crate and is linked in only when the
-/// user passes `--enable-wasm-runtime`.
-///
-/// Gated behind the `wasm-host` Cargo feature so non-wasm programs don't
-/// pull `js_webassembly_*` into libperry_runtime.a — those shims hold
-/// undefined references to `perry_wasm_host_*` which would fail to link
-/// without libperry_wasm_host.a on the line. The auto-optimize path
-/// (crates/perry/src/commands/compile/optimized_libs.rs) flips this
-/// feature on when `ctx.needs_wasm_runtime` is true.
-#[cfg(any(test, feature = "wasm-host"))]
 mod wasm_instance_state;
 pub mod web_storage;
-#[cfg(feature = "wasm-host")]
+/// WebAssembly host shims (issue #76). The wasmi-backed engine lives in the
+/// separate `perry-wasm-host` crate, which perry links only for a program
+/// that uses WebAssembly; it registers its entry points with the runtime
+/// (`webassembly::host`), so this module names none of its symbols, and
+/// `js_runtime_install_wasm_host` installs the engine into the namespace.
 pub mod webassembly;
 // Networking is provided by perry-ext-net; the retired synchronous provider
 // no longer contributes a second js_net_* export surface (#10678).
@@ -852,8 +843,7 @@ pub(crate) mod stdlib_pump {
         // and keeps the result live for debug assertions/tests.
         debug_assert!(!outermost || ACTIVE_OUTER_PUMPS.load(Ordering::Acquire) > 0);
         crate::promise::js_native_async_process_pending();
-        #[cfg(feature = "node-api-host")]
-        crate::node_api_host::process_pending();
+        crate::node_api_host::hooks::process_pending();
         crate::os::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
@@ -906,8 +896,7 @@ pub(crate) mod stdlib_pump {
         if crate::event_pump::agent_loop_has_outstanding_work() {
             return 1;
         }
-        #[cfg(feature = "node-api-host")]
-        if crate::node_api_host::has_active_work() {
+        if crate::node_api_host::hooks::has_active_work() {
             return 1;
         }
         if crate::promise::js_native_async_has_active() != 0 {

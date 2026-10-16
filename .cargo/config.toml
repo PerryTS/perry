@@ -55,3 +55,32 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-C",
 # counters. Nothing in perry reads SQLite's memory statistics.
 [env]
 LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"
+
+# The compiler and every archive it links, in one Cargo graph (the workspace
+# `default-members` minus perry-container-compose): `cargo build-perry
+# --release [-p <more>]`. CI and recipes that add packages to the build use
+# this so the runtime, stdlib and wrapper archives stay one graph (#7358).
+[alias]
+build-perry = [
+    "build",
+    "-p", "perry",
+    "-p", "perry-runtime-static",
+    "-p", "perry-stdlib-static",
+    "-p", "perry-wasm-host",
+    "-p", "perry-ext-ads",
+    "-p", "perry-ext-argon2",
+    "-p", "perry-ext-bcrypt",
+    "-p", "perry-ext-better-sqlite3",
+    "-p", "perry-ext-cheerio",
+    "-p", "perry-ext-ethers",
+    "-p", "perry-ext-http",
+    "-p", "perry-ext-net",
+    "-p", "perry-ext-nodemailer",
+    "-p", "perry-ext-parcel-watcher",
+    "-p", "perry-ext-pdf",
+    "-p", "perry-ext-sharp",
+    "-p", "perry-ext-typescript",
+    "-p", "perry-ext-undici",
+    "-p", "perry-ext-ws",
+    "-p", "perry-ext-zlib",
+]

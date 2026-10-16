@@ -110,10 +110,10 @@ pub(crate) fn auto_optimized_cross_features(
             cross_features.push(format!("perry-runtime/{}", f));
         }
     }
-    // Issue #76 — enable perry-runtime's `wasm-host` feature when the
-    // program references `WebAssembly.*`. Without this the shim TU stays
-    // out of libperry_runtime.a, so unrelated programs don't drag in
-    // unresolved `perry_wasm_host_*` references at link time.
+    // Issue #76 — install the WebAssembly engine (`js_runtime_install_wasm_host`)
+    // when the program references `WebAssembly.*`, and the Node-API host
+    // (#8523) for an approved native addon. Both are always compiled into the
+    // runtime archive and reached only through their installs.
     if ctx.needs_wasm_runtime {
         cross_features.push("perry-runtime/wasm-host".to_string());
     }

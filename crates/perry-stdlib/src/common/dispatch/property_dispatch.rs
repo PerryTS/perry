@@ -6,7 +6,9 @@ use crate::common::feature_hooks::{Hook, PropertyArm};
 // hub order; see `method_dispatch.rs` for the scheme.
 static PROP_TLS: Hook<PropertyArm> = Hook::empty();
 static PROP_STREAMS: Hook<PropertyArm> = Hook::empty();
+static PROP_NET_SOCKET_METHOD: Hook<PropertyArm> = Hook::empty();
 static PROP_HTTP_AGENT: Hook<PropertyArm> = Hook::empty();
+static PROP_NET_VALUE: Hook<PropertyArm> = Hook::empty();
 static PROP_SQLITE: Hook<PropertyArm> = Hook::empty();
 static PROP_HTTP_SERVER: Hook<PropertyArm> = Hook::empty();
 static PROP_HTTP_CLIENT: Hook<PropertyArm> = Hook::empty();
@@ -39,17 +41,11 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // #9324: `WebSocketServer.clients` on the dynamic path is served by
     // perry-ext-ws's own handle-property extension (`dispatch.rs`); the
     // bundled `ws` arm that sat here was deleted in tokio lane L4.
-    if let Some(value) =
-        super::super::net_socket_bridge::bind_net_socket_property(handle, property_name)
-    {
-        return value;
-    }
+    try_arm!(PROP_NET_SOCKET_METHOD, handle, property_name);
 
     try_arm!(PROP_HTTP_AGENT, handle, property_name);
 
-    if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
-        return v;
-    }
+    try_arm!(PROP_NET_VALUE, handle, property_name);
 
     try_arm!(PROP_SQLITE, handle, property_name);
 
@@ -136,15 +132,6 @@ unsafe fn prop_streams(handle: i64, property_name: &str) -> Option<f64> {
 #[cfg(feature = "external-http-client-pump")]
 unsafe fn prop_http_agent(handle: i64, property_name: &str) -> Option<f64> {
     {
-        extern "C" {
-            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
-            fn js_ext_http_agent_dispatch_property(
-                handle: i64,
-                property_ptr: *const u8,
-                property_len: usize,
-            ) -> f64;
-        }
-
         if matches!(
             property_name,
             "createConnection"
@@ -194,39 +181,6 @@ unsafe fn prop_http_server(handle: i64, property_name: &str) -> Option<f64> {
     // Server-side node:http request/response handles whose static
     // `HttpServer` / `IncomingMessage` / `ServerResponse` type was lost.
     {
-        extern "C" {
-            fn js_ext_http_server_is_handle(handle: i64) -> i32;
-            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
-            fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
-            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
-            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
-            fn js_ext_http_server_dispatch_property(
-                handle: i64,
-                property_ptr: *const u8,
-                property_len: usize,
-            ) -> f64;
-            fn js_ext_http_incoming_message_dispatch_property(
-                handle: i64,
-                property_ptr: *const u8,
-                property_len: usize,
-            ) -> f64;
-            fn js_ext_http_server_response_dispatch_property(
-                handle: i64,
-                property_ptr: *const u8,
-                property_len: usize,
-            ) -> f64;
-            fn js_ext_http2_session_dispatch_property(
-                handle: i64,
-                property_ptr: *const u8,
-                property_len: usize,
-            ) -> f64;
-            fn js_ext_http2_stream_dispatch_property(
-                handle: i64,
-                property_ptr: *const u8,
-                property_len: usize,
-            ) -> f64;
-        }
-
         if matches!(
             property_name,
             "listen"
@@ -595,6 +549,23 @@ pub(super) fn install_sqlite() {
 pub(super) fn install_external_http_server() {
     PROP_HTTP_SERVER.set(prop_http_server);
 }
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(super) fn install_external_net() {
+    PROP_NET_SOCKET_METHOD.set(super::super::net_socket_bridge::bind_net_socket_property);
+    PROP_NET_VALUE.set(prop_net_value);
+}
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+unsafe fn prop_net_value(handle: i64, property_name: &str) -> Option<f64> {
+    crate::common::net_method_values::dispatch_property(handle, property_name)
+}
 #[cfg(feature = "web-fetch")]
 pub(super) fn install_fetch() {
     PROP_FETCH.set(prop_fetch);
@@ -603,3 +574,6 @@ pub(super) fn install_fetch() {
 pub(super) fn install_crypto() {
     PROP_CRYPTO.set(prop_crypto);
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;

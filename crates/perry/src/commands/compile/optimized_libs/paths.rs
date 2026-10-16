@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::Command;
 
 /// (#1529) Android's `libperry_app.so` is loaded via `dlopen`, so its TLS
@@ -27,21 +26,4 @@ pub(crate) fn android_global_dynamic_tls_rustflag(cmd: &mut Command) -> &'static
         cmd.env("RUSTC_BOOTSTRAP", "1");
         "-Z tls-model=global-dynamic"
     }
-}
-
-#[cfg(windows)]
-pub(crate) fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
-    let raw = path.to_string_lossy();
-    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
-        PathBuf::from(format!(r"\\{}", rest))
-    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
-        PathBuf::from(rest)
-    } else {
-        path
-    }
-}
-
-#[cfg(not(windows))]
-pub(crate) fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
-    path
 }

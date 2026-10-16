@@ -173,7 +173,6 @@ mod vm_script_owner;
 
 mod symbol_owner_brand;
 
-#[cfg(feature = "node-api-host")]
 mod node_api_metadata_owner;
 
 mod wasm_funcref_owner;

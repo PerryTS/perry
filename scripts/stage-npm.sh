@@ -280,7 +280,7 @@ for entry in "${PLATFORMS[@]}"; do
     fi
     cp "$src_dir/perry.exe" "$pkg_dir/bin/perry.exe"
     cp "$src_dir/LLVM-C.dll" "$pkg_dir/bin/LLVM-C.dll"
-    for lib in "${WIN_CORE_LIBS[@]}" "$ui_lib"; do
+    for lib in "${WIN_CORE_LIBS[@]}" perry_wasm_host.lib "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${WIN_CORE_LIBS[@]}"
@@ -290,7 +290,7 @@ for entry in "${PLATFORMS[@]}"; do
   else
     cp "$src_dir/perry" "$pkg_dir/bin/perry"
     chmod +x "$pkg_dir/bin/perry"
-    for lib in "${UNIX_CORE_LIBS[@]}" "$ui_lib"; do
+    for lib in "${UNIX_CORE_LIBS[@]}" libperry_wasm_host.a "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"

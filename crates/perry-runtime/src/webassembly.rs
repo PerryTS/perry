@@ -3,12 +3,13 @@
 //!
 //! ## Design
 //!
-//! `perry-runtime` always declares the `js_webassembly_*` FFIs and forward-
-//! declares the `perry_wasm_host_*` symbols they call into. The
-//! `perry-wasm-host` archive (wasmi-backed) is linked **only** when the
-//! user passed `--enable-wasm-runtime`. Programs that never reference
-//! `WebAssembly.*` never trigger an undefined-symbol error because the
-//! linker dead-strips the unreferenced `js_webassembly_*` functions.
+//! `perry-runtime` always defines the `js_webassembly_*` FFIs. They call the
+//! `perry-wasm-host` archive (wasmi-backed) through the entry-point table it
+//! registers (`host`, `perry_abi::wasm_host`), never by symbol; perry links
+//! the archive only for a program that uses WebAssembly, and installs the
+//! engine into the namespace from the generated installer
+//! (`js_runtime_install_wasm_host`). A program that never reaches
+//! `WebAssembly.*` links none of this module.
 //!
 //! ## API shape
 //!
@@ -571,6 +572,40 @@ impl Drop for ActiveInstanceGuard {
         });
     }
 }
+/// The name the active-call root scanner is registered under.
+pub(crate) const ROOT_SCANNER_NAME: &str = "crate::webassembly::scan_active_wasm_call_roots_mut";
+
+static ENGINE: crate::object::WasmEngine = crate::object::WasmEngine {
+    validate: js_webassembly_validate,
+    compile: js_webassembly_compile,
+    instantiate: js_webassembly_instantiate,
+    module_new: js_webassembly_module_new,
+    instance_new: js_webassembly_instance_new,
+    table_new: js_webassembly_table_new,
+    global_new: js_webassembly_global_new,
+    memory_new: js_webassembly_memory_new,
+    memory_grow: js_webassembly_memory_grow,
+    module_exports: js_webassembly_module_exports,
+    module_imports: js_webassembly_module_imports,
+    module_custom_sections: js_webassembly_module_custom_sections,
+};
+
+/// Install the engine into the `WebAssembly` namespace and register its GC
+/// roots (`js_runtime_install_wasm_host`). Without a registered host archive
+/// there is no engine to install, and the namespace keeps its graceful
+/// failures.
+pub(crate) fn install() {
+    if !host::host_linked() {
+        return;
+    }
+    crate::object::install_wasm_engine(&ENGINE);
+    crate::feature_hooks::WASM_ROOT_SCANNER.set(scan_active_wasm_call_roots_mut);
+    crate::gc::gc_register_named_mutable_root_scanner(
+        ROOT_SCANNER_NAME,
+        scan_active_wasm_call_roots_mut,
+    );
+}
+
 pub(crate) fn scan_active_wasm_call_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ACTIVE_WASM_INSTANCES.with(|stack| {
         for frame in stack.borrow_mut().iter_mut() {

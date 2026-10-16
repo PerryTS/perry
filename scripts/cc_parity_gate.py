@@ -58,15 +58,14 @@ def build_toolchain(work):
         ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT
     ))
     base = ["cargo", "build", "--locked", "--profile", "perry-dev"]
-    # The compiler uses the default runtime without external Wasm symbols.
-    commands = [base + ["-p", "perry"]]
-    packages = ["perry-runtime-static", "perry-stdlib-static", "perry-wasm-host"]
+    # The compiler and every archive embedding runtime code in ONE graph
+    # (#6303): the WebAssembly engine is always compiled into the runtime.
+    packages = ["perry", "perry-runtime-static", "perry-stdlib-static", "perry-wasm-host"]
     packages += sorted(p["name"] for p in metadata["packages"] if p["name"].startswith("perry-ext-"))
-    # Unify wasm-host in EVERY archive embedding runtime code (#6303).
-    runtime = base + ["--features", "perry-runtime/wasm-host"]
+    runtime = list(base)
     for package in packages:
         runtime += ["-p", package]
-    commands.append(runtime)
+    commands = [runtime]
     with (work / "logs/build.log").open("w") as log:
         for command in commands:
             print(" ".join(command), flush=True)

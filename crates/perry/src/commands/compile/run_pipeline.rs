@@ -2879,14 +2879,8 @@ pub fn run_with_parse_cache(
         ))
     });
 
-    // Phase J: detect bitcode-link mode. The actual .bc paths aren't known
-    // yet (build_optimized_libs runs after compilation), but we decide the
-    // mode here so the per-module codegen can emit .ll instead of .o.
-    let bitcode_link = std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
-
     // V2.2: Per-module object cache at `<cache_dir>/objects/<target>/<key>.o`.
     // Disabled when the user passed `--no-cache`, when `PERRY_NO_CACHE=1`, or
-    // when we're in bitcode-link mode (the artifacts aren't object files), or
     // when native-region verification is enabled and lowering must run.
     // Key derivation: `compute_object_cache_key(opts, source_hash, perry_version)`.
     let cache_env_disabled = std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
@@ -2898,11 +2892,8 @@ pub fn run_with_parse_cache(
             .ok()
             .as_deref()
             == Some("1");
-    let cache_enabled = !args.no_cache
-        && !cache_env_disabled
-        && !bitcode_link
-        && !verify_native_regions
-        && typed_feedback.is_none();
+    let cache_enabled =
+        !args.no_cache && !cache_env_disabled && !verify_native_regions && typed_feedback.is_none();
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
@@ -3593,44 +3584,20 @@ pub fn run_with_parse_cache(
     #[cfg(not(feature = "target-wasi"))]
     let native_link_set_skipped = false;
 
-    // Issue #76 follow-up — auto-provision the wasmi host staticlib. A
-    // program that references `WebAssembly.*` sets `ctx.needs_wasm_runtime`
-    // (feature_detect.rs), which links `libperry_wasm_host.a`. That archive
-    // lives in the standalone `perry-wasm-host` crate and is built by NOTHING
-    // in the normal compile path — not the auto-optimize runtime/stdlib
-    // rebuild, not codegen — so a bare `perry compile` used to die with
-    // `libperry_wasm_host.a not found` until a human ran
-    // `cargo build --release -p perry-wasm-host`. Build it on demand here so
-    // both the symbol-stub scan below and the final link resolve it. Cargo's
-    // freshness check makes this a no-op when it is already current; programs
-    // that do not use wasm skip the check entirely.
-    //
-    // `--enable-wasm-runtime` is an explicit override: fold it into
-    // `ctx.needs_wasm_runtime` so EVERY downstream path (the `wasm-host`
-    // cargo feature in `auto_optimized_cross_features`, the no-auto runtime
-    // rebuild, the library link, and the symbol-stub scan) treats it the
-    // same as auto-detected `WebAssembly.*` usage. Without this fold the
-    // flag only linked `libperry_wasm_host.a` but never enabled the
-    // `perry-runtime/wasm-host` cargo feature, so `js_webassembly_*`
-    // symbols stayed undefined in the runtime archive.
+    // Issue #76 — the wasmi host archive. A program that references
+    // `WebAssembly.*` sets `ctx.needs_wasm_runtime` (feature_detect.rs);
+    // `--enable-wasm-runtime` is an explicit override folded into the same
+    // flag, so every downstream step (the `wasm-host` install, the host's
+    // registration in the generated installer object, the library link and
+    // the symbol-stub scan) treats both alike. `libperry_wasm_host.a` is built
+    // with the runtime archives when perry is built; it is located here, never
+    // built.
     if args.enable_wasm_runtime {
         ctx.needs_wasm_runtime = true;
     }
     let use_wasm_host = ctx.needs_wasm_runtime;
-    if use_wasm_host && !native_link_set_skipped && find_perry_workspace_root().is_none() {
-        eprintln!(
-            "warning: WebAssembly runtime was requested, but Perry could not find its source workspace to build the required `perry-runtime/wasm-host` feature. The default prebuilt runtime lacks this feature, so linking may fail unless the selected runtime was built with it. Set `PERRY_WORKSPACE_ROOT` to a Perry source checkout (including `crates/perry-runtime` and `crates/perry-wasm-host`), or use a wasm-enabled runtime archive."
-        );
-    }
     let wasm_host_lib_resolved = if use_wasm_host && !native_link_set_skipped {
-        // Prefer a Cargo freshness check when workspace source is available.
-        // Merely finding an archive is insufficient after the host ABI grows:
-        // a stale libperry_wasm_host.a can exist while the freshly rebuilt
-        // runtime references newer symbols. Cargo is incremental here, so an
-        // up-to-date host is a cheap no-op. Installed/source-less builds fall
-        // back to their packaged archive.
-        build_wasm_host_library(target.as_deref(), format, verbose)
-            .or_else(|| find_wasm_host_library(target.as_deref()))
+        find_wasm_host_library(target.as_deref())
     } else {
         None
     };
@@ -5877,7 +5844,7 @@ pub fn run_with_parse_cache(
             namespace_v8_specifiers,
             namespace_member_prefixes,
             namespace_member_origin_names,
-            emit_ir_only: bitcode_link,
+            emit_ir_only: false,
             verify_native_regions,
             disable_buffer_fast_path,
             namespace_imports,
@@ -6241,8 +6208,7 @@ pub fn run_with_parse_cache(
                 (None, None)
             };
             let obj_name = native_object_file_stem(&hir_module.name);
-            // In bitcode mode the bytes are .ll text; use .ll extension.
-            let ext = if bitcode_link { "ll" } else { "o" };
+            let ext = "o";
             // #7167: on `--no-link` the emitted object is the product, so it
             // is written where `-o` points (verbatim, for the single-module
             // case) rather than into a temp directory nobody deletes. When
@@ -6833,10 +6799,7 @@ pub fn run_with_parse_cache(
     let optimized_libs: OptimizedLibs =
         optimized_libs.expect("native link set is resolved before codegen");
 
-    let stdlib_lib_resolved: Option<PathBuf> = optimized_libs
-        .stdlib
-        .clone()
-        .or_else(|| find_stdlib_library(target.as_deref()));
+    let stdlib_lib_resolved: Option<PathBuf> = find_stdlib_library(target.as_deref());
 
     // Optional runtime features — and perry-stdlib's, when the stdlib is
     // linked — install through the installers this object registers (see
@@ -6857,9 +6820,18 @@ pub fn run_with_parse_cache(
                 eprintln!("  stdlib installs: {}", stdlib.join(", "));
             }
         }
+        // The wasm host registers its entry points with the runtime before
+        // `main` (`perry_abi::wasm_host`), so `js_runtime_install_wasm_host`
+        // finds them.
+        let registrations: Vec<String> = wasm_host_lib_resolved
+            .is_some()
+            .then(|| crate::commands::stdlib_installs::WASM_HOST_REGISTER_SYMBOL.to_string())
+            .into_iter()
+            .collect();
         let installer_bytes = perry_codegen::stubs::generate_feature_installer_object(
             &runtime_symbols,
             stdlib_symbols.as_deref(),
+            &registrations,
             target.as_deref(),
         )?;
         let installer_path = object_output_dir.join("_perry_feature_installs.o");
@@ -7100,112 +7072,6 @@ pub fn run_with_parse_cache(
             obj_fingerprints.push(None);
         }
     }
-
-    // Phase J: bitcode link — merge user .ll + runtime/stdlib .bc into one
-    // optimized object via llvm-link → opt → llc. This replaces both the
-    // per-module clang -c step AND the archive linking.
-    let _bitcode_linked = if bitcode_link && optimized_libs.runtime_bc.is_some() {
-        if matches!(format, OutputFormat::Text) {
-            println!("Using LLVM bitcode link (whole-program LTO)");
-        }
-        // Separate .ll files (user modules) from .o files (stubs)
-        let ll_files: Vec<PathBuf> = obj_paths
-            .iter()
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ll"))
-            .cloned()
-            .collect();
-        let stub_objs: Vec<PathBuf> = obj_paths
-            .iter()
-            .filter(|p| p.extension().and_then(|e| e.to_str()) != Some("ll"))
-            .cloned()
-            .collect();
-
-        if ll_files.is_empty() {
-            eprintln!("  bitcode-link: no .ll files produced, falling back to normal link");
-            false
-        } else {
-            let runtime_bc = optimized_libs.runtime_bc.as_ref().unwrap();
-            let stdlib_bc = optimized_libs.stdlib_bc.as_deref();
-
-            match perry_codegen::linker::bitcode_link_pipeline(
-                &ll_files,
-                runtime_bc,
-                stdlib_bc,
-                &optimized_libs.extra_bc,
-                target.as_deref(),
-            ) {
-                Ok(linked_obj) => {
-                    match format {
-                        OutputFormat::Text => {
-                            if let Ok(meta) = std::fs::metadata(&linked_obj) {
-                                println!(
-                                    "  bitcode-link: merged {} modules → {} ({:.1} MB)",
-                                    ll_files.len(),
-                                    linked_obj.display(),
-                                    meta.len() as f64 / (1024.0 * 1024.0)
-                                );
-                            }
-                        }
-                        OutputFormat::Json => {}
-                    }
-                    // Clean up intermediate .ll files unless the caller
-                    // explicitly requested debuggable compiler artifacts.
-                    if !args.keep_intermediates {
-                        for ll in &ll_files {
-                            let _ = fs::remove_file(ll);
-                        }
-                    }
-                    // Replace obj_paths with the merged .o + any stubs.
-                    // The merged object is derived after codegen-cache
-                    // materialization, so the original per-module cache
-                    // fingerprints are no longer a trusted proxy for these
-                    // bytes.
-                    obj_cleanup_paths.push(linked_obj.clone());
-                    let mut linked_obj_paths = vec![linked_obj];
-                    linked_obj_paths.extend(stub_objs);
-                    obj_fingerprints = vec![None; linked_obj_paths.len()];
-                    obj_paths = linked_obj_paths;
-                    true
-                }
-                Err(e) => {
-                    eprintln!(
-                        "  bitcode-link: pipeline failed ({}), falling back to normal link",
-                        e
-                    );
-                    false
-                }
-            }
-        }
-    } else if bitcode_link {
-        // bitcode_link was requested but runtime .bc wasn't produced.
-        // Fall back: compile any .ll files to .o via clang -c.
-        eprintln!("  bitcode-link: runtime .bc not available, falling back to normal link");
-        let mut new_obj_paths: Vec<PathBuf> = Vec::new();
-        let mut new_obj_fingerprints: Vec<Option<String>> = Vec::new();
-        for (idx, p) in obj_paths.iter().enumerate() {
-            if p.extension().and_then(|e| e.to_str()) == Some("ll") {
-                let ll_text = fs::read_to_string(p)?;
-                let obj_bytes =
-                    perry_codegen::linker::compile_ll_to_object(&ll_text, target.as_deref())?;
-                let obj_path = p.with_extension("o");
-                fs::write(&obj_path, &obj_bytes)?;
-                if !args.keep_intermediates {
-                    let _ = fs::remove_file(p);
-                }
-                obj_cleanup_paths.push(obj_path.clone());
-                new_obj_paths.push(obj_path);
-                new_obj_fingerprints.push(None);
-            } else {
-                new_obj_paths.push(p.clone());
-                new_obj_fingerprints.push(obj_fingerprints.get(idx).cloned().unwrap_or(None));
-            }
-        }
-        obj_paths = new_obj_paths;
-        obj_fingerprints = new_obj_fingerprints;
-        false
-    } else {
-        false
-    };
 
     // Generate JS bundle if needed
     let _js_bundle_path = if !ctx.js_modules.is_empty() {
@@ -7939,8 +7805,8 @@ pub fn run_with_parse_cache(
     };
     let runtime_lib = if let Some(ref libs) = geisterhand_libs {
         libs.runtime.clone()
-    } else if let Some(auto_rt) = optimized_libs.runtime.clone() {
-        auto_rt
+    } else if let Some(core) = optimized_libs.runtime.clone() {
+        core
     } else {
         find_runtime_library(target.as_deref())?
     };

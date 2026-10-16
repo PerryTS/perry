@@ -85,7 +85,7 @@ governed_ext_packages=$(./scripts/release_ext_packages.sh)
 while IFS= read -r package; do
   echo "::group::build $package"
   "${cargo_build[@]}" --profile prod --target "$target" \
-    -p perry -p perry-runtime-static -p perry-stdlib-static -p "$package" \
+    -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$package" \
     || echo "  (skipped $package -- failed to build on the glibc 2.31 sysroot)"
   echo "::endgroup::"
 done <<< "$governed_ext_packages"

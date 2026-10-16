@@ -1159,10 +1159,20 @@ pub fn gc_init() {
     reg_scanner!(crate::object::scan_arguments_object_roots_mut);
     // bun:ffi (#6562): the cached FFIType enum object.
     reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
-    #[cfg(feature = "node-api-host")]
-    reg_scanner!(crate::node_api_host::scan_node_api_roots_mut);
-    #[cfg(feature = "wasm-host")]
-    reg_scanner!(crate::webassembly::scan_active_wasm_call_roots_mut);
+    // Optional features' scanners, on every thread after the feature's
+    // install filled the slot (`feature_hooks`).
+    if let Some(scanner) = crate::feature_hooks::NODE_API_ROOT_SCANNER.peek() {
+        gc_register_named_mutable_root_scanner(crate::node_api_host::ROOT_SCANNER_NAME, scanner);
+    }
+    if let Some(scanner) = crate::feature_hooks::WASM_ROOT_SCANNER.peek() {
+        gc_register_named_mutable_root_scanner(crate::webassembly::ROOT_SCANNER_NAME, scanner);
+    }
+    // Unit tests reach the Node-API host without perry's installer: install it
+    // with the first initialized thread (which registers its scanner there;
+    // later threads take it from the slot above), as a build with the old
+    // `node-api-host` feature did for every thread.
+    #[cfg(test)]
+    crate::feature_hooks::js_runtime_install_node_api_host();
     reg_budgeted_scanner!(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,

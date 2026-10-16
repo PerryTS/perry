@@ -1143,6 +1143,9 @@ pub extern "C" fn perry_wasm_host_instance_memory_write(
     copied
 }
 
+// The unit tests link no runtime to register with.
+#[cfg(not(test))]
+mod ops;
 mod tables;
 pub use tables::WASM_VAL_KIND_NONE;
 use tables::*;

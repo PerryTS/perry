@@ -953,7 +953,6 @@ pub(super) fn malloc_resident_bytes() -> usize {
 /// Visit current malloc custody during native environment shutdown. The
 /// visitor may enqueue plain native finalizer records, but never collect or
 /// invoke JS. This does not alter incremental sweep snapshot/forwarding state.
-#[cfg(feature = "node-api-host")]
 pub(crate) fn walk_malloc_headers_for_native_shutdown(visit: &mut dyn FnMut(*mut GcHeader)) {
     let _no_move = super::GcSuppressScope::new();
     let headers = MALLOC_STATE.with(|state| state.borrow().objects.clone());

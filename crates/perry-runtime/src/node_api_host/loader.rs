@@ -693,3 +693,46 @@ mod request_tests {
         assert!(manifest_entry_for(&manifest, "$project/sub/native/addon.node").is_ok());
     }
 }
+
+/// `process.dlopen(module, filename, flags)`: load an approved addon into
+/// `module.exports` (`js_process_dlopen` reaches it through `hooks`).
+pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
+    use crate::string::js_string_from_bytes;
+    use crate::value::JSValue;
+    unsafe {
+        let Some(filename) = js_string_value(filename) else {
+            crate::fs::validate::throw_type_error_with_code(
+                "process.dlopen(module, filename) expects filename to be a string",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        };
+        let flags_value = JSValue::from_bits(flags.to_bits());
+        if !flags_value.is_undefined() && !flags_value.is_null() {
+            if !flags_value.is_number() || !matches!(flags_value.as_number() as i64, 0 | 1 | 2) {
+                crate::fs::validate::throw_error_with_code(
+                    "process.dlopen only supports RTLD_LAZY or RTLD_NOW with local symbol scope",
+                    "ERR_DLOPEN_FAILED",
+                );
+            }
+        }
+        let module_value = JSValue::from_bits(module.to_bits());
+        if !crate::object::object_ops::value_is_object_like(module) {
+            crate::fs::validate::throw_type_error_with_code(
+                "process.dlopen(module, filename) expects module to be an object",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let module = scope
+            .root_raw_mut_ptr(module_value.as_pointer::<crate::object::ObjectHeader>()
+                as *mut crate::object::ObjectHeader);
+        let exports = scope.root_nanbox_f64(load_addon_or_throw(&filename));
+        let key = scope.root_string_ptr(js_string_from_bytes(b"exports".as_ptr(), 7));
+        module.with_mut_ptr(|module| {
+            key.with_const_ptr(|key| {
+                crate::object::js_object_set_field_by_name(module, key, exports.get_nanbox_f64())
+            })
+        });
+        exports.get_nanbox_f64()
+    }
+}

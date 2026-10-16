@@ -124,6 +124,8 @@ pub(crate) fn install_external_http_server() {
 ))]
 pub(crate) fn install_external_net() {
     method_dispatch::install_external_net();
+    property_dispatch::install_external_net();
+    unsafe { init::install_external_net_registrations() };
 }
 
 #[cfg(feature = "web-fetch")]

@@ -353,15 +353,6 @@ watchos-game-loop = []
 # invokes Perry's compiled `main()`. Auto-enabled by the compiler when
 # --target harmonyos[-simulator] is passed (see crates/perry-runtime/src/ohos_napi.rs).
 ohos-napi = []
-# WebAssembly host shims (issue #76). When on, `webassembly.rs` is compiled
-# into libperry_runtime.a, which adds undefined references to `perry_wasm_host_*`
-# (resolved by linking libperry_wasm_host.a). The auto-optimize path turns
-# this on only when the user's program references `WebAssembly.*`, so non-wasm
-# programs don't pay an unresolvable-symbol penalty at link time.
-wasm-host = []
-# #8523: opt-in Node-API ABI and host-core symbols. The compiler enables this
-# only for an allowlisted native-addon graph, preserving the default size gate.
-node-api-host = ["dep:perry-hex", "dep:sha2"]
 # #6559: runtime dynamic-code evaluation — `new Function(p1, …, body)` with a
 # RUNTIME-constructed body parses the generated source with perry-parser (SWC)
 # and runs it through a scoped tree-walking interpreter (`src/dyn_eval/`).
@@ -434,8 +425,9 @@ timezone_provider = { version = "0.2.6", default-features = false, features = ["
 
 serde.workspace = true
 serde_json.workspace = true
-perry-hex = { workspace = true, optional = true }
-sha2 = { version = "0.11", optional = true }
+# The Node-API host (#8523): addon manifest hashes.
+perry-hex.workspace = true
+sha2 = "0.11"
 # TLS client identity callbacks run from the external net archive, before the
 # stdlib TLS module is necessarily linked. Keep the legacy peer-certificate
 # object builder in the runtime so that callback path has no stdlib symbol

@@ -30,8 +30,9 @@ done
 unset RUSTFLAGS
 case "$target" in
   linux-x86_64)
-    # Same command as test.yml's gap-suite-build, whose archives the CI leg reuses.
-    build=(cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
+    # Same command as test.yml's gap-suite-build, whose archives the CI leg reuses:
+    # the compiler and every archive it links, in one graph (`cargo build-perry`).
+    build=(cargo build-perry --release)
     libdir="target/release"; libs=(libperry_runtime.a libperry_stdlib.a) ;;
   macos-aarch64)
     build=(cargo build --release -p perry-runtime-static -p perry-stdlib-static)

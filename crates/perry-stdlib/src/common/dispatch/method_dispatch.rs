@@ -86,16 +86,6 @@ unsafe fn try_dispatch_external_http_client(
     let method_name =
         std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len)).ok()?;
 
-    extern "C" {
-        fn js_ext_http_agent_is_handle(handle: i64) -> i32;
-        fn js_ext_http_agent_dispatch_method(
-            handle: i64,
-            method_ptr: *const u8,
-            method_len: usize,
-            args_ptr: *const f64,
-            args_len: usize,
-        ) -> f64;
-    }
     if matches!(
         method_name,
         "getName" | "destroy" | "keepSocketAlive" | "reuseSocket" | "createConnection"
@@ -122,9 +112,6 @@ unsafe fn try_dispatch_external_http_client(
         return None;
     }
 
-    extern "C" {
-        fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
-    }
     if js_ext_http_client_incoming_message_is_handle(handle) == 0 {
         return None;
     }
@@ -521,49 +508,6 @@ unsafe fn arm_http_server(handle: i64, method_name: &str, args: &[f64]) -> Optio
     // FastifyApp, …) doesn't misroute. The list mirrors the
     // `class_filter: Some("HttpServer")` rows in http.rs.
     {
-        extern "C" {
-            fn js_ext_http_server_is_handle(handle: i64) -> i32;
-            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
-            fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
-            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
-            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
-            fn js_ext_http_server_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-            fn js_ext_http_incoming_message_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-            fn js_ext_http_server_response_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-            fn js_ext_http2_session_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-            fn js_ext_http2_stream_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-        }
-
         let is_http_server_method = matches!(
             method_name,
             "listen" | "close" | "address" | "on" | "addListener" | "setTimeout"
@@ -790,9 +734,6 @@ unsafe fn arm_http_client_pause_resume(
     // drains when an `'end'`/`'data'` listener attaches, so returning the
     // receiver is the whole fix here.
     {
-        extern "C" {
-            fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
-        }
         if matches!(method_name, "pause" | "resume")
             && unsafe { js_ext_http_client_incoming_message_is_handle(handle) } != 0
         {
@@ -812,9 +753,6 @@ unsafe fn arm_external_net(handle: i64, method_name: &str, args: &[f64]) -> Opti
     // the well-known flip strips bundled-net. Same dispatch contract,
     // but routes through extern "C" symbols perry-ext-net provides.
     {
-        extern "C" {
-            fn js_ext_net_is_socket_handle(handle: i64) -> i32;
-        }
         if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
             return Some(dispatch_external_net_socket(handle, method_name, &args));
         }
@@ -927,3 +865,6 @@ pub(super) fn install_external_net() {
 pub(super) fn install_fetch() {
     ARM_FETCH.set(arm_fetch);
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;

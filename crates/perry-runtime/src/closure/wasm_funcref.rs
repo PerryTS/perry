@@ -5,12 +5,10 @@ use crate::value::JSValue;
 use std::ffi::c_void;
 const NAME: &str = "Perry.Wasm.FunctionReference";
 const TYPE_ID: u64 = 0x1179_8efb_4213_c8ab;
-#[cfg(feature = "wasm-host")]
 static VTABLE: crate::native_payload::PayloadVTable = crate::native_payload::PayloadVTable {
     drop: drop_external,
     stream: None,
 };
-#[cfg(feature = "wasm-host")]
 unsafe extern "C" fn drop_external(resource: *mut c_void, _hint: *mut c_void) {
     crate::webassembly::drop_host_extern_handle(resource as usize);
 }
@@ -29,7 +27,6 @@ unsafe fn install(
         crate::value::js_nanbox_pointer(cell as i64),
     );
 }
-#[cfg(feature = "wasm-host")]
 pub(crate) fn register_wasm_funcref_external(owner: usize, external: usize) {
     if owner == 0 {
         crate::webassembly::drop_host_extern_handle(external);
@@ -41,7 +38,6 @@ pub(crate) fn register_wasm_funcref_external(owner: usize, external: usize) {
 }
 /// Ordinary instance exports still borrow their native pointer from the
 /// instance. Table funcrefs instead hold a traced owning native cell.
-#[cfg(feature = "wasm-host")]
 pub(crate) fn external_from_capture(value: f64) -> *mut c_void {
     let value = JSValue::from_bits(value.to_bits());
     if !value.is_pointer() {

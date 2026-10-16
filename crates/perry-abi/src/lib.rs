@@ -95,8 +95,8 @@ pub const BUILTIN_PROTO_FAMILIES: usize = 16;
 /// clear while every member still holds its builtin and `globalThis[name]`
 /// still names the namespace.
 pub const BUILTIN_NAMESPACES: [&str; 15] = [
-    "console", "Math", "JSON", "Reflect", "Object", "Number", "String", "Array", "Promise",
-    "Date", "Symbol", "BigInt", "Atomics", "Intl", "Boolean",
+    "console", "Math", "JSON", "Reflect", "Object", "Number", "String", "Array", "Promise", "Date",
+    "Symbol", "BigInt", "Atomics", "Intl", "Boolean",
 ];
 /// Builtin prototype families plus builtin namespaces: the intrinsic slots.
 pub const INTRINSIC_FAMILIES: usize = BUILTIN_PROTO_FAMILIES + BUILTIN_NAMESPACES.len();
@@ -1029,6 +1029,7 @@ pub const BYTES_DETACHED: u16 = 1 << 14;
 pub const BYTES_ELEMENT_SHIFT: [u8; 19] = [0, 0, 0, 1, 1, 2, 2, 1, 2, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0];
 
 pub mod native_class_ids;
+pub mod wasm_host;
 
 /// Slot 3: address of the existing compiled-class function directory.
 pub const AGENT_PTR_CLASS_VALUES: usize = 3;

@@ -80,7 +80,6 @@ pub(crate) use header::{
     drop_owned_backing_at_thread_exit, finalize_collected_dead_buffer, is_foreign_backed_buffer,
 };
 // Only the wasm host re-points a foreign wrapper (#9611); see the fn's docs.
-#[cfg(feature = "wasm-host")]
 pub(crate) use header::rebind_foreign_buffer;
 
 // ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
@@ -681,7 +680,6 @@ mod tests {
     }
 }
 
-#[cfg(feature = "node-api-host")]
 pub(crate) use header::{enqueue_all_foreign_finalizers, set_foreign_finalizer};
 
 #[cfg(test)]

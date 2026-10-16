@@ -91,12 +91,38 @@ exclude = [
     "third_party/windows-winui",
 ]
 
-# Build only the host-independent product set by default.
+# Build only the host-independent product set by default: the compiler and
+# every archive it links (runtime, stdlib, the WebAssembly host and the routed
+# `perry-ext-*` wrappers of `crates/perry/well_known_bindings.toml`). perry
+# never builds an archive while compiling a program, and the archives must
+# come from ONE Cargo graph (#7358), so they are built with the compiler.
+# `cargo build-perry` (.cargo/config.toml) is the same set for a command line
+# that adds packages; `default_members_match_the_build_perry_alias` keeps the
+# two in step.
 # Platform UI manifests keep their source and dependencies behind target cfgs.
 # Build each platform package explicitly for its applicable target.
 default-members = [
     "crates/perry",
     "crates/perry-container-compose",
+    "crates/perry-runtime-static",
+    "crates/perry-stdlib-static",
+    "crates/perry-wasm-host",
+    "crates/perry-ext-ads",
+    "crates/perry-ext-argon2",
+    "crates/perry-ext-bcrypt",
+    "crates/perry-ext-better-sqlite3",
+    "crates/perry-ext-cheerio",
+    "crates/perry-ext-ethers",
+    "crates/perry-ext-http",
+    "crates/perry-ext-net",
+    "crates/perry-ext-nodemailer",
+    "crates/perry-ext-parcel-watcher",
+    "crates/perry-ext-pdf",
+    "crates/perry-ext-sharp",
+    "crates/perry-ext-typescript",
+    "crates/perry-ext-undici",
+    "crates/perry-ext-ws",
+    "crates/perry-ext-zlib",
 ]
 
 # Aggressive release optimizations for small, fast binaries

@@ -17,20 +17,10 @@ fn workspace_root() -> PathBuf {
         .expect("canonicalize workspace root")
 }
 
-/// Dedicated target dir for this suite's `wasm-host`-enabled runtime.
-///
-/// #8547: this test is the only thing in the workspace that builds
-/// `perry-runtime` with `perry-runtime/wasm-host`. Built into the SHARED
-/// `target/debug`, it replaces `libperry_runtime.a` with one that compiles
-/// `webassembly.rs` in — and that archive carries undefined references to
-/// `perry_wasm_host_*`, which only `libperry_wasm_host.a` satisfies and which a
-/// runtime-only link line does not include. Every other suite in the same
-/// `cargo test --workspace` job that links runtime-only against that archive
-/// then fails at link time (`issue_5247_property_read_source_location` was the
-/// casualty). Isolating the build mirrors what the compiler's own no-auto path
-/// already does for exactly this reason — see `build_wasm_host_runtime` in
-/// `optimized_libs/no_auto.rs`, whose dedicated `target/perry-wasm-host-runtime`
-/// exists so "the prebuilt libperry_runtime.a is not clobbered".
+/// Dedicated target dir for this suite's runtime and wasm host archives
+/// (`libperry_wasm_host.a` is linked for every WebAssembly program, and perry
+/// does not build it while compiling one), kept apart from the shared
+/// `target/debug` other suites link (#8547).
 fn wasm_host_target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
@@ -52,10 +42,10 @@ fn ensure_runtime_archives() {
             .arg("build")
             .arg("-p")
             .arg("perry-runtime-static")
-            .arg("--features")
-            .arg("perry-runtime/wasm-host")
+            .arg("-p")
+            .arg("perry-wasm-host")
             .output()
-            .expect("build static runtime wrapper with wasm host shims");
+            .expect("build the static runtime and wasm host archives");
         assert!(
             runtime_build.status.success(),
             "static runtime build failed\nstdout:\n{}\nstderr:\n{}",

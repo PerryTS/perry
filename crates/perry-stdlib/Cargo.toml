@@ -28,7 +28,11 @@ default = ["full"]
 # runtime, `common::tokio_bridge`) was deleted by the final tokio lane, and
 # `full` lost it with it. `scripts/tokio_inventory.py` gates that tokio never
 # comes back into this crate or `Cargo.lock`.
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client"]
+# `full` also carries the `external-*` adapters for the routed wrappers
+# (perry-ext-net / -http / -ws / -zlib). Each is installed only for a program
+# that links its wrapper (`common::feature_hooks`), so the one prebuilt archive
+# serves routed and unrouted programs alike.
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client", "external-ws-pump", "external-net-pump", "external-zlib-pump", "external-http-server-pump", "external-http-client-pump", "external-net-tls", "external-tls-server"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -95,9 +99,8 @@ streams-brotli = ["bundled-streams", "dep:brotli"]
 websocket = ["bundled-ws"]
 bundled-ws = []
 
-# Activated by `optimized_libs::build_optimized_libs` when the
-# well-known flip strips `bundled-ws` and routes `import 'ws'` to
-# perry-ext-ws. The extension registers its pump and keepalive contributor
+# Installed by perry when the well-known flip strips `bundled-ws` and
+# routes `import 'ws'` to perry-ext-ws. The extension registers its pump and keepalive contributor
 # directly with perry-runtime (#9696). perry-ext-ws runs on turnloop and
 # carries no tokio, so this needs only the promise bridge (turnloop P8 lane L).
 external-ws-pump = ["async-bridge"]
@@ -111,9 +114,8 @@ external-ws-pump = ["async-bridge"]
 net = ["bundled-net"]
 bundled-net = []
 
-# Activated by `optimized_libs::build_optimized_libs` (v0.5.579) when
-# the well-known flip strips `bundled-net` and routes `import 'net'`
-# to perry-ext-net. Selects ext-net dispatch adapters. The extension itself
+# Installed by perry (v0.5.579) when the well-known flip strips
+# `bundled-net` and routes `import 'net'` to perry-ext-net. Selects ext-net dispatch adapters. The extension itself
 # registers its pump and keepalive contributor. perry-ext-net runs every
 # socket on turnloop and carries no tokio (#11105), so this needs only the
 # promise bridge (turnloop P8 lane L).
@@ -124,16 +126,14 @@ external-net-pump = ["async-bridge"]
 # feature name remains compatible with the optimized feature selector.
 external-zlib-pump = []
 
-# Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
-# the well-known flip routes `node:http` / `node:https` / `node:http2`
+# Installed by perry (v0.5.714) when the well-known flip routes `node:http` / `node:https` / `node:http2`
 # to perry-ext-http. Selects the HTTP server dispatch adapters;
 # perry-ext-http registers its pump and keepalive contributor. perry-ext-http
 # carries no tokio since tokio lane D (#11265), so this needs only the promise
 # bridge (turnloop P8 lane L).
 external-http-server-pump = ["async-bridge"]
 
-# Activated by `optimized_libs::build_optimized_libs` when the well-known
-# flip routes `node:http` / `node:https` to perry-ext-http and the user
+# Installed by perry when the well-known flip routes `node:http` / `node:https` to perry-ext-http and the user
 # code calls `http.request` / `http.get`. Selects client dispatch adapters;
 # perry-ext-http registers its own callbacks. Promise bridge only, as above.
 external-http-client-pump = ["async-bridge"]

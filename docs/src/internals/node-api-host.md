@@ -7,7 +7,7 @@ contract kept alongside the implementation and its gates.
 
 ## Implementation status
 
-The optional `perry-runtime/node-api-host` feature contains the version-10 host:
+The runtime's Node-API host (`perry-runtime/src/node_api_host`) is the version-10 host:
 opaque handle scopes and references, GC root rewriting and weak clearing,
 object metadata/finalization, values and descriptors, native callbacks,
 buffers/views, promises, async work, threadsafe functions, cleanup hooks, and
@@ -422,9 +422,10 @@ The initializer runs attributed to its module, which is how
 
 ## Linking and exported symbols
 
-The Node-API implementation lives behind a `node-api-host` runtime feature.
-The compiler enables it only when the collected graph contains an approved
-addon. A checked-in symbol inventory is the single source for Rust export
+The Node-API implementation is compiled into every runtime archive and is
+reached only through its install, `js_runtime_install_node_api_host`, which the
+compiler's generated installer calls only when the collected graph contains an
+approved addon; without it the linker drops the host. A checked-in symbol inventory is the single source for Rust export
 retention, platform linker flags, unresolved-symbol validation, and the CI
 assertion.
 

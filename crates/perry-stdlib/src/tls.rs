@@ -35,6 +35,8 @@ mod liveness;
 mod liveness_tests;
 mod module_api;
 mod socket_api;
+pub(crate) use dispatch::install_client_socket_arm;
+pub(crate) use module_api::install_ext_net_connect;
 mod turnloop_server;
 #[cfg(all(test, feature = "turnloop-http-client"))]
 mod turnloop_server_tests;

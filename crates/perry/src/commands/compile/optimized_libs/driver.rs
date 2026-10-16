@@ -356,10 +356,19 @@ pub(crate) fn build_optimized_libs(
     // in optimized_libs/tests.rs pins that).
     features.insert("async-bridge");
 
-    let mut libs = resolve_no_auto_optimized_libs(ctx, target, format, verbose);
+    if matches!(format, OutputFormat::Text) && verbose > 0 {
+        eprintln!("  libraries: prebuilt runtime/stdlib archives with selected installs");
+    }
+    let well_known_libs =
+        super::wrapper_libs::resolve_prebuilt_ext_libs(&routed_set, target, format);
+    let mut libs = OptimizedLibs {
+        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
+        well_known_libs,
+        ..OptimizedLibs::empty()
+    };
     // A runtime-only program that needs none of the optional runtime
     // features links the packaged core archive when one is installed.
-    if libs.runtime.is_none() && super::prebuilt_core::eligible(ctx, cli_features) {
+    if super::prebuilt_core::eligible(ctx, cli_features) {
         libs.runtime = super::super::library_search::find_runtime_core_library(target);
     }
     prebuilt_installs(libs, ctx, &features, cli_features)
@@ -367,9 +376,8 @@ pub(crate) fn build_optimized_libs(
 
 /// The prebuilt archives carry every feature; the generated installer installs
 /// the ones this program needs (exactly the set the retired auto-optimized
-/// rebuild compiled), so the linker drops the rest. An archive rebuilt for a
-/// program (`runtime`/`stdlib` is `Some`) was built with exactly its features
-/// and installs everything it has.
+/// rebuild compiled), so the linker drops the rest. The core runtime archive
+/// (`runtime` is `Some`) has no optional features and installs what it has.
 fn prebuilt_installs(
     mut libs: OptimizedLibs,
     ctx: &CompilationContext,
@@ -377,10 +385,8 @@ fn prebuilt_installs(
     cli_features: &[String],
 ) -> OptimizedLibs {
     use crate::commands::stdlib_installs::FeatureInstalls;
-    if libs.stdlib.is_none() {
-        libs.stdlib_installs =
-            FeatureInstalls::Selected(prebuilt_stdlib_install_features(features));
-    }
+    libs.stdlib_installs =
+        FeatureInstalls::Selected(features.iter().map(|f| f.to_string()).collect());
     if libs.runtime.is_none() {
         libs.runtime_installs = FeatureInstalls::Selected(
             auto_optimized_cross_features(ctx, features, cli_features)
@@ -391,24 +397,4 @@ fn prebuilt_installs(
         );
     }
     libs
-}
-
-/// The stdlib features to install from the prebuilt full archive. The
-/// `external-*` adapters are compiled only into archives built for a routed
-/// wrapper; against the full archive the wrappers register their providers
-/// themselves, so only the TLS runtime they call back into is installed.
-pub(super) fn prebuilt_stdlib_install_features(
-    features: &BTreeSet<&'static str>,
-) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for feature in features {
-        if feature.starts_with("external-") {
-            if matches!(*feature, "external-net-tls" | "external-tls-server") {
-                out.insert("tls-runtime".to_string());
-            }
-            continue;
-        }
-        out.insert(feature.to_string());
-    }
-    out
 }

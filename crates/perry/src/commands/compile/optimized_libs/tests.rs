@@ -1,4 +1,4 @@
-use super::no_auto::{build_missing_prebuilt_ext_lib, resolve_prebuilt_ext_libs};
+use super::wrapper_libs::resolve_prebuilt_ext_libs;
 use super::*;
 use std::path::Path;
 
@@ -16,13 +16,6 @@ fn set_env_var(key: &str, value: Option<&str>) {
         Some(value) => std::env::set_var(key, value),
         None => std::env::remove_var(key),
     }
-}
-
-fn write_file(path: &Path, contents: &[u8]) {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("mkdir parent");
-    }
-    std::fs::write(path, contents).expect("write test file");
 }
 
 #[test]
@@ -239,23 +232,13 @@ fn forced_well_known_env_extends_iteration_set() {
 }
 
 #[test]
-fn no_auto_still_resolves_prebuilt_well_known_archives() {
+fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
     let _guard = env_lock();
     let old_lib_dir = std::env::var("PERRY_LIB_DIR").ok();
     let old_runtime_dir = std::env::var("PERRY_RUNTIME_DIR").ok();
     let old_disable_well_known = std::env::var("PERRY_DISABLE_WELL_KNOWN").ok();
 
     let dir = tempfile::tempdir().expect("tempdir");
-    // #10466 — deliberately NOT "http"/"https" here: importing either now
-    // triggers `build_http_client_pump_stdlib`'s on-demand rebuild (a real
-    // cargo invocation), which this test's fake `PERRY_LIB_DIR` archives
-    // (raw `!<arch>\n` placeholders, not real cargo output) can't stand in
-    // for, and which would turn this fast unit test into a slow, real build.
-    // That new behavior has its own coverage below
-    // (`no_auto_http_client_import_rebuilds_pump_stdlib_with_ext_http`).
-    // This test's job is unrelated: confirm `resolve_prebuilt_ext_libs` still
-    // finds multiple well-known archives via `PERRY_LIB_DIR` when no rebuild
-    // trigger is present.
     let net = super::super::well_known::lookup_well_known("net").expect("net well-known binding");
     let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
     let net_lib = dir
@@ -283,7 +266,7 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
     ctx.native_module_imports.insert("net".to_string());
     ctx.native_module_imports.insert("ws".to_string());
-    let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
+    let libs = resolve_prebuilt_ext_libs(&routed_modules(&ctx), None, OutputFormat::Json);
 
     set_env_var("PERRY_LIB_DIR", old_lib_dir.as_deref());
     set_env_var("PERRY_RUNTIME_DIR", old_runtime_dir.as_deref());
@@ -292,17 +275,13 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
         old_disable_well_known.as_deref(),
     );
 
-    assert_eq!(libs.runtime, None);
-    assert_eq!(libs.stdlib, None);
     assert!(
-        libs.well_known_libs.contains(&net_lib),
-        "expected no-auto well-known libs to include {net_lib:?}, got {:?}",
-        libs.well_known_libs
+        libs.contains(&net_lib),
+        "expected the well-known libs to include {net_lib:?}, got {libs:?}"
     );
     assert!(
-        libs.well_known_libs.contains(&ws_lib),
-        "expected no-auto well-known libs to include {ws_lib:?}, got {:?}",
-        libs.well_known_libs
+        libs.contains(&ws_lib),
+        "expected the well-known libs to include {ws_lib:?}, got {libs:?}"
     );
 }
 
@@ -356,245 +335,21 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     for module in ["net", "ws", "events"] {
         ctx.native_module_imports.insert(module.to_string());
     }
-    let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
     let routed = super::routed_modules(&ctx);
+    let libs = resolve_prebuilt_ext_libs(&routed, None, OutputFormat::Json);
 
     for (key, value) in &saved {
         set_env_var(key, value.as_deref());
     }
 
-    assert!(
-        libs.well_known_libs.contains(&archives[0]),
-        "net: {libs:?}",
-        libs = libs.well_known_libs
-    );
-    assert!(
-        libs.well_known_libs.contains(&archives[1]),
-        "ws: {libs:?}",
-        libs = libs.well_known_libs
-    );
+    assert!(libs.contains(&archives[0]), "net: {libs:?}");
+    assert!(libs.contains(&archives[1]), "ws: {libs:?}");
     assert_eq!(
         routed,
         std::collections::BTreeSet::from(["net".to_string(), "ws".to_string()])
     );
     assert!(super::wrapper_is_sole_provider("node:net"));
     assert!(!super::wrapper_is_sole_provider("tls"));
-}
-
-/// #10466 — the flip side of the test above: when the program DOES import
-/// `http`, no-auto now rebuilds `perry-stdlib-static` (with
-/// `external-http-client-pump`) and `perry-ext-http` together, and the
-/// rebuilt `perry-ext-http` archive takes the place of whatever
-/// `resolve_prebuilt_ext_libs` would otherwise have found on disk for it.
-/// This does a real (if small) cargo build, so it's slower than the rest of
-/// this file — that's the trade-off for exercising the actual rebuild path
-/// rather than re-asserting the pass-through plumbing against a mock.
-#[test]
-fn no_auto_http_client_import_rebuilds_pump_stdlib_with_ext_http() {
-    let _guard = env_lock();
-    let mut ctx = CompilationContext::new(
-        find_perry_workspace_root().expect("workspace root for this checkout"),
-    );
-    ctx.native_module_imports.insert("http".to_string());
-    let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
-
-    let stdlib = libs
-        .stdlib
-        .as_ref()
-        .expect("http import should trigger the http-client-pump stdlib rebuild");
-    assert!(
-        stdlib.ends_with("libperry_stdlib.a") || stdlib.ends_with("perry_stdlib.lib"),
-        "unexpected stdlib archive name: {stdlib:?}"
-    );
-    let ext_http_in_well_known = libs.well_known_libs.iter().any(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.contains("perry_ext_http"))
-    });
-    assert!(
-        ext_http_in_well_known,
-        "expected the freshly-rebuilt perry-ext-http archive in well_known_libs, got {:?}",
-        libs.well_known_libs
-    );
-}
-
-#[cfg(windows)]
-#[test]
-fn cargo_target_dir_strips_windows_verbatim_prefixes() {
-    let drive = cargo_target_dir_path(PathBuf::from(
-        r"\\?\D:\Projects\perry\target\perry-auto-deadbeef",
-    ));
-    assert_eq!(
-        drive,
-        PathBuf::from(r"D:\Projects\perry\target\perry-auto-deadbeef")
-    );
-
-    let unc = cargo_target_dir_path(PathBuf::from(
-        r"\\?\UNC\server\share\perry\target\perry-auto-deadbeef",
-    ));
-    assert_eq!(
-        unc,
-        PathBuf::from(r"\\server\share\perry\target\perry-auto-deadbeef")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn no_auto_builds_missing_well_known_archive_from_workspace_source() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _guard = env_lock();
-    let old_path = std::env::var_os("PATH");
-    let old_cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
-
-    let workspace = tempfile::tempdir().expect("tempdir");
-    for dir in [
-        "crates/perry-runtime",
-        "crates/perry-ui-geisterhand",
-        "crates/perry-ext-http",
-    ] {
-        std::fs::create_dir_all(workspace.path().join(dir)).expect("mkdir workspace marker");
-    }
-
-    let fake_bin = workspace.path().join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).expect("mkdir fake bin");
-    let fake_cargo = fake_bin.join("cargo");
-    std::fs::write(
-        &fake_cargo,
-        r#"#!/bin/sh
-case "$*" in
-  *"-p perry-ext-http"*) ;;
-  *) exit 43 ;;
-esac
-mkdir -p "$CARGO_TARGET_DIR/release"
-printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_ext_http.a"
-"#,
-    )
-    .expect("write fake cargo");
-    let mut perms = std::fs::metadata(&fake_cargo)
-        .expect("fake cargo metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&fake_cargo, perms).expect("chmod fake cargo");
-
-    let target_dir = workspace.path().join("out-target");
-    let test_path = match old_path.as_ref() {
-        Some(path) => {
-            let mut paths = vec![fake_bin.clone()];
-            paths.extend(std::env::split_paths(path));
-            std::env::join_paths(paths).expect("join PATH")
-        }
-        None => fake_bin.clone().into_os_string(),
-    };
-    std::env::set_var("PATH", test_path);
-    std::env::set_var("CARGO_TARGET_DIR", &target_dir);
-
-    let binding =
-        super::super::well_known::lookup_well_known("http").expect("http well-known binding");
-    let filename =
-        super::super::well_known::ext_staticlib_filename(&binding.lib, rust_target_triple(None));
-    let got = build_missing_prebuilt_ext_lib(
-        workspace.path(),
-        binding,
-        &filename,
-        None,
-        OutputFormat::Json,
-        0,
-    );
-
-    if let Some(path) = old_path {
-        std::env::set_var("PATH", path);
-    } else {
-        std::env::remove_var("PATH");
-    }
-    if let Some(dir) = old_cargo_target_dir {
-        std::env::set_var("CARGO_TARGET_DIR", dir);
-    } else {
-        std::env::remove_var("CARGO_TARGET_DIR");
-    }
-
-    assert_eq!(
-        got.expect("missing archive should be built from workspace source"),
-        target_dir.join("release/libperry_ext_http.a")
-    );
-}
-
-/// Issue #76 follow-up: a bare `perry compile` of a `WebAssembly.*` program
-/// must auto-build `perry-wasm-host` instead of hard-failing with
-/// `libperry_wasm_host.a not found`. The build is a plain leaf
-/// `cargo build --release -p perry-wasm-host` into `target/release`; drive it
-/// with a fake cargo (so no real toolchain runs) and assert the resolved path.
-#[cfg(unix)]
-#[test]
-fn wasm_host_auto_build_produces_staticlib_from_workspace_source() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _guard = env_lock();
-    let old_path = std::env::var_os("PATH");
-    let old_cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
-    let old_workspace_root = std::env::var_os("PERRY_WORKSPACE_ROOT");
-
-    let workspace = tempfile::tempdir().expect("tempdir");
-    // A crate dir + workspace marker so `find_perry_workspace_root` (via
-    // PERRY_WORKSPACE_ROOT) and the `crate_dir.is_dir()` guard both pass.
-    for dir in [
-        "crates/perry-wasm-host",
-        "crates/perry-runtime",
-        "crates/perry-ui-geisterhand",
-    ] {
-        std::fs::create_dir_all(workspace.path().join(dir)).expect("mkdir workspace marker");
-    }
-
-    let fake_bin = workspace.path().join("fake-bin");
-    std::fs::create_dir_all(&fake_bin).expect("mkdir fake bin");
-    let fake_cargo = fake_bin.join("cargo");
-    std::fs::write(
-        &fake_cargo,
-        r#"#!/bin/sh
-case "$*" in
-  *"-p perry-wasm-host"*) ;;
-  *) exit 43 ;;
-esac
-mkdir -p "$CARGO_TARGET_DIR/release"
-printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_wasm_host.a"
-"#,
-    )
-    .expect("write fake cargo");
-    let mut perms = std::fs::metadata(&fake_cargo)
-        .expect("fake cargo metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&fake_cargo, perms).expect("chmod fake cargo");
-
-    let target_dir = workspace.path().join("out-target");
-    let test_path = match old_path.as_ref() {
-        Some(path) => {
-            let mut paths = vec![fake_bin.clone()];
-            paths.extend(std::env::split_paths(path));
-            std::env::join_paths(paths).expect("join PATH")
-        }
-        None => fake_bin.clone().into_os_string(),
-    };
-    std::env::set_var("PATH", test_path);
-    std::env::set_var("CARGO_TARGET_DIR", &target_dir);
-    std::env::set_var("PERRY_WORKSPACE_ROOT", workspace.path());
-
-    let got = super::super::library_search::build_wasm_host_library(None, OutputFormat::Json, 0);
-
-    set_env_var("PATH", old_path.as_deref().and_then(|v| v.to_str()));
-    set_env_var(
-        "CARGO_TARGET_DIR",
-        old_cargo_target_dir.as_deref().and_then(|v| v.to_str()),
-    );
-    set_env_var(
-        "PERRY_WORKSPACE_ROOT",
-        old_workspace_root.as_deref().and_then(|v| v.to_str()),
-    );
-
-    assert_eq!(
-        got.expect("missing wasm host lib should be built from workspace source"),
-        target_dir.join("release/libperry_wasm_host.a")
-    );
 }
 
 /// Regression: the auto-optimize rebuild must always include
@@ -651,29 +406,60 @@ fn bun_usage_enables_cli_utility_runtime_pack() {
     );
 }
 
-/// The `keepalive-anchors` feature must NOT be conditional on
-/// `PERRY_LLVM_BITCODE_LINK` — the classic link path needs it too.
+/// The prebuilt stdlib carries the `external-*` adapters (#10466): an `http`
+/// import installs the ones a routed perry-ext-http needs, links the prebuilt
+/// wrapper, and builds nothing.
 #[test]
-fn auto_optimize_keepalive_anchors_not_bitcode_only() {
+fn http_import_installs_the_external_adapters_of_the_prebuilt_stdlib() {
     let _guard = env_lock();
-    let old_bitcode = std::env::var_os("PERRY_LLVM_BITCODE_LINK");
-    std::env::remove_var("PERRY_LLVM_BITCODE_LINK");
-
+    let saved: Vec<_> = [
+        "PERRY_LIB_DIR",
+        "PERRY_RUNTIME_DIR",
+        "PERRY_DISABLE_WELL_KNOWN",
+    ]
+    .iter()
+    .map(|k| (*k, std::env::var(k).ok()))
+    .collect();
     let dir = tempfile::tempdir().expect("tempdir");
-    let empty_features: std::collections::BTreeSet<&'static str> =
-        std::collections::BTreeSet::new();
-    let ctx = CompilationContext::new(dir.path().to_path_buf());
-    let cross = auto_optimized_cross_features(&ctx, &empty_features, &[]);
+    set_env_var("PERRY_LIB_DIR", dir.path().to_str());
+    set_env_var("PERRY_RUNTIME_DIR", None);
+    set_env_var("PERRY_DISABLE_WELL_KNOWN", None);
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.native_module_imports.insert("http".to_string());
+    for module in routed_modules(&ctx) {
+        let binding = super::super::well_known::lookup_well_known(&module).expect("binding");
+        let lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &binding.lib,
+                rust_target_triple(None),
+            ));
+        std::fs::write(&lib, b"!<arch>\n").expect("write fake archive");
+    }
+    let libs = build_optimized_libs(&ctx, None, &[], OutputFormat::Json, 0);
+    for (key, value) in &saved {
+        set_env_var(key, value.as_deref());
+    }
 
-    set_env_var(
-        "PERRY_LLVM_BITCODE_LINK",
-        old_bitcode.as_deref().and_then(|v| v.to_str()),
-    );
-
+    let crate::commands::stdlib_installs::FeatureInstalls::Selected(installs) =
+        &libs.stdlib_installs
+    else {
+        panic!("a prebuilt link selects its stdlib installs");
+    };
+    for adapter in [
+        "external-http-client-pump",
+        "external-http-server-pump",
+        "external-net-tls",
+    ] {
+        assert!(installs.contains(adapter), "{adapter}: {installs:?}");
+    }
     assert!(
-        cross.iter().any(|f| f == "perry-runtime/keepalive-anchors"),
-        "keepalive-anchors must be present even without PERRY_LLVM_BITCODE_LINK, \
-         got {cross:?}"
+        libs.well_known_libs.iter().any(|p| p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains("perry_ext_http"))),
+        "{:?}",
+        libs.well_known_libs
     );
 }
 
@@ -791,8 +577,6 @@ fn hot_diag_knobs_match_the_runtime() {
     assert_eq!(runtime, super::features::HOT_DIAG_KNOBS);
 }
 
-mod no_auto_http_graph;
-
 /// Decision 69: codegen and the linker read ONE routing decision. For each
 /// representative import, in both modes and with the flip on and off, the
 /// install symbol codegen emits for the module's namespace, the entry
@@ -848,7 +632,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
             let routed = routed_modules(&ctx);
             // The linker's wrapper archives, by lib stem.
             let linked: std::collections::BTreeSet<String> = if no_auto {
-                resolve_prebuilt_ext_libs(&routed, None, OutputFormat::Json, 0)
+                resolve_prebuilt_ext_libs(&routed, None, OutputFormat::Json)
                     .iter()
                     .map(|p| {
                         let name = p.file_name().unwrap().to_str().unwrap();
@@ -970,4 +754,71 @@ fn data_url_dynamic_import_installs_dyn_eval() {
         cross.iter().any(|f| f == "perry-runtime/dyn-eval"),
         "data URL modules require the dyn-eval runtime, got {cross:?}"
     );
+}
+
+/// perry never builds an archive while compiling a program, so the workspace
+/// build must produce every archive a program can link: the runtime, the
+/// stdlib, the WebAssembly host and every routed wrapper of
+/// `well_known_bindings.toml`, in ONE Cargo graph. `default-members` (plain
+/// `cargo build`) and the `build-perry` alias (a build that adds packages)
+/// are that set.
+#[test]
+fn default_members_match_the_build_perry_alias() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let Ok(manifest) = std::fs::read_to_string(root.join("Cargo.toml")) else {
+        return;
+    };
+    let Ok(config) = std::fs::read_to_string(root.join(".cargo/config.toml")) else {
+        return;
+    };
+    let manifest: toml::Table = manifest.parse().expect("workspace manifest");
+    let config: toml::Table = config.parse().expect("cargo config");
+    let members: BTreeSet<String> = manifest["workspace"]["default-members"]
+        .as_array()
+        .expect("default-members")
+        .iter()
+        .map(|m| {
+            m.as_str()
+                .unwrap()
+                .trim_start_matches("crates/")
+                .to_string()
+        })
+        .filter(|m| m != "perry-container-compose")
+        .collect();
+    let alias = config["alias"]["build-perry"].as_array().expect("alias");
+    let alias: BTreeSet<String> = alias
+        .iter()
+        .map(|a| a.as_str().unwrap().to_string())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|w| w[0] == "-p")
+        .map(|w| w[1].clone())
+        .collect();
+    assert_eq!(
+        members, alias,
+        "default-members and `cargo build-perry` differ"
+    );
+    for required in [
+        "perry",
+        "perry-runtime-static",
+        "perry-stdlib-static",
+        "perry-wasm-host",
+    ] {
+        assert!(
+            members.contains(required),
+            "{required} missing from default-members"
+        );
+    }
+    let bindings = std::fs::read_to_string(root.join("crates/perry/well_known_bindings.toml"))
+        .expect("well_known_bindings.toml");
+    let bindings: toml::Table = bindings.parse().expect("bindings");
+    let bindings = bindings["bindings"].as_table().expect("[bindings]");
+    for binding in bindings.values() {
+        if let Some(krate) = binding.get("crate").and_then(|c| c.as_str()) {
+            assert!(
+                members.contains(krate),
+                "routed wrapper {krate} is not built with perry (default-members)"
+            );
+        }
+    }
 }

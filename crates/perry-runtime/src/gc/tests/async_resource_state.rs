@@ -156,7 +156,6 @@ fn check_native(erase: bool) {
     assert!(crate::async_hooks::resource_state::get(id).is_none());
 }
 
-#[cfg(feature = "node-api-host")]
 #[test]
 fn native_async_context_without_resource_retains_its_captured_store() {
     let _guard = crate::gc::tests::support::CopyingNurseryTestGuard::new(1);

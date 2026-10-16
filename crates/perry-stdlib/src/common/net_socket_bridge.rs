@@ -69,24 +69,13 @@ fn external_socket_method_name(property_name: &str) -> Option<&'static [u8]> {
     }
 }
 
-#[cfg_attr(
-    not(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    )),
-    allow(unused_variables)
-)]
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 pub(super) unsafe fn bind_net_socket_property(handle: i64, property_name: &str) -> Option<f64> {
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     {
-        extern "C" {
-            fn js_ext_net_is_socket_handle(handle: i64) -> i32;
-        }
         if js_ext_net_is_socket_handle(handle) != 0 {
             if let Some(name_bytes) = external_socket_method_name(property_name) {
                 return Some(bind_class_method(handle, name_bytes));
@@ -97,26 +86,26 @@ pub(super) unsafe fn bind_net_socket_property(handle: i64, property_name: &str) 
     None
 }
 
-/// Registers perry-ext-net's socket-handle probe with the runtime. With no
-/// ext-net adapter compiled in there is nothing to register: perry-ext-net
-/// registers its own probe (`gc_roots.rs`), and perry-stdlib's bundled `net`
-/// probe that used to sit here was deleted in tokio lane L4.
+/// Registers perry-ext-net's socket-handle probe with the runtime, from the
+/// `external-net-pump` install (perry-ext-net also registers its own probe,
+/// `gc_roots.rs`; perry-stdlib's bundled `net` probe was deleted in tokio
+/// lane L4).
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 pub(super) unsafe fn register_net_socket_handle_probe() {
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     {
         extern "C" {
             fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
         }
         unsafe extern "C" fn external_net_socket_probe(handle: i64) -> bool {
-            extern "C" {
-                fn js_ext_net_is_socket_handle(handle: i64) -> i32;
-            }
             js_ext_net_is_socket_handle(handle) != 0
         }
         js_register_net_socket_handle_probe(external_net_socket_probe);
     }
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;

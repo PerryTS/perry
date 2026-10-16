@@ -172,8 +172,7 @@ pub fn retire_agent(id: AgentId) {
     );
     // Finish native-addon ownership while this agent's heap and loop are
     // still live. TLS destruction cannot safely call back into the runtime.
-    #[cfg(feature = "node-api-host")]
-    crate::node_api_host::shutdown_current_env();
+    crate::node_api_host::hooks::shutdown_current_env();
     // turnloop P9: this agent may own a `turnloop::Loop`. Tear it down FIRST,
     // while the arena is still mapped and this thread can still run the
     // bindings' completion sinks.

@@ -11,52 +11,38 @@ use super::CompilationContext;
 
 mod driver;
 mod features;
-mod no_auto;
 mod paths;
 mod prebuilt_core;
+mod wrapper_libs;
 
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use features::{
     auto_optimized_cross_features, gc_instruments_requested, gc_trace_requested, hot_diag_requested,
 };
-pub(crate) use no_auto::resolve_no_auto_optimized_libs;
-pub(crate) use paths::{android_global_dynamic_tls_rustflag, cargo_target_dir_path};
+
+pub(crate) use paths::android_global_dynamic_tls_rustflag;
 
 #[cfg(test)]
 mod tests;
 
 pub struct OptimizedLibs {
-    /// Path to the rebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
-    /// `None` means "fall back to the prebuilt one in target/release/".
+    /// The runtime archive chosen for this program before codegen: the
+    /// packaged core archive (`prebuilt_core`) when one applies. `None` links
+    /// the default prebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
     pub runtime: Option<PathBuf>,
-    /// Path to the rebuilt `libperry_stdlib.a`. `None` means "fall back
-    /// to the prebuilt full stdlib".
-    pub stdlib: Option<PathBuf>,
-    /// LLVM bitcode (`.bc`) for perry-runtime (Phase J).
-    pub runtime_bc: Option<PathBuf>,
-    /// LLVM bitcode (`.bc`) for perry-stdlib (Phase J).
-    pub stdlib_bc: Option<PathBuf>,
-    /// LLVM bitcode (`.bc`) for additional crates (UI, geisterhand).
-    pub extra_bc: Vec<PathBuf>,
-    /// Extra `.a` archives to add to the link line — one per
-    /// well-known native binding (#466 Phase 4) that the compile
-    /// pipeline routed away from the perry-stdlib copy. Whenever an
-    /// entry is added here, the corresponding perry-stdlib feature
-    /// is *also* stripped from the rebuild so the link line stays
-    /// free of duplicate `_js_*` symbols.
+    /// The prebuilt wrapper archives (#466 Phase 4), one per well-known native
+    /// binding the program's routed modules link.
     pub well_known_libs: Vec<PathBuf>,
-    /// True when the stdlib archive is the prebuilt full archive rather
-    /// than an optimized rebuild with well-known features stripped. In that
-    /// fallback shape, wrapper archives must appear before stdlib so their
-    /// duplicate Node binding symbols satisfy the object files first.
+    /// Wrapper archives go before the stdlib, so their symbols satisfy the
+    /// program's objects first (the stdlib also defines some of the Node
+    /// binding symbols a wrapper replaces).
     pub prefer_well_known_before_stdlib: bool,
     /// Which stdlib feature installs the generated
     /// `perry_stdlib_feature_installer` calls (see `stdlib_installs.rs`).
-    /// `Compiled` unless the link uses the prebuilt full-feature stdlib.
     pub stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls,
     /// Which runtime feature installs the generated installer calls; the
-    /// runtime counterpart of `stdlib_installs`. `Compiled` unless the link
-    /// uses a prebuilt full-feature runtime archive.
+    /// runtime counterpart of `stdlib_installs`. `Compiled` for the core
+    /// archive, which has no optional features to select.
     pub runtime_installs: crate::commands::stdlib_installs::FeatureInstalls,
 }
 
@@ -64,10 +50,6 @@ impl OptimizedLibs {
     pub(super) fn empty() -> Self {
         OptimizedLibs {
             runtime: None,
-            stdlib: None,
-            runtime_bc: None,
-            stdlib_bc: None,
-            extra_bc: Vec::new(),
             well_known_libs: Vec::new(),
             prefer_well_known_before_stdlib: false,
             stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,

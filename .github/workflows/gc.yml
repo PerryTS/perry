@@ -170,7 +170,7 @@ jobs:
           # without them links a stale archive and makes the whole measurement
           # vacuous. The package set is fixed here so cargo feature unification
           # is identical to the set used to capture the baseline.
-          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
@@ -408,9 +408,7 @@ jobs:
           # without them links a stale archive and makes the whole measurement
           # vacuous. The package set matches gc-stress exactly so cargo feature
           # unification — and therefore the cache — is identical.
-          cargo build --release \
-            -p perry -p perry-runtime -p perry-stdlib \
-            -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
@@ -613,7 +611,7 @@ jobs:
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
           export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
-          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --profile perry-dev
       - name: Provider dylib host-boundary GC and Response
         if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: scripts/gc_provider_dylib_gate.sh
@@ -916,8 +914,7 @@ jobs:
           # assertion removes the external opt/clang overrides; the in-process
           # backend itself still has to link the LLVM 22 ABI used by llvm-sys.
           export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
-          cargo build --profile perry-dev -p perry -p perry-runtime-static \
-            -p perry-stdlib-static --features perry-codegen/llvm-inprocess
+          cargo build-perry --profile perry-dev --features perry-codegen/llvm-inprocess
 
           # Probe 09 is the whole point: it carries `try`, so every call in it
           # is an `invoke`, which the explicit bridge refuses outright (#7330).
@@ -1094,7 +1091,7 @@ jobs:
           # the -static wrapper crates. The package set is fixed so cargo
           # feature unification matches every other job that builds the
           # compiler.
-          cargo build --release --features target-wasi -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release --features target-wasi
           for artifact in perry libperry_runtime.a libperry_stdlib.a; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
@@ -1251,7 +1248,7 @@ jobs:
       - name: Build perry and the runtime archives
         run: |
           set -euo pipefail
-          cargo build --release --features target-wasi -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release --features target-wasi
           for artifact in perry libperry_runtime.a libperry_stdlib.a; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
@@ -1605,9 +1602,7 @@ jobs:
           # come from the *-static wrapper crates. Building without them links
           # a stale archive and makes this whole gate vacuous in a way nothing
           # downstream can detect (CLAUDE.md's "Verifying a runtime change").
-          cargo build --release \
-            -p perry -p perry-runtime -p perry-stdlib \
-            -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
@@ -1738,9 +1733,7 @@ jobs:
           # without them links a stale archive and makes the whole run
           # vacuous (CLAUDE.md, "Verifying a runtime change"). Package set
           # matches gc-stress exactly so the cache is shared.
-          cargo build --release \
-            -p perry -p perry-runtime -p perry-stdlib \
-            -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \

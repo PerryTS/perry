@@ -79,19 +79,27 @@ const INSTALLS: &[(&str, &[&str])] = &[
     ),
     (
         "js_stdlib_install_external_zlib_pump",
-        &["external-zlib-pump"],
+        &["default", "external-zlib-pump", "full"],
     ),
     (
         "js_stdlib_install_external_http_client_pump",
-        &["external-http-client-pump"],
+        &["default", "external-http-client-pump", "full"],
     ),
     (
         "js_stdlib_install_external_http_server_pump",
-        &["external-http-server-pump"],
+        &["default", "external-http-server-pump", "full"],
     ),
     (
         "js_stdlib_install_external_net_pump",
-        &["external-net-pump"],
+        &["default", "external-net-pump", "full"],
+    ),
+    (
+        "js_stdlib_install_external_net_tls",
+        &["default", "external-net-tls", "full"],
+    ),
+    (
+        "js_stdlib_install_external_tls_server",
+        &["default", "external-tls-server", "full"],
     ),
     (
         "js_stdlib_install_web_fetch",
@@ -167,7 +175,16 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
         &["default", "regex-engine"],
     ),
     ("js_runtime_install_url_engine", &["default", "url-engine"]),
+    // Always compiled (no Cargo feature): perry names these installs for a
+    // program with an approved native addon / that uses WebAssembly.
+    ("js_runtime_install_node_api_host", &["node-api-host"]),
+    ("js_runtime_install_wasm_host", &["wasm-host"]),
 ];
+
+/// The `void()` registration perry-wasm-host exports: the generated
+/// constructor calls it so the host's entry points reach the runtime
+/// (`perry_abi::wasm_host`) before `js_runtime_install_wasm_host` runs.
+pub const WASM_HOST_REGISTER_SYMBOL: &str = "perry_wasm_host_register";
 
 /// The runtime install entry points the generated installer calls for
 /// `installs` (perry-runtime features, without the `perry-runtime/` prefix).
@@ -320,12 +337,21 @@ mod tests {
                 .strip_prefix("js_runtime_install_")
                 .unwrap()
                 .replace('_', "-");
+            let listed: BTreeSet<String> = triggers.iter().map(|t| t.to_string()).collect();
+            if !table.contains_key(&installed) {
+                // An always-compiled install: perry selects it by its own name.
+                assert_eq!(
+                    listed,
+                    BTreeSet::from([installed.clone()]),
+                    "{symbol}: an install with no Cargo feature is triggered by its name only"
+                );
+                continue;
+            }
             let expected: BTreeSet<String> = table
                 .keys()
                 .filter(|f| closure(&table, f).contains(&installed))
                 .cloned()
                 .collect();
-            let listed: BTreeSet<String> = triggers.iter().map(|t| t.to_string()).collect();
             assert_eq!(
                 listed, expected,
                 "{symbol}: trigger list must equal every perry-runtime feature whose closure \

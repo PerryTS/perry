@@ -224,8 +224,7 @@ jobs:
           echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
       - name: Build with the llvm-inprocess feature
         run: |
-          cargo build --profile perry-dev -p perry -p perry-runtime-static \
-            -p perry-stdlib-static --features perry/llvm-inprocess
+          cargo build-perry --profile perry-dev --features perry/llvm-inprocess
       - name: Unit gates (including corpus construction + RS4GC pin)
         run: |
           set -euo pipefail
@@ -680,8 +679,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build compiler + runtime archives
         run: |
-          cargo build --profile perry-dev -p perry -p perry-runtime-static \
-            -p perry-stdlib-static
+          cargo build-perry --profile perry-dev
       - name: Owned transport — liveness, agreement, fallback, parity
         run: |
           set -euo pipefail
@@ -1085,7 +1083,7 @@ jobs:
           node-version-file: .node-version
       - name: Build Perry release binary
         run: |
-          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
       - name: Node builtin compat matrix guard (--check, pinned oracle)
         run: |
@@ -1176,7 +1174,7 @@ jobs:
           node-version-file: .node-version
       - name: Build Perry release binary
         run: |
-          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
       - name: Node-suite regression guard (floor baseline, node 26)
         run: |
@@ -1307,7 +1305,7 @@ jobs:
           git -C vendor/nodejs checkout
       - name: Build Perry release binary
         run: |
-          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
       - name: Run Node core subset radar
         run: |
@@ -1523,7 +1521,7 @@ jobs:
           node-version-file: .node-version
       - name: Build Perry release binary
         run: |
-          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
       - name: Check feature matrix
         run: |
@@ -1793,7 +1791,7 @@ jobs:
           node-version-file: .node-version
       - name: Build Perry release binary
         run: |
-          cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
       - name: Run npm package sweep
         env:
@@ -2186,8 +2184,7 @@ jobs:
         run: docker info --format '{{.ServerVersion}}'
       - name: Build Perry CLI (release)
         run: |
-          cargo build --release \
-            -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
       - name: D — redis smoke
         run: |
@@ -2383,7 +2380,7 @@ jobs:
           test ! -e target/geisterhand
       - name: Build perry + iOS UI lib
         run: |
-          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim
       - name: Geisterhand iOS compile smoke (#1311)
@@ -2489,7 +2486,7 @@ jobs:
           cache-dependency-path: tests/fixtures/next-app-route/package-lock.json
       - name: Build Perry and provider archives
         run: >-
-          cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --profile perry-dev
       - name: Focused four-store continuation parity
         env:
           PERRY_BIN: target/perry-dev/perry
@@ -2623,9 +2620,7 @@ jobs:
           # what the failure mode under test silently substitutes, so a run
           # without them could not distinguish the two. perry-runtime and
           # perry-stdlib are rlib-only; the `.a`s come from the -static wrappers.
-          cargo build --release \
-            -p perry -p perry-runtime -p perry-stdlib \
-            -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
@@ -3294,7 +3289,7 @@ jobs:
         run: cargo install tak-cli@0.0.14 --locked
       - name: Build Perry
         run: |
-          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           test -s target/release/perry
           test -s target/release/libperry_runtime.a
@@ -3546,7 +3541,7 @@ jobs:
           # and libperry_stdlib.a come from the -static wrapper crates. Building
           # without them links a stale archive and makes the measurement
           # vacuous (CLAUDE.md, "Verifying a runtime change").
-          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \

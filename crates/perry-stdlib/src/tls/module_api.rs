@@ -18,22 +18,28 @@ use super::{
 };
 
 // `tls.connect` is perry-ext-net's (`js_tls_connect`); perry-stdlib's bundled
-// `net` copy that also defined it was deleted in tokio lane L4.
-#[cfg(feature = "external-net-tls")]
-unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
-    unsafe extern "C" {
-        fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64;
-    }
+// `net` copy that also defined it was deleted in tokio lane L4. The
+// `external-net-tls` install binds it directly for a program that links
+// perry-ext-net beside its routed `tls`.
+static TLS_CONNECT: crate::common::feature_hooks::Hook<unsafe fn(f64, f64, f64, f64) -> i64> =
+    crate::common::feature_hooks::Hook::empty();
+
+pub(crate) fn install_ext_net_connect() {
+    TLS_CONNECT.set(ext_net_tls_connect);
+}
+
+unsafe fn ext_net_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
     js_tls_connect(arg1, arg2, arg3, arg4)
 }
 
-/// No link-time provider (the prebuilt `full` archive, which must link without
-/// libperry_ext_net.a): use the one perry-ext-net registered with the runtime
-/// from its install hook, which the entry prologue calls for every program
-/// that imports `net` or `tls`. 0 (read as `undefined`) when ext-net is not
-/// linked at all.
-#[cfg(not(feature = "external-net-tls"))]
+/// Without the direct binding, use the provider perry-ext-net registered with
+/// the runtime from its install hook, which the entry prologue calls for every
+/// program that imports `net` or `tls`. 0 (read as `undefined`) when ext-net
+/// is not linked at all.
 unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
+    if let Some(connect) = TLS_CONNECT.get() {
+        return connect(arg1, arg2, arg3, arg4);
+    }
     match perry_runtime::tls::tls_connect_provider() {
         Some(connect) => connect(arg1, arg2, arg3, arg4),
         None => 0,
@@ -340,3 +346,6 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
         _ => f64::from_bits(TLS_DISPATCH_MISSING_BITS),
     }
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;

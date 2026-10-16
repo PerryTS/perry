@@ -14,6 +14,7 @@ mod async_work;
 mod bigint;
 mod buffers;
 mod functions;
+pub(crate) mod hooks;
 mod lifecycle;
 mod loader;
 mod metadata;
@@ -493,6 +494,14 @@ pub(crate) fn catch_value_call(env: NapiEnv, f: impl FnOnce() -> f64) -> Result<
 }
 
 /// Mark and rewrite every native-owned Node-API root.
+/// The name the host's root scanner is registered under.
+pub(crate) const ROOT_SCANNER_NAME: &str = "crate::node_api_host::scan_node_api_roots_mut";
+
+pub(crate) fn install() {
+    symbols::retain();
+    hooks::install();
+}
+
 pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NODE_API_ENV.with(|cell| {
         let mut borrowed = cell.borrow_mut();

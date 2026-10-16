@@ -45,6 +45,20 @@ impl<F: Copy> Hook<F> {
         self.bits.store(bits, Ordering::Release);
     }
 
+    /// The slot's value, without the unit-test fallback of [`Hook::get`]:
+    /// for slots read while the runtime itself initializes (`gc_init`), where
+    /// installing everything would re-enter it.
+    #[inline]
+    pub fn peek(&self) -> Option<F> {
+        let bits = self.bits.load(Ordering::Acquire);
+        if bits == 0 {
+            None
+        } else {
+            // SAFETY: only `set` stores non-zero bits, and it stores an `F`.
+            Some(unsafe { std::mem::transmute_copy(&bits) })
+        }
+    }
+
     #[inline]
     pub fn get(&self) -> Option<F> {
         #[cfg_attr(not(test), allow(unused_mut))]
@@ -117,7 +131,8 @@ pub(crate) fn run_feature_installer() {
     js_runtime_install_compiled();
 }
 
-/// Install every optional runtime feature this archive was compiled with.
+/// Install every optional runtime feature this archive was compiled with
+/// (its Cargo features).
 #[no_mangle]
 pub extern "C" fn js_runtime_install_compiled() {
     #[cfg(feature = "dyn-eval")]
@@ -134,6 +149,38 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_regex_engine();
     #[cfg(feature = "url-engine")]
     js_runtime_install_url_engine();
+    // The always-compiled hosts (Node-API, WebAssembly) are not Cargo
+    // features: perry installs them by name for the programs that need them,
+    // so installing "everything compiled" (the core archive's installer) must
+    // not pull them in.
+}
+
+/// Root scanners an optional feature contributes. The root-scanner registry
+/// is per thread: `gc_init` registers every filled slot on each thread it
+/// initializes, and the install registers its scanner on the installing
+/// thread (whose `gc_init` already ran).
+pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+pub(crate) static WASM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+
+/// Node-API addon hosting (#8523): `process.dlopen`, `require` of an
+/// allowlisted `.node` addon, and the addon environment's pump, roots and
+/// shutdown. perry installs it for a program with an approved native addon.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_node_api_host() {
+    perry_install_once!({
+        crate::node_api_host::install();
+    });
+}
+
+/// The WebAssembly engine (#76). Installs only when a `perry-wasm-host`
+/// archive registered its entry points (`js_runtime_set_wasm_host_ops`), which
+/// perry links for a program that uses WebAssembly; otherwise the namespace
+/// keeps its graceful-failure behavior.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_wasm_host() {
+    perry_install_once!({
+        crate::webassembly::install();
+    });
 }
 
 #[cfg(feature = "dyn-eval")]

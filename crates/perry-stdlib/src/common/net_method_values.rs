@@ -168,83 +168,37 @@ fn net_block_list_method_name(prop: &str) -> Option<&'static [u8]> {
     }
 }
 
-#[cfg_attr(
-    not(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    )),
-    allow(unused_variables)
-)]
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64> {
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if let Some(name) = net_socket_method_name(property_name) {
-        extern "C" {
-            fn js_ext_net_is_socket_handle(handle: i64) -> i32;
-        }
         if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
             return Some(bind_handle_method(handle, name));
         }
     }
 
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if let Some(name) = net_server_method_name(property_name) {
-        extern "C" {
-            fn js_ext_net_is_server_handle(handle: i64) -> i32;
-        }
         if unsafe { js_ext_net_is_server_handle(handle) } != 0 {
             return Some(bind_handle_method(handle, name));
         }
     }
 
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if let Some(name) = net_block_list_method_name(property_name) {
-        extern "C" {
-            fn js_ext_net_is_block_list_handle(handle: i64) -> i32;
-        }
         if unsafe { js_ext_net_is_block_list_handle(handle) } != 0 {
             return Some(bind_handle_method(handle, name));
         }
     }
 
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if property_name == "listening" {
-        extern "C" {
-            fn js_ext_net_is_server_handle(handle: i64) -> i32;
-            fn js_net_server_get_listening(handle: i64) -> f64;
-        }
         if unsafe { js_ext_net_is_server_handle(handle) } != 0 {
             return Some(unsafe { js_net_server_get_listening(handle) });
         }
     }
 
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if matches!(property_name, "maxConnections" | "dropMaxConnection") {
-        extern "C" {
-            fn js_ext_net_is_server_handle(handle: i64) -> i32;
-            fn js_net_server_get_max_connections(handle: i64) -> f64;
-            fn js_net_server_get_drop_max_connection(handle: i64) -> f64;
-        }
         if unsafe { js_ext_net_is_server_handle(handle) } != 0 {
             return Some(match property_name {
                 "maxConnections" => unsafe { js_net_server_get_max_connections(handle) },
@@ -253,35 +207,14 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
         }
     }
 
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if property_name == "rules" {
-        extern "C" {
-            fn js_ext_net_is_block_list_handle(handle: i64) -> i32;
-            fn js_net_block_list_rules(handle: i64) -> *mut perry_runtime::ArrayHeader;
-        }
         if unsafe { js_ext_net_is_block_list_handle(handle) } != 0 {
             let arr = unsafe { js_net_block_list_rules(handle) };
             return Some(perry_runtime::js_nanbox_pointer(arr as i64));
         }
     }
 
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     if matches!(property_name, "address" | "family" | "port" | "flowlabel") {
-        extern "C" {
-            fn js_ext_net_is_socket_address_handle(handle: i64) -> i32;
-            fn js_net_socket_address_get_address(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_net_socket_address_get_family(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_net_socket_address_get_port(handle: i64) -> f64;
-            fn js_net_socket_address_get_flowlabel(handle: i64) -> f64;
-        }
         if unsafe { js_ext_net_is_socket_address_handle(handle) } != 0 {
             return Some(match property_name {
                 "address" => unsafe {
@@ -313,12 +246,6 @@ pub(crate) unsafe fn dispatch_property_set(handle: i64, property_name: &str, val
         return false;
     }
 
-    extern "C" {
-        fn js_ext_net_is_server_handle(handle: i64) -> i32;
-        fn js_net_server_set_max_connections(handle: i64, value: f64) -> f64;
-        fn js_net_server_set_drop_max_connection(handle: i64, value: f64) -> f64;
-    }
-
     if js_ext_net_is_server_handle(handle) == 0 {
         return false;
     }
@@ -335,16 +262,6 @@ pub(crate) unsafe fn dispatch_property_set(handle: i64, property_name: &str, val
     true
 }
 
-#[cfg(not(all(
-    feature = "external-net-pump",
-    not(target_os = "ios"),
-    not(target_os = "android")
-)))]
-pub(crate) unsafe fn dispatch_property_set(handle: i64, property_name: &str, value: f64) -> bool {
-    let _ = (handle, property_name, value);
-    false
-}
-
 #[cfg(all(
     feature = "external-net-pump",
     not(target_os = "ios"),
@@ -357,26 +274,6 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
 ) -> Option<f64> {
     if method != "rules" && net_block_list_method_name(method).is_none() {
         return None;
-    }
-
-    extern "C" {
-        fn js_ext_net_is_block_list_handle(handle: i64) -> i32;
-        fn js_net_block_list_add_address(handle: i64, address_ptr: i64, family_ptr: i64) -> f64;
-        fn js_net_block_list_add_range(
-            handle: i64,
-            start_ptr: i64,
-            end_ptr: i64,
-            family_ptr: i64,
-        ) -> f64;
-        fn js_net_block_list_add_subnet(
-            handle: i64,
-            address_ptr: i64,
-            prefix: f64,
-            family_ptr: i64,
-        ) -> f64;
-        fn js_net_block_list_check(handle: i64, address_ptr: i64, family_ptr: i64) -> f64;
-        fn js_net_block_list_to_json(handle: i64) -> f64;
-        fn js_net_block_list_from_json(handle: i64, value: f64) -> f64;
     }
 
     if js_ext_net_is_block_list_handle(handle) == 0 {
@@ -428,22 +325,6 @@ pub(crate) unsafe fn dispatch_external_server_method(
 ) -> Option<f64> {
     if net_server_method_name(method).is_none() {
         return None;
-    }
-
-    extern "C" {
-        fn js_ext_net_is_server_handle(handle: i64) -> i32;
-        fn js_net_server_listen(handle: i64, port: f64, arg2: f64, arg3: f64);
-        fn js_net_server_close(handle: i64, callback_i64: i64);
-        fn js_net_server_address(handle: i64) -> *mut perry_runtime::StringHeader;
-        fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64);
-        fn js_net_server_once(handle: i64, event_ptr: i64, cb: i64) -> i64;
-        fn js_net_server_remove_listener(handle: i64, event_ptr: i64, cb: i64) -> i64;
-        fn js_net_server_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
-        fn js_net_server_listener_count(handle: i64, event_ptr: i64) -> f64;
-        fn js_net_server_get_connections(handle: i64) -> f64;
-        fn js_net_server_event_names(handle: i64) -> *mut perry_runtime::StringHeader;
-        fn js_net_server_listeners(handle: i64, event_ptr: i64) -> i64;
-        fn js_net_server_raw_listeners(handle: i64, event_ptr: i64) -> i64;
     }
 
     if js_ext_net_is_server_handle(handle) == 0 {
@@ -516,3 +397,6 @@ pub(crate) unsafe fn dispatch_external_server_method(
     };
     Some(result)
 }
+
+#[allow(unused_imports)]
+use crate::common::wrapper_imports::*;
