@@ -504,8 +504,9 @@ pub struct Model {
     /// An accessor was installed on `Object.prototype` while solving: every
     /// lookup in the program may run it. Kills every fact (derive).
     pub objproto_accessor: bool,
-    /// Solve-time budget; when exceeded the solve stops and the program
-    /// gets no facts at all (every fact off: the sound fallback).
+    /// Wall-clock budget on generation and solve; when exceeded the pass
+    /// stops and the program gets no facts at all (every fact off: the
+    /// sound fallback).
     pub budget: Option<(std::time::Instant, std::time::Duration)>,
     pub aborted: bool,
     pub pops: u64,

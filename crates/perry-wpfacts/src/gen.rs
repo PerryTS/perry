@@ -823,6 +823,10 @@ impl<'a> Gen<'a> {
             }
         }
         for (mi, (_, module)) in modules.iter().enumerate() {
+            // Over a bound: the program gets no facts; stop generating.
+            if self.m.aborted {
+                return;
+            }
             let mi = mi as u32;
             let init_fn = self.synthetic_fn(mi, "<init>");
             let this = self.m.funcs[init_fn as usize].this;
@@ -848,10 +852,16 @@ impl<'a> Gen<'a> {
             }
             self.stmts(&fx, &module.init);
             for f in &module.functions {
+                if self.m.aborted {
+                    return;
+                }
                 let fxi = self.mods[mi as usize].funcs[&f.id];
                 self.walk_fn(mi, fxi, f, None, None);
             }
             for c in &module.classes {
+                if self.m.aborted {
+                    return;
+                }
                 self.walk_class(mi, c, &fx);
             }
         }

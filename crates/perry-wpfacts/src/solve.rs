@@ -213,6 +213,10 @@ impl Model {
         }
         self.nodes[a as usize].succ.push(b);
         self.rel(|| format!("copy {a} {b}"));
+        // Over a bound the program gets no facts: nothing more to propagate.
+        if self.aborted {
+            return;
+        }
         let toks = self.nodes[a as usize].pts.to_sorted();
         let prim = self.nodes[a as usize].prim;
         let saved = (self.cur_src, self.cur_why);
@@ -230,6 +234,9 @@ impl Model {
             self.rel(|| line);
         }
         self.nodes[n as usize].cons.push(c.clone());
+        if self.aborted {
+            return;
+        }
         let toks = self.nodes[n as usize].pts.to_sorted();
         let prim = self.nodes[n as usize].prim;
         if !toks.is_empty() || prim != 0 {

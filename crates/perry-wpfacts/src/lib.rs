@@ -46,7 +46,8 @@ pub struct FactsConfig {
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
     pub sabotage: Option<String>,
-    /// Solve-time budget (seconds); past it the program gets no facts.
+    /// Wall-clock budget (seconds) on generation and solve; past it the
+    /// program gets no facts.
     pub budget_secs: Option<u64>,
     /// Report-only what-if: ignore the E14 program-wide kill (UNSOUND; for
     /// the precision report only, never for codegen).
@@ -131,6 +132,16 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     if cfg.profile {
         g.m.profile = Some(Default::default());
     }
+    // The bounds are in force from the first constraint: generation already
+    // solves online (`Model::cons` and `Model::edge` apply each rule to what
+    // its node holds), so it is part of the solve they bound.
+    if let Some(secs) = cfg.budget_secs {
+        g.m.budget = Some((t0, std::time::Duration::from_secs(secs)));
+    }
+    g.m.max_pts = cfg.max_pts.unwrap_or(0);
+    g.m.max_work = cfg.max_work.unwrap_or(0);
+    g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
+    g.m.widen_k = cfg.widen_k.unwrap_or(0);
     g.register_all();
     g.link_exports();
     g.walk_all();
@@ -139,13 +150,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         eprintln!("perry: wpfacts after generation {}", g.m.size_line());
     }
     let t1 = std::time::Instant::now();
-    if let Some(secs) = cfg.budget_secs {
-        g.m.budget = Some((t1, std::time::Duration::from_secs(secs)));
-    }
-    g.m.max_pts = cfg.max_pts.unwrap_or(0);
-    g.m.max_work = cfg.max_work.unwrap_or(0);
-    g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
-    g.m.widen_k = cfg.widen_k.unwrap_or(0);
     g.m.log_seed_accessors();
     for s in &g.read_sites {
         let (m0, o, k, r, c) = (s.module, s.byte_offset, s.key, s.recv, s.is_call as u8);

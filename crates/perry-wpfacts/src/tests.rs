@@ -253,3 +253,38 @@ fn dynamic_code_reach_kills_facts_without_an_unknown_call() {
     assert!(!tmpl(&pf, "P").prefix_stable);
     assert!(!field(tmpl(&pf, "P"), "x").readonly);
 }
+
+/// The bounds hold from the first constraint. Generation solves online
+/// (`cons`/`edge` apply each rule to what the node already holds), so a
+/// bound passed while the constraints are generated must stop the pass
+/// there. The Next.js server spent 12+ minutes and 50 GB in generation,
+/// with no bound (not even widening) in force yet.
+#[test]
+fn bounds_hold_during_generation() {
+    let mut src = String::new();
+    for i in 0..200 {
+        src.push_str(&format!(
+            "class C{i} {{ v = {i}; m() {{ return this.v; }} }}\n\
+             function f{i}(x: any) {{ return x.m() + x.m() + x.m() + new C{i}().m() + [x, x].length; }}\n"
+        ));
+    }
+    src.push_str("console.log(f0(new C1()));\n");
+    let full = facts(&src);
+    assert!(!full.stats.aborted);
+    // A node bound (max_pts / 8) far below what generation creates.
+    let bounded = facts_with(
+        &src,
+        FactsConfig {
+            max_pts: Some(800),
+            ..Default::default()
+        },
+    );
+    assert!(bounded.stats.aborted);
+    assert!(bounded.templates.is_empty() && bounded.sites.is_empty());
+    assert!(
+        bounded.stats.nodes * 2 < full.stats.nodes,
+        "generation went on past the bound: {} of {} nodes",
+        bounded.stats.nodes,
+        full.stats.nodes
+    );
+}
