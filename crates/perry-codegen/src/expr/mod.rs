@@ -403,6 +403,9 @@ pub(crate) struct FnCtx<'a> {
     /// every executable write produces this type by construction and whose
     /// every read follows a write. Holds at every read, reassigned or not.
     pub typed_locals: std::collections::HashMap<u32, HirType>,
+    /// Closed World 5d: the body's int32-or-NaN Number locals
+    /// (`TypedLocals::code_units`); the array-key admission's char-code proof.
+    pub code_unit_locals: std::collections::HashSet<u32>,
     /// Proven Array bindings no code but their construction and element /
     /// `length` reads names (`collectors::definite_init::confined`): their
     /// guarded element reads drop the per-read descriptor-layout query.

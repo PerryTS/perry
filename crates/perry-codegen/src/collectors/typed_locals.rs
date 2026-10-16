@@ -55,6 +55,13 @@ pub(crate) struct TypedLocals {
     pub numbers: HashSet<u32>,
     /// Locals that hold an Array created by a literal in this body.
     pub arrays: HashSet<u32>,
+    /// The Number locals that are int32-or-NaN at every read: every write is
+    /// `charCodeAt` on a proven String (a UTF-16 code unit, or NaN for an
+    /// index out of range), a bounded int32 ([`int32_writer_range`]), another
+    /// such local, or a conditional of those. NaN is NOT an int32: a consumer
+    /// must handle it (the array-key admission rejects it with one ordered
+    /// compare). `++`/`--` writes are excluded (they can leave int32).
+    pub code_units: HashSet<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -481,6 +488,89 @@ fn iife_return_kind(
 /// What a `String.prototype` method returns, for a String receiver: the
 /// lists `string_value_is_runtime_guaranteed` and
 /// `string_method_returns_number` trust.
+/// One write of a [`TypedLocals::code_units`] candidate: int32-or-NaN by
+/// construction. `charCodeAt` answers a code unit in [0, 0xFFFF] for an index
+/// in range and NaN otherwise (never a fraction, never -0 through ToInteger of
+/// the index); only a receiver the String fixed point proved qualifies, so a
+/// user object's `charCodeAt` never does.
+fn is_code_unit(e: &Expr, env: &Env<'_>, set: &HashSet<u32>, depth: usize) -> bool {
+    if depth > 24 {
+        return false;
+    }
+    let rec = |x: &Expr| is_code_unit(x, env, set, depth + 1);
+    match e {
+        Expr::Call { callee, .. } => matches!(callee.as_ref(),
+            Expr::PropertyGet { object, property, .. }
+            if property == "charCodeAt" && env.is(object, Kind::Str)),
+        Expr::LocalGet(id) => set.contains(id),
+        Expr::LocalSet(_, v) => rec(v),
+        Expr::Sequence(v) => v.last().is_some_and(rec),
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => rec(then_expr) && rec(else_expr),
+        _ => int32_writer_range(e).is_some(),
+    }
+}
+
+/// Closed bounds for additional writers. In particular qs combines surrogate
+/// code units using masks, a constant shift, OR, and addition. Never assume
+/// that an arbitrary Number assignment is integral or within fptosi's range.
+pub(crate) fn int32_writer_range(expr: &Expr) -> Option<(i64, i64)> {
+    match expr {
+        Expr::Integer(n) if i32::try_from(*n).is_ok() => return Some((*n, *n)),
+        Expr::Number(n)
+            if n.is_finite()
+                && n.fract() == 0.0
+                && *n >= i32::MIN as f64
+                && *n <= i32::MAX as f64 =>
+        {
+            return Some((*n as i64, *n as i64));
+        }
+        _ => {}
+    }
+    let Expr::Binary { op, left, right } = expr else {
+        return None;
+    };
+    if *op == BinaryOp::BitAnd {
+        let mask = int32_writer_range(left).or_else(|| int32_writer_range(right));
+        if let Some((lo, hi)) = mask {
+            if lo == hi && lo >= 0 && hi <= i64::from(i32::MAX) {
+                return Some((0, hi));
+            }
+        }
+    }
+    let (lo, hi) = int32_writer_range(left)?;
+    let (rlo, rhi) = int32_writer_range(right)?;
+    match op {
+        BinaryOp::Add => {
+            let lower = lo.checked_add(rlo)?;
+            let upper = hi.checked_add(rhi)?;
+            (lower >= i64::from(i32::MIN) && upper <= i64::from(i32::MAX)).then_some((lower, upper))
+        }
+        BinaryOp::Shl
+            if lo >= 0 && hi <= i64::from(i32::MAX) && rlo == rhi && (0..32).contains(&rlo) =>
+        {
+            let lower = lo.checked_shl(rlo as u32)?;
+            let upper = hi.checked_shl(rlo as u32)?;
+            (upper <= i64::from(i32::MAX)).then_some((lower, upper))
+        }
+        BinaryOp::BitOr
+            if lo >= 0 && rlo >= 0 && hi <= i64::from(i32::MAX) && rhi <= i64::from(i32::MAX) =>
+        {
+            let max = hi.max(rhi) as u64;
+            let bound = if max == 0 {
+                0
+            } else {
+                (1u64 << (64 - max.leading_zeros())) - 1
+            };
+            Some((0, bound as i64))
+        }
+        _ => None,
+    }
+}
+
 fn string_method_kind(name: &str) -> Option<Kind> {
     match name {
         "toString" | "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" | "slice"
@@ -716,22 +806,60 @@ pub(crate) fn collect_typed_locals(
         }
         excluded.extend(bad);
     };
+    let mut code_units: HashSet<u32> = numbers
+        .iter()
+        .copied()
+        .filter(|id| !updates.contains(id))
+        .collect();
+    loop {
+        let env = Env {
+            iife: &iife,
+            boxed_vars,
+            module_globals,
+            proofs,
+            strings: &strings,
+            numbers: &numbers,
+            arrays: &arrays,
+        };
+        let drop: Vec<u32> = code_units
+            .iter()
+            .copied()
+            .filter(|id| {
+                !writes.get(id).is_some_and(|ws| {
+                    ws.iter()
+                        .all(|w| w.is_some_and(|e| is_code_unit(e, &env, &code_units, 0)))
+                })
+            })
+            .collect();
+        if drop.is_empty() {
+            break;
+        }
+        for id in drop {
+            code_units.remove(&id);
+        }
+    }
     if std::env::var_os("PERRY_TYPED_LOCALS_TRACE").is_some() {
         let mut s: Vec<_> = strings.iter().collect();
         let mut n: Vec<_> = numbers.iter().collect();
         s.sort();
         n.sort();
         eprintln!(
-            "[typed_locals] proofs={:?} candidates={} strings={s:?} numbers={n:?} arrays={}",
+            "[typed_locals] proofs={:?} candidates={} strings={s:?} numbers={n:?} arrays={} code_units={:?}",
             proofs.keys().collect::<Vec<_>>(),
             candidates.len(),
-            arrays.len()
+            arrays.len(),
+            {
+                let mut c: Vec<_> = code_units.iter().collect();
+                c.sort();
+                c
+            }
         );
     }
     TypedLocals {
         strings,
         numbers,
         arrays,
+        code_units,
     }
 }
 
@@ -883,6 +1011,7 @@ pub(crate) fn apply(
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     number_by_construction: &mut HashSet<u32>,
+    code_units: &mut HashSet<u32>,
 ) -> HashMap<u32, HirType> {
     let mut all = proofs.clone();
     for (id, ty) in outer {
@@ -891,6 +1020,7 @@ pub(crate) fn apply(
     let t = collect_typed_locals(body, &all, boxed_vars, module_globals);
     number_by_construction.extend(t.numbers.iter().copied());
     number_by_construction.extend(number_proof_params(proofs));
+    code_units.extend(t.code_units.iter().copied());
     // Numbers answer through `number_by_construction` alone (THE Number
     // query); the map carries the String and Array proofs.
     let mut m = outer_only(outer);

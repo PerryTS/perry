@@ -262,6 +262,7 @@ pub(super) fn compile_module_init(
         local_types: init_local_types,
         proven_local_types: HashMap::new(),
         typed_locals: std::collections::HashMap::new(),
+        code_unit_locals: std::collections::HashSet::new(),
         confined_arrays: &cross_module.definite_init.confined,
         confined_array_read: false,
         guarded_discriminant_aliases: HashMap::new(),

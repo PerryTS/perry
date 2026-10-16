@@ -1110,6 +1110,7 @@ pub(super) fn compile_function(
 
     // Closed World 5d: the body's typed locals under this variant's entry
     // proofs (the spec clone's guarded parameters that are never rebound).
+    let mut code_unit_locals = std::collections::HashSet::new();
     let typed_locals = crate::collectors::typed_locals::apply(
         &f.body,
         &crate::collectors::typed_locals::stable_param_proofs(
@@ -1121,6 +1122,7 @@ pub(super) fn compile_function(
         &boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
+        &mut code_unit_locals,
     );
     // A Number-by-construction local cannot ever hold a GC pointer, so it
     // must not pay the root-slot protocol on every assignment.  The shadow
@@ -1218,6 +1220,7 @@ pub(super) fn compile_function(
         local_types,
         proven_local_types: spec_param_proofs,
         typed_locals,
+        code_unit_locals,
         confined_arrays: &cross_module.definite_init.confined,
         confined_array_read: false,
         guarded_discriminant_aliases: HashMap::new(),

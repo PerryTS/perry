@@ -512,6 +512,7 @@ pub(super) fn compile_method(
         &cross_module.module_global_proven_types,
     );
     // Closed World 5d: the body's typed locals (no entry proofs here).
+    let mut code_unit_locals = std::collections::HashSet::new();
     let typed_locals = crate::collectors::typed_locals::apply(
         method_body,
         &std::collections::HashMap::new(),
@@ -519,6 +520,7 @@ pub(super) fn compile_method(
         &method_boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
+        &mut code_unit_locals,
     );
     super::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
@@ -597,6 +599,7 @@ pub(super) fn compile_method(
         local_types,
         proven_local_types: guarded_param_proofs,
         typed_locals,
+        code_unit_locals,
         confined_arrays: &cross_module.definite_init.confined,
         confined_array_read: false,
         guarded_discriminant_aliases: std::collections::HashMap::new(),

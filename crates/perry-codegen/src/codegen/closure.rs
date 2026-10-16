@@ -924,6 +924,7 @@ pub(super) fn compile_closure(
     // construction under this body's entry proofs (none for a generic
     // body). Number locals join the by-construction set before any root
     // slot is dropped for it.
+    let mut code_unit_locals = std::collections::HashSet::new();
     let typed_locals = crate::collectors::typed_locals::apply(
         body,
         &typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
@@ -931,6 +932,7 @@ pub(super) fn compile_closure(
         &closure_boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
+        &mut code_unit_locals,
     );
     super::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
@@ -1112,6 +1114,7 @@ pub(super) fn compile_closure(
         // A typed body's entry check (the public dispatcher) proved these.
         proven_local_types: typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
         typed_locals,
+        code_unit_locals,
         confined_arrays: &cross_module.definite_init.confined,
         confined_array_read: false,
         guarded_discriminant_aliases: std::collections::HashMap::new(),

@@ -3,17 +3,33 @@
 use super::FnCtx;
 use crate::function::LlFunction;
 use crate::types::{DOUBLE, I1, I32, I64};
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::Expr;
 
 const NORMALIZE: &str = "perry_array_index_normalize_i32";
 
-/// The specialized String lowering returns a UTF-16 code unit or NaN.
+/// The builtin `String.prototype.charCodeAt` returns a UTF-16 code unit or
+/// NaN, so this is a fact about values produced while `Pristine(String)`
+/// holds: [`normalize`] admits through it only after testing that bit at the
+/// read. The bit is sticky, so clear at the read means clear at every write.
 /// Uninitialized hoisted aliases may also be undefined; the ordered check
 /// declines that tag as well. Every writer of an alias must produce a code
 /// unit/NaN or a bounded i32. Parameters and captured cells are excluded.
 pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     fn walk(ctx: &FnCtx<'_>, expr: &Expr, seen: &mut std::collections::HashSet<u32>) -> bool {
         match expr {
+            // Closed World 5d: every write of this body local is a code unit
+            // of a proven String, NaN, or a bounded int32, and no read runs
+            // before a write (`TypedLocals::code_units`). The proof is
+            // whole-body, so it holds here whatever the lowering order saw.
+            // `index_alias_writers` must list it as well: that keeps out
+            // parameters (a sloppy `arguments` object aliases them), closure
+            // references, and locals with writes neither walk can see.
+            Expr::LocalGet(id)
+                if ctx.code_unit_locals.contains(id)
+                    && ctx.index_alias_writers.contains_key(id) =>
+            {
+                true
+            }
             Expr::Call { callee, .. } => matches!(callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
                 if property == "charCodeAt"
@@ -33,9 +49,9 @@ pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
                 initializer
                     && ctx.index_alias_writers.get(id).is_some_and(|values| {
                         values.iter().all(|value| {
-                            writer_range(value).is_some_and(|(lo, hi)| {
-                                lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX)
-                            }) || walk(ctx, value, &mut seen.clone())
+                            crate::collectors::typed_locals::int32_writer_range(value).is_some_and(
+                                |(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX),
+                            ) || walk(ctx, value, &mut seen.clone())
                         })
                     })
             }
@@ -43,63 +59,6 @@ pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         }
     }
     walk(ctx, expr, &mut std::collections::HashSet::new())
-}
-
-/// Closed bounds for additional writers. In particular qs combines surrogate
-/// code units using masks, a constant shift, OR, and addition. Never assume
-/// that an arbitrary Number assignment is integral or within fptosi's range.
-fn writer_range(expr: &Expr) -> Option<(i64, i64)> {
-    match expr {
-        Expr::Integer(n) if i32::try_from(*n).is_ok() => return Some((*n, *n)),
-        Expr::Number(n)
-            if n.is_finite()
-                && n.fract() == 0.0
-                && *n >= i32::MIN as f64
-                && *n <= i32::MAX as f64 =>
-        {
-            return Some((*n as i64, *n as i64));
-        }
-        _ => {}
-    }
-    let Expr::Binary { op, left, right } = expr else {
-        return None;
-    };
-    if *op == BinaryOp::BitAnd {
-        let mask = writer_range(left).or_else(|| writer_range(right));
-        if let Some((lo, hi)) = mask {
-            if lo == hi && lo >= 0 && hi <= i64::from(i32::MAX) {
-                return Some((0, hi));
-            }
-        }
-    }
-    let (lo, hi) = writer_range(left)?;
-    let (rlo, rhi) = writer_range(right)?;
-    match op {
-        BinaryOp::Add => {
-            let lower = lo.checked_add(rlo)?;
-            let upper = hi.checked_add(rhi)?;
-            (lower >= i64::from(i32::MIN) && upper <= i64::from(i32::MAX)).then_some((lower, upper))
-        }
-        BinaryOp::Shl
-            if lo >= 0 && hi <= i64::from(i32::MAX) && rlo == rhi && (0..32).contains(&rlo) =>
-        {
-            let lower = lo.checked_shl(rlo as u32)?;
-            let upper = hi.checked_shl(rlo as u32)?;
-            (upper <= i64::from(i32::MAX)).then_some((lower, upper))
-        }
-        BinaryOp::BitOr
-            if lo >= 0 && rlo >= 0 && hi <= i64::from(i32::MAX) && rhi <= i64::from(i32::MAX) =>
-        {
-            let max = hi.max(rhi) as u64;
-            let bound = if max == 0 {
-                0
-            } else {
-                (1u64 << (64 - max.leading_zeros())) - 1
-            };
-            Some((0, bound as i64))
-        }
-        _ => None,
-    }
 }
 
 /// Preserve a widened native index even when lowering a later operand opened
@@ -118,8 +77,17 @@ pub(super) fn normalize(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> 
     }
     if expr.is_some_and(|e| is_char_code(ctx, e)) {
         // The ordered comparison rejects the sole non-integer result, NaN.
+        // A modified String (or Object) prototype may have replaced
+        // `charCodeAt` with a function returning anything: `Pristine(String)`
+        // must hold too, else the key takes the exact generic admission.
         // Sanitize BEFORE fptosi: even a rejected conversion must not poison.
-        let valid = ctx.block().fcmp("ord", key, key);
+        let patched = crate::builtin_proto::emit_patched_test(
+            ctx,
+            crate::builtin_proto::BuiltinProto::String,
+        );
+        let ordered = ctx.block().fcmp("ord", key, key);
+        let pristine = ctx.block().xor(I1, &patched, "true");
+        let valid = ctx.block().and(I1, &ordered, &pristine);
         let safe = ctx.block().select(I1, &valid, DOUBLE, key, "0.0");
         let index = ctx.block().fptosi(DOUBLE, &safe, I32);
         return ctx.block().select(I1, &valid, I32, &index, "-1");
@@ -181,7 +149,7 @@ mod tests {
     use super::*;
     use crate::{compile_module, CompileOptions};
     use perry_hir::types::Type;
-    use perry_hir::{Function, Module, Param, Stmt};
+    use perry_hir::{BinaryOp, Function, Module, Param, Stmt};
 
     fn read_ir(index: Expr, prelude: Vec<Stmt>) -> String {
         let mut module = Module::new("intkey.ts");
@@ -312,6 +280,39 @@ mod tests {
         );
         assert!(
             ir.contains("fcmp ord double") && ir.contains("aidx.runtime_key"),
+            "{ir}"
+        );
+    }
+    #[test]
+    fn hoisted_char_code_var_is_admitted_by_its_typed_locals_fact() {
+        // `var c` hoisted (seed `undefined`), then `var c = "abc".charCodeAt(k)`:
+        // the redeclaration lowers through LocalSet, which drops the
+        // lowering-order alias, so only the whole-body fact admits it.
+        let code = Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::String("abc".into())),
+                property: "charCodeAt".into(),
+                byte_offset: 0,
+            }),
+            args: vec![Expr::LocalGet(2)],
+            type_args: vec![],
+            byte_offset: 0,
+        };
+        let var = |init| Stmt::Let {
+            id: 4,
+            name: "c".into(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(init),
+        };
+        let ir = read_ir(Expr::LocalGet(4), vec![var(Expr::Undefined), var(code)]);
+        assert!(
+            !ir.contains("call i32 @perry_array_index_normalize_i32"),
+            "{ir}"
+        );
+        // NaN and a modified String prototype both take the exact admission.
+        assert!(
+            ir.contains("fcmp ord double") && ir.contains("llvm.expect.i1"),
             "{ir}"
         );
     }

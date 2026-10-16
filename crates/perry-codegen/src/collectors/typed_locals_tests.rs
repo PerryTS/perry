@@ -372,3 +372,58 @@ fn outer_seed_fills_only_unknown_oracle_slots_and_never_numbers() {
     assert!(!local_types.contains_key(&3));
     assert!(!outer_only(&outer).contains_key(&3));
 }
+
+#[test]
+fn a_char_code_of_a_proven_string_and_a_bounded_combination_is_a_code_unit() {
+    let t = run(&encode_body(), &[(1, HirType::String)]);
+    assert_eq!(t.code_units, HashSet::from([4]), "{t:?}");
+    assert!(run(&encode_body(), &[]).code_units.is_empty());
+}
+
+#[test]
+fn a_write_that_can_leave_int32_is_not_a_code_unit() {
+    // var c = s.charCodeAt(0); c = c / 2;   (a Number, not int32-or-NaN)
+    let body = vec![
+        let_(5, Some(Expr::String("ab".into()))),
+        let_(
+            6,
+            Some(method(get(5), "charCodeAt", vec![Expr::Integer(0)])),
+        ),
+        set(6, bin(BinaryOp::Div, get(6), Expr::Integer(2))),
+        Stmt::Return(Some(get(6))),
+    ];
+    let t = run(&body, &[]);
+    assert!(t.numbers.contains(&6) && t.code_units.is_empty(), "{t:?}");
+    // c++ can step out of int32 too.
+    let body = vec![
+        let_(5, Some(Expr::String("ab".into()))),
+        let_(
+            6,
+            Some(method(get(5), "charCodeAt", vec![Expr::Integer(0)])),
+        ),
+        Stmt::Expr(Expr::Update {
+            id: 6,
+            op: perry_hir::UpdateOp::Increment,
+            prefix: false,
+        }),
+        Stmt::Return(Some(get(6))),
+    ];
+    let t = run(&body, &[]);
+    assert!(t.numbers.contains(&6) && t.code_units.is_empty(), "{t:?}");
+}
+
+#[test]
+fn a_copy_of_a_code_unit_is_a_code_unit_and_an_unknown_receiver_is_not() {
+    let body = vec![
+        let_(5, Some(Expr::String("ab".into()))),
+        let_(6, Some(method(get(5), "charCodeAt", vec![get(7)]))),
+        let_(8, Some(get(6))),
+        let_(
+            9,
+            Some(method(get(7), "charCodeAt", vec![Expr::Integer(0)])),
+        ),
+        Stmt::Return(Some(bin(BinaryOp::Add, get(8), get(9)))),
+    ];
+    let t = run(&body, &[]);
+    assert_eq!(t.code_units, HashSet::from([6, 8]), "{t:?}");
+}

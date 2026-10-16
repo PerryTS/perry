@@ -257,6 +257,7 @@ pub(in crate::codegen) fn compile_static_method(
         local_types,
         proven_local_types: std::collections::HashMap::new(),
         typed_locals: crate::collectors::typed_locals::outer_only(&outer_proofs),
+        code_unit_locals: std::collections::HashSet::new(),
         confined_arrays: &cross_module.definite_init.confined,
         confined_array_read: false,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
