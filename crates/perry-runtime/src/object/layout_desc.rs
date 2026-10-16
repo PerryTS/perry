@@ -568,6 +568,17 @@ pub(crate) fn register_static_layouts() {
     }
 }
 
+/// The shape kind a descriptor's `kind` code declares, among the ordinary
+/// kinds the registrar represents: `Ordinary`, and for a runtime prototype
+/// whose stores must reach their funnel, `OrdinaryUnmarked` or
+/// `CallableOrdinary`.
+fn declared_kind(code: u8) -> Option<super::shapes::ShapeObjectKind> {
+    use super::shapes::ShapeObjectKind::{CallableOrdinary, Ordinary, OrdinaryUnmarked};
+    [Ordinary, OrdinaryUnmarked, CallableOrdinary]
+        .into_iter()
+        .find(|k| k.code() == code as u64)
+}
+
 /// Register one descriptor under `requested`; the id it resolved to, or 0
 /// when this runtime cannot represent it yet (a descriptor prototype, a
 /// non-ordinary kind, slots that are not a permutation of the key positions,
@@ -583,7 +594,10 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         }
     }
     let d = &*desc;
-    if d.kind != 0 || requested >= super::shapes::STATIC_SHAPE_ID_END {
+    let Some(kind) = declared_kind(d.kind) else {
+        return 0;
+    };
+    if requested >= super::shapes::STATIC_SHAPE_ID_END {
         return 0;
     }
     let keys = if d.key_count == 0 {
@@ -672,7 +686,7 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         key_count,
         slot_count,
         0,
-        super::shapes::ShapeObjectKind::Ordinary,
+        kind,
         0,
         proto_id,
         summary,
@@ -707,7 +721,7 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
     };
     if super::shapes::shape_descriptor_by_id(id).is_none() {
         super::shapes::install_declared_layout(
-            id, list, key_count, slot_count, proto_id, summary, rep, integrity,
+            id, list, key_count, slot_count, kind, proto_id, summary, rep, integrity,
         );
     }
     super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_by_id(id));
@@ -777,10 +791,18 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader
 /// # Safety
 /// `obj` is a freshly allocated, unpublished `GC_TYPE_OBJECT` born on `d`.
 unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) {
-    super::shapes::store_kind::premark_plain_ordinary(obj);
     let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-    if d.kind == super::shapes::ShapeObjectKind::Class.code() as u8 {
-        (*gc)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
+    match declared_kind(d.kind) {
+        Some(super::shapes::ShapeObjectKind::OrdinaryUnmarked) => {}
+        Some(super::shapes::ShapeObjectKind::CallableOrdinary) => {
+            (*gc)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
+        }
+        _ => {
+            super::shapes::store_kind::premark_plain_ordinary(obj);
+            if d.kind == super::shapes::ShapeObjectKind::Class.code() as u8 {
+                (*gc)._reserved |= crate::gc::GC_OBJECT_CALLABLE;
+            }
+        }
     }
     if d.proto == LAYOUT_PROTO_NULL {
         (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
@@ -804,7 +826,8 @@ unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) 
 /// code runs.
 ///
 /// # Safety
-/// `desc` is a registered runtime descriptor with the default prototype.
+/// `desc` is a registered runtime descriptor whose prototype is
+/// `%Object.prototype%` or null.
 pub(crate) unsafe fn alloc_layout_prototype(
     desc: *const PerryLayoutDesc,
     room: u32,
@@ -817,7 +840,12 @@ pub(crate) unsafe fn alloc_layout_prototype(
         );
         std::process::abort();
     };
-    let obj = super::object_alloc_prototype_old(0, room.max(d.slot_count));
+    let room = room.max(d.slot_count);
+    let obj = if d.proto == LAYOUT_PROTO_NULL {
+        super::object_alloc_prototype_old_null_proto(0, room)
+    } else {
+        super::object_alloc_prototype_old(0, room)
+    };
     mark_layout_object_facts(obj, d);
     // A birth: the bit is carried, never admitted.
     super::shapes::stamp_birth_shape_id_with_carrier_note(obj, id);

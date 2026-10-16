@@ -354,6 +354,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             crate::object::builtin_proto::note_array_custom_proto();
             if array_prototype != 0 && array_prototype == obj_ptr {
                 crate::array::invalidate_array_index_fast_path();
+                // Every array's chain runs through `%Array.prototype%`'s
+                // holder: its shadow bit now says the chain left its layout.
+                crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             // A lazy JSON array's materialized storage is a SEPARATE

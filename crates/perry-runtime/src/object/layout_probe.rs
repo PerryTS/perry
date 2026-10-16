@@ -717,14 +717,23 @@ unsafe fn probe_get<const ABSENT: bool>(
 }
 
 /// A receiver whose header word names no ordinary layout. Two exotics keep
-/// their own named properties in one ordinary object, which the probe asks
-/// for an own data property: an Array's `ArrayHeader.named` (object model
-/// step 7) and a function's own-property bag (`ClosureHeader.props`,
-/// `closure/props.rs`: the function's own string and symbol properties,
-/// `prototype` once it exists; a deletion removes the key from the bag).
-/// Everything else, and every miss (the chain continues at the exotic's
-/// builtin prototype, and a function's synthesized `name`/`length` live
-/// outside its bag), declines.
+/// their own named properties in one ordinary object: an Array's
+/// `ArrayHeader.named` (object model step 7) and a function's own-property
+/// bag (`ClosureHeader.props`, `closure/props.rs`: the function's own string
+/// and symbol properties, `prototype` once it exists; a deletion removes the
+/// key from the bag). The probe asks that object for an own data property and
+/// on a proven miss continues at the exotic's builtin prototype, a static
+/// layout (`runtime_layouts::builtin_prototypes`):
+///
+/// * an array with no own [[Prototype]] (`GC_ARRAY_CUSTOM_PROTO`) inherits
+///   from `%Array.prototype%`, whose holder lists every builtin method, then
+///   `%Object.prototype%`;
+/// * a function on a described Function shape (`closure::shape`: no accessor,
+///   delete or recorded [[Prototype]]) of a plain body inherits from
+///   `%Function.prototype%`, except for the names a function answers outside
+///   its bag ([`function_reads_outside_bag`]).
+///
+/// Everything else declines.
 #[cold]
 #[inline(never)]
 unsafe fn array_named_get<const ABSENT: bool>(
@@ -733,7 +742,7 @@ unsafe fn array_named_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let v = exotic_own_get(dir, obj, key_bits, hash);
+    let v = exotic_get::<ABSENT>(dir, obj, key_bits, hash);
     if ABSENT {
         verify::answer(obj as usize, key_bits, v)
     } else {
@@ -742,7 +751,7 @@ unsafe fn array_named_get<const ABSENT: bool>(
 }
 
 #[inline(always)]
-unsafe fn exotic_own_get(
+unsafe fn exotic_get<const ABSENT: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     key_bits: u64,
@@ -752,26 +761,149 @@ unsafe fn exotic_own_get(
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return hole();
     }
-    let named = match (*header).obj_type {
-        crate::gc::GC_TYPE_ARRAY => (*(obj as *const crate::array::ArrayHeader)).named,
-        crate::gc::GC_TYPE_CLOSURE => (*(obj as *const crate::closure::ClosureHeader)).props,
-        _ => return hole(),
-    } as *const ObjectHeader;
-    if named.is_null() {
-        return hole();
-    }
-    let word = (*named).parent_class_id;
-    let r = record_of(dir, word);
-    if r.is_null() {
-        return hole();
-    }
-    match own_position(r, key_bits, hash) {
-        Ok(pos) => value_at(named, r, pos),
-        Err(true) if word & crate::object::overflow::SHADOW_BIT != 0 => {
-            overflow_get(named, key_bits, hash).unwrap_or_else(hole)
+    let (named, proto) = match (*header).obj_type {
+        crate::gc::GC_TYPE_ARRAY => {
+            let named = (*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader;
+            if (*header)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+                (named, None)
+            } else {
+                (named, Some(crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE))
+            }
         }
-        Err(_) => hole(),
+        crate::gc::GC_TYPE_CLOSURE => {
+            let c = obj as *const crate::closure::ClosureHeader;
+            let inherits = crate::closure::shape::closure_on_plain_function_shape(c)
+                && !function_reads_outside_bag(hash);
+            (
+                (*c).props as *const ObjectHeader,
+                inherits.then_some(crate::closure::shape::INTRINSIC_SERIAL_FUNCTION),
+            )
+        }
+        _ => return hole(),
+    };
+    if !named.is_null() {
+        let word = (*named).parent_class_id;
+        let r = record_of(dir, word);
+        if r.is_null() {
+            return hole();
+        }
+        match own_position(r, key_bits, hash) {
+            Ok(pos) => return value_at(named, r, pos),
+            Err(true) if word & crate::object::overflow::SHADOW_BIT != 0 => {
+                match overflow_get(named, key_bits, hash) {
+                    Some(v) => return v,
+                    None => {}
+                }
+            }
+            Err(true) => {}
+            Err(false) => return hole(),
+        }
     }
+    let Some(serial) = proto else {
+        return hole();
+    };
+    let Some(p) = intrinsic_prototype(dir, serial) else {
+        return hole();
+    };
+    if serial == crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE {
+        // `p` is `%Array.prototype%`'s holder; `%Array.prototype%` itself
+        // (whose holder `named` is) continues at its own [[Prototype]]. A
+        // write to the holder, or a relink of `%Array.prototype%`, sets the
+        // holder's shadow bit.
+        if p != named {
+            let w = (*p).parent_class_id;
+            let rn = record_of(dir, w);
+            if rn.is_null() || w & crate::object::overflow::SHADOW_BIT != 0 {
+                return hole();
+            }
+            let pw = probe_word(rn);
+            if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
+                return hole();
+            }
+            match list_position(rn, pw, key_bits, hash) {
+                Ok((pos, direct)) => return hit_value(p, rn, pos, direct),
+                Err(true) => {}
+                Err(false) => return hole(),
+            }
+        }
+        // `%Array.prototype%`'s [[Prototype]] is `%Object.prototype%`.
+        return match object_prototype(dir) {
+            Some(op) => exotic_chain::<ABSENT>(dir, op, key_bits, hash),
+            None => hole(),
+        };
+    }
+    exotic_chain::<ABSENT>(dir, p, key_bits, hash)
+}
+
+/// [`chain_from`] from an exotic receiver's builtin prototype `next`: there
+/// is no ordinary object to resume a complete walk from.
+#[inline(never)]
+unsafe fn exotic_chain<const ABSENT: bool>(
+    dir: *const u8,
+    next: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    chain_from::<ABSENT>(dir, std::ptr::null(), std::ptr::null(), next, key_bits, hash)
+}
+
+/// Does a function answer `hash`'s key outside its own-property bag? Its
+/// synthesized own properties (`name`, `length`, `prototype`, and a sloppy
+/// function's `caller` / `arguments`), and the members a read off a function
+/// produces itself (`call`, `apply`, `bind`, `toString` and `isPrototypeOf`
+/// read as bound values; `constructor`, `valueOf`, `toLocaleString` by their
+/// own dispatch) are not read from `%Function.prototype%`'s layout. A set of
+/// names fixed at compile time: a branch, not a lookup.
+#[inline(always)]
+fn function_reads_outside_bag(hash: u64) -> bool {
+    use crate::object::runtime_layouts::atom_hash as h;
+    const NAME: u64 = h(b"name");
+    const LENGTH: u64 = h(b"length");
+    const PROTOTYPE: u64 = h(b"prototype");
+    const CALLER: u64 = h(b"caller");
+    const ARGUMENTS: u64 = h(b"arguments");
+    const CALL: u64 = h(b"call");
+    const APPLY: u64 = h(b"apply");
+    const BIND: u64 = h(b"bind");
+    const TO_STRING: u64 = h(b"toString");
+    const IS_PROTOTYPE_OF: u64 = h(b"isPrototypeOf");
+    const CONSTRUCTOR: u64 = h(b"constructor");
+    const VALUE_OF: u64 = h(b"valueOf");
+    const TO_LOCALE_STRING: u64 = h(b"toLocaleString");
+    matches!(
+        hash,
+        NAME | LENGTH
+            | PROTOTYPE
+            | CALLER
+            | ARGUMENTS
+            | CALL
+            | APPLY
+            | BIND
+            | TO_STRING
+            | IS_PROTOTYPE_OF
+            | CONSTRUCTOR
+            | VALUE_OF
+            | TO_LOCALE_STRING
+    )
+}
+
+/// The builtin prototype object a reserved intrinsic `serial` names, read
+/// from its identity word in the agent's word directory (the encoding of
+/// runtime prototype families, `layout_desc::PerryProtoFamily`): `None`
+/// before the realm named it.
+#[inline(always)]
+unsafe fn intrinsic_prototype(dir: *const u8, serial: u64) -> Option<*const ObjectHeader> {
+    let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
+    if word_dir.is_null() {
+        return None;
+    }
+    let bits = *super::shapes_prototype::identity_word_slot_in(word_dir, serial)?;
+    if bits & TAG_MASK != POINTER_TAG
+        || ((bits & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
+    {
+        return None;
+    }
+    Some((bits & POINTER_MASK) as *const ObjectHeader)
 }
 
 /// The record's probe word is not derived yet, or declines.
@@ -865,58 +997,45 @@ unsafe fn overflow_get(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Op
 
 /// May the probe continue from `obj` (record `r`) to its prototype? Only an
 /// object whose own keys are exactly its layout's list and its overflow: an
-/// ordinary object, or an unmarked one (a runtime-born record, a user
-/// prototype) that is not an intrinsic of the realm (`%Object.prototype%` and
-/// the sealed builtin prototypes may hold builtins outside their list); no
+/// ordinary object, or an unmarked or callable one that [`listed`] admits; no
 /// native-alias, namespace or numeric-proof kind, no exotic read receiver.
-#[inline]
-unsafe fn walks_from(dir: *const u8, obj: *const ObjectHeader, r: *const ShapeRecord) -> bool {
-    walks_from_in(object_prototype(dir), obj, r)
-}
-
-/// [`walks_from`] with the agent's `%Object.prototype%` already read.
 #[inline(always)]
-unsafe fn walks_from_in(
-    op: Option<*const ObjectHeader>,
-    obj: *const ObjectHeader,
-    r: *const ShapeRecord,
-) -> bool {
-    let meta = (*obj).meta;
+unsafe fn walks_from(obj: *const ObjectHeader, r: *const ShapeRecord) -> bool {
     match (*r).object_kind() {
         super::ShapeObjectKind::Ordinary => {
+            let meta = (*obj).meta;
             meta.is_null()
                 || (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
         }
-        super::ShapeObjectKind::OrdinaryUnmarked => plain_unmarked_in(op, obj),
-        _ => false,
+        kind => listed(obj, kind),
     }
 }
 
-/// Is the unmarked object `obj` one whose own keys its list and overflow
-/// hold (not `%Object.prototype%`, a sealed intrinsic, a typed-array
-/// prototype, or an exotic read receiver)?
-#[inline]
-unsafe fn plain_unmarked(dir: *const u8, obj: *const ObjectHeader) -> bool {
-    plain_unmarked_in(object_prototype(dir), obj)
-}
-
-/// [`plain_unmarked`] with the agent's `%Object.prototype%` already read.
+/// Are the own keys of `obj`, an object of the unmarked or callable ordinary
+/// `kind`, exactly its list and overflow? An unmarked object qualifies (a
+/// runtime-born record, a user prototype) unless it is an exotic read
+/// receiver, a typed-array prototype, or a sealed intrinsic other than the
+/// builtin prototypes born on complete static layouts
+/// ([`crate::object::builtin_proto::on_static_layout`]); a callable one only
+/// as such a prototype (`%Function.prototype%`).
 #[inline(always)]
-unsafe fn plain_unmarked_in(op: Option<*const ObjectHeader>, obj: *const ObjectHeader) -> bool {
+unsafe fn listed(obj: *const ObjectHeader, kind: super::ShapeObjectKind) -> bool {
     let meta = (*obj).meta;
-    if !meta.is_null()
-        && (*meta).flags
-            & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
-                | crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC)
-            != 0
+    let flags = if meta.is_null() { 0 } else { (*meta).flags };
+    if flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
+        return matches!(
+            kind,
+            super::ShapeObjectKind::OrdinaryUnmarked | super::ShapeObjectKind::CallableOrdinary
+        ) && flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
+            && crate::object::builtin_proto::on_static_layout(flags);
+    }
+    if kind != super::ShapeObjectKind::OrdinaryUnmarked
+        || flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
     {
         return false;
     }
     let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
-        return false;
-    }
-    op != Some(obj)
+    (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO == 0
 }
 
 /// Where a prototype walk goes from an object.
@@ -955,39 +1074,45 @@ unsafe fn object_prototype(dir: *const u8) -> Option<*const ObjectHeader> {
 /// shape's identity: null, the realm default `%Object.prototype%`, a class
 /// declaration prototype (the identity's word), or a linked identity's word.
 unsafe fn prototype_of(dir: *const u8, obj: *const ObjectHeader, r: *const ShapeRecord) -> Next {
-    prototype_of_in(dir, object_prototype(dir), obj, r)
+    let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+        && ((*obj).meta.is_null() || (*(*obj).meta).prototype == 0)
+        && (*r).proto_id == super::PROTO_ID_DEFAULT
+    {
+        return Next::Unknown;
+    }
+    link_of(dir, obj, r)
 }
 
-/// [`prototype_of`] with the agent's `%Object.prototype%` already read.
+/// The [[Prototype]] link of `cur` (record `rc`), an object whose own keys
+/// [`walks_from`] admits, so not a typed-array prototype: its recorded
+/// prototype, else its layout's identity (null, the realm default
+/// `%Object.prototype%`, a class identity's word, a linked identity's word).
 #[inline(always)]
-unsafe fn prototype_of_in(
-    dir: *const u8,
-    op: Option<*const ObjectHeader>,
-    obj: *const ObjectHeader,
-    r: *const ShapeRecord,
-) -> Next {
-    let meta = (*obj).meta;
-    let bits = if !meta.is_null() && (*meta).prototype != 0 {
-        (*meta).prototype
-    } else {
-        if (*r).weak_collection_brand().is_some() {
+unsafe fn link_of(dir: *const u8, cur: *const ObjectHeader, rc: *const ShapeRecord) -> Next {
+    let meta = (*cur).meta;
+    let mut bits = 0u64;
+    if !meta.is_null() {
+        if (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
             return Next::Unknown;
         }
-        let pid = (*r).proto_id;
-        if pid == super::PROTO_ID_NULL {
-            return Next::End;
+        bits = (*meta).prototype;
+    }
+    if bits == 0 {
+        if (*rc).weak_collection_brand().is_some() {
+            return Next::Unknown;
         }
+        let pid = (*rc).proto_id;
         if pid == super::PROTO_ID_DEFAULT {
-            let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
-            if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
-                return Next::Unknown;
-            }
-            return match op {
-                Some(p) if p != obj => Next::Object(p),
+            return match object_prototype(dir) {
+                Some(p) if p != cur => Next::Object(p),
                 _ => Next::Unknown,
             };
         }
-        if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
+        if pid == super::PROTO_ID_NULL {
+            return Next::End;
+        }
+        bits = if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
             let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
             if word_dir.is_null() {
                 return Next::Unknown;
@@ -997,102 +1122,26 @@ unsafe fn prototype_of_in(
                 None => return Next::Unknown,
             }
         } else {
-            (*r).prototype_word()
-        }
-    };
+            (*rc).prototype_word()
+        };
+    }
     if bits == TAG_NULL {
         return Next::End;
     }
-    if bits & TAG_MASK != POINTER_TAG {
+    if bits & TAG_MASK != POINTER_TAG
+        || ((bits & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
+    {
         return Next::Unknown;
     }
-    let p = (bits & POINTER_MASK) as usize;
-    if p < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return Next::Unknown;
-    }
-    Next::Object(p as *const ObjectHeader)
-}
-
-/// FNV-1a, for the builtin names below.
-const fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-    let mut i = 0;
-    while i < bytes.len() {
-        h ^= bytes[i] as u64;
-        h = h.wrapping_mul(0x0100_0000_01b3);
-        i += 1;
-    }
-    h
-}
-
-/// The atom hashes of `%Object.prototype%`'s own builtin properties, which
-/// the intrinsic may install without listing them in its layout. A key whose
-/// hash is none of these and that the intrinsic's list does not hold is not
-/// a property of it.
-const OBJECT_PROTOTYPE_BUILTINS: [u64; 12] = [
-    fnv1a(b"constructor"),
-    fnv1a(b"__defineGetter__"),
-    fnv1a(b"__defineSetter__"),
-    fnv1a(b"hasOwnProperty"),
-    fnv1a(b"__lookupGetter__"),
-    fnv1a(b"__lookupSetter__"),
-    fnv1a(b"isPrototypeOf"),
-    fnv1a(b"propertyIsEnumerable"),
-    fnv1a(b"toString"),
-    fnv1a(b"valueOf"),
-    fnv1a(b"__proto__"),
-    fnv1a(b"toLocaleString"),
-];
-
-/// A one-word filter over [`OBJECT_PROTOTYPE_BUILTINS`]: bit `hash & 63`.
-const OBJECT_PROTOTYPE_BUILTIN_BLOOM: u64 = {
-    let mut m = 0u64;
-    let mut i = 0;
-    while i < OBJECT_PROTOTYPE_BUILTINS.len() {
-        m |= 1 << (OBJECT_PROTOTYPE_BUILTINS[i] & 63);
-        i += 1;
-    }
-    m
-};
-
-/// Is `hash` one of `%Object.prototype%`'s builtin names?
-#[inline(always)]
-fn object_prototype_builtin(hash: u64) -> bool {
-    if OBJECT_PROTOTYPE_BUILTIN_BLOOM & (1 << (hash & 63)) == 0 {
-        return false;
-    }
-    let mut i = 0;
-    while i < OBJECT_PROTOTYPE_BUILTINS.len() {
-        if OBJECT_PROTOTYPE_BUILTINS[i] == hash {
-            return true;
-        }
-        i += 1;
-    }
-    false
+    Next::Object((bits & POINTER_MASK) as *const ObjectHeader)
 }
 
 /// The first prototype of `obj` that holds `key_bits`, if every object
 /// before it proves the key absent, and that holder's data value; with
 /// `ABSENT`, `undefined` when the whole chain proves the key absent.
 ///
-/// `obj`'s own list and overflow have proved the key absent. The common
-/// chain is read here in one frame-light loop, with each hop's work the
-/// layout's own facts and the object's own words:
-///
-/// * the link: the object's recorded [[Prototype]] (meta) or its layout's
-///   prototype identity (a class identity's word, the realm default
-///   `%Object.prototype%`, a linked identity's word);
-/// * the next object's layout word, record and key index, the same probe
-///   the own hit makes; a hit reads the holder's slot (`hit_value`);
-/// * a miss continues while the next object is an ordinary object whose
-///   own keys are exactly its list (no shadow bit), and ends at
-///   `%Object.prototype%`, which proves absence for every name but its
-///   unlisted builtins.
-///
-/// Every other case (an exotic or unmarked receiver kind, an overflow on a
-/// prototype, a TEXT key entry, a record not yet derived) continues in the
-/// complete walk ([`inherited_walk`]) from the last object whose absence is
-/// proven, which answers it with the same rules.
+/// `obj`'s own list and overflow have proved the key absent; the chain is
+/// read by [`chain_from`].
 #[inline(never)]
 unsafe fn inherited_get<const ABSENT: bool>(
     dir: *const u8,
@@ -1101,119 +1150,85 @@ unsafe fn inherited_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let (mut cur, mut rc) = (obj, r as *const ShapeRecord);
     // `cur` is an object the walk may continue from (`walks_from`): the
     // receiver is checked here, each prototype before it becomes `cur`.
-    if (*rc).object_kind() != super::ShapeObjectKind::Ordinary {
+    if (*r).object_kind() != super::ShapeObjectKind::Ordinary {
         return inherited_walk::<ABSENT>(dir, obj, r, key_bits, hash);
     }
-    for _ in 0..MAX_HOPS {
-        // The link (`prototype_of_in`'s order): a recorded prototype first,
-        // then the layout's identity.
-        let meta = (*cur).meta;
-        let mut bits = 0u64;
-        if !meta.is_null() {
-            if (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
-                return hole();
-            }
-            bits = (*meta).prototype;
-        }
-        let next = if bits != 0 {
-            if bits & TAG_MASK != POINTER_TAG
-                || ((bits & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
-            {
-                return if bits == TAG_NULL {
-                    chain_absent::<ABSENT>()
-                } else {
-                    hole()
-                };
-            }
-            (bits & POINTER_MASK) as *const ObjectHeader
+    match link_of(dir, obj, r) {
+        Next::Object(next) => chain_from::<ABSENT>(dir, obj, r, next, key_bits, hash),
+        Next::End => chain_absent::<ABSENT>(),
+        Next::Unknown => hole(),
+    }
+}
+
+/// The chain from `next`, the [[Prototype]] of `cur` (record `rc`, an object
+/// whose own list and overflow proved `key_bits` absent; null for an exotic
+/// receiver), read in one frame-light loop with each hop's work the layout's
+/// own facts and the object's own words:
+///
+/// * the object's layout word, record and key index, the same probe the own
+///   hit makes; a hit reads the holder's slot (`hit_value`);
+/// * a miss continues while the object's own keys are exactly its list (no
+///   shadow bit; [`walks_from`]), through its link ([`link_of`]), and ends
+///   where a link is null. The builtin prototypes are static layouts
+///   (`runtime_layouts::builtin_prototypes`), so `%Object.prototype%`'s miss
+///   is absence like any other.
+///
+/// Every other case (an overflow on a prototype, a TEXT key entry, a record
+/// not yet derived) continues in the complete walk ([`inherited_walk`]) from
+/// `cur`, which answers it with the same rules; with no `cur` it declines.
+#[inline(always)]
+unsafe fn chain_from<const ABSENT: bool>(
+    dir: *const u8,
+    mut cur: *const ObjectHeader,
+    mut rc: *const ShapeRecord,
+    mut next: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let walk = |cur: *const ObjectHeader, rc: *const ShapeRecord| {
+        if cur.is_null() {
+            hole()
         } else {
-            if (*rc).weak_collection_brand().is_some() {
-                return hole();
-            }
-            let pid = (*rc).proto_id;
-            if pid == super::PROTO_ID_DEFAULT {
-                // `cur` is not a typed-array prototype: an Ordinary kind never
-                // is (its kind is derived from the receiver's flags and
-                // restamped when they change), and an unmarked `cur` was
-                // proved plain (`plain_unmarked_in`) before it became `cur`.
-                match object_prototype(dir) {
-                    Some(p) => {
-                        return object_prototype_get::<ABSENT>(dir, cur, rc, p, key_bits, hash)
-                    }
-                    None => return hole(),
-                }
-            }
-            if pid == super::PROTO_ID_NULL {
-                return chain_absent::<ABSENT>();
-            }
-            let word = if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
-                let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
-                if word_dir.is_null() {
-                    return hole();
-                }
-                match super::shapes_prototype::identity_word_slot_in(word_dir, pid) {
-                    Some(slot) => *slot,
-                    None => return hole(),
-                }
-            } else {
-                (*rc).prototype_word()
-            };
-            if word == TAG_NULL {
-                return chain_absent::<ABSENT>();
-            }
-            if word & TAG_MASK != POINTER_TAG
-                || ((word & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
-            {
-                return hole();
-            }
-            (word & POINTER_MASK) as *const ObjectHeader
-        };
+            inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash)
+        }
+    };
+    for _ in 0..MAX_HOPS {
         let w = (*next).parent_class_id;
         let rn = record_of(dir, w);
         if rn.is_null() {
             return hole();
         }
-        let pw = (*rn).probe;
+        // A record's probe word is derived on its first probe.
+        let pw = probe_word(rn);
         if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
-            return inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash);
+            return walk(cur, rc);
         }
         match list_position(rn, pw, key_bits, hash) {
             Ok((pos, direct)) => return hit_value(next, rn, pos, direct),
             Err(true) => {}
-            Err(false) => return inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash),
+            Err(false) => return walk(cur, rc),
         }
         if w & crate::object::overflow::SHADOW_BIT != 0 {
-            return inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash);
+            return walk(cur, rc);
         }
-        // A builtin prototype may install its methods outside its list, so its
-        // miss proves nothing; `%Object.prototype%` proves absence for every
-        // key but its own builtin names when its chain ends; any other
-        // unmarked object whose own keys are exactly its list is walked like
-        // an ordinary one (`inherited_walk`'s rules).
+        // A sealed builtin prototype not yet on a static layout may install
+        // methods outside its list, so its miss proves nothing.
         match (*rn).object_kind() {
             super::ShapeObjectKind::Ordinary => {}
-            super::ShapeObjectKind::OrdinaryUnmarked => {
-                let op = object_prototype(dir);
-                if op == Some(next) {
-                    if object_prototype_builtin(hash) {
-                        return hole();
-                    }
-                    return match prototype_of_in(dir, op, next, rn) {
-                        Next::End => chain_absent::<ABSENT>(),
-                        _ => hole(),
-                    };
-                }
-                if !plain_unmarked_in(op, next) {
-                    return hole();
-                }
-            }
+            kind if listed(next, kind) => {}
             _ => return hole(),
         }
-        cur = next;
-        rc = rn;
+        match link_of(dir, next, rn) {
+            Next::Object(p) => {
+                cur = next;
+                rc = rn;
+                next = p;
+            }
+            Next::End => return chain_absent::<ABSENT>(),
+            Next::Unknown => return hole(),
+        }
     }
     hole()
 }
@@ -1285,59 +1300,6 @@ unsafe fn list_position(
     }
 }
 
-/// The last hop of the common chain: `cur` (record `rc`, an ordinary object
-/// that proved the key absent) links to the realm default, `p` =
-/// `%Object.prototype%`, whose list answers a hit, and whose miss proves
-/// absence for every key but its unlisted builtin names when its own
-/// [[Prototype]] is null. Anything else is the complete walk's, from `cur`.
-#[inline(always)]
-unsafe fn object_prototype_get<const ABSENT: bool>(
-    dir: *const u8,
-    cur: *const ObjectHeader,
-    rc: *const ShapeRecord,
-    p: *const ObjectHeader,
-    key_bits: u64,
-    hash: u64,
-) -> f64 {
-    let full = || inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash);
-    if p == cur {
-        return hole();
-    }
-    let w = (*p).parent_class_id;
-    let rn = record_of(dir, w);
-    if rn.is_null()
-        || (*rn).object_kind() != super::ShapeObjectKind::OrdinaryUnmarked
-        || w & crate::object::overflow::SHADOW_BIT != 0
-    {
-        return full();
-    }
-    let pw = (*rn).probe;
-    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
-        return full();
-    }
-    match list_position(rn, pw, key_bits, hash) {
-        Ok((pos, direct)) => return hit_value(p, rn, pos, direct),
-        Err(true) => {}
-        Err(false) => return full(),
-    }
-    if object_prototype_builtin(hash) {
-        return hole();
-    }
-    // `%Object.prototype%`'s [[Prototype]] is null: a recorded null, or none
-    // recorded and its layout's identity null (`prototype_of`'s first two
-    // steps). Anything else is the walk's.
-    let meta = (*p).meta;
-    let ends = if !meta.is_null() && (*meta).prototype != 0 {
-        (*meta).prototype == TAG_NULL
-    } else {
-        (*rn).weak_collection_brand().is_none() && (*rn).proto_id == super::PROTO_ID_NULL
-    };
-    if !ends {
-        return full();
-    }
-    chain_absent::<ABSENT>()
-}
-
 /// The hit path's proven own miss (its list proved the key absent): the
 /// overflow, then the prototype chain. The record is read again from the
 /// object, so the hit path passes four values and keeps no frame.
@@ -1378,27 +1340,22 @@ unsafe fn inherited_walk<const ABSENT: bool>(
             hole()
         }
     };
-    // The walk is a leaf: nothing moves, so `%Object.prototype%` is read
-    // once.
-    let op = object_prototype(dir);
     let (mut cur, mut rc) = (obj, r as *const ShapeRecord);
     for _ in 0..MAX_HOPS {
-        if !walks_from_in(op, cur, rc) {
+        if !walks_from(cur, rc) {
             // A runtime-born record (unmarked, its keys all in its list and
-            // overflow) whose chain ends here proves absence, except for the
-            // names `%Object.prototype%` (also unmarked) may hold unlisted.
+            // overflow) whose chain ends here proves absence.
             if (*rc).object_kind() == super::ShapeObjectKind::OrdinaryUnmarked
-                && !object_prototype_builtin(hash)
                 && ((*cur).meta.is_null()
                     || (*(*cur).meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
                         == 0)
-                && matches!(prototype_of_in(dir, op, cur, rc), Next::End)
+                && matches!(prototype_of(dir, cur, rc), Next::End)
             {
                 return absent();
             }
             return hole();
         }
-        let next = match prototype_of_in(dir, op, cur, rc) {
+        let next = match prototype_of(dir, cur, rc) {
             Next::Object(p) => p,
             Next::End => return absent(),
             Next::Unknown => return hole(),
@@ -1418,27 +1375,11 @@ unsafe fn inherited_walk<const ABSENT: bool>(
                 return v;
             }
         }
-        // A builtin prototype may install its methods outside its list, so
-        // its miss proves nothing; `%Object.prototype%`, an unmarked object
-        // whose chain ends, proves absence for every key but its own
-        // builtin names; any other unmarked object is walked like an
-        // ordinary one.
+        // A sealed builtin prototype not yet on a static layout may install
+        // methods outside its list, so its miss proves nothing.
         match (*rn).object_kind() {
             super::ShapeObjectKind::Ordinary => {}
-            super::ShapeObjectKind::OrdinaryUnmarked => {
-                if op == Some(next) {
-                    if object_prototype_builtin(hash) {
-                        return hole();
-                    }
-                    return match prototype_of_in(dir, op, next, rn) {
-                        Next::End => absent(),
-                        _ => hole(),
-                    };
-                }
-                if !plain_unmarked_in(op, next) {
-                    return hole();
-                }
-            }
+            kind if listed(next, kind) => {}
             _ => return hole(),
         }
         cur = next;
@@ -1500,7 +1441,7 @@ pub(crate) unsafe fn probe_accessor_word(
     for hop in 0..=MAX_HOPS {
         if hop > 0
             || (*rc).object_kind() == super::ShapeObjectKind::Ordinary
-            || plain_unmarked(dir, cur)
+            || listed(cur, (*rc).object_kind())
         {
             match own_position(rc as *mut ShapeRecord, key_bits, hash) {
                 Ok(pos) => return accessor_at(cur, rc, pos),
@@ -1515,7 +1456,7 @@ pub(crate) unsafe fn probe_accessor_word(
         } else {
             return None;
         }
-        if !walks_from(dir, cur, rc) {
+        if !walks_from(cur, rc) {
             return None;
         }
         let next = match prototype_of(dir, cur, rc) {
@@ -1528,7 +1469,7 @@ pub(crate) unsafe fn probe_accessor_word(
         }
         match (*rn).object_kind() {
             super::ShapeObjectKind::Ordinary => {}
-            super::ShapeObjectKind::OrdinaryUnmarked if plain_unmarked(dir, next) => {}
+            kind if listed(next, kind) => {}
             _ => {
                 // A builtin prototype's list holds what the program defined
                 // on it; an accessor found there is that accessor.
@@ -1786,7 +1727,7 @@ unsafe fn diag_walk(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Strin
         Err(true) => {}
     }
     for hop in 0..MAX_HOPS {
-        if !walks_from(dir, cur, rc) {
+        if !walks_from(cur, rc) {
             return format!("hop{hop}:nowalk({:?})", (*rc).object_kind());
         }
         let next = match prototype_of(dir, cur, rc) {
@@ -1837,10 +1778,7 @@ unsafe fn diag_walk(obj: *const ObjectHeader, key_bits: u64, hash: u64) -> Strin
             Err(true) => {}
         }
         if next as usize == crate::array::object_prototype_addr_if_resolved() {
-            return format!(
-                "hop{hop}:objproto-miss(builtin={})",
-                OBJECT_PROTOTYPE_BUILTINS.contains(&hash)
-            );
+            return format!("hop{hop}:objproto-miss");
         }
         cur = next;
         rc = rn;
@@ -2047,3 +1985,7 @@ static KEEP_PERRY_PROBE_GET: unsafe extern "C" fn(*const u8, i64, u64, u64) -> f
 #[used(compiler)]
 static KEEP_PERRY_PROBE_GET_BINDING: unsafe extern "C" fn(*const u8, i64, u64, u64) -> f64 =
     perry_probe_get_binding;
+
+#[cfg(test)]
+#[path = "builtin_layout_probe_tests.rs"]
+mod builtin_layout_probe_tests;

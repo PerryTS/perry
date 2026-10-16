@@ -263,6 +263,16 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 );
             }
             arr as *mut ObjectHeader
+        } else if name == "Function" {
+            // Born on its static layout (`runtime_layouts::FUNCTION_PROTOTYPE`,
+            // a callable ordinary kind); the population fills its slots.
+            // SAFETY: a registered runtime descriptor with the default prototype.
+            unsafe {
+                crate::object::layout_desc::alloc_layout_prototype(
+                    std::ptr::addr_of!(crate::object::runtime_layouts::FUNCTION_PROTOTYPE),
+                    0,
+                )
+            }
         } else {
             super::proto_room::alloc_builtin_prototype()
         };
@@ -371,6 +381,19 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                         proto_obj as usize,
                         serial,
                     );
+                    name_first_realm_prototype(proto_obj, serial);
+                }
+            }
+            if let Some(serial) = declaration.named_serial {
+                // SAFETY: `proto_obj` is the live intrinsic array; its holder
+                // of named properties is the object the serial names.
+                unsafe {
+                    let holder = crate::array::array_property_bag(
+                        proto_obj as *const crate::array::ArrayHeader,
+                    );
+                    if !holder.is_null() {
+                        name_first_realm_prototype(holder, serial);
+                    }
                 }
             }
             if let Some(serial) = declaration.sealed_serial {
@@ -1144,3 +1167,20 @@ fn install_error_static_fn(
 // installed there, so the read returned `undefined`. These thunks delegate
 // to the same runtime helpers the direct `Object.keys(x)` lowering uses.
 // =====================================================================
+
+/// Give the agent's first realm's builtin prototype `proto` its reserved
+/// intrinsic `serial` and write the serial's identity word, which names it
+/// for the agent's life (`builtin_proto::name_runtime_prototype`, the
+/// encoding of runtime prototype families): the unknown-receiver probe reaches
+/// `%Function.prototype%` and `%Array.prototype%`'s holder through it, as the
+/// slow reads reach the first realm's intrinsics (`array::prototype_addr`).
+///
+/// # Safety
+/// `proto` is a live ordinary object whose serial is 0 or `serial`.
+unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
+    if crate::object::shapes::identity_word_slot(serial).is_some_and(|slot| *slot != 0) {
+        return;
+    }
+    crate::object::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
+    let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
+}

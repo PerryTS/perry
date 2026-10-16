@@ -10,13 +10,13 @@ pub(crate) unsafe fn install_declared_layout(
     keys: *mut ArrayHeader,
     key_count: u32,
     slot_count: u32,
+    kind: ShapeObjectKind,
     proto_id: u64,
     summary: u8,
     rep: u64,
     integrity: u16,
 ) {
     let table = &crate::state::state().shapes;
-    let kind = ShapeObjectKind::Ordinary;
     let mut record = ShapeRecord::new(keys as u64, key_count, slot_count, 0, kind, 0)
         .with_proto_id(proto_id)
         .with_summary(summary)

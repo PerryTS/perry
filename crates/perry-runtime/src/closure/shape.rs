@@ -45,6 +45,10 @@ pub(crate) const INTRINSIC_SERIAL_READABLE_STATE: u64 = 7;
 pub(crate) const INTRINSIC_SERIAL_WRITABLE_STATE: u64 = 8;
 pub(crate) const INTRINSIC_SERIAL_TIMEOUT: u64 = 9;
 pub(crate) const INTRINSIC_SERIAL_IMMEDIATE: u64 = 10;
+/// `%Array.prototype%`'s named-property holder (`ArrayHeader.named`, born on
+/// `runtime_layouts::ARRAY_PROTOTYPE_NAMED`): its identity word is how an
+/// array read reaches it.
+pub(crate) const INTRINSIC_SERIAL_ARRAY_PROTOTYPE: u64 = 11;
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -244,6 +248,26 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
     // so the info-pointer compare (a link-time constant, no thread-local
     // read) excludes it for free on this hot path.
     id != function_dictionary_shape() && !is_class_info((*closure).info)
+}
+
+/// Is `closure` on a described Function shape of a plain function body: its
+/// own properties are its bag plus the synthesized intrinsic ones, and its
+/// [[Prototype]] is `%Function.prototype%`? Not FunctionDictionary, a class
+/// constructor, a bound function or method (whose reads have their own
+/// dispatch), or an async or generator body (another intrinsic prototype).
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline(always)]
+pub(crate) unsafe fn closure_on_plain_function_shape(closure: *const ClosureHeader) -> bool {
+    let info = (*closure).info;
+    if info.is_null() || (*closure).shape_id == function_dictionary_shape() || is_class_info(info) {
+        return false;
+    }
+    let code = (*info).code;
+    code != super::BOUND_FUNCTION_FUNC_PTR
+        && code != super::BOUND_METHOD_FUNC_PTR
+        && (*info).flags & (super::FN_ASYNC | super::FN_GENERATOR | super::FN_ASYNC_GENERATOR) == 0
 }
 
 /// Record that `closure` now answers something its base shape does not:

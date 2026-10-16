@@ -146,15 +146,17 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     if closure_ptr.is_null() {
         return None;
     }
-    // The intrinsic's terminal edge is published by its birth shape, like
-    // any other null-parent object. No address or name exception is needed
-    // by a presence walk.
-    // Born old and never-move (O3, `gc::never_move`): the terminal of most
-    // inherited and absent reads, admitted by every site memo at once.
-    let proto_obj = crate::object::object_alloc_prototype_old_null_proto(
-        0,
-        super::proto_room::BUILTIN_PROTOTYPE_ROOM,
-    );
+    // Born on its static layout (`runtime_layouts::OBJECT_PROTOTYPE`): every
+    // own key and its null [[Prototype]] are layout facts, and the population
+    // below fills the declared slots. Born old and never-move (O3,
+    // `gc::never_move`): the terminal of most inherited and absent reads.
+    // SAFETY: a registered runtime descriptor with a null prototype.
+    let proto_obj = unsafe {
+        crate::object::layout_desc::alloc_layout_prototype(
+            std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE),
+            0,
+        )
+    };
     if proto_obj.is_null() {
         return None;
     }
@@ -173,8 +175,6 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
         super::super::PropertyAttrs::new(true, false, true),
     );
     populate_builtin_prototype_methods("Object", proto_obj);
-    // SAFETY: the fresh prototype, not yet exposed, collection suppressed.
-    unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
     Some((closure_ptr, proto_obj))
 }
 

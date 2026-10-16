@@ -403,6 +403,19 @@ fn sealed_family(flags: u64) -> usize {
         & super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK) as usize
 }
 
+/// Is the sealed intrinsic whose meta flags are `flags` a builtin prototype
+/// born on a complete static layout (`runtime_layouts::builtin_prototypes`):
+/// `%Object.prototype%`, `%Function.prototype%` or `%Array.prototype%`'s
+/// holder? Its own keys are then exactly its list and overflow, like an
+/// ordinary object's. A compare against a fixed set of families.
+#[inline(always)]
+pub(crate) fn on_static_layout(flags: u64) -> bool {
+    const OBJECT: usize = BuiltinProto::Object as usize;
+    const FUNCTION: usize = BuiltinProto::Function as usize;
+    const ARRAY: usize = BuiltinProto::Array as usize;
+    matches!(sealed_family(flags), OBJECT | FUNCTION | ARRAY)
+}
+
 /// A write reached a sealed intrinsic: a prototype family's own bit, a
 /// runtime prototype's own shadow bit, or a namespace holder or the realm
 /// global (`builtin_namespace`). `field` is the inline or spill slot a value

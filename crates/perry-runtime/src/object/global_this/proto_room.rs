@@ -35,16 +35,6 @@ pub(crate) fn alloc_builtin_prototype() -> *mut ObjectHeader {
     crate::object::object_alloc_prototype_old(0, BUILTIN_PROTOTYPE_ROOM)
 }
 
-per_test_global! {
-    static FITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-}
-
-/// Builtin prototypes whose unused room was returned (diagnostic, tests).
-#[cfg(test)]
-pub(crate) fn builtin_prototypes_fitted() -> u64 {
-    FITTED.load(Ordering::Relaxed)
-}
-
 /// Shrink a builtin prototype born by [`alloc_builtin_prototype`] to the
 /// inline slots its keys use: publish that live bound (a ShapeId transition
 /// that moves no slot), then cut the allocation to it and leave the tail as a
@@ -76,7 +66,6 @@ pub(crate) unsafe fn fit_builtin_prototype(obj: *mut ObjectHeader) {
     {
         return;
     }
-    FITTED.fetch_add(1, Ordering::Relaxed);
     if !crate::arena::pointer_in_nursery(obj as usize) {
         return;
     }
@@ -150,8 +139,8 @@ mod tests {
     }
 
     /// `%Object.prototype%` holds its own keys inline (the method site's
-    /// inherited entry reads them there), its live bound is exactly what they
-    /// use, and the allocation's unused room went back.
+    /// inherited entry reads them there) and its live bound is exactly what
+    /// they use: it is born on its static layout, with no room to return.
     #[test]
     fn object_prototype_keys_are_inline_and_the_room_is_returned() {
         std::thread::Builder::new()
@@ -159,7 +148,6 @@ mod tests {
             .spawn(|| unsafe {
                 let (_, proto) = ensure_object_intrinsics();
                 assert!(!proto.is_null());
-                assert!(builtin_prototypes_fitted() > 0, "no prototype was fitted");
                 let d = crate::object::shapes::object_shape_descriptor(proto).expect("shape");
                 let keys = d.logical_key_count;
                 assert!(keys >= 7, "%Object.prototype% has {keys} keys");

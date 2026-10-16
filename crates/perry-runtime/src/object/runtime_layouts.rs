@@ -127,6 +127,10 @@ macro_rules! runtime_layout {
     (@slot) => { None };
     (@slot $slot:expr) => { Some($slot) };
     ($name:ident, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(@ $slot:expr)? $(=> $attrs:expr)?),* $(,)?]) => {
+        runtime_layout!($name, kind = 0, $family, $variant, $proto, [$($atom $(@ $slot)? $(=> $attrs)?),*]);
+    };
+    // `kind`: the layout's `ShapeObjectKind` code (an ordinary-family kind).
+    ($name:ident, kind = $kind:expr, $family:expr, $variant:expr, $proto:expr, [$($atom:ident $(@ $slot:expr)? $(=> $attrs:expr)?),* $(,)?]) => {
         #[allow(non_snake_case)]
         pub mod $name {
             use super::*;
@@ -143,7 +147,7 @@ macro_rules! runtime_layout {
         #[export_name = concat!("perry_runtime_layout_", stringify!($name))]
         /// Declared layout of a checked runtime record.
         pub static mut $name: PerryLayoutDesc = PerryLayoutDesc {
-            family: $family, variant: $variant, kind: 0, integrity: 0,
+            family: $family, variant: $variant, kind: $kind, integrity: 0,
             slot_count: $name::SLOT_COUNT as u32,
             layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
             rep: 0, proto: $proto, keys: $name::KEYS.as_ptr(),
@@ -197,6 +201,7 @@ pub(crate) mod intrinsic_private_atoms {
         "233c70657272793a707269766174652d76616c75653a303a40303a636f6c6453746f72653e"
     );
 }
+include!("runtime_layouts/builtin_prototypes.rs");
 
 /// `child_process.spawnSync`'s result. Node gives it `error` first, and only
 /// when the spawn failed: the key is an optional member (object model §3.2),
@@ -1847,41 +1852,13 @@ pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutD
     index_mask: 3,
     index: REGEX_INDICES_GROUPS_NAMED_INDEX.as_ptr(),
 };
-static ARRAY_PROTOTYPE_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
+static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
     slot: 0,
     attrs: 0,
     _pad: [0; 3],
 }];
-static ARRAY_PROTOTYPE_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
-/// `%Array.prototype%`'s named layout (`ArrayHeader.named`, object model
-/// step 7): `Symbol.iterator` is its fixed slot 0, so array iteration reads
-/// one slot. The builtin methods population installs follow it inline: the
-/// layout reserves the builtin prototype room.
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut ARRAY_PROTOTYPE_NAMED: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x5254000C,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: crate::object::BUILTIN_PROTOTYPE_ROOM,
-    layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ARRAY_PROTOTYPE_NAMED_KEYS.as_ptr(),
-    key_count: 1,
-    index_mask: 1,
-    index: ARRAY_PROTOTYPE_NAMED_INDEX.as_ptr(),
-};
-/// The fixed slot of `Symbol.iterator` in [`ARRAY_PROTOTYPE_NAMED`].
-pub(crate) const ARRAY_PROTOTYPE_ITERATOR_SLOT: u32 = 0;
-
+static ARRAY_NAMED_INDEX: [u32; 2] = [u32::MAX, 0];
 /// Empty array named family; absent iterator slot 0 is the hole marker.
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
@@ -1899,10 +1876,10 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: ARRAY_PROTOTYPE_NAMED_KEYS.as_ptr(),
+    keys: ARRAY_NAMED_KEYS.as_ptr(),
     key_count: 1,
     index_mask: 1,
-    index: ARRAY_PROTOTYPE_NAMED_INDEX.as_ptr(),
+    index: ARRAY_NAMED_INDEX.as_ptr(),
 };
 
 // Fixed legacy SQLite column metadata; the five data properties are all present.

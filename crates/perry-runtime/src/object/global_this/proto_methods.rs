@@ -188,6 +188,14 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// primitives alike.
 const SHARED_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[("toLocaleString", 0), ("valueOf", 0)];
 
+/// The Annex B §B.2.2 legacy accessor helpers of [`OBJECT_PROTO_METHODS`].
+const ANNEX_B_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
+    ("__defineGetter__", 2),
+    ("__defineSetter__", 2),
+    ("__lookupGetter__", 1),
+    ("__lookupSetter__", 1),
+];
+
 /// [`OBJECT_PROTO_METHODS`] for `builtin_name`'s prototype: all of them on
 /// `Object.prototype`, and on any other prototype only the members that are
 /// not `Object.prototype`'s alone.
@@ -313,26 +321,20 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
     super::super::native_module::set_builtin_closure_non_constructable(setter as usize);
     let get_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
     let set_bits = crate::value::js_nanbox_pointer(setter as i64).to_bits();
-    // A descriptor alone doesn't make the name enumerable by
-    // `getOwnPropertyNames`/`hasOwnProperty`/`Object.hasOwn`/
-    // `Reflect.ownKeys` — those walk the object's OWN KEYS ARRAY, which
-    // `set_builtin_accessor_descriptor` (deliberately gate-neutral) never
-    // touches. Write an ordinary placeholder field first, exactly like
-    // `perf_hooks::install_perf_getter`: this appends `"__proto__"` to the
-    // keys array via the ordinary field-set path, and the accessor
-    // descriptor installed right after takes over every actual read/write —
-    // the placeholder `undefined` is never observed.
-    let key = crate::string::js_string_from_bytes(b"__proto__".as_ptr(), 9);
-    js_object_set_field_by_name(proto_obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
-    super::super::set_builtin_accessor_descriptor(
-        proto_obj as usize,
-        "__proto__".to_string(),
-        super::super::AccessorDescriptor {
-            get: get_bits,
-            set: set_bits,
-        },
-        crate::object::PropertyAttrs::new(true, false, true),
-    );
+    // The static layout lists `__proto__` as an accessor
+    // (`runtime_layouts::OBJECT_PROTOTYPE`): its slot takes the pair.
+    // SAFETY: the fresh intrinsic, under the bootstrap's no-move scope.
+    unsafe {
+        crate::object::accessor_pair::store_own_accessor_bytes(
+            proto_obj as usize,
+            b"__proto__",
+            Some(crate::object::accessor_pair::Accessor {
+                get: get_bits,
+                set: set_bits,
+                ..Default::default()
+            }),
+        );
+    }
 }
 
 extern "C" fn object_prototype_dunder_proto_getter_thunk(
@@ -817,18 +819,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_proto_method(
-                proto_obj,
-                "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
-            install_proto_method(
-                proto_obj,
-                "propertyIsEnumerable",
-                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
+            // Annex B §B.2.2: own methods of `%Object.prototype%`, as its
+            // static layout lists them.
+            install_noop_proto_methods(proto_obj, ANNEX_B_OBJECT_PROTO_METHODS);
             install_object_prototype_dunder_proto(proto_obj);
         }
         "Function" => {
