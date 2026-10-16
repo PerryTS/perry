@@ -797,13 +797,13 @@ jobs:
         # crate, which downloaded a prebuilt V8 that 404'd on musl, was
         # removed.)
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: mbx build --profile prod --target ${{ matrix.target }} -p perry
+        run: ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry
 
       - name: Build runtime libraries
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
-          mbx build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
-          mbx build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -979,7 +979,7 @@ jobs:
 
       - name: Build UI library (Windows)
         if: runner.os == 'Windows'
-        run: mbx build --profile prod --target ${{ matrix.target }} -p perry-ui-windows
+        run: ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-ui-windows
 
       # Closes #872 / #4823: cross-compile the Android runtime libs (and the
       # perry-ui-android UI backend) on the Windows leg so the WinGet zip
@@ -1041,9 +1041,9 @@ jobs:
           # pwsh has no `set -e`; these two are mandatory, so fail the step on a
           # non-zero exit (otherwise the best-effort UI build below, which resets
           # $LASTEXITCODE, could mask a runtime/stdlib failure).
-          mbx build --profile prod --target aarch64-linux-android -p perry-runtime -p perry-runtime-static
+          cargo build --profile prod --target aarch64-linux-android -p perry-runtime -p perry-runtime-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          mbx build --profile prod --target aarch64-linux-android -p perry-stdlib -p perry-stdlib-static
+          cargo build --profile prod --target aarch64-linux-android -p perry-stdlib -p perry-stdlib-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # #4823 (option 1): the Android UI backend so a WinGet/Scoop-installed
           # perry can link `perry/ui` apps for android without a source tree.
@@ -1053,7 +1053,7 @@ jobs:
           # staticlib (UI crates are already staticlib — no -static wrapper); the
           # global-dynamic TLS rustflag only matters at the consumer's final
           # cdylib link, not here.
-          mbx build --profile prod --target aarch64-linux-android -p perry-ui-android
+          cargo build --profile prod --target aarch64-linux-android -p perry-ui-android
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # #4856 — defense in depth behind the cache eviction above: assert
@@ -1618,12 +1618,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mbx build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
-          mbx build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
           # UI crate is matrix-driven. perry-ui-android needs the NDK env
           # we wired above; perry-ui-windows builds against the MSVC SDK
           # already on windows-latest. Both go through plain `cargo build`.
-          mbx build --profile prod --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
+          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
 
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
