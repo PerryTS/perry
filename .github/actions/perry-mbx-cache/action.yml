@@ -11,7 +11,31 @@ inputs:
 runs:
   using: composite
   steps:
+    # mbx publishes no x86_64-apple-darwin release binary (no release has ever
+    # shipped one), so the pinned-release installer cannot verify one on the
+    # Intel runners. Build the same pinned version from crates.io instead;
+    # --locked + the registry checksum verify the source, and the installed
+    # version is asserted. The action then picks mbx up from PATH.
+    - name: Build mbx 1.22.0 from crates.io (Intel macOS)
+      if: runner.os == 'macOS' && runner.arch == 'X64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo install --locked --version 1.22.0 mbx
+        installed=$(mbx --version)
+        case "$installed" in
+          *" 1.22.0"*|"1.22.0") ;;
+          *) echo "::error::expected mbx 1.22.0, got: $installed"; exit 1 ;;
+        esac
+    - name: Configure Mr Boxington (Intel macOS, mbx from PATH)
+      if: runner.os == 'macOS' && runner.arch == 'X64'
+      uses: ./.github/actions/perry/jdx/mr-boxington-action
+      with:
+        github-cache-mode: objects
+        cache-generation: ${{ inputs.cache-generation }}
+        save-on-workflow-dispatch: ${{ inputs.save-on-workflow-dispatch }}
     - name: Configure Mr Boxington
+      if: runner.os != 'macOS' || runner.arch != 'X64'
       uses: ./.github/actions/perry/jdx/mr-boxington-action
       with:
         version: "1.22.0"
