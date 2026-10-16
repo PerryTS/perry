@@ -527,6 +527,12 @@ http = "1"
 # ring; rustls's DEFAULT features would add aws-lc-rs (+aws-lc-sys) as a second
 # provider (~1.3 MB stripped, ~1 MB RSS). Keep default-features off; deny.toml
 # bans aws-lc-rs so it can't creep back.
+# rustls 0.23.46 (Cargo.lock) fixes RUSTSEC-2026-0346, -0347, -0348 and -0349 in
+# 0.23.45 (TLS secrets in Debug impls, buffered data after ECH rejection, brotli
+# certificate decompression allocating before authentication, ServerHello key
+# exchange downgrade). Published 2026-10-14, inside the 7-day soak; locked once
+# with the owner-approved one-time publish-age override (2026-10-16). The
+# override lapses on its own on 2026-10-21, when 0.23.46 clears the window.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
 rustls-pemfile = "2"
 socket2 = "0.6"
