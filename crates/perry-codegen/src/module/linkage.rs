@@ -232,6 +232,26 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
     }
 }
 
+/// The aliasee symbol (`@name`) of an alias definition
+/// (`@a = [linkage] ... alias TY, <constant naming @aliasee>`), or `None`
+/// when `line` is not an alias.
+pub(crate) fn alias_target(line: &str) -> Option<&str> {
+    let (_, rhs) = line.split_once(" = ")?;
+    let rest = &rhs[rhs.find("alias ")?..];
+    if !rhs[..rhs.len() - rest.len()]
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '(' | ')'))
+    {
+        return None;
+    }
+    let at = rest.find('@')?;
+    let tail = &rest[at..];
+    let end = tail[1..]
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$' | '-')))
+        .map_or(tail.len(), |i| i + 1);
+    Some(&tail[..end])
+}
+
 pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     if line.contains(" = external ") {
         return Some(line.to_string());
@@ -252,6 +272,17 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     // `unnamed_addr` describes the definition only; the declaration drops it.
     let (_, rhs) = take_keyword(rhs, &["unnamed_addr", "local_unnamed_addr"]);
     let (initialized, rhs) = take_keyword(rhs, &["externally_initialized"]);
+    // An alias is declared, in a unit that does not define it, as an
+    // external global of its value type: object files see only a symbol.
+    if let Some(rest) = rhs.strip_prefix("alias ") {
+        let ty = rest.split_once(',')?.0.trim();
+        let prefix: String = [preemption, visibility, tls]
+            .iter()
+            .filter(|keyword| !keyword.is_empty())
+            .map(|keyword| format!("{keyword} "))
+            .collect();
+        return Some(format!("{name} = external {prefix}global {ty}"));
+    }
     let (kind, rest) = if let Some(rest) = rhs.strip_prefix("constant ") {
         ("constant", rest)
     } else if let Some(rest) = rhs.strip_prefix("global ") {

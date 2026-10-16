@@ -926,7 +926,7 @@ pub(crate) fn build_optimized_libs(
                          SDK root (the dir containing native/llvm/bin/clang). Skipping auto-optimize."
                     );
                 }
-                return OptimizedLibs::empty();
+                return prebuilt_fallback(well_known_libs, &routed_set, target, format, verbose);
             }
         }
     }
@@ -1047,14 +1047,14 @@ pub(crate) fn build_optimized_libs(
                     "{}",
                     auto_build_fallback_warning(&format!("failed to spawn cargo: {e}"))
                 );
-                return OptimizedLibs::empty();
+                return prebuilt_fallback(well_known_libs, &routed_set, target, format, verbose);
             }
         };
     if !status.success() {
         let cause = diagnostic
             .unwrap_or_else(|| format!("cargo build exited with {status} (no error line emitted)"));
         eprintln!("{}", auto_build_fallback_warning(&cause));
-        return OptimizedLibs::empty();
+        return prebuilt_fallback(well_known_libs, &routed_set, target, format, verbose);
     }
     let _ = std::fs::write(&build_stamp_path, &build_stamp);
 
@@ -1314,6 +1314,37 @@ pub(crate) fn build_optimized_libs(
         well_known_libs,
         stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
         runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
+    }
+}
+
+/// The libraries to link when the auto-optimized rebuild cannot run: the
+/// full prebuilt runtime and stdlib (`OptimizedLibs::empty`) plus the
+/// program's routed wrapper archives. The prebuilt stdlib carries no
+/// `perry-ext-*` code, so dropping them failed the link with "`js_ext_http_
+/// nm_install` needs libperry_ext_http.a, but that archive is not linked"
+/// although the archive sat next to the prebuilt runtime. `found` holds the
+/// CPU-only wrappers already resolved; the co-built ones resolve from the
+/// prebuilt search path exactly as an out-of-tree install does.
+fn prebuilt_fallback(
+    found: Vec<PathBuf>,
+    routed_set: &BTreeSet<String>,
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> OptimizedLibs {
+    let mut well_known_libs = found;
+    for lib in resolve_prebuilt_ext_libs(routed_set, target, format, verbose) {
+        if !well_known_libs
+            .iter()
+            .any(|have| have.file_name() == lib.file_name())
+        {
+            well_known_libs.push(lib);
+        }
+    }
+    OptimizedLibs {
+        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
+        well_known_libs,
+        ..OptimizedLibs::empty()
     }
 }
 

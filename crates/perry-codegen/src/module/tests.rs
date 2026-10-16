@@ -990,3 +990,78 @@ fn with_local_exec_tls_rewrites_every_thread_local_model() {
     assert_eq!(with_local_exec_tls("@g = global i64 0"), None);
     assert_eq!(with_local_exec_tls("@thread_local = global i64 0"), None);
 }
+
+/// A layout descriptor plus its `layout_id` alias, as `layout_desc` emits
+/// them, and three functions: a big one (unit 0), one that attaches the
+/// descriptor, and — when `read_id` — one that loads the alias.
+fn layout_id_alias_fixture(read_id: bool) -> LlModule {
+    let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+    m.declare_function("js_noop", VOID, &[]);
+    m.declare_function("perry_array_attach_layout", DOUBLE, &[DOUBLE, PTR]);
+    m.add_raw_global(
+        "@perry_array_layout_m_0 = global { i32, i32 } { i32 7, i32 0 }, align 8".to_string(),
+    );
+    m.add_raw_global(
+        "@perry_array_layout_m_0_id = internal alias i32, getelementptr (i8, ptr @perry_array_layout_m_0, i64 4)"
+            .to_string(),
+    );
+    let big = m.define_function("perry_fn_m__big", DOUBLE, vec![]);
+    let block = big.create_block("entry");
+    for _ in 0..200 {
+        block.call_void("js_noop", &[]);
+    }
+    block.ret(DOUBLE, "0.0");
+    let attach = m.define_function("perry_fn_m__attach", DOUBLE, vec![]);
+    let block = attach.create_block("entry");
+    let v = block.call(
+        DOUBLE,
+        "perry_array_attach_layout",
+        &[(DOUBLE, "0.0"), (PTR, "@perry_array_layout_m_0")],
+    );
+    block.ret(DOUBLE, &v);
+    if read_id {
+        let reader = m.define_function("perry_fn_m__reader", I32, vec![]);
+        let block = reader.create_block("entry");
+        let id = block.load(I32, "@perry_array_layout_m_0_id");
+        block.ret(I32, &id);
+    }
+    m
+}
+
+#[test]
+fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
+    // Next.js: nothing loads an array layout's id alias, so unit 0 kept it
+    // while the attaching function's unit owned the descriptor, and LLVM
+    // rejected unit 0 with "Alias must point to a definition".
+    for (read_id, n) in [(false, 2), (true, 3)] {
+        let units = layout_id_alias_fixture(read_id).render_codegen_units(n);
+        assert_eq!(units.len(), n);
+        for (i, unit) in units.iter().enumerate() {
+            crate::testing::verify_ir(unit, &format!("alias_unit{i}"))
+                .unwrap_or_else(|e| panic!("unit {i} (read_id {read_id}): {e}\n{unit}"));
+        }
+        let owner = |sym: &str| {
+            units
+                .iter()
+                .position(|u| {
+                    u.contains(&format!("{sym} = global")) || u.contains(&format!("{sym} = alias"))
+                })
+                .unwrap_or_else(|| panic!("{sym} defined nowhere"))
+        };
+        assert_eq!(
+            owner("@perry_array_layout_m_0_id"),
+            owner("@perry_array_layout_m_0"),
+            "an alias lives in its aliasee's unit"
+        );
+        if read_id {
+            let reader = units
+                .iter()
+                .find(|u| u.contains("define i32 @perry_fn_m__reader("))
+                .unwrap();
+            assert!(
+                reader.contains("@perry_array_layout_m_0_id = external global i32"),
+                "{reader}"
+            );
+        }
+    }
+}

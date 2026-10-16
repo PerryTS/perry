@@ -1338,7 +1338,7 @@ impl LlModule {
         // associative targets (LNK1227). Give each global one owner and use
         // external declarations in other consumers. Mach-O retains the
         // replicated policy required by `-dead_strip`.
-        let global_owners: Vec<usize> = (0..all_globals.len())
+        let mut global_owners: Vec<usize> = (0..all_globals.len())
             .map(|gi| {
                 bucket_needs
                     .iter()
@@ -1346,6 +1346,26 @@ impl LlModule {
                     .unwrap_or(0)
             })
             .collect();
+        let replicate_globals = self.target_triple.contains("apple");
+        // An alias must name a DEFINITION in its own object ("Alias must
+        // point to a definition"), so with one owner per global it is owned
+        // by its aliasee's owner. Owning it by its own first reference put a
+        // layout id alias (`@perry_array_layout_*_id`, which nothing loads,
+        // so unit 0 kept it) beside a mere declaration of its descriptor,
+        // defined in the unit that attaches the layout; three Next.js
+        // bundles failed to compile that way. Other units that name the
+        // alias declare it like any global (`external_decl_for_global`).
+        // Under replication every unit emitting the alias also emits the
+        // aliasee (the reference closure above), so Mach-O needs nothing.
+        if !replicate_globals {
+            for gi in 0..all_globals.len() {
+                if let Some(aliasee) = alias_target(all_globals[gi]) {
+                    if let Some(&ai) = global_index.get(aliasee) {
+                        global_owners[gi] = global_owners[ai];
+                    }
+                }
+            }
+        }
         // #10152: otherwise-unreferenced globals are retained in unit 0, but
         // their initializers were absent from the function-rooted closure
         // above. An orphaned string dispatch descriptor can still name bytes
@@ -1366,7 +1386,6 @@ impl LlModule {
                 }
             }
         }
-        let replicate_globals = self.target_triple.contains("apple");
         // #9610: how many units end up DEFINING each global. Under the
         // replicated (Mach-O) policy that is one unit per referencing bucket;
         // the owner fallback keeps unreferenced globals at one. Only the

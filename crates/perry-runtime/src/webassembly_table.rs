@@ -309,7 +309,10 @@ pub(super) fn make_table_function(external: *mut c_void, context: f64) -> f64 {
         crate::object::set_bound_native_closure_name(closure, "wasm-table-function")
     });
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::closure::register_wasm_funcref_external(closure as usize, external as usize);
+        crate::closure::wasm_funcref::register_wasm_funcref_external(
+            closure as usize,
+            external as usize,
+        );
         crate::value::js_nanbox_pointer(closure as i64)
     })
 }
