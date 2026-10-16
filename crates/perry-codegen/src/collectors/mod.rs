@@ -64,6 +64,7 @@ pub(crate) mod spec_abi_sites;
 mod straight_line_stores;
 pub(crate) mod suffix_strings;
 mod this_as_value;
+pub(crate) mod typed_locals;
 mod uppercase_strings;
 
 // Public re-exports for the visible API.

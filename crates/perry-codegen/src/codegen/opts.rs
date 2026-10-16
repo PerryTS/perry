@@ -920,6 +920,10 @@ pub(crate) struct CrossModuleCtx {
     /// wpfacts slice 2: the elision facts of this module
     /// (`CompileOptions::program_facts`).
     pub wpfacts: std::sync::Arc<super::ElisionFacts>,
+    /// Closed World 5d: per closure, the types of the locals it captures
+    /// from the bodies around it (`collectors::typed_locals::capture_proofs`).
+    pub capture_type_proofs:
+        std::collections::HashMap<u32, std::collections::HashMap<u32, perry_hir::types::Type>>,
     /// Case 2c: the program's families and colouring
     /// (`CompileOptions::program_layouts`).
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,

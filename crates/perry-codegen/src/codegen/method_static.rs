@@ -249,6 +249,7 @@ pub(in crate::codegen) fn compile_static_method(
         locals,
         local_types,
         proven_local_types: std::collections::HashMap::new(),
+        typed_locals: std::collections::HashMap::new(),
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,

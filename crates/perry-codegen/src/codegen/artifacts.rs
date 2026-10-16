@@ -155,6 +155,16 @@ pub(super) fn emit_module_artifacts(
             .collect();
     progress.checkpoint("reassigned-local analysis");
 
+    // Step 5d: fninfer's parameter types for this module's closures,
+    // candidates their typed bodies entry-check.
+    let (inferred_param_types, directly_invoked) = if super::typed_body::typed_bodies_enabled() {
+        (
+            super::typed_body::inferred_param_types(hir),
+            super::typed_body::closures_without_typed_body(hir),
+        )
+    } else {
+        Default::default()
+    };
     let closure_started = Instant::now();
     let closure_progress_step = (closures.len() / 20).max(1);
     for (closure_index, (func_id, closure_expr)) in closures.iter().enumerate() {
@@ -205,6 +215,7 @@ pub(super) fn emit_module_artifacts(
             && !cross_module.typed_string_closures.contains(func_id)
             && !trusted_box_closures.contains_key(func_id)
             && !versioned_loop_callbacks.contains(func_id)
+            && !directly_invoked.contains(func_id)
         {
             super::typed_body::plan_for_closure_expr(
                 closure_expr,
@@ -213,6 +224,8 @@ pub(super) fn emit_module_artifacts(
                 &module_reassigned_locals,
                 class_ids,
                 &cross_module.wpfacts,
+                &inferred_param_types,
+                module_globals,
             )
         } else {
             None

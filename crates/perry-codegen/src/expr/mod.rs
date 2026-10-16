@@ -399,6 +399,10 @@ pub(crate) struct FnCtx<'a> {
     /// initializer. Unlike `local_types`, this map never receives a declared
     /// annotation or a type inferred from one.
     pub proven_local_types: std::collections::HashMap<u32, HirType>,
+    /// Closed World 5d (`collectors/typed_locals.rs`): body locals whose
+    /// every executable write produces this type by construction and whose
+    /// every read follows a write. Holds at every read, reassigned or not.
+    pub typed_locals: std::collections::HashMap<u32, HirType>,
     /// Immutable CSE/local aliases of a property read from another local,
     /// recorded as `alias_id -> (owner_id, property)`. Guarded discriminant
     /// narrowing uses this only after proving the owner at runtime; the alias
@@ -2840,9 +2844,11 @@ impl<'a> FnCtx<'a> {
     /// both provenance-checked and write-stable.
     pub(crate) fn stable_local_type_proof(&self, id: &u32) -> Option<&HirType> {
         if self.reassigned_locals.contains(id) {
-            None
+            self.typed_locals.get(id)
         } else {
-            self.proven_local_types.get(id)
+            self.proven_local_types
+                .get(id)
+                .or_else(|| self.typed_locals.get(id))
         }
     }
 

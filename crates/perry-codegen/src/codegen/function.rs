@@ -1078,7 +1078,7 @@ pub(super) fn compile_function(
             .return_shape_class(f.id)
             .is_some(),
     );
-    let native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_params(
+    let mut native_facts = crate::collectors::collect_native_region_fact_graph_with_spec_params(
         &f.body,
         &f.params,
         &flat_const_ids,
@@ -1101,6 +1101,20 @@ pub(super) fn compile_function(
         &cross_module.module_global_proven_types,
     );
 
+    // Closed World 5d: the body's typed locals under this variant's entry
+    // proofs (the spec clone's guarded parameters that are never rebound).
+    let typed_locals = crate::collectors::typed_locals::apply(
+        &f.body,
+        &crate::collectors::typed_locals::stable_param_proofs(
+            &spec_param_proofs,
+            &f.body,
+            &boxed_vars,
+        ),
+        None,
+        &boxed_vars,
+        module_globals,
+        &mut native_facts.representation.number_by_construction_locals,
+    );
     // A Number-by-construction local cannot ever hold a GC pointer, so it
     // must not pay the root-slot protocol on every assignment.  The shadow
     // map is initially conservative because it is built before the
@@ -1196,6 +1210,7 @@ pub(super) fn compile_function(
         locals,
         local_types,
         proven_local_types: spec_param_proofs,
+        typed_locals,
         guarded_discriminant_aliases: HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,

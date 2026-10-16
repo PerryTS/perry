@@ -743,6 +743,7 @@ pub(super) fn compile_module_entry(
             locals: HashMap::new(),
             local_types: init_local_types,
             proven_local_types: HashMap::new(),
+            typed_locals: std::collections::HashMap::new(),
             guarded_discriminant_aliases: HashMap::new(),
             module_global_proven_types: &cross_module.module_global_proven_types,
             module_global_transfers: &cross_module.module_global_transfers,

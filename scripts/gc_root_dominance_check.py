@@ -5547,6 +5547,13 @@ def _sp_seed_sites(lines):
                 continue
             if probe.result == reg:
                 continue
+            # Float arithmetic and ordered compares prove the operand is a
+            # raw number (`use_proves_numeric`), and the checker exempts
+            # exactly those uses. A safepoint planted above one is not a
+            # violation, so a non-report there is CORRECT and must not count
+            # as a miss; look past it for a use the checker does read.
+            if use_proves_numeric(text):
+                continue
             use_at = j
             break
         if use_at is not None and use_at > i + 1:
@@ -6147,6 +6154,40 @@ def statepoint_self_test():
                 print("self-test FAIL: typed alias seeder went dark",
                       file=sys.stderr)
                 ok = False
+
+        # A Number reload whose first use is float arithmetic: the checker
+        # exempts that use (`use_proves_numeric`), so the mutator must not
+        # plant above it -- the correct non-report would count as a miss
+        # (Closed World 5d's Number comparator bodies, 4 of 40 seeds). With a
+        # real use further down it plants above that one; with none, there
+        # is no site at all.
+        text = Path(paths["reloaded"]).read_text()
+        text = re.sub(
+            r"ptrtoint ptr addrspace\(1\) (%[\w.$]+) to i64",
+            r'call i64 asm "", "=r,0"(ptr addrspace(1) \1)', text)
+        numeric_first = text.replace(
+            "  %r = call double",
+            "  %raw.box = bitcast i64 %raw to double\n"
+            "  %raw.num = fsub double %raw.box, 1.000000e+00\n"
+            "  %r = call double").splitlines()
+        sites = [at for at, _ in _sp_seed_sites(numeric_first)]
+        if [numeric_first[at].lstrip()[:7] for at in sites] != ["%r = ca"]:
+            print("self-test FAIL: numeric-first reload seeded at "
+                  f"{[numeric_first[at] for at in sites]}", file=sys.stderr)
+            ok = False
+        numeric_only = text.replace(
+            "  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)",
+            "  %raw.box = bitcast i64 %raw to double\n"
+            "  %r = fsub double %raw.box, 1.000000e+00").splitlines()
+        if "fsub" not in "\n".join(numeric_only):
+            print("self-test FAIL: numeric-only fixture did not build",
+                  file=sys.stderr)
+            ok = False
+        sites = [numeric_only[at] for at, _ in _sp_seed_sites(numeric_only)]
+        if sites:
+            print(f"self-test FAIL: numeric-only reload seeded at {sites}",
+                  file=sys.stderr)
+            ok = False
 
         # --- the two classes, and the control -----------------------------
         for name, want_class in (("unrooted", "unrooted"), ("stale", "stale")):

@@ -61,6 +61,13 @@ pub(crate) fn typed_bodies_enabled() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BodyGuard {
     None,
+    /// A Number: a plain double, or an int32 box converted to the equal
+    /// double (the two-tier test of `typed_entry.rs`).
+    Number,
+    /// A heap or inline string (the tag alone).
+    String,
+    /// `true` or `false`.
+    Boolean,
     /// The header's class id is one of these (ES classes, at most four).
     Class {
         class_ids: Vec<u32>,
@@ -103,6 +110,214 @@ impl TypedBodyPlan {
     }
 }
 
+/// fninfer's inferred type of every closure parameter declared `any` whose
+/// type it infers as a Number, String or Boolean (step 5d). A candidate: the
+/// typed body's entry check proves it.
+pub(crate) fn inferred_param_types(hir: &perry_hir::Module) -> HashMap<u32, Type> {
+    use perry_hir::analysis::fn_infer::{infer_module, InferConfig};
+    let inf = infer_module(hir, InferConfig::default());
+    let mut out = HashMap::new();
+    let mut found = |func_id: u32, params: &[Param]| {
+        let Some(sig) = inf.sigs.get(&func_id) else {
+            return;
+        };
+        for (p, t) in params.iter().zip(sig.params.iter()) {
+            if p.is_rest || !matches!(p.ty, Type::Any | Type::Unknown) {
+                continue;
+            }
+            if let Some((_, proof)) = scalar_of(t) {
+                out.insert(p.id, proof);
+            }
+        }
+    };
+    fn walk(e: &Expr, found: &mut dyn FnMut(u32, &[Param])) {
+        if let Expr::Closure {
+            func_id,
+            params,
+            body,
+            ..
+        } = e
+        {
+            found(*func_id, params);
+            stmts(body, found);
+            return;
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| walk(c, found));
+    }
+    fn stmts(body: &[Stmt], found: &mut dyn FnMut(u32, &[Param])) {
+        for s in body {
+            perry_hir::walker::stmt_any_expr(s, &mut |e| {
+                walk(e, found);
+                false
+            });
+        }
+    }
+    stmts(&hir.init, &mut found);
+    for f in &hir.functions {
+        stmts(&f.body, &mut found);
+    }
+    for c in &hir.classes {
+        let fns = c
+            .constructor
+            .iter()
+            .chain(c.methods.iter())
+            .chain(c.getters.iter().map(|(_, f)| f))
+            .chain(c.setters.iter().map(|(_, f)| f))
+            .chain(c.static_methods.iter());
+        for f in fns {
+            stmts(&f.body, &mut found);
+        }
+    }
+    out
+}
+
+/// Closures a typed body would only duplicate: those invoked where they are
+/// created (`(function (…) {…})(…)`, whose one call site is the only
+/// caller), and the CommonJS `require(id)` every wrapped module binds
+/// (Perry's own scaffolding, recognised on the HIR the way
+/// `collectors/cjs_scaffolding.rs` recognises it: a binding named `require`
+/// whose value is a function). That one runs once per import, during module
+/// initialization, and is the same small body in every module.
+pub(crate) fn closures_without_typed_body(hir: &perry_hir::Module) -> HashSet<u32> {
+    // Visit every statement (closure bodies included) and every expression.
+    fn stmts(body: &[Stmt], on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)) {
+        for s in body {
+            on_stmt(s);
+            match s {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    stmts(then_branch, on_stmt, on_expr);
+                    if let Some(b) = else_branch {
+                        stmts(b, on_stmt, on_expr);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    stmts(body, on_stmt, on_expr)
+                }
+                Stmt::For { init, body, .. } => {
+                    if let Some(i) = init {
+                        stmts(std::slice::from_ref(i.as_ref()), on_stmt, on_expr);
+                    }
+                    stmts(body, on_stmt, on_expr);
+                }
+                Stmt::Labeled { body, .. } => {
+                    stmts(std::slice::from_ref(body.as_ref()), on_stmt, on_expr)
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    stmts(body, on_stmt, on_expr);
+                    if let Some(c) = catch {
+                        stmts(&c.body, on_stmt, on_expr);
+                    }
+                    if let Some(b) = finally {
+                        stmts(b, on_stmt, on_expr);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        stmts(&c.body, on_stmt, on_expr);
+                    }
+                }
+                _ => {}
+            }
+            // Expressions owned directly by this statement.
+            let mut own = |e: &Expr| expr(e, on_stmt, on_expr);
+            match s {
+                Stmt::Let { init: Some(e), .. }
+                | Stmt::Return(Some(e))
+                | Stmt::Expr(e)
+                | Stmt::Throw(e) => own(e),
+                Stmt::If { condition, .. }
+                | Stmt::While { condition, .. }
+                | Stmt::DoWhile { condition, .. } => own(condition),
+                Stmt::For {
+                    condition, update, ..
+                } => {
+                    if let Some(c) = condition {
+                        own(c);
+                    }
+                    if let Some(u) = update {
+                        own(u);
+                    }
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                } => {
+                    own(discriminant);
+                    for c in cases {
+                        if let Some(t) = &c.test {
+                            own(t);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn expr(e: &Expr, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)) {
+        on_expr(e);
+        if let Expr::Closure { body, .. } = e {
+            stmts(body, on_stmt, on_expr);
+            return;
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| expr(c, on_stmt, on_expr));
+    }
+    let each = |on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)| {
+        stmts(&hir.init, on_stmt, on_expr);
+        for f in &hir.functions {
+            stmts(&f.body, on_stmt, on_expr);
+        }
+        for c in &hir.classes {
+            let fns = c
+                .constructor
+                .iter()
+                .chain(c.methods.iter())
+                .chain(c.getters.iter().map(|(_, f)| f))
+                .chain(c.setters.iter().map(|(_, f)| f))
+                .chain(c.static_methods.iter());
+            for f in fns {
+                stmts(&f.body, on_stmt, on_expr);
+            }
+        }
+    };
+    let mut out = HashSet::new();
+    let mut require_ids = HashSet::new();
+    each(
+        &mut |s| {
+            if let Stmt::Let { id, name, init, .. } = s {
+                if name == "require" {
+                    require_ids.insert(*id);
+                    if let Some(Expr::Closure { func_id, .. }) = init {
+                        out.insert(*func_id);
+                    }
+                }
+            }
+        },
+        &mut |_| {},
+    );
+    each(&mut |_| {}, &mut |e| match e {
+        Expr::Call { callee, .. } => {
+            if let Expr::Closure { func_id, .. } = callee.as_ref() {
+                out.insert(*func_id);
+            }
+        }
+        Expr::LocalSet(id, v) if require_ids.contains(id) => {
+            if let Expr::Closure { func_id, .. } = v.as_ref() {
+                out.insert(*func_id);
+            }
+        }
+        _ => {}
+    });
+    out
+}
+
 pub(crate) fn typed_body_name(public: &str) -> String {
     format!("{public}$tbody")
 }
@@ -119,6 +334,9 @@ fn class_set(
     class_ids: &HashMap<String, u32>,
     facts: &super::ElisionFacts,
 ) -> Option<Vec<u32>> {
+    if facts.classes.is_empty() {
+        return None;
+    }
     let one = |t: &Type| match t {
         Type::Named(c) => class_ids
             .get(c)
@@ -192,10 +410,9 @@ pub(crate) fn closure_typed_body_plan(
     reassigned: &HashSet<u32>,
     class_ids: &HashMap<String, u32>,
     facts: &super::ElisionFacts,
+    inferred_params: &HashMap<u32, Type>,
+    module_globals: &HashMap<u32, String>,
 ) -> Option<TypedBodyPlan> {
-    if facts.classes.is_empty() {
-        return None;
-    }
     if is_generator || (is_async && super::param_guard::body_contains_await(body)) {
         return None;
     }
@@ -208,7 +425,9 @@ pub(crate) fn closure_typed_body_plan(
     }
     let mut guards = Vec::with_capacity(params.len());
     let mut receivers = std::collections::BTreeMap::new();
+    let mut proofs = HashMap::new();
     let mut sites = 0usize;
+    let mut scalar_sites = 0usize;
     for p in params {
         // The binding must hold the entry value for the whole body.
         let stable = !boxed_vars.contains(&p.id) && !reassigned.contains(&p.id);
@@ -233,19 +452,147 @@ pub(crate) fn closure_typed_body_plan(
                 sites += n;
                 receivers.insert(p.id, class_ids.clone());
                 guards.push(BodyGuard::Class { class_ids });
+                continue;
             }
-            _ => guards.push(BodyGuard::None),
+            _ => {}
+        }
+        // Step 5d: the most fixed scalar type the module proves for the
+        // parameter — declared, inferred by fninfer, or the one the body
+        // itself tests with `typeof` — entry-checked.
+        let scalar = (stable && !crate::collectors::has_any_mutation(body, p.id))
+            .then(|| {
+                scalar_of(&p.ty)
+                    .or_else(|| inferred_params.get(&p.id).and_then(scalar_of))
+                    .or_else(|| typeof_candidate(body, p.id))
+            })
+            .flatten();
+        match scalar {
+            Some((guard, proof)) => {
+                scalar_sites += proof_sites(body, p.id, &proof);
+                proofs.insert(p.id, proof);
+                guards.push(guard);
+            }
+            None => guards.push(BodyGuard::None),
         }
     }
-    if receivers.is_empty() {
+    if receivers.is_empty() && proofs.is_empty() {
         return None;
+    }
+    if receivers.is_empty() {
+        // A scalar clone must change a lowering: an operation on a proven
+        // parameter, or a body local the proofs type.
+        let without = crate::collectors::typed_locals::collect_typed_locals(
+            body,
+            &HashMap::new(),
+            boxed_vars,
+            module_globals,
+        );
+        let with = crate::collectors::typed_locals::collect_typed_locals(
+            body,
+            &proofs,
+            boxed_vars,
+            module_globals,
+        );
+        if scalar_sites == 0 && with == without {
+            return None;
+        }
     }
     Some(TypedBodyPlan {
         guards,
-        proofs: HashMap::new(),
-        sites,
+        proofs,
+        sites: sites + scalar_sites,
         receivers,
     })
+}
+
+/// The entry guard and proof of a scalar type.
+fn scalar_of(ty: &Type) -> Option<(BodyGuard, Type)> {
+    match ty {
+        Type::Number | Type::Int32 => Some((BodyGuard::Number, Type::Number)),
+        Type::String => Some((BodyGuard::String, Type::String)),
+        Type::Boolean => Some((BodyGuard::Boolean, Type::Boolean)),
+        _ => None,
+    }
+}
+
+/// `typeof p === "string"` (or `"number"`, `"boolean"`; any equality
+/// operator, either side) somewhere in the body: the type the body itself
+/// singles out for the parameter.
+fn typeof_candidate(body: &[Stmt], id: u32) -> Option<(BodyGuard, Type)> {
+    let mut found: Option<(BodyGuard, Type)> = None;
+    let mut visit = |e: &Expr| {
+        if found.is_some() {
+            return;
+        }
+        let Expr::Compare { left, right, .. } = e else {
+            return;
+        };
+        let ((Expr::TypeOf(x), Expr::String(lit)) | (Expr::String(lit), Expr::TypeOf(x))) =
+            (left.as_ref(), right.as_ref())
+        else {
+            return;
+        };
+        if !matches!(x.as_ref(), Expr::LocalGet(l) if *l == id) {
+            return;
+        }
+        found = match lit.as_str() {
+            "string" => scalar_of(&Type::String),
+            "number" => scalar_of(&Type::Number),
+            "boolean" => scalar_of(&Type::Boolean),
+            _ => None,
+        };
+    };
+    fn walk(e: &Expr, visit: &mut dyn FnMut(&Expr)) {
+        visit(e);
+        if matches!(e, Expr::Closure { .. }) {
+            return;
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| walk(c, visit));
+    }
+    for s in body {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            walk(e, &mut visit);
+            false
+        });
+    }
+    found
+}
+
+/// Sites of `body` (closure bodies excluded) whose lowering a scalar proof
+/// of the parameter `id` changes: operators on it, and member reads, calls
+/// and `typeof` on a String.
+fn proof_sites(body: &[Stmt], id: u32, ty: &Type) -> usize {
+    let is_p = |e: &Expr| matches!(e, Expr::LocalGet(l) if *l == id);
+    let mut n = 0usize;
+    let mut visit = |e: &Expr| match e {
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. }
+            if is_p(left) || is_p(right) =>
+        {
+            n += 1
+        }
+        Expr::Unary { operand, .. } if is_p(operand) => n += 1,
+        Expr::TypeOf(x) if is_p(x) => n += 1,
+        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+            if is_p(object) && matches!(ty, Type::String) =>
+        {
+            n += 1
+        }
+        _ => {}
+    };
+    fn walk(e: &Expr, visit: &mut dyn FnMut(&Expr)) {
+        visit(e);
+        if matches!(e, Expr::Closure { .. }) {
+            return;
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| walk(c, visit));
+    }
+    for s in body {
+        perry_hir::walker::stmt_any_expr(s, &mut |e| {
+            walk(e, &mut visit);
+            false
+        });
+    }
+    n
 }
 
 /// Runtime entries a body calls: every direct call to a runtime symbol
@@ -295,6 +642,18 @@ pub(crate) fn emit_typed_body_dispatch(
             .zip(guards)
             .map(|(arg, g)| match g {
                 BodyGuard::None => super::typed_entry::EntryArgGuard::default(),
+                BodyGuard::Number => super::typed_entry::EntryArgGuard {
+                    number: true,
+                    exact: None,
+                },
+                BodyGuard::String => super::typed_entry::EntryArgGuard {
+                    number: false,
+                    exact: Some(super::typed_abi::emit_typed_string_guard(blk, arg)),
+                },
+                BodyGuard::Boolean => super::typed_entry::EntryArgGuard {
+                    number: false,
+                    exact: Some(super::typed_abi::emit_typed_i1_guard(blk, arg)),
+                },
                 BodyGuard::Class { class_ids } => {
                     let bits = blk.bitcast_double_to_i64(arg);
                     let recv = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
@@ -352,6 +711,8 @@ pub(crate) fn plan_for_closure_expr(
     reassigned: &HashSet<u32>,
     class_ids: &HashMap<String, u32>,
     facts: &super::ElisionFacts,
+    inferred: &HashMap<u32, Type>,
+    module_globals: &HashMap<u32, String>,
 ) -> Option<TypedBodyPlan> {
     let Expr::Closure {
         params,
@@ -373,6 +734,8 @@ pub(crate) fn plan_for_closure_expr(
         reassigned,
         class_ids,
         facts,
+        inferred,
+        module_globals,
     )
 }
 
@@ -410,9 +773,12 @@ pub(crate) fn install_closure_dispatch(
         .unwrap_or(0);
     let mut elided = |i: usize| llmod.function_mut(i).map_or(0, |f| f.wpfacts_sites);
     let (gen_sites, tb_sites) = (elided(generic_index), elided(tbody_index));
-    // Step 5b: the clone must carry receiver-proven sites the generic body
-    // does not have, and call fewer runtime entries.
-    let installed = tb_sites > gen_sites && tb_calls < gen_calls;
+    // Step 5b: a receiver clone must carry receiver-proven sites the
+    // generic body does not have; step 5d: a scalar clone must change a
+    // lowering. Either way it must call fewer runtime entries.
+    let receivers_carried = !plan.receivers.is_empty() && tb_sites > gen_sites;
+    let scalars_carried = !plan.proofs.is_empty();
+    let installed = (receivers_carried || scalars_carried) && tb_calls < gen_calls;
     log_clone(&public, plan, gen_calls, tb_calls, installed);
     if !installed {
         // Nothing references it; codegen-unit splitting would otherwise keep
@@ -533,7 +899,98 @@ mod tests {
             &HashSet::new(),
             &ids(),
             f,
+            &HashMap::new(),
+            &HashMap::new(),
         )
+    }
+
+    fn typeof_string_body(id: u32) -> Vec<Stmt> {
+        // var s = p; if (typeof p !== 'string') s = f(p); return s.length;
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "s".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::LocalGet(id)),
+            },
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: perry_hir::CompareOp::Ne,
+                    left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(id)))),
+                    right: Box::new(Expr::String("string".into())),
+                },
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                    20,
+                    Box::new(Expr::Call {
+                        callee: Box::new(Expr::LocalGet(9)),
+                        args: vec![Expr::LocalGet(id)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                ))],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(20)),
+                property: "length".into(),
+                byte_offset: 0,
+            })),
+        ]
+    }
+
+    #[test]
+    fn a_typeof_tested_param_gets_a_string_entry_proof() {
+        let p = plan(
+            &[param(1, Type::Any)],
+            &typeof_string_body(1),
+            &ElisionFacts::default(),
+        )
+        .expect("plan");
+        assert_eq!(p.guards, vec![BodyGuard::String]);
+        assert_eq!(p.proofs.get(&1), Some(&Type::String));
+        assert!(p.receivers.is_empty());
+    }
+
+    #[test]
+    fn an_inferred_number_param_with_an_operator_site_is_planned() {
+        let body = vec![Stmt::Return(Some(Expr::Binary {
+            op: perry_hir::BinaryOp::Mul,
+            left: Box::new(Expr::LocalGet(1)),
+            right: Box::new(Expr::Number(2.0)),
+        }))];
+        let inferred = HashMap::from([(1u32, Type::Number)]);
+        let p = closure_typed_body_plan(
+            &[param(1, Type::Any)],
+            &body,
+            false,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &ids(),
+            &ElisionFacts::default(),
+            &inferred,
+            &HashMap::new(),
+        )
+        .expect("plan");
+        assert_eq!(p.guards, vec![BodyGuard::Number]);
+        // Unused or rebound parameters get no clone.
+        let reassigned = HashSet::from([1u32]);
+        assert!(closure_typed_body_plan(
+            &[param(1, Type::Any)],
+            &body,
+            false,
+            false,
+            false,
+            &HashSet::new(),
+            &reassigned,
+            &ids(),
+            &ElisionFacts::default(),
+            &inferred,
+            &HashMap::new(),
+        )
+        .is_none());
     }
 
     #[test]
@@ -592,6 +1049,8 @@ mod tests {
             &reassigned,
             &ids(),
             &facts(),
+            &HashMap::new(),
+            &HashMap::new(),
         )
         .is_none());
     }

@@ -2803,6 +2803,7 @@ fn compile_module_impl(
             .collect();
     let mut cross_module = CrossModuleCtx {
         wpfacts: opts.program_facts.elision.clone(),
+        capture_type_proofs: Default::default(),
         program_layouts: Arc::clone(&opts.program_layouts),
         program_has_worker: opts.program_has_worker,
         program_has_thread_agents: thread_agents,
@@ -3189,6 +3190,8 @@ fn compile_module_impl(
     cross_module.scope_map =
         crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
     cross_module.string_accumulator_locals = crate::collectors::string_accumulator_locals(hir);
+    cross_module.capture_type_proofs =
+        crate::collectors::typed_locals::capture_proofs(hir, &module_boxed_vars, &module_globals);
     // #6369: the *receiver-type oracle* for closure bodies — every module-wide
     // `Stmt::Let` type, with NO representation-driven filtering. `FnCtx.
     // local_types` is what `static_type_of` / `is_array_expr` /
