@@ -47,7 +47,6 @@
 //! stays the safe default for everything else.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 
 use crate::function::{FinalItem, LlFunction};
 use crate::inst::LlInst;
@@ -124,67 +123,175 @@ pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
 ];
 
-/// Merge target tables: the most conservative class wins, `throws` is `yes` if
-/// any target says so, and a symbol absent from any table is dropped (reads as
-/// `Reenters`, `throws=yes`). Panics on a malformed row: a table codegen cannot
-/// read must fail the build, never degrade silently.
-pub(crate) fn merge_tables(tables: &[(&str, &str)]) -> HashMap<String, RuntimeFacts> {
-    let mut merged: HashMap<String, (RuntimeFacts, usize)> = HashMap::new();
-    for (target, text) in tables {
-        let mut seen: HashSet<&str> = HashSet::new();
-        for (n, line) in text.lines().enumerate() {
-            if line.starts_with('#') || line.trim().is_empty() {
-                continue;
-            }
-            let mut cols = line.split('\t');
-            let (Some(sym), Some(class), Some(throws), None) =
-                (cols.next(), cols.next(), cols.next(), cols.next())
-            else {
-                panic!("gc_effects/{target}.tsv:{}: malformed row", n + 1)
-            };
-            let class = RuntimeClass::parse(class)
-                .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: bad class", n + 1));
-            let throws = match throws {
-                "yes" => true,
-                "no" => false,
-                _ => panic!("gc_effects/{target}.tsv:{}: bad throws", n + 1),
-            };
-            let row = RuntimeFacts { class, throws };
-            assert!(
-                seen.insert(sym),
-                "gc_effects/{target}.tsv:{}: duplicate {sym}",
-                n + 1
-            );
-            let e = merged.entry(sym.to_string()).or_insert((row, 0));
-            e.0.class = e.0.class.max(class);
-            e.0.throws |= throws;
-            e.1 += 1;
+/// The merged runtime call-effect facts one compilation reads.
+///
+/// Built once per compilation and carried explicitly (`CompileOptions::
+/// gc_effects`, then the module and every function's register counter), never
+/// read from a process global: two compilations in one process may hold
+/// different tables, and the object-cache key carries [`GcEffects::digest`] so
+/// a module compiled under one table is never served for another.
+///
+/// Today the rows are the merge of the three committed per-target tables
+/// ([`GcEffects::from_committed`]).
+pub struct GcEffects {
+    rows: HashMap<String, RuntimeFacts>,
+    digest: u64,
+}
+
+impl std::fmt::Debug for GcEffects {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcEffects")
+            .field("rows", &self.rows.len())
+            .field("digest", &format_args!("{:016x}", self.digest))
+            .finish()
+    }
+}
+
+impl Default for GcEffects {
+    fn default() -> Self {
+        Self::from_committed()
+    }
+}
+
+impl GcEffects {
+    /// The merge of the committed per-target tables ([`GENERATED_TABLES`]).
+    pub fn from_committed() -> Self {
+        Self::from_tables(GENERATED_TABLES)
+    }
+
+    /// The table a function or module built outside a compilation (a unit
+    /// test) reads: the committed tables, named explicitly. A compilation
+    /// always installs its own `CompileOptions::gc_effects` instead.
+    pub(crate) fn committed_fallback() -> std::sync::Arc<Self> {
+        #[cfg(test)]
+        {
+            std::sync::Arc::clone(committed_for_tests())
+        }
+        #[cfg(not(test))]
+        {
+            std::sync::Arc::new(Self::from_committed())
         }
     }
-    merged
-        .into_iter()
-        .filter(|(_, (_, count))| *count == tables.len())
-        .map(|(sym, (facts, _))| (sym, facts))
-        .collect()
+
+    /// Merge target tables: the most conservative class wins, `throws` is
+    /// `yes` if any target says so, and a symbol absent from any table is
+    /// dropped (reads as `Reenters`, `throws=yes`). Panics on a malformed row:
+    /// a table codegen cannot read must fail the build, never degrade
+    /// silently.
+    pub fn from_tables(tables: &[(&str, &str)]) -> Self {
+        let mut merged: HashMap<String, (RuntimeFacts, usize)> = HashMap::new();
+        for (target, text) in tables {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for (n, line) in text.lines().enumerate() {
+                if line.starts_with('#') || line.trim().is_empty() {
+                    continue;
+                }
+                let mut cols = line.split('\t');
+                let (Some(sym), Some(class), Some(throws), None) =
+                    (cols.next(), cols.next(), cols.next(), cols.next())
+                else {
+                    panic!("gc_effects/{target}.tsv:{}: malformed row", n + 1)
+                };
+                let class = RuntimeClass::parse(class)
+                    .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: bad class", n + 1));
+                let throws = match throws {
+                    "yes" => true,
+                    "no" => false,
+                    _ => panic!("gc_effects/{target}.tsv:{}: bad throws", n + 1),
+                };
+                let row = RuntimeFacts { class, throws };
+                assert!(
+                    seen.insert(sym),
+                    "gc_effects/{target}.tsv:{}: duplicate {sym}",
+                    n + 1
+                );
+                let e = merged.entry(sym.to_string()).or_insert((row, 0));
+                e.0.class = e.0.class.max(class);
+                e.0.throws |= throws;
+                e.1 += 1;
+            }
+        }
+        let rows: HashMap<String, RuntimeFacts> = merged
+            .into_iter()
+            .filter(|(_, (_, count))| *count == tables.len())
+            .map(|(sym, (facts, _))| (sym, facts))
+            .collect();
+        let digest = digest_of(&rows);
+        Self { rows, digest }
+    }
+
+    /// A stable digest of everything an answer depends on: the merged rows
+    /// (sorted, so map order never leaks in) and the codegen-defined
+    /// [`OVERRIDES`]. Part of every module's object-cache key.
+    pub fn digest(&self) -> u64 {
+        self.digest
+    }
+
+    /// The merged class of a runtime symbol (`Reenters` if unknown).
+    pub(crate) fn runtime_class(&self, name: &str) -> RuntimeClass {
+        self.rows
+            .get(name)
+            .map_or(RuntimeClass::Reenters, |f| f.class)
+    }
+
+    /// Whether a call to this runtime symbol can unwind, merged over the
+    /// target tables. A symbol no table proves (user code, a new helper, a
+    /// name missing on one target) answers `true`: the caller keeps its
+    /// `invoke`.
+    pub(crate) fn runtime_throws(&self, name: &str) -> bool {
+        self.rows.get(name).is_none_or(|f| f.throws)
+    }
+
+    /// Classify one direct LLVM callee name, without the leading `@`.
+    pub(crate) fn classify_direct_callee(&self, name: &str) -> GcCallEffect {
+        if let Some(&(_, effect, _)) = OVERRIDES.iter().find(|(n, _, _)| *n == name) {
+            return effect;
+        }
+        effect_of_class(self.runtime_class(name))
+    }
+
+    /// Whether a direct external call is a Perry-GC leaf in this compile.
+    ///
+    /// `AllocNoReentry` is deliberately conditional: without the strict
+    /// safepoint-only contract those helpers may collect synchronously at
+    /// their allocation site, so every caller frame on the stack still needs a
+    /// statepoint at the edge that reached them.
+    fn external_callee_cannot_collect(&self, name: &str) -> bool {
+        name.starts_with("llvm.")
+            || match self.classify_direct_callee(name) {
+                GcCallEffect::CannotCollect => true,
+                GcCallEffect::AllocNoReentry => {
+                    crate::codegen::helpers::gc_safepoint_only_contract_enabled()
+                }
+                GcCallEffect::Unknown => false,
+            }
+    }
 }
 
-fn generated() -> &'static HashMap<String, RuntimeFacts> {
-    static TABLE: OnceLock<HashMap<String, RuntimeFacts>> = OnceLock::new();
-    TABLE.get_or_init(|| merge_tables(GENERATED_TABLES))
-}
-
-/// The merged generated class of a runtime symbol (`Reenters` if unknown).
-pub(crate) fn runtime_class(name: &str) -> RuntimeClass {
-    generated()
-        .get(name)
-        .map_or(RuntimeClass::Reenters, |f| f.class)
-}
-
-/// Whether a call to this runtime symbol can unwind, merged over the three
-/// target tables. A symbol no table proves (user code, a new helper, a name
-/// missing on one target) answers `true`: the caller keeps its `invoke`.
-pub(crate) fn runtime_throws(name: &str) -> bool {
-    generated().get(name).is_none_or(|f| f.throws)
+/// FNV-1a over the sorted rows and the overrides.
+fn digest_of(rows: &HashMap<String, RuntimeFacts>) -> u64 {
+    fn eat(h: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *h ^= u64::from(*b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        // Field separator, so ("ab","c") and ("a","bc") differ.
+        *h ^= 0xff;
+        *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut sorted: Vec<(&String, &RuntimeFacts)> = rows.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (sym, f) in sorted {
+        eat(&mut h, sym.as_bytes());
+        eat(&mut h, &[f.class as u8, u8::from(f.throws)]);
+    }
+    eat(&mut h, b"overrides");
+    for (name, effect, _) in OVERRIDES {
+        eat(&mut h, name.as_bytes());
+        eat(&mut h, &[*effect as u8]);
+    }
+    h
 }
 
 fn effect_of_class(class: RuntimeClass) -> GcCallEffect {
@@ -196,29 +303,13 @@ fn effect_of_class(class: RuntimeClass) -> GcCallEffect {
     }
 }
 
-/// Classify one direct LLVM callee name, without the leading `@`.
-pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
-    if let Some(&(_, effect, _)) = OVERRIDES.iter().find(|(n, _, _)| *n == name) {
-        return effect;
-    }
-    effect_of_class(runtime_class(name))
-}
-
-/// Whether a direct external call is a Perry-GC leaf in this compile.
-///
-/// `AllocNoReentry` is deliberately conditional: without the strict
-/// safepoint-only contract those helpers may collect synchronously at their
-/// allocation site, so every caller frame on the stack still needs a
-/// statepoint at the edge that reached them.
-fn external_callee_cannot_collect(name: &str) -> bool {
-    name.starts_with("llvm.")
-        || match classify_direct_callee(name) {
-            GcCallEffect::CannotCollect => true,
-            GcCallEffect::AllocNoReentry => {
-                crate::codegen::helpers::gc_safepoint_only_contract_enabled()
-            }
-            GcCallEffect::Unknown => false,
-        }
+/// The committed tables, parsed once for unit tests that have no compilation
+/// to take them from. Production code never calls this: it takes the
+/// compilation's own [`GcEffects`].
+#[cfg(test)]
+pub(crate) fn committed_for_tests() -> &'static std::sync::Arc<GcEffects> {
+    static COMMITTED: std::sync::OnceLock<std::sync::Arc<GcEffects>> = std::sync::OnceLock::new();
+    COMMITTED.get_or_init(|| std::sync::Arc::new(GcEffects::from_committed()))
 }
 
 /// The direct callee token and its argument-list opening parenthesis.
@@ -355,38 +446,48 @@ struct FunctionEffects {
     has_collecting_edge: bool,
 }
 
-fn note_direct_callee(effects: &mut FunctionEffects, callee: &str, defined: &HashSet<&str>) {
+fn note_direct_callee(
+    gc: &GcEffects,
+    effects: &mut FunctionEffects,
+    callee: &str,
+    defined: &HashSet<&str>,
+) {
     if defined.contains(callee) {
         effects.internal_callees.insert(callee.to_string());
-    } else if !external_callee_cannot_collect(callee) {
+    } else if !gc.external_callee_cannot_collect(callee) {
         effects.has_collecting_edge = true;
     }
 }
 
-fn note_text_effects(line: &str, effects: &mut FunctionEffects, defined: &HashSet<&str>) {
+fn note_text_effects(
+    gc: &GcEffects,
+    line: &str,
+    effects: &mut FunctionEffects,
+    defined: &HashSet<&str>,
+) {
     if !line_is_call_like(line) || line.contains("\"gc-leaf-function\"") || line.contains(" asm ") {
         return;
     }
     match direct_callee_span(line) {
-        Some((callee, _)) => note_direct_callee(effects, callee, defined),
+        Some((callee, _)) => note_direct_callee(gc, effects, callee, defined),
         None => effects.has_collecting_edge = true,
     }
 }
 
-fn effects_of(function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
+fn effects_of(gc: &GcEffects, function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
     let mut effects = FunctionEffects::default();
     function
         .for_each_final_item::<std::convert::Infallible>(&mut |item| {
             match item {
                 FinalItem::Inst(LlInst::Call { callee, .. }) => {
-                    note_direct_callee(&mut effects, callee, defined)
+                    note_direct_callee(gc, &mut effects, callee, defined)
                 }
                 FinalItem::Inst(LlInst::CallIndirect { .. }) => effects.has_collecting_edge = true,
                 FinalItem::Inst(LlInst::AsmBarrier) => {}
                 FinalItem::Inst(LlInst::Raw(line)) => {
-                    note_text_effects(line, &mut effects, defined)
+                    note_text_effects(gc, line, &mut effects, defined)
                 }
-                FinalItem::Text(line) => note_text_effects(line, &mut effects, defined),
+                FinalItem::Text(line) => note_text_effects(gc, line, &mut effects, defined),
                 FinalItem::Label(_) | FinalItem::Blank | FinalItem::Inst(_) => {}
             }
             Ok(())
@@ -410,11 +511,14 @@ fn effects_of(function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects
 /// collector must find and rewrite that caller's frame. Consequently this set
 /// is the safe part of polling-style density reduction; calls outside it must
 /// remain statepoints.
-pub(crate) fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<String> {
+pub(crate) fn transitive_leaf_functions(
+    gc: &GcEffects,
+    functions: &[&LlFunction],
+) -> HashSet<String> {
     let defined: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
     let effects: HashMap<&str, FunctionEffects> = functions
         .iter()
-        .map(|f| (f.name.as_str(), effects_of(f, &defined)))
+        .map(|f| (f.name.as_str(), effects_of(gc, f, &defined)))
         .collect();
 
     let mut collecting: HashSet<&str> = effects
@@ -451,6 +555,30 @@ pub(crate) fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The unit tests have no compilation to take a table from: they read the
+    // committed merge, named explicitly.
+    fn generated() -> &'static HashMap<String, RuntimeFacts> {
+        &committed_for_tests().rows
+    }
+    fn merge_tables(tables: &[(&str, &str)]) -> HashMap<String, RuntimeFacts> {
+        GcEffects::from_tables(tables).rows
+    }
+    fn runtime_class(name: &str) -> RuntimeClass {
+        committed_for_tests().runtime_class(name)
+    }
+    fn runtime_throws(name: &str) -> bool {
+        committed_for_tests().runtime_throws(name)
+    }
+    fn classify_direct_callee(name: &str) -> GcCallEffect {
+        committed_for_tests().classify_direct_callee(name)
+    }
+    fn external_callee_cannot_collect(name: &str) -> bool {
+        committed_for_tests().external_callee_cannot_collect(name)
+    }
+    fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<String> {
+        super::transitive_leaf_functions(committed_for_tests(), functions)
+    }
 
     #[test]
     fn ungenerated_constfn_finalizer_and_class_mint_are_collecting_edges() {
@@ -568,6 +696,43 @@ mod tests {
             "merged table: {} symbols, {leaves} Leaf",
             merged.len()
         );
+    }
+
+    #[test]
+    fn the_digest_follows_the_rows_and_only_the_rows() {
+        let a = "# target: a\nx\tLeaf\tno\ny\tReenters\tyes\n";
+        let a_reordered = "# target: a\ny\tReenters\tyes\nx\tLeaf\tno\n";
+        let a_other_target_name = "# target: z\nx\tLeaf\tno\ny\tReenters\tyes\n";
+        let class_changed = "# target: a\nx\tAllocOnly\tno\ny\tReenters\tyes\n";
+        let throws_changed = "# target: a\nx\tLeaf\tyes\ny\tReenters\tyes\n";
+        let row_added = "# target: a\nx\tLeaf\tno\ny\tReenters\tyes\nw\tLeaf\tno\n";
+        let d = |t: &str| GcEffects::from_tables(&[("a", t)]).digest();
+        assert_eq!(
+            d(a),
+            d(a_reordered),
+            "row order never leaks into the digest"
+        );
+        assert_eq!(d(a), d(a_other_target_name), "comments are not rows");
+        for changed in [class_changed, throws_changed, row_added] {
+            assert_ne!(d(a), d(changed));
+        }
+        assert_eq!(
+            GcEffects::from_committed().digest(),
+            GcEffects::from_committed().digest()
+        );
+    }
+
+    #[test]
+    fn two_tables_answer_independently() {
+        let leaf = GcEffects::from_tables(&[("a", "# target: a\nhelper\tLeaf\tno\n")]);
+        let slow = GcEffects::from_tables(&[("a", "# target: a\nhelper\tReenters\tyes\n")]);
+        assert_eq!(
+            leaf.classify_direct_callee("helper"),
+            GcCallEffect::CannotCollect
+        );
+        assert_eq!(slow.classify_direct_callee("helper"), GcCallEffect::Unknown);
+        assert!(!leaf.runtime_throws("helper"));
+        assert!(slow.runtime_throws("helper"));
     }
 
     #[test]

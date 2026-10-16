@@ -17,6 +17,7 @@ pub(super) fn share(module: &mut LlModule, public: &str, class_id: u32) {
     let linkage = old.linkage.clone();
     let mut wrapper = crate::function::LlFunction::new(body_name, DOUBLE, params.clone());
     wrapper.linkage = linkage;
+    wrapper.set_gc_effects(module.gc_effects());
     wrapper.enable_shadow_frame(0);
     let b = wrapper.create_block("entry");
     let owner = b.call(DOUBLE, "js_class_value", &[(I32, &class_id.to_string())]);

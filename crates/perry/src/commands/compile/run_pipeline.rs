@@ -3480,6 +3480,9 @@ pub fn run_with_parse_cache(
         candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
     }
     let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
+    // The runtime call-effect table, one per compilation: every module is
+    // lowered under it and its digest is in each module's object-cache key.
+    let gc_effects = std::sync::Arc::new(perry_codegen::GcEffects::from_committed());
     // #10498: the accessor names every compiled class declares decide which
     // sites carry a class-accessor arm.
     let program_class_accessor_names = std::sync::Arc::new(
@@ -5765,6 +5768,7 @@ pub fn run_with_parse_cache(
             program_class_shape_ids: Default::default(),
             program_facts: Default::default(),
             program_layouts: Default::default(),
+            gc_effects: std::sync::Arc::clone(&gc_effects),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             program_class_accessor_names: Some(std::sync::Arc::clone(
                 &program_class_accessor_names,

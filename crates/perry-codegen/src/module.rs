@@ -105,6 +105,9 @@ pub struct LlModule {
     /// shared with every function's register counter; emitted by
     /// [`Self::emit_fn_infos`] once every function exists.
     fn_infos: Rc<RefCell<crate::fn_info::FnInfoState>>,
+    /// The compilation's runtime call-effect table, installed on every
+    /// function this module defines. `None` outside a compilation (tests).
+    gc_effects: Option<Arc<crate::gc_call_effects::GcEffects>>,
     /// Whether this module's own thread-locals use the local-exec model
     /// ([`Self::use_local_exec_tls`]). Module state: the output kind of the
     /// compile that built this module decides it, never a process global.
@@ -169,6 +172,7 @@ impl LlModule {
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
             fn_infos: Rc::new(RefCell::new(crate::fn_info::FnInfoState::default())),
+            gc_effects: None,
             local_exec_tls: false,
         }
     }
@@ -268,6 +272,20 @@ impl LlModule {
         self.preserve_none_fns.borrow_mut().extend(fns);
     }
 
+    /// Install the compilation's call-effect table (`CompileOptions::
+    /// gc_effects`). Must precede every function definition so each function's
+    /// counter reads it from its first block.
+    pub(crate) fn set_gc_effects(&mut self, effects: Arc<crate::gc_call_effects::GcEffects>) {
+        self.gc_effects = Some(effects);
+    }
+
+    /// The call-effect table this module is compiled under.
+    pub(crate) fn gc_effects(&self) -> Arc<crate::gc_call_effects::GcEffects> {
+        self.gc_effects
+            .clone()
+            .unwrap_or_else(crate::gc_call_effects::GcEffects::committed_fallback)
+    }
+
     /// Append a raw metadata definition line (e.g. `!1 = distinct !{!1}`).
     /// Emitted after `!0 = !{}` in the module IR.
     pub fn add_metadata_line(&mut self, line: String) {
@@ -365,6 +383,7 @@ impl LlModule {
         // so its call sites and its own define header agree on the convention.
         func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
         func.set_fn_infos(Rc::clone(&self.fn_infos));
+        func.set_gc_effects(self.gc_effects());
         func.set_null_guard_global(&self.null_guard_global());
         self.functions.push(func);
         self.functions.last_mut().unwrap()
@@ -378,6 +397,7 @@ impl LlModule {
         }
         func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
         func.set_fn_infos(Rc::clone(&self.fn_infos));
+        func.set_gc_effects(self.gc_effects());
         func.set_null_guard_global(&self.null_guard_global());
         self.functions.push(func);
     }
@@ -392,6 +412,7 @@ impl LlModule {
             .expect("defined body");
         func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
         func.set_fn_infos(Rc::clone(&self.fn_infos));
+        func.set_gc_effects(self.gc_effects());
         func.set_null_guard_global(&self.null_guard_global());
         self.functions[i] = func;
     }
@@ -920,7 +941,7 @@ impl LlModule {
 
         let funcs = self.deduped_function_refs();
         let gc_leaf_callees = if crate::codegen::helpers::native_stack_roots_enabled() {
-            crate::gc_call_effects::transitive_leaf_functions(&funcs)
+            crate::gc_call_effects::transitive_leaf_functions(&self.gc_effects(), &funcs)
         } else {
             HashSet::new()
         };
@@ -1057,7 +1078,7 @@ impl LlModule {
         if n <= 1 || funcs.len() <= 1 {
             let gc_leaf_callees =
                 Arc::new(if crate::codegen::helpers::native_stack_roots_enabled() {
-                    crate::gc_call_effects::transitive_leaf_functions(&funcs)
+                    crate::gc_call_effects::transitive_leaf_functions(&self.gc_effects(), &funcs)
                 } else {
                     HashSet::new()
                 });
@@ -1124,7 +1145,7 @@ impl LlModule {
         let gc_leaf_callees = {
             let refs: Vec<&LlFunction> = funcs.iter().map(|f| f.borrow()).collect();
             Arc::new(if crate::codegen::helpers::native_stack_roots_enabled() {
-                crate::gc_call_effects::transitive_leaf_functions(&refs)
+                crate::gc_call_effects::transitive_leaf_functions(&self.gc_effects(), &refs)
             } else {
                 HashSet::new()
             })

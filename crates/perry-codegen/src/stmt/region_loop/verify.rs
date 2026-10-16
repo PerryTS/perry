@@ -11,11 +11,12 @@ pub(super) fn cannot_collect(
     scan_start: usize,
     scan_end: usize,
 ) -> bool {
+    let gc = ctx.func.gc_effects();
     std::iter::once(entry).chain(scan_start..scan_end).all(|b| {
         ctx.func.blocks()[b]
             .insts()
             .iter()
-            .all(|inst| !bare::inst_may_collect(inst))
+            .all(|inst| !bare::inst_may_collect(&gc, inst))
     })
 }
 
@@ -23,13 +24,13 @@ pub(super) fn cannot_collect(
 
 /// Callees that cannot run JavaScript (they may allocate or collect — the
 /// receiver is re-derived at every use — but they cannot reshape anything).
-pub(super) fn cannot_run_js(callee: &str) -> bool {
-    use crate::gc_call_effects::{classify_direct_callee, GcCallEffect};
+pub(super) fn cannot_run_js(gc: &crate::gc_call_effects::GcEffects, callee: &str) -> bool {
+    use crate::gc_call_effects::GcCallEffect;
     if callee.starts_with("llvm.") {
         return true;
     }
     if matches!(
-        classify_direct_callee(callee),
+        gc.classify_direct_callee(callee),
         GcCallEffect::CannotCollect | GcCallEffect::AllocNoReentry
     ) {
         return true;
@@ -50,10 +51,13 @@ pub(super) fn cannot_run_js(callee: &str) -> bool {
         )
 }
 
-pub(super) fn inst_may_run_js(inst: &crate::inst::LlInst) -> bool {
+pub(super) fn inst_may_run_js(
+    gc: &crate::gc_call_effects::GcEffects,
+    inst: &crate::inst::LlInst,
+) -> bool {
     use crate::inst::LlInst;
     match inst {
-        LlInst::Call { callee, .. } => !cannot_run_js(callee),
+        LlInst::Call { callee, .. } => !cannot_run_js(gc, callee),
         LlInst::CallIndirect { .. } => true,
         LlInst::Raw(s) => {
             let t = s.trim_start();
@@ -69,7 +73,7 @@ pub(super) fn inst_may_run_js(inst: &crate::inst::LlInst) -> bool {
                         .chars()
                         .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '$')
                         .collect();
-                    !cannot_run_js(&name)
+                    !cannot_run_js(gc, &name)
                 }
                 None => true,
             }
@@ -106,6 +110,7 @@ pub(super) fn verify(
     emitted: &[(usize, usize)],
 ) -> bool {
     let blocks = ctx.func.blocks();
+    let gc = ctx.func.gc_effects();
     let in_f = |b: usize| b == entry || (scan_start..scan_end).contains(&b);
     let mut by_label: HashMap<&str, usize> = HashMap::new();
     for b in (scan_start..scan_end).chain(std::iter::once(entry)) {
@@ -125,7 +130,7 @@ pub(super) fn verify(
         stale_in.insert(b, prev || stale);
         let mut s = prev || stale;
         for inst in blocks[b].insts() {
-            if inst_may_run_js(inst) {
+            if inst_may_run_js(&gc, inst) {
                 s = true;
             }
         }
@@ -143,7 +148,7 @@ pub(super) fn verify(
             None => continue,
         };
         for inst in &blocks[b].insts()[..i.min(blocks[b].insts().len())] {
-            if inst_may_run_js(inst) {
+            if inst_may_run_js(&gc, inst) {
                 s = true;
             }
         }
@@ -179,6 +184,7 @@ pub(super) fn verify_exit_effects(
     const DIRTY: u8 = 2;
     const LEFT: u8 = 4;
     let blocks = ctx.func.blocks();
+    let gc = ctx.func.gc_effects();
     let in_f = |b: usize| b == entry || (scan_start..scan_end).contains(&b);
     let mut by_label: HashMap<&str, usize> = HashMap::new();
     for b in (scan_start..scan_end).chain(std::iter::once(entry)) {
@@ -201,7 +207,7 @@ pub(super) fn verify_exit_effects(
                     continue;
                 }
                 let mut bits = bits;
-                if inst_may_run_js(inst) {
+                if inst_may_run_js(&gc, inst) {
                     bits |= JS;
                 }
                 if let LlInst::Store { val, ptr, .. } = inst {

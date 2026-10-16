@@ -21,6 +21,7 @@ pub(crate) mod fn_info;
 pub mod function;
 pub mod function_order;
 pub(crate) mod gc_call_effects;
+pub use gc_call_effects::GcEffects;
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
 pub mod inprocess;

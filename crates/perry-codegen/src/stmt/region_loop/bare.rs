@@ -54,10 +54,13 @@ pub(super) fn region_handle(ctx: &mut FnCtx<'_>, r: Recv) -> Result<String> {
 /// block created before `b0` — conservative, never wrong.
 pub(super) fn nothing_collects_since(ctx: &FnCtx<'_>, b0: usize, i0: usize) -> bool {
     let blocks = ctx.func.blocks();
+    let gc = ctx.func.gc_effects();
     let cur = ctx.current_block;
     let tail = |b: usize, from: usize| {
         let insts = blocks[b].insts();
-        insts[from.min(insts.len())..].iter().any(inst_may_collect)
+        insts[from.min(insts.len())..]
+            .iter()
+            .any(|inst| inst_may_collect(&gc, inst))
     };
     if cur == b0 {
         return !tail(b0, i0);
@@ -107,13 +110,19 @@ pub(super) fn nothing_collects_since(ctx: &FnCtx<'_>, b0: usize, i0: usize) -> b
 }
 
 /// Can this instruction run a collection (and so move the receiver)?
-pub(super) fn inst_may_collect(inst: &crate::inst::LlInst) -> bool {
-    use crate::gc_call_effects::{classify_direct_callee, GcCallEffect};
+pub(super) fn inst_may_collect(
+    gc: &crate::gc_call_effects::GcEffects,
+    inst: &crate::inst::LlInst,
+) -> bool {
+    use crate::gc_call_effects::GcCallEffect;
     use crate::inst::LlInst;
     let named = |callee: &str| -> bool {
         !(callee.starts_with("llvm.")
             || callee == "js_recv_route_note"
-            || matches!(classify_direct_callee(callee), GcCallEffect::CannotCollect)
+            || matches!(
+                gc.classify_direct_callee(callee),
+                GcCallEffect::CannotCollect
+            )
             || crate::root_reload::is_non_collecting(callee))
     };
     match inst {

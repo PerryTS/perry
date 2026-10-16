@@ -562,6 +562,7 @@ fn compile_module_impl(
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     llmod.program_has_worker = opts.program_has_worker;
+    llmod.set_gc_effects(std::sync::Arc::clone(&opts.gc_effects));
     runtime_decls::declare_phase1(&mut llmod);
 
     // Derive a per-module symbol prefix from the HIR module name:

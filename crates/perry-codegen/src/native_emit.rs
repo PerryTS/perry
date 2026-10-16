@@ -80,7 +80,8 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
     let skeleton = llmod.skeleton_ir();
     let funcs = llmod.deduped_function_refs();
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
-    let gc_leaf_callees = crate::gc_call_effects::transitive_leaf_functions(&funcs);
+    let gc_leaf_callees =
+        crate::gc_call_effects::transitive_leaf_functions(&llmod.gc_effects(), &funcs);
     let (typed_insts, raw_insts) =
         stream_functions(context, &module, &funcs, false, &gc_leaf_callees)?;
     log::debug!(

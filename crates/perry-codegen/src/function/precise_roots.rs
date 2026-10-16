@@ -152,7 +152,11 @@ fn rewrite_root_access(
 /// parse plus a hash lookup against the root set (see `rewrite_root_access`).
 /// `equivalence_tests` pins this against the previous per-root form on
 /// generated functions, so the output is identical by test, not by argument.
-fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String> {
+fn lower_roots_for_rs4gc(
+    gc: &crate::gc_call_effects::GcEffects,
+    lines: &[&str],
+    root_ptrs: &[String],
+) -> Option<String> {
     let roots: std::collections::HashSet<&str> = root_ptrs.iter().map(String::as_str).collect();
     let mut out = String::with_capacity(lines.len() * 48 + root_ptrs.len() * 96);
     let mut cast_counter = 0usize;
@@ -211,14 +215,14 @@ fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String>
         }
         if is_call && trimmed.ends_with(')') && !trimmed.contains(" asm ") {
             if let Some(callee) = direct_callee_name(line) {
-                if audited_leaf_callee(callee) {
+                if audited_leaf_callee(gc, callee) {
                     out.push_str(line.trim_end());
                     out.push_str(" \"gc-leaf-function\"\n");
                     continue;
                 }
             }
         }
-        if let Some(marked) = leaf_marked_invoke(line) {
+        if let Some(marked) = leaf_marked_invoke(gc, line) {
             out.push_str(&marked);
             continue;
         }
@@ -231,8 +235,8 @@ fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String>
 
 /// Whether the audited call-effect table lets RS4GC skip the safepoint at a
 /// direct call of `callee`. `AllocNoReentry` keeps its contract gating.
-fn audited_leaf_callee(callee: &str) -> bool {
-    let leaf = match crate::gc_call_effects::classify_direct_callee(callee) {
+fn audited_leaf_callee(gc: &crate::gc_call_effects::GcEffects, callee: &str) -> bool {
+    let leaf = match gc.classify_direct_callee(callee) {
         crate::gc_call_effects::GcCallEffect::CannotCollect => true,
         crate::gc_call_effects::GcCallEffect::AllocNoReentry => {
             crate::codegen::helpers::gc_safepoint_only_contract_enabled()
@@ -258,7 +262,7 @@ fn audited_leaf_callee(callee: &str) -> bool {
 /// arm's `ends_with(')')` — so a site already carrying a call-site attribute,
 /// including a leaf mark emitted by `call_gc_leaf`, is left alone. Inline asm
 /// is marked for the call arm's reason: RS4GC cannot wrap it at all.
-fn leaf_marked_invoke(line: &str) -> Option<String> {
+fn leaf_marked_invoke(gc: &crate::gc_call_effects::GcEffects, line: &str) -> Option<String> {
     let line = line.trim_end();
     let trimmed = line.trim_start();
     if !(trimmed.starts_with("invoke ") || trimmed.contains(" = invoke ")) {
@@ -268,8 +272,8 @@ fn leaf_marked_invoke(line: &str) -> Option<String> {
     if !head.ends_with(')') {
         return None;
     }
-    let leaf =
-        head.contains(" asm ") || direct_invoke_callee_name(head).is_some_and(audited_leaf_callee);
+    let leaf = head.contains(" asm ")
+        || direct_invoke_callee_name(head).is_some_and(|callee| audited_leaf_callee(gc, callee));
     leaf.then(|| format!("{head} \"gc-leaf-function\"{edges}\n"))
 }
 
@@ -309,6 +313,7 @@ fn callee_before_args(call: &str) -> Option<&str> {
 /// recognizer meets a root-alloca use it does not understand, anything else
 /// would emit a frame whose roots the collector cannot find.
 pub(super) fn lower_precise_roots_to_native_stack(
+    gc: &crate::gc_call_effects::GcEffects,
     ir: &str,
     function_name: &str,
     slot_count: u32,
@@ -365,7 +370,7 @@ pub(super) fn lower_precise_roots_to_native_stack(
     // statepoint. Found on the Claude Code bundle, where an early return
     // skipped leaf-marking and the verifier aborted with "Cannot take the
     // address of an inline asm!".
-    match lower_roots_for_rs4gc(&lines, &root_ptrs) {
+    match lower_roots_for_rs4gc(gc, &lines, &root_ptrs) {
         Some(out) => {
             if let Some(mut report) = report {
                 report.note_call(root_ptrs.len());
@@ -607,7 +612,12 @@ mod tests {
                   \x20 %lp = landingpad { ptr, i32 } catch ptr null\n\
                   \x20 ret i64 0\n\
                   }\n";
-        let lowered = lower_precise_roots_to_native_stack(ir, "f", 0);
+        let lowered = lower_precise_roots_to_native_stack(
+            crate::gc_call_effects::committed_for_tests(),
+            ir,
+            "f",
+            0,
+        );
         for expected in [
             "  %a = invoke i64 @js_closure_get_capture_bits(i64 0, i32 0) \"gc-leaf-function\" to label %ok1 unwind label %pad\n",
             "  invoke void @js_box_set_bits(i64 %a, i64 1) \"gc-leaf-function\" to label %ok2 unwind label %pad\n",
@@ -676,7 +686,12 @@ entry:
   ret i64 %r3
 }
 "#;
-        let lowered = lower_precise_roots_to_native_stack(ir, "f", 1);
+        let lowered = lower_precise_roots_to_native_stack(
+            crate::gc_call_effects::committed_for_tests(),
+            ir,
+            "f",
+            1,
+        );
         // THE discriminating clause: reverting `rewrite_root_access`'s two load
         // arms fails here. The RS4GC-level clauses below are the structural
         // companion — they show WHY the launder is needed (the second
@@ -760,7 +775,12 @@ entry:
 }
 "#;
 
-        let lowered = lower_precise_roots_to_native_stack(ir, "f", 1);
+        let lowered = lower_precise_roots_to_native_stack(
+            crate::gc_call_effects::committed_for_tests(),
+            ir,
+            "f",
+            1,
+        );
         assert!(lowered.contains("%a = alloca ptr addrspace(1)"));
         assert!(lowered.contains("%b = alloca ptr addrspace(1)"));
         assert!(!lowered.contains("@js_shadow_slot_bind"));

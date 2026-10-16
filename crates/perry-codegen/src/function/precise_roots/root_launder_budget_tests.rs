@@ -17,7 +17,12 @@ fn wide_roots(word_type: &str) -> String {
         ));
     }
     ir.push_str("  ret void\n}\n");
-    lower_precise_roots_to_native_stack(&ir, "wide", 128)
+    lower_precise_roots_to_native_stack(
+        crate::gc_call_effects::committed_for_tests(),
+        &ir,
+        "wide",
+        128,
+    )
 }
 
 #[test]

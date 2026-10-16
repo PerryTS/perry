@@ -16,6 +16,7 @@ use super::{direct_callee_name, mentions_register, parse_shadow_bind, parse_shad
 /// line. Joins use union ("active on any incoming path"), so a stale local can
 /// be retained but a live root cannot be omitted.
 pub(super) fn reference_lower_roots_for_rs4gc(
+    gc: &crate::gc_call_effects::GcEffects,
     lines: &[&str],
     root_ptrs: &[String],
 ) -> Option<String> {
@@ -140,7 +141,7 @@ pub(super) fn reference_lower_roots_for_rs4gc(
         }
         if is_call && trimmed.ends_with(')') && !trimmed.contains(" asm ") {
             if let Some(callee) = direct_callee_name(line) {
-                let leaf = match crate::gc_call_effects::classify_direct_callee(callee) {
+                let leaf = match gc.classify_direct_callee(callee) {
                     crate::gc_call_effects::GcCallEffect::CannotCollect => true,
                     crate::gc_call_effects::GcCallEffect::AllocNoReentry => {
                         crate::codegen::helpers::gc_safepoint_only_contract_enabled()
@@ -346,8 +347,16 @@ fn linear_lowering_matches_the_per_root_reference_on_generated_functions() {
         let seed = rng.0;
         let g = generate(&mut rng, roots, lines, case % 2 == 0);
         let lines_vec: Vec<&str> = g.ir.lines().collect();
-        let reference = reference_lower_roots_for_rs4gc(&lines_vec, &g.root_ptrs);
-        let linear = super::lower_roots_for_rs4gc(&lines_vec, &g.root_ptrs);
+        let reference = reference_lower_roots_for_rs4gc(
+            crate::gc_call_effects::committed_for_tests(),
+            &lines_vec,
+            &g.root_ptrs,
+        );
+        let linear = super::lower_roots_for_rs4gc(
+            crate::gc_call_effects::committed_for_tests(),
+            &lines_vec,
+            &g.root_ptrs,
+        );
         assert_eq!(
             linear, reference,
             "case {case} (seed {seed:#x}) diverged from the reference lowering:\n{}",
@@ -401,7 +410,11 @@ fn linear_lowering_handles_a_wide_function_without_per_root_work() {
     let g = generate(&mut rng, 2_000, 40_000, true);
     let lines_vec: Vec<&str> = g.ir.lines().collect();
     let started = std::time::Instant::now();
-    let linear = super::lower_roots_for_rs4gc(&lines_vec, &g.root_ptrs);
+    let linear = super::lower_roots_for_rs4gc(
+        crate::gc_call_effects::committed_for_tests(),
+        &lines_vec,
+        &g.root_ptrs,
+    );
     let retyped = super::retype_landing_pads_for_statepoints(&g.ir);
     let elapsed = started.elapsed();
     assert!(
@@ -422,14 +435,22 @@ fn reference_timing_on_the_wide_function() {
     let g = generate(&mut rng, 2_000, 40_000, true);
     let lines_vec: Vec<&str> = g.ir.lines().collect();
     let started = std::time::Instant::now();
-    let reference = reference_lower_roots_for_rs4gc(&lines_vec, &g.root_ptrs);
+    let reference = reference_lower_roots_for_rs4gc(
+        crate::gc_call_effects::committed_for_tests(),
+        &lines_vec,
+        &g.root_ptrs,
+    );
     let lowering = started.elapsed();
     let started = std::time::Instant::now();
     let retyped = reference_retype_landing_pads_for_statepoints(&g.ir);
     let retype = started.elapsed();
     assert_eq!(
         reference,
-        super::lower_roots_for_rs4gc(&lines_vec, &g.root_ptrs)
+        super::lower_roots_for_rs4gc(
+            crate::gc_call_effects::committed_for_tests(),
+            &lines_vec,
+            &g.root_ptrs
+        )
     );
     assert_eq!(retyped, super::retype_landing_pads_for_statepoints(&g.ir));
     eprintln!("reference lowering {lowering:?}, reference retype {retype:?}");

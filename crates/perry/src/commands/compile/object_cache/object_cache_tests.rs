@@ -15,6 +15,7 @@ fn empty_opts() -> CompileOptions {
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
+        gc_effects: Default::default(),
         target: Some("aarch64-apple-darwin".to_string()),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -117,6 +118,44 @@ fn key_changes_with_perry_version() {
     let a = compute_object_cache_key(&opts, 1, "0.5.155");
     let b = compute_object_cache_key(&opts, 1, "0.5.156");
     assert_ne!(a, b);
+}
+
+/// The runtime call-effect table is part of the key: the same module compiled
+/// under a table with one different row is a different object, and the same
+/// rows built twice are the same key.
+#[test]
+fn key_changes_with_gc_effects_table() {
+    let rows = |class: &str| {
+        format!("# target: t\njs_array_length_leaf\t{class}\tno\nother\tReenters\tyes\n")
+    };
+    let build = |class: &str| {
+        let text = rows(class);
+        std::sync::Arc::new(perry_codegen::GcEffects::from_tables(&[(
+            "t",
+            text.as_str(),
+        )]))
+    };
+    let mut leaf = empty_opts();
+    leaf.gc_effects = build("Leaf");
+    let mut again = empty_opts();
+    again.gc_effects = build("Leaf");
+    let mut reenters = empty_opts();
+    reenters.gc_effects = build("Reenters");
+    assert_eq!(
+        compute_object_cache_key(&leaf, 1, "0.5.156"),
+        compute_object_cache_key(&again, 1, "0.5.156"),
+        "identical rows must hit"
+    );
+    assert_ne!(
+        compute_object_cache_key(&leaf, 1, "0.5.156"),
+        compute_object_cache_key(&reenters, 1, "0.5.156"),
+        "a table that classifies a helper differently must miss"
+    );
+    assert_ne!(
+        compute_object_cache_key(&leaf, 1, "0.5.156"),
+        compute_object_cache_key(&empty_opts(), 1, "0.5.156"),
+        "the committed tables differ from a one-row table"
+    );
 }
 
 #[test]

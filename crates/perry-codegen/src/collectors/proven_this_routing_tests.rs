@@ -42,6 +42,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
+        gc_effects: Default::default(),
         target: None,
         is_entry_module: is_entry,
         non_entry_module_prefixes: Vec::new(),

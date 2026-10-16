@@ -137,10 +137,18 @@ fn compact_generic<'e>(
     let Expr::Call { callee, args, .. } = generic else {
         return None;
     };
-    let Expr::PropertyGet { object, property, .. } = callee.as_ref() else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
         return None;
     };
-    let Expr::PropertyGet { object: global, property: name, .. } = object.as_ref() else {
+    let Expr::PropertyGet {
+        object: global,
+        property: name,
+        ..
+    } = object.as_ref()
+    else {
         return None;
     };
     if !matches!(global.as_ref(), Expr::GlobalThisExpr) || name != ns {
@@ -208,9 +216,7 @@ pub(crate) fn lower_namespace_guard(
 
     ctx.current_block = generic_idx;
     let generic_val = match compact_generic(ns, generic) {
-        Some((family, member, args)) => {
-            emit_namespace_generic_call(ctx, family, member, args)?
-        }
+        Some((family, member, args)) => emit_namespace_generic_call(ctx, family, member, args)?,
         None => crate::expr::lower_expr(ctx, generic)?,
     };
     let generic_after = ctx.block().label.clone();

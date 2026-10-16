@@ -142,6 +142,7 @@ fn publish(ctx: &mut FnCtx<'_>) {
         return;
     }
     let mut f = LlFunction::new(NORMALIZE, I32, vec![(DOUBLE, "%key".into())]);
+    f.set_gc_effects(ctx.func.gc_effects());
     f.linkage = "linkonce_odr".into();
     f.no_inline = true;
     let b = f.create_block("entry");

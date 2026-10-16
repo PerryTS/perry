@@ -12,6 +12,7 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::codegen::FpContractMode;
 use crate::types::LlvmType;
@@ -170,6 +171,12 @@ pub struct RegCounter {
     /// Flags of the open class-guard run (`expr::class_guard_memo`). The
     /// same choke point clears them; the run's end unregisters them.
     guard_memo_slots: RefCell<Vec<String>>,
+    /// The compilation's runtime call-effect table, injected by
+    /// `LlModule::define_function` (and the other module entry points) from
+    /// `CompileOptions::gc_effects`. `None` for functions built outside a
+    /// module (tests): [`Self::gc_effects`] then names the committed tables
+    /// explicitly.
+    gc_effects: RefCell<Option<Arc<crate::gc_call_effects::GcEffects>>>,
 }
 
 impl RegCounter {
@@ -185,7 +192,24 @@ impl RegCounter {
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
             byte_access_dirty_slots: RefCell::new(Vec::new()),
             guard_memo_slots: RefCell::new(Vec::new()),
+            gc_effects: RefCell::new(None),
         }
+    }
+
+    /// Install the compilation's call-effect table on this function.
+    pub(crate) fn set_gc_effects(&self, effects: Arc<crate::gc_call_effects::GcEffects>) {
+        *self.gc_effects.borrow_mut() = Some(effects);
+    }
+
+    /// The compilation's call-effect table. A function built outside a module
+    /// (unit tests) was given none and reads the committed tables.
+    pub(crate) fn gc_effects(&self) -> Arc<crate::gc_call_effects::GcEffects> {
+        if let Some(effects) = &*self.gc_effects.borrow() {
+            return Arc::clone(effects);
+        }
+        let committed = crate::gc_call_effects::GcEffects::committed_fallback();
+        *self.gc_effects.borrow_mut() = Some(Arc::clone(&committed));
+        committed
     }
 
     /// Point this function's null-guard loads at `global` (a bare symbol
@@ -398,7 +422,7 @@ impl LlBlock {
             name.starts_with("llvm.")
                 || name.starts_with("js_shadow_")
                 || name.starts_with("js_write_barrier")
-                || crate::gc_call_effects::classify_direct_callee(name)
+                || self.counter.gc_effects().classify_direct_callee(name)
                     == crate::gc_call_effects::GcCallEffect::CannotCollect
         }) {
             return;
@@ -528,7 +552,7 @@ impl LlBlock {
                 // change its backing, bounds or JS-visible state.
                 || (matches!(crate::module::helper_memory_effect(callee),
                     crate::module::HelperMemoryEffect::None | crate::module::HelperMemoryEffect::ReadOnly)
-                    && crate::gc_call_effects::classify_direct_callee(callee)
+                    && self.counter.gc_effects().classify_direct_callee(callee)
                         == crate::gc_call_effects::GcCallEffect::CannotCollect)
         }) {
             return;
@@ -1595,7 +1619,7 @@ impl LlBlock {
     /// LlBlock keeps appending into the continuation transparently.
     fn eh_invoke_suffix(&mut self, func_name: &str) -> Option<(String, String)> {
         let lpad = self.counter.current_eh_unwind_label()?;
-        if crate::eh_mode::nothrow_callee(func_name) {
+        if crate::eh_mode::nothrow_callee(&self.counter.gc_effects(), func_name) {
             return None;
         }
         let cont = format!("eh.cont{}", self.counter.next());

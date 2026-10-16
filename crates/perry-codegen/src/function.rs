@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::block::{FpFlags, LlBlock, RegCounter};
 use crate::types::LlvmType;
@@ -923,6 +924,17 @@ impl LlFunction {
         self.reg_counter.set_preserve_none_fns(fns);
     }
 
+    /// Install the compilation's call-effect table (`CompileOptions::
+    /// gc_effects`) on this function's counter.
+    pub(crate) fn set_gc_effects(&self, effects: Arc<crate::gc_call_effects::GcEffects>) {
+        self.reg_counter.set_gc_effects(effects);
+    }
+
+    /// The compilation's call-effect table this function is lowered under.
+    pub(crate) fn gc_effects(&self) -> Arc<crate::gc_call_effects::GcEffects> {
+        self.reg_counter.gc_effects()
+    }
+
     /// Install the module's `JsFunctionInfo` state (`crate::fn_info`).
     pub(crate) fn set_fn_infos(&self, infos: Rc<RefCell<crate::fn_info::FnInfoState>>) {
         self.reg_counter.set_fn_infos(infos);
@@ -1153,6 +1165,7 @@ impl LlFunction {
                 && crate::codegen::helpers::native_stack_roots_enabled()
                 && crate::codegen::helpers::rs4gc_enabled(),
             rewrite_eh_phis: self.personality.is_some(),
+            gc_effects: self.gc_effects(),
         }
     }
 
@@ -1634,6 +1647,8 @@ pub(crate) struct TextFinish {
     annotate_leaf_calls: bool,
     retype_landing_pads: bool,
     rewrite_eh_phis: bool,
+    /// The compilation's call-effect table the audited-leaf marking reads.
+    gc_effects: Arc<crate::gc_call_effects::GcEffects>,
 }
 
 impl TextFinish {
@@ -1642,7 +1657,9 @@ impl TextFinish {
         // native-frame stack maps only after lowering is complete, when every
         // lazily-reserved scalar root and every call site is visible.
         let ir = match self.precise_roots {
-            Some(slot_count) => lower_precise_roots_to_native_stack(&ir, &self.name, slot_count),
+            Some(slot_count) => {
+                lower_precise_roots_to_native_stack(&self.gc_effects, &ir, &self.name, slot_count)
+            }
             None => ir,
         };
 

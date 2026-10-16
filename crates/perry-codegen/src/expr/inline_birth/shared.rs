@@ -13,6 +13,7 @@ fn publish(ctx: &mut FnCtx<'_>, name: &str, params: Vec<(&'static str, String)>,
         return;
     }
     let mut f = LlFunction::new(name, I64, params);
+    f.set_gc_effects(ctx.func.gc_effects());
     f.linkage = "linkonce_odr".into();
     f.no_inline = true;
     let entry = f.create_block("entry");

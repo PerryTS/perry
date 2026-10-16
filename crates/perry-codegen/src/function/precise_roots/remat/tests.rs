@@ -63,7 +63,12 @@ fn roots() -> Vec<String> {
 }
 
 fn rewrite(ir: &str) -> String {
-    let lowered = lower_precise_roots_to_native_stack(ir, "f", 3);
+    let lowered = lower_precise_roots_to_native_stack(
+        crate::gc_call_effects::committed_for_tests(),
+        ir,
+        "f",
+        3,
+    );
     let target = crate::codegen::default_target_triple();
     crate::inprocess::statepoint_rewritten_ir(&lowered, &target, "remat_fixture")
         .expect("fixture survives the statepoint rewrite")
@@ -151,7 +156,12 @@ fn constants_are_kept_and_global_stores_become_the_marker() {
 #[test]
 fn rematerialized_slots_take_no_relocate_and_reload_after_the_safepoint() {
     let ir = fixture(HANDLE, "");
-    let lowered = lower_precise_roots_to_native_stack(&ir, "f", 3);
+    let lowered = lower_precise_roots_to_native_stack(
+        crate::gc_call_effects::committed_for_tests(),
+        &ir,
+        "f",
+        3,
+    );
     assert!(lowered.contains("%s = alloca double"), "{lowered}");
     assert!(lowered.contains("%k = alloca i64"), "{lowered}");
     assert!(

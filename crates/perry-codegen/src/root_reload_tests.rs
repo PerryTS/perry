@@ -111,7 +111,7 @@ fn own_field_probe_reaching_js_opens_a_reload_window() {
     let helper = "js_object_get_own_field_or_undef";
     assert!(NON_COLLECTING.contains(&helper));
     assert_ne!(
-        crate::gc_call_effects::classify_direct_callee(helper),
+        crate::gc_call_effects::committed_for_tests().classify_direct_callee(helper),
         crate::gc_call_effects::GcCallEffect::CannotCollect
     );
     let mut f = one_block(helper);

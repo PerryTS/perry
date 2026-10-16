@@ -586,6 +586,11 @@ pub struct CompileOptions {
     /// and key colouring (`layout_families`), the same value for every
     /// module; its digest is in the object-cache key.
     pub program_layouts: std::sync::Arc<crate::layout_families::ProgramLayouts>,
+    /// The runtime call-effect table this compilation lowers under: which
+    /// runtime calls can collect or unwind. One value per compilation, shared
+    /// by every module; its digest is in the object-cache key. Default: the
+    /// committed per-target tables ([`crate::GcEffects::from_committed`]).
+    pub gc_effects: std::sync::Arc<crate::GcEffects>,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
