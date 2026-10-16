@@ -9,7 +9,7 @@ FROM ${OLD_GLIBC_IMAGE}
 # disabled for this first signed archive fetch.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
-      'deb https://deb.debian.org/debian-security bullseye-security main' \
+      'deb https://archive.debian.org/debian-security bullseye-security main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \
