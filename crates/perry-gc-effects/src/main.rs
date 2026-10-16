@@ -41,6 +41,16 @@ enum Command {
         #[arg(required = true)]
         archives: Vec<PathBuf>,
     },
+    /// Write `<runtime archive>.gc-effects` beside every runtime archive in a
+    /// directory: the runtime alone, and the runtime with its stdlib.
+    Sidecars {
+        /// Override the `<os>-<arch>` label detected from the archives.
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, default_value_t = 1000)]
+        min_symbols: usize,
+        lib_dir: PathBuf,
+    },
     Why {
         #[arg(long = "archive", required = true)]
         archives: Vec<PathBuf>,
@@ -163,6 +173,47 @@ fn run() -> Result<()> {
                 "[gc-call-effects] {}: no UNSAFE drift ({} safe)",
                 table.display(),
                 safe.len()
+            );
+        }
+        Command::Sidecars {
+            target,
+            min_symbols,
+            lib_dir,
+        } => {
+            let commit = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["rev-parse", "--short=12", "HEAD"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_else(|| "unknown".into());
+            let analyzer = format!("{} {commit}", env!("CARGO_PKG_VERSION"));
+            let t = std::time::Instant::now();
+            let sidecars = perry_gc_effects::sidecar::produce(
+                &lib_dir,
+                &rules,
+                &root,
+                &analyzer,
+                target.as_deref(),
+                min_symbols,
+                &|name, res, secs| {
+                    eprintln!("[gc-call-effects] {name}: {secs:.1}s");
+                    stats(res);
+                },
+            )?;
+            perry_gc_effects::sidecar::write_sidecars(&sidecars)?;
+            for (path, s) in &sidecars {
+                eprintln!(
+                    "[gc-call-effects] wrote {} ({} combinations)",
+                    path.display(),
+                    s.combinations.len()
+                );
+            }
+            eprintln!(
+                "[gc-call-effects] sidecars: {:.1}s total",
+                t.elapsed().as_secs_f64()
             );
         }
         Command::Why { archives, symbols } => {

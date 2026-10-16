@@ -90,6 +90,11 @@ while IFS= read -r package; do
   echo "::endgroup::"
 done <<< "$governed_ext_packages"
 
+# GC effects sidecars (<archive>.gc-effects) over the final runtime bytes: the
+# ext loop above re-links the runtime, so this is the last write. The table
+# depends only on the bytes, so building it in the container changes nothing.
+bash scripts/gc_call_effects/sidecars.sh "$target_dir/$target/prod"
+
 compiler="$target_dir/$target/prod/perry"
 max_glibc=$(
   readelf --version-info "$compiler" \

@@ -322,6 +322,7 @@ print_gc_evidence_artifacts() {
 init_gc_evidence_outputs
 
 cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry --quiet
+scripts/gc_call_effects/sidecars.sh target/release
 
 PERRY=./target/release/perry
 PYTHON=${PYTHON:-python3}

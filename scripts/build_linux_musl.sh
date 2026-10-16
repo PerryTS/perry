@@ -116,6 +116,9 @@ cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
 
 bash scripts/build_core_runtime.sh "$target"
 
+# GC effects sidecars (<archive>.gc-effects) over the final runtime bytes.
+bash scripts/gc_call_effects/sidecars.sh "$target_dir/$target/prod"
+
 # A dynamically linked binary can run on the glibc build host and still fail
 # immediately for users on Alpine. Gate the artifact itself, not just the
 # Cargo exit status.

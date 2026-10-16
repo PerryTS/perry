@@ -27,6 +27,7 @@ cd "$REPO_ROOT"
 cargo build --release \
     -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-doc-tests \
     -p perry-ext-nodemailer
+scripts/gc_call_effects/sidecars.sh target/release
 
 # Disable per-test auto-optimize for HOST runs only. With this set,
 # `perry compile` short-circuits the cargo-rebuild step in

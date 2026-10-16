@@ -124,6 +124,29 @@ resolve_artifact() {
   echo "$workdir"
 }
 
+# GC effects sidecars: `<archive>.gc-effects` is staged beside every runtime
+# archive (and, once the archive is compressed, beside its .a.zst). perry
+# re-hashes the decompressed archive against it at compile time. A runtime
+# archive without its sidecar is an error: perry would fall back to the
+# all-unsafe table. Args: $1 = source dir, $2 = dest dir, rest = archive names
+# that were staged (non-runtime archives have no sidecar and are skipped).
+stage_sidecars() {
+  local src="$1" dest="$2" lib
+  shift 2
+  for lib in "$@"; do
+    case "$lib" in
+      *perry_runtime*) ;;
+      *) continue ;;
+    esac
+    [ -f "$dest/$lib" ] || continue
+    if [ ! -f "$src/$lib.gc-effects" ]; then
+      echo "  error: $src has no $lib.gc-effects sidecar (scripts/gc_call_effects/sidecars.sh)" >&2
+      exit 1
+    fi
+    cp "$src/$lib.gc-effects" "$dest/$lib.gc-effects"
+  done
+}
+
 # #4823: Stage Android cross-compile libs into a platform package.
 #
 # `perry --target android` links three static archives (runtime, stdlib, UI).
@@ -174,6 +197,13 @@ stage_android_cross_libs() {
       continue
     fi
     cp "$src" "$dest/$lib"
+    if [ "$lib" = libperry_runtime.a ]; then
+      if [ ! -f "$src.gc-effects" ]; then
+        echo "  error: $src has no .gc-effects sidecar (scripts/gc_call_effects/sidecars.sh)" >&2
+        exit 1
+      fi
+      cp "$src.gc-effects" "$dest/$lib.gc-effects"
+    fi
     staged=$((staged + 1))
   done
 
@@ -253,6 +283,7 @@ for entry in "${PLATFORMS[@]}"; do
     for lib in "${WIN_CORE_LIBS[@]}" "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
+    stage_sidecars "$src_dir" "$pkg_dir/lib" "${WIN_CORE_LIBS[@]}"
     # #4823: the Windows package also carries the android cross-libs so
     # `perry --target android` works from an npm install (parity with the zip).
     stage_android_cross_libs "$pkg_dir" "$src_dir"
@@ -262,6 +293,7 @@ for entry in "${PLATFORMS[@]}"; do
     for lib in "${UNIX_CORE_LIBS[@]}" "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
+    stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
   fi
 
   # Compress the static archives so the published npm tarball stays under
@@ -279,7 +311,7 @@ for entry in "${PLATFORMS[@]}"; do
     for f in "$pkg_dir"/lib/*; do
       [ -f "$f" ] || continue
       case "$f" in
-        *.zst) continue ;;
+        *.zst | *.gc-effects) continue ;;
       esac
       zstd -19 -T0 -q -f --rm "$f"
       echo "  compressed $(basename "$f") -> $(basename "$f").zst"

@@ -294,3 +294,31 @@ fn complete_tsv_bytes_match_python_goldens_in_three_formats() {
         }
     }
 }
+
+#[test]
+fn duplicate_definitions_take_the_weaker_row_in_any_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules = load_rules(RULES).unwrap();
+    for (tag, normal, planted, _) in FORMATS {
+        let n = archive(tmp.path(), &format!("n-{tag}.a"), normal);
+        let p = archive(tmp.path(), &format!("p-{tag}.a"), planted);
+        let weak = Entry {
+            class: Class::Reenters,
+            throws: true,
+        };
+        for order in [[n.clone(), p.clone()], [p.clone(), n.clone()]] {
+            let g = build_graph(&order).unwrap();
+            let res = classify(&g, &rules, None).unwrap();
+            assert_eq!(res.table["leaf_helper"], weak, "{tag}: {order:?}");
+            assert!(res.defs["leaf_helper"].len() >= 2, "{tag}: not duplicated");
+            // Untouched rows keep their class, and the explanation walks the
+            // definition that reaches a seed.
+            assert_eq!(res.table["alloc_helper"].class, Class::AllocOnly);
+            let why = res.witness_path(&g, "leaf_helper", Mode::L2);
+            assert!(
+                why.iter().all(|l| !l.contains("reaches no seed")),
+                "{why:?}"
+            );
+        }
+    }
+}

@@ -128,18 +128,22 @@ pub fn shadowed_symbols(root: &Path) -> Result<HashSet<String>> {
     Ok(out)
 }
 pub fn read_table(path: &Path) -> Result<Table> {
+    parse_table(&std::fs::read_to_string(path)?, &path.display().to_string())
+}
+/// Parse the `symbol class throws` rows of a table; `#` lines are comments.
+pub fn parse_table(text: &str, label: &str) -> Result<Table> {
     let mut out = Table::new();
-    for (n, line) in std::fs::read_to_string(path)?.lines().enumerate() {
+    for (n, line) in text.lines().enumerate() {
         if line.starts_with('#') || line.trim().is_empty() {
             continue;
         }
         let parts: Vec<_> = line.split('\t').collect();
         if parts.len() != 3 || !["no", "yes"].contains(&parts[2]) {
-            bail!("{}:{}: malformed table row {line:?}", path.display(), n + 1);
+            bail!("{label}:{}: malformed table row {line:?}", n + 1);
         }
         let class = parts[1]
             .parse()
-            .with_context(|| format!("{}:{}", path.display(), n + 1))?;
+            .with_context(|| format!("{label}:{}", n + 1))?;
         if out
             .insert(
                 parts[0].into(),

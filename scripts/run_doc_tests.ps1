@@ -25,6 +25,12 @@ cargo build --release `
     -p perry-ext-nodemailer
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# GC effects sidecars (<archive>.gc-effects) over the archives just built. The
+# analyzer imports LLVM-C.dll, so LLVM's bin directory must be on PATH.
+if ($env:LLVM_SYS_221_PREFIX) { $env:PATH = "$env:LLVM_SYS_221_PREFIX\bin;$env:PATH" }
+bash scripts/gc_call_effects/sidecars.sh target/release
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # Host doc-tests can reuse the full prebuilt runtime/stdlib archives above.
 # This mirrors run_doc_tests.sh and avoids a feature-specialized Cargo rebuild
 # for each of ~90 examples. Cross-compile runs must leave auto-optimization on

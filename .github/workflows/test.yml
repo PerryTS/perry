@@ -1623,6 +1623,7 @@ jobs:
               # their own full-tier shards.
               cargo build --release -p perry-runtime -p perry-stdlib \
                 -p perry-runtime-static -p perry-stdlib-static
+              scripts/gc_call_effects/sidecars.sh target/release
               export PERRY_RUNTIME_DIR="$PWD/target/release"
             fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
@@ -1860,10 +1861,12 @@ jobs:
               -p perry-runtime-static -p perry-stdlib-static \
               -p perry-ext-http -p perry-ext-net \
               -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
+            scripts/gc_call_effects/sidecars.sh target/release
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
             cargo build --release -p perry-runtime -p perry-stdlib \
               -p perry-runtime-static -p perry-stdlib-static
+            scripts/gc_call_effects/sidecars.sh target/release
           fi
           export PERRY_RUNTIME_DIR="$PWD/target/release"
           export CARGO_BUILD_JOBS=1
@@ -2073,6 +2076,7 @@ jobs:
                 -p perry-runtime-static -p perry-stdlib-static \
                 -p perry-ext-http -p perry-ext-net \
                 -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
+              scripts/gc_call_effects/sidecars.sh target/release
               export PERRY_TEST_RUNTIME_PREBUILT=1
             else
               runtime_packages=(-p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
@@ -2478,6 +2482,7 @@ jobs:
           cargo build --release \
             -p perry -p perry-runtime -p perry-stdlib \
             -p perry-runtime-static -p perry-stdlib-static
+          scripts/gc_call_effects/sidecars.sh target/release
       - name: Upload shared GC matrix build
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
@@ -2486,6 +2491,7 @@ jobs:
             target/release/perry
             target/release/libperry_runtime.a
             target/release/libperry_stdlib.a
+            target/release/libperry_runtime.a.gc-effects
           if-no-files-found: error
           retention-days: 1
 
@@ -3442,7 +3448,9 @@ jobs:
       - name: Build compiler + runtime archives (fast mode, shared across shards)
         # Release profile, codegen-units=1: the parity harness's own build
         # command. cu=16 miscompiles the release runtime (see CLAUDE.md).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+        run: |
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          scripts/gc_call_effects/sidecars.sh target/release
 
       # Only the three files the fast-mode harness actually links against
       # (PERRY_BIN / PERRY_RUNTIME_DIR below) -- not the rest of target/release,
@@ -3455,6 +3463,7 @@ jobs:
             target/release/perry
             target/release/libperry_runtime.a
             target/release/libperry_stdlib.a
+            target/release/libperry_runtime.a.gc-effects
           if-no-files-found: error
           retention-days: 1
 
@@ -3711,7 +3720,9 @@ jobs:
           save-if: false
       - name: Build runtime archives (no shared build in this tier)
         if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+        run: |
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          scripts/gc_call_effects/sidecars.sh target/release
       - name: Committed table vs. the archives
         env:
           GC_EFFECTS_SKIP_BUILD: "1"
@@ -4101,7 +4112,9 @@ jobs:
         # a "no reactor running" panic. `test_issue_414_mysql_query_params`
         # was the single compile-smoke failure this caused. Same set the
         # doc-tests job already builds together.
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-nodemailer
+        run: |
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-nodemailer
+          scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Issue #945 scalar method IR guard
         run: |
@@ -4629,7 +4642,9 @@ jobs:
           mysql -h 127.0.0.1 -P 3306 -u root -e "SELECT VERSION();"
 
       - name: Build perry compiler
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+        run: |
+          cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+          scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Run drizzle-mysql fixture
         run: |
@@ -4699,7 +4714,9 @@ jobs:
           node-version-file: .node-version
 
       - name: Build perry compiler
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+        run: |
+          cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+          scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Run Ink link fixture
         run: |
@@ -4773,7 +4790,9 @@ jobs:
           node-version-file: .node-version
 
       - name: Build perry compiler
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+        run: |
+          cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
+          scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Run Effect fixture
         run: |
@@ -5045,7 +5064,9 @@ jobs:
         # Build them in this SAME Cargo graph as perry-stdlib: otherwise each
         # no-auto fallback build bundles a distinct tokio TLS/runtime and the
         # linker rejects the unsafe pair (#507, #7629).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-nodemailer -p perry-ext-net
+        run: |
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-nodemailer -p perry-ext-net
+          scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Verify macOS application bundle packaging
         if: matrix.os == 'macos-14'
@@ -5158,7 +5179,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build release binaries
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+        run: |
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          scripts/gc_call_effects/sidecars.sh target/release
 
       # What users ship is the dead-stripped LINKED program, not the archive:
       # compile a few small fixtures through the real pipeline, prove each

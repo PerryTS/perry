@@ -10,6 +10,8 @@
 #   GC_EFFECTS_SKIP_BUILD=1 GC_EFFECTS_LIB_DIR=target/release \
 #       scripts/gc_call_effects/regen.sh linux-x86_64 --check
 #
+# The sidecars step runs on every invocation: it is the rule check for the
+# archives, and every runtime archive in the directory gets its .gc-effects file.
 # --cross-check also runs the retained Python analyzer and diffs complete TSV bytes.
 # windows-x86_64 cross-builds with cargo-xwin (runs on a Linux or macOS host).
 set -euo pipefail
@@ -48,6 +50,9 @@ for l in "${libs[@]}"; do paths+=("$libdir/$l"); done
 table="crates/perry-codegen/src/gc_effects/$target.tsv"
 tool=(cargo run --quiet --release -p perry-gc-effects --)
 if [[ -n "${GC_EFFECTS_BIN:-}" ]]; then tool=("$GC_EFFECTS_BIN"); fi
+# Every recipe that builds the runtime archives also writes their sidecars
+# (<archive>.gc-effects), over the bytes just built.
+"${tool[@]}" sidecars "$libdir"
 if [[ -n "$cross_check" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT

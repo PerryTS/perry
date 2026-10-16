@@ -893,7 +893,8 @@ jobs:
           src="target-glibc231/$TARGET/prod"
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a; do
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a \
+              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects libperry_runtime_core.a.gc-effects; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -940,7 +941,8 @@ jobs:
           src="target-musl/$TARGET/prod"
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a; do
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a \
+              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects libperry_runtime_core.a.gc-effects; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -1059,6 +1061,32 @@ jobs:
       # Android cross triples) defines the sentinel #[no_mangle] symbols.
       # A stale cached archive fails the release here instead of breaking
       # consumer links with `undefined symbol: _perry_macos_bundle_chdir`.
+      # GC effects sidecars (design 4.3): one `<archive>.gc-effects` beside
+      # every runtime archive (default, _abort, _core, iOS, Android, ...),
+      # computed over the exact bytes staged below and after the last cargo
+      # call. The rules the analyzer enforces make this the release gate for
+      # the effects tables. The glibc 2.31 and musl legs run the same script
+      # inside their containers (build_linux_*.sh) and copy the results out.
+      - name: Write GC effects sidecars
+        if: matrix.old_glibc_image == '' && matrix.musl_image == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The analyzer imports LLVM-C.dll.
+            export PATH="$(cygpath -u "$LLVM_SYS_221_PREFIX")/bin:$PATH"
+          fi
+          dirs=$(find target \( -path "*/prod/libperry_runtime.a" -o -path "*/prod/perry_runtime.lib" \) -exec dirname {} \; | sort -u)
+          if [ -z "$dirs" ]; then
+            echo "::error::no built runtime archives found under target/ -- nothing to analyze"
+            exit 1
+          fi
+          for dir in $dirs; do
+            echo "::group::sidecars $dir"
+            time ./scripts/gc_call_effects/sidecars.sh "$dir"
+            echo "::endgroup::"
+          done
+
       - name: Verify runtime archives are fresh (#4856)
         shell: bash
         run: |
@@ -1080,6 +1108,10 @@ jobs:
           for lib in libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/prod/$lib" ]; then
               cp "target/${{ matrix.target }}/prod/$lib" staging/
+              # The GC effects sidecar travels beside its runtime archive.
+              case "$lib" in
+                libperry_runtime*) cp "target/${{ matrix.target }}/prod/$lib.gc-effects" staging/ ;;
+              esac
             fi
           done
           # #2532 — ship the perry-ext-* staticlibs so an out-of-tree install
@@ -1099,6 +1131,7 @@ jobs:
             dev_dir="target/aarch64-apple-ios/prod"
             if [ -f "$dev_dir/libperry_runtime.a" ]; then
               cp "$dev_dir/libperry_runtime.a" "staging/libperry_runtime_ios.a"
+              cp "$dev_dir/libperry_runtime.a.gc-effects" "staging/libperry_runtime_ios.a.gc-effects"
             fi
             if [ -f "$dev_dir/libperry_stdlib.a" ]; then
               cp "$dev_dir/libperry_stdlib.a" "staging/libperry_stdlib_ios.a"
@@ -1109,6 +1142,7 @@ jobs:
             sim_dir="target/aarch64-apple-ios-sim/prod"
             if [ -f "$sim_dir/libperry_runtime.a" ]; then
               cp "$sim_dir/libperry_runtime.a" "staging/libperry_runtime_ios_sim.a"
+              cp "$sim_dir/libperry_runtime.a.gc-effects" "staging/libperry_runtime_ios_sim.a.gc-effects"
             fi
             if [ -f "$sim_dir/libperry_stdlib.a" ]; then
               cp "$sim_dir/libperry_stdlib.a" "staging/libperry_stdlib_ios_sim.a"
@@ -1117,6 +1151,10 @@ jobs:
               cp "$sim_dir/libperry_ui_ios.a" "staging/libperry_ui_ios_sim.a"
             fi
           fi
+          # Every runtime archive in the package has its sidecar.
+          for lib in staging/libperry_runtime*.a; do
+            [ -f "$lib.gc-effects" ] || { echo "::error::$lib has no .gc-effects sidecar"; exit 1; }
+          done
           cd staging
           tar czf ../${{ matrix.artifact }}.tar.gz *
 
@@ -1224,6 +1262,9 @@ jobs:
             $path = "target/${{ matrix.target }}/prod/$lib"
             if (Test-Path $path) {
               Copy-Item $path staging/
+              if ($lib -like "perry_runtime*") {
+                Copy-Item "$path.gc-effects" staging/
+              }
             }
           }
           # #872: stage the Android cross-compiled archives next to the
@@ -1251,6 +1292,9 @@ jobs:
                 exit 1
               }
               Copy-Item $src $androidLibDir
+              if ($lib -eq "libperry_runtime.a") {
+                Copy-Item "$src.gc-effects" $androidLibDir
+              }
             }
           }
           Compress-Archive -Path staging/* -DestinationPath "${{ matrix.artifact }}.zip"
@@ -1584,6 +1628,17 @@ jobs:
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
       # every consumer executable link on the build workers.
+      # GC effects sidecar for the runtime archive built above (same step as
+      # the native legs; the analyzer runs on the host for any target triple).
+      - name: Write GC effects sidecars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="$(cygpath -u "$LLVM_SYS_221_PREFIX")/bin:$PATH"
+          fi
+          time ./scripts/gc_call_effects/sidecars.sh "target/${{ matrix.target }}/prod"
+
       - name: Verify runtime archive is fresh (#4856)
         shell: bash
         run: |
@@ -1613,7 +1668,7 @@ jobs:
           rm -rf "$STAGING"
           mkdir -p "$STAGING"
           # Required runtime + stdlib (always present on a successful build).
-          for lib in libperry_runtime.a libperry_stdlib.a; do
+          for lib in libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             src="target/${TARGET}/prod/${lib}"
             if [ ! -f "$src" ]; then
               echo "::error::Expected $src after build but it's missing — aborting bundle."
@@ -1648,7 +1703,7 @@ jobs:
           # (paths and triples are safe ASCII today, but the schema is the
           # contract — let jq own it).
           files_json=$(jq -n '[]')
-          for f in libperry_runtime.a libperry_stdlib.a "$UI_LIB"; do
+          for f in libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects "$UI_LIB"; do
             files_json=$(jq -n --argjson acc "$files_json" \
               --arg path "$f" \
               --arg sha "$(sha "$STAGING/$f")" \
@@ -1676,7 +1731,7 @@ jobs:
           # Windows MSVC builds emit `perry_runtime.lib` / `perry_stdlib.lib`
           # (no `lib` prefix, `.lib` extension) — match the host-build
           # behavior at line ~448 above.
-          $libs = @("perry_runtime.lib", "perry_stdlib.lib", $uiLib)
+          $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_runtime.lib.gc-effects", $uiLib)
           foreach ($lib in $libs) {
             $src = "target/$target/prod/$lib"
             if (-not (Test-Path $src)) {
@@ -2079,12 +2134,13 @@ jobs:
             def install
               if OS.mac?
                 bin.install "perry"
-                lib.install Dir["libperry_*.a"]
+                lib.install Dir["libperry_*.a"] + Dir["libperry_*.a.gc-effects"]
               else
                 system "cargo", "build", "--profile", "prod"
                 system "cargo", "build", "--profile", "prod", "-p", "perry-runtime", "-p", "perry-stdlib", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
+                system "cargo", "run", "--release", "-p", "perry-gc-effects", "--", "sidecars", "target/prod"
                 bin.install "target/prod/perry"
-                lib.install Dir["target/prod/libperry_*.a"]
+                lib.install Dir["target/prod/libperry_*.a"] + Dir["target/prod/libperry_*.a.gc-effects"]
               end
             end
 
@@ -2223,6 +2279,19 @@ jobs:
             chmod 644 "${pkg_dir}/usr/lib/perry/$lib"
           }
 
+          # The GC effects sidecar rides in the same package as its runtime
+          # archive. NOTE: the strip above rewrites the archive bytes, so the
+          # SHA-256 in this sidecar names the unstripped archive that was
+          # analyzed (the rows hold: --strip-debug removes no code).
+          copy_runtime_sidecar() {
+            local lib="$1"
+            local pkg_dir="$2"
+
+            require_staging_file "$lib.gc-effects"
+            cp "staging/$lib.gc-effects" "${pkg_dir}/usr/lib/perry/"
+            chmod 644 "${pkg_dir}/usr/lib/perry/$lib.gc-effects"
+          }
+
           build_deb() {
             local pkg_dir="$1"
 
@@ -2284,6 +2353,7 @@ jobs:
             "Perry runtime static library" \
             "Static runtime archive required by the Perry compiler when linking generated executables."
           copy_static_archive libperry_runtime.a "$RUNTIME_PKG"
+          copy_runtime_sidecar libperry_runtime.a "$RUNTIME_PKG"
           build_deb "$RUNTIME_PKG"
 
           STDLIB_PKG="perry-stdlib_${VERSION}_${ARCH}"

@@ -240,16 +240,26 @@ pub struct Stats {
 pub struct Classification {
     pub table: Table,
     pub node_of: BTreeMap<String, usize>,
+    /// Every node that defines an exported symbol. A symbol defined more than
+    /// once in the link set (the stdlib archive bundles a runtime copy) is
+    /// classified by the join of its definitions.
+    pub defs: BTreeMap<String, Vec<usize>>,
     pub stats: Stats,
     reason: Vec<Vec<Option<String>>>,
     witness: Vec<Vec<Option<usize>>>,
 }
 impl Classification {
     pub fn witness_path(&self, g: &Graph, name: &str, mode: Mode) -> Vec<String> {
-        let Some(&i) = self.node_of.get(name) else {
+        let Some(&first) = self.node_of.get(name) else {
             return vec![format!("{name}: not an exported symbol of these archives")];
         };
         let m = mode.index();
+        // Of several definitions, explain through one that reaches a seed.
+        let i = self
+            .defs
+            .get(name)
+            .and_then(|d| d.iter().copied().find(|&i| self.reason[m][i].is_some()))
+            .unwrap_or(first);
         if self.reason[m][i].is_none() {
             return vec![format!("{name}: reaches no seed in mode {}", mode.name())];
         }
@@ -601,34 +611,47 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         HashSet::new()
     };
     let mut node_of = BTreeMap::new();
+    let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, n) in g.nodes.iter().enumerate() {
         for name in &n.names {
             if g.by_global.get(name).is_some_and(|ns| ns.contains(&i))
                 && (root.is_none() || perry_member(&n.obj, name, &stems))
             {
                 node_of.entry(name.clone()).or_insert(i);
+                let d = defs.entry(name.clone()).or_default();
+                if !d.contains(&i) {
+                    d.push(i);
+                }
             }
         }
     }
-    let table = node_of
+    let entry_of = |i: usize| {
+        let class = if reason[0][i].is_none() {
+            Class::Leaf
+        } else if reason[1][i].is_none() {
+            Class::AllocOnly
+        } else if reason[2][i].is_none() {
+            Class::ThrowOnly
+        } else {
+            Class::Reenters
+        };
+        Entry {
+            class,
+            throws: reason[3][i].is_some(),
+        }
+    };
+    // The join of the definitions: the weaker class and the OR of throws, so
+    // the row holds whichever definition the linker keeps.
+    let table = defs
         .iter()
-        .map(|(name, &i)| {
-            let class = if reason[0][i].is_none() {
-                Class::Leaf
-            } else if reason[1][i].is_none() {
-                Class::AllocOnly
-            } else if reason[2][i].is_none() {
-                Class::ThrowOnly
-            } else {
-                Class::Reenters
-            };
-            (
-                name.clone(),
-                Entry {
-                    class,
-                    throws: reason[3][i].is_some(),
-                },
-            )
+        .map(|(name, nodes)| {
+            let mut row = entry_of(nodes[0]);
+            for &i in &nodes[1..] {
+                let e = entry_of(i);
+                row.class = row.class.max(e.class);
+                row.throws |= e.throws;
+            }
+            (name.clone(), row)
         })
         .collect();
     let mut named_seed_nodes = BTreeMap::new();
@@ -669,6 +692,7 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     Ok(Classification {
         table,
         node_of,
+        defs,
         stats,
         reason,
         witness,

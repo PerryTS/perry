@@ -171,7 +171,8 @@ jobs:
           # vacuous. The package set is fixed here so cargo feature unification
           # is identical to the set used to capture the baseline.
           cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
-          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+          scripts/gc_call_effects/sidecars.sh target/release
+          for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
@@ -410,7 +411,8 @@ jobs:
           cargo build --release \
             -p perry -p perry-runtime -p perry-stdlib \
             -p perry-runtime-static -p perry-stdlib-static
-          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+          scripts/gc_call_effects/sidecars.sh target/release
+          for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
@@ -1606,7 +1608,8 @@ jobs:
           cargo build --release \
             -p perry -p perry-runtime -p perry-stdlib \
             -p perry-runtime-static -p perry-stdlib-static
-          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+          scripts/gc_call_effects/sidecars.sh target/release
+          for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
@@ -1738,7 +1741,8 @@ jobs:
           cargo build --release \
             -p perry -p perry-runtime -p perry-stdlib \
             -p perry-runtime-static -p perry-stdlib-static
-          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+          scripts/gc_call_effects/sidecars.sh target/release
+          for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done

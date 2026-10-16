@@ -8,12 +8,15 @@ mod archive;
 mod graph;
 mod instructions;
 mod rules;
+pub mod sidecar;
 mod table;
 
 pub use archive::build_graph;
 pub use graph::{classify, Classification, Graph, Mode, Node, Stats};
 pub use rules::{load_rules, Rule, SEEDS};
-pub use table::{compare, read_table, shadowed_symbols, write_table, Class, Drift, Entry, Table};
+pub use table::{
+    compare, parse_table, read_table, shadowed_symbols, write_table, Class, Drift, Entry, Table,
+};
 
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
