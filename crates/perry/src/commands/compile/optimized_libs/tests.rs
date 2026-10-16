@@ -1,8 +1,8 @@
-use super::no_auto::build_missing_prebuilt_ext_lib;
+use super::no_auto::{build_missing_prebuilt_ext_lib, resolve_prebuilt_ext_libs};
 use super::*;
 use std::path::Path;
 
-use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
+use crate::commands::stdlib_features::compute_required_features;
 use crate::OutputFormat;
 
 use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
@@ -37,449 +37,17 @@ fn missing_ext_archive_names_emitted_symbols_and_their_providers() {
     assert!(missing.iter().any(|line| {
         line.contains("js_bun_tcp_nm_install")
             && line.contains("libperry_ext_net.a")
-            && line.contains("-p perry-stdlib-static -p perry-ext-net")
+            && line.contains("cargo build --release -p perry-ext-net")
     }));
     assert!(missing.iter().any(|line| {
         line.contains("js_ext_http_nm_install")
             && line.contains("libperry_ext_http.a")
-            && line.contains("-p perry-stdlib-static -p perry-ext-http")
+            && line.contains("cargo build --release -p perry-ext-http")
     }));
 
     let resolved = [PathBuf::from("/archive/libperry_ext_net.a")];
     let definitions = HashSet::from(["js_ext_http_nm_install".to_string()]);
     assert!(missing_ext_archive_diagnostics(&emitted, &definitions, &resolved, None).is_empty());
-}
-
-fn minimal_auto_workspace(dir: &Path) {
-    write_file(&dir.join("Cargo.toml"), b"[workspace]\n");
-    write_file(&dir.join("Cargo.lock"), b"# lock\n");
-    write_file(&dir.join("crates/perry-runtime/Cargo.toml"), b"[package]\n");
-    write_file(
-        &dir.join("crates/perry-runtime/src/lib.rs"),
-        b"pub fn rt() {}\n",
-    );
-    write_file(&dir.join("crates/perry-stdlib/Cargo.toml"), b"[package]\n");
-    write_file(
-        &dir.join("crates/perry-stdlib/src/lib.rs"),
-        b"pub fn stdlib() {}\n",
-    );
-    write_file(&dir.join("crates/perry-hir/Cargo.toml"), b"[package]\n");
-    write_file(
-        &dir.join("crates/perry-hir/src/lib.rs"),
-        b"pub fn hir() {}\n",
-    );
-}
-
-mod cache_compat;
-use cache_compat::matching_runtime_archive;
-
-#[test]
-fn auto_optimized_archives_are_fresh_when_newer_than_sources() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-    std::thread::sleep(std::time::Duration::from_millis(10));
-
-    let runtime = dir
-        .path()
-        .join("target/perry-auto/release/libperry_runtime.a");
-    let stdlib = dir
-        .path()
-        .join("target/perry-auto/release/libperry_stdlib.a");
-    write_file(&runtime, &matching_runtime_archive());
-    write_file(&stdlib, b"!<arch>\n");
-    let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
-    write_file(&stamp, b"test-stamp");
-
-    assert!(auto_optimized_archives_are_fresh(
-        dir.path(),
-        &runtime,
-        &stdlib,
-        &[],
-        &stamp,
-        "test-stamp"
-    ));
-}
-
-#[test]
-fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
-    let _env = env_lock();
-    let original_path = std::env::var_os("PATH");
-    let original_bitcode = std::env::var_os("PERRY_LLVM_BITCODE_LINK");
-    let workspace_root = find_perry_workspace_root().expect("workspace root");
-
-    let mut ctx = CompilationContext::new(workspace_root.clone());
-    ctx.needs_wasm_runtime = true;
-
-    // Derive the cache key / target dir / stamp exactly as
-    // `build_optimized_libs` does for this ctx, so the freshness probe finds
-    // the archives we plant (instead of hardcoding a key string that drifts
-    // whenever the cache-key inputs change).
-    // Mirror build_optimized_libs's feature derivation for this import-free
-    // ctx: since the stdlib cherry-pick, `crypto` is no longer force-added
-    // (it only joins via imports, `uses_crypto_builtins`, or the codegen
-    // `js_crypto_*` prefix net); only the `async-bridge` floor (required
-    // by the always-on worker_threads/readline async bridge; tokio-free
-    // since turnloop P8 lane L) is forced, and the import-/fetch-driven
-    // unions don't fire for a fresh ctx.
-    let mut features = compute_required_features(
-        &ctx.native_module_imports,
-        ctx.uses_fetch,
-        ctx.uses_crypto_builtins,
-    );
-    features.insert("async-bridge");
-    let feature_arg = features_to_cargo_arg(&features);
-    let panic_abort_safe =
-        !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
-    let panic_immediate = effective_size_panic_immediate_abort(panic_abort_safe);
-    let key_input = auto_optimized_cache_key(
-        &feature_arg,
-        panic_abort_safe,
-        panic_immediate,
-        None,
-        &ctx,
-        &[],
-    );
-    let mut hash: u64 = 5381;
-    for b in key_input.as_bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
-    }
-    let (target_dir, _) = auto_target_dir_paths(&workspace_root, hash);
-    let release_dir = target_dir.join("release");
-    let runtime = release_dir.join("libperry_runtime.a");
-    let stdlib = release_dir.join("libperry_stdlib.a");
-    std::fs::create_dir_all(&release_dir).expect("mkdir release dir");
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(&runtime, &matching_runtime_archive());
-    write_file(&stdlib, b"!<arch>\n");
-    let cross_features = auto_optimized_cross_features(&ctx, &features, &[]);
-    let source_fingerprint = auto_optimized_source_fingerprint(&workspace_root, &[]);
-    let stamp =
-        auto_optimized_build_stamp(&key_input, None, &cross_features, &[], &source_fingerprint);
-    write_file(
-        &target_dir.join(".perry-auto-build.stamp"),
-        stamp.as_bytes(),
-    );
-
-    let fake_path = tempfile::tempdir().expect("fake PATH");
-    std::env::set_var("PATH", fake_path.path());
-    std::env::remove_var("PERRY_LLVM_BITCODE_LINK");
-
-    let libs = build_optimized_libs(&ctx, None, &[], OutputFormat::Json, 0);
-
-    set_env_var("PATH", original_path.as_deref().and_then(|v| v.to_str()));
-    set_env_var(
-        "PERRY_LLVM_BITCODE_LINK",
-        original_bitcode.as_deref().and_then(|v| v.to_str()),
-    );
-
-    assert_eq!(libs.runtime.as_deref(), Some(runtime.as_path()));
-    assert_eq!(libs.stdlib.as_deref(), Some(stdlib.as_path()));
-}
-
-#[test]
-fn auto_optimized_archives_are_stale_when_runtime_source_is_newer() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-    let runtime = dir
-        .path()
-        .join("target/perry-auto/release/libperry_runtime.a");
-    let stdlib = dir
-        .path()
-        .join("target/perry-auto/release/libperry_stdlib.a");
-    write_file(&runtime, &matching_runtime_archive());
-    write_file(&stdlib, b"!<arch>\n");
-    let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
-    write_file(&stamp, b"test-stamp");
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(
-        &dir.path().join("crates/perry-runtime/src/lib.rs"),
-        b"pub fn rt_changed() {}\n",
-    );
-
-    assert!(!auto_optimized_archives_are_fresh(
-        dir.path(),
-        &runtime,
-        &stdlib,
-        &[],
-        &stamp,
-        "test-stamp"
-    ));
-}
-
-#[test]
-fn auto_optimized_freshness_ignores_nested_target_dirs() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    let runtime = dir
-        .path()
-        .join("target/perry-auto/release/libperry_runtime.a");
-    let stdlib = dir
-        .path()
-        .join("target/perry-auto/release/libperry_stdlib.a");
-    write_file(&runtime, &matching_runtime_archive());
-    write_file(&stdlib, b"!<arch>\n");
-    let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
-    write_file(&stamp, b"test-stamp");
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(
-        &dir.path()
-            .join("crates/perry-runtime/target/debug/stale-marker"),
-        b"newer but irrelevant\n",
-    );
-
-    assert!(auto_optimized_archives_are_fresh(
-        dir.path(),
-        &runtime,
-        &stdlib,
-        &[],
-        &stamp,
-        "test-stamp"
-    ));
-}
-
-/// #5892 layer 2 / #5778 warm-cache trap: the auto-opt freshness gate must be
-/// keyed on the CONTENT of every source tree that lands in the archives — an
-/// ext-crate edit must rotate the fingerprint even when mtimes lie (cache
-/// restores, fresh checkouts), and rewriting identical bytes must NOT.
-#[test]
-fn source_fingerprint_tracks_ext_crate_content_not_mtimes() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-    write_file(
-        &dir.path().join("crates/perry-ext-http/Cargo.toml"),
-        b"[package]\n",
-    );
-    write_file(
-        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
-        b"pub fn http() {}\n",
-    );
-    let bindings = vec![(
-        "perry-ext-http".to_string(),
-        "perry_ext_http".to_string(),
-        None,
-    )];
-
-    let fp1 = auto_optimized_source_fingerprint(dir.path(), &bindings);
-
-    // Rewriting identical bytes (mtime-only churn) must not rotate the key.
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(
-        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
-        b"pub fn http() {}\n",
-    );
-    assert_eq!(
-        fp1,
-        auto_optimized_source_fingerprint(dir.path(), &bindings)
-    );
-
-    // A content edit in the ext crate must rotate it — this is exactly the
-    // stale-archive reuse that masked #5911 in CI.
-    write_file(
-        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
-        b"pub fn http_changed() {}\n",
-    );
-    let fp2 = auto_optimized_source_fingerprint(dir.path(), &bindings);
-    assert_ne!(fp1, fp2);
-
-    // A binding crate that isn't routed must not affect the key.
-    assert_ne!(
-        auto_optimized_source_fingerprint(dir.path(), &[]),
-        fp2,
-        "fingerprint should include routed binding crates"
-    );
-}
-
-/// The fingerprint must follow transitive workspace path-deps: an edit in a
-/// crate reachable only through another crate's manifest (here perry-ext-net
-/// via perry-ext-http) still lands in the archives, so it must rotate the key.
-#[test]
-fn source_fingerprint_follows_workspace_dep_closure() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-    write_file(
-        &dir.path().join("crates/perry-ext-http/Cargo.toml"),
-        b"[package]\n[dependencies]\nperry-ext-net = { path = \"../perry-ext-net\" }\n",
-    );
-    write_file(
-        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
-        b"pub fn http() {}\n",
-    );
-    write_file(
-        &dir.path().join("crates/perry-ext-net/Cargo.toml"),
-        b"[package]\n",
-    );
-    write_file(
-        &dir.path().join("crates/perry-ext-net/src/lib.rs"),
-        b"pub fn net() {}\n",
-    );
-    let bindings = vec![(
-        "perry-ext-http".to_string(),
-        "perry_ext_http".to_string(),
-        None,
-    )];
-
-    let fp1 = auto_optimized_source_fingerprint(dir.path(), &bindings);
-    write_file(
-        &dir.path().join("crates/perry-ext-net/src/lib.rs"),
-        b"pub fn net_changed() {}\n",
-    );
-    assert_ne!(
-        fp1,
-        auto_optimized_source_fingerprint(dir.path(), &bindings)
-    );
-}
-
-/// The GC-iteration "stale runtime" trap: perry-runtime / perry-stdlib are the
-/// crates a runtime dev edits most, yet the pre-existing fingerprint coverage
-/// only exercised the routed ext crates. A CONTENT edit to a runtime/stdlib
-/// source file must rotate the fingerprint even when the file's mtime does NOT
-/// advance (a `git checkout`, `cp -p`, or cache restore can hand back a fresh
-/// checkout whose sources look "older" than a cached archive) — the #5892/#5930
-/// content fingerprint is exactly what makes that safe, where the mtime gate
-/// alone is blind. Rewriting identical bytes must NOT rotate it, so the common
-/// no-edit rebuild stays a fast cache hit.
-#[test]
-fn source_fingerprint_tracks_runtime_and_stdlib_content_not_mtimes() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-
-    let fp0 = auto_optimized_source_fingerprint(dir.path(), &[]);
-
-    // mtime-only churn (identical bytes, later write time) must not rotate the
-    // key — this is the no-edit fast path the freshness gate relies on.
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(
-        &dir.path().join("crates/perry-runtime/src/lib.rs"),
-        b"pub fn rt() {}\n",
-    );
-    assert_eq!(
-        fp0,
-        auto_optimized_source_fingerprint(dir.path(), &[]),
-        "rewriting identical runtime bytes must not rotate the fingerprint"
-    );
-
-    // A content edit to an EXISTING perry-runtime source file must rotate it.
-    // Editing in place (rather than adding a new file) is what makes this
-    // assertion depend on the file CONTENT hash: a fingerprint that hashed only
-    // the path set would still rotate on an added file, and the test could not
-    // fail. See `runtime_source_edit_rotates_build_stamp_and_fails_freshness`
-    // for the same reasoning applied to the freshness gate.
-    write_file(
-        &dir.path().join("crates/perry-runtime/src/lib.rs"),
-        b"pub fn rt_changed() {}\n",
-    );
-    let fp_rt = auto_optimized_source_fingerprint(dir.path(), &[]);
-    assert_ne!(
-        fp0, fp_rt,
-        "a perry-runtime source edit must rotate the fingerprint"
-    );
-
-    // Same guarantee for perry-stdlib.
-    write_file(
-        &dir.path().join("crates/perry-stdlib/src/lib.rs"),
-        b"pub fn stdlib_changed() {}\n",
-    );
-    let fp_std = auto_optimized_source_fingerprint(dir.path(), &[]);
-    assert_ne!(
-        fp_rt, fp_std,
-        "a perry-stdlib source edit must rotate the fingerprint"
-    );
-
-    write_file(
-        &dir.path().join("crates/perry-hir/tests/e2e.rs"),
-        b"#[test] fn e2e_only() {}\n",
-    );
-    assert_eq!(
-        fp_std,
-        auto_optimized_source_fingerprint(dir.path(), &[]),
-        "test-only targets do not land in the optimized runtime archive"
-    );
-
-    // Compiler/runtime contract inputs participate in perry-runtime's build
-    // id even when the runtime archive does not depend on them through Cargo.
-    // Reusing the old archive after a lowering edit therefore fails the build
-    // id check unless the auto-opt stamp rotates too.
-    write_file(
-        &dir.path().join("crates/perry-hir/src/lib.rs"),
-        b"pub fn hir_changed() {}\n",
-    );
-    assert_ne!(
-        fp_std,
-        auto_optimized_source_fingerprint(dir.path(), &[]),
-        "a compiler/runtime contract edit must rotate the fingerprint"
-    );
-}
-
-/// Ties the runtime-source fingerprint to the freshness gate the compile driver
-/// actually consults: a content edit to perry-runtime rotates the build stamp,
-/// so a `target/perry-auto-<hash>` dir stamped for the OLD source can never pass
-/// `auto_optimized_archives_are_fresh` — no manual `rm libperry_runtime.a`.
-///
-/// The stamp gate is the ONLY thing this test lets answer "stale": the archives
-/// are planted *after* the source edit, so every source is older than them and
-/// the mtime half of `auto_optimized_archives_are_fresh` votes "fresh". That
-/// ordering is deliberate — plant them first and the edit's own mtime makes the
-/// gate reject on the mtime path alone, so the assertion would still pass with
-/// the stamp comparison deleted and the test could never fail (the repo's
-/// "a gate must assert its subject was live" rule). It is also the real-world
-/// case the content fingerprint exists for: a `git checkout` / `cp -p` / CI
-/// cache restore hands back sources whose mtimes never advance past a cached
-/// archive.
-#[test]
-fn runtime_source_edit_rotates_build_stamp_and_fails_freshness() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    minimal_auto_workspace(dir.path());
-
-    let fp_before = auto_optimized_source_fingerprint(dir.path(), &[]);
-    let stamp_before = auto_optimized_build_stamp("key", None, &[], &[], &fp_before);
-
-    // Content edit to an EXISTING runtime source file (in place, so the
-    // assertion rides on the content hash rather than on the path set).
-    write_file(
-        &dir.path().join("crates/perry-runtime/src/lib.rs"),
-        b"pub fn rt_v2() {}\n",
-    );
-
-    // Only now plant the archives + the stamp recorded for the PRE-edit source,
-    // so their mtimes are newer than every source and the mtime half of the gate
-    // says "fresh". Anything but the stamp mismatch would let this pass.
-    let runtime = dir
-        .path()
-        .join("target/perry-auto/release/libperry_runtime.a");
-    let stdlib = dir
-        .path()
-        .join("target/perry-auto/release/libperry_stdlib.a");
-    let stamp_path = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(&runtime, &matching_runtime_archive());
-    write_file(&stdlib, b"!<arch>\n");
-    write_file(&stamp_path, stamp_before.as_bytes());
-
-    let fp_after = auto_optimized_source_fingerprint(dir.path(), &[]);
-    let stamp_after = auto_optimized_build_stamp("key", None, &[], &[], &fp_after);
-    assert_ne!(
-        stamp_before, stamp_after,
-        "a runtime source edit must rotate the build stamp"
-    );
-    assert!(
-        !auto_optimized_archives_are_fresh(
-            dir.path(),
-            &runtime,
-            &stdlib,
-            &[],
-            &stamp_path,
-            &stamp_after,
-        ),
-        "archives stamped for the pre-edit runtime source must not pass the freshness gate"
-    );
-}
-
-/// #507's co-build set (formerly "shared tokio"): the network wrappers are
-/// rebuilt in the stdlib's cargo invocation.
-#[test]
-fn net_cobuilds_with_stdlib() {
-    assert!(binding_cobuilds_with_stdlib("net"));
 }
 
 #[test]
@@ -501,92 +69,6 @@ fn web_streams_remain_bundled_when_well_known_wrappers_are_enabled() {
     );
 }
 
-/// The final tokio lane deleted perry-stdlib's `async-runtime` feature (the
-/// tokio current-thread runtime) and tokio with it. No import may select it
-/// again: not through the module → feature table, and not through the
-/// workspace manifest, whose declared-feature filter must drop it (and any
-/// `tokio` optional-dependency feature) as unknown. The Cargo.lock half of the
-/// same invariant is `scripts/tokio_inventory.py`.
-#[test]
-fn no_feature_selection_reaches_tokio() {
-    let mut modules: Vec<String> = [
-        "net",
-        "tls",
-        "http",
-        "https",
-        "http2",
-        "ws",
-        "dgram",
-        "dns",
-        "zlib",
-        "crypto",
-        "child_process",
-        "worker_threads",
-        "readline",
-        "stream",
-        "streams",
-        "fs/promises",
-        "bcrypt",
-        "argon2",
-        "sharp",
-        "nodemailer",
-        "undici",
-        "perry/container",
-    ]
-    .iter()
-    .map(|m| m.to_string())
-    .collect();
-    for binding in super::super::well_known::iter_well_known() {
-        modules.push(binding.package.clone());
-    }
-    let imports: BTreeSet<String> = modules.iter().cloned().collect();
-    let mut selected = compute_required_features(&imports, true, true);
-    for module in &modules {
-        selected.extend(crate::commands::stdlib_features::module_to_features(module));
-    }
-    for feature in &selected {
-        assert!(
-            *feature != "async-runtime" && !feature.contains("tokio"),
-            "`{feature}` selects tokio, which was removed from the workspace"
-        );
-    }
-
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut cross = vec![
-        "perry-stdlib/async-runtime".to_string(),
-        "perry-stdlib/tokio".to_string(),
-        "perry-stdlib/async-bridge".to_string(),
-    ];
-    let dropped = retain_workspace_declared_features(&workspace_root, &mut cross);
-    assert_eq!(
-        dropped,
-        ["perry-stdlib/async-runtime", "perry-stdlib/tokio"],
-        "perry-stdlib must declare neither `async-runtime` nor a `tokio` dependency"
-    );
-    assert_eq!(
-        cross,
-        ["perry-stdlib/async-bridge"],
-        "the bridge is the one that stays"
-    );
-}
-
-#[test]
-fn cpu_only_wrappers_are_not_co_built() {
-    // bcrypt / argon2 / sharp / dotenv all route through perry-stdlib's
-    // `spawn_blocking` / pool shims; their workspace-built archive links as-is.
-    assert!(!binding_cobuilds_with_stdlib("bcrypt"));
-    assert!(!binding_cobuilds_with_stdlib("argon2"));
-    assert!(!binding_cobuilds_with_stdlib("sharp"));
-    assert!(!binding_cobuilds_with_stdlib("dotenv"));
-}
-
-#[test]
-fn undici_cobuilds_with_stdlib() {
-    // perry-ext-undici is network-I/O-family glue over the native fetch
-    // stack; it rides the co-build (see the freshness.rs comment).
-    assert!(binding_cobuilds_with_stdlib("undici"));
-}
-
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
 /// The codegen prefix net routes `js_undici_*` to these
 /// binding keys; each must exist in the shipped `well_known_bindings.toml`
@@ -599,15 +81,6 @@ fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
         assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
     }
-}
-
-/// The auto-build selection split: undici rides the co-built auto-optimize
-/// invocation, while node-forge is CPU-only
-/// (routes async through perry-stdlib's spawn_blocking shim) and is auto-built
-/// by the isolated leaf-build path in the driver's CPU-only branch.
-#[test]
-fn ext_binding_build_routing_split() {
-    assert!(binding_cobuilds_with_stdlib("undici"));
 }
 
 #[test]
@@ -626,15 +99,6 @@ fn direct_tls_without_external_transport_keeps_legacy_umbrella() {
     let mut features = std::collections::BTreeSet::new();
     super::driver::finalize_tls_transport_features(&mut features, true, false);
     assert_eq!(features, std::collections::BTreeSet::from(["tls"]));
-}
-
-#[test]
-fn unknown_modules_default_to_workspace_path() {
-    // Defensive default: if a module isn't in the allowlist,
-    // treat it as CPU-only (existing v0.5.586 behavior).
-    assert!(!binding_cobuilds_with_stdlib(
-        "definitely-not-a-real-package"
-    ));
 }
 
 #[test]
@@ -714,68 +178,6 @@ fn node_test_usage_enables_mod_node_test_cross_feature() {
 }
 
 #[test]
-fn node_test_gate_keys_the_auto_optimize_cache() {
-    // Two programs that differ ONLY in `node:test` usage build different
-    // archives, so they must not share a `target/perry-auto-<hash>` dir.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut with_test = CompilationContext::new(dir.path().to_path_buf());
-    with_test.uses_node_test = true;
-    let without = CompilationContext::new(dir.path().to_path_buf());
-
-    assert_ne!(
-        auto_optimized_cache_key("", true, false, None, &with_test, &[]),
-        auto_optimized_cache_key("", true, false, None, &without, &[]),
-        "mod-node-test must participate in the auto-optimize cache key"
-    );
-}
-
-#[test]
-fn co_built_wrapper_set_keys_the_auto_optimize_target_dir() {
-    // #9470 / #9094: wrapper selection is expressed with Cargo `-p` args,
-    // not stdlib features. Two otherwise-identical compilations therefore
-    // used to share one perry-auto target dir. Once the wrapper build released
-    // its lock, a wrapper-free build could replace stdlib before the first
-    // compiler linked, leaving archives from different dependency graphs.
-    let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
-    let mysql = vec![(
-        "perry-ext-mysql2".to_string(),
-        "perry_ext_mysql2".to_string(),
-        Some("#466".to_string()),
-    )];
-    let axios = vec![(
-        "perry-ext-axios".to_string(),
-        "perry_ext_axios".to_string(),
-        Some("#466".to_string()),
-    )];
-
-    let without_wrapper = auto_optimized_cache_key("async-bridge", true, false, None, &ctx, &[]);
-    let with_mysql = auto_optimized_cache_key("async-bridge", true, false, None, &ctx, &mysql);
-    let with_axios = auto_optimized_cache_key("async-bridge", true, false, None, &ctx, &axios);
-
-    assert_ne!(without_wrapper, with_mysql);
-    assert_ne!(with_mysql, with_axios);
-    assert!(
-        with_mysql.contains("|cobuild=perry-ext-mysql2:perry_ext_mysql2|"),
-        "the co-built set is keyed under `cobuild=`: {with_mysql}"
-    );
-
-    // Aliases can discover the same archive more than once. Multiplicity and
-    // tracking prose do not change the Cargo graph, so neither changes its key.
-    let duplicate_mysql = vec![
-        mysql[0].clone(),
-        (
-            "perry-ext-mysql2".to_string(),
-            "perry_ext_mysql2".to_string(),
-            Some("different tracking text".to_string()),
-        ),
-    ];
-    assert_eq!(
-        with_mysql,
-        auto_optimized_cache_key("async-bridge", true, false, None, &ctx, &duplicate_mysql,)
-    );
-}
-
-#[test]
 fn http2_import_enables_http2_constants_cross_feature() {
     // #6468: importing `node:http2` records "http2" in `native_module_imports`,
     // which must flip on `perry-runtime/mod-http2-constants` so the constant
@@ -813,59 +215,6 @@ fn http2_import_enables_http2_constants_cross_feature() {
             .any(|f| f == "perry-runtime/mod-http2-constants"),
         "getBuiltinModule should enable mod-http2-constants, got {dynamic_features:?}"
     );
-}
-
-#[test]
-fn http2_import_changes_optimized_libs_cache_key() {
-    // #6468: the http2-constants usage bit participates in the auto-build cache
-    // key, so a runtime built without the constant tables is never reused for a
-    // program that imports `node:http2`.
-    let dir = tempfile::tempdir().expect("tempdir");
-
-    let base = CompilationContext::new(dir.path().to_path_buf());
-    let key_without = auto_optimized_cache_key("", true, false, None, &base, &[]);
-
-    let mut with_http2 = CompilationContext::new(dir.path().to_path_buf());
-    with_http2.native_module_imports.insert("http2".to_string());
-    let key_with = auto_optimized_cache_key("", true, false, None, &with_http2, &[]);
-
-    assert_ne!(
-        key_without, key_with,
-        "an http2 import must change the auto-optimized cache key"
-    );
-
-    let mut dynamic = CompilationContext::new(dir.path().to_path_buf());
-    dynamic.uses_get_builtin_module = true;
-    assert_ne!(
-        key_without,
-        auto_optimized_cache_key("", true, false, None, &dynamic, &[]),
-        "getBuiltinModule must change the auto-optimized cache key"
-    );
-}
-
-#[test]
-fn immediate_abort_requires_unwind_safe_reachability_and_changes_cache_identity() {
-    let _guard = env_lock();
-    let old_size_opt = std::env::var("PERRY_SIZE_OPT").ok();
-    let old_size_panic = std::env::var("PERRY_SIZE_PANIC").ok();
-    set_env_var("PERRY_SIZE_OPT", Some("z"));
-    set_env_var("PERRY_SIZE_PANIC", Some("abort-immediate"));
-
-    let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
-    let safe_mode = effective_size_panic_immediate_abort(true);
-    let unsafe_mode = effective_size_panic_immediate_abort(false);
-    let ordinary_key = auto_optimized_cache_key("", true, false, None, &ctx, &[]);
-    let immediate_key = auto_optimized_cache_key("", true, safe_mode, None, &ctx, &[]);
-    let unsafe_key = auto_optimized_cache_key("", false, unsafe_mode, None, &ctx, &[]);
-
-    set_env_var("PERRY_SIZE_OPT", old_size_opt.as_deref());
-    set_env_var("PERRY_SIZE_PANIC", old_size_panic.as_deref());
-
-    assert!(safe_mode);
-    assert!(!unsafe_mode);
-    assert_ne!(ordinary_key, immediate_key);
-    assert!(immediate_key.contains("+panicimm"));
-    assert!(!unsafe_key.contains("+panicimm"));
 }
 
 #[test]
@@ -1089,39 +438,6 @@ fn cargo_target_dir_strips_windows_verbatim_prefixes() {
     );
 }
 
-#[cfg(windows)]
-#[test]
-fn auto_target_dir_uses_relative_cargo_env_path_on_windows() {
-    let workspace = PathBuf::from(r"\\?\D:\Projects\perry");
-    let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace, 0xdeadbeef);
-
-    assert!(
-        !cargo_env_dir.is_absolute(),
-        "CARGO_TARGET_DIR should stay relative so Cargo build scripts do not receive verbatim Windows paths"
-    );
-    assert_eq!(
-        cargo_env_dir,
-        PathBuf::from("target").join("perry-auto-00000000deadbeef")
-    );
-    assert_eq!(
-        target_dir,
-        PathBuf::from(r"D:\Projects\perry\target\perry-auto-00000000deadbeef")
-    );
-}
-
-#[cfg(not(windows))]
-#[test]
-fn auto_target_dir_keeps_absolute_cargo_env_path_off_windows() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let (target_dir, cargo_env_dir) = auto_target_dir_paths(dir.path(), 0xdeadbeef);
-
-    assert!(
-        cargo_env_dir.is_absolute(),
-        "non-Windows hosts should keep the previous absolute CARGO_TARGET_DIR behavior"
-    );
-    assert_eq!(target_dir, cargo_env_dir);
-}
-
 #[cfg(unix)]
 #[test]
 fn no_auto_builds_missing_well_known_archive_from_workspace_source() {
@@ -1281,89 +597,6 @@ printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_wasm_host.a"
     );
 }
 
-/// Binary/workspace skew: a cross-feature the on-disk checkout's
-/// perry-runtime doesn't declare must be dropped (and reported), not passed
-/// through to fail the entire cargo resolve — that failure's prebuilt
-/// fallback links without the routed ext entrypoints and dies with
-/// undefined `js_*` symbols far from the cause.
-#[test]
-fn retain_workspace_declared_features_drops_unknown_names() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    write_file(
-        &dir.path().join("crates/perry-runtime/Cargo.toml"),
-        b"[package]\nname = \"perry-runtime\"\n\n[features]\nfull = [\"dep:hidden-allocator\"]\nregex-engine = []\n\n[dependencies]\nmimalloc = { version = \"0.1\", optional = true }\nhidden-allocator = { version = \"0.1\", optional = true }\n",
-    );
-    write_file(
-        &dir.path().join("crates/perry-stdlib/Cargo.toml"),
-        b"[package]\nname = \"perry-stdlib\"\n\n[features]\ncrypto = []\n",
-    );
-
-    let mut cross_features = vec![
-        "perry-runtime/full".to_string(),
-        "perry-runtime/alloc-mimalloc".to_string(),
-        "perry-runtime/mimalloc".to_string(),
-        "perry-runtime/hidden-allocator".to_string(),
-        "perry-stdlib/crypto".to_string(),
-        "perry-stdlib/web-fetch".to_string(),
-    ];
-    let dropped = retain_workspace_declared_features(dir.path(), &mut cross_features);
-
-    // `full` and `crypto` are declared features; `mimalloc` is an optional
-    // dep with an implicit feature. `hidden-allocator` is referenced through
-    // `dep:`, so Cargo does not expose an implicit same-named feature.
-    assert_eq!(
-        cross_features,
-        vec![
-            "perry-runtime/full".to_string(),
-            "perry-runtime/mimalloc".to_string(),
-            "perry-stdlib/crypto".to_string(),
-        ]
-    );
-    assert_eq!(
-        dropped,
-        vec![
-            "perry-runtime/alloc-mimalloc".to_string(),
-            "perry-runtime/hidden-allocator".to_string(),
-            "perry-stdlib/web-fetch".to_string(),
-        ]
-    );
-}
-
-/// A manifest without an explicit `[features]` table still declares implicit
-/// features for optional dependencies, but must reject every other stale name.
-#[test]
-fn retain_workspace_declared_features_handles_missing_feature_table() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    write_file(
-        &dir.path().join("crates/perry-runtime/Cargo.toml"),
-        b"[package]\nname = \"perry-runtime\"\n\n[dependencies]\nmimalloc = { version = \"0.1\", optional = true }\n",
-    );
-
-    let mut cross_features = vec![
-        "perry-runtime/mimalloc".to_string(),
-        "perry-runtime/stale".to_string(),
-    ];
-    let dropped = retain_workspace_declared_features(dir.path(), &mut cross_features);
-
-    assert_eq!(cross_features, vec!["perry-runtime/mimalloc".to_string()]);
-    assert_eq!(dropped, vec!["perry-runtime/stale".to_string()]);
-}
-
-/// Fail-open: with no readable manifest (release tarball, partial checkout)
-/// there is nothing trustworthy to filter against — every requested feature
-/// must survive.
-#[test]
-fn retain_workspace_declared_features_keeps_all_without_manifests() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut cross_features = vec![
-        "perry-runtime/full".to_string(),
-        "perry-runtime/alloc-mimalloc".to_string(),
-    ];
-    let dropped = retain_workspace_declared_features(dir.path(), &mut cross_features);
-    assert!(dropped.is_empty());
-    assert_eq!(cross_features.len(), 2);
-}
-
 /// Regression: the auto-optimize rebuild must always include
 /// `perry-runtime/keepalive-anchors` in the cross-feature set. #6917 gated
 /// the `#[used]` keepalive anchors behind the feature and only enabled it for
@@ -1415,42 +648,6 @@ fn bun_usage_enables_cli_utility_runtime_pack() {
             .iter()
             .any(|feature| feature == "perry-runtime/bun-cli-utils"),
         "--platform bun must retain #9600's runtime backends: {platform_features:?}"
-    );
-}
-
-#[test]
-fn dynamic_import_options_retain_toml_and_change_cache_key() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let without = CompilationContext::new(dir.path().to_path_buf());
-    let mut with = CompilationContext::new(dir.path().to_path_buf());
-    with.uses_dynamic_import_options = true;
-    let cross = auto_optimized_cross_features(&with, &std::collections::BTreeSet::new(), &[]);
-    assert!(cross
-        .iter()
-        .any(|feature| feature == "perry-runtime/bun-cli-utils"));
-    assert_ne!(
-        auto_optimized_cache_key("", true, false, None, &with, &[]),
-        auto_optimized_cache_key("", true, false, None, &without, &[]),
-    );
-}
-
-#[test]
-fn data_url_dynamic_import_enables_dyn_eval_and_changes_cache_key() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let empty_features = std::collections::BTreeSet::new();
-    let without = CompilationContext::new(dir.path().to_path_buf());
-    let mut with_data_url = CompilationContext::new(dir.path().to_path_buf());
-    with_data_url.uses_data_url_dynamic_import = true;
-
-    let cross = auto_optimized_cross_features(&with_data_url, &empty_features, &[]);
-    assert!(
-        cross.iter().any(|f| f == "perry-runtime/dyn-eval"),
-        "data URL modules require the dyn-eval runtime, got {cross:?}"
-    );
-    assert_ne!(
-        auto_optimized_cache_key("", true, false, None, &with_data_url, &[]),
-        auto_optimized_cache_key("", true, false, None, &without, &[]),
-        "a runtime without dyn-eval must not be reused for data URL imports"
     );
 }
 
@@ -1570,31 +767,6 @@ fn non_wasm_usage_does_not_enable_wasm_host_cross_feature() {
     );
 }
 
-/// Regression: the auto-optimize cache key must differ between a wasm-using
-/// program and a non-wasm program so cargo doesn't serve a cached non-wasm
-/// runtime archive (missing `js_webassembly_*`) to a wasm program, or vice
-/// versa (an archive carrying unresolved `perry_wasm_host_*` refs).
-#[test]
-fn wasm_usage_changes_auto_optimize_cache_key() {
-    let workspace_root = find_perry_workspace_root().expect("workspace root");
-    let ctx_no_wasm = CompilationContext::new(workspace_root.clone());
-    let mut ctx_wasm = CompilationContext::new(workspace_root);
-    ctx_wasm.needs_wasm_runtime = true;
-
-    let features = compute_required_features(
-        &ctx_no_wasm.native_module_imports,
-        ctx_no_wasm.uses_fetch,
-        ctx_no_wasm.uses_crypto_builtins,
-    );
-    let feature_arg = features_to_cargo_arg(&features);
-    let key_no_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_no_wasm, &[]);
-    let key_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_wasm, &[]);
-    assert_ne!(
-        key_no_wasm, key_wasm,
-        "wasm usage must change the cache key so the target dirs don't collide"
-    );
-}
-
 #[test]
 fn gc_instrument_knobs_match_the_runtime() {
     // The compiler decides whether to link the instruments; the runtime aborts
@@ -1605,7 +777,7 @@ fn gc_instrument_knobs_match_the_runtime() {
     let start = src.find("INSTRUMENT_KNOBS: &[&str] = &[").unwrap();
     let end = start + src[start..].find("];").unwrap();
     let runtime: Vec<&str> = src[start..end].split('"').skip(1).step_by(2).collect();
-    assert_eq!(runtime, super::freshness::GC_INSTRUMENT_KNOBS);
+    assert_eq!(runtime, super::features::GC_INSTRUMENT_KNOBS);
 }
 
 #[test]
@@ -1616,7 +788,7 @@ fn hot_diag_knobs_match_the_runtime() {
     let start = src.find("HOT_DIAG_KNOBS: &[&str] = &[").unwrap();
     let end = start + src[start..].find("];").unwrap();
     let runtime: Vec<&str> = src[start..end].split('"').skip(1).step_by(2).collect();
-    assert_eq!(runtime, super::freshness::HOT_DIAG_KNOBS);
+    assert_eq!(runtime, super::features::HOT_DIAG_KNOBS);
 }
 
 mod no_auto_http_graph;
@@ -1770,9 +942,32 @@ fn missing_http_archive_explains_installed_and_source_options() {
     let message = &diagnostics[0];
     assert!(message.contains("installed Perry"), "{message}");
     assert!(message.contains("matching extension archive"), "{message}");
-    assert!(message.contains("PERRY_WORKSPACE_ROOT"), "{message}");
     assert!(
-        message.contains("-p perry-stdlib-static -p perry-ext-http"),
+        message.contains("cargo build --release -p perry-ext-http"),
         "{message}"
+    );
+}
+
+#[test]
+fn dynamic_import_options_install_bun_cli_utils() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut with = CompilationContext::new(dir.path().to_path_buf());
+    with.uses_dynamic_import_options = true;
+    let cross = auto_optimized_cross_features(&with, &std::collections::BTreeSet::new(), &[]);
+    assert!(cross
+        .iter()
+        .any(|feature| feature == "perry-runtime/bun-cli-utils"));
+}
+
+#[test]
+fn data_url_dynamic_import_installs_dyn_eval() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features = std::collections::BTreeSet::new();
+    let mut with_data_url = CompilationContext::new(dir.path().to_path_buf());
+    with_data_url.uses_data_url_dynamic_import = true;
+    let cross = auto_optimized_cross_features(&with_data_url, &empty_features, &[]);
+    assert!(
+        cross.iter().any(|f| f == "perry-runtime/dyn-eval"),
+        "data URL modules require the dyn-eval runtime, got {cross:?}"
     );
 }

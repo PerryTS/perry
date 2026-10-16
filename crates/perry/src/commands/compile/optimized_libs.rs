@@ -1,15 +1,7 @@
-//! Auto-rebuild perry-runtime + perry-stdlib with the smallest matching
-//! Cargo feature set so the compiled `.o` only links the runtime APIs
-//! the user's TS code actually uses.
-//!
-//! Tier 2.1 follow-up (v0.5.341) — extracts `OptimizedLibs` + the
-//! `build_optimized_libs` driver from `compile.rs`. ~390 LOC of
-//! self-contained library-build orchestration. Both `runtime` and
-//! `stdlib` halves fall back to the prebuilt libraries gracefully on
-//! any failure (no source on disk, no cargo, build error). Cargo's
-//! incremental cache is keyed per (target dir, feature set), and we
-//! use a hash-keyed target dir so consecutive runs with the same
-//! profile are no-ops after the first build.
+//! The runtime/stdlib/wrapper archives a program links (`OptimizedLibs`) and
+//! the optional features its generated installer installs. perry links the
+//! prebuilt archives and never builds them while compiling a program; the
+//! driver (`build_optimized_libs`) only selects archives and installs.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
@@ -18,23 +10,17 @@ use std::path::PathBuf;
 use super::CompilationContext;
 
 mod driver;
-mod freshness;
+mod features;
 mod no_auto;
 mod paths;
 mod prebuilt_core;
 
 pub(crate) use driver::build_optimized_libs;
-pub(crate) use freshness::{
-    auto_optimized_archives_are_fresh, auto_optimized_build_stamp, auto_optimized_cache_key,
-    auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_cobuilds_with_stdlib,
-    effective_size_panic_immediate_abort, gc_instruments_requested, gc_trace_requested,
-    hot_diag_requested, resolve_auto_well_known_libs, retain_workspace_declared_features,
-    size_lto_fat, size_opt_level,
+pub(crate) use features::{
+    auto_optimized_cross_features, gc_instruments_requested, gc_trace_requested, hot_diag_requested,
 };
-pub(crate) use no_auto::{resolve_no_auto_optimized_libs, resolve_prebuilt_ext_libs};
-pub(crate) use paths::{
-    android_global_dynamic_tls_rustflag, auto_target_dir_paths, cargo_target_dir_path,
-};
+pub(crate) use no_auto::resolve_no_auto_optimized_libs;
+pub(crate) use paths::{android_global_dynamic_tls_rustflag, cargo_target_dir_path};
 
 #[cfg(test)]
 mod tests;
@@ -204,7 +190,7 @@ pub(crate) fn missing_ext_archive_diagnostics(
     resolved_ext_libs: &[PathBuf],
     target: Option<&str>,
 ) -> Vec<String> {
-    let mut missing: BTreeMap<String, (&str, &str, bool)> = BTreeMap::new();
+    let mut missing: BTreeMap<String, (&str, &str)> = BTreeMap::new();
     for symbol in emitted_undefined {
         if linked_definitions.contains(symbol) {
             continue;
@@ -225,29 +211,16 @@ pub(crate) fn missing_ext_archive_diagnostics(
         {
             continue;
         }
-        missing.entry(filename).or_insert((
-            symbol,
-            &binding.krate,
-            binding_cobuilds_with_stdlib(owner),
-        ));
+        missing.entry(filename).or_insert((symbol, &binding.krate));
     }
     missing
         .into_iter()
-        .map(|(filename, (symbol, krate, cobuilt))| {
-            let build = if cobuilt {
-                format!(
-                    "cargo build --release -p perry -p perry-runtime-static \
-                     -p perry-stdlib-static -p {krate}"
-                )
-            } else {
-                format!("cargo build --release -p {krate}")
-            };
+        .map(|(filename, (symbol, krate))| {
             format!(
                 "`{symbol}` needs {filename}, but that archive is not linked. \
-                 From a Perry source checkout, build it with: {build}. For an \
-                 installed Perry, install the matching extension archive in \
-                 PERRY_RUNTIME_DIR or PERRY_LIB_DIR, or set PERRY_WORKSPACE_ROOT \
-                 to a matching source checkout to build it on demand."
+                 From a Perry source checkout, build it with: cargo build \
+                 --release -p {krate}. For an installed Perry, install the \
+                 matching extension archive in PERRY_RUNTIME_DIR or PERRY_LIB_DIR."
             )
         })
         .collect()

@@ -222,12 +222,6 @@ pub fn compute_required_features(
     features
 }
 
-/// Render a feature set as the comma-separated string Cargo expects on
-/// `--features`.
-pub fn features_to_cargo_arg(features: &BTreeSet<&'static str>) -> String {
-    features.iter().copied().collect::<Vec<_>>().join(",")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

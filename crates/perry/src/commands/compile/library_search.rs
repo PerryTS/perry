@@ -1243,18 +1243,6 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
     })
 }
 
-/// Find the panic=abort prebuilt runtime variant (optional — shipped by
-/// release packaging for runtime-only apps; selected by the out-of-tree
-/// fallback in `optimized_libs.rs` when no `catch_unwind` callers are
-/// reachable and stdlib is not linked). Unix-only: Windows always links
-/// stdlib, which is built panic=unwind.
-pub(super) fn find_runtime_abort_library(target: Option<&str>) -> Option<PathBuf> {
-    if is_windows_target(target) {
-        return None;
-    }
-    find_library("libperry_runtime_abort.a", target)
-}
-
 /// Optional feature-trimmed runtime shipped for source-free Unix installs.
 /// The existing search also resolves `.a.zst` archives from npm packages.
 pub(super) fn find_runtime_core_library(target: Option<&str>) -> Option<PathBuf> {

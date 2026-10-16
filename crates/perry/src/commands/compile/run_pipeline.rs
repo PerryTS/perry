@@ -3635,25 +3635,13 @@ pub fn run_with_parse_cache(
         None
     };
 
-    // Auto-mode: pick the smallest matching (features, panic) profile
-    // for this binary and rebuild perry-runtime + perry-stdlib in a
-    // hash-keyed target dir. Both halves fall back to the prebuilt full
-    // libraries if the rebuild fails or the workspace source isn't on
-    // disk. `--no-auto-optimize` disables runtime/stdlib rebuilds but
-    // still resolves prebuilt well-known wrapper archives whose symbols
-    // are absent from the full stdlib.
-    //
-    // The legacy `--minimal-stdlib` flag is now a no-op alias for
-    // backward compat — auto-mode already does what it used to and more.
+    // Link the prebuilt runtime/stdlib/wrapper archives; the installer
+    // generated after codegen installs exactly the optional features this
+    // program needs, and the linker drops the rest. `--no-auto-optimize` and
+    // the legacy `--minimal-stdlib` are accepted no-ops: nothing is rebuilt.
+    let _ = args.no_auto_optimize;
     let optimized_libs: Option<OptimizedLibs> = if native_link_set_skipped {
         None
-    } else if args.no_auto_optimize {
-        Some(optimized_libs::resolve_no_auto_optimized_libs(
-            &ctx,
-            target.as_deref(),
-            format,
-            verbose,
-        ))
     } else {
         Some(build_optimized_libs(
             &ctx,
@@ -6108,12 +6096,9 @@ pub fn run_with_parse_cache(
     // runtime checks. See `program_facts.rs` for the knobs.
     let program_facts = super::program_facts::run(
         &ctx.native_modules,
-        // The dyn-eval interpreter is linked (E14 possible): a prebuilt
-        // runtime, or an auto-optimized one that keeps the interpreter.
-        args.no_auto_optimize
-            || std::env::var_os("PERRY_NO_AUTO_OPTIMIZE")
-                .is_some_and(|v| !v.is_empty() && v != "0")
-            || perry_hir::has_deferred_dynamic_code_sites()
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 /// (#1529) Android's `libperry_app.so` is loaded via `dlopen`, so its TLS
@@ -44,22 +44,4 @@ pub(crate) fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
 #[cfg(not(windows))]
 pub(crate) fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
     path
-}
-
-#[cfg(windows)]
-fn cargo_target_dir_env_path(_target_dir: &Path, relative_target_dir: &Path) -> PathBuf {
-    relative_target_dir.to_path_buf()
-}
-
-#[cfg(not(windows))]
-fn cargo_target_dir_env_path(target_dir: &Path, _relative_target_dir: &Path) -> PathBuf {
-    target_dir.to_path_buf()
-}
-
-pub(crate) fn auto_target_dir_paths(workspace_root: &Path, hash: u64) -> (PathBuf, PathBuf) {
-    let workspace_root = cargo_target_dir_path(workspace_root.to_path_buf());
-    let relative_target_dir = PathBuf::from("target").join(format!("perry-auto-{:016x}", hash));
-    let target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
-    let cargo_env_dir = cargo_target_dir_env_path(&target_dir, &relative_target_dir);
-    (target_dir, cargo_env_dir)
 }

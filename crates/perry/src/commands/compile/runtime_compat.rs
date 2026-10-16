@@ -183,10 +183,7 @@ pub(crate) fn runtime_library_diagnostic(path: &Path, status: &RuntimeLibrarySta
 
     format!(
         "runtime library does not match this Perry compiler:\n  {reason}\n\
-         The archive may be stale. For auto-optimized archives, rebuild Perry \
-         from the same checkout with `cargo build --release -p perry`, then run \
-         that newly built executable and retry so auto-optimize refreshes its cache. \
-         For prebuilt libraries, rebuild the compiler and both archives together with \
+         The archive may be stale. Rebuild the compiler and both archives together with \
          `cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static` \
          and replace {} with the matching runtime archive, or reinstall Perry \
          so the binary and libraries come from the same package.",
@@ -268,8 +265,6 @@ mod tests {
         assert!(diagnostic.contains(&stale.to_string()));
         assert!(diagnostic.contains(&expected.to_string()));
         assert!(diagnostic.contains("archive may be stale"));
-        assert!(diagnostic.contains("auto-optimize refreshes its cache"));
-        assert!(diagnostic.contains("that newly built executable"));
         assert!(diagnostic.contains("-p perry -p perry-runtime-static -p perry-stdlib-static"));
     }
 

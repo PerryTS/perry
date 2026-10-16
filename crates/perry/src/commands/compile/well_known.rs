@@ -218,30 +218,6 @@ pub fn ext_staticlib_filename(lib_stem: &str, target_triple: Option<&str>) -> St
     }
 }
 
-/// Resolve the bundled staticlib path for `binding`, given the perry
-/// workspace root (from `find_perry_workspace_root`) and an optional
-/// rust target triple. When `target_triple` is `Some`, look in the
-/// per-target output dir (`target/<triple>/release/`); otherwise the
-/// host build dir (`target/release/`). Returns `None` when the file
-/// isn't present — caller decides whether to error or fall through.
-pub fn bundled_staticlib_path_for_target(
-    workspace_root: &Path,
-    binding: &WellKnownBinding,
-    target_triple: Option<&str>,
-) -> Option<PathBuf> {
-    let release_dir = if let Some(triple) = target_triple {
-        workspace_root.join("target").join(triple).join("release")
-    } else {
-        workspace_root.join("target").join("release")
-    };
-    let path = release_dir.join(ext_staticlib_filename(&binding.lib, target_triple));
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
-}
-
 fn parse_well_known_toml(raw: &str) -> Result<BTreeMap<String, WellKnownBinding>, String> {
     // Hand-written parser keeps the dep surface small and avoids
     // pulling another toml-deserializer alternative — `toml`

@@ -1,17 +1,11 @@
 use super::*;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
-use std::process::Command;
 
-use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
+use crate::commands::stdlib_features::compute_required_features;
 use crate::OutputFormat;
 
-use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env, host_target_triple};
-use super::super::{
-    find_perry_workspace_root, is_android_target, is_windows_target, rust_target_triple,
-    CompilationContext,
-};
+use super::super::CompilationContext;
 
 /// Select the provider for TLS module/server state after well-known routing.
 ///
@@ -35,16 +29,16 @@ pub(super) fn finalize_tls_transport_features(
     }
 }
 
-/// Rebuild perry-runtime + perry-stdlib in a single cargo invocation with
-/// the chosen Cargo features and panic mode, and return paths to the
-/// resulting archives. Both halves fall back to the prebuilt libraries
-/// gracefully on any failure (no source on disk, no cargo, build error).
+/// Choose the runtime/stdlib/wrapper archives a program links and the optional
+/// features its generated installer installs.
 ///
-/// This is the auto-mode workhorse — it lets the compile driver pick the
-/// smallest matching profile for the user's TS code without any manual
-/// flags. Cargo's incremental cache is keyed per (target dir, feature
-/// set), and we use a hash-keyed target dir so consecutive runs with the
-/// same profile are no-ops after the first build.
+/// perry links the prebuilt archives (`target/release`, or the ones installed
+/// next to the perry binary) and never builds them at compile time. Each
+/// archive carries every optional feature behind an install entry point
+/// (`js_runtime_install_*` / `js_stdlib_install_*`); the features computed here
+/// pick the entry points the generated installer calls, and the linker's
+/// `--gc-sections` / `-dead_strip` / `/OPT:REF` drops whatever no installed
+/// feature and no compiled call reaches.
 pub(crate) fn build_optimized_libs(
     ctx: &CompilationContext,
     target: Option<&str>,
@@ -70,26 +64,6 @@ pub(crate) fn build_optimized_libs(
         );
         std::process::exit(1);
     }
-    // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
-    // specialization and use the prebuilt `target/release/libperry_*.a`
-    // built with the default `full` feature set. Used by CI doc-tests
-    // (`scripts/run_doc_tests.sh`) where the workspace is pre-built
-    // once and 80+ tests would otherwise re-trigger a multi-minute
-    // cargo rebuild per test (each test's distinct import set hashes
-    // to a different `target/perry-auto-<hash>` cache dir). Trades
-    // binary size for ~80% wall-time reduction on doc-tests.
-    //
-    // The runtime/stdlib link path still falls through to
-    // `find_runtime_library` / `find_stdlib_library`, which probe
-    // `target/release/` and `target/<target-triple>/release/`. Keep the
-    // well-known wrapper lookup active, though: native-table rows such
-    // as `http.request(...)` and `http.createServer(...)` emit symbols
-    // owned by `perry-ext-http`, and the full prebuilt stdlib does not
-    // define those wrapper-only entry points.
-    if std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
-        return resolve_no_auto_optimized_libs(ctx, target, format, verbose);
-    }
-    // (compute_required_features + features_to_cargo_arg imported at module top)
     let mut features = compute_required_features(
         &ctx.native_module_imports,
         ctx.uses_fetch,
@@ -129,154 +103,18 @@ pub(crate) fn build_optimized_libs(
     // each entry falls back to the perry-stdlib copy individually
     // (logged with `well-known: skipping` when verbose), so a
     // partially-built workspace still produces a working binary.
-    let mut well_known_libs: Vec<PathBuf> = Vec::new();
-    // #507 — network wrappers (`binding_cobuilds_with_stdlib`) are rebuilt
-    // IN the auto-optimize cargo invocation (`-p <crate>`), next to
-    // perry-runtime-static / perry-stdlib-static, so they are compiled from
-    // the same sources, profile and feature unification as the archives
-    // they link against. This began as the "shared tokio" fix (two tokio
-    // compilations meant two `CONTEXT` thread-locals and a "no reactor
-    // running" abort); tokio is gone from the workspace, the co-build stays.
-    //
-    // CPU-only wrappers (bcrypt, argon2, sharp, …) don't need this —
-    // they only use perry-ffi's `spawn_blocking` / pool shims. Their
-    // workspace-built .a stays fine.
-    let mut cobuilt_bindings: Vec<(String, String, Option<String>)> = Vec::new();
     let mut external_net_transport = false;
     // Web Fetch is selected independently from the external node:http
     // binding. `uses_fetch` adds `web-fetch` in compute_required_features.
-    // Was `if use_well_known { … }`; the gate is now the compile's routing
-    // decision (`routed_modules`), and the block is kept to leave the body's
-    // indentation — and its blame — as it was.
+    // Every routed module with a well-known binding links that binding's
+    // prebuilt wrapper archive (`resolve_prebuilt_ext_libs`, below); here it
+    // only adjusts the stdlib features the program needs installed.
     let routed_set = routed_modules(ctx);
     {
         for module in &routed_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
-            let Some(binding) = super::super::well_known::lookup_well_known(module) else {
+            if super::super::well_known::lookup_well_known(module).is_none() {
                 continue;
-            };
-            // Workspace root is required for both the prebuilt-path
-            // probe AND for the rebuild-in-auto-optimize path.
-            let workspace_root_opt = find_perry_workspace_root();
-            let Some(workspace_root) = workspace_root_opt.as_ref() else {
-                continue;
-            };
-            let cobuilds_with_stdlib = binding_cobuilds_with_stdlib(module_normalized);
-            // For CPU-only wrappers we can use the workspace-built
-            // copy directly. Skip the binding entirely if no .a
-            // exists on disk (partial build / release tarball
-            // missing the wrapper).
-            if !cobuilds_with_stdlib {
-                // CPU-only wrapper: prefer the workspace-built copy on disk.
-                // When it's missing (fresh checkout, or a `compilePackages`
-                // binding that a human never prebuilt — the measured
-                // perry-ext-node-forge gap), auto-build it from workspace
-                // source instead of silently falling back to the perry-stdlib
-                // copy. A bare `perry compile` of a program whose codegen
-                // emitted `js_node_forge_*` must not require a manual
-                // `cargo build -p perry-ext-node-forge` first. `build_missing_
-                // prebuilt_ext_lib` is the same plain-build mechanism the
-                // no-auto path already uses (a leaf `cargo build --release -p
-                // <crate>` into `target/release`) — CPU-only wrappers don't
-                // need the co-build invocation, so this stays isolated
-                // from the specialized runtime/stdlib rebuild.
-                let lib_path = super::super::well_known::bundled_staticlib_path_for_target(
-                    workspace_root,
-                    binding,
-                    rust_target_triple(target),
-                )
-                .or_else(|| {
-                    let filename = super::super::well_known::ext_staticlib_filename(
-                        &binding.lib,
-                        rust_target_triple(target),
-                    );
-                    if matches!(format, OutputFormat::Text) && verbose > 0 {
-                        eprintln!(
-                            "  well-known: `lib{}.a` not on disk for `{}` — auto-building \
-                             `{}` from workspace source.",
-                            binding.lib, module, binding.krate
-                        );
-                    }
-                    super::no_auto::build_missing_prebuilt_ext_lib(
-                        workspace_root,
-                        binding,
-                        &filename,
-                        target,
-                        format,
-                        verbose,
-                    )
-                });
-                let Some(lib_path) = lib_path else {
-                    if matches!(format, OutputFormat::Text) && verbose > 0 {
-                        eprintln!(
-                            "  well-known: skipping `{}` — bundled `lib{}.a` not found \
-                             in target/release and the auto-build produced nothing; \
-                             falling back to perry-stdlib copy.",
-                            module, binding.lib
-                        );
-                    }
-                    continue;
-                };
-                if matches!(format, OutputFormat::Text) {
-                    println!(
-                        "  well-known: routing `{}` → {} ({})",
-                        module,
-                        lib_path.display(),
-                        binding.tracking.as_deref().unwrap_or("no tracking issue")
-                    );
-                }
-                well_known_libs.push(lib_path);
-            } else {
-                // Co-built: defer path resolution until after the
-                // auto-optimize cargo build. Verify the source crate
-                // exists on disk first (so we can actually build it).
-                let crate_dir = workspace_root.join("crates").join(&binding.krate);
-                if !crate_dir.is_dir() {
-                    // tokio lane L4 deleted perry-stdlib's bundled `net` / `ws`,
-                    // so for those the fall-back below has nothing to fall back to.
-                    if wrapper_is_sole_provider(module_normalized) {
-                        eprintln!(
-                            "error: `import '{}'` requires the external {} wrapper, but its \
-                             source crate was not found at `{}`. perry-stdlib's bundled copy was \
-                             removed; build or restore {}.",
-                            module,
-                            binding.krate,
-                            crate_dir.display(),
-                            binding.krate
-                        );
-                        std::process::exit(1);
-                    }
-                    if matches!(format, OutputFormat::Text) && verbose > 0 {
-                        eprintln!(
-                            "  well-known: skipping `{}` — crate `{}` source not on disk; \
-                             falling back to perry-stdlib copy.",
-                            module, binding.krate
-                        );
-                    }
-                    continue;
-                }
-                if matches!(format, OutputFormat::Text) {
-                    println!(
-                        "  well-known: routing `{}` → rebuilding `{}` with the specialized stdlib (#507) ({})",
-                        module,
-                        binding.krate,
-                        binding.tracking.as_deref().unwrap_or("no tracking issue")
-                    );
-                }
-                // Multiple import spellings can resolve to one archive
-                // (`http` + `https` + `http2`). Keep the
-                // Cargo package set and link line unique; alias multiplicity
-                // is not a different build graph.
-                if !cobuilt_bindings
-                    .iter()
-                    .any(|(krate, lib, _tracking)| krate == &binding.krate && lib == &binding.lib)
-                {
-                    cobuilt_bindings.push((
-                        binding.krate.clone(),
-                        binding.lib.clone(),
-                        binding.tracking.clone(),
-                    ));
-                }
             }
             if matches!(module_normalized, "net" | "http" | "https" | "http2") {
                 external_net_transport = true;
@@ -517,854 +355,60 @@ pub(crate) fn build_optimized_libs(
     // can select a tokio runtime any more (`no_feature_selection_reaches_tokio`
     // in optimized_libs/tests.rs pins that).
     features.insert("async-bridge");
-    let feature_arg = features_to_cargo_arg(&features);
 
-    // panic = "abort" is safe whenever no `catch_unwind` callers are
-    // reachable. Today those live in:
-    //   - perry-runtime/src/thread.rs (perry/thread `spawn`)
-    //   - perry-ui-{macos,ios}/* (UI callback isolation)
-    //   - perry-runtime plugin host (`needs_plugins` → -rdynamic +
-    //     -force_load paths that may rely on unwind tables for plugin
-    //     dylibs)
-    //   - geisterhand registry callbacks
-    // Whenever the user binary doesn't pull any of those in, switching
-    // to `abort` saves ~12-18 % off the final binary by dropping
-    // __TEXT,__eh_frame, __TEXT,__gcc_except_tab, __TEXT,__unwind_info
-    // and the matching landing pads / Drop glue.
-    let panic_abort_safe =
-        !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
-    // Keep the opt-in immediate-abort strategy behind the same reachability
-    // proof as ordinary panic=abort. UI/thread/plugin callbacks still rely on
-    // unwinding, so disabling their unwind tables would be unsound.
-    let panic_immediate = effective_size_panic_immediate_abort(panic_abort_safe);
-
-    // Locate the workspace. Without source we can't rebuild — fall back
-    // to whatever's prebuilt next to perry on disk. The fallback names are
-    // platform-specific so the log doesn't claim Perry is searching for a
-    // `.a` on Windows (it isn't — `find_runtime_library` / `find_stdlib_library`
-    // route to `perry_runtime.lib` + `perry_stdlib.lib` on Windows hosts).
-    let workspace_root = match find_perry_workspace_root() {
-        Some(p) => p,
-        None => {
-            // Release packages build their runtime archives with
-            // PERRY_RELEASE_STRIP_INSTRUMENTS=1, so a prebuilt link cannot
-            // honor an instrument request, and the knob then refuses at
-            // startup with advice to recompile. Say here why recompiling
-            // alone does not help. Not verbose-gated: it answers a request
-            // the user just made.
-            if matches!(format, OutputFormat::Text)
-                && (super::freshness::gc_instruments_requested()
-                    || super::freshness::hot_diag_requested())
-            {
-                eprintln!(
-                    "  note: GC instruments / hot-path diagnostics were requested, but \
-                     Perry workspace source was not found, so the prebuilt runtime is \
-                     linked; release builds of it carry no instruments. Set \
-                     PERRY_WORKSPACE_ROOT to a perry source checkout to build them in."
-                );
-            }
-            if super::prebuilt_core::eligible(ctx, cli_features) {
-                if let Some(runtime) =
-                    super::super::library_search::find_runtime_core_library(target)
-                {
-                    if matches!(format, OutputFormat::Text) && verbose > 0 {
-                        eprintln!(
-                            "  auto-optimize: using prebuilt core runtime: {}",
-                            runtime.display()
-                        );
-                    }
-                    return OptimizedLibs {
-                        runtime: Some(runtime),
-                        ..OptimizedLibs::empty()
-                    };
-                }
-            }
-            // Not verbose-gated: the fallback links the full-feature
-            // prebuilt stdlib (sqlite/crypto/tls/…), which typically
-            // adds 5MB+ of code the linker cannot dead-strip (the
-            // dynamic dispatch table pins every module). Users should
-            // know why the binary is big and how to opt back in.
-            if matches!(format, OutputFormat::Text) && verbose == 0 {
-                eprintln!(
-                    "  note: Perry workspace source not found — linking the prebuilt \
-                     full stdlib (larger binary). Set PERRY_WORKSPACE_ROOT to a \
-                     source checkout to enable size-optimized rebuilds."
-                );
-            }
-            if matches!(format, OutputFormat::Text) && verbose > 0 {
-                let (rt_name, std_name) = if is_windows_target(target) {
-                    ("perry_runtime.lib", "perry_stdlib.lib")
-                } else {
-                    ("libperry_runtime.a", "libperry_stdlib.a")
-                };
-                eprintln!(
-                    "  auto-optimize: Perry workspace source not found, \
-                     using prebuilt {} + {}",
-                    rt_name, std_name
-                );
-            }
-            // #2532 — out-of-tree (released / out-of-source) install:
-            // we can't rebuild perry-stdlib with a stripped feature set,
-            // so the link uses the prebuilt full `libperry_stdlib.a`.
-            // That full stdlib does NOT carry the `perry-ext-*` host
-            // functions — `node:http`'s server lives in perry-ext-http,
-            // which isn't a perry-stdlib dependency — so
-            // an out-of-box `node:http` server otherwise fails to link
-            // with `Undefined symbols: _js_node_http_create_server…`.
-            // Resolve the well-known ext staticlibs the program needs
-            // from the same search path the runtime/stdlib lookups use
-            // (PERRY_LIB_DIR / PERRY_RUNTIME_DIR, the exe dir, Homebrew
-            // `../lib`, …) and hand them back so they join the link line
-            // after the full stdlib.
-            let well_known_libs = resolve_prebuilt_ext_libs(&routed_set, target, format, verbose);
-            // Out-of-tree size salvage: release packaging ships a
-            // panic=abort prebuilt runtime variant alongside the unwind
-            // one (stage-npm.sh / release-packages.yml). When the app
-            // links runtime-only (no stdlib) and pulls in nothing that
-            // needs `catch_unwind`, prefer it — same ~12-18% saving the
-            // workspace rebuild gets from panic=abort, no source needed.
-            // Unix-only by construction: Windows always links stdlib
-            // (codegen declares all stdlib externs there), and mixing an
-            // abort runtime with the unwind stdlib is not supported.
-            let runtime = if panic_abort_safe && !ctx.needs_stdlib {
-                let found = super::super::library_search::find_runtime_abort_library(target);
-                if found.is_some() && matches!(format, OutputFormat::Text) && verbose > 0 {
-                    eprintln!("  auto-optimize: using prebuilt panic=abort runtime");
-                }
-                found
-            } else {
-                None
-            };
-            return OptimizedLibs {
-                runtime,
-                prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
-                well_known_libs,
-                // The prebuilt stdlib carries every feature. Install only the
-                // ones this program needs — the same set an auto-optimized
-                // rebuild would compile — so the linker can drop the rest.
-                // A deferred dynamic-code site can reach a module by runtime
-                // string, so such programs keep installing everything.
-                stdlib_installs: if perry_hir::has_deferred_dynamic_code_sites() {
-                    crate::commands::stdlib_installs::FeatureInstalls::Compiled
-                } else {
-                    crate::commands::stdlib_installs::FeatureInstalls::Selected(
-                        features.iter().map(|f| f.to_string()).collect(),
-                    )
-                },
-                // Both runtime fallbacks here (the prebuilt `panic=abort`
-                // variant, or `None` = the prebuilt `libperry_runtime.a`) carry
-                // every runtime feature too: install the ones an auto-optimized
-                // rebuild would compile for this program.
-                runtime_installs: if perry_hir::has_deferred_dynamic_code_sites() {
-                    crate::commands::stdlib_installs::FeatureInstalls::Compiled
-                } else {
-                    crate::commands::stdlib_installs::FeatureInstalls::Selected(
-                        auto_optimized_cross_features(ctx, &features, cli_features)
-                            .iter()
-                            .filter_map(|f| f.strip_prefix("perry-runtime/"))
-                            .map(str::to_string)
-                            .collect(),
-                    )
-                },
-                ..OptimizedLibs::empty()
-            };
-        }
-    };
-    let workspace_root = cargo_target_dir_path(workspace_root);
-
-    // Hash the (features, panic_mode, target, wasm-host, co-built wrapper
-    // set) tuple into the target dir name so cargo treats each combination as
-    // its own incremental cache. `wasm-host` lives on `perry-runtime` (not
-    // perry-stdlib), so it isn't part of `feature_arg`; the selected ext
-    // wrappers are Cargo packages rather than features, so they are not in it
-    // either. Bake both into the key so neither graph can be served or
-    // overwritten by another compile using the same stripped stdlib features.
-    //
-    // The compiler version is part of the key too. Codegen emits calls to
-    // runtime entrypoints (e.g. `js_promise_run_promise_jobs`,
-    // `js_mark_entry_module_esm`) that grow with each release; the object
-    // cache is already version-invalidated (see build_cache.rs — it misses on
-    // `perry_version != CARGO_PKG_VERSION`), so on a persistent build host a
-    // newer compiler emits the new calls while this version-blind dir would
-    // hand back a stale `libperry_runtime.a` lacking those symbols — an
-    // "undefined symbol" link failure for exactly the newly-added entrypoints.
-    // Keying on the version forces a matching rebuild whenever perry upgrades.
-    // Cheap djb2 — no need for the SipHash overhead.
-    let key_input = auto_optimized_cache_key(
-        &feature_arg,
-        panic_abort_safe,
-        panic_immediate,
-        target,
-        ctx,
-        &cobuilt_bindings,
-    );
-    let mut hash: u64 = 5381;
-    for b in key_input.as_bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
+    let mut libs = resolve_no_auto_optimized_libs(ctx, target, format, verbose);
+    // A runtime-only program that needs none of the optional runtime
+    // features links the packaged core archive when one is installed.
+    if libs.runtime.is_none() && super::prebuilt_core::eligible(ctx, cli_features) {
+        libs.runtime = super::super::library_search::find_runtime_core_library(target);
     }
-    let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
-    let mut cross_features = auto_optimized_cross_features(ctx, &features, cli_features);
-    // Binary/workspace skew guard: the baked-in list above tracks the branch
-    // this `perry` was built from, but cargo resolves it against the checkout
-    // on disk. One unknown `perry-runtime/<feat>` fails the whole resolve, and
-    // the prebuilt fallback below then links without the ext-pump entrypoints
-    // — undefined-`js_*` errors two stages away from the cause. Filter before
-    // the build stamp so the stamp keys on what actually gets built.
-    let dropped_features = retain_workspace_declared_features(&workspace_root, &mut cross_features);
-    if !dropped_features.is_empty() && matches!(format, OutputFormat::Text) {
-        eprintln!(
-            "  auto-optimize: dropping feature(s) this workspace does not declare: {} \
-             (this perry binary was likely built from a different branch than the \
-             checkout at {})",
-            dropped_features.join(", "),
-            workspace_root.display()
+    prebuilt_installs(libs, ctx, &features, cli_features)
+}
+
+/// The prebuilt archives carry every feature; the generated installer installs
+/// the ones this program needs (exactly the set the retired auto-optimized
+/// rebuild compiled), so the linker drops the rest. An archive rebuilt for a
+/// program (`runtime`/`stdlib` is `Some`) was built with exactly its features
+/// and installs everything it has.
+fn prebuilt_installs(
+    mut libs: OptimizedLibs,
+    ctx: &CompilationContext,
+    features: &BTreeSet<&'static str>,
+    cli_features: &[String],
+) -> OptimizedLibs {
+    use crate::commands::stdlib_installs::FeatureInstalls;
+    if libs.stdlib.is_none() {
+        libs.stdlib_installs =
+            FeatureInstalls::Selected(prebuilt_stdlib_install_features(features));
+    }
+    if libs.runtime.is_none() {
+        libs.runtime_installs = FeatureInstalls::Selected(
+            auto_optimized_cross_features(ctx, features, cli_features)
+                .iter()
+                .filter_map(|f| f.strip_prefix("perry-runtime/"))
+                .map(str::to_string)
+                .collect(),
         );
     }
-    let cross_features = cross_features;
-    // `-Zbuild-std` (the `PERRY_SIZE_PANIC=abort-immediate` path) requires an
-    // explicit `--target`, and passing one relocates cargo's output into
-    // `target/<triple>/release`. Resolve the effective triple ONCE so the
-    // cargo args and this path can never disagree (they did in development:
-    // the archives built fine and the link then reported them missing).
-    let effective_triple: Option<&str> = rust_target_triple(target).or_else(|| {
-        if panic_immediate {
-            host_target_triple()
-        } else {
-            None
-        }
-    });
-    let release_dir = if let Some(triple) = effective_triple {
-        target_dir.join(triple).join("release")
-    } else {
-        target_dir.join("release")
-    };
-    let runtime_name = if is_windows_target(target) {
-        "perry_runtime.lib"
-    } else {
-        "libperry_runtime.a"
-    };
-    let stdlib_name = if is_windows_target(target) {
-        "perry_stdlib.lib"
-    } else {
-        "libperry_stdlib.a"
-    };
-    let runtime_path = release_dir.join(runtime_name);
-    let stdlib_path = release_dir.join(stdlib_name);
-    // Content fingerprint of the sources that land in the archives — makes the
-    // stamp (and therefore the freshness gate) immune to mtime scrambling from
-    // cache restores / fresh checkouts (#5892 layer 2, #5778 warm-cache trap).
-    let source_fingerprint = auto_optimized_source_fingerprint(&workspace_root, &cobuilt_bindings);
-    let build_stamp = auto_optimized_build_stamp(
-        &key_input,
-        target,
-        &cross_features,
-        &cobuilt_bindings,
-        &source_fingerprint,
-    );
-    let build_stamp_path = target_dir.join(".perry-auto-build.stamp");
+    libs
+}
 
-    // Closes #25 (the v0.5.384 NJOBS 6->3 retreat): serialize parallel
-    // `perry compile` invocations that target the SAME `target/perry-auto
-    // -<hash>` directory via an OS-level file lock. Cargo has its own
-    // target-dir lock (`.cargo-lock`) that prevents concurrent COMPILES,
-    // but the FILE OUTPUT is rename'd at link end -- meaning worker B's
-    // clang can read `libperry_runtime.a` while worker A's cargo is
-    // mid-rename and see errno=2. The race window is sub-second but
-    // fired reliably at NJOBS=6 on the macos-14 compile-smoke runner.
-    //
-    // The lock is per-hash, so different feature combos still build in
-    // parallel. fslock is portable (flock on Unix, LockFileEx on
-    // Windows) and was already a transitive dep -- no new crate cost.
-    //
-    // Best-effort: if the dir create or lock acquisition fails for any
-    // reason, fall through and run cargo unguarded. The retry loop in
-    // the smoke script's compile_one already handles the residual race
-    // window if any worker still slips through.
-    let _build_lock = {
-        let _ = std::fs::create_dir_all(&target_dir);
-        let lock_path = target_dir.join(".perry-auto-build.lock");
-        match fslock::LockFile::open(&lock_path) {
-            Ok(mut lf) => {
-                let _ = lf.lock();
-                Some(lf)
-            }
-            Err(_) => None,
-        }
-    };
-
-    let bitcode_requested = std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
-    if !bitcode_requested
-        && auto_optimized_archives_are_fresh(
-            &workspace_root,
-            &runtime_path,
-            &stdlib_path,
-            &cobuilt_bindings,
-            &build_stamp_path,
-            &build_stamp,
-        )
-    {
-        // The "archives fresh" fast-path must still carry the NON-co-built
-        // routed well-known libs collected by the routing loop above (e.g.
-        // perry-ext-zlib for `node:zlib`, …). They live in
-        // the outer `well_known_libs`; `resolve_auto_well_known_libs` only
-        // resolves the co-built bindings. Without merging them, the routed
-        // CPU-only ext staticlibs are dropped here and the link fails with
-        // undefined `js_ext_zlib_*` / `js_zlib_*` (and other CPU-only
-        // well-known) symbols — even though the archive is on disk.
-        let mut well_known_libs = well_known_libs;
-        well_known_libs.extend(resolve_auto_well_known_libs(
-            &workspace_root,
-            &release_dir,
-            &cobuilt_bindings,
-            target,
-            format,
-        ));
-        return OptimizedLibs {
-            runtime: Some(runtime_path),
-            stdlib: Some(stdlib_path),
-            runtime_bc: None,
-            stdlib_bc: None,
-            extra_bc: Vec::new(),
-            prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
-            well_known_libs,
-            stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
-            runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
-        };
-    }
-
-    if matches!(format, OutputFormat::Text) {
-        let panic_str = if panic_immediate {
-            "immediate-abort"
-        } else if panic_abort_safe {
-            "abort"
-        } else {
-            "unwind"
-        };
-        let feat_str = if features.is_empty() {
-            "(no optional features)".to_string()
-        } else {
-            feature_arg.clone()
-        };
-        println!(
-            "  auto-optimize: rebuilding runtime+stdlib (panic={}, features={})",
-            panic_str, feat_str
-        );
-    }
-
-    // Tier-3 Apple targets (tvOS, watchOS) aren't shipped with a prebuilt
-    // libstd; cargo needs `+nightly -Zbuild-std` to synthesize core/alloc/std
-    // from source for the cross-compile.
-    let is_tier3 = matches!(
-        target,
-        Some("tvos") | Some("tvos-simulator") | Some("watchos") | Some("watchos-simulator")
-    );
-
-    let mut cargo_cmd = Command::new("cargo");
-    if is_tier3 || panic_immediate {
-        cargo_cmd.arg("+nightly");
-    }
-    cargo_cmd
-        .current_dir(&workspace_root)
-        // Keep Windows auto-target paths in the non-verbatim form before
-        // handing them to Cargo or downstream MSVC tools. Other platforms
-        // keep the previous absolute env path behavior.
-        .env("CARGO_TARGET_DIR", &cargo_env_dir)
-        .arg("build")
-        .arg("--release")
-        // #5422 — the staticlib (.a) is now emitted by the perry-runtime-static
-        // / perry-stdlib-static wrapper crates, not perry-runtime/perry-stdlib
-        // themselves (which are rlib-only). The `perry-runtime/<feat>` strings in
-        // `cross_features` still resolve because perry-runtime is in each
-        // wrapper's dependency graph (cargo accepts the `dep/feature` form).
-        .arg("-p")
-        .arg("perry-runtime-static")
-        .arg("-p")
-        .arg("perry-stdlib-static")
-        .arg("--no-default-features");
-    // #507 — rebuild the co-built ext crates in the same cargo
-    // invocation as perry-stdlib, so cargo unifies their dependency
-    // graph with the specialized runtime/stdlib (see
-    // `binding_cobuilds_with_stdlib`).
-    for (krate, _lib, _tracking) in &cobuilt_bindings {
-        cargo_cmd.arg("-p").arg(krate);
-    }
-    if is_tier3 {
-        cargo_cmd.arg("-Zbuild-std=std,panic_abort");
-    }
-    if panic_immediate && !is_tier3 {
-        // Rebuild std with the panic path collapsed to a bare `abort`: drops
-        // the backtrace symbolizer (gimli/addr2line/rustc_demangle) and the
-        // default hook's formatting machinery. `--target` is required for
-        // `-Zbuild-std`, so pin the host triple when the caller didn't cross.
-        cargo_cmd.arg("-Zbuild-std=std,panic_abort");
-    }
-    // Both perry-runtime and perry-stdlib accept their own feature lists.
-    // Cargo's `--features` takes `crate/feature` syntax for cross-crate
-    // selection — we always enable perry-stdlib's stdlib-side bridge so
-    // perry-runtime exports the right symbols, and the user-derived
-    // stdlib features.
-    if !cross_features.is_empty() {
-        cargo_cmd.arg("--features").arg(cross_features.join(","));
-    }
-    if let Some(triple) = effective_triple {
-        cargo_cmd.arg("--target").arg(triple);
-    }
-    // HarmonyOS cross-compile needs the OHOS SDK's clang on PATH for C
-    // dependencies (notably libmimalloc-sys) — without --sysroot the build
-    // fails in build.rs with "'pthread.h' file not found".
-    if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
-        match find_harmonyos_sdk() {
-            Some(sdk) => {
-                for (k, v) in harmonyos_cross_env(&sdk, target) {
-                    cargo_cmd.env(k, v);
-                }
-            }
-            None => {
-                if matches!(format, OutputFormat::Text) {
-                    eprintln!(
-                        "  auto-optimize: OHOS SDK not found — set OHOS_SDK_HOME to the DevEco Studio \
-                         SDK root (the dir containing native/llvm/bin/clang). Skipping auto-optimize."
-                    );
-                }
-                return prebuilt_fallback(well_known_libs, &routed_set, target, format, verbose);
-            }
-        }
-    }
-    // #1508: same shape for Android — cc-rs can't find the NDK clang
-    // otherwise (silent on Unix where `clang` happens to exist, hard fail
-    // on Windows with `clang.exe not found`).
-    if is_android_target(target) {
-        if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
-            for (k, v) in
-                super::super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
-            {
-                cargo_cmd.env(k, v);
-            }
-        }
-    }
-    // RUSTFLAGS is the only path that works without a custom cargo profile,
-    // and cargo correctly reuses incremental artifacts that were built with
-    // the same RUSTFLAGS. The hash-keyed CARGO_TARGET_DIR keeps builds with
-    // distinct flag sets from clobbering each other's cache.
-    let mut rustflags: Vec<String> = Vec::new();
-    if panic_abort_safe {
-        // Override the workspace profile's `panic = "unwind"` for the
-        // duration of this invocation. `immediate-abort` (nightly, opt-in via
-        // `PERRY_SIZE_PANIC`) goes further: the panic path collapses to a bare
-        // `abort` with no message/backtrace formatting, which is what lets the
-        // symbolizer dead-strip. It supersedes plain `abort`.
-        if panic_immediate {
-            rustflags.push("-Zunstable-options".to_string());
-            rustflags.push("-C panic=immediate-abort".to_string());
-        } else {
-            rustflags.push("-C panic=abort".to_string());
-        }
-    }
-    // PERRY_SIZE_OPT=z|s — rebuild the auto-optimized runtime/stdlib at
-    // `-C opt-level=z`/`s` instead of the profile's `3`. RUSTFLAGS is
-    // appended after cargo's profile-derived flags, and rustc takes the
-    // last `-C opt-level`, so this cleanly overrides the per-package
-    // `opt-level = 3` without a custom profile. Trades some runtime speed
-    // for a substantially smaller binary; keyed into the auto-opt cache
-    // dir hash (see `auto_optimized_cache_key`) so size-optimized and
-    // speed-optimized archives never serve each other's builds.
-    if let Some(level) = size_opt_level() {
-        rustflags.push(format!("-C opt-level={level}"));
-    }
-    // PERRY_SIZE_LTO=fat — whole-archive fat LTO on top of the size opt
-    // level. Must go through cargo's profile override (env form) rather
-    // than RUSTFLAGS: `-C lto` in RUSTFLAGS reaches every rlib dep too,
-    // and rustc rejects `-C lto` for rlib crate types. The env override
-    // lets cargo do it properly (deps keep embedding bitcode, only the
-    // leaf staticlib runs the fat-LTO pass).
-    if size_lto_fat() {
-        cargo_cmd.env("CARGO_PROFILE_RELEASE_LTO", "fat");
-    }
-    if panic_immediate {
-        // With panics collapsed to `abort` there is nothing to unwind, so the
-        // per-function unwind tables (`__unwind_info` / `__eh_frame`, ~54 KB
-        // measured) are dead weight too.
-        rustflags.push("-C force-unwind-tables=no".to_string());
-    }
-    // #6125: pin the Rust-side CPU baseline to the same PERRY_TARGET_CPU
-    // knob codegen's clang invocation honors, so the rebuilt runtime/stdlib
-    // (which is what runs before the app's first print — exactly where the
-    // reported SIGILLs landed) obeys the requested portable baseline too.
-    // A `generic`-family value adds no flag but still forces RUSTFLAGS to be
-    // set explicitly below, so an ambient `-C target-cpu=native` (shell rc,
-    // CI image, build-server environment) can't leak the build box's ISA
-    // into libraries that ship to other machines.
-    let requested_cpu = std::env::var("PERRY_TARGET_CPU")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    if let Some(cpu) = &requested_cpu {
-        match cpu.as_str() {
-            "generic" | "off" | "none" | "0" | "false" => {}
-            cpu => rustflags.push(format!("-C target-cpu={cpu}")),
-        }
-    }
-    // #1529 — Android loads `libperry_app.so` via `dlopen` at runtime
-    // (PerryActivity's System.loadLibrary), but Rust's default TLS model for
-    // the aarch64-linux-android target is Initial-Executable, which is only
-    // valid for libraries present at process startup. A dlopen'd library
-    // crashes with `TLS symbol "(null)" ... using IE access model`. The
-    // runtime/stdlib use `thread_local!` heavily (per-thread arena, GC state,
-    // shadow stack), so those IE TLS relocations get baked into the final
-    // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
-    // slots after the process has started.
-    if is_android_target(target) {
-        rustflags.push(android_global_dynamic_tls_rustflag(&mut cargo_cmd).to_string());
-    }
-    // Set RUSTFLAGS whenever we have flags to pass, and also whenever a CPU
-    // baseline was requested at all (#6125): explicitly setting the env var —
-    // even to a flag list without a `-C target-cpu` — overrides any inherited
-    // RUSTFLAGS from the parent environment, which is exactly the isolation a
-    // pinned-baseline build needs.
-    if !rustflags.is_empty() || requested_cpu.is_some() {
-        // #7315: setting RUSTFLAGS here replaces `.cargo/config.toml`'s
-        // `[build] rustflags`, which is where `-C force-unwind-tables=yes`
-        // lives. Without it the rebuilt runtime has no unwind tables and the
-        // first `throw` that crosses a runtime frame aborts.
-        if !panic_immediate {
-            rustflags.push("-C force-unwind-tables=yes".to_string());
-            // Synchronous tables: exact at call sites, which is every PC
-            // the exception transport unwinds from, and compact-encodable
-            // on Apple targets (async tables force a DWARF FDE per
-            // function — ~500 KB of `__eh_frame`). Mirrors
-            // `.cargo/config.toml`.
-            rustflags.push("-Zuse-sync-unwind=yes".to_string());
-        }
-        cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
-    }
-
-    let (status, diagnostic) =
-        match super::super::tool_output::run_internal_tool_with_diagnostic(&mut cargo_cmd, verbose)
-        {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!(
-                    "{}",
-                    auto_build_fallback_warning(&format!("failed to spawn cargo: {e}"))
-                );
-                return prebuilt_fallback(well_known_libs, &routed_set, target, format, verbose);
-            }
-        };
-    if !status.success() {
-        let cause = diagnostic
-            .unwrap_or_else(|| format!("cargo build exited with {status} (no error line emitted)"));
-        eprintln!("{}", auto_build_fallback_warning(&cause));
-        return prebuilt_fallback(well_known_libs, &routed_set, target, format, verbose);
-    }
-    let _ = std::fs::write(&build_stamp_path, &build_stamp);
-
-    if matches!(format, OutputFormat::Text) {
-        if let Ok(meta) = std::fs::metadata(&runtime_path) {
-            println!(
-                "  auto-optimize: built {} ({:.1} MB)",
-                runtime_path.display(),
-                meta.len() as f64 / (1024.0 * 1024.0)
-            );
-        }
-        if let Ok(meta) = std::fs::metadata(&stdlib_path) {
-            println!(
-                "  auto-optimize: built {} ({:.1} MB)",
-                stdlib_path.display(),
-                meta.len() as f64 / (1024.0 * 1024.0)
-            );
-        }
-    }
-
-    // #507 — resolve the `.a` paths for each co-built ext crate
-    // we rebuilt above. They live next to perry-stdlib.a in the
-    // auto-optimize target-dir.
-    for (krate, lib, _tracking) in &cobuilt_bindings {
-        // Cargo emits `lib<lib>.a` on Unix but `<lib>.lib` on Windows/MSVC.
-        // Hardcoding the Unix name here meant a Windows build never found
-        // the rebuilt ext staticlib (e.g. perry-ext-ws), silently skipped
-        // it, and failed the final link with unresolved `js_*` symbols.
-        let lib_filename =
-            super::super::well_known::ext_staticlib_filename(lib, rust_target_triple(target));
-        let lib_path = release_dir.join(&lib_filename);
-        if !lib_path.exists() {
-            // Fall back to the workspace target copy — a safety net
-            // rather than hard-failing.
-            // Prefer the target-specific dir when cross-compiling so we
-            // don't link host-platform Mach-O into a Linux ELF.
-            let fallback = if let Some(triple) = rust_target_triple(target) {
-                let triple_path = workspace_root
-                    .join("target")
-                    .join(triple)
-                    .join("release")
-                    .join(&lib_filename);
-                if triple_path.exists() {
-                    triple_path
-                } else {
-                    workspace_root
-                        .join("target")
-                        .join("release")
-                        .join(&lib_filename)
-                }
-            } else {
-                workspace_root
-                    .join("target")
-                    .join("release")
-                    .join(&lib_filename)
-            };
-            if fallback.exists() {
-                if matches!(format, OutputFormat::Text) {
-                    eprintln!(
-                        "  well-known: rebuild produced no `{}` in {} — \
-                         using the workspace-built copy instead",
-                        lib_filename,
-                        release_dir.display()
-                    );
-                }
-                well_known_libs.push(fallback);
-            } else if matches!(format, OutputFormat::Text) {
-                eprintln!(
-                    "  well-known: rebuild produced no `{}` for `{}`; \
-                     skipping — link will likely fail with unresolved js_* symbols.",
-                    lib_filename, krate
-                );
+/// The stdlib features to install from the prebuilt full archive. The
+/// `external-*` adapters are compiled only into archives built for a routed
+/// wrapper; against the full archive the wrappers register their providers
+/// themselves, so only the TLS runtime they call back into is installed.
+pub(super) fn prebuilt_stdlib_install_features(
+    features: &BTreeSet<&'static str>,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for feature in features {
+        if feature.starts_with("external-") {
+            if matches!(*feature, "external-net-tls" | "external-tls-server") {
+                out.insert("tls-runtime".to_string());
             }
             continue;
         }
-        if matches!(format, OutputFormat::Text) {
-            if let Ok(meta) = std::fs::metadata(&lib_path) {
-                println!(
-                    "  auto-optimize: built {} ({:.1} MB)",
-                    lib_path.display(),
-                    meta.len() as f64 / (1024.0 * 1024.0)
-                );
-            }
-        }
-        well_known_libs.push(lib_path);
+        out.insert(feature.to_string());
     }
-
-    // Phase J: when PERRY_LLVM_BITCODE_LINK=1, also emit LLVM bitcode
-    // (.bc) for whole-program LTO via `cargo rustc --emit=llvm-bc,link`.
-    let (runtime_bc, stdlib_bc, extra_bc) = if bitcode_requested {
-        if matches!(format, OutputFormat::Text) {
-            println!("  auto-optimize: emitting LLVM bitcode for whole-program LTO");
-        }
-
-        // Start from the exact archive-build flags so panic strategy, unwind
-        // tables, size tuning, target CPU, and platform TLS remain identical.
-        // Bitcode emission adds only its single-codegen-unit requirement.
-        let mut bc_rustflags = rustflags.clone();
-        bc_rustflags.push("-C codegen-units=1".to_string());
-        let bc_rustflags = bc_rustflags.join(" ");
-
-        let emit_bc = |crate_name: &str| -> Option<PathBuf> {
-            let mut cmd = Command::new("cargo");
-            if is_tier3 || panic_immediate {
-                cmd.arg("+nightly");
-            }
-            cmd.current_dir(&workspace_root)
-                .env("CARGO_TARGET_DIR", &cargo_env_dir)
-                .env("RUSTFLAGS", &bc_rustflags)
-                .arg("rustc")
-                .arg("--release")
-                .arg("-p")
-                .arg(crate_name)
-                .arg("--no-default-features");
-            if is_tier3 || panic_immediate {
-                cmd.arg("-Zbuild-std=std,panic_abort");
-            }
-            if !cross_features.is_empty() {
-                cmd.arg("--features").arg(cross_features.join(","));
-            }
-            if let Some(triple) = effective_triple {
-                cmd.arg("--target").arg(triple);
-            }
-            cmd.arg("--").arg("--emit=llvm-bc,link");
-
-            match super::super::tool_output::run_internal_tool(&mut cmd, verbose) {
-                Ok(s) if s.success() => {}
-                Ok(s) => {
-                    if matches!(format, OutputFormat::Text) {
-                        eprintln!(
-                            "  auto-optimize: cargo rustc --emit=llvm-bc for {} failed (exit {})",
-                            crate_name, s
-                        );
-                    }
-                    return None;
-                }
-                Err(e) => {
-                    if matches!(format, OutputFormat::Text) {
-                        eprintln!(
-                            "  auto-optimize: failed to spawn cargo rustc for {} ({})",
-                            crate_name, e
-                        );
-                    }
-                    return None;
-                }
-            }
-
-            // Glob for the .bc file in deps/
-            let deps_dir = release_dir.join("deps");
-            let crate_underscore = crate_name.replace('-', "_");
-            let mut candidates: Vec<PathBuf> = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&deps_dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if name_str.starts_with(&format!("{}-", crate_underscore))
-                        && name_str.ends_with(".bc")
-                        && !name_str.contains(".rcgu")
-                    {
-                        candidates.push(entry.path());
-                    }
-                }
-            }
-            candidates.sort_by(|a, b| {
-                let ma = a.metadata().and_then(|m| m.modified()).ok();
-                let mb = b.metadata().and_then(|m| m.modified()).ok();
-                mb.cmp(&ma)
-            });
-            if let Some(bc_path) = candidates.first() {
-                if matches!(format, OutputFormat::Text) {
-                    if let Ok(meta) = std::fs::metadata(bc_path) {
-                        println!(
-                            "  auto-optimize: bitcode {} ({:.1} MB)",
-                            bc_path.display(),
-                            meta.len() as f64 / (1024.0 * 1024.0)
-                        );
-                    }
-                }
-                Some(bc_path.clone())
-            } else {
-                if matches!(format, OutputFormat::Text) {
-                    eprintln!(
-                        "  auto-optimize: no .bc file found for {} in {}",
-                        crate_name,
-                        deps_dir.display()
-                    );
-                }
-                None
-            }
-        };
-
-        let rt_bc = emit_bc("perry-runtime");
-        let sl_bc = emit_bc("perry-stdlib");
-
-        // Emit .bc for additional crates (UI, geisterhand).
-        // HarmonyOS has no `perry-ui-harmonyos` crate by design — UI is
-        // emitted as ArkUI source via the codegen-arkts harvest, and
-        // any `perry_ui_*` / `perry_system_*` / `perry_updater_*` symbols
-        // that survive into the .so resolve via the no-op stubs auto-
-        // generated by `perry-runtime/build.rs` (#395 + #399). The
-        // harmonyos branch in compile.rs unconditionally clears
-        // `needs_ui` for that target so we never reach this match arm
-        // with `Some("harmonyos*")`.
-        let mut extra = Vec::new();
-        if ctx.needs_ui {
-            let ui_crate = match target {
-                Some("ios-simulator")
-                | Some("ios")
-                | Some("ios-widget")
-                | Some("ios-widget-simulator") => "perry-ui-ios",
-                Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
-                target if is_android_target(target) => "perry-ui-android",
-                Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
-                Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
-                Some("linux") => "perry-ui-gtk4",
-                Some("windows-winui") => "perry-ui-windows-winui",
-                target if is_windows_target(target) => "perry-ui-windows",
-                Some("macos") => "perry-ui-macos",
-                _ => {
-                    if cfg!(target_os = "linux") {
-                        "perry-ui-gtk4"
-                    } else {
-                        "perry-ui-macos"
-                    }
-                }
-            };
-            if let Some(bc) = emit_bc(ui_crate) {
-                extra.push(bc);
-            }
-        }
-        if ctx.needs_geisterhand {
-            if let Some(bc) = emit_bc("perry-ui-geisterhand") {
-                extra.push(bc);
-            }
-        }
-
-        (rt_bc, sl_bc, extra)
-    } else {
-        (None, None, Vec::new())
-    };
-
-    OptimizedLibs {
-        runtime: if runtime_path.exists() {
-            Some(runtime_path)
-        } else {
-            None
-        },
-        stdlib: if stdlib_path.exists() {
-            Some(stdlib_path)
-        } else {
-            None
-        },
-        runtime_bc,
-        stdlib_bc,
-        extra_bc,
-        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
-        well_known_libs,
-        stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
-        runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
-    }
-}
-
-/// The libraries to link when the auto-optimized rebuild cannot run: the
-/// full prebuilt runtime and stdlib (`OptimizedLibs::empty`) plus the
-/// program's routed wrapper archives. The prebuilt stdlib carries no
-/// `perry-ext-*` code, so dropping them failed the link with "`js_ext_http_
-/// nm_install` needs libperry_ext_http.a, but that archive is not linked"
-/// although the archive sat next to the prebuilt runtime. `found` holds the
-/// CPU-only wrappers already resolved; the co-built ones resolve from the
-/// prebuilt search path exactly as an out-of-tree install does.
-fn prebuilt_fallback(
-    found: Vec<PathBuf>,
-    routed_set: &BTreeSet<String>,
-    target: Option<&str>,
-    format: OutputFormat,
-    verbose: u8,
-) -> OptimizedLibs {
-    let mut well_known_libs = found;
-    for lib in resolve_prebuilt_ext_libs(routed_set, target, format, verbose) {
-        if !well_known_libs
-            .iter()
-            .any(|have| have.file_name() == lib.file_name())
-        {
-            well_known_libs.push(lib);
-        }
-    }
-    OptimizedLibs {
-        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
-        well_known_libs,
-        ..OptimizedLibs::empty()
-    }
-}
-
-fn auto_build_fallback_warning(cause: &str) -> String {
-    format!(
-        "warning: auto-optimized runtime build failed; linking the full prebuilt runtime and stdlib instead (larger binary).\n  First error: {cause}\n  Report this at https://github.com/PerryTS/perry/issues with your Perry version, target, compile command, and the Cargo error above."
-    )
-}
-
-#[cfg(test)]
-mod fallback_tests {
-    #[test]
-    fn fallback_warning_names_cause_size_and_report_destination() {
-        let message =
-            super::auto_build_fallback_warning("error[E0425]: missing nanbox_handle_value");
-        assert!(message.starts_with("warning: auto-optimized runtime build failed"));
-        assert!(message.contains("full prebuilt runtime and stdlib"));
-        assert!(message.contains("larger binary"));
-        assert!(message.contains("First error: error[E0425]: missing nanbox_handle_value"));
-        assert!(message.contains("https://github.com/PerryTS/perry/issues"));
-        assert!(message.contains("version, target, compile command"));
-    }
+    out
 }
