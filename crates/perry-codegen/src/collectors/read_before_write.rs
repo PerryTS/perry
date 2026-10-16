@@ -28,23 +28,40 @@
 //! normally only when its block or a catch does and then its `finally` does;
 //! a `finally` that cannot complete makes the whole statement terminate.
 //!
-//! A closure may run any time after its creation, so creating it counts as
-//! a read of every local it captures or reads in its body.
+//! A closure reads what its body reads when it runs, which for a closure
+//! expression may be any time after its creation, so creating one counts as
+//! a read of every local it captures or reads in its body. A function
+//! binding (`function f() {}`, hoisted to the top of the body, or any `Let`
+//! bound once to a closure and never written again) runs only where its
+//! value is used: a direct call `f(..)` runs its body after the arguments,
+//! and every other use of `f` (an argument, a property or array store, a
+//! return, an alias, `new`, a class capture) hands the value on, so the body
+//! may run from that point on. The walk judges the body's reads at each of
+//! those points instead of at the creation. A use inside another closure is
+//! a use where that closure runs (transitively through other function
+//! bindings). Creating the binding still copies every capture that does not
+//! live in a cell the body preallocates (`PreallocateBoxes`), so those are
+//! read at the creation. A body with a direct `eval` or a `with` (which can
+//! reach any binding by name) keeps every closure read at its creation.
 //!
 //! Whether a local is flagged depends only on the body and that local, never
 //! on which other locals are candidates, so a caller may exclude the result
 //! from its candidates up front and run its fixed point once.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use perry_hir::types::FuncId;
 use perry_hir::{Expr, Stmt};
 
 /// Locals some read of which may run before any write (so it may see the
 /// `undefined` a `var` starts as). A read is safe only when every path that
 /// reaches it writes the local first.
 pub(crate) fn reads_before_write(stmts: &[Stmt], candidates: &HashSet<u32>) -> HashSet<u32> {
+    let fns = Fns::collect(stmts, candidates);
     let mut w = Walk {
         c: candidates,
+        fns: &fns,
+        cells: HashSet::new(),
         bad: HashSet::new(),
         targets: Vec::new(),
     };
@@ -52,8 +69,229 @@ pub(crate) fn reads_before_write(stmts: &[Stmt], candidates: &HashSet<u32>) -> H
         da: HashSet::new(),
         live: true,
     };
-    w.stmts(stmts, &mut st);
+    for s in stmts {
+        // A cell the body preallocates exists before anything after it runs.
+        if let Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) = s {
+            w.cells.extend(ids.iter().copied());
+        }
+        w.stmt(s, &mut st);
+    }
     w.bad
+}
+
+/// The function bindings of a body: locals bound by exactly one `Let` to a
+/// closure and never written otherwise, so every use of the function is a
+/// use of the local (or of the closure's `FuncRef`).
+#[derive(Default)]
+struct Fns {
+    local: HashMap<u32, usize>,
+    func: HashMap<FuncId, usize>,
+    /// Per binding: the candidates its body reads when it runs, including
+    /// through the bindings its body uses.
+    reads: Vec<HashSet<u32>>,
+}
+
+impl Fns {
+    fn collect(stmts: &[Stmt], c: &HashSet<u32>) -> Fns {
+        let mut lets: HashMap<u32, Vec<Option<&Expr>>> = HashMap::new();
+        each_stmt(stmts, &mut |s| {
+            if let Stmt::Let { id, init, .. } = s {
+                lets.entry(*id).or_default().push(init.as_ref());
+            }
+        });
+        let mut written: HashSet<u32> = HashSet::new();
+        let mut dynamic = false;
+        each_expr_deep(stmts, &mut |e| match e {
+            Expr::LocalSet(id, _)
+            | Expr::Update { id, .. }
+            | Expr::ScopedTemp { id, .. }
+            | Expr::ArrayPop(id)
+            | Expr::ArrayShift(id)
+            | Expr::ArrayPush { array_id: id, .. }
+            | Expr::ArrayPushSpread { array_id: id, .. }
+            | Expr::ArrayUnshift { array_id: id, .. }
+            | Expr::ArraySplice { array_id: id, .. }
+            | Expr::ArrayCopyWithin { array_id: id, .. }
+            | Expr::SetAdd { set_id: id, .. } => {
+                written.insert(*id);
+            }
+            Expr::WithGet { .. } | Expr::WithSet { .. } => dynamic = true,
+            Expr::ExternFuncRef { name, .. } if name == "js_eval_in_scope" => dynamic = true,
+            _ => {}
+        });
+        let mut fns = Fns::default();
+        if dynamic {
+            return fns;
+        }
+        let mut closures: Vec<&Expr> = Vec::new();
+        let mut ids: Vec<u32> = lets.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            if let [Some(e @ Expr::Closure { func_id, .. })] = lets[&id][..] {
+                if !written.contains(&id) {
+                    fns.local.insert(id, closures.len());
+                    fns.func.insert(*func_id, closures.len());
+                    closures.push(e);
+                }
+            }
+        }
+        let mut uses: Vec<Vec<usize>> = Vec::with_capacity(closures.len());
+        for e in &closures {
+            let mut reads = HashSet::new();
+            let mut used = Vec::new();
+            closure_reads(e, &mut |x| match x {
+                Read::Local(id) => {
+                    if c.contains(&id) {
+                        reads.insert(id);
+                    }
+                }
+                Read::Expr(x) => {
+                    if let Some(j) = fns.reached(x) {
+                        used.push(j);
+                    }
+                }
+            });
+            fns.reads.push(reads);
+            uses.push(used);
+        }
+        loop {
+            let mut changed = false;
+            for (i, used) in uses.iter().enumerate() {
+                for &j in used {
+                    if i == j {
+                        continue;
+                    }
+                    let add: Vec<u32> = fns.reads[j].difference(&fns.reads[i]).copied().collect();
+                    if !add.is_empty() {
+                        fns.reads[i].extend(add);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        fns
+    }
+
+    /// The binding a use inside another closure's body reaches.
+    fn reached(&self, e: &Expr) -> Option<usize> {
+        match e {
+            Expr::LocalGet(id) => self.local.get(id).copied(),
+            Expr::FuncRef(f) => self.func.get(f).copied(),
+            _ => None,
+        }
+    }
+
+    /// Binding `i` may run here: its body's reads happen now.
+    fn run(&self, i: usize, c: &HashSet<u32>, da: &HashSet<u32>, bad: &mut HashSet<u32>) {
+        for id in &self.reads[i] {
+            if c.contains(id) && !da.contains(id) {
+                bad.insert(*id);
+            }
+        }
+    }
+}
+
+enum Read<'a> {
+    Local(u32),
+    Expr(&'a Expr),
+}
+
+/// Everything a closure reads when it runs: its captures, its parameter
+/// defaults and body, and the closures nested in them; `Read::Expr` hands
+/// over every expression so a caller can see the function bindings used.
+fn closure_reads(e: &Expr, f: &mut dyn FnMut(Read<'_>)) {
+    let Expr::Closure {
+        params,
+        body,
+        captures,
+        mutable_captures,
+        ..
+    } = e
+    else {
+        return;
+    };
+    for id in captures.iter().chain(mutable_captures.iter()) {
+        f(Read::Local(*id));
+    }
+    let mut visit = |x: &Expr| {
+        if let Expr::LocalGet(id) | Expr::Update { id, .. } = x {
+            f(Read::Local(*id));
+        }
+        f(Read::Expr(x));
+    };
+    for p in params {
+        if let Some(d) = &p.default {
+            each_expr_deep_in(d, &mut visit);
+        }
+    }
+    each_expr_deep(body, &mut visit);
+}
+
+/// Every statement of `stmts`, nested statements included, closures not.
+fn each_stmt<'a>(stmts: &'a [Stmt], f: &mut dyn FnMut(&'a Stmt)) {
+    for s in stmts {
+        f(s);
+        match s {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                each_stmt(then_branch, f);
+                if let Some(b) = else_branch {
+                    each_stmt(b, f);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => each_stmt(body, f),
+            Stmt::For { init, body, .. } => {
+                if let Some(i) = init {
+                    each_stmt(std::slice::from_ref(i.as_ref()), f);
+                }
+                each_stmt(body, f);
+            }
+            Stmt::Labeled { body, .. } => each_stmt(std::slice::from_ref(body.as_ref()), f),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                each_stmt(body, f);
+                if let Some(cc) = catch {
+                    each_stmt(&cc.body, f);
+                }
+                if let Some(b) = finally {
+                    each_stmt(b, f);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    each_stmt(&case.body, f);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Every expression of `stmts`, inside nested statements and closures too.
+fn each_expr_deep(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
+    for s in stmts {
+        perry_hir::walker::stmt_any_expr(s, &mut |x| {
+            each_expr_deep_in(x, f);
+            false
+        });
+    }
+}
+
+fn each_expr_deep_in(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    if let Expr::Closure { body, .. } = e {
+        each_expr_deep(body, f);
+    }
+    perry_hir::walker::walk_expr_children(e, &mut |x| each_expr_deep_in(x, f));
 }
 
 /// The definite-assignment state at one program point. `live == false`
@@ -115,6 +353,9 @@ impl Target {
 
 struct Walk<'a> {
     c: &'a HashSet<u32>,
+    fns: &'a Fns,
+    /// Locals whose cell the body preallocated before the current point.
+    cells: HashSet<u32>,
     bad: HashSet<u32>,
     targets: Vec<Target>,
 }
@@ -127,7 +368,7 @@ impl Walk<'_> {
     }
 
     fn expr(&mut self, e: &Expr, st: &mut State) {
-        da_expr(e, self.c, &mut st.da, &mut self.bad);
+        da_expr(e, self.c, self.fns, &mut st.da, &mut self.bad);
     }
 
     /// Walks `body` with `kind` as the innermost jump target; returns the
@@ -210,6 +451,21 @@ impl Walk<'_> {
                 // The `undefined` seed of a hoisted `var` is not an assignment.
                 None | Some(Expr::Undefined) => {
                     st.da.remove(id);
+                }
+                // Creating a function binding runs nothing; it copies the
+                // captures that do not live in a preallocated cell.
+                Some(Expr::Closure {
+                    captures,
+                    mutable_captures,
+                    ..
+                }) if self.fns.local.contains_key(id) => {
+                    for cap in captures.iter().chain(mutable_captures.iter()) {
+                        if self.c.contains(cap) && !self.cells.contains(cap) && !st.da.contains(cap)
+                        {
+                            self.bad.insert(*cap);
+                        }
+                    }
+                    st.da.insert(*id);
                 }
                 Some(e) => {
                     self.expr(e, st);
@@ -376,11 +632,31 @@ impl Walk<'_> {
 
 /// Reads in evaluation order; a write inside a conditional part
 /// (`&&`, `||`, `??`, `?:`) does not count after it.
-fn da_expr(e: &Expr, c: &HashSet<u32>, da: &mut HashSet<u32>, bad: &mut HashSet<u32>) {
+fn da_expr(e: &Expr, c: &HashSet<u32>, fns: &Fns, da: &mut HashSet<u32>, bad: &mut HashSet<u32>) {
     match e {
         Expr::LocalGet(id) => {
             if c.contains(id) && !da.contains(id) {
                 bad.insert(*id);
+            }
+            // Any use of a function binding but a direct call hands its
+            // value on: the body may run from here on.
+            if let Some(&i) = fns.local.get(id) {
+                fns.run(i, c, da, bad);
+            }
+        }
+        Expr::FuncRef(f) => {
+            if let Some(&i) = fns.func.get(f) {
+                fns.run(i, c, da, bad);
+            }
+        }
+        // A direct call runs the body after the arguments.
+        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(id) if fns.local.contains_key(id)) =>
+        {
+            for a in args {
+                da_expr(a, c, fns, da, bad);
+            }
+            if let Expr::LocalGet(id) = callee.as_ref() {
+                fns.run(fns.local[id], c, da, bad);
             }
         }
         Expr::Update { id, .. } => {
@@ -389,62 +665,45 @@ fn da_expr(e: &Expr, c: &HashSet<u32>, da: &mut HashSet<u32>, bad: &mut HashSet<
             }
         }
         Expr::LocalSet(id, v) => {
-            da_expr(v, c, da, bad);
+            da_expr(v, c, fns, da, bad);
             da.insert(*id);
         }
         Expr::Logical { left, right, .. } => {
-            da_expr(left, c, da, bad);
+            da_expr(left, c, fns, da, bad);
             let mut r = da.clone();
-            da_expr(right, c, &mut r, bad);
+            da_expr(right, c, fns, &mut r, bad);
         }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            da_expr(condition, c, da, bad);
+            da_expr(condition, c, fns, da, bad);
             let mut t = da.clone();
-            da_expr(then_expr, c, &mut t, bad);
+            da_expr(then_expr, c, fns, &mut t, bad);
             let mut f = da.clone();
-            da_expr(else_expr, c, &mut f, bad);
+            da_expr(else_expr, c, fns, &mut f, bad);
             *da = t.intersection(&f).copied().collect();
         }
-        Expr::Closure {
-            captures,
-            mutable_captures,
-            body,
-            ..
-        } => {
+        Expr::Closure { .. } => {
             // Creating the closure reads what it captures (by value unless
-            // boxed, and boxed locals are never candidates).
+            // boxed) and, since it may run any time after, what its body
+            // reads, including through the function bindings it uses.
             let mut read = |id: &u32| {
                 if c.contains(id) && !da.contains(id) {
                     bad.insert(*id);
                 }
             };
-            captures
-                .iter()
-                .chain(mutable_captures.iter())
-                .for_each(&mut read);
-            fn gets(stmts: &[Stmt], f: &mut dyn FnMut(&u32)) {
-                fn e(x: &Expr, f: &mut dyn FnMut(&u32)) {
-                    match x {
-                        Expr::LocalGet(id) | Expr::Update { id, .. } => f(id),
-                        Expr::Closure { body, .. } => gets(body, f),
-                        _ => {}
+            closure_reads(e, &mut |x| match x {
+                Read::Local(id) => read(&id),
+                Read::Expr(x) => {
+                    if let Some(j) = fns.reached(x) {
+                        fns.reads[j].iter().for_each(&mut read);
                     }
-                    perry_hir::walker::walk_expr_children(x, &mut |y| e(y, f));
                 }
-                for s in stmts {
-                    perry_hir::walker::stmt_any_expr(s, &mut |x| {
-                        e(x, f);
-                        false
-                    });
-                }
-            }
-            gets(body, &mut read);
+            });
         }
-        _ => perry_hir::walker::walk_expr_children(e, &mut |x| da_expr(x, c, da, bad)),
+        _ => perry_hir::walker::walk_expr_children(e, &mut |x| da_expr(x, c, fns, da, bad)),
     }
 }
 
@@ -875,5 +1134,194 @@ mod tests {
             body: vec![set(X, Expr::Integer(1))],
             condition: Expr::Bool(false),
         }]));
+    }
+
+    // ---- function bindings run where they are called or handed on ----
+
+    const F: u32 = 10;
+    const G: u32 = 11;
+
+    fn closure(func_id: u32, captures: Vec<u32>, body: Vec<Stmt>) -> Expr {
+        Expr::Closure {
+            func_id,
+            params: Vec::new(),
+            return_type: HirType::Any,
+            body,
+            captures,
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        }
+    }
+
+    fn call(callee: Expr, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(callee),
+            args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }
+    }
+
+    /// `function f() { return x; }` hoisted (its cell preallocated), then
+    /// `<before>; let x = 0; <after>`.
+    fn hoisted(before: Vec<Stmt>, after: Vec<Stmt>) -> Vec<Stmt> {
+        let mut body = vec![
+            Stmt::PreallocateBoxes(vec![X]),
+            let_(
+                F,
+                Some(closure(100, vec![X], vec![Stmt::Return(Some(get(X)))])),
+            ),
+        ];
+        body.extend(before);
+        body.push(let_(X, Some(Expr::Integer(0))));
+        body.extend(after);
+        body
+    }
+
+    fn flagged(body: &[Stmt]) -> bool {
+        reads_before_write(body, &HashSet::from([X])).contains(&X)
+    }
+
+    #[test]
+    fn a_function_binding_reads_its_captures_where_it_is_called() {
+        // Called only after the counter is written.
+        assert!(!flagged(&hoisted(
+            vec![],
+            vec![Stmt::Expr(call(get(F), vec![]))]
+        )));
+        // Called before.
+        assert!(flagged(&hoisted(
+            vec![Stmt::Expr(call(get(F), vec![]))],
+            vec![]
+        )));
+        // A direct call runs the body after its arguments: `f(x = 1)`.
+        let body = vec![
+            Stmt::PreallocateBoxes(vec![X]),
+            let_(
+                F,
+                Some(closure(100, vec![X], vec![Stmt::Return(Some(get(X)))])),
+            ),
+            let_(X, None),
+            Stmt::Expr(call(
+                get(F),
+                vec![Expr::LocalSet(X, Box::new(Expr::Integer(1)))],
+            )),
+        ];
+        assert!(!flagged(&body));
+    }
+
+    #[test]
+    fn every_other_use_of_a_function_binding_is_where_it_may_run() {
+        // Passed as an argument, stored, returned before the write.
+        let escapes = [
+            Stmt::Expr(call(Expr::Undefined, vec![get(F)])),
+            Stmt::Expr(Expr::LocalSet(N, Box::new(get(F)))),
+            Stmt::If {
+                condition: get(K),
+                then_branch: vec![Stmt::Return(Some(get(F)))],
+                else_branch: None,
+            },
+        ];
+        for e in escapes {
+            assert!(flagged(&hoisted(vec![e.clone()], vec![])), "{e:?}");
+            assert!(!flagged(&hoisted(vec![], vec![e.clone()])), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn a_function_binding_runs_where_the_bindings_using_it_run() {
+        // function g() { return f(); } hoisted too; g() before the write.
+        let g = let_(
+            G,
+            Some(closure(
+                101,
+                vec![F],
+                vec![Stmt::Return(Some(call(get(F), vec![])))],
+            )),
+        );
+        let mut body = hoisted(vec![Stmt::Expr(call(get(G), vec![]))], vec![]);
+        body.insert(2, g.clone());
+        assert!(flagged(&body));
+        let mut body = hoisted(vec![], vec![Stmt::Expr(call(get(G), vec![]))]);
+        body.insert(2, g);
+        assert!(!flagged(&body));
+        // A recursive pair called after the write.
+        let f = let_(
+            F,
+            Some(closure(
+                100,
+                vec![X, G],
+                vec![Stmt::Return(Some(bin(
+                    BinaryOp::Add,
+                    get(X),
+                    call(get(G), vec![]),
+                )))],
+            )),
+        );
+        let g = let_(
+            G,
+            Some(closure(
+                101,
+                vec![F],
+                vec![Stmt::Return(Some(call(get(F), vec![])))],
+            )),
+        );
+        let pair = |at_end: bool| {
+            let mut body = vec![Stmt::PreallocateBoxes(vec![X]), f.clone(), g.clone()];
+            let c = Stmt::Expr(call(get(G), vec![]));
+            if !at_end {
+                body.push(c.clone());
+            }
+            body.push(let_(X, Some(Expr::Integer(0))));
+            if at_end {
+                body.push(c);
+            }
+            body
+        };
+        assert!(!flagged(&pair(true)));
+        assert!(flagged(&pair(false)));
+        // An arrow created before the write that calls f reads x there.
+        let arrow = Stmt::Expr(call(
+            Expr::Undefined,
+            vec![closure(
+                102,
+                vec![F],
+                vec![Stmt::Return(Some(call(get(F), vec![])))],
+            )],
+        ));
+        assert!(flagged(&hoisted(vec![arrow.clone()], vec![])));
+        assert!(!flagged(&hoisted(vec![], vec![arrow])));
+    }
+
+    #[test]
+    fn unknown_function_bindings_read_at_creation() {
+        let after = vec![Stmt::Expr(call(get(F), vec![]))];
+        // The name is written again.
+        let mut body = hoisted(vec![], after.clone());
+        body.push(set(F, Expr::Undefined));
+        assert!(flagged(&body));
+        // A capture without a preallocated cell is copied at creation.
+        let mut body = hoisted(vec![], after.clone());
+        body.remove(0);
+        assert!(flagged(&body));
+        // A direct eval can reach the binding by name.
+        let mut body = hoisted(vec![], after.clone());
+        body.push(Stmt::Expr(call(
+            Expr::ExternFuncRef {
+                name: "js_eval_in_scope".into(),
+                param_types: Vec::new(),
+                return_type: HirType::Any,
+            },
+            vec![],
+        )));
+        assert!(flagged(&body));
+        // Control: the same body without those.
+        assert!(!flagged(&hoisted(vec![], after)));
     }
 }
