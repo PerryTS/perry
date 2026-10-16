@@ -389,7 +389,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
 /// returns an array of Dirent objects (each with `name`, `parentPath`
 /// and Node's seven `fs.Dirent` predicate methods),
 /// matching Node's `fs.readdirSync(path, options)` shape (issue #631).
-/// Returns an empty array on error.
+/// Throws a Node-shaped `scandir` error when the directory cannot be read.
 #[no_mangle]
 pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64 {
     crate::fs::validate::validate_path("path", path_value);
@@ -491,10 +491,13 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                     f64::from_bits(i64::cast_unsigned(arr as i64))
                 }
             }
-            Err(_) => {
-                let arr = js_array_alloc(0);
-                f64::from_bits(i64::cast_unsigned(arr as i64))
-            }
+            // Node throws `ENOENT: no such file or directory, scandir '<path>'`
+            // (or ENOTDIR/EACCES); callers such as Next.js's recursiveReadDir
+            // branch on `err.code`, so an empty array would read as an empty
+            // directory that exists.
+            Err(err) => crate::exception::js_throw(crate::fs::errors::build_fs_error_value(
+                &err, "scandir", &path_str,
+            )),
         }
     }
 }

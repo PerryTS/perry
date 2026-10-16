@@ -298,6 +298,17 @@ pub(crate) use format::{
 /// use these bits only for survival age and never acquire this marker.
 pub(crate) const STRING_IMAGE_MARKER: u16 = 0x494d;
 
+/// `GcHeader::size` of an executable string image with `byte_len` payload
+/// bytes: GC header, string header, the NUL-terminated payload padded to 8,
+/// then the 8-byte atom hash. Codegen (`string_pool/image.rs`) emits exactly
+/// this layout; runtime images (`object/runtime_layouts.rs`) build it and the
+/// image classifier (`value/addr_class/image.rs`) validates against it.
+pub(crate) const fn image_string_gc_size(byte_len: u32) -> usize {
+    let payload_end =
+        crate::gc::GC_HEADER_SIZE + std::mem::size_of::<StringHeader>() + byte_len as usize + 1;
+    (payload_end + 7) / 8 * 8 + 8
+}
+
 /// A string image owns its address for the life of the executable. This is
 /// separate from the intern bit, which also controls speculative own reads.
 #[inline]

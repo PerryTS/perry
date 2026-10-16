@@ -95,10 +95,13 @@ pub(super) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> 
     }
     let string = &*(addr as *const StringHeader);
     let payload_end = data.checked_add(string.byte_len as usize)?.checked_add(1)?;
-    if payload_end > end
+    // The image extends past the NUL to its 8-aligned atom hash; the whole
+    // extent, not just the payload, must lie in the section.
+    let image_end = header_addr.checked_add(gc.size as usize)?;
+    if image_end > end
         || string.byte_len != string.capacity
         || string.utf16_len > string.byte_len
-        || gc.size as usize != payload_end - header_addr
+        || gc.size as usize != crate::string::image_string_gc_size(string.byte_len)
         || *(payload_end as *const u8).sub(1) != 0
     {
         return None;

@@ -6,6 +6,7 @@ struct Image {
     gc: GcHeader,
     string: StringHeader,
     bytes: [u8; 8],
+    hash: u64,
 }
 #[used]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
@@ -19,7 +20,7 @@ static IMAGE: Image = Image {
         obj_type: crate::gc::GC_TYPE_STRING,
         gc_flags: 0x15,
         _reserved: 0x494d,
-        size: 36,
+        size: crate::string::image_string_gc_size(7) as u32,
     },
     string: StringHeader {
         utf16_len: 7,
@@ -29,6 +30,7 @@ static IMAGE: Image = Image {
         flags: 4,
     },
     bytes: *b"literal\0",
+    hash: 0,
 };
 
 #[test]
@@ -81,7 +83,7 @@ fn tracked_classifier_rejects_null_forged_and_image_edge_addresses() {
             obj_type: crate::gc::GC_TYPE_STRING,
             gc_flags: 0x15,
             _reserved: 0x494d,
-            size: 36,
+            size: crate::string::image_string_gc_size(7) as u32,
         },
         string: StringHeader {
             utf16_len: 7,
@@ -91,8 +93,29 @@ fn tracked_classifier_rejects_null_forged_and_image_edge_addresses() {
             flags: 4,
         },
         bytes: *b"literal\0",
+        hash: 0,
     };
     assert!(unsafe { try_read_tracked_gc_header(&fake.string as *const _ as usize) }.is_none());
+}
+
+/// The layout codegen emits (`string_pool/image.rs`): payload padded to 8,
+/// then the atom hash. The runtime's own images share it. Every validator
+/// must admit it; a size check that forgets the hash trailer rejects every
+/// program literal (`path.join("a", "b")` threw ERR_INVALID_ARG_TYPE).
+#[test]
+fn image_size_covers_the_atom_hash_trailer() {
+    assert_eq!(std::mem::size_of::<Image>(), 48);
+    assert_eq!(crate::string::image_string_gc_size(7), 48);
+    assert_eq!(crate::string::image_string_gc_size(0), 40);
+    let _scope = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let runtime = crate::object::runtime_layouts::test_image_string();
+        assert!(try_read_string_header(runtime).is_some(), "runtime image");
+        assert!(
+            try_read_string_header(&IMAGE.string).is_some(),
+            "fixture image"
+        );
+    }
 }
 
 #[test]

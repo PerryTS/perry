@@ -1150,15 +1150,27 @@ pub(super) fn compile_closure(
         in_static_member: false,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
+        // Only an arrow written inside the derived CONSTRUCTOR (directly or
+        // through enclosing arrows) shares that constructor's uninitialized
+        // `this`. An arrow in a method of the same class has the method's
+        // receiver, which is initialized; checking the runtime binding stack
+        // there reads whichever derived constructor is running — e.g. a base
+        // constructor calling an overridden method (Next.js `NextNodeServer`
+        // during `super()`) — and threw "Must call super constructor".
         lexical_this_uses_derived_binding: captures_this
             && enclosing_class
                 .as_ref()
                 .and_then(|name| classes.get(name).copied())
                 .is_some_and(|class| {
-                    class.extends.is_some()
+                    (class.extends.is_some()
                         || class.extends_name.is_some()
                         || class.native_extends.is_some()
-                        || class.extends_expr.is_some()
+                        || class.extends_expr.is_some())
+                        && class.constructor.as_ref().is_some_and(|ctor| {
+                            crate::lower_call::ctor_body_lexically_contains_arrow(
+                                &ctor.body, func_id,
+                            )
+                        })
                 }),
         inline_ctor_return: Vec::new(),
         methods,

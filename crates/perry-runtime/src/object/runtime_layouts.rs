@@ -364,7 +364,7 @@ const fn image<const N: usize>(bytes: [u8; N]) -> ImageString<N> {
                 | crate::gc::GC_FLAG_PINNED
                 | crate::gc::GC_FLAG_INTERNED,
             _reserved: crate::string::STRING_IMAGE_MARKER,
-            size: ((28 + N + 7) / 8 * 8 + 8) as u32,
+            size: crate::string::image_string_gc_size(len) as u32,
         },
         string: StringHeader {
             utf16_len: len,
@@ -413,6 +413,11 @@ pub(crate) unsafe fn bind_builtin_prototype(desc: *const PerryLayoutDesc, bits: 
     link_section = "perry_strings"
 )]
 static IMAGE_0: ImageString<14> = image(*b"highWaterMark\0");
+
+#[cfg(test)]
+pub(crate) fn test_image_string() -> *const StringHeader {
+    &IMAGE_0.string
+}
 #[used(linker)]
 #[export_name = "perry_atom_6869676857617465724d61726b"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
