@@ -303,6 +303,17 @@ pub(crate) fn class_method_declaration_value_bytes(
             );
         }
     }
+    // A compiled method whose body already names it (its image name, or the
+    // name registered for its entry) answers `name` as the intrinsic of its
+    // base Function shape: the same value and attributes (non-writable,
+    // non-enumerable, configurable) as the own data property defined below,
+    // and no property bag. The closure then stays on its body's base shape,
+    // which every shape-proved function path (bind, call, `.name`) admits.
+    // A computed or differing name is defined as an own property.
+    let intrinsic_name = entry != 0
+        && !computed_name
+        && unsafe { crate::builtins::function_name_for_closure(f) }
+            .is_some_and(|n| n.as_bytes() == name);
     let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(
@@ -324,6 +335,11 @@ pub(crate) fn class_method_declaration_value_bytes(
         f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
             crate::object::set_builtin_closure_non_constructable(ptr as usize);
         });
+    }
+    if intrinsic_name {
+        return crate::value::js_nanbox_pointer(
+            f.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        );
     }
     let name_value = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_value = scope.root_string_ptr(name_value);

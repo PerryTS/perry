@@ -1595,9 +1595,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         TypedFeedbackContract::object_get_by_name(),
                     );
                     let _ = obj_handle;
-                    Ok(symbol_ic::keyed_slow(
-                        ctx, obj_box, key_box, &site_id, false,
-                    ))
+                    // Object model step 5 (§3.7 case 3): the receiver's own
+                    // layout and its chain answer the key's atom
+                    // (`perry_probe_get_keyed`, a GC leaf); only a decline
+                    // takes the complete keyed read.
+                    Ok(symbol_ic::emit_keyed_probe(ctx, obj_box, key_box, |ctx| {
+                        symbol_ic::keyed_slow(ctx, obj_box, key_box, &site_id, false)
+                    }))
                 });
             }
             // Last-resort fallback with runtime tag checks on the index.
@@ -1703,7 +1707,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // #10753: the by-key entry answers from shapes before it
                 // takes the by-value read (see the dynamic-string arm above).
                 let _ = str_obj_handle;
-                let v_str = symbol_ic::keyed_slow(ctx, &obj_box, &idx_box, &site_id, false);
+                // The probe first (§3.7 case 3), as the dynamic-string arm.
+                let v_str = symbol_ic::emit_keyed_probe(ctx, &obj_box, &idx_box, |ctx| {
+                    symbol_ic::keyed_slow(ctx, &obj_box, &idx_box, &site_id, false)
+                });
                 let str_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);
                 // Numeric key → polymorphic dispatch.

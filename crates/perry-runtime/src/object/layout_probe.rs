@@ -52,18 +52,32 @@ const PROBE_ATOMS: u64 = 2;
 /// The record's list is not an immutable shape-shared list, or the record's
 /// receivers are not answered by their list: the probe declines every key.
 const PROBE_DECLINE: u64 = 4;
-/// The record holds an accessor or a private entry: every hit checks the
-/// key's attributes (`value_at`), so the hit path leaves it to the cold path.
+/// Every probe of the record takes the cold path (verify mode, which holds
+/// each answer back for the slow entry's check).
 const PROBE_CHECKED: u64 = 1 << 63;
+/// The record holds an accessor or a private entry: its list is always
+/// indexed, and a hit reads one load only at an entry marked
+/// [`DIRECT_ENTRY`]; every other hit checks the key's attributes
+/// (`value_at`).
+const PROBE_ATTRS: u64 = 1 << 62;
 /// A bucket entry whose list word is a TEXT entry (see `derive_word`).
 const TEXT_ENTRY: u32 = 1 << 31;
 /// A bucket entry matched by the program atom in the index's alias words.
 const ALIAS_ENTRY: u32 = 1 << 30;
+/// A bucket entry whose key is a data property (no accessor, not private)
+/// stored at its own position, an inline slot of every receiver of the
+/// record: the hit is one load (`value_at` would read exactly that slot).
+/// A fact of the record's immutable list, its attributes and its inline
+/// slot count, derived with the index.
+const DIRECT_ENTRY: u32 = 1 << 29;
+/// The position bits of a bucket entry.
+const POS_BITS: u32 = DIRECT_ENTRY - 1;
 /// The bits of a probe word that are not the position table's address.
-const PROBE_FLAGS: u64 = 7 | PROBE_CHECKED;
+const PROBE_FLAGS: u64 = 7 | PROBE_CHECKED | PROBE_ATTRS;
 
 /// A derived key index: `count` alias words, then `mask + 1` buckets of key
-/// positions, `u32::MAX` = empty, open addressing from `hash & mask`.
+/// positions, `u32::MAX` = empty, open addressing from `hash & mask`. The
+/// alias word of a [`TEXT_ENTRY`] position holds its text's hash.
 ///
 /// A bucket compares the site key against the list's own word at its
 /// position, which the collector keeps current (a symbol or a plain string
@@ -296,7 +310,7 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         & (crate::object::key_attrs::SUMMARY_ACCESSOR | crate::object::key_attrs::SUMMARY_PRIVATE)
         != 0
     {
-        PROBE_CHECKED
+        PROBE_ATTRS
     } else {
         0
     };
@@ -354,7 +368,9 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         }
     }
     let flags = PROBE_READY | checked | if atoms { PROBE_ATOMS } else { 0 };
-    if count <= SCAN_KEYS && !aliased {
+    // A list with accessor or private entries is always indexed: its
+    // entries carry which positions a hit may read with one load.
+    if count <= SCAN_KEYS && !aliased && checked == 0 {
         return flags;
     }
     let buckets = (count as usize * 2).next_power_of_two();
@@ -367,7 +383,14 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
     (*table).count = count;
     let out = (*table).words.as_mut_ptr();
     for (i, (word, _, _)) in canon.iter().enumerate() {
-        *out.add(i) = if *word != *words.add(i) { *word } else { 0 };
+        // An alias entry's word is its program atom; a TEXT entry's is its
+        // text's hash, so a bucket compares the text only for a key of the
+        // same hash.
+        *out.add(i) = match canon[i] {
+            (_, Some(h), true) => h,
+            (w, _, _) if w != *words.add(i) => w,
+            _ => 0,
+        };
     }
     let slots = KeyIndex::buckets(table) as *mut u32;
     for b in 0..buckets {
@@ -382,10 +405,36 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             b = (b + 1) & (buckets - 1);
         }
         let alias = canon[i].0 != *words.add(i);
-        *slots.add(b) =
-            i as u32 | if *text { TEXT_ENTRY } else { 0 } | if alias { ALIAS_ENTRY } else { 0 };
+        *slots.add(b) = i as u32
+            | if *text { TEXT_ENTRY } else { 0 }
+            | if alias { ALIAS_ENTRY } else { 0 }
+            | if direct_position(rec, keys, i as u32) {
+                DIRECT_ENTRY
+            } else {
+                0
+            };
     }
     table as u64 | flags
+}
+
+/// Does [`value_at`] read key position `pos` of `rec` (list `keys`) as the
+/// inline slot at `pos`: a data key (no accessor, not private) whose storage
+/// slot is its position, below the record's inline slot count?
+unsafe fn direct_position(
+    rec: &ShapeRecord,
+    keys: *const crate::array::ArrayHeader,
+    pos: u32,
+) -> bool {
+    use crate::object::key_attrs::{
+        key_storage_slot, keys_entry, ENTRY_ACCESSOR_MASK, ENTRY_PRIVATE, SUMMARY_ACCESSOR,
+        SUMMARY_PRIVATE,
+    };
+    if rec.summary() & (SUMMARY_ACCESSOR | SUMMARY_PRIVATE) != 0
+        && keys_entry(keys, pos) & (ENTRY_ACCESSOR_MASK | ENTRY_PRIVATE) != 0
+    {
+        return false;
+    }
+    key_storage_slot(keys, pos) == pos && pos < rec.live_inline_slot_count
 }
 
 /// May a TEXT entry of `rec`'s list prove absence (see `derive_word`)?
@@ -415,16 +464,20 @@ unsafe fn text_entry_matches(word: u64, key_bits: u64) -> bool {
     crate::string::js_string_key_bytes(crate::JSValue::from_bits(word), &mut sso) == Some(key_text)
 }
 
-/// Probe bucket `pos` (an entry of a derived index) for `key_bits`: the key
-/// position on a match.
+/// Probe bucket `pos` (an entry of a derived index) for `key_bits` (hash
+/// `hash`): the key position on a match.
 #[inline(always)]
 unsafe fn bucket_matches(
     table: *const KeyIndex,
     list: *const u64,
     pos: u32,
     key_bits: u64,
+    hash: u64,
 ) -> Option<u32> {
-    let p = pos & !(TEXT_ENTRY | ALIAS_ENTRY);
+    let p = pos & POS_BITS;
+    if pos & TEXT_ENTRY != 0 && KeyIndex::word(table, p) != hash {
+        return None;
+    }
     let w = if pos & ALIAS_ENTRY != 0 {
         KeyIndex::word(table, p)
     } else {
@@ -498,7 +551,7 @@ unsafe fn own_position(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<
         if pos == u32::MAX {
             return absent;
         }
-        if let Some(p) = bucket_matches(table, list, pos, key_bits) {
+        if let Some(p) = bucket_matches(table, list, pos, key_bits, hash) {
             return Ok(p);
         }
         b = (b + 1) & mask;
@@ -531,6 +584,25 @@ unsafe fn value_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) ->
     crate::object::spill::spill_get_present(obj as usize, slot as usize)
         .map(f64::from_bits)
         .unwrap_or_else(hole)
+}
+
+/// The data value at key position `pos` of `obj` (record `r`): one load when
+/// the record's facts make the position its inline slot (`direct`: the
+/// entry's [`DIRECT_ENTRY`] bit, or `POSBOUND` for an unindexed list), else
+/// [`value_at`]. A hole is the slot's value either way, which the site treats
+/// as a decline.
+#[inline(always)]
+unsafe fn hit_value(
+    obj: *const ObjectHeader,
+    r: *const ShapeRecord,
+    pos: u32,
+    direct: bool,
+) -> f64 {
+    if direct {
+        return *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pos as usize * 8)
+            as *const f64);
+    }
+    value_at(obj, r, pos)
 }
 
 /// The value of key `key_bits` (atom hash `hash`) read from the object at
@@ -596,12 +668,13 @@ unsafe fn probe_get<const ABSENT: bool>(
         return absent_from::<ABSENT>(dir, obj, key_bits, hash);
     }
     let table = (probe & !PROBE_FLAGS) as *const KeyIndex;
-    let pos = if table.is_null() {
+    let (pos, direct) = if table.is_null() {
+        // An unindexed list has no accessor or private entry.
         let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
         let mut i = 0u32;
         loop {
             if *words.add(i as usize) == key_bits {
-                break i;
+                break (i, i < (*r).position_bound_raw());
             }
             i += 1;
             if i == count {
@@ -618,28 +691,29 @@ unsafe fn probe_get<const ABSENT: bool>(
             if pos == u32::MAX {
                 return absent_from::<ABSENT>(dir, obj, key_bits, hash);
             }
+            let i = pos & POS_BITS;
             if pos & TEXT_ENTRY != 0 {
+                // Only a key of the text's hash can be its text.
+                if KeyIndex::word(table, i) != hash {
+                    b = (b + 1) & mask;
+                    continue;
+                }
                 // A text compare is a call: the cold path makes it, so the
                 // hit path keeps no frame.
                 return probe_get_underived::<ABSENT>(dir, obj, word, r, key_bits, hash);
             }
-            let i = pos & !ALIAS_ENTRY;
             let w = if pos & ALIAS_ENTRY != 0 {
                 KeyIndex::word(table, i)
             } else {
                 *list.add(i as usize)
             };
             if w == key_bits {
-                break i;
+                break (i, pos & DIRECT_ENTRY != 0);
             }
             b = (b + 1) & mask;
         }
     };
-    if pos < (*r).position_bound_raw() {
-        return *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pos as usize * 8)
-            as *const f64);
-    }
-    value_at(obj, r, pos)
+    hit_value(obj, r, pos, direct)
 }
 
 /// A receiver whose header word names no ordinary layout. Two exotics keep
@@ -1000,6 +1074,25 @@ fn object_prototype_builtin(hash: u64) -> bool {
 /// The first prototype of `obj` that holds `key_bits`, if every object
 /// before it proves the key absent, and that holder's data value; with
 /// `ABSENT`, `undefined` when the whole chain proves the key absent.
+///
+/// `obj`'s own list and overflow have proved the key absent. The common
+/// chain is read here in one frame-light loop, with each hop's work the
+/// layout's own facts and the object's own words:
+///
+/// * the link: the object's recorded [[Prototype]] (meta) or its layout's
+///   prototype identity (a class identity's word, the realm default
+///   `%Object.prototype%`, a linked identity's word);
+/// * the next object's layout word, record and key index, the same probe
+///   the own hit makes; a hit reads the holder's slot (`hit_value`);
+/// * a miss continues while the next object is an ordinary object whose
+///   own keys are exactly its list (no shadow bit), and ends at
+///   `%Object.prototype%`, which proves absence for every name but its
+///   unlisted builtins.
+///
+/// Every other case (an exotic or unmarked receiver kind, an overflow on a
+/// prototype, a TEXT key entry, a record not yet derived) continues in the
+/// complete walk ([`inherited_walk`]) from the last object whose absence is
+/// proven, which answers it with the same rules.
 #[inline(never)]
 unsafe fn inherited_get<const ABSENT: bool>(
     dir: *const u8,
@@ -1008,7 +1101,241 @@ unsafe fn inherited_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    absent_hop::<ABSENT>(dir, obj, r, key_bits, hash)
+    let (mut cur, mut rc) = (obj, r as *const ShapeRecord);
+    // `cur` is an object the walk may continue from (`walks_from`): the
+    // receiver is checked here, each prototype before it becomes `cur`.
+    if (*rc).object_kind() != super::ShapeObjectKind::Ordinary {
+        return inherited_walk::<ABSENT>(dir, obj, r, key_bits, hash);
+    }
+    for _ in 0..MAX_HOPS {
+        // The link (`prototype_of_in`'s order): a recorded prototype first,
+        // then the layout's identity.
+        let meta = (*cur).meta;
+        let mut bits = 0u64;
+        if !meta.is_null() {
+            if (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
+                return hole();
+            }
+            bits = (*meta).prototype;
+        }
+        let next = if bits != 0 {
+            if bits & TAG_MASK != POINTER_TAG
+                || ((bits & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
+            {
+                return if bits == TAG_NULL {
+                    chain_absent::<ABSENT>()
+                } else {
+                    hole()
+                };
+            }
+            (bits & POINTER_MASK) as *const ObjectHeader
+        } else {
+            if (*rc).weak_collection_brand().is_some() {
+                return hole();
+            }
+            let pid = (*rc).proto_id;
+            if pid == super::PROTO_ID_DEFAULT {
+                // `cur` is not a typed-array prototype: an Ordinary kind never
+                // is (its kind is derived from the receiver's flags and
+                // restamped when they change), and an unmarked `cur` was
+                // proved plain (`plain_unmarked_in`) before it became `cur`.
+                match object_prototype(dir) {
+                    Some(p) => {
+                        return object_prototype_get::<ABSENT>(dir, cur, rc, p, key_bits, hash)
+                    }
+                    None => return hole(),
+                }
+            }
+            if pid == super::PROTO_ID_NULL {
+                return chain_absent::<ABSENT>();
+            }
+            let word = if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&pid) {
+                let word_dir = *(dir.add(FLAT_BASE_OFFSET + 24) as *const *const u8);
+                if word_dir.is_null() {
+                    return hole();
+                }
+                match super::shapes_prototype::identity_word_slot_in(word_dir, pid) {
+                    Some(slot) => *slot,
+                    None => return hole(),
+                }
+            } else {
+                (*rc).prototype_word()
+            };
+            if word == TAG_NULL {
+                return chain_absent::<ABSENT>();
+            }
+            if word & TAG_MASK != POINTER_TAG
+                || ((word & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
+            {
+                return hole();
+            }
+            (word & POINTER_MASK) as *const ObjectHeader
+        };
+        let w = (*next).parent_class_id;
+        let rn = record_of(dir, w);
+        if rn.is_null() {
+            return hole();
+        }
+        let pw = (*rn).probe;
+        if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
+            return inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash);
+        }
+        match list_position(rn, pw, key_bits, hash) {
+            Ok((pos, direct)) => return hit_value(next, rn, pos, direct),
+            Err(true) => {}
+            Err(false) => return inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash),
+        }
+        if w & crate::object::overflow::SHADOW_BIT != 0 {
+            return inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash);
+        }
+        // A builtin prototype may install its methods outside its list, so its
+        // miss proves nothing; `%Object.prototype%` proves absence for every
+        // key but its own builtin names when its chain ends; any other
+        // unmarked object whose own keys are exactly its list is walked like
+        // an ordinary one (`inherited_walk`'s rules).
+        match (*rn).object_kind() {
+            super::ShapeObjectKind::Ordinary => {}
+            super::ShapeObjectKind::OrdinaryUnmarked => {
+                let op = object_prototype(dir);
+                if op == Some(next) {
+                    if object_prototype_builtin(hash) {
+                        return hole();
+                    }
+                    return match prototype_of_in(dir, op, next, rn) {
+                        Next::End => chain_absent::<ABSENT>(),
+                        _ => hole(),
+                    };
+                }
+                if !plain_unmarked_in(op, next) {
+                    return hole();
+                }
+            }
+            _ => return hole(),
+        }
+        cur = next;
+        rc = rn;
+    }
+    hole()
+}
+
+/// The chain proved the key absent.
+#[inline(always)]
+fn chain_absent<const ABSENT: bool>() -> f64 {
+    if ABSENT {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        hole()
+    }
+}
+
+/// Position of `key_bits` in record `r`'s derived list (`pw` its ready probe
+/// word with `PROBE_ATOMS`) and whether a hit there is one load
+/// ([`hit_value`]): `Ok((pos, direct))`, `Err(true)` for proven absence,
+/// `Err(false)` for a TEXT entry the complete walk compares by text.
+#[inline(always)]
+unsafe fn list_position(
+    r: *const ShapeRecord,
+    pw: u64,
+    key_bits: u64,
+    hash: u64,
+) -> Result<(u32, bool), bool> {
+    let count = (*r).logical_key_count;
+    if count == 0 {
+        return Err(true);
+    }
+    let list = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
+    let table = (pw & !PROBE_FLAGS) as *const KeyIndex;
+    if table.is_null() {
+        let mut i = 0;
+        while i < count {
+            if *list.add(i as usize) == key_bits {
+                return Ok((i, i < (*r).position_bound_raw()));
+            }
+            i += 1;
+        }
+        return Err(true);
+    }
+    let mask = (*table).mask as usize;
+    let slots = KeyIndex::buckets(table);
+    let mut b = hash as usize & mask;
+    loop {
+        let pos = *slots.add(b);
+        if pos == u32::MAX {
+            return Err(true);
+        }
+        let i = pos & POS_BITS;
+        if pos & TEXT_ENTRY != 0 {
+            // Only a key of the text's hash can be its text, which the
+            // complete walk compares.
+            if KeyIndex::word(table, i) != hash {
+                b = (b + 1) & mask;
+                continue;
+            }
+            return Err(false);
+        }
+        let wd = if pos & ALIAS_ENTRY != 0 {
+            KeyIndex::word(table, i)
+        } else {
+            *list.add(i as usize)
+        };
+        if wd == key_bits {
+            return Ok((i, pos & DIRECT_ENTRY != 0));
+        }
+        b = (b + 1) & mask;
+    }
+}
+
+/// The last hop of the common chain: `cur` (record `rc`, an ordinary object
+/// that proved the key absent) links to the realm default, `p` =
+/// `%Object.prototype%`, whose list answers a hit, and whose miss proves
+/// absence for every key but its unlisted builtin names when its own
+/// [[Prototype]] is null. Anything else is the complete walk's, from `cur`.
+#[inline(always)]
+unsafe fn object_prototype_get<const ABSENT: bool>(
+    dir: *const u8,
+    cur: *const ObjectHeader,
+    rc: *const ShapeRecord,
+    p: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let full = || inherited_walk::<ABSENT>(dir, cur, rc as *mut _, key_bits, hash);
+    if p == cur {
+        return hole();
+    }
+    let w = (*p).parent_class_id;
+    let rn = record_of(dir, w);
+    if rn.is_null()
+        || (*rn).object_kind() != super::ShapeObjectKind::OrdinaryUnmarked
+        || w & crate::object::overflow::SHADOW_BIT != 0
+    {
+        return full();
+    }
+    let pw = (*rn).probe;
+    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
+        return full();
+    }
+    match list_position(rn, pw, key_bits, hash) {
+        Ok((pos, direct)) => return hit_value(p, rn, pos, direct),
+        Err(true) => {}
+        Err(false) => return full(),
+    }
+    if object_prototype_builtin(hash) {
+        return hole();
+    }
+    // `%Object.prototype%`'s [[Prototype]] is null: a recorded null, or none
+    // recorded and its layout's identity null (`prototype_of`'s first two
+    // steps). Anything else is the walk's.
+    let meta = (*p).meta;
+    let ends = if !meta.is_null() && (*meta).prototype != 0 {
+        (*meta).prototype == TAG_NULL
+    } else {
+        (*rn).weak_collection_brand().is_none() && (*rn).proto_id == super::PROTO_ID_NULL
+    };
+    if !ends {
+        return full();
+    }
+    chain_absent::<ABSENT>()
 }
 
 /// The hit path's proven own miss (its list proved the key absent): the
@@ -1032,129 +1359,7 @@ unsafe fn absent_from<const ABSENT: bool>(
     if probe & PROBE_ATOMS == 0 {
         return hole();
     }
-    absent_hop::<ABSENT>(dir, obj, r, key_bits, hash)
-}
-
-/// [`inherited_get`] for a receiver its list and overflow prove without the
-/// key.
-#[inline(always)]
-unsafe fn absent_hop<const ABSENT: bool>(
-    dir: *const u8,
-    obj: *const ObjectHeader,
-    r: *mut ShapeRecord,
-    key_bits: u64,
-    hash: u64,
-) -> f64 {
-    // The common chain, read directly: an ordinary receiver with no meta
-    // whose [[Prototype]] is the realm default, `%Object.prototype%`, which
-    // proves the key absent. The same reads as `inherited_walk`'s first
-    // hop, in its order; every other outcome is a tail call into the walk
-    // or a value read, so this leaf keeps no frame.
-    let op = object_prototype(dir);
-    let Some(p) = op else {
-        return inherited_walk_from::<ABSENT>(dir, obj, key_bits, hash);
-    };
-    // An Ordinary kind is never a typed-array prototype: the kind is
-    // derived from the receiver's flags and restamped when they change
-    // (`shapes_store_kind.rs`, R1/R4), so `prototype_of`'s flag test holds;
-    // nor `%Object.prototype%` itself, which is unmarked.
-    if (*r).object_kind() != super::ShapeObjectKind::Ordinary
-        || !(*obj).meta.is_null()
-        || (*r).proto_id != super::PROTO_ID_DEFAULT
-        || (*r).weak_collection_brand().is_some()
-    {
-        return inherited_walk_from::<ABSENT>(dir, obj, key_bits, hash);
-    }
-    let w = (*p).parent_class_id;
-    let rn = record_of(dir, w);
-    if rn.is_null()
-        || (*rn).object_kind() != super::ShapeObjectKind::OrdinaryUnmarked
-        || w & crate::object::overflow::SHADOW_BIT != 0
-    {
-        return inherited_walk_from::<ABSENT>(dir, obj, key_bits, hash);
-    }
-    let pw = (*rn).probe;
-    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS {
-        return inherited_walk_from::<ABSENT>(dir, obj, key_bits, hash);
-    }
-    let count = (*rn).logical_key_count;
-    if count != 0 {
-        let list =
-            || crate::array::array_elements_ptr((*rn).keys as usize as *const _) as *const u64;
-        let table = (pw & !PROBE_FLAGS) as *const KeyIndex;
-        if table.is_null() {
-            let list = list();
-            let mut i = 0;
-            while i < count {
-                if *list.add(i as usize) == key_bits {
-                    return value_at(p, rn, i);
-                }
-                i += 1;
-            }
-        } else {
-            let mask = (*table).mask as usize;
-            let slots = KeyIndex::buckets(table);
-            let mut b = hash as usize & mask;
-            loop {
-                let pos = *slots.add(b);
-                if pos == u32::MAX {
-                    break;
-                }
-                if pos & TEXT_ENTRY != 0 {
-                    // A text compare: the walk makes it.
-                    return inherited_walk_from::<ABSENT>(dir, obj, key_bits, hash);
-                }
-                let i = pos & !ALIAS_ENTRY;
-                let wd = if pos & ALIAS_ENTRY != 0 {
-                    KeyIndex::word(table, i)
-                } else {
-                    *list().add(i as usize)
-                };
-                if wd == key_bits {
-                    return value_at(p, rn, i);
-                }
-                b = (b + 1) & mask;
-            }
-        }
-    }
-    if object_prototype_builtin(hash) {
-        return hole();
-    }
-    // `%Object.prototype%`'s [[Prototype]] is null: a recorded null, or none
-    // recorded and its layout's identity null (`prototype_of`'s first two
-    // steps). Anything else is the walk's.
-    let meta = (*p).meta;
-    let ends = if !meta.is_null() && (*meta).prototype != 0 {
-        (*meta).prototype == TAG_NULL
-    } else {
-        (*rn).weak_collection_brand().is_none() && (*rn).proto_id == super::PROTO_ID_NULL
-    };
-    if !ends {
-        return inherited_walk_from::<ABSENT>(dir, obj, key_bits, hash);
-    }
-    if ABSENT {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        hole()
-    }
-}
-
-/// [`inherited_walk`] with the receiver's record read again (the fast hop's
-/// fallback passes four values).
-#[inline(never)]
-unsafe fn inherited_walk_from<const ABSENT: bool>(
-    dir: *const u8,
-    obj: *const ObjectHeader,
-    key_bits: u64,
-    hash: u64,
-) -> f64 {
-    inherited_walk::<ABSENT>(
-        dir,
-        obj,
-        record_of(dir, (*obj).parent_class_id),
-        key_bits,
-        hash,
-    )
+    inherited_get::<ABSENT>(dir, obj, r, key_bits, hash)
 }
 
 /// The complete prototype walk of [`inherited_get`].
