@@ -507,6 +507,19 @@ pub(crate) fn collect_integer_locals_with_seeds(
             disqualified.insert(id);
         }
     }
+    // #12658: the optimistic `undefined` seed is exempt from judgment above,
+    // and a hoisted `var` read before its first real write sees exactly that
+    // `undefined` (`f(k){ if (k) r = n + 1; var n = 5; n = n * 2 }`). The
+    // exemption holds only when no read can run before a write, which is the
+    // shared `read_before_write` predicate `typed_locals` asks too. Applied
+    // to every `Let`-bound candidate, not just the seeded ones: a read that
+    // can precede the first write is never an int32 read. The entry-proven
+    // `seed_locals` hold their argument from the start and are left out.
+    let let_bound_candidates: HashSet<u32> = candidates.difference(seed_locals).copied().collect();
+    disqualified.extend(super::read_before_write::reads_before_write(
+        stmts,
+        &let_bound_candidates,
+    ));
     let mut worklist: Vec<u32> = disqualified.iter().copied().collect();
     while let Some(gone) = worklist.pop() {
         if let Some(dependent_ids) = dependents.get(&gone) {
