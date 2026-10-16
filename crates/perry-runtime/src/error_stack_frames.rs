@@ -153,7 +153,7 @@ fn decode_pcs(blob: &[u8]) -> Vec<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Capture: the frame-pointer chain walk.
+// Capture: the frame-pointer chain walk (unwind tables on x86_64 Linux).
 // ---------------------------------------------------------------------------
 
 #[cfg(all(
@@ -166,6 +166,7 @@ mod walk {
     /// A frame record is two words and must be word-aligned; anything else is
     /// a corrupt chain and abandons the walk, exactly as the collector's
     /// `fp_chain::visit` does.
+    #[cfg_attr(all(target_arch = "x86_64", target_os = "linux"), allow(dead_code))]
     const FRAME_RECORD_ALIGN_MASK: usize = 0x7;
 
     #[cfg(target_arch = "aarch64")]
@@ -238,6 +239,32 @@ mod walk {
         current_frame_pointer()
     }
 
+    /// x86_64 Linux: the runtime keeps no frame-pointer chain there (rustc's
+    /// default, and the archives no longer force one), so the frames are
+    /// stepped by their unwind tables instead (`eh_walker_trace.rs`). Never
+    /// inlined, so the first address that walk reports is the return into
+    /// this function and the second the return into its caller, which is
+    /// where the frame-pointer walk below starts.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[inline(never)]
+    pub(super) fn capture(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
+        let top = stack_top();
+        if top == 0 {
+            return 0;
+        }
+        let mut pcs = [0usize; MAX_CAPTURED_FRAMES + 1];
+        let n = crate::eh_walker::capture_return_addresses(&mut pcs, top);
+        if n <= 1 {
+            return 0;
+        }
+        out[..n - 1].copy_from_slice(&pcs[1..n]);
+        n - 1
+    }
+
+    /// Everywhere else every frame keeps a frame record (rustc's Apple and
+    /// AArch64 Linux defaults; generated code always), so the chain is the
+    /// walk: two loads per frame.
+    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
     pub(super) fn capture(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
         let top = stack_top();
         if top == 0 {
@@ -624,13 +651,24 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 /// name. That is the same shape as the collector's own function table
 /// (`stack_maps_index.rs`: "a function with no safepoints is absent … so an
 /// `ip` inside one resolves to the previous mapped function"). Closing it
-/// needs per-function extents, which this registry and Mach-O do not expose.
+/// needs per-function extents, which this registry and Mach-O do not expose;
+/// on ELF the `.eh_frame_hdr` FDE that covers `ip` supplies them.
 fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]>)> {
     let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
     let at = at.checked_sub(1)?;
     let (start, name) = &index.entries[at];
     if ip - *start > MAX_FUNCTION_SPAN {
         return None;
+    }
+    // Where the unwind tables give the containing function's exact start
+    // (ELF), an address whose function is NOT the registered one is a frame
+    // of an unregistered function (a module initializer, a thunk, runtime
+    // code placed after the bundle) and is dropped rather than reported
+    // under its neighbour's name.
+    if let Some(fn_start) = crate::eh_walker::function_start_for(ip as u64) {
+        if fn_start != *start as u64 {
+            return None;
+        }
     }
     Some((*start, name))
 }

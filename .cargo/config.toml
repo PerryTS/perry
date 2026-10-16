@@ -28,26 +28,17 @@ global-min-publish-age = "7 days"
 [build]
 rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 
-# #9486: x86_64 needs frame pointers, and cannot inherit them from `[build]`.
-#
-# `Error.stack` captures its frames by walking the `rbp` / `x29` chain, which
-# is only a chain if every frame between `new Error` and the throwing JS
-# function maintains one. Generated code always does — codegen tags it
-# `"frame-pointer"="non-leaf"` — but the runtime is Rust, and on
-# x86_64-unknown-linux-gnu rustc leaves `rbp` as a general-purpose
-# callee-saved register. Measured: `rbp` inside `alloc_error` held `0x1`, so
-# the walk had no root at all and every stack fell back to `at <anonymous>`.
-# The AArch64 platform ABI reserves x29, which is why this is a x86_64-only
-# knob and why the collector's own `fp_chain` walker was AArch64-only.
-#
-# `force-unwind-tables` is REPEATED here on purpose: cargo does not merge
-# `target.*.rustflags` with `build.rustflags` — the target flags take
-# precedence and the `[build]` list is dropped entirely for this target. Omit
-# the repeat and every throw crossing a runtime frame is stranded (the runtime
-# self-checks on the first `try` and aborts loudly, so the mistake is loud
-# rather than silent — but it is still a mistake).
-[target.'cfg(target_arch = "x86_64")']
-rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-C", "force-frame-pointers=yes"]
+# No `force-frame-pointers`. #9486 once set it for x86_64 because
+# `Error.stack` walked the `rbp` chain, which runtime Rust frames on
+# x86_64-unknown-linux-gnu do not maintain (rustc keeps `rbp` a general
+# callee-saved register there). It cost ~3% of runtime instructions on real
+# programs (tsc +2.6%, Zod +3.4%). The capture now steps x86_64 Linux frames by
+# their unwind tables (`perry-runtime/src/eh_walker_trace.rs`); the collector's
+# x86_64 walk and the exception transport always did. Apple targets and
+# AArch64 Linux keep frame records by rustc's own default, so their chain walk
+# is unchanged. Do not reintroduce a `[target.*] rustflags` table without
+# repeating the `[build]` flags in it: cargo uses the target list INSTEAD of
+# the build list, and a runtime without unwind tables strands every throw.
 
 # The bundled SQLite is built as node's is in this one respect: node compiles
 # it with SQLITE_DEFAULT_MEMSTATUS=0 (`PRAGMA compile_options` on node 26),
