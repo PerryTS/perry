@@ -70,7 +70,6 @@ SENTINELS=(
   js_class_method_bind_by_id
   js_method_direct_shape_guard
   js_typed_feedback_class_field_get_guard
-  js_typed_feedback_class_field_set_guard
   js_typed_feedback_method_direct_call_guard
   js_typed_feedback_closure_direct_call_guard
   js_typed_feedback_array_get_f64
