@@ -96,6 +96,8 @@ mod native;
 #[cfg(test)]
 mod native_abi_tests;
 mod native_module_dispatch;
+pub(crate) use early_branches::native_receiver_module;
+pub(crate) use native_module_dispatch::native_lookup_runtime;
 #[cfg(test)]
 mod native_module_rooting_tests;
 mod native_table;

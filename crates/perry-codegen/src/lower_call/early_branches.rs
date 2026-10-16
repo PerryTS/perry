@@ -152,7 +152,7 @@ pub fn try_lower_native_chain_method_call(
 ///   its chains are already rewritten to nested `NativeMethodCall`s by the
 ///   HIR `fix_local_native_instances` pass, so its receiver is matched by the
 ///   `NativeMethodCall` arm directly.
-fn native_receiver_module(expr: &Expr) -> Option<&str> {
+pub(crate) fn native_receiver_module(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::NativeMethodCall { module, .. } => Some(module.as_str()),
         Expr::Call { callee, .. } => {

@@ -61,6 +61,7 @@ pub(crate) mod native_value;
 pub(crate) use perry_abi as runtime_abi;
 pub mod native_routing;
 pub(crate) mod nm_install;
+pub mod providers;
 pub use native_routing::{
     program_native_routing_key, set_program_native_routing, NativeProvider, NativeRouting,
 };

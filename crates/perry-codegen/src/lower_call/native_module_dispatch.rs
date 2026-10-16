@@ -15,6 +15,35 @@ use crate::types::{DOUBLE, I32, I64};
 
 use super::{NativeArgKind, NativeModSig, NativeRetKind, NATIVE_MODULE_TABLE};
 
+/// The table module a call-site module name dispatches through.
+fn normalized_table_module(module: &str) -> &str {
+    // Mirror the well-known aliasing here so call-site lookups find the
+    // right runtime fns regardless of which alias the user imported from.
+    match module {
+        "sys" => "util",
+        // #6563: @lydell/node-pty is an API-identical fork of node-pty
+        // (opencode imports the fork, kimi-code the original); both route to
+        // the one runtime pty implementation.
+        "@lydell/node-pty" | "bun-pty" => "node-pty",
+        // #11211: `perry/container-compose` is the internal specifier for the
+        // same compose surface `perry/compose` exposes (stdlib_features.rs
+        // maps both to the `container` feature); share its rows.
+        "perry/container-compose" => "perry/compose",
+        m => m,
+    }
+}
+
+/// The runtime symbol [`native_module_lookup`] selects, for the HIR provider
+/// pass (`crate::providers`): the same choice lowering makes for the call.
+pub(crate) fn native_lookup_runtime(
+    module: &str,
+    has_receiver: bool,
+    method: &str,
+    class_name: Option<&str>,
+) -> Option<&'static str> {
+    native_module_lookup(module, has_receiver, method, class_name).map(|sig| sig.runtime)
+}
+
 /// Look up a native module method in the static dispatch table.
 /// Entries with `class_filter: Some("Pool")` only match when
 /// `class_name == Some("Pool")`; entries with `class_filter: None`
@@ -28,20 +57,7 @@ pub fn native_module_lookup(
     method: &str,
     class_name: Option<&str>,
 ) -> Option<&'static NativeModSig> {
-    // Mirror the well-known aliasing here so call-site lookups find the
-    // right runtime fns regardless of which alias the user imported from.
-    let normalized = match module {
-        "sys" => "util",
-        // #6563: @lydell/node-pty is an API-identical fork of node-pty
-        // (opencode imports the fork, kimi-code the original); both route to
-        // the one runtime pty implementation.
-        "@lydell/node-pty" | "bun-pty" => "node-pty",
-        // #11211: `perry/container-compose` is the internal specifier for the
-        // same compose surface `perry/compose` exposes (stdlib_features.rs
-        // maps both to the `container` feature); share its rows.
-        "perry/container-compose" => "perry/compose",
-        m => m,
-    };
+    let normalized = normalized_table_module(module);
     // First pass: look for an exact class_filter match.
     let exact = NATIVE_MODULE_TABLE.iter().find(|sig| {
         sig.module == normalized

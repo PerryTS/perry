@@ -117,6 +117,16 @@ fn namespace_local_function_wrapper_symbol(module_name: &str, function_name: &st
     )
 }
 
+/// Design §4.4: a module's emitted registry symbols (or a cached object's
+/// manifest) must name only providers the HIR pass put in the link set.
+fn check_module_providers(
+    providers: &perry_codegen::ext_registry::ProviderSet,
+    module: &str,
+    symbols: &[&str],
+) -> Result<(), String> {
+    perry_codegen::ext_registry::check_emitted_providers(providers, module, symbols.iter().copied())
+}
+
 fn validate_module_ffi_symbols(
     routing: &perry_codegen::NativeRouting,
     module: &str,
@@ -666,12 +676,6 @@ pub fn run_with_parse_cache(
             },
         );
     }
-
-    // #835 + #846: clear the codegen-side FFI provenance set up-front
-    // so any leftover entries from a prior `perry dev` rebuild (or a
-    // failed-build early-return that skipped our drain below) don't
-    // bleed into this build's auto-link decisions.
-    let _ = perry_codegen::ext_registry::take_used_providers();
 
     // #1663: make `--debug-symbols` retain a symbol table on every native
     // target, not just emit a PDB on Windows. Previously the flag was a no-op
@@ -3530,6 +3534,135 @@ pub fn run_with_parse_cache(
         });
     }
     let object_literal_method_candidates = std::sync::Arc::new(object_literal_method_candidates);
+    // Design GC_EFFECTS_AT_BUILD §4.4 (slice 4): the runtime provider set is
+    // computed from HIR here, before codegen, and the link set (the
+    // auto-optimize runtime/stdlib build or the prebuilt archives) is resolved
+    // from it. Codegen does not add providers: every registry symbol a module
+    // emits is checked against this set (`check_emitted_providers`), on a
+    // fresh compile and on an object-cache hit alike. Order: HIR → features +
+    // providers → link set → (GC effects table, slice 5) → codegen → link.
+    //
+    // Compiled-package code can call provider FFI without any matching
+    // import in `ctx.native_module_imports` (Effect's `Stream` lowers to
+    // `js_readable_stream_*`, Express's server to
+    // `js_node_http_create_server`), so the import-driven flips alone miss
+    // them; the HIR pass sees the native surfaces themselves.
+    //
+    // Codegen still sees `needs_stdlib` as feature detection left it: the
+    // entry module's event-loop shape keys on it, and folding the providers
+    // in first would change the emitted code (`codegen_needs_stdlib`).
+    let codegen_needs_stdlib = ctx.needs_stdlib;
+    let program_providers = perry_codegen::providers::program_providers(
+        ctx.native_modules.values(),
+        &perry_codegen::providers::ProviderInputs {
+            routing: &ctx.native_routing,
+            entry_install_hooks: &native_provider_installs,
+            uses_crypto_builtins: ctx.uses_crypto_builtins,
+        },
+    );
+    for owner in &program_providers {
+        use perry_codegen::ext_registry::OwnerKind;
+        match *owner {
+            OwnerKind::Stdlib { feature } => {
+                // The auto-optimize layer (`build_optimized_libs`) rebuilds
+                // perry-stdlib with only the features
+                // `compute_required_features` derives from
+                // `native_module_imports`; a provider reached without an
+                // import adds its feature here so the rebuild includes the
+                // providing module (#835/#846).
+                ctx.needs_stdlib = true;
+                if let Some(feat) = feature {
+                    ctx.extra_stdlib_features.insert(feat);
+                }
+            }
+            OwnerKind::WellKnown(key) => {
+                // Inserting into native_module_imports flips the well-known
+                // mechanism for this binding; `needs_stdlib` is what brings
+                // the well-known libs onto the link line.
+                ctx.native_module_imports.insert(key.to_string());
+                ctx.needs_stdlib = true;
+            }
+        }
+    }
+    let program_providers = std::sync::Arc::new(program_providers);
+
+    // A standalone WASI build links against the wasm32 runtime after
+    // codegen and has no native link set.
+    #[cfg(feature = "target-wasi")]
+    let native_link_set_skipped = target.as_deref() == Some("wasi");
+    #[cfg(not(feature = "target-wasi"))]
+    let native_link_set_skipped = false;
+
+    // Issue #76 follow-up — auto-provision the wasmi host staticlib. A
+    // program that references `WebAssembly.*` sets `ctx.needs_wasm_runtime`
+    // (feature_detect.rs), which links `libperry_wasm_host.a`. That archive
+    // lives in the standalone `perry-wasm-host` crate and is built by NOTHING
+    // in the normal compile path — not the auto-optimize runtime/stdlib
+    // rebuild, not codegen — so a bare `perry compile` used to die with
+    // `libperry_wasm_host.a not found` until a human ran
+    // `cargo build --release -p perry-wasm-host`. Build it on demand here so
+    // both the symbol-stub scan below and the final link resolve it. Cargo's
+    // freshness check makes this a no-op when it is already current; programs
+    // that do not use wasm skip the check entirely.
+    //
+    // `--enable-wasm-runtime` is an explicit override: fold it into
+    // `ctx.needs_wasm_runtime` so EVERY downstream path (the `wasm-host`
+    // cargo feature in `auto_optimized_cross_features`, the no-auto runtime
+    // rebuild, the library link, and the symbol-stub scan) treats it the
+    // same as auto-detected `WebAssembly.*` usage. Without this fold the
+    // flag only linked `libperry_wasm_host.a` but never enabled the
+    // `perry-runtime/wasm-host` cargo feature, so `js_webassembly_*`
+    // symbols stayed undefined in the runtime archive.
+    if args.enable_wasm_runtime {
+        ctx.needs_wasm_runtime = true;
+    }
+    let use_wasm_host = ctx.needs_wasm_runtime;
+    if use_wasm_host && !native_link_set_skipped && find_perry_workspace_root().is_none() {
+        eprintln!(
+            "warning: WebAssembly runtime was requested, but Perry could not find its source workspace to build the required `perry-runtime/wasm-host` feature. The default prebuilt runtime lacks this feature, so linking may fail unless the selected runtime was built with it. Set `PERRY_WORKSPACE_ROOT` to a Perry source checkout (including `crates/perry-runtime` and `crates/perry-wasm-host`), or use a wasm-enabled runtime archive."
+        );
+    }
+    let wasm_host_lib_resolved = if use_wasm_host && !native_link_set_skipped {
+        // Prefer a Cargo freshness check when workspace source is available.
+        // Merely finding an archive is insufficient after the host ABI grows:
+        // a stale libperry_wasm_host.a can exist while the freshly rebuilt
+        // runtime references newer symbols. Cargo is incremental here, so an
+        // up-to-date host is a cheap no-op. Installed/source-less builds fall
+        // back to their packaged archive.
+        build_wasm_host_library(target.as_deref(), format, verbose)
+            .or_else(|| find_wasm_host_library(target.as_deref()))
+    } else {
+        None
+    };
+
+    // Auto-mode: pick the smallest matching (features, panic) profile
+    // for this binary and rebuild perry-runtime + perry-stdlib in a
+    // hash-keyed target dir. Both halves fall back to the prebuilt full
+    // libraries if the rebuild fails or the workspace source isn't on
+    // disk. `--no-auto-optimize` disables runtime/stdlib rebuilds but
+    // still resolves prebuilt well-known wrapper archives whose symbols
+    // are absent from the full stdlib.
+    //
+    // The legacy `--minimal-stdlib` flag is now a no-op alias for
+    // backward compat — auto-mode already does what it used to and more.
+    let optimized_libs: Option<OptimizedLibs> = if native_link_set_skipped {
+        None
+    } else if args.no_auto_optimize {
+        Some(optimized_libs::resolve_no_auto_optimized_libs(
+            &ctx,
+            target.as_deref(),
+            format,
+            verbose,
+        ))
+    } else {
+        Some(build_optimized_libs(
+            &ctx,
+            target.as_deref(),
+            &compiled_features,
+            format,
+            verbose,
+        ))
+    };
     let module_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(module_jobs)
         .thread_name(|index| format!("perry-module-{index}"))
@@ -5790,7 +5923,7 @@ pub fn run_with_parse_cache(
             disable_constfn_shapes: std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0"),
             program_has_worker,
             program_has_thread_agents,
-            needs_stdlib: ctx.needs_stdlib,
+            needs_stdlib: codegen_needs_stdlib,
             program_is_synchronous,
             needs_ui: ctx.needs_ui,
             needs_geisterhand: ctx.needs_geisterhand,
@@ -6163,16 +6296,12 @@ pub fn run_with_parse_cache(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .extend(seeds);
-                // #6439: a hit skips `compile_module`, and `compile_module`
-                // is what populates the ext_registry (`record_ffi_call`
-                // fires from `LlBlock::call`). The registry drives
-                // `needs_stdlib` + the well-known flip further down, so
-                // without this replay the link line depends on whether the
-                // cache happened to be warm: `api.ts` (Effect) linked from
-                // cold and failed from warm with an undefined
-                // `_js_ws_connect_start`. Replaying the manifest makes a hit
-                // record exactly what the skipped codegen would have.
-                perry_codegen::ext_registry::replay_ffi_symbols(&ffi_symbols);
+                // #6439: a hit skips `compile_module`, so the manifest stored
+                // beside the `.o` stands in for its emissions and is checked
+                // against the providers computed from HIR, exactly as a fresh
+                // compile is: the same source links (or is refused) the same
+                // way cold and warm.
+                check_module_providers(&program_providers, &hir_module.name, &cached_symbols)?;
                 // #7167: `-o` must name the same file whether the object cache
                 // was warm or cold. A linking compile can hand the linker the
                 // cache path directly — the bytes are the bytes and nothing
@@ -6279,6 +6408,7 @@ pub fn run_with_parse_cache(
                 )
             })?;
             let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
+            check_module_providers(&program_providers, &hir_module.name, &emitted_ffi_symbols)?;
             validate_module_ffi_symbols(
                 &ctx.native_routing,
                 &hir_module.name,
@@ -6678,57 +6808,6 @@ pub fn run_with_parse_cache(
         eprintln!("{rendered}");
     }
 
-    // #835 + #846: fold the codegen-side FFI provenance registry into
-    // ctx so the well-known flip and `needs_stdlib` decisions below see
-    // the symbols codegen actually emitted, not just the modules the
-    // user imported. Today, codegen for compiled-package code can emit
-    // (e.g.) `js_node_http_create_server` or `js_readable_stream_new`
-    // without any `import "node:http"` / `import "streams"` showing up
-    // in `ctx.native_module_imports` — Effect's `Stream`, Express's
-    // server, and similar shapes lower the FFI calls directly. The
-    // registry (`crates/perry-codegen/src/ext_registry.rs`) records
-    // every call-emission site against its providing crate; here we
-    // drain that record and route each entry through the existing
-    // `needs_stdlib` + `native_module_imports` machinery. Done before
-    // `build_optimized_libs` so `compute_required_features` and the
-    // well-known flip both see the augmented set.
-    {
-        use perry_codegen::ext_registry::{take_used_providers, OwnerKind};
-        let providers = take_used_providers();
-        for owner in providers {
-            match owner {
-                OwnerKind::Stdlib { feature } => {
-                    ctx.needs_stdlib = true;
-                    // Follow-up to #835/#846: codegen-emitted Stdlib
-                    // FFIs (Effect `Stream`, etc.) flip needs_stdlib
-                    // here, but the auto-optimize layer
-                    // (`build_optimized_libs`) rebuilds perry-stdlib
-                    // with only the features `compute_required_features`
-                    // derived from `native_module_imports` — which is
-                    // empty when no `import "streams"` appears in the
-                    // user TS. Without the feature, the symbol's
-                    // module is `#[cfg]`-gated out and the link fails
-                    // with "Undefined symbols: _js_readable_stream_…".
-                    // Inject the feature here so the rebuild includes
-                    // the providing module.
-                    if let Some(feat) = feature {
-                        ctx.extra_stdlib_features.insert(feat);
-                    }
-                }
-                OwnerKind::WellKnown(key) => {
-                    // Inserting into native_module_imports flips the
-                    // well-known mechanism for this binding. Also flip
-                    // `needs_stdlib` because the link step's
-                    // "Linking (with stdlib)..." vs "(runtime-only)"
-                    // gate is what brings the well-known libs onto the
-                    // command line (see link.rs:881-916).
-                    ctx.native_module_imports.insert(key.to_string());
-                    ctx.needs_stdlib = true;
-                }
-            }
-        }
-    }
-
     // Standalone WASI (#11379): link the wasm32 objects against the runtime
     // built for wasm32-wasip2 and stop; none of the native link machinery
     // below (auto-optimize, stdlib, stubs, link cache) applies.
@@ -6765,63 +6844,10 @@ pub fn run_with_parse_cache(
         });
     }
 
-    // Issue #76 follow-up — auto-provision the wasmi host staticlib. A
-    // program that references `WebAssembly.*` sets `ctx.needs_wasm_runtime`
-    // (feature_detect.rs), which links `libperry_wasm_host.a`. That archive
-    // lives in the standalone `perry-wasm-host` crate and is built by NOTHING
-    // in the normal compile path — not the auto-optimize runtime/stdlib
-    // rebuild, not codegen — so a bare `perry compile` used to die with
-    // `libperry_wasm_host.a not found` until a human ran
-    // `cargo build --release -p perry-wasm-host`. Build it on demand here so
-    // both the symbol-stub scan below and the final link resolve it. Cargo's
-    // freshness check makes this a no-op when it is already current; programs
-    // that do not use wasm skip the check entirely.
-    //
-    // `--enable-wasm-runtime` is an explicit override: fold it into
-    // `ctx.needs_wasm_runtime` so EVERY downstream path (the `wasm-host`
-    // cargo feature in `auto_optimized_cross_features`, the no-auto runtime
-    // rebuild, the library link, and the symbol-stub scan) treats it the
-    // same as auto-detected `WebAssembly.*` usage. Without this fold the
-    // flag only linked `libperry_wasm_host.a` but never enabled the
-    // `perry-runtime/wasm-host` cargo feature, so `js_webassembly_*`
-    // symbols stayed undefined in the runtime archive.
-    if args.enable_wasm_runtime {
-        ctx.needs_wasm_runtime = true;
-    }
-    let use_wasm_host = ctx.needs_wasm_runtime;
-    if use_wasm_host && find_perry_workspace_root().is_none() {
-        eprintln!(
-            "warning: WebAssembly runtime was requested, but Perry could not find its source workspace to build the required `perry-runtime/wasm-host` feature. The default prebuilt runtime lacks this feature, so linking may fail unless the selected runtime was built with it. Set `PERRY_WORKSPACE_ROOT` to a Perry source checkout (including `crates/perry-runtime` and `crates/perry-wasm-host`), or use a wasm-enabled runtime archive."
-        );
-    }
-    let wasm_host_lib_resolved = if use_wasm_host {
-        // Prefer a Cargo freshness check when workspace source is available.
-        // Merely finding an archive is insufficient after the host ABI grows:
-        // a stale libperry_wasm_host.a can exist while the freshly rebuilt
-        // runtime references newer symbols. Cargo is incremental here, so an
-        // up-to-date host is a cheap no-op. Installed/source-less builds fall
-        // back to their packaged archive.
-        build_wasm_host_library(target.as_deref(), format, verbose)
-            .or_else(|| find_wasm_host_library(target.as_deref()))
-    } else {
-        None
-    };
+    // Resolved before codegen (design §4.4); a WASI build returned above.
+    let optimized_libs: OptimizedLibs =
+        optimized_libs.expect("native link set is resolved before codegen");
 
-    // Auto-mode: pick the smallest matching (features, panic) profile
-    // for this binary and rebuild perry-runtime + perry-stdlib in a
-    // hash-keyed target dir. Both halves fall back to the prebuilt full
-    // libraries if the rebuild fails or the workspace source isn't on
-    // disk. `--no-auto-optimize` disables runtime/stdlib rebuilds but
-    // still resolves prebuilt well-known wrapper archives whose symbols
-    // are absent from the full stdlib.
-    //
-    // The legacy `--minimal-stdlib` flag is now a no-op alias for
-    // backward compat — auto-mode already does what it used to and more.
-    let optimized_libs: OptimizedLibs = if args.no_auto_optimize {
-        optimized_libs::resolve_no_auto_optimized_libs(&ctx, target.as_deref(), format, verbose)
-    } else {
-        build_optimized_libs(&ctx, target.as_deref(), &compiled_features, format, verbose)
-    };
     let stdlib_lib_resolved: Option<PathBuf> = optimized_libs
         .stdlib
         .clone()

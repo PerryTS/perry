@@ -27,18 +27,18 @@
 //!    (means: insert "http" into `ctx.native_module_imports` so the
 //!    existing well-known flip picks up `perry-ext-http`).
 //!
-//! 2. A process-wide `Mutex<HashSet<&'static str>>` collector
-//!    [`USED_PROVIDERS`] gets populated by `LlBlock::call` / `call_void`
-//!    at every codegen call-emission site whose symbol name matches a
-//!    registry entry. Since `compile_module` is called per-module from
-//!    rayon, the mutex is the synchronization point — contention is
-//!    negligible (one `HashSet::insert` per FFI call, all small static
-//!    strings).
+//! 2. Before codegen, the compile driver computes the program's provider
+//!    set from HIR ([`crate::providers::program_providers`], design
+//!    GC_EFFECTS_AT_BUILD §4.4) and resolves the link set (auto-optimize
+//!    build or prebuilt archives) from it, folding the set into
+//!    `ctx.needs_stdlib`, `ctx.extra_stdlib_features` and
+//!    `ctx.native_module_imports`.
 //!
-//! 3. The CLI driver calls [`take_used_providers`] **after** all
-//!    per-module codegen finishes but **before** `build_optimized_libs`,
-//!    folds the set into `ctx.needs_stdlib` + `ctx.native_module_imports`,
-//!    and the existing well-known machinery routes everything from there.
+//! 3. Codegen only checks: `LlBlock::call` / `call_void` record each
+//!    emitted registry symbol in a per-module capture
+//!    ([`record_ffi_call`]), and the driver rejects a module whose capture
+//!    (or cached manifest) names an owner outside the precomputed set
+//!    ([`check_emitted_providers`]).
 //!
 //! The registry is intentionally small — only the FFI symbols we KNOW
 //! live exclusively (or primarily) outside `perry-runtime`. Symbols
@@ -58,10 +58,9 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::Mutex;
 
 /// Where a given FFI symbol's implementation lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum OwnerKind {
     /// Symbol lives in `perry-stdlib`. Driver sets `ctx.needs_stdlib = true`.
     ///
@@ -76,7 +75,7 @@ pub enum OwnerKind {
     /// feature, the symbol never makes it into the .a, and the link
     /// fails with "Undefined symbols: _js_readable_stream_…".
     ///
-    /// The driver drains these entries into
+    /// The driver folds these entries into
     /// `ctx.extra_stdlib_features`, which `build_optimized_libs`
     /// unions into the feature set right before rebuilding.
     ///
@@ -629,6 +628,23 @@ pub fn well_known_owner_for_symbol(symbol: &str) -> Option<&'static str> {
         .map(|(_, binding)| *binding)
 }
 
+/// The well-known binding key `module` names when the registry files wrapper
+/// symbols under it ([`wrapper_owns_symbols`]).
+pub fn wrapper_binding(module: &str) -> Option<&'static str> {
+    FFI_REGISTRY
+        .iter()
+        .find_map(|(_, owner)| match owner {
+            OwnerKind::WellKnown(key) if *key == module => Some(*key),
+            _ => None,
+        })
+        .or_else(|| {
+            EXT_PREFIX_REGISTRY
+                .iter()
+                .find(|(_, binding)| *binding == module)
+                .map(|(_, binding)| *binding)
+        })
+}
+
 /// Does this registry name any symbol that only `module`'s wrapper crate
 /// defines (the same attribution [`well_known_owner_for_symbol`] makes)?
 /// Symbols the stdlib also implements are `OwnerKind::Stdlib`, not listed
@@ -669,158 +685,138 @@ pub(crate) fn wrapper_install_hooks() -> impl Iterator<Item = &'static str> {
     })
 }
 
-/// Process-wide collector of provider keys observed during codegen.
-/// Populated by [`record_ffi_call`] from `LlBlock::call` / `call_void`.
-/// Drained by [`take_used_providers`] right before `build_optimized_libs`.
-///
-/// `Mutex<HashSet>` instead of an `RwLock` or lock-free structure because
-/// FFI call emission is already an expensive operation (allocates +
-/// formats an LLVM IR line), and the contention here is one `insert` per
-/// FFI call across a small rayon worker pool — well under any
-/// optimization horizon worth measuring.
-static USED_PROVIDERS: Mutex<Option<HashSet<OwnerKind>>> = Mutex::new(None);
+/// The providers one registry symbol needs, and the marker the per-module
+/// capture records for it: the exact symbol for a table row, the matched
+/// prefix for a prefix-net symbol. A marker resolves to the same owners as
+/// the symbol it stands for, so a manifest stored beside a cached `.o` is
+/// checked against today's table, never a routing decision baked in by an
+/// older perry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SymbolOwners {
+    pub marker: &'static str,
+    owners: [Option<OwnerKind>; 2],
+}
 
-/// Test-only: the thread that holds `PROVIDER_TEST_LOCK`.
-///
-/// `USED_PROVIDERS` is process-wide but `PROVIDER_TEST_LOCK` only serialises
-/// tests that TAKE it, so a concurrently-running test that lowers any code
-/// touching an ext symbol used to add providers to the holder's set. Observed:
-/// `ext_prefix_net_does_not_over_match` asserts the set is empty after an
-/// unlisted symbol and failed once in twenty once #7662 added `child_process`
-/// lowering tests, which call `record_ffi_call`. Recording is narrowed to the
-/// holder's thread while a provider test is running; production is untouched
-/// (`PROVIDER_TEST_THREAD` is `None` outside tests, which permits everything).
-#[cfg(test)]
-static PROVIDER_TEST_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
-
-/// May the calling thread record into `USED_PROVIDERS`? Always yes in
-/// production and whenever no provider test holds the lock.
-#[inline]
-fn provider_recording_permitted() -> bool {
-    #[cfg(test)]
-    {
-        if let Ok(holder) = PROVIDER_TEST_THREAD.lock() {
-            if let Some(id) = *holder {
-                return id == std::thread::current().id();
-            }
+impl SymbolOwners {
+    fn one(marker: &'static str, owner: OwnerKind) -> Self {
+        SymbolOwners {
+            marker,
+            owners: [Some(owner), None],
         }
     }
-    true
+
+    pub fn iter(&self) -> impl Iterator<Item = OwnerKind> + '_ {
+        self.owners.iter().flatten().copied()
+    }
 }
 
-// Per-module capture buffer, active only between [`begin_module_capture`]
-// and [`take_module_capture`] on the same thread.
-//
-// Why a thread-local rather than another field on [`USED_PROVIDERS`]:
-// the object cache (`crates/perry/src/commands/compile/object_cache.rs`)
-// needs to know which registry symbols *this one module* emitted, so it
-// can persist them next to the module's cached `.o` and replay them on a
-// later cache hit. [`USED_PROVIDERS`] is process-wide and rayon compiles
-// many modules concurrently, so it cannot attribute a symbol to a module.
-// `perry-codegen` itself never uses rayon and `compile_module` runs start
-// to finish on its caller's worker thread, so a thread-local scoped
-// around that one call captures exactly this module's emissions.
-//
-// We record the matched symbol *names* rather than [`OwnerKind`]s: replay
-// re-runs them through [`record_ffi_call`], so the symbol→owner mapping is
-// always the one in today's table, never a stale routing decision baked
-// into a cache entry written by an older perry.
-thread_local! {
-    static MODULE_CAPTURE: RefCell<Option<HashSet<&'static str>>> = const { RefCell::new(None) };
-}
-
-/// Called from every `LlBlock::call` / `LlBlock::call_void` site.
-/// O(N) lookup over `FFI_REGISTRY` (N ≈ 50 today) — measured at
-/// ~30 ns per emission, fully amortized by the surrounding format!
-/// strings.
-pub(crate) fn record_ffi_call(symbol: &str) {
+/// Which providers `symbol` needs, or `None` for a symbol the always-linked
+/// runtime serves. O(N) over `FFI_REGISTRY` (N ≈ 350), only on emission.
+pub fn symbol_owners(symbol: &str) -> Option<SymbolOwners> {
     // #9603: `js_bun_serve` is implemented by perry-ext-http but crosses a
     // narrow JSON bridge into perry-stdlib's Fetch registries to construct
     // Request values and consume Response values. It therefore has two
     // providers, unlike the ordinary one-symbol/one-owner registry rows.
     if symbol == "js_bun_serve" {
-        if provider_recording_permitted() {
-            let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
-            let providers = guard.get_or_insert_with(HashSet::new);
-            providers.insert(OwnerKind::WellKnown("http"));
-            providers.insert(OwnerKind::Stdlib {
-                feature: Some("web-fetch"),
-            });
-        }
-        MODULE_CAPTURE.with(|cell| {
-            if let Some(set) = cell.borrow_mut().as_mut() {
-                set.insert("js_bun_serve");
-            }
+        return Some(SymbolOwners {
+            marker: "js_bun_serve",
+            owners: [
+                Some(OwnerKind::WellKnown("http")),
+                Some(OwnerKind::Stdlib {
+                    feature: Some("web-fetch"),
+                }),
+            ],
         });
-        return;
     }
-    for (name, owner) in FFI_REGISTRY {
-        if *name == symbol {
-            if provider_recording_permitted() {
-                let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
-                guard.get_or_insert_with(HashSet::new).insert(*owner);
-            }
-            MODULE_CAPTURE.with(|cell| {
-                if let Some(set) = cell.borrow_mut().as_mut() {
-                    set.insert(*name);
-                }
-            });
-            return;
-        }
+    if let Some((name, owner)) = FFI_REGISTRY.iter().find(|(name, _)| *name == symbol) {
+        return Some(SymbolOwners::one(name, *owner));
     }
-
     // Prefix safety net (stdlib cherry-pick): the auto-optimize driver no
     // longer force-enables perry-stdlib's `crypto` feature for every build,
     // so ANY codegen-emitted call into the node:crypto / WebCrypto surface
-    // must flip the feature here — the import mapping and the
-    // `uses_crypto_builtins` HIR gate cover the known shapes, and this rule
-    // covers everything else (compiled-package lowering, future HIR
-    // variants) without maintaining a per-symbol table: every FFI defined
-    // by perry-stdlib's crypto/webcrypto modules carries one of these two
-    // prefixes. `js_webcrypto_illegal_constructor` is excluded — it lives
-    // in perry-runtime (object/global_this/ctor_thunks.rs), so emitting it
-    // needs no stdlib feature. The MODULE_CAPTURE marker is the prefix
-    // itself: replaying it through this function (object-cache manifest,
-    // #6439) re-enters this arm and reproduces the same owner.
+    // needs the feature: every FFI defined by perry-stdlib's crypto/webcrypto
+    // modules carries one of these two prefixes. `js_webcrypto_illegal_constructor`
+    // is excluded — it lives in perry-runtime (object/global_this/ctor_thunks.rs).
+    // The marker is the prefix itself, which re-enters this arm.
     if symbol.starts_with("js_crypto_")
         || (symbol.starts_with("js_webcrypto_") && symbol != "js_webcrypto_illegal_constructor")
     {
-        let owner = OwnerKind::Stdlib {
-            feature: Some("crypto"),
+        return Some(SymbolOwners::one(
+            "js_crypto_",
+            OwnerKind::Stdlib {
+                feature: Some("crypto"),
+            },
+        ));
+    }
+    // Ext-binding prefix net: an emitted `js_<binding>_*` symbol needs its
+    // well-known wrapper (an AOT-compiled `undici` / `typescript` is in no
+    // import set). The marker is the matched prefix.
+    EXT_PREFIX_REGISTRY
+        .iter()
+        .find(|(prefix, _)| symbol.starts_with(prefix))
+        .map(|(prefix, binding)| SymbolOwners::one(prefix, OwnerKind::WellKnown(binding)))
+}
+
+/// The providers a compilation links, computed from HIR before codegen
+/// ([`crate::providers::program_providers`]). Codegen does not add to it: an
+/// emitted registry symbol whose owner is missing is a compile error
+/// ([`check_emitted_providers`]).
+pub type ProviderSet = std::collections::BTreeSet<OwnerKind>;
+
+/// Check one module's emitted registry symbols (or the markers a cached
+/// object's manifest recorded) against the precomputed provider set. A miss
+/// means the HIR provider pass did not predict a provider this module's code
+/// calls into: linking would fail with an undefined symbol, or link a runtime
+/// the GC effects table does not describe. It is a hard error naming the
+/// symbol and its owner.
+pub fn check_emitted_providers<'a>(
+    providers: &ProviderSet,
+    module: &str,
+    symbols: impl IntoIterator<Item = &'a str>,
+) -> Result<(), String> {
+    for symbol in symbols {
+        let Some(owners) = symbol_owners(symbol) else {
+            continue;
         };
-        {
-            let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
-            guard.get_or_insert_with(HashSet::new).insert(owner);
+        for owner in owners.iter() {
+            if !providers.contains(&owner) {
+                return Err(format!(
+                    "internal error: module '{module}' emits `{symbol}`, whose provider {owner:?} \
+                     is not in the link set computed from HIR before codegen \
+                     (perry_codegen::providers). The HIR provider pass must predict every \
+                     provider codegen calls into."
+                ));
+            }
         }
+    }
+    Ok(())
+}
+
+// Per-module capture buffer, active only between [`begin_module_capture`]
+// and [`take_module_capture`] on the same thread.
+//
+// The compile driver checks each module's capture against the provider set
+// computed from HIR, and the object cache persists it next to the module's
+// cached `.o` so a hit is checked the same way. `perry-codegen` itself never
+// uses rayon and `compile_module` runs start to finish on its caller's worker
+// thread, so a thread-local scoped around that one call captures exactly
+// this module's emissions. Markers, not owners, are recorded (see
+// [`SymbolOwners`]).
+thread_local! {
+    static MODULE_CAPTURE: RefCell<Option<HashSet<&'static str>>> = const { RefCell::new(None) };
+}
+
+/// Called from every `LlBlock::call` / `LlBlock::call_void` site: records a
+/// registry symbol in this module's capture, which the driver checks against
+/// the precomputed provider set ([`check_emitted_providers`]). It never adds
+/// a provider.
+pub(crate) fn record_ffi_call(symbol: &str) {
+    if let Some(owners) = symbol_owners(symbol) {
         MODULE_CAPTURE.with(|cell| {
             if let Some(set) = cell.borrow_mut().as_mut() {
-                set.insert("js_crypto_");
+                set.insert(owners.marker);
             }
         });
-        return;
-    }
-
-    // Ext-binding prefix net: an emitted `js_<binding>_*` symbol flips its
-    // well-known wrapper onto the link line off codegen provenance alone. This
-    // is what lets an AOT-compiled `undici` / `typescript` (in
-    // `perry.compilePackages`, so never in any import set) still link its
-    // `perry-ext-*` staticlib. The MODULE_CAPTURE marker is the matched prefix
-    // itself: replaying it (object-cache manifest, #6439) re-enters this arm
-    // and reproduces the same owner — `"js_undici_".starts_with("js_undici_")`.
-    for (prefix, binding) in EXT_PREFIX_REGISTRY {
-        if symbol.starts_with(prefix) {
-            let owner = OwnerKind::WellKnown(binding);
-            {
-                let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
-                guard.get_or_insert_with(HashSet::new).insert(owner);
-            }
-            MODULE_CAPTURE.with(|cell| {
-                if let Some(set) = cell.borrow_mut().as_mut() {
-                    set.insert(prefix);
-                }
-            });
-            return;
-        }
     }
 }
 
@@ -837,7 +833,7 @@ pub fn begin_module_capture() {
 }
 
 /// End the capture started by [`begin_module_capture`] and return the
-/// registry symbols emitted since, sorted so the persisted manifest is
+/// registry markers emitted since, sorted so the persisted manifest is
 /// byte-identical across runs (the cached `.o` already is — #686).
 ///
 /// Returns an empty vec when no capture was active.
@@ -852,76 +848,67 @@ pub fn take_module_capture() -> Vec<&'static str> {
         syms
     })
 }
-
-/// Re-record symbols read back from a cached module's FFI manifest, as if
-/// codegen had just emitted them.
-///
-/// This is what keeps the object cache from silently changing the link
-/// line: a cache hit skips `compile_module`, so without a replay the
-/// provider that module needs is never recorded and the well-known /
-/// stdlib-feature flip below it never happens — the same source links on a
-/// cold cache and fails to link on a warm one (#6439). Unknown symbols are
-/// ignored, so a manifest written by a perry whose table has since dropped
-/// an entry degrades to "no provider" rather than a hard error.
-pub fn replay_ffi_symbols<I, S>(symbols: I)
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    for symbol in symbols {
-        record_ffi_call(symbol.as_ref());
-    }
-}
-
-/// Drain and return everything codegen recorded since the last call.
-/// The CLI driver calls this once after all per-module codegen finishes
-/// and folds the result into `ctx.needs_stdlib` + `ctx.native_module_imports`
-/// before `build_optimized_libs` runs.
-///
-/// Returns an empty set when no FFI in the registry was emitted.
-pub fn take_used_providers() -> HashSet<OwnerKind> {
-    let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
-    guard.take().unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    static PROVIDER_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Takes `PROVIDER_TEST_LOCK` **and** claims `PROVIDER_TEST_THREAD`, so
-    /// `record_ffi_call` on any other thread stops writing into this test's
-    /// `USED_PROVIDERS` snapshot. Taking the lock alone is not enough: it only
-    /// serialises tests that take it, and a neighbouring lowering test does not.
-    struct ProviderTestGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
+    // Test shims: the tests below were written against a process-wide
+    // collector. Owners now come from `symbol_owners`; these thread-local
+    // helpers keep each test's "emit, then ask which providers" shape
+    // without any global state (so no cross-test lock is needed).
+    thread_local! {
+        static RECORDED: RefCell<HashSet<OwnerKind>> = RefCell::new(HashSet::new());
     }
+
+    fn record_ffi_call(symbol: &str) {
+        super::record_ffi_call(symbol);
+        if let Some(owners) = symbol_owners(symbol) {
+            RECORDED.with(|r| r.borrow_mut().extend(owners.iter()));
+        }
+    }
+
+    fn take_used_providers() -> HashSet<OwnerKind> {
+        RECORDED.with(|r| std::mem::take(&mut *r.borrow_mut()))
+    }
+
+    /// A cached manifest's markers resolve like the live symbols.
+    fn replay_ffi_symbols<I, S>(symbols: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for symbol in symbols {
+            record_ffi_call(symbol.as_ref());
+        }
+    }
+
+    struct ProviderTestGuard;
 
     impl ProviderTestGuard {
         fn new() -> Self {
-            let g = PROVIDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            if let Ok(mut t) = super::PROVIDER_TEST_THREAD.lock() {
-                *t = Some(std::thread::current().id());
-            }
-            ProviderTestGuard { _lock: g }
+            ProviderTestGuard
         }
     }
 
-    impl Drop for ProviderTestGuard {
-        fn drop(&mut self) {
-            if let Ok(mut t) = super::PROVIDER_TEST_THREAD.lock() {
-                *t = None;
-            }
-        }
+    #[test]
+    fn check_emitted_providers_names_the_missing_owner() {
+        let mut set = ProviderSet::new();
+        set.insert(OwnerKind::WellKnown("ws"));
+        assert!(check_emitted_providers(&set, "m.ts", ["js_ws_send", "js_array_push_f64"]).is_ok());
+        let err = check_emitted_providers(&set, "m.ts", ["js_crypto_"]).unwrap_err();
+        assert!(
+            err.contains("`js_crypto_`") && err.contains("crypto"),
+            "{err}"
+        );
+        // js_bun_serve needs both of its providers.
+        set.insert(OwnerKind::WellKnown("http"));
+        assert!(check_emitted_providers(&set, "m.ts", ["js_bun_serve"]).is_err());
     }
 
     /// #6439: per-module capture must see exactly what this thread emitted,
     /// sorted and deduped, and must end cleanly. This is what the object
     /// cache persists beside each `.o`.
     ///
-    /// Thread-local, so unlike the `USED_PROVIDERS` tests below this needs
-    /// no lock — a concurrent test on another thread cannot perturb it.
     #[test]
     fn module_capture_collects_only_registered_symbols_sorted() {
         begin_module_capture();
@@ -981,10 +968,6 @@ mod tests {
         );
     }
 
-    // `USED_PROVIDERS` is a process-wide static; other tests in the same
-    // process may concurrently insert into it via `LlBlock::call`, and these
-    // module tests drain it. Serialize the explicit drain/record assertions so
-    // one test cannot steal another test's providers.
     #[test]
     fn registry_dispatch_routes_to_correct_owner() {
         let _guard = ProviderTestGuard::new();
