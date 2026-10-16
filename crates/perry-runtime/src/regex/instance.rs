@@ -5,8 +5,10 @@ use crate::gc::RuntimeHandleScope;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
 
-const PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
-    crate::object::IntrinsicPrivateReadSite::new("[[RegExpPrototype]]");
+static PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
+    crate::object::IntrinsicPrivateReadSite::new(
+        &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_PROTOTYPE,
+    );
 crate::perry_thread_local! {
     static BIRTH_SHAPE: Cell<u32> = const { Cell::new(0) };
 }

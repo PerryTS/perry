@@ -315,6 +315,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                 if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
                     return val;
                 }
+                if super::has_property::closure_get_is_complete(obj as usize, key) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
                 let binary_receiver = crate::typedarray::is_offheap_sidetable_alloc(obj as usize);
                 if binary_receiver
                     && (crate::buffer::is_registered_buffer(obj as usize)

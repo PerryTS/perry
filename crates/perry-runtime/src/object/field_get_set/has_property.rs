@@ -1419,6 +1419,34 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
     None
 }
 
+/// Whether [`closure_dynamic_prop_by_key`]'s miss on `obj` for `key` was the
+/// whole `[[Get]]`, so its `undefined` is the answer: `obj` is a plain
+/// (non-class) function and `key` is not a name the by-name tail
+/// (`get_field_by_name_object_tail_with_kind`) synthesizes for functions
+/// after running that same Get (the `caller`/`arguments` poison pill, the
+/// lazy `prototype`, the inherited `constructor`, `length`, `name`). For
+/// every other key the tail only repeats the Get: the own lookup, the
+/// `%Function.prototype%` walk, and any own getter a second time.
+///
+/// # Safety
+/// `key` is null or a live string header.
+pub(crate) unsafe fn closure_get_is_complete(obj: usize, key: *const crate::StringHeader) -> bool {
+    if key.is_null() || !crate::closure::is_closure_ptr(obj) {
+        return false;
+    }
+    if crate::closure::shape::is_class_info((*(obj as *const crate::closure::ClosureHeader)).info) {
+        return false;
+    }
+    let bytes = std::slice::from_raw_parts(
+        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+        (*key).byte_len as usize,
+    );
+    !matches!(
+        bytes,
+        b"caller" | b"arguments" | b"prototype" | b"constructor" | b"length" | b"name"
+    )
+}
+
 /// Inherited Function/Object prototype methods that reify into a BOUND_METHOD
 /// closure bound to the receiver function when read as a value.
 pub(crate) fn reified_function_method_name(name: &str) -> Option<&'static [u8]> {

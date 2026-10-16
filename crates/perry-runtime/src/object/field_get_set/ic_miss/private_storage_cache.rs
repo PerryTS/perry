@@ -239,7 +239,9 @@ mod private_storage_cache_tests {
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let storage = private_storage_key_by_id(0, 0, "[[RegExpMatcher]]");
-        let site = IntrinsicPrivateReadSite::new("[[RegExpMatcher]]");
+        let site = IntrinsicPrivateReadSite::new(
+            &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_MATCHER,
+        );
         let spelling =
             scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
         object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
@@ -458,33 +460,38 @@ mod private_storage_cache_tests {
 /// A builtin's fixed intrinsic private read: the receiver's layout lists the
 /// qualified private key (found as the probe finds a public one), else the
 /// complete own lookup. Nothing is kept: no receiver, value or slot.
+///
+/// The key is a static atom (`runtime_layouts::intrinsic_private_atoms`),
+/// seeded as the agent's atom for its spelling before any intrinsic is born,
+/// so a birth key list carries exactly that word and the read is one layout
+/// probe with a constant key word and hash.
 pub(crate) struct IntrinsicPrivateReadSite {
-    name: &'static str,
-}
-
-/// `private_storage_spelling(0, 0, name)` in `buf`, without allocating.
-fn intrinsic_spelling<'b>(name: &str, buf: &'b mut [u8; 128]) -> Option<&'b [u8]> {
-    const HEAD: &[u8] = b"#<perry:private-value:0:@0:";
-    let len = HEAD.len() + name.len() + 1;
-    if len > buf.len() {
-        return None;
-    }
-    buf[..HEAD.len()].copy_from_slice(HEAD);
-    buf[HEAD.len()..len - 1].copy_from_slice(name.as_bytes());
-    buf[len - 1] = b'>';
-    Some(&buf[..len])
+    atom: &'static crate::object::layout_desc::StaticAtom,
 }
 
 impl IntrinsicPrivateReadSite {
-    pub(crate) const fn new(name: &'static str) -> Self {
-        Self { name }
+    pub(crate) const fn new(atom: &'static crate::object::layout_desc::StaticAtom) -> Self {
+        Self { atom }
     }
 
-    /// The same evaluation-qualified spelling used by class private slots.
-    /// Birth builders attach PRIVATE_FIELD_ENTRY to this canonical atom.
+    /// The qualified spelling, `private_storage_spelling(0, 0, name)`.
+    #[inline]
+    fn spelling(&self) -> &'static [u8] {
+        let string = self.atom.string;
+        unsafe {
+            std::slice::from_raw_parts(
+                crate::string::string_data(string),
+                (*string).byte_len as usize,
+            )
+        }
+    }
+
+    /// The agent's atom for the qualified spelling (the static atom unless an
+    /// equal spelling was interned first). Birth builders attach
+    /// PRIVATE_FIELD_ENTRY to it.
     #[cfg(feature = "regex-engine")]
     pub(crate) fn birth_key(&self) -> *const crate::StringHeader {
-        crate::string::intern_ascii_literal(private_storage_spelling(0, 0, self.name).as_bytes())
+        crate::string::intern_ascii_literal(self.spelling())
     }
 
     /// The slot of this intrinsic's qualified private key in `keys`, if the
@@ -498,8 +505,7 @@ impl IntrinsicPrivateReadSite {
         keys: *const crate::array::ArrayHeader,
         count: u32,
     ) -> Option<u32> {
-        let spelling = private_storage_spelling(0, 0, self.name);
-        crate::object::keys_find_private_slot_by_bytes(keys, count, spelling.as_bytes())
+        crate::object::keys_find_private_slot_by_bytes(keys, count, self.spelling())
             .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
     }
 
@@ -513,22 +519,14 @@ impl IntrinsicPrivateReadSite {
             return None;
         }
         let object = addr as *const ObjectHeader;
-        let mut buf = [0u8; 128];
-        if let Some(spelling) = intrinsic_spelling(self.name, &mut buf) {
-            let hash = crate::object::key_bytes_hash(spelling.as_ptr(), spelling.len());
-            if let Some(atom) = crate::string::atom_lookup(spelling, hash) {
-                if unsafe { crate::string::is_property_atom(atom) } {
-                    if let Some(value) = unsafe {
-                        crate::object::layout_probe::own_private_value(
-                            object,
-                            crate::value::STRING_TAG | atom as u64,
-                            crate::string::property_atom_hash(atom),
-                        )
-                    } {
-                        return Some(value);
-                    }
-                }
-            }
+        if let Some(value) = unsafe {
+            crate::object::layout_probe::own_private_value(
+                object,
+                crate::value::STRING_TAG | self.atom.string as u64,
+                self.atom.hash,
+            )
+        } {
+            return Some(value);
         }
         // Honest tags reject unshaped cells without private-name lookup.
         if !crate::object::shapes::is_shape_id(crate::object::layout_desc::layout_id_of_word(
@@ -552,13 +550,12 @@ impl IntrinsicPrivateReadSite {
         // The complete own lookup by spelling: no private-name cache, which
         // would activate the class namespace cache for every intrinsic-only
         // program.
-        let spelling = private_storage_spelling(0, 0, self.name);
         let keys = unsafe { crate::object::object_keys(object) };
         let index = unsafe {
             crate::object::keys_find_private_slot_by_bytes(
                 keys.arr(),
                 keys.count(),
-                spelling.as_bytes(),
+                self.spelling(),
             )
         }?;
         let live = unsafe { crate::object::object_live_slot_count(object) };

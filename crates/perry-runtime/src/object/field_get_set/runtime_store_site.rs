@@ -80,7 +80,9 @@ mod tests {
             })
         };
         crate::object::intrinsic_private_add(receiver(), "coldStore", 11.0);
-        let private = crate::object::IntrinsicPrivateReadSite::new("coldStore");
+        let private = crate::object::IntrinsicPrivateReadSite::new(
+            &crate::object::runtime_layouts::intrinsic_private_atoms::COLD_STORE,
+        );
         assert_eq!(private.read(receiver()), Some(11.0));
         static SITE: RuntimeStoreSite = RuntimeStoreSite::new();
         const KEY: &[u8] = b"#<perry:private-value:0:@0:coldStore>";

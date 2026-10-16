@@ -156,6 +156,30 @@ macro_rules! runtime_layout {
 
 include!("runtime_layouts/records.rs");
 
+/// The qualified private keys of the runtime's intrinsic slots
+/// (`private_storage_spelling(0, 0, name)`), as static atoms. A builtin's
+/// brand read (`IntrinsicPrivateReadSite`) compares this one key word against
+/// the receiver's layout: no spelling is built, hashed or looked up per read.
+pub(crate) mod intrinsic_private_atoms {
+    use super::*;
+    runtime_atom!(
+        REGEXP_MATCHER,
+        "#<perry:private-value:0:@0:[[RegExpMatcher]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b5265674578704d6174636865725d5d3e"
+    );
+    runtime_atom!(
+        REGEXP_PROTOTYPE,
+        "#<perry:private-value:0:@0:[[RegExpPrototype]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b52656745787050726f746f747970655d5d3e"
+    );
+    #[cfg(test)]
+    runtime_atom!(
+        COLD_STORE,
+        "#<perry:private-value:0:@0:coldStore>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a636f6c6453746f72653e"
+    );
+}
+
 /// `child_process.spawnSync`'s result. Node gives it `error` first, and only
 /// when the spawn failed: the key is an optional member (object model §3.2),
 /// so a successful run leaves its slot holding the hole and the key is absent

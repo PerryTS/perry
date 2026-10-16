@@ -193,8 +193,10 @@ pub fn regexp_data_of(value: f64) -> Option<*const RegExpData> {
 /// Raw-receiver ABI retained for the typed HIR calls until S5.
 pub type RegExpHeader = ObjectHeader;
 pub(crate) const REGEXP_MATCHER: &str = "[[RegExpMatcher]]";
-const MATCHER_READ: crate::object::IntrinsicPrivateReadSite =
-    crate::object::IntrinsicPrivateReadSite::new(REGEXP_MATCHER);
+static MATCHER_READ: crate::object::IntrinsicPrivateReadSite =
+    crate::object::IntrinsicPrivateReadSite::new(
+        &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_MATCHER,
+    );
 
 /// The slot of the intrinsic private matcher in a shape's key list: the
 /// brand as a fact of that shape.
