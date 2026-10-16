@@ -21,7 +21,7 @@ impl Model {
         if node.widened {
             // A widened set is {⊤}: every token reaching it escapes.
             for &t in toks {
-                if t != TOP {
+                if t != TOP && !self.is_escaped(t) {
                     self.widen_queue.push(t);
                 }
             }
@@ -50,7 +50,7 @@ impl Model {
                     self.aborted = true;
                 }
             }
-            if self.widen_k != 0 && node.pts.len() > self.widen_k {
+            if self.widen_k != 0 && node.pts.len() > self.widen_k && !node.internal {
                 // Sound widening: the members escape (unknown code may do
                 // anything with them) and the set becomes ⊤.
                 node.widened = true;
@@ -95,8 +95,48 @@ impl Model {
         let succ: usize = self.nodes.iter().map(|n| n.succ.len()).sum();
         let pts: usize = self.nodes.iter().map(|n| n.pts.len()).sum();
         let delta: usize = self.nodes.iter().map(|n| n.delta.len()).sum();
+        let rss_mb = std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|t| t.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .map(|p| p * 4096 / (1 << 20))
+            .unwrap_or(0);
+        let succ_cap: usize = self.nodes.iter().map(|n| n.succ.capacity()).sum();
+        let delta_cap: usize = self.nodes.iter().map(|n| n.delta.capacity()).sum();
+        let big: usize = self
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.pts, crate::pts::Pts::Big(_)))
+            .count();
+        let mut hubs: Vec<(usize, usize)> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.succ.len(), i))
+            .filter(|x| x.0 > 100_000)
+            .collect();
+        hubs.sort_unstable_by(|a, b| b.cmp(a));
+        let max_succ: Vec<String> = hubs
+            .iter()
+            .take(6)
+            .map(|&(l, i)| {
+                let n = &self.nodes[i];
+                format!(
+                    "{}#{i}:{l}:w{}:p{}:n{}:top{}",
+                    self.labels[i],
+                    n.widened as u8,
+                    n.prim,
+                    n.pts.len(),
+                    n.pts.contains_tok(TOP) as u8
+                )
+            })
+            .collect();
+        let max_succ = max_succ.join(",");
+        let stopped: usize = self.stopped.values().map(|v| v.len()).sum();
+        let csites: usize = self.callee_sites.values().map(|v| v.len()).sum();
         format!(
-            "pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} widenq={} widened={} escaped={} entries={}",
+            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} widenq={} widened={} escaped={} entries={}",
+            self.walk_nodes.len(),
+            self.relays.len(),
             self.pops,
             self.wl.len(),
             self.nodes.len(),
@@ -200,52 +240,106 @@ impl Model {
 
     /// Copy edge a → b (pts(a) ⊆ pts(b)).
     pub fn edge(&mut self, a: NodeId, b: NodeId) {
+        self.edge_impl(a, b, true);
+    }
+
+    /// `edge` without a relation line: internal relays the checker derives
+    /// from a logged rule (`bind_via`).
+    fn edge_quiet(&mut self, a: NodeId, b: NodeId) {
+        self.edge_impl(a, b, false);
+    }
+
+    fn edge_impl(&mut self, a: NodeId, b: NodeId, log: bool) {
         if a == b {
             return;
         }
         // Dedup against short successor lists only: a duplicate edge costs
         // a little propagation, a global edge set costs gigabytes.
+        let b_widened = self.nodes[b as usize].widened;
         {
-            let succ = &self.nodes[a as usize].succ;
-            if succ.len() <= 16 && succ.contains(&b) {
-                return;
+            let node = &mut self.nodes[a as usize];
+            match &mut node.succ_set {
+                Some(set) => {
+                    if !set.insert(b) {
+                        return;
+                    }
+                }
+                None => {
+                    if node.succ.contains(&b) {
+                        return;
+                    }
+                    if node.succ.len() >= 16 {
+                        let mut set: crate::pts::FxHashSet<NodeId> =
+                            node.succ.iter().copied().collect();
+                        set.insert(b);
+                        node.succ_set = Some(Box::new(set));
+                    }
+                }
+            }
+            if node.widened || !b_widened {
+                node.succ.push(b);
+            } else {
+                // Into a widened node: escape at the source, carry prims.
+                node.esc_out = true;
+                node.prim_succ.push(b);
             }
         }
-        self.nodes[a as usize].succ.push(b);
-        self.rel(|| format!("copy {a} {b}"));
+        if log {
+            self.rel(|| format!("copy {a} {b}"));
+        }
         // Over a bound the program gets no facts: nothing more to propagate.
         if self.aborted {
             return;
         }
-        let toks = self.nodes[a as usize].pts.to_sorted();
         let prim = self.nodes[a as usize].prim;
+        if self.nodes[a as usize].pts.is_empty() && prim == 0 {
+            return;
+        }
+        let mut toks = self.bufs.pop().unwrap_or_default();
+        toks.clear();
+        self.nodes[a as usize].pts.sorted_into(&mut toks);
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = a;
         self.cur_why = u32::MAX;
         self.add(b, &toks, prim);
         (self.cur_src, self.cur_why) = saved;
+        self.bufs.push(toks);
     }
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
-        if self.relations.is_some() {
+        if self.relations.is_some()
+            && !matches!(
+                c,
+                Cons::ThisTo { .. }
+                    | Cons::CallArgs { .. }
+                    | Cons::BuiltinCallee
+                    | Cons::HolderStep { .. }
+                    | Cons::VisitHolders { .. }
+                    | Cons::VisitStop { .. }
+            )
+        {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
-        self.nodes[n as usize].cons.push(c.clone());
+        self.nodes[n as usize].cons.push(c);
         if self.aborted {
             return;
         }
-        let toks = self.nodes[n as usize].pts.to_sorted();
         let prim = self.nodes[n as usize].prim;
-        if !toks.is_empty() || prim != 0 {
-            let saved = (self.cur_src, self.cur_why);
-            self.cur_src = n;
-            self.cur_why = u32::MAX;
-            self.with_s(|m| m.apply(n, &c, &toks, prim));
-            (self.cur_src, self.cur_why) = saved;
+        if self.nodes[n as usize].pts.is_empty() && prim == 0 {
+            return;
         }
+        let mut toks = self.bufs.pop().unwrap_or_default();
+        toks.clear();
+        self.nodes[n as usize].pts.sorted_into(&mut toks);
+        let saved = (self.cur_src, self.cur_why);
+        self.cur_src = n;
+        self.cur_why = u32::MAX;
+        self.with_s(|m| m.apply(n, &c, &toks, prim));
+        (self.cur_src, self.cur_why) = saved;
+        self.bufs.push(toks);
     }
 
     pub fn solve(&mut self) {
@@ -289,20 +383,62 @@ impl Model {
             let nsucc = self.nodes[n as usize].succ.len();
             let ncons0 = self.nodes[n as usize].cons.len();
             self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64;
+            if self.profile.is_some() {
+                let e = self.label_work.entry(self.labels[n as usize]).or_default();
+                e.0 += delta.len() as u64 * nsucc as u64;
+                e.1 += delta.len() as u64 * ncons0 as u64;
+                e.2 += 1;
+            }
             if self.max_work != 0 && self.work > self.max_work {
                 self.aborted = true;
                 return;
             }
-            for i in 0..nsucc {
+            if self.nodes[n as usize].esc_out {
+                for &t in &delta {
+                    if t != TOP && !self.is_escaped(t) {
+                        self.widen_queue.push(t);
+                    }
+                }
+                if dprim != 0 {
+                    for i in 0..self.nodes[n as usize].prim_succ.len() {
+                        let s = self.nodes[n as usize].prim_succ[i];
+                        self.add(s, &[], dprim);
+                    }
+                }
+            }
+            let mut i = 0;
+            while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
+                if self.nodes[s as usize].widened && !self.nodes[n as usize].widened {
+                    // A widened successor holds ⊤ and escapes what reaches
+                    // it: this node escapes its tokens itself from now on,
+                    // and the edge carries only primitive kinds.
+                    self.add(s, &delta, dprim);
+                    let node = &mut self.nodes[n as usize];
+                    node.succ.swap_remove(i);
+                    if let Some(set) = node.succ_set.as_mut() {
+                        set.remove(&s);
+                    }
+                    node.esc_out = true;
+                    node.prim_succ.push(s);
+                    continue;
+                }
                 self.add(s, &delta, dprim);
+                i += 1;
             }
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
-                let c = self.nodes[n as usize].cons[i].clone();
+                let c = self.nodes[n as usize].cons[i];
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
                 self.apply(n, &c, &delta, dprim);
+            }
+            // Hand the delta's storage back to the node (no reallocation).
+            let mut delta = delta;
+            delta.clear();
+            let node = &mut self.nodes[n as usize];
+            if node.delta.is_empty() && delta.capacity() <= 256 {
+                node.delta = delta;
             }
         }
         self.cur_src = NO_NODE;
@@ -537,6 +673,9 @@ impl Model {
             }
             Cons::AnyAccessors { origin, act } => {
                 for &q in toks {
+                    if q != TOP {
+                        self.any_walk_holders.entry(q).or_default().push((origin, act));
+                    }
                     if q != TOP && self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()) {
                         self.accessor_hit(origin, q, Key::Any, act);
                     }
@@ -654,34 +793,14 @@ impl Model {
                     if !ks.contains(&key) {
                         ks.push(key);
                     }
-                    if matches!(self.toks[t as usize], TokKind::ObjectProto) {
+                    let objproto = matches!(self.toks[t as usize], TokKind::ObjectProto);
+                    if objproto {
                         // Every lookup reaches Object.prototype: rather than
                         // replay them all, the derivation turns every fact
                         // off (an accessor on Object.prototype is E23).
                         self.objproto_accessor = true;
-                        continue;
                     }
-                    // Replay computed-key walks that reached this holder.
-                    let walks: Vec<(NodeId, Tok, Tok, ChainAct)> = self
-                        .any_walks
-                        .iter()
-                        .copied()
-                        .filter(|&(cp, _, own, _)| {
-                            own == t || self.nodes[cp as usize].pts.contains_tok(t)
-                        })
-                        .collect();
-                    for (_, origin, _, act) in walks {
-                        self.accessor_hit(origin, t, Key::Any, act);
-                    }
-                    // Replay lookups that already visited this holder.
-                    let visits: Vec<_> = self
-                        .visits
-                        .get(&t)
-                        .map(|v| v.iter().copied().collect())
-                        .unwrap_or_default();
-                    for (origin, k, act) in visits {
-                        self.accessor_hit(origin, t, k, act);
-                    }
+                    self.accessor_installed(t, key, f, setter, !objproto);
                 }
             }
             Cons::ProtoFrom { src } => {
@@ -773,6 +892,58 @@ impl Model {
                     }
                 }
             }
+            Cons::ThisTo { origin } => {
+                for &t in toks {
+                    self.this_to(t, origin);
+                }
+            }
+            Cons::CallArgs { call } => {
+                for &t in toks {
+                    self.call_args(call, t);
+                }
+            }
+            Cons::HolderStep { key, pass, stop } => {
+                for &q in toks {
+                    if q == TOP {
+                        self.add(pass, &[TOP], 0);
+                    } else if self.stops_at(q, key) {
+                        self.add(stop, &[q], 0);
+                        self.stopped_holders.entry(q).or_default().push((key, pass, stop));
+                    } else {
+                        let (p2, s2) = self.holders(q, key);
+                        self.edge_quiet(p2, pass);
+                        self.edge_quiet(s2, stop);
+                    }
+                }
+            }
+            Cons::VisitHolders { origin, key, act } => {
+                for &h in toks {
+                    if h == TOP {
+                        self.chain_step(0, origin, TOP, key, act);
+                        continue;
+                    }
+                    if !matches!(self.toks[h as usize], TokKind::ObjectProto) {
+                        self.visits.entry(h).or_default().insert((origin, key, act));
+                    }
+                    self.accessor_hit(origin, h, key, act);
+                }
+            }
+            Cons::VisitStop { origin, key, act } => {
+                for &h in toks {
+                    self.accessor_hit(origin, h, key, act);
+                }
+            }
+            Cons::BuiltinCallee => {
+                for &t in toks {
+                    if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+                        self.builtin_callee.insert(n);
+                        let sites = self.callee_sites.get(&n).cloned().unwrap_or_default();
+                        for (call, origin) in sites {
+                            self.call_tok(call, t, Some(origin));
+                        }
+                    }
+                }
+            }
             Cons::NewTargetHard { reason } => {
                 for &t in toks {
                     match self.toks[t as usize] {
@@ -846,15 +1017,113 @@ impl Model {
         if !self.needs_accessor_walk(key) {
             return;
         }
+        let Some(act) = self.shared_act(origin, t, key, act) else {
+            return;
+        };
         match key {
-            Key::Named(_) => self.chain_from(origin, t, key, act),
+            Key::Named(_) => self.holder_walk(origin, t, key, act, false),
             Key::Any => {
                 self.accessor_hit(origin, t, Key::Any, act);
                 let cp = self.cp(t);
                 if self.any_walk_done.insert((cp, origin, act)) {
                     self.any_walks.push((cp, origin, t, act));
+                    self.any_walk_holders.entry(t).or_default().push((origin, act));
                     self.cons(cp, Cons::AnyAccessors { origin, act });
                 }
+            }
+        }
+    }
+
+    /// Walks are per (receiver, start, key), not per site: the first site
+    /// walks with a shared act (a node the accessors feed, or that feeds
+    /// the setters), every site connects to it. `None`: already walked.
+    /// The same accessors run with the same `this`, so the union each site
+    /// sees is unchanged.
+    fn shared_act(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) -> Option<ChainAct> {
+        let store = matches!(act, ChainAct::Store(_));
+        let kind: u8 = match act {
+            ChainAct::Load(_) => 0,
+            ChainAct::Store(_) => 1,
+            ChainAct::Call(_) => 2,
+        };
+        let (n, fresh) = match self.walk_nodes.get(&(origin, t, key, kind)) {
+            Some(&n) => (n, false),
+            None => {
+                let n = self.node_l(["walk-load", "walk-store", "walk-call"][kind as usize]);
+                // A call walk relays getter results to calls: never widened.
+                // A load walk's members all reach every site's result, and a
+                // store walk's every setter's parameter, which would widen
+                // past the bound anyway: those widen like any value node.
+                match kind {
+                    1 => {
+                        self.walk_store_pending.insert(n, Vec::new());
+                    }
+                    2 => self.nodes[n as usize].internal = true,
+                    _ => {}
+                }
+                self.walk_nodes.insert((origin, t, key, kind), n);
+                (n, true)
+            }
+        };
+        match act {
+            ChainAct::Load(dst) => self.edge(n, dst),
+            ChainAct::Store(src) => match self.walk_store_pending.get_mut(&n) {
+                Some(v) => v.push(src),
+                None => self.edge(src, n),
+            },
+            ChainAct::Call(call) => self.bind_via(n, call, origin),
+        }
+        // A call walk collects getter results as a load does.
+        fresh.then_some(if store {
+            ChainAct::Store(n)
+        } else {
+            ChainAct::Load(n)
+        })
+    }
+
+    /// The holder sets of a named-key lookup that starts at `t` itself
+    /// (`t` is passed through, then its prototypes).
+    fn holders(&mut self, t: Tok, key: Key) -> (NodeId, NodeId) {
+        if let Some(&x) = self.holder_nodes.get(&(t, key)) {
+            return x;
+        }
+        let p = self.node_l("holders");
+        let s = self.node_l("holders-stop");
+        self.nodes[p as usize].internal = true;
+        self.nodes[s as usize].internal = true;
+        self.holder_nodes.insert((t, key), (p, s));
+        self.add(p, &[t], 0);
+        let pn = self.proto_node(t);
+        self.cons(pn, Cons::HolderStep { key, pass: p, stop: s });
+        (p, s)
+    }
+
+    /// A named-key accessor lookup for receiver `origin` from `t` (from
+    /// `t`'s prototypes, or, `at_start`, from prototype `t` itself with a
+    /// stop check there: `super.key`). Accessors on the pass holders run
+    /// and replay; those on stop holders run.
+    fn holder_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct, at_start: bool) {
+        let (p, s) = if at_start {
+            let p = self.node_l("holders");
+            let s = self.node_l("holders-stop");
+            self.nodes[p as usize].internal = true;
+            self.nodes[s as usize].internal = true;
+            let x = self.node_l("holders-start");
+            self.add(x, &[t], 0);
+            self.cons(x, Cons::HolderStep { key, pass: p, stop: s });
+            (p, s)
+        } else {
+            self.holders(t, key)
+        };
+        self.cons(p, Cons::VisitHolders { origin, key, act });
+        self.cons(s, Cons::VisitStop { origin, key, act });
+    }
+
+    /// A store walk found a consumer: its sites' sources flow from now on.
+    fn store_live(&mut self, n: NodeId) {
+        if let Some(srcs) = self.walk_store_pending.remove(&n) {
+            for src in srcs {
+                self.edge(src, n);
             }
         }
     }
@@ -941,6 +1210,7 @@ impl Model {
                 ChainAct::Load(dst) => self.add_tok(dst, TOP),
                 ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                 ChainAct::Store(src) => {
+                    self.store_live(src);
                     let r = self.reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                 }
@@ -994,7 +1264,10 @@ impl Model {
         }
         match key {
             Key::Named(_) if self.needs_accessor_walk(key) => {
-                self.chain_step(0, origin, start, key, act)
+                // `start` itself is a prototype: a lookup can stop there.
+                if let Some(act) = self.shared_act(origin, start | SUPER_BIT, key, act) {
+                    self.holder_walk(origin, start, key, act, true)
+                }
             }
             Key::Any => self.accessor_walk(origin, start, key, act),
             _ => {}
@@ -1008,6 +1281,13 @@ impl Model {
                 self.chain_from(origin, p, key, act);
             }
         }
+        if let Some(v) = self.stopped_holders.remove(&p) {
+            for (key, pass, stop) in v {
+                let (p2, s2) = self.holders(p, key);
+                self.edge_quiet(p2, pass);
+                self.edge_quiet(s2, stop);
+            }
+        }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst) in v {
                 let up = self.cv(p, key);
@@ -1016,53 +1296,285 @@ impl Model {
         }
     }
 
-    /// Accessors named `key` declared on `holder`: call them with `origin`.
+    /// Accessors named `key` (any key: `Key::Any`) declared on `holder`:
+    /// they run with `origin` as `this`, through the holder's group.
     pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
-        let keys: Vec<Atom> = match key {
-            Key::Named(a) => vec![a],
-            Key::Any => self.accessor_keys.get(&holder).cloned().unwrap_or_default(),
+        let has = match key {
+            Key::Named(a) => self.accessors.contains_key(&(holder, a)),
+            Key::Any => self
+                .accessor_keys
+                .get(&holder)
+                .is_some_and(|ks| !ks.is_empty()),
         };
-        for a in keys {
-            let Some((getters, setters)) = self.accessors.get(&(holder, a)).cloned() else {
-                continue;
-            };
-            match act {
-                ChainAct::Load(dst) => {
-                    for g in getters {
-                        let ret = self.funcs[g as usize].ret;
-                        let this = self.funcs[g as usize].this;
-                        self.add_tok(this, origin);
-                        self.edge(ret, dst);
-                    }
+        if !has {
+            return;
+        }
+        self.acc_group(holder, key);
+        self.group_hit(origin, holder, key, act);
+    }
+
+    /// One lookup from `origin` reaches group (holder, key).
+    fn group_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
+        let g = &self.acc_groups[&(holder, key)];
+        let (gt, ar, st, sp, live) = (g.gt, g.ar, g.st, g.sp, g.has_setter);
+        match act {
+            ChainAct::Load(dst) => {
+                self.add_tok(gt, origin);
+                self.edge(ar, dst);
+            }
+            ChainAct::Call(call) => {
+                // `o.k()` where k is a getter: the getter runs, then its
+                // result is called with `o` as `this`.
+                self.add_tok(gt, origin);
+                self.bind_via(ar, call, origin);
+            }
+            ChainAct::Store(src) => {
+                self.add_tok(st, origin);
+                if live {
+                    self.store_live(src);
+                    self.edge(src, sp);
+                } else {
+                    self.acc_groups
+                        .get_mut(&(holder, key))
+                        .unwrap()
+                        .pending
+                        .push(src);
                 }
-                ChainAct::Store(src) => {
-                    for s in setters {
-                        let this = self.funcs[s as usize].this;
-                        self.add_tok(this, origin);
-                        if let Some(&p0) = self.funcs[s as usize].params.first() {
-                            self.edge(src, p0);
-                        }
-                    }
+            }
+        }
+    }
+
+    /// The group of (holder, key), created with every accessor declared
+    /// there so far (an Any group: linked to every named group of the
+    /// holder).
+    fn acc_group(&mut self, holder: Tok, key: Key) {
+        if self.acc_groups.contains_key(&(holder, key)) {
+            return;
+        }
+        let gt = self.node_l("acc-this");
+        let ar = self.node_l("acc-ret");
+        let st = self.node_l("acc-setthis");
+        // The setter parameter source widens like the parameter it feeds.
+        let sp = self.node_l("acc-setarg");
+        for n in [gt, ar, st] {
+            self.nodes[n as usize].internal = true;
+        }
+        self.acc_groups.insert(
+            (holder, key),
+            AccGroup {
+                gt,
+                ar,
+                st,
+                sp,
+                has_setter: false,
+                pending: Vec::new(),
+            },
+        );
+        match key {
+            Key::Named(a) => {
+                let (ng, ns) = self
+                    .accessors
+                    .get(&(holder, a))
+                    .map_or((0, 0), |(g, s)| (g.len(), s.len()));
+                for i in 0..ng {
+                    let f = self.accessors[&(holder, a)].0[i];
+                    self.group_connect(holder, key, f, false);
                 }
-                ChainAct::Call(call) => {
-                    // `o.k()` where k is a getter: the getter runs, then its
-                    // result is called with `o` as `this`.
-                    for g in getters {
-                        let ret = self.funcs[g as usize].ret;
-                        let this = self.funcs[g as usize].this;
-                        self.add_tok(this, origin);
-                        self.bind_via(ret, call, origin);
+                for i in 0..ns {
+                    let f = self.accessors[&(holder, a)].1[i];
+                    self.group_connect(holder, key, f, true);
+                }
+                if self.acc_groups.contains_key(&(holder, Key::Any)) {
+                    self.group_link(holder, a);
+                }
+            }
+            Key::Any => {
+                let star = self.atom(crate::STAR_KEY);
+                let n = self.accessor_keys.get(&holder).map_or(0, |v| v.len());
+                for i in 0..n {
+                    let a = self.accessor_keys[&holder][i];
+                    if a == star || !self.accessors.contains_key(&(holder, a)) {
+                        continue;
                     }
+                    self.acc_group(holder, Key::Named(a));
+                    self.group_link(holder, a);
+                }
+            }
+        }
+    }
+
+    /// Link named group (holder, a) under the holder's Any group.
+    fn group_link(&mut self, holder: Tok, a: Atom) {
+        let any = self.acc_groups[&(holder, Key::Any)].clone();
+        let g = self.acc_groups[&(holder, Key::Named(a))].clone();
+        self.edge_quiet(any.gt, g.gt);
+        self.edge_quiet(g.ar, any.ar);
+        self.edge_quiet(any.st, g.st);
+        self.edge_quiet(any.sp, g.sp);
+        if g.has_setter {
+            self.group_live(holder, Key::Any);
+        }
+    }
+
+    /// Accessor `f` hangs off group (holder, key).
+    fn group_connect(&mut self, holder: Tok, key: Key, f: FnIdx, setter: bool) {
+        let g = self.acc_groups[&(holder, key)].clone();
+        // An accessor with a lexical `this` (arrow) never sees the
+        // receiver, as for a call (`call_tok`).
+        let this = (!self.funcs[f as usize].lexical_this).then(|| self.funcs[f as usize].this);
+        if setter {
+            if let Some(this) = this {
+                self.edge_quiet(g.st, this);
+            }
+            if let Some(&p0) = self.funcs[f as usize].params.first() {
+                self.edge_quiet(g.sp, p0);
+            }
+            self.group_live(holder, key);
+            if self.acc_groups.contains_key(&(holder, Key::Any)) {
+                self.group_live(holder, Key::Any);
+            }
+        } else {
+            if let Some(this) = this {
+                self.edge_quiet(g.gt, this);
+            }
+            let ret = self.funcs[f as usize].ret;
+            self.edge_quiet(ret, g.ar);
+        }
+    }
+
+    /// A group has a setter: its waiting store sources flow from now on.
+    fn group_live(&mut self, holder: Tok, key: Key) {
+        let g = self.acc_groups.get_mut(&(holder, key)).unwrap();
+        if g.has_setter {
+            return;
+        }
+        g.has_setter = true;
+        let pending = std::mem::take(&mut g.pending);
+        let sp = g.sp;
+        for src in pending {
+            self.store_live(src);
+            self.edge(src, sp);
+        }
+    }
+
+    /// Accessor `f` was installed on (holder, key) while solving. With
+    /// `replay`, lookups that reached the holder before it had a group for
+    /// this key run it now; later ones find it through the group.
+    fn accessor_installed(&mut self, holder: Tok, key: Atom, f: FnIdx, setter: bool, replay: bool) {
+        let k = Key::Named(key);
+        if self.acc_groups.contains_key(&(holder, k)) {
+            self.group_connect(holder, k, f, setter);
+        } else {
+            let any_exists = self.acc_groups.contains_key(&(holder, Key::Any));
+            if replay || any_exists {
+                // Creating the group picks up every accessor there (this
+                // one too) and links it under an existing Any group.
+                self.acc_group(holder, k);
+            }
+            if replay {
+                let visits: Vec<_> = self
+                    .visits
+                    .get(&holder)
+                    .map(|v| v.iter().copied().filter(|&(_, kk, _)| kk == k).collect())
+                    .unwrap_or_default();
+                for (origin, _, act) in visits {
+                    self.group_hit(origin, holder, k, act);
+                }
+            }
+        }
+        if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
+            let walks = self.any_walk_holders.get(&holder).cloned().unwrap_or_default();
+            if !walks.is_empty() {
+                self.acc_group(holder, Key::Any);
+                for (origin, act) in walks {
+                    self.group_hit(origin, holder, Key::Any, act);
                 }
             }
         }
     }
 
     /// Bind `call` to every function that shows up in `callee`, with `this`
-    /// fixed to `origin`.
+    /// fixed to `origin` (the relation `callthis callee call origin`).
+    ///
+    /// The rule splits in two so a megamorphic site does not pay
+    /// receivers × methods per call: `this` binds once per (method node,
+    /// receiver), shared by every site that looks the same key up on that
+    /// receiver (`ThisTo`), and arguments/result bind once per (call,
+    /// function) through the call's relay node (`CallArgs`). A builtin
+    /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
+    /// The result is the same as one `CallThis` per (callee, call, origin).
     fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
-        if self.callthis_done.insert((callee, call, origin)) {
-            self.cons(callee, Cons::CallThis { call, this: origin });
+        if !self.callthis_done.insert((callee, call, origin)) {
+            return;
+        }
+        self.rel(|| format!("callthis {callee} {call} {origin}"));
+        if self.this_done.insert((callee, origin)) {
+            self.cons(callee, Cons::ThisTo { origin });
+        }
+        let relay = match self.relays.get(&call) {
+            Some(&r) => r,
+            None => {
+                let r = self.node_l("callee-relay");
+                self.nodes[r as usize].internal = true;
+                self.relays.insert(call, r);
+                self.cons(r, Cons::CallArgs { call });
+                r
+            }
+        };
+        if self.relay_done.insert((call, callee)) {
+            self.edge_quiet(callee, relay);
+        }
+        let sites = self.callee_sites.entry(callee).or_default();
+        let first = sites.is_empty();
+        sites.push((call, origin));
+        if first {
+            self.cons(callee, Cons::BuiltinCallee);
+        } else if self.builtin_callee.contains(&callee) {
+            let mut toks = self.bufs.pop().unwrap_or_default();
+            toks.clear();
+            self.nodes[callee as usize].pts.sorted_into(&mut toks);
+            for &t in &toks {
+                if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+                    self.call_tok(call, t, Some(origin));
+                }
+            }
+            self.bufs.push(toks);
+        }
+    }
+
+    /// The `this` half of `call_tok(_, t, Some(origin))`.
+    fn this_to(&mut self, t: Tok, origin: Tok) {
+        match self.toks[t as usize] {
+            TokKind::Top | TokKind::BuiltinFn => {
+                let r = self.reason("receiver of a call of an unknown function value");
+                self.escape(origin, r);
+            }
+            TokKind::Func(f) => {
+                if !self.funcs[f as usize].lexical_this {
+                    let this = self.funcs[f as usize].this;
+                    self.add_tok(this, origin);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The argument half of `call_tok(call, t, Some(_))` (builtin namespace
+    /// values excepted: they run per receiver, `BuiltinCallee`).
+    fn call_args(&mut self, call: CallId, t: Tok) {
+        match self.toks[t as usize] {
+            TokKind::Top | TokKind::BuiltinFn => {
+                if self.bind_done.insert((call, t, u32::MAX - 2)) {
+                    self.unknown_callee_args(call, t, false);
+                }
+            }
+            TokKind::Func(_) => self.bind_args(call, t),
+            TokKind::Bound(_) => {
+                if self.bind_done.insert((call, t, u32::MAX)) {
+                    self.call_bound(call, t);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1159,144 +1671,28 @@ impl Model {
             if !self.bind_done.insert((call, t, u32::MAX - 2)) {
                 return;
             }
-            let c = self.calls[call as usize].clone();
-            if t == TOP {
-                self.top_calls += 1;
-            }
-            let r = if t == TOP {
-                self.reason("passed to a call of an unknown function value")
-            } else {
-                self.reason("passed to an opaque builtin function value")
-            };
-            for &a in c.args.iter().chain(c.spread.iter()) {
-                self.sink_node(a, r);
-            }
-            if this_tok.is_none() {
-                match &c.this {
-                    ThisArg::Node(n) => self.sink_node(*n, r),
-                    ThisArg::Tok(x) => self.escape(*x, r),
-                    ThisArg::Undef => {}
-                }
-            }
-            if t == TOP {
-                self.add_tok(c.ret, TOP);
-            } else {
-                self.add_top(c.ret, |_| {
-                    "result of an opaque builtin function value".into()
-                });
-            }
-            self.add_prim(c.ret, prim::ALL);
+            self.unknown_callee_args(call, t, this_tok.is_none());
             return;
         }
         let key_this = this_tok.unwrap_or(u32::MAX);
         if !self.bind_done.insert((call, t, key_this)) {
             return;
         }
-        let c = self.calls[call as usize].clone();
-        match self.toks[t as usize].clone() {
-            TokKind::Top | TokKind::BuiltinFn => {
-                if t == TOP {
-                    self.top_calls += 1;
-                }
-                // Unknown callee: arguments and receiver escape, result ⊤.
-                let r = if t == TOP {
-                    self.reason("passed to a call of an unknown function value")
-                } else {
-                    self.reason("passed to an opaque builtin function value")
-                };
-                for &a in c.args.iter().chain(c.spread.iter()) {
-                    self.sink_node(a, r);
-                }
-                match (this_tok, &c.this) {
-                    (Some(x), _) => self.escape(x, r),
-                    (None, ThisArg::Node(n)) => self.sink_node(*n, r),
-                    (None, ThisArg::Tok(x)) => self.escape(*x, r),
-                    (None, ThisArg::Undef) => {}
-                }
-                self.add_tok(c.ret, TOP);
-                self.add_prim(c.ret, prim::ALL);
-            }
+        match self.toks[t as usize] {
+            TokKind::Top | TokKind::BuiltinFn => unreachable!(),
             TokKind::Func(f) => {
-                let fi = self.funcs[f as usize].clone();
-                if !fi.lexical_this {
-                    match (this_tok, &c.this) {
-                        (Some(x), _) => self.add_tok(fi.this, x),
-                        (None, ThisArg::Tok(x)) => self.add_tok(fi.this, *x),
-                        (None, ThisArg::Node(n)) => self.edge(*n, fi.this),
-                        (None, ThisArg::Undef) => self.add_prim(fi.this, prim::UNDEF),
+                if !self.funcs[f as usize].lexical_this {
+                    let fthis = self.funcs[f as usize].this;
+                    match (this_tok, &self.calls[call as usize].this) {
+                        (Some(x), _) => self.add_tok(fthis, x),
+                        (None, &ThisArg::Tok(x)) => self.add_tok(fthis, x),
+                        (None, &ThisArg::Node(n)) => self.edge(n, fthis),
+                        (None, ThisArg::Undef) => self.add_prim(fthis, prim::UNDEF),
                     }
                 }
-                // Arguments and result bind once per (call, function); only
-                // `this` differs between receivers.
-                if !self.bind_done.insert((call, t, u32::MAX - 1)) {
-                    return;
-                }
-                for (i, &a) in c.args.iter().enumerate() {
-                    if let Some(&p) = fi.params.get(i) {
-                        self.edge(a, p);
-                    } else if let Some(rest) = fi.rest {
-                        let fa = self.field_any_node_of_node(rest);
-                        self.edge(a, fa);
-                    }
-                    self.edge(a, fi.args_all);
-                }
-                // Missing arguments are undefined.
-                for &p in fi.params.iter().skip(c.args.len()) {
-                    self.add_prim(p, prim::UNDEF);
-                }
-                for &s in &c.spread {
-                    // Spread arrays: their elements may be any parameter.
-                    let elems = self.node_l("spread-elems");
-                    self.cons(
-                        s,
-                        Cons::Load {
-                            key: Key::Any,
-                            dst: elems,
-                        },
-                    );
-                    for &p in &fi.params {
-                        self.edge(elems, p);
-                    }
-                    if let Some(rest) = fi.rest {
-                        let fa = self.field_any_node_of_node(rest);
-                        self.edge(elems, fa);
-                    }
-                    self.edge(elems, fi.args_all);
-                }
-                self.edge(fi.ret, c.ret);
+                self.bind_args(call, t);
             }
-            TokKind::Bound(b) => {
-                let (target, bthis, bargs) = self.bound[b as usize].clone();
-                // Calling a bound function: its target with the bound this;
-                // bound + call args land in any parameter (positions shift).
-                let all_args = self.node_l("bound-args");
-                for &a in bargs.iter().chain(c.args.iter()).chain(c.spread.iter()) {
-                    self.edge(a, all_args);
-                }
-                let call2 = self.calls.len() as CallId;
-                let mut args: Vec<NodeId> = bargs.clone();
-                args.extend(c.args.iter().copied());
-                self.calls.push(CallSite {
-                    this: ThisArg::Node(bthis),
-                    args,
-                    spread: c.spread.clone(),
-                    ret: c.ret,
-                    site: c.site,
-                });
-                self.rel(|| format!("boundcall {call2} {call} {b}"));
-                // Positions shift when the bound args are not a prefix of the
-                // target's params; the conservative cover: every arg to every
-                // param, done by spreading `all_args` as an array.
-                let arr = self.node_l("bound-arr");
-                let primbox = self.tok(TokKind::PrimBox);
-                let _ = primbox;
-                let holder = self.tok(TokKind::Bound(b));
-                let fa = self.field_any(holder);
-                self.edge(all_args, fa);
-                self.add_tok(arr, holder);
-                self.calls[call2 as usize].spread.push(arr);
-                self.cons(target, Cons::Call { call: call2 });
-            }
+            TokKind::Bound(_) => self.call_bound(call, t),
             TokKind::ClassObj(_) => {
                 // Calling a class without `new` throws; nothing flows.
             }
@@ -1319,6 +1715,137 @@ impl Model {
                 // that is a function (Proxy over a function etc., ⊤ anyway).
             }
         }
+    }
+
+    /// Unknown callee (⊤ or an opaque builtin function value): arguments
+    /// escape, the result is ⊤; with `sink_this` (no receiver token given),
+    /// the call's own `this` escapes too.
+    fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
+        if t == TOP {
+            self.top_calls += 1;
+        }
+        let r = if t == TOP {
+            self.reason("passed to a call of an unknown function value")
+        } else {
+            self.reason("passed to an opaque builtin function value")
+        };
+        let na = self.calls[call as usize].args.len();
+        for i in 0..na {
+            let a = self.calls[call as usize].args[i];
+            self.sink_node(a, r);
+        }
+        let ns = self.calls[call as usize].spread.len();
+        for i in 0..ns {
+            let a = self.calls[call as usize].spread[i];
+            self.sink_node(a, r);
+        }
+        if sink_this {
+            match self.calls[call as usize].this {
+                ThisArg::Node(n) => self.sink_node(n, r),
+                ThisArg::Tok(x) => self.escape(x, r),
+                ThisArg::Undef => {}
+            }
+        }
+        let ret = self.calls[call as usize].ret;
+        if t == TOP {
+            self.add_tok(ret, TOP);
+        } else {
+            self.add_top(ret, |_| "result of an opaque builtin function value".into());
+        }
+        self.add_prim(ret, prim::ALL);
+    }
+
+    /// Arguments and result of `call` into function token `t`: once per
+    /// (call, function); only `this` differs between receivers.
+    fn bind_args(&mut self, call: CallId, t: Tok) {
+        let TokKind::Func(f) = self.toks[t as usize] else {
+            return;
+        };
+        if !self.bind_done.insert((call, t, u32::MAX - 1)) {
+            return;
+        }
+        let f = f as usize;
+        let c = call as usize;
+        let rest = self.funcs[f].rest;
+        let args_all = self.funcs[f].args_all;
+        let nparams = self.funcs[f].params.len();
+        let nargs = self.calls[c].args.len();
+        for i in 0..nargs {
+            let a = self.calls[c].args[i];
+            if i < nparams {
+                let p = self.funcs[f].params[i];
+                self.edge(a, p);
+            } else if let Some(rest) = rest {
+                let fa = self.field_any_node_of_node(rest);
+                self.edge(a, fa);
+            }
+            self.edge(a, args_all);
+        }
+        // Missing arguments are undefined.
+        for i in nargs..nparams {
+            let p = self.funcs[f].params[i];
+            self.add_prim(p, prim::UNDEF);
+        }
+        let nspread = self.calls[c].spread.len();
+        for j in 0..nspread {
+            let s = self.calls[c].spread[j];
+            // Spread arrays: their elements may be any parameter.
+            let elems = self.node_l("spread-elems");
+            self.cons(
+                s,
+                Cons::Load {
+                    key: Key::Any,
+                    dst: elems,
+                },
+            );
+            for i in 0..nparams {
+                let p = self.funcs[f].params[i];
+                self.edge(elems, p);
+            }
+            if let Some(rest) = rest {
+                let fa = self.field_any_node_of_node(rest);
+                self.edge(elems, fa);
+            }
+            self.edge(elems, args_all);
+        }
+        let fret = self.funcs[f].ret;
+        let cret = self.calls[c].ret;
+        self.edge(fret, cret);
+    }
+
+    /// Calling a bound function: its target with the bound this; bound +
+    /// call args land in any parameter (positions shift).
+    fn call_bound(&mut self, call: CallId, t: Tok) {
+        let TokKind::Bound(b) = self.toks[t as usize] else {
+            return;
+        };
+        let c = self.calls[call as usize].clone();
+        let (target, bthis, bargs) = self.bound[b as usize].clone();
+        let all_args = self.node_l("bound-args");
+        for &a in bargs.iter().chain(c.args.iter()).chain(c.spread.iter()) {
+            self.edge(a, all_args);
+        }
+        let call2 = self.calls.len() as CallId;
+        let mut args: Vec<NodeId> = bargs.clone();
+        args.extend(c.args.iter().copied());
+        self.calls.push(CallSite {
+            this: ThisArg::Node(bthis),
+            args,
+            spread: c.spread.clone(),
+            ret: c.ret,
+            site: c.site,
+        });
+        self.rel(|| format!("boundcall {call2} {call} {b}"));
+        // Positions shift when the bound args are not a prefix of the
+        // target's params; the conservative cover: every arg to every
+        // param, done by spreading `all_args` as an array.
+        let arr = self.node_l("bound-arr");
+        let holder = self.tok(TokKind::Bound(b));
+        let fa = self.field_any(holder);
+        self.edge(all_args, fa);
+        self.add_tok(arr, holder);
+        self.calls[call2 as usize].spread.push(arr);
+        self.cons(target, Cons::Call { call: call2 });
     }
 
     fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
@@ -1507,7 +2034,7 @@ impl Model {
     // --------------------------------------------------------------- escape
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
-        if t == TOP || self.escaped.contains_key(&t) {
+        if t == TOP || self.is_escaped(t) {
             return;
         }
         // Runtime-owned objects do not "escape": unknown code already holds
@@ -1530,12 +2057,21 @@ impl Model {
         self.with_s(|m| m.escape_inner(t, reason));
     }
 
+    fn mark_escaped(&mut self, t: Tok, reason: u32) {
+        self.escaped.insert(t, reason);
+        let w = (t >> 6) as usize;
+        if self.esc_bits.len() <= w {
+            self.esc_bits.resize(w + 1, 0);
+        }
+        self.esc_bits[w] |= 1 << (t & 63);
+    }
+
     fn escape_inner(&mut self, t: Tok, reason: u32) {
         if matches!(self.toks[t as usize], TokKind::Proto(_)) {
-            self.escaped.insert(t, reason);
+            self.mark_escaped(t, reason);
             self.resume_stopped(t);
         }
-        self.escaped.insert(t, reason);
+        self.mark_escaped(t, reason);
         self.rel(|| format!("escaped {t}"));
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
@@ -1743,6 +2279,18 @@ impl Model {
             Cons::Arith { dst, add } => format!("arith {n} {dst} {}", *add as u8),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
+            Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
+            Cons::CallArgs { call } => format!("callargs {n} {call}"),
+            Cons::BuiltinCallee => format!("builtincallee {n}"),
+            Cons::HolderStep { key, pass, stop } => {
+                format!("holderstep {n} {} {pass} {stop}", self.key_name(*key))
+            }
+            Cons::VisitHolders { origin, key, act } => {
+                format!("visitholders {n} {origin} {} {act:?}", self.key_name(*key))
+            }
+            Cons::VisitStop { origin, key, act } => {
+                format!("visitstop {n} {origin} {} {act:?}", self.key_name(*key))
+            }
         }
     }
 

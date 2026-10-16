@@ -16,8 +16,16 @@ const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 impl Hasher for FxHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.add(b as u64);
+        // Eight bytes per step (strings: atoms, reasons).
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            self.add(u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut w = [0u8; 8];
+            w[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(w) ^ ((rest.len() as u64) << 59));
         }
     }
     #[inline]
@@ -104,6 +112,18 @@ impl Pts {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Append the members, sorted, to `out` (a reused buffer).
+    pub(crate) fn sorted_into(&self, out: &mut Vec<u32>) {
+        match self {
+            Pts::Small(v) => out.extend_from_slice(v),
+            Pts::Big(s) => {
+                let at = out.len();
+                out.extend(s.iter().copied());
+                out[at..].sort_unstable();
+            }
+        }
     }
 
     /// Sorted copy of the members.

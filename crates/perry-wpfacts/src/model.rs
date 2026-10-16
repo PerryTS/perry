@@ -254,7 +254,7 @@ impl Hard {
 }
 
 /// Complex constraints, attached to the node whose new tokens trigger them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Cons {
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
@@ -338,6 +338,32 @@ pub enum Cons {
     /// The node holds the source of a typed array `ta`: a buffer or view
     /// there means `ta` shares (and so exposes) that buffer (B1).
     ShareBuffer { ta: Tok },
+    /// The node holds the methods a lookup found on receiver `origin`:
+    /// each runs with `origin` as `this` (the `this` half of `CallThis`,
+    /// shared by every call site that looks the same key up on `origin`).
+    ThisTo { origin: Tok },
+    /// The node is call `call`'s callee relay (the union of the method
+    /// nodes its receivers found): arguments and result bind once per
+    /// (call, function) (the argument half of `CallThis`).
+    CallArgs { call: CallId },
+    /// The node is a method node some call sites bound through: a builtin
+    /// namespace value in it runs per (call, receiver) (`callee_sites`).
+    BuiltinCallee,
+    /// The node holds prototypes on a named-key accessor lookup's chain:
+    /// `pass` ⊇ the holders the lookup passes through (and continues
+    /// above), `stop` ⊇ the prototypes where a declared member ends it.
+    /// Built once per (start, key), shared by every receiver below it.
+    HolderStep {
+        key: Key,
+        pass: NodeId,
+        stop: NodeId,
+    },
+    /// The node is a lookup's pass-holder set: accessors there run for
+    /// `origin` (and later ones replay through `visits`); ⊤ there is an
+    /// unknown prototype.
+    VisitHolders { origin: Tok, key: Key, act: ChainAct },
+    /// The node is a lookup's stop-holder set: accessors there run.
+    VisitStop { origin: Tok, key: Key, act: ChainAct },
 }
 
 impl Cons {
@@ -373,6 +399,12 @@ impl Cons {
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ShareBuffer { .. } => "sharebuffer",
+            Cons::ThisTo { .. } => "thisto",
+            Cons::CallArgs { .. } => "callargs",
+            Cons::BuiltinCallee => "builtincallee",
+            Cons::HolderStep { .. } => "holderstep",
+            Cons::VisitHolders { .. } => "visitholders",
+            Cons::VisitStop { .. } => "visitstop",
         }
     }
 }
@@ -389,6 +421,19 @@ pub struct Node {
     /// The set grew past the widening bound: it holds only ⊤ from now on,
     /// and every token that reaches it escapes.
     pub widened: bool,
+    /// A solver relay (callee relay, shared accessor walk), not a program
+    /// value: never widened (its members are bound or forwarded exactly as
+    /// the per-site rules it replaces would have).
+    pub internal: bool,
+    /// Successor set, once the list is long (exact edge dedup for hubs: a
+    /// function's return node can be offered the same edge millions of
+    /// times).
+    pub succ_set: Option<Box<crate::pts::FxHashSet<NodeId>>>,
+    /// Some successor was widened: every token reaching this node escapes
+    /// (what that successor did with it), and the edge to it carries only
+    /// primitive kinds from then on (`prim_succ`).
+    pub esc_out: bool,
+    pub prim_succ: Vec<NodeId>,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -453,6 +498,8 @@ pub struct Model {
     pub adds_keys: FxHashMap<TmplId, u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
     pub escaped: FxHashMap<Tok, u32>,
+    /// `escaped` as a bitset by token (the hot membership test).
+    pub esc_bits: Vec<u64>,
     pub reasons: Vec<String>,
     pub reason_index: FxHashMap<String, u32>,
     pub top_node: NodeId,
@@ -467,9 +514,38 @@ pub struct Model {
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
+    /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
+    /// receiver), the callee relay per call, the edges into it, and the
+    /// (call, receiver) pairs bound through each method node.
+    pub this_done: crate::pts::FxHashSet<(NodeId, Tok)>,
+    pub relays: FxHashMap<CallId, NodeId>,
+    pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
+    pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,
+    pub builtin_callee: crate::pts::FxHashSet<NodeId>,
+    /// Shared accessor walks: (receiver, start, key, load/store/call) → the
+    /// node the walk's accessors feed (load/call) or read from (store).
+    pub walk_nodes: FxHashMap<(Tok, Tok, Key, u8), NodeId>,
+    /// Store walks that have found no setter (and no unknown prototype) yet:
+    /// the sites' source nodes wait here instead of flowing into the walk
+    /// node, which nothing reads until then.
+    pub walk_store_pending: FxHashMap<NodeId, Vec<NodeId>>,
+    /// Named-key lookup chains: (start, key) → (pass holders, stop holders).
+    pub holder_nodes: FxHashMap<(Tok, Key), (NodeId, NodeId)>,
+    /// Holder chains that stopped at a declared member of this prototype:
+    /// resumed when it becomes HARD or escapes.
+    pub stopped_holders: FxHashMap<Tok, Vec<(Key, NodeId, NodeId)>>,
+    /// Accessor groups: (holder, key or Any) → the shared nodes every
+    /// lookup that reaches the holder's accessors uses (`AccGroup`).
+    pub acc_groups: FxHashMap<(Tok, Key), AccGroup>,
+    /// Reused token buffers (no allocation per rule application).
+    pub bufs: Vec<Vec<Tok>>,
     pub sunk_nodes: crate::pts::FxHashSet<NodeId>,
     pub any_walk_done: crate::pts::FxHashSet<(NodeId, Tok, ChainAct)>,
     pub any_walks: Vec<(NodeId, Tok, Tok, ChainAct)>,
+    /// Computed-key walks by holder: every (receiver, act) whose walk
+    /// reached that holder (the receiver itself or a prototype in its
+    /// closure), so installing an accessor replays only those.
+    pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.
@@ -520,6 +596,9 @@ pub struct Model {
     pub stopped: FxHashMap<Tok, Vec<(Tok, Key, ChainAct)>>,
     /// Optional per-constraint-kind profile (PERRY_FACTS_PROFILE).
     pub profile: Option<FxHashMap<&'static str, (u64, std::time::Duration)>>,
+    /// With the profile: propagation work by source-node label
+    /// (delta × successors, delta × constraints).
+    pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Birth keys / definite keys of `new f()` instances, from the
     /// construction-phase analysis of `f`'s body.
@@ -533,7 +612,28 @@ pub struct Model {
     pub top_vals: FxHashMap<String, NodeId>,
 }
 
+/// The accessors of one holder under one key (or every key, `Key::Any`),
+/// as shared nodes: a lookup from receiver `o` adds `o` to `gt` (getters'
+/// `this`) and reads `ar` (getter results), or adds `o` to `st` (setters'
+/// `this`) and feeds `sp` (setters' parameter). The accessors' own nodes
+/// hang off these, so a new accessor connects once instead of replaying
+/// every lookup, and a lookup costs O(1) instead of O(accessors).
+#[derive(Clone, Debug)]
+pub struct AccGroup {
+    pub gt: NodeId,
+    pub ar: NodeId,
+    pub st: NodeId,
+    pub sp: NodeId,
+    pub has_setter: bool,
+    /// Store sources waiting for a first setter.
+    pub pending: Vec<NodeId>,
+}
+
 pub const NO_NODE: NodeId = u32::MAX;
+
+/// Marks a `super` walk's start in `Model::walk_nodes` keys (it begins with
+/// a stop check at the start prototype, unlike a receiver's own walk).
+pub const SUPER_BIT: Tok = 1 << 31;
 
 impl Model {
     pub fn atom(&mut self, s: &str) -> Atom {
@@ -816,6 +916,13 @@ impl Model {
             n = src;
             hops += 1;
         }
+    }
+
+    #[inline]
+    pub fn is_escaped(&self, t: Tok) -> bool {
+        self.esc_bits
+            .get((t >> 6) as usize)
+            .is_some_and(|w| w & (1 << (t & 63)) != 0)
     }
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {

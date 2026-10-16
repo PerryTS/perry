@@ -30,11 +30,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
-/// the whole pass costs a few seconds at most. Programs the analysis cannot
-/// finish within it (tsc, Effect, fastify) get no facts anyway. 16M is about
-/// 2 s of solve on the build host; zod needs 6.2M, commander 2.0M, the
-/// class-local kernels under 400.
-const DEFAULT_MAX_WORK: u64 = 16_000_000;
+/// the whole pass costs a few seconds at most. With `this` bound per
+/// (receiver, key), shared accessor walks and groups, and edges into
+/// widened sets cut at the source, tsc needs 45M, fastify 59M, Effect 27M,
+/// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
+/// bound and gets no facts.
+const DEFAULT_MAX_WORK: u64 = 200_000_000;
 
 pub(crate) fn contracts_requested() -> bool {
     std::env::var("PERRY_CHECK_CONTRACTS")

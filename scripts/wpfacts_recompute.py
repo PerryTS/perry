@@ -591,18 +591,23 @@ class Solver:
             if (holder, a) not in self.accessors:
                 continue
             getters, setters = self.accessors[(holder, a)]
+            # An accessor with a lexical `this` (arrow) never sees the
+            # receiver, as for a call (`call_tok`).
             if act[0] == "load":
                 for g in getters:
-                    self.add(self.funcs[g]["this"], [origin])
+                    if not self.funcs[g]["lexical"]:
+                        self.add(self.funcs[g]["this"], [origin])
                     self.edge(self.funcs[g]["ret"], act[1])
             elif act[0] == "store":
                 for s in setters:
-                    self.add(self.funcs[s]["this"], [origin])
+                    if not self.funcs[s]["lexical"]:
+                        self.add(self.funcs[s]["this"], [origin])
                     if self.funcs[s]["params"]:
                         self.edge(act[1], self.funcs[s]["params"][0])
             else:
                 for g in getters:
-                    self.add(self.funcs[g]["this"], [origin])
+                    if not self.funcs[g]["lexical"]:
+                        self.add(self.funcs[g]["this"], [origin])
                     self.bind_via(self.funcs[g]["ret"], act[1], origin)
 
     def bind_via(self, callee, call, origin):

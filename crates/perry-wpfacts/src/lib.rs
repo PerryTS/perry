@@ -156,6 +156,33 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         g.m.rel(|| format!("readsite {m0} {o} {k} {r} {c}"));
     }
     g.m.solve();
+    if cfg.profile {
+        let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
+        v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
+        for (k, (es, ec, pops)) in v.iter().take(25) {
+            eprintln!("perry: wpfacts labelwork {k} succ={es} cons={ec} pops={pops}");
+        }
+        let m = &g.m;
+        let mut gs: Vec<_> = m
+            .acc_groups
+            .iter()
+            .map(|((h, k), gr)| {
+                let ng = match k {
+                    model::Key::Named(a) => m.accessors.get(&(*h, *a)).map_or(0, |x| x.0.len()),
+                    model::Key::Any => m.accessor_keys.get(h).map_or(0, |x| x.len()),
+                };
+                (m.nodes[gr.ar as usize].pts.len(), m.nodes[gr.gt as usize].pts.len(), m.nodes[gr.ar as usize].succ.len(), ng, *h, *k)
+            })
+            .collect();
+        gs.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        for (ar, gt, succ, ng, h, k) in gs.iter().take(12) {
+            eprintln!(
+                "perry: wpfacts accgroup {} key={} ar={ar} gt={gt} ar_succ={succ} accessors={ng}",
+                m.tok_name(*h),
+                m.key_name(*k)
+            );
+        }
+    }
     g.m.dump_meta();
     let solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // E14: with the interpreter linked, interpreted code can patch
