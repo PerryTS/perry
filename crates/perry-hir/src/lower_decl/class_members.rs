@@ -731,6 +731,16 @@ pub fn lower_class_method_with_name(
         if prologue_len > 0 {
             ctx.gen_param_prologue_len.insert(func_id, prologue_len);
         }
+    } else if method.function.is_async && method_home.is_some() {
+        // An async method also becomes a state machine (async_to_generator
+        // marks it, the generator transform lowers it). Its home binding
+        // (`let __perry_method_home = ClassMethodHome`, body index 0) names
+        // the CALLED method object, so it must run in the outer wrapper:
+        // inside the step closure it named the closure, and `super.m()`
+        // after an `await` threw "value is not a function". Only the home is
+        // lifted; async parameter binding stays in the body, where an error
+        // rejects the returned promise.
+        ctx.gen_param_prologue_len.insert(func_id, 1);
     }
 
     Ok(Function {

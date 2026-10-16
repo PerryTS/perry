@@ -608,6 +608,47 @@ fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
     found
 }
 
+/// True when the closure `func_id` sits in this constructor body with the
+/// constructor's lexical `this`: directly, or inside enclosing arrows. A
+/// non-arrow function has its own `this`, so the search stops there.
+pub(crate) fn ctor_body_lexically_contains_arrow(
+    body: &[perry_hir::Stmt],
+    func_id: perry_hir::types::FuncId,
+) -> bool {
+    ctor_body_any(
+        body,
+        &|e: &Expr| expr_contains_lexical_arrow(e, func_id),
+        NO_STMT_PRED,
+    )
+}
+
+fn expr_contains_lexical_arrow(expr: &Expr, target: perry_hir::types::FuncId) -> bool {
+    if let Expr::Closure {
+        func_id,
+        is_arrow,
+        body,
+        ..
+    } = expr
+    {
+        if !*is_arrow {
+            return false;
+        }
+        return *func_id == target
+            || ctor_body_any(
+                body,
+                &|e: &Expr| expr_contains_lexical_arrow(e, target),
+                NO_STMT_PRED,
+            );
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_contains_lexical_arrow(child, target) {
+            found = true;
+        }
+    });
+    found
+}
+
 /// True when the ctor body dereferences `this` OUTSIDE nested closures.
 /// Combined with `ctor_body_closure_calls_super`: a direct `this` access in
 /// a no-direct-super derived ctor throws ReferenceError per spec before any

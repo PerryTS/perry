@@ -326,7 +326,18 @@ pub extern "C" fn js_fs_readdir_callback(path_value: f64, arg1: f64, arg2: f64) 
             return f64::from_bits(TAG_UNDEFINED);
         }
     }
-    let entries = js_fs_readdir_sync(path_value, options);
+    // Argument errors throw synchronously, as in Node; a directory that
+    // cannot be read (ENOTDIR, EACCES, ...) goes to the callback.
+    crate::fs::validate::validate_path("path", path_value);
+    crate::fs::validate::validate_string_or_object_options("options", options);
+    let entries = match crate::exception::catch_js_throw(|| js_fs_readdir_sync(path_value, options))
+    {
+        Ok(entries) => entries,
+        Err(err_val) => {
+            unsafe { call_cb_err2(cb, err_val) };
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    };
     let entries =
         f64::from_bits(crate::value::JSValue::pointer(entries.to_bits() as *const u8).bits());
     if !cb.is_null() {
