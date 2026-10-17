@@ -1216,6 +1216,7 @@ pub(super) fn compile_closure(
         program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
+        wpfacts_off: false,
         wpfacts_this: if captures_this {
             this_stack
                 .last()

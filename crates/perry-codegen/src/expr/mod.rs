@@ -370,6 +370,9 @@ pub(crate) struct FnCtx<'a> {
     /// (stable local, block) pairs whose receiver test already passed in
     /// that block (`wpfacts_access::tested_in_block`).
     pub wpfacts_tested: Vec<(i64, usize)>,
+    /// Set while lowering the generic arm of a guarded proof (decision 150):
+    /// that arm is the site's complete operation without the facts.
+    pub wpfacts_off: bool,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).

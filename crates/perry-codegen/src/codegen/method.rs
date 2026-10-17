@@ -628,6 +628,7 @@ pub(super) fn compile_method(
         program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
+        wpfacts_off: false,
         wpfacts_this: vec![(this_slot.clone(), method.id)],
         this_stack: vec![this_slot],
         super_called_stack: Vec::new(),

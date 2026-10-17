@@ -310,7 +310,10 @@ pub(crate) fn interp_restore(savepoint: u64) {
 /// state and is rethrown to the caller's handler.
 pub(crate) fn interp_entry<R>(f: impl FnOnce() -> R) -> R {
     let saved = interp_savepoint();
-    match crate::exception::catch_js_throw(f) {
+    crate::dyn_eval_hooks::interp_active_enter();
+    let r = crate::exception::catch_js_throw(f);
+    crate::dyn_eval_hooks::interp_active_leave();
+    match r {
         Ok(r) => r,
         Err(err) => {
             // The exception value is a plain f64 here; nothing below

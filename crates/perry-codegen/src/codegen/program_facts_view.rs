@@ -24,13 +24,19 @@ pub struct ProgramFactsView {
     pub elision: std::sync::Arc<ElisionFacts>,
 }
 
-/// What a binding (a local, or a function's `this`) can hold, when that is
-/// only instances of prefix-stable classes (F3 + F4), plus null/undefined
-/// when `nullable`. Bindings with any other value have no entry.
+/// What a binding (a local, or a function's `this`) can hold: instances of
+/// these prefix-stable classes (F3 + F4), plus null/undefined when
+/// `nullable`, plus anything else when `checked` (⊤ from interpreted or
+/// unmodeled code, other objects, primitives). A `checked` binding's sites
+/// compare the receiver's class id against `class_ids` and take their
+/// complete generic operation on a miss (decision 150, 5b case 2); the
+/// others need no receiver test beyond the nullish one. Bindings with no
+/// prefix-stable class have no entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct FactsRecv {
     pub class_ids: Vec<u32>,
     pub nullable: bool,
+    pub checked: bool,
 }
 
 /// A definite data birth field of a prefix-stable class (F1, F1', F2, F6).
@@ -74,6 +80,12 @@ pub struct ElisionFacts {
     pub receiver_params: std::collections::BTreeMap<u32, Vec<String>>,
     /// Contract build: every elided site asserts its facts at run time.
     pub contracts: bool,
+    /// Interpreted code can run (decision 150, `ProgramFacts::interp_guard`):
+    /// every proof also tests the runtime's `PERRY_INTERP_PROTO_WRITTEN`
+    /// word (set-only: interpreted code wrote an intrinsic or marked
+    /// prototype) and takes the site's complete generic operation once it
+    /// is set.
+    pub interp_guard: bool,
 }
 
 impl ElisionFacts {
@@ -90,8 +102,17 @@ impl ElisionFacts {
     }
 }
 
+/// Defined by `perry-runtime`'s `contracts` module (feature `contract-checks`).
+pub(crate) const CONTRACT_RUNTIME_SYMBOL: &str =
+    "perry_contract_build_needs_runtime_feature_contract_checks";
+
 /// Emit `bytes` as this module's `.perry_facts` blob, kept alive through
 /// `@llvm.used` (no code references it; the runtime finds it by section).
+///
+/// The blob also references `CONTRACT_RUNTIME_SYMBOL`, which only a runtime
+/// built with `contract-checks` defines: linking a contract build against a
+/// runtime without the checks fails at link time naming the feature, instead
+/// of producing a binary that checks nothing.
 pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
@@ -116,7 +137,19 @@ pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, b
         "@{name} = internal constant [{} x i8] {lit}, section \"{section}\", align 8",
         bytes.len()
     ));
+    // A real relocation (not just an `@llvm.used` entry): the reference must
+    // reach the linker.
+    let ref_section = if llmod.target_triple.contains("apple") {
+        "__DATA,__perry_fref"
+    } else {
+        ".perry_facts_ref"
+    };
+    llmod.add_raw_global(format!("@{CONTRACT_RUNTIME_SYMBOL} = external global i8"));
     llmod.add_raw_global(format!(
-        "@llvm.used = appending global [1 x ptr] [ptr @{name}], section \"llvm.metadata\""
+        "@{name}_ref = internal constant ptr @{CONTRACT_RUNTIME_SYMBOL}, section \"{ref_section}\", align 8"
+    ));
+    llmod.add_raw_global(format!(
+        "@llvm.used = appending global [2 x ptr] [ptr @{name}, ptr @{name}_ref], \
+         section \"llvm.metadata\""
     ));
 }

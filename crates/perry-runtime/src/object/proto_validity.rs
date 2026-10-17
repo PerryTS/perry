@@ -375,6 +375,7 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
         return;
     }
     if object_is_marked_prototype(obj) {
+        crate::dyn_eval_hooks::note_proto_write();
         // #11915: a sealed builtin prototype is always marked, so its
         // structural mutations (key add, delete, descriptor and attribute
         // changes, `[[Prototype]]` relinks) all reach this branch.
@@ -395,6 +396,7 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
 #[inline]
 pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
     if any_prototype_marked() && object_is_marked_prototype(obj) {
+        crate::dyn_eval_hooks::note_proto_write();
         crate::object::builtin_proto::note_write(
             obj as *const crate::object::ObjectHeader,
             "overflow key change",

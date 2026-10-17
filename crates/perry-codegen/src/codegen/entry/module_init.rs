@@ -288,6 +288,7 @@ pub(super) fn compile_module_init(
         program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
+        wpfacts_off: false,
         wpfacts_this: Vec::new(),
         this_stack: Vec::new(),
         super_called_stack: Vec::new(),

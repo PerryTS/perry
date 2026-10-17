@@ -49,9 +49,6 @@ pub struct FactsConfig {
     /// Wall-clock budget (seconds) on generation and solve; past it the
     /// program gets no facts.
     pub budget_secs: Option<u64>,
-    /// Report-only what-if: ignore the E14 program-wide kill (UNSOUND; for
-    /// the precision report only, never for codegen).
-    pub whatif_no_e14: bool,
     /// Per-constraint-kind time profile in the report.
     pub profile: bool,
     /// Bound on points-to entries (work/memory); past it, no facts.
@@ -63,7 +60,9 @@ pub struct FactsConfig {
     /// Widening bound on one points-to set (escape + ⊤ beyond it).
     pub widen_k: Option<usize>,
     /// The driver knows the program can run interpreted code (a deferred
-    /// `new Function`/`eval` site or `node:vm`): E14, program-wide.
+    /// `new Function`/`eval` site or `node:vm`). Not a kill (decision 150):
+    /// interpreted code is the ⊤ summary node; see
+    /// [`ProgramFacts::interp_guard`].
     pub dynamic_code: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
@@ -102,12 +101,19 @@ pub struct ProgramFacts {
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
     pub stats: Stats,
-    /// A program-wide kill (E14 interpreted code), if any.
-    pub global: Option<String>,
+    /// Interpreted code can run (decision 150), and why. It is no kill: its
+    /// data flow is the ⊤ summary node (everything it can receive already
+    /// escapes there). What the analysis cannot see is interpreted code
+    /// writing an intrinsic prototype (an accessor or method under any key
+    /// on `Object.prototype`, `Array.prototype` …): that runs it with the
+    /// receiver of any lookup reaching that prototype, and a setter there
+    /// keeps a constructor's assignment from defining its birth field. The
+    /// runtime records exactly that (`PERRY_INTERP_PROTO_WRITTEN`, set-only),
+    /// so with this set every proof is GUARDED: the site tests the word and
+    /// takes its complete generic operation once it is set.
+    pub interp_guard: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
-    /// Report-only what-if run (unsound): never feed codegen from it.
-    pub whatif_no_e14: bool,
     pub relations: Option<Vec<String>>,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
@@ -126,9 +132,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
-    if cfg.whatif_no_e14 {
-        g.m.rel(|| "whatif 1".to_string());
-    }
     if cfg.profile {
         g.m.profile = Some(Default::default());
     }
@@ -154,6 +157,14 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     for s in &g.read_sites {
         let (m0, o, k, r, c) = (s.module, s.byte_offset, s.key, s.recv, s.is_call as u8);
         g.m.rel(|| format!("readsite {m0} {o} {k} {r} {c}"));
+    }
+    if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
+        // Interpreted code can catch what compiled code throws (a compiled
+        // function it calls throws into its `try`): thrown values reach the
+        // summary node.
+        let r = g.m.reason("thrown where interpreted code can catch it");
+        let thrown = g.m.thrown;
+        g.m.sink_node(thrown, r);
     }
     g.m.solve();
     if cfg.profile {
@@ -185,12 +196,16 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     }
     g.m.dump_meta();
     let solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
-    // E14: with the interpreter linked, interpreted code can patch
-    // Object.prototype; it is reachable through a modeled Function/vm use or
-    // any call of a ⊤ value (which could be the Function constructor).
+    // Decision 150: interpreted code is the ⊤ summary node, never a
+    // program-wide kill. Every value it can receive (arguments and results
+    // of ⊤ calls, globals (E20), the scope object of a direct eval) already
+    // escapes to ⊤; a ⊤ call that may be the Function constructor only
+    // connects already-⊤ values. Its writes to intrinsic prototypes are the
+    // runtime's guard word (`ProgramFacts::interp_guard`).
+    let mut interp_guard = None;
     if let Some(linked) = &cfg.dynamic_code {
-        if !cfg.whatif_no_e14 && (g.m.dyn_eval.is_some() || g.m.top_calls > 0) {
-            g.global_hard = Some(format!(
+        if g.m.dyn_eval.is_some() || g.m.top_calls > 0 {
+            interp_guard = Some(format!(
                 "E14 interpreter linked ({linked}) and reachable ({})",
                 g.m.dyn_eval.clone().unwrap_or_else(|| format!(
                     "{} calls of unknown function values",
@@ -199,10 +214,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
             ));
         }
     }
-    // Source the interpreter evaluates can name the global scope, so it can
-    // install an accessor under any key on Object.prototype: every family's
-    // chain runs unknown code with the receiver (the E23 rule, for any key).
-    if cfg.dynamic_code_reach.globals && !cfg.whatif_no_e14 {
+    if cfg.dynamic_code_reach.globals && interp_guard.is_none() {
         let first = cfg
             .dynamic_code_reach
             .sites
@@ -210,9 +222,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
             .next()
             .cloned()
             .unwrap_or_default();
-        g.global_hard = Some(format!(
-            "E14 dynamic_code_reach: non-constant source names Object.prototype ({first})"
-        ));
+        interp_guard = Some(format!("E14 dynamic_code_reach: {first}"));
     }
     let t2 = std::time::Instant::now();
     let (mut templates, mut sites) = if g.m.aborted {
@@ -227,7 +237,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         sites.clear();
         bindings.clear();
     }
-    let global = g.global_hard.clone();
     if let Some(spec) = &cfg.sabotage {
         dump::apply_sabotage(&mut templates, spec);
     }
@@ -273,10 +282,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         templates,
         sites,
         stats,
-        global,
+        interp_guard,
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
-        whatif_no_e14: cfg.whatif_no_e14,
         relations: g.m.relations.take(),
         tok_names,
         bindings,

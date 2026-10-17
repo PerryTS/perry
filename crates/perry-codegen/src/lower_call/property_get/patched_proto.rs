@@ -58,36 +58,37 @@ fn method_patched(property: &str) -> bool {
 /// so does a known user class instance, whose methods the class-dispatch arms
 /// resolve.
 pub(crate) fn guards(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
-    // A direct eval of non-constant source names the classes in its scope
-    // chain, so it can replace their prototype methods as well; any other
-    // dynamic site names only globals, which `method_patched` already covers
-    // (the driver records every builtin member as written).
-    let dynamic = !ctx.wpfacts.dynamic_code_reach.lexical_modules.is_empty();
-    if !dynamic && !method_patched(property) {
+    // Only a method the PROGRAM writes onto a builtin prototype routes here.
+    // Dynamic code is no program-wide switch (decision 150): what it writes
+    // onto a builtin prototype or namespace is the runtime's shadow bit of
+    // that holder, which every direct builtin site under dynamic reach
+    // tests (`Pristine(family)`, `builtin_proto::emit_patched_test`;
+    // `namespace_call_guarded`), and what a direct eval writes onto a class
+    // prototype it names is that prototype's shadow bit, which every site
+    // binding a class member tests (object model step 3, `object::shadow`).
+    if !method_patched(property) {
         return false;
     }
     let value_receiver = match object {
         Expr::ExternFuncRef { name, .. } => ctx.imported_vars.contains(name.as_str()),
-        _ => {
-            matches!(
-                object,
-                Expr::LocalGet(_)
-                    | Expr::PropertyGet { .. }
-                    | Expr::IndexGet { .. }
-                    | Expr::Call { .. }
-                    | Expr::CallSpread { .. }
-                    | Expr::Array(_)
-                    | Expr::ArraySpread(_)
-                    | Expr::MapNew
-                    | Expr::MapNewFromArray(_)
-                    | Expr::SetNew
-                    | Expr::SetNewFromArray(_)
-                    | Expr::FuncRef(_)
-                    | Expr::Closure { .. }
-            ) || (dynamic && matches!(object, Expr::This | Expr::New { .. }))
-        }
+        _ => matches!(
+            object,
+            Expr::LocalGet(_)
+                | Expr::PropertyGet { .. }
+                | Expr::IndexGet { .. }
+                | Expr::Call { .. }
+                | Expr::CallSpread { .. }
+                | Expr::Array(_)
+                | Expr::ArraySpread(_)
+                | Expr::MapNew
+                | Expr::MapNewFromArray(_)
+                | Expr::SetNew
+                | Expr::SetNewFromArray(_)
+                | Expr::FuncRef(_)
+                | Expr::Closure { .. }
+        ),
     };
-    value_receiver && (dynamic || receiver_class_name(ctx, object).is_none())
+    value_receiver && receiver_class_name(ctx, object).is_none()
 }
 
 /// `@<bytes>` and length of the method name's interned UTF-8 bytes.

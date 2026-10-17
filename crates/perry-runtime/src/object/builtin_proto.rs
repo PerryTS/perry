@@ -474,6 +474,7 @@ unsafe fn note_prototype_value_store(
     site: &'static str,
 ) {
     let flags = (*meta).flags;
+    crate::dyn_eval_hooks::note_proto_write();
     if flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
         note_sealed_write(obj, flags, Some(field_index), site);
     }
@@ -532,6 +533,7 @@ fn note_family_write(family: usize, site: &'static str) {
     if super::own_override::in_builtin_definition() {
         return;
     }
+    crate::dyn_eval_hooks::note_proto_write();
     let set = |k: usize| -> bool {
         let p = crate::agent_ptrs::intrinsic_proto(k) as *mut ObjectHeader;
         // SAFETY: a live intrinsic of this agent, or the static stand-in

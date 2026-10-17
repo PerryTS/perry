@@ -19,6 +19,8 @@ Assertion lines (`// WPFACTS: ...`):
 - `site .<key> off|on` — every non-call read site of `<key>` in the entry
   file is (not) proven Tier 0;
 - `call .<key> off|on` — the same for method-call sites;
-- `global on|off` — the program-wide E14 kill.
+- `guard on|off` — interpreted code can run, so every proof is guarded by
+  the runtime's `PERRY_INTERP_PROTO_WRITTEN` word (decision 150; there is
+  no program-wide kill).
 
 Run: `python3 scripts/wpfacts_corpus.py --perry <perry> --out <dir>`.

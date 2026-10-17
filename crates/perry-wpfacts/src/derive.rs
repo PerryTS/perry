@@ -131,10 +131,14 @@ pub struct SiteFacts {
 
 pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
     let m = &mut g.m;
-    let global = g.global_hard.clone().or_else(|| {
-        m.objproto_accessor
-            .then(|| "E23 accessor installed on Object.prototype".to_string())
-    });
+    // A program-wide kill only for what the compiled program itself does:
+    // an accessor it installs on `Object.prototype` (E23, any key). Dynamic
+    // code is not a kill (decision 150): its data flow is ⊤, and what it can
+    // do to the intrinsic prototypes is the runtime's guard word
+    // (`ProgramFacts::interp_guard`).
+    let global = m
+        .objproto_accessor
+        .then(|| "E23 accessor installed on Object.prototype".to_string());
     let objproto = m.tok(TokKind::ObjectProto);
     let objproto_hard = m
         .hard
@@ -255,13 +259,7 @@ fn template_facts(
     if unsummarized_native {
         chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
     }
-    let escape = if let Some(reason) = global {
-        Some(reason.clone())
-    } else if m.objproto_accessor && escape.is_none() {
-        Some("E23 accessor installed on Object.prototype".to_string())
-    } else {
-        escape
-    };
+    let escape = global.clone().or(escape);
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
     let adds = m.adds_keys.get(&tm).copied().unwrap_or(0);
     // Slots: birth order, valid up to the first non-definite / accessor key.

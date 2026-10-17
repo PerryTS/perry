@@ -407,7 +407,8 @@ class Solver:
                     self.accessor_hit(origin, t, k2, act)
         elif op == "protofrom":
             for t in toks:
-                if t != TOP:
+                # Object.prototype's [[Prototype]] is immutable.
+                if t != TOP and self.toks[t][0] != "objectproto":
                     self.edge(c[1], self.pnode(t))
         elif op == "protoof":
             for t in toks:
@@ -783,6 +784,14 @@ class Solver:
             self.adds[tm] += 1
         self.addcons(self.pnode(t), ("top",))
         self.implicit(t)
+        # Unknown code writes any key (setters on the chain run with an
+        # unknown value) and reads any key (getter results reach it).
+        w = self.node()
+        self.add(w, [TOP], ALL)
+        self.chain_from(t, t, "*", ("store", w))
+        r = self.node()
+        self.edge(r, self.sink())
+        self.chain_from(t, t, "*", ("load", r))
         kind, arg = self.toks[t]
         if kind == "func":
             fi = self.funcs[arg]
@@ -819,6 +828,8 @@ class Solver:
 
     def mark_hard(self, t, code):
         if t == TOP or t in self.hard:
+            return
+        if code == "E6" and self.toks[t][0] == "objectproto":
             return
         self.hard[t] = code
         if self.toks[t][0] == "proto":
@@ -1120,10 +1131,9 @@ def derive(s, objproto_hard):
                 star_on_chain = True
         if star_on_chain:
             escape = True
-        e14 = (not s.whatif) and (s.dynamic_reach or (s.interp is not None and (s.dyn_eval is not None or s.top_calls > 0)))
-        if e14:
-            escape = True
-        if objproto_hard or e14 or s.objproto_accessor:
+        # Decision 150: interpreted code is the ⊤ summary node (its data flow
+        # is already in the relations), never a kill; see interp_guard().
+        if objproto_hard or s.objproto_accessor:
             chain_bad = True
         if star in acc or (tp["computed"] and not tp["birth"] and tp["kind"] != "fninst"):
             chain_bad = True
@@ -1313,7 +1323,8 @@ def compare(rust, py, rust_sites, py_sites):
                 prec.append(f"{k}: compiler={rv} recompute={pv}")
             else:
                 sound.append(f"{k}: compiler={rv} recompute={pv}")
-        elif fact == "escape":
+        elif fact in ("escape", "interp_guard"):
+            # A missing escape or a missing guard claims too much.
             (sound if rv == "0" else prec).append(f"{k}: compiler={rv} recompute={pv}")
         else:
             (sound if rv == "1" else prec).append(f"{k}: compiler={rv} recompute={pv}")
@@ -1331,11 +1342,19 @@ def compare(rust, py, rust_sites, py_sites):
     return sound, prec, cover
 
 
+def interp_guard(s):
+    """The program can run interpreted code: every proof is guarded by the
+    runtime's PERRY_INTERP_PROTO_WRITTEN word (decision 150)."""
+    return s.dynamic_reach or (s.interp is not None and (s.dyn_eval is not None or s.top_calls > 0))
+
+
 def read_rust(dump):
     facts, sites, objproto_hard = {}, {}, False
     for line in open(dump):
         line = line.rstrip("\n")
-        if line.startswith("FACT "):
+        if line.startswith("# interp_guard "):
+            facts["G interp_guard"] = "0" if line == "# interp_guard none" else "1"
+        elif line.startswith("FACT "):
             body, val = line[5:].rsplit(" = ", 1)
             facts[body] = val
         elif line.startswith("S "):
@@ -1358,6 +1377,7 @@ def main():
     op = s.tok_of.get(("objectproto", "-"))
     objproto_hard = op in s.hard if op is not None else False
     py, tfacts = derive(s, objproto_hard)
+    py["G interp_guard"] = "1" if interp_guard(s) else "0"
     py_sites = site_verdicts(s, tfacts)
     sound, prec, cover = compare(rust, py, rust_sites, py_sites)
     print(f"recompute: {len(rust)} compiler facts, {len(py)} recomputed, "

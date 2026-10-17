@@ -108,13 +108,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
     out.push_str(&format!(
-        "# global {}\n",
-        pf.global.clone().unwrap_or_else(|| "none".into())
+        "# interp_guard {}\n",
+        pf.interp_guard.clone().unwrap_or_else(|| "none".into())
     ));
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
-    if pf.whatif_no_e14 {
-        out.push_str("# whatif no-E14 (UNSOUND, report only)\n");
-    }
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
@@ -223,7 +220,7 @@ pub fn module_digests(pf: &ProgramFacts) -> Vec<u64> {
             h
         })
         .collect();
-    let global = pf.global.clone().unwrap_or_default();
+    let global = pf.interp_guard.clone().unwrap_or_default();
     let sab = pf.sabotage.clone().unwrap_or_default();
     seen.into_iter()
         .map(|ids| {

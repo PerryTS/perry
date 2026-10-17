@@ -1315,7 +1315,7 @@ pub fn run_with_parse_cache(
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     for site in &ctx.patched_builtins.dynamic_code_reach.sites {
-        eprintln!("perry: dynamic code {site}: builtin prototype/namespace members are treated as replaceable, and Object.prototype accessors disable the whole-program field facts{}", if site.contains("lexical") { "; the classes it names keep prototype lookups" } else { "" });
+        eprintln!("perry: dynamic code {site}: builtin prototype/namespace members are treated as replaceable (each direct site tests its holder's shadow bit), and the whole-program field facts are guarded by the runtime's interpreted-prototype-write word");
     }
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
         &ctx.patched_builtins,

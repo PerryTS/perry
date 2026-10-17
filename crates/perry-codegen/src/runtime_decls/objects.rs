@@ -46,6 +46,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // construction site can skip `js_gc_forget_object_layout` outright.
     // perry-runtime: `gc::layout_tables::PERRY_PER_OBJECT_LAYOUTS_ANY`.
     module.add_external_global("PERRY_PER_OBJECT_LAYOUTS_ANY", I32);
+    // perry-runtime: `dyn_eval::PERRY_INTERP_PROTO_WRITTEN` (decision 150:
+    // interpreted code wrote a prototype; guarded wpfacts proofs test it).
+    module.add_external_global("PERRY_INTERP_PROTO_WRITTEN", I32);
     // Process-global 4,096-bit address sketch of every per-object layout
     // record ever installed (`gc::layout_tables::PERRY_LAYOUT_ADDR_FILTER`).
     // An armed count only says SOME thread holds records; a clear sketch bit

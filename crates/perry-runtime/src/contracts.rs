@@ -60,6 +60,14 @@ struct Claim {
     keys: Vec<KeyClaim>,
 }
 
+/// Every contract build references this symbol from its `.perry_facts`
+/// blob (`perry-codegen` `emit_contract_section`), so a contract build
+/// linked against a runtime without `contract-checks` is a link error that
+/// names the feature, not a binary that silently checks nothing.
+#[no_mangle]
+#[used]
+pub static perry_contract_build_needs_runtime_feature_contract_checks: u8 = 1;
+
 static CLAIMS: OnceLock<HashMap<u32, Claim>> = OnceLock::new();
 static CHECKS: AtomicU64 = AtomicU64::new(0);
 

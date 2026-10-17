@@ -6,7 +6,7 @@
 // WPFACTS: kind Point.x is num
 // WPFACTS: site .x on
 // WPFACTS: call .norm on
-// WPFACTS: global off
+// WPFACTS: guard off
 class Point {
   x: number;
   y: number;

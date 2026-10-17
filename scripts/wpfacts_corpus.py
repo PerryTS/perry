@@ -165,9 +165,9 @@ def check_one(a, lines, entry):
             return (False, "no such site")
         on = [v in ("T0", "T0set") for v in vs]
         return ((all(on) if want_on else not any(on)), f"verdicts {vs}")
-    if p[0] == "global":
-        g = next((l for l in lines if l.startswith("# global ")), "# global none")
-        is_on = g != "# global none"
+    if p[0] == "guard":
+        g = next((l for l in lines if l.startswith("# interp_guard ")), "# interp_guard none")
+        is_on = g != "# interp_guard none"
         return (is_on == (p[1] == "on"), g)
     return (False, "unknown assertion")
 

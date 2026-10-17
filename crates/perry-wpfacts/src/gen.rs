@@ -45,10 +45,6 @@ pub struct Gen<'a> {
     pub thrown: NodeId,
     pub cjs_registry: NodeId,
     pub read_sites: Vec<ReadSite>,
-    /// E14: the program may run interpreted code (non-constant
-    /// `new Function` / `eval` / `vm`): such code can patch
-    /// `Object.prototype`, so no template is prefix-stable.
-    pub global_hard: Option<String>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
@@ -140,7 +136,6 @@ impl<'a> Gen<'a> {
             thrown,
             cjs_registry,
             read_sites: Vec::new(),
-            global_hard: None,
             ctor_phase: FxHashMap::default(),
             fn_inst_of: FxHashMap::default(),
             field_init_fn: FxHashMap::default(),

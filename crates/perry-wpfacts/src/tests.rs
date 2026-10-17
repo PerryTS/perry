@@ -185,7 +185,6 @@ fn sabotage_plants_the_fact() {
             sabotage: Some("readonly:P.x".into()),
             dynamic_code: None,
             budget_secs: None,
-            whatif_no_e14: false,
             profile: false,
             max_pts: None,
             widen_k: None,
@@ -223,7 +222,6 @@ fn write_dump_for_checker() {
             sabotage: std::env::var("WPFACTS_TEST_SABOTAGE").ok(),
             dynamic_code: None,
             budget_secs: None,
-            whatif_no_e14: false,
             profile: false,
             max_pts: None,
             widen_k: None,
@@ -235,8 +233,11 @@ fn write_dump_for_checker() {
     std::fs::write(dir.join("t.facts.rel"), pf.relations_text().unwrap()).unwrap();
 }
 
+/// Decision 150: dynamic code naming the global scope is no kill. The class
+/// keeps its facts; the program's proofs are guarded by the runtime's
+/// interpreted-prototype-write word instead.
 #[test]
-fn dynamic_code_reach_kills_facts_without_an_unknown_call() {
+fn dynamic_code_reach_guards_instead_of_killing() {
     let mut reach = perry_hir::dynamic_code::DynamicCodeReach::default();
     reach.record_global("new Function(...) @ t.ts:4".into());
     let pf = facts_with(
@@ -249,9 +250,86 @@ fn dynamic_code_reach_kills_facts_without_an_unknown_call() {
     );
     assert!(pf.dynamic_code_reach.disables_builtin_constants());
     assert!(pf.relations_text().unwrap().contains("dynamicreach 1"));
-    assert!(pf.global.as_deref().unwrap().contains("dynamic_code_reach"));
-    assert!(!tmpl(&pf, "P").prefix_stable);
-    assert!(!field(tmpl(&pf, "P"), "x").readonly);
+    assert!(pf
+        .interp_guard
+        .as_deref()
+        .unwrap()
+        .contains("dynamic_code_reach"));
+    assert!(tmpl(&pf, "P").prefix_stable, "{}", pf.dump_text());
+    assert!(field(tmpl(&pf, "P"), "x").readonly);
+}
+
+fn interp_cfg() -> FactsConfig {
+    FactsConfig {
+        dynamic_code: Some("E14 test".into()),
+        ..Default::default()
+    }
+}
+
+/// Interpreted code is ONE summary node (⊤): what is passed to a function
+/// it made, and what such a function returns, escapes; a class whose
+/// instances never reach it keeps every fact. `this` and locals that can
+/// hold both get the class plus ⊤ (a checked proof in codegen).
+#[test]
+fn interpreted_function_is_a_summary_node() {
+    let pf = facts_with(
+        r#"
+        class Kept { x: number; constructor(x: number) { this.x = x; } }
+        class Given { y: number; constructor(y: number) { this.y = y; } }
+        const body = ["return o"].join("");
+        const f = new Function("o", body);
+        const back = f(new Given(2));
+        function rd(k: Kept) { return k.x; }
+        let either: any = new Kept(3);
+        if (back) either = back;
+        console.log(rd(new Kept(1)), back.y, either.x);
+        "#,
+        interp_cfg(),
+    );
+    assert!(pf.interp_guard.is_some(), "{}", pf.dump_text());
+    let kept = tmpl(&pf, "Kept");
+    assert!(
+        kept.prefix_stable && kept.fixed_layout,
+        "{}",
+        pf.dump_text()
+    );
+    assert!(field(kept, "x").readonly);
+    assert_eq!(field(kept, "x").kind.desc(), "num");
+    let given = tmpl(&pf, "Given");
+    assert!(!given.prefix_stable, "{}", pf.dump_text());
+    assert!(field(given, "y").kind.top);
+    // `either` holds Kept and ⊤ (the interpreted function's result).
+    let kept_id = kept.class_id.unwrap();
+    let mb = &pf.bindings[0];
+    assert!(
+        mb.locals
+            .iter()
+            .any(|(_, b)| b.other && b.class_ids == vec![kept_id]),
+        "{:?}",
+        mb.locals
+    );
+}
+
+/// A ⊤ callee that may be the Function constructor (tsc's 84k calls) only
+/// connects values that are already ⊤: an object that never reaches a ⊤
+/// call keeps its facts.
+#[test]
+fn top_call_connects_only_top_values() {
+    let pf = facts_with(
+        r#"
+        class Kept { x: number; constructor(x: number) { this.x = x; } }
+        const u: any = (globalThis as any).someUnknown;
+        const r = u("a", 1);
+        function rd(k: Kept) { return k.x; }
+        console.log(rd(new Kept(1)), r);
+        "#,
+        interp_cfg(),
+    );
+    assert!(pf.stats.top_calls > 0);
+    assert!(pf.interp_guard.is_some());
+    let kept = tmpl(&pf, "Kept");
+    assert!(kept.prefix_stable, "{}", pf.dump_text());
+    assert!(field(kept, "x").readonly);
 }
 
 /// The bounds hold from the first constraint. Generation solves online

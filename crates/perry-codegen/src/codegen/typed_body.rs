@@ -103,6 +103,7 @@ impl TypedBodyPlan {
                 super::FactsRecv {
                     class_ids: cids.clone(),
                     nullable: false,
+                    checked: false,
                 },
             );
         }

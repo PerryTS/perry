@@ -1290,6 +1290,7 @@ pub(super) fn compile_function(
         program_layouts: cross_module.program_layouts.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
+        wpfacts_off: false,
         wpfacts_this: this_stack
             .last()
             .map(|s| vec![(s.clone(), f.id)])

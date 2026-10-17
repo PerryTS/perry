@@ -805,7 +805,10 @@ impl Model {
             }
             Cons::ProtoFrom { src } => {
                 for &t in toks {
-                    if t == TOP {
+                    // `%Object.prototype%` is an immutable prototype exotic
+                    // object: setting its [[Prototype]] to anything but its
+                    // own (null) throws.
+                    if t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto) {
                         continue;
                     }
                     let pn = self.proto_node(t);
@@ -2094,6 +2097,24 @@ impl Model {
         // Own accessors run with `this` = ⊤-reached object: already modeled
         // by the accessor rule when unknown code reads; call them now.
         self.implicit(t, reason);
+        // Unknown code can also write any key of it: every setter on its
+        // chain (its own accessors included) runs with `this` = it and an
+        // unknown value (a direct eval writes the caller's locals exactly so,
+        // through the setters of its bindings object); and read any key:
+        // every getter runs and its result reaches unknown code.
+        let w = self.node_l("escaped-store");
+        self.add_top(w, |m| {
+            format!(
+                "stored into an escaped {}: {}",
+                m.tok_kind_word(t),
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(w, prim::ALL);
+        self.accessor_walk(t, t, Key::Any, ChainAct::Store(w));
+        let r = self.node_l("escaped-load");
+        self.sink_node(r, reason);
+        self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
         match self.toks[t as usize].clone() {
             TokKind::Func(f) => {
                 let fi = self.funcs[f as usize].clone();
@@ -2167,6 +2188,14 @@ impl Model {
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         if t == TOP {
+            return;
+        }
+        // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
+        // null (its [[Prototype]] already): nothing changes (immutable
+        // prototype exotic object). A ⊤ target that may be it is no E6 on it.
+        if kind == Hard::E6SetPrototypeOf
+            && matches!(self.toks[t as usize], TokKind::ObjectProto)
+        {
             return;
         }
         if self.hard.contains_key(&t) {
