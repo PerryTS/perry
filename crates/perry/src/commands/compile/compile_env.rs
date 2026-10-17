@@ -100,6 +100,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_LAYOUT_LATE_BUDGET",
     "PERRY_LAYOUT_LATE_EVIDENCE",
     "PERRY_LAYOUT_READS",
+    "PERRY_LAYOUT_VARIANTS",
     "PERRY_LD",
     "PERRY_LD64.LLD",
     "PERRY_LIB_DIR",
@@ -431,6 +432,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
     (
+        "PERRY_EH_CHECK",
+        "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
         "PERRY_EH_TRACE",
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
@@ -491,12 +496,12 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),
     (
-        "PERRY_FACTS_WHATIF_NO_E14",
-        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
-    ),
-    (
         "PERRY_FAKE_XCRUN_LOG",
         "Test-only fake xcrun logging in target discovery tests.",
+    ),
+    (
+        "PERRY_FAMILY_DIAG",
+        "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
     (
         "PERRY_FETCH_DIAG",
@@ -647,10 +652,6 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
     (
-        "PERRY_IC_OUTLINE_FASTPATH",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
-    ),
-    (
         "PERRY_INLINE_DEBUG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
@@ -663,8 +664,8 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
     (
-        "PERRY_KEYADD_IC",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
+        "PERRY_LAYOUT_REPORT",
+        "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_LAZY_STACK_MAPS",
@@ -791,8 +792,20 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
     (
+        "PERRY_PROBE_DIAG",
+        "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_PROBE_VERIFY",
+        "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
         "PERRY_PROCESS_EXEC_ARGV",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_PROTO_CENSUS_REPORT",
+        "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_R2_SABOTAGE",
@@ -839,16 +852,16 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
     (
-        "PERRY_SETTER_SITE_STATS",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
-    ),
-    (
         "PERRY_SFW",
         "Used by standalone CLI/update/publish commands, outside the compile pipeline.",
     ),
     (
         "PERRY_SHAPE_FACT_AUDIT",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_SITE_STATS",
+        "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_SKIP_CODEGEN",
@@ -963,15 +976,15 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
+        "PERRY_TEST_PROTO_SHADOW_FALSE_ANSWER",
+        "Test-only fixture/child-process control; absent from compiler production paths.",
+    ),
+    (
         "PERRY_TEST_REGEXP_BUILTIN_SHAPE_CHILD",
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
         "PERRY_TEST_RESTORE_COVERAGE_CHILD",
-        "Test-only fixture/child-process control; absent from compiler production paths.",
-    ),
-    (
-        "PERRY_TEST_SPLIT_REGEXP_SITE_CHILD",
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
@@ -993,6 +1006,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_TEST_STREAM_SABOTAGE",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_TEST_THROW_IN_COLLECTION_CHILD",
+        "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
         "PERRY_TEST_VERIFY_PASS_LINE_CHILD",
@@ -1019,6 +1036,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
     (
+        "PERRY_TRAP_CLANG",
+        "Selects the clang for the runtime build script; compiles link the prebuilt runtime archives.",
+    ),
+    (
         "PERRY_TREE_SHAKE_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
@@ -1033,6 +1054,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_TYPED_ELEMENT_SABOTAGE",
         "Test-only typed-element negative control under cfg(test).",
+    ),
+    (
+        "PERRY_TYPED_LOCALS_TRACE",
+        "Prints lowering diagnostics; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_UNCAUGHT_BACKTRACE",
