@@ -31,17 +31,16 @@ export function prepareRequireRuntime(root) {
   }
   const buildEnv = { ...process.env };
   // CI overrides target rustflags to disable lld. Such an override replaces
-  // .cargo/config.toml's unwind/frame-pointer flags rather than extending it.
-  // Preserve those native exception/stack-walking requirements in every
+  // .cargo/config.toml's unwind-table flag rather than extending it.
+  // Preserve that native exception/stack-walking requirement in every
   // override while keeping the caller's linker and other options intact.
   for (const key of Object.keys(buildEnv)) {
     if (key === 'RUSTFLAGS' || /^CARGO_TARGET_.+_RUSTFLAGS$/.test(key)) {
-      buildEnv[key] += ' -C force-unwind-tables=yes -C force-frame-pointers=yes';
+      buildEnv[key] += ' -C force-unwind-tables=yes';
     }
   }
   if (buildEnv.CARGO_ENCODED_RUSTFLAGS !== undefined) {
-    buildEnv.CARGO_ENCODED_RUSTFLAGS += '\x1f-C\x1fforce-unwind-tables=yes' +
-      '\x1f-C\x1fforce-frame-pointers=yes';
+    buildEnv.CARGO_ENCODED_RUSTFLAGS += '\x1f-C\x1fforce-unwind-tables=yes';
   }
   // CI builds the full graph before entering any bounded fixture. Explicit
   // prepared mode still checks every archive below; compiler/linker source

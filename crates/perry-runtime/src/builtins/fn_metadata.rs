@@ -109,13 +109,17 @@ fn descriptor_pointer<T>(base: *const u8, offset: i32) -> *const T {
 /// The bytes are BORROWED from the program image and never copied: this map
 /// is written only by [`js_register_function_name_static`], whose contract is
 /// process lifetime.
+///
+/// Keyed by code address with the runtime's pointer hasher: `Error`
+/// construction probes it once per frame it walks.
 fn function_name_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>> {
+) -> &'static std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, &'static [u8]>> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>>> =
-        OnceLock::new();
+    static REGISTRY: OnceLock<
+        std::sync::Mutex<crate::fast_hash::PtrHashMap<usize, &'static [u8]>>,
+    > = OnceLock::new();
     crate::once_init::get_or_init(&REGISTRY, || {
-        std::sync::Mutex::new(std::collections::HashMap::new())
+        std::sync::Mutex::new(crate::fast_hash::new_ptr_hash_map())
     })
 }
 
@@ -354,6 +358,19 @@ pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8
 /// extents, so a runtime function following a thunk would inherit its name.
 pub fn bundle_function_name_registry_len() -> Option<usize> {
     Some(function_name_registry().lock().ok()?.len())
+}
+
+/// Run `f` with the generated-bundle name map held, keyed by function start
+/// address: the set `Error.stack` resolves against, so a capture can tell a
+/// JS frame from a runtime one while it walks (and stop at
+/// `Error.stackTraceLimit` JS frames). `f` must not register names. Only
+/// the x86_64 Linux capture classifies frames as it walks.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub(crate) fn with_bundle_function_names<R>(
+    f: impl FnOnce(&crate::fast_hash::PtrHashMap<usize, &'static [u8]>) -> R,
+) -> Option<R> {
+    let names = function_name_registry().lock().ok()?;
+    Some(f(&names))
 }
 
 /// Snapshot only the generated-bundle names registered through

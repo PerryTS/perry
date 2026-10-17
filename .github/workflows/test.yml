@@ -1823,7 +1823,7 @@ jobs:
 
       - name: Run perry integration shard ${{ matrix.shard }}
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes -C force-frame-pointers=yes"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes"
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
           SHARD: ${{ matrix.shard }}
@@ -2049,7 +2049,7 @@ jobs:
         if: steps.scope.outputs.suites != ''
         env:
           # lld has repeatedly SIGBUS'd large test links on the shared runner.
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes -C force-frame-pointers=yes"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes"
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
           # Bound the heavy per-binary runtime link so the runner doesn't OOM.

@@ -304,6 +304,9 @@ struct EhFrameImage {
     hdr: Option<gimli::ParsedEhFrameHdr<gimli::EndianSlice<'static, NativeEndian>>>,
     /// Runtime address of `.eh_frame_hdr` (0 without one).
     hdr_addr: u64,
+    /// The `.eh_frame_hdr` segment's bytes (empty without one), for the
+    /// `Error.stack` capture's direct table search (`eh_walker_trace.rs`).
+    hdr_bytes: &'static [u8],
 }
 
 // arm64 compact-unwind encoding (mach-o/compact_unwind_encoding.h).
@@ -604,6 +607,7 @@ fn find_eh_frame_images() -> Vec<EhFrameImage> {
             personality_slots,
             hdr: None,
             hdr_addr: 0,
+            hdr_bytes: &[],
         });
     }
     images
@@ -684,6 +688,7 @@ fn find_eh_frame_images() -> Vec<EhFrameImage> {
             personality_slots: Vec::new(),
             hdr: Some(parsed),
             hdr_addr,
+            hdr_bytes,
         });
         0
     }
@@ -1136,6 +1141,30 @@ pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
     Some(pcs)
 }
 
+/// Start of the function containing `pc`, from the `.eh_frame_hdr` FDE that
+/// covers it: an exact extent, which the `Error.stack` name registry (starts
+/// only) does not have. `None` when no ELF table covers `pc` (Mach-O compact
+/// unwind may coalesce neighbouring functions, so it is not asked), and the
+/// caller keeps its own bound. Cold: called only when a `.stack` is rendered.
+pub(crate) fn function_start_for(pc: u64) -> Option<u64> {
+    let walker = locked_walker()?;
+    let image = walker.image_for(pc)?;
+    let hdr = image.image.hdr.as_ref()?;
+    let table = hdr.table()?;
+    let fde = table
+        .fde_for_address(&image.eh_frame, &image.bases, pc, EhFrame::cie_from_offset)
+        .ok()?;
+    Some(fde.initial_address())
+}
+
+// Error.stack capture through the unwind tables on the one target whose
+// runtime keeps no frame-pointer chain (see the module docs).
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[path = "eh_walker_trace.rs"]
+mod trace;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub(crate) use trace::{capture_js_return_addresses, capture_return_addresses};
+
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {
     None
@@ -1582,6 +1611,133 @@ mod tests {
                 sys[j0 + k],
                 "divergence at frame {k}\nours: {ours:x?}\nsys:  {sys:x?}"
             );
+        }
+    }
+
+    /// The `Error.stack` capture (unwind tables, no cache, no frame
+    /// pointers) must reproduce the system unwinder's chain exactly, from
+    /// the first frame both see to the bottom of the stack. Run through a
+    /// three-deep Rust chain so the frames it steps are runtime-shaped.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[test]
+    #[inline(never)]
+    fn trace_capture_matches_system_backtrace() {
+        #[inline(never)]
+        fn leaf() -> (Vec<u64>, Vec<u64>) {
+            let mut out = [0usize; 64];
+            let n = capture_return_addresses(&mut out, crate::native_stack::stack_top());
+            let ours = out[..n].iter().map(|pc| *pc as u64).collect();
+            (ours, system_pcs(80))
+        }
+        #[inline(never)]
+        fn middle() -> (Vec<u64>, Vec<u64>) {
+            let r = leaf();
+            std::hint::black_box(r)
+        }
+        let (ours, sys) = std::hint::black_box(middle());
+        assert!(
+            ours.len() >= 4,
+            "trace saw only {} frames: {ours:x?}",
+            ours.len()
+        );
+        // ours[0] and the system walk's own leaf entry are two different
+        // call sites inside `leaf`; the chains are shared from its caller up.
+        let (i0, j0) = ours
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| sys.iter().position(|q| q == p).map(|j| (i, j)))
+            .unwrap_or_else(|| panic!("no common anchor\nours: {ours:x?}\nsys: {sys:x?}"));
+        assert!(
+            i0 <= 1,
+            "the trace lost frames before the anchor\nours: {ours:x?}\nsys: {sys:x?}"
+        );
+        let common = (ours.len() - i0).min(sys.len() - j0);
+        assert!(
+            common >= 4,
+            "too little overlap ({common})\nours: {ours:x?}\nsys: {sys:x?}"
+        );
+        for k in 0..common {
+            assert_eq!(
+                ours[i0 + k],
+                sys[j0 + k],
+                "divergence at frame {k}\nours: {ours:x?}\nsys:  {sys:x?}"
+            );
+        }
+    }
+
+    /// The `Error` walk (`capture_js_return_addresses`) offers the
+    /// classifier exactly the frames the full walk steps, in order, from the
+    /// origin's caller up to the executable's `main`, and names each one's
+    /// function by its FDE start. The classifier here accepts nothing, so
+    /// every frame is stepped by its row (this Rust binary keeps no frame
+    /// records to step any other way).
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[test]
+    #[inline(never)]
+    fn js_capture_offers_every_frame_up_to_main() {
+        #[inline(never)]
+        fn leaf() -> (Vec<(u64, u64)>, Vec<u64>) {
+            let top = crate::native_stack::stack_top();
+            let origin = capture_here();
+            let mut offered = Vec::new();
+            let mut out = [0usize; 1];
+            let kept = capture_js_return_addresses(origin, &mut out, top, |pc, start| {
+                offered.push((pc, start));
+                false
+            });
+            assert_eq!(kept, 0);
+            let mut full = [0usize; 64];
+            let n = capture_return_addresses(&mut full, top);
+            (offered, full[..n].iter().map(|pc| *pc as u64).collect())
+        }
+        #[inline(never)]
+        fn middle() -> (Vec<(u64, u64)>, Vec<u64>) {
+            let r = leaf();
+            std::hint::black_box(r)
+        }
+        let (offered, full) = std::hint::black_box(middle());
+        assert!(offered.len() >= 3, "offered only {offered:x?}");
+        // The full walk starts one frame deeper (inside `leaf`); both share
+        // the chain from `leaf`'s caller up.
+        let j0 = full
+            .iter()
+            .position(|pc| *pc == offered[0].0)
+            .unwrap_or_else(|| panic!("no anchor\noffered: {offered:x?}\nfull: {full:x?}"));
+        for (k, (pc, start)) in offered.iter().enumerate() {
+            assert_eq!(
+                *pc,
+                full[j0 + k],
+                "frame {k}\noffered: {offered:x?}\nfull: {full:x?}"
+            );
+            assert_eq!(
+                Some(*start),
+                function_start_for(pc - 1),
+                "frame {k}: the offered start is not the FDE's"
+            );
+        }
+        let main = {
+            extern "C" {
+                #[linkage = "extern_weak"]
+                static main: *const u8;
+            }
+            unsafe { main as u64 }
+        };
+        // On the main thread the walk ends at `main`; on a test thread
+        // (no `main` beneath it) it runs to the bottom with the full walk.
+        let main_at = full[j0..]
+            .iter()
+            .position(|pc| function_start_for(pc - 1) == Some(main));
+        match main_at {
+            Some(at) => assert_eq!(
+                offered.len(),
+                at + 1,
+                "the walk must end at the executable's main\noffered: {offered:x?}\nfull: {full:x?}"
+            ),
+            None => assert_eq!(
+                offered.len(),
+                full.len() - j0,
+                "the walk must reach the bottom\noffered: {offered:x?}\nfull: {full:x?}"
+            ),
         }
     }
 

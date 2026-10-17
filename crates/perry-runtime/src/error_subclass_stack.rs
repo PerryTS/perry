@@ -111,7 +111,7 @@ extern "C" fn error_subclass_stack_getter(
             }
         };
         let head = error_subclass_stack_head(receiver);
-        let s = format!("{head}\n{frame}");
+        let s = crate::error::join_stack(&head, &frame);
         let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
         crate::value::js_nanbox_string(ptr as i64)
     }

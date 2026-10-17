@@ -148,6 +148,8 @@ pub(crate) use console::{
 };
 
 pub(crate) use fn_metadata::function_name_for_closure;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub(crate) use fn_metadata::with_bundle_function_names;
 
 pub use fn_metadata::{
     bundle_function_name_registry_entries, bundle_function_name_registry_len,

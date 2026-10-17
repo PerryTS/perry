@@ -21,7 +21,12 @@
 //! (`gc/roots/stack_maps.rs`), so `[fp] = caller fp` / `[fp+8] = return
 //! address` holds for JS frames on both supported architectures. Two loads per
 //! frame, no allocation, no symbolication — and it runs on EVERY `new Error`,
-//! including the overwhelming majority whose `.stack` is never read.
+//! including the overwhelming majority whose `.stack` is never read. On
+//! x86_64 Linux the runtime's own frames keep no record, so the walk starts
+//! at the constructor's frame, names each frame's function with one
+//! `.eh_frame_hdr` search, steps JS frames by their records and runtime
+//! frames by their unwind rows (`eh_walker_trace.rs`), and stops after
+//! `Error.stackTraceLimit` JS frames or at `main`.
 //!
 //! **Resolution** happens on first `.stack` read and reuses the registry
 //! codegen already fills: `js_register_function_name_static` records
@@ -50,13 +55,15 @@ use std::sync::OnceLock;
 static STATIC_SYMBOL_SPAWN_ATTEMPTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-/// Native return addresses captured per construction. 16 words = 128 bytes of
-/// encoded blob, enough to cover node's default `Error.stackTraceLimit` of 10
-/// JS frames plus the runtime frames between `new Error` and the throwing
-/// function.
+/// Return addresses captured per construction, and the ceiling on
+/// `Error.stackTraceLimit`. 16 words = 128 bytes of encoded blob. On x86_64
+/// Linux the capture keeps JS frames only (it classifies each frame as it
+/// walks); the frame-pointer targets keep every native frame, which covers
+/// node's default of 10 JS frames plus the runtime frames between them.
 pub(crate) const MAX_CAPTURED_FRAMES: usize = 16;
 
-/// Rendered JS frames, matching V8's default `Error.stackTraceLimit`.
+/// V8's default `Error.stackTraceLimit`: the limit when no `Error`
+/// constructor exists yet, and for a payload that carries none.
 const RENDER_LIMIT: usize = 10;
 
 /// Encoded characters per captured address: 48 bits at 6 bits per character.
@@ -153,7 +160,7 @@ fn decode_pcs(blob: &[u8]) -> Vec<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Capture: the frame-pointer chain walk.
+// Capture: the frame-pointer chain walk (unwind tables on x86_64 Linux).
 // ---------------------------------------------------------------------------
 
 #[cfg(all(
@@ -166,6 +173,7 @@ mod walk {
     /// A frame record is two words and must be word-aligned; anything else is
     /// a corrupt chain and abandons the walk, exactly as the collector's
     /// `fp_chain::visit` does.
+    #[cfg_attr(all(target_arch = "x86_64", target_os = "linux"), allow(dead_code))]
     const FRAME_RECORD_ALIGN_MASK: usize = 0x7;
 
     #[cfg(target_arch = "aarch64")]
@@ -238,6 +246,93 @@ mod walk {
         current_frame_pointer()
     }
 
+    /// Where an `Error` capture starts walking. x86_64 Linux: the register
+    /// context of the constructor frame that captured it, so the walk steps
+    /// none of the capture's own helper frames. Elsewhere the frame-pointer
+    /// chain needs no origin.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    pub(crate) type Origin = crate::eh_walker::WalkRegs;
+    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
+    pub(crate) type Origin = ();
+
+    /// Capture the calling frame's origin. Always inlined, so the origin is
+    /// the CALLER's frame, which stays live while the walk runs beneath it.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[inline(always)]
+    pub(crate) fn origin() -> Origin {
+        crate::eh_walker::capture_here()
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
+    #[inline(always)]
+    pub(crate) fn origin() -> Origin {}
+
+    /// x86_64 Linux: the JS frames above `origin`, innermost first, at most
+    /// `out.len()` of them. A frame is JS when its function (the covering
+    /// FDE's start) is one codegen registered a display name for: exactly
+    /// the frames `render_frames` can name, so the walk stops once it holds
+    /// `Error.stackTraceLimit` of them and stores no runtime frame. A frame
+    /// no table covers is kept for the resolver to judge.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    pub(super) fn capture_js(
+        origin: Origin,
+        out: &mut [usize; MAX_CAPTURED_FRAMES],
+        want: usize,
+    ) -> usize {
+        let top = stack_top();
+        let out = &mut out[..want.min(MAX_CAPTURED_FRAMES)];
+        if top == 0 || out.is_empty() {
+            return 0;
+        }
+        crate::builtins::with_bundle_function_names(|names| {
+            crate::eh_walker::capture_js_return_addresses(origin, out, top, |pc, start| {
+                start == 0
+                    || (names.contains_key(&(start as usize))
+                        && (pc as usize)
+                            .saturating_sub(1)
+                            .saturating_sub(start as usize)
+                            <= super::MAX_FUNCTION_SPAN)
+            })
+        })
+        .unwrap_or(0)
+    }
+
+    /// Elsewhere the chain walk is two loads per frame, so it keeps every
+    /// frame (`render_frames` drops the runtime ones and applies the limit).
+    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
+    pub(super) fn capture_js(
+        _origin: Origin,
+        out: &mut [usize; MAX_CAPTURED_FRAMES],
+        _want: usize,
+    ) -> usize {
+        capture(out)
+    }
+
+    /// x86_64 Linux: the runtime keeps no frame-pointer chain there (rustc's
+    /// default, and the archives no longer force one), so the frames are
+    /// stepped by their unwind tables instead (`eh_walker_trace.rs`). Never
+    /// inlined, so the first address that walk reports is the return into
+    /// this function and the second the return into its caller, which is
+    /// where the frame-pointer walk below starts.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[inline(never)]
+    pub(super) fn capture(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
+        let top = stack_top();
+        if top == 0 {
+            return 0;
+        }
+        let mut pcs = [0usize; MAX_CAPTURED_FRAMES + 1];
+        let n = crate::eh_walker::capture_return_addresses(&mut pcs, top);
+        if n <= 1 {
+            return 0;
+        }
+        out[..n - 1].copy_from_slice(&pcs[1..n]);
+        n - 1
+    }
+
+    /// Everywhere else every frame keeps a frame record (rustc's Apple and
+    /// AArch64 Linux defaults; generated code always), so the chain is the
+    /// walk: two loads per frame.
+    #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
     pub(super) fn capture(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
         let top = stack_top();
         if top == 0 {
@@ -299,6 +394,19 @@ mod walk {
         0
     }
 
+    pub(crate) type Origin = ();
+
+    #[inline(always)]
+    pub(crate) fn origin() -> Origin {}
+
+    pub(super) fn capture_js(
+        _origin: Origin,
+        _out: &mut [usize; MAX_CAPTURED_FRAMES],
+        _want: usize,
+    ) -> usize {
+        0
+    }
+
     pub(super) fn diag_stack_top() -> usize {
         0
     }
@@ -308,14 +416,17 @@ mod walk {
     }
 }
 
-/// Capture the current native return addresses and encode them.
+/// Capture the JS frames above `origin` (at most `want`) and encode them.
 /// Returns `(buffer, len)`; `len == 0` means nothing was captured.
-pub(crate) fn capture_encoded() -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize) {
+fn capture_encoded(
+    origin: walk::Origin,
+    want: usize,
+) -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize) {
     let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
-    let n = walk::capture(&mut pcs);
+    let n = walk::capture_js(origin, &mut pcs, want);
     if diag_enabled() {
         eprintln!(
-            "[stackdiag] capture: frames={n} top={:#x} fp0={:#x} pcs={:x?}",
+            "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",
             walk::diag_stack_top(),
             walk::diag_frame_pointer(),
             &pcs[..n]
@@ -331,8 +442,8 @@ pub(crate) fn capture_encoded() -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize)
 
 /// Raw return addresses of the current native stack, innermost first, for
 /// the GC's site-attribution diagnostics (`gc/diag_sites.rs`, the
-/// `PERRY_ALLOC_SITE_SAMPLE` sampler). Same walk as `capture_encoded`, no
-/// encoding.
+/// `PERRY_ALLOC_SITE_SAMPLE` sampler). Every native frame, runtime ones
+/// included, with no `Error.stackTraceLimit` and no encoding.
 pub(crate) fn capture_ips(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
     walk::capture(out)
 }
@@ -624,13 +735,24 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 /// name. That is the same shape as the collector's own function table
 /// (`stack_maps_index.rs`: "a function with no safepoints is absent … so an
 /// `ip` inside one resolves to the previous mapped function"). Closing it
-/// needs per-function extents, which this registry and Mach-O do not expose.
+/// needs per-function extents, which this registry and Mach-O do not expose;
+/// on ELF the `.eh_frame_hdr` FDE that covers `ip` supplies them.
 fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]>)> {
     let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
     let at = at.checked_sub(1)?;
     let (start, name) = &index.entries[at];
     if ip - *start > MAX_FUNCTION_SPAN {
         return None;
+    }
+    // Where the unwind tables give the containing function's exact start
+    // (ELF), an address whose function is NOT the registered one is a frame
+    // of an unregistered function (a module initializer, a thunk, runtime
+    // code placed after the bundle) and is dropped rather than reported
+    // under its neighbour's name.
+    if let Some(fn_start) = crate::eh_walker::function_start_for(ip as u64) {
+        if fn_start != *start as u64 {
+            return None;
+        }
     }
     Some((*start, name))
 }
@@ -666,7 +788,7 @@ fn with_index<R>(f: impl FnOnce(&CodeSymbolIndex) -> R) -> Option<R> {
 /// builtin that invoked a callback. A capture in which nothing resolves
 /// returns `None` so the caller can fall back to the pre-#9486 single line
 /// instead of producing a headed stack with no frames at all.
-pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
+pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
     let pcs = decode_pcs(blob);
     if pcs.is_empty() {
         return None;
@@ -688,7 +810,7 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
         let mut out = String::new();
         let mut rendered = 0usize;
         for pc in &pcs {
-            if rendered >= RENDER_LIMIT {
+            if rendered >= limit {
                 break;
             }
             // A return address points AFTER the call instruction; on a tail
@@ -735,18 +857,62 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
     .flatten()
 }
 
+/// `Error.stackTraceLimit` as the capture reads it: the own data value on
+/// this thread's `Error` constructor, floored and clamped to
+/// [`MAX_CAPTURED_FRAMES`]. A value that is not a number captures nothing
+/// (V8 then leaves `stack` undefined; perry keeps the header line). No
+/// `Error` constructor yet (runtime-internal errors during startup): V8's
+/// default.
+fn stack_trace_limit() -> usize {
+    let ctor = crate::object::ERROR_CONSTRUCTOR_PTR.with(|c| c.get());
+    if ctor == 0 {
+        return RENDER_LIMIT;
+    }
+    let Some(bits) = crate::closure::closure_get_own_dynamic_prop(ctor, "stackTraceLimit") else {
+        return 0;
+    };
+    let value = crate::value::JSValue::from_bits(bits.to_bits());
+    if !value.is_number() {
+        return 0;
+    }
+    let n = value.as_number();
+    if n >= MAX_CAPTURED_FRAMES as f64 {
+        MAX_CAPTURED_FRAMES
+    } else if n >= 1.0 {
+        n as usize
+    } else {
+        0
+    }
+}
+
 /// #9486: build the `frames` payload for an error being constructed — the
-/// encoded native return addresses, plus the recorded #5247 line when there is
-/// one. Returns an empty vector when there is nothing to record, in which case
-/// no string is allocated at all.
+/// `Error.stackTraceLimit` in force, the encoded JS return addresses, plus
+/// the recorded #5247 line when there is one. Returns an empty vector when
+/// there is nothing to record, in which case no string is allocated at all.
+///
+/// Always inlined, so the walk starts at the constructor frame that called
+/// it (see [`walk::origin`]).
+#[inline(always)]
 pub(crate) fn capture_frames_payload() -> Vec<u8> {
-    let (blob, len) = capture_encoded();
+    let origin = walk::origin();
+    capture_frames_payload_from(origin)
+}
+
+#[inline(never)]
+fn capture_frames_payload_from(origin: walk::Origin) -> Vec<u8> {
+    let limit = stack_trace_limit();
+    if limit == 0 {
+        // `Error.stackTraceLimit = 0`: a header and no frame lines.
+        return vec![ALPHABET[0]];
+    }
+    let (blob, len) = capture_encoded(origin, limit);
     let recorded = recorded_stack_frame();
     if len == 0 && recorded.is_none() {
         return Vec::new();
     }
     let recorded = recorded.unwrap_or_default();
-    let mut out = Vec::with_capacity(len + recorded.len() + 1);
+    let mut out = Vec::with_capacity(1 + len + recorded.len() + 1);
+    out.push(ALPHABET[limit]);
     out.extend_from_slice(&blob[..len]);
     if !recorded.is_empty() {
         out.push(b'\n');
@@ -755,15 +921,40 @@ pub(crate) fn capture_frames_payload() -> Vec<u8> {
     out
 }
 
+/// Join a `.stack` header and its frame lines; no frame lines (an
+/// `Error.stackTraceLimit` of 0) leaves the header alone, as in V8.
+pub(crate) fn join_stack(head: &str, lines: &str) -> String {
+    if lines.is_empty() {
+        head.to_string()
+    } else {
+        format!("{head}\n{lines}")
+    }
+}
+
 /// #9486: render the frame lines of a `.stack` from a captured `frames`
 /// payload. The recorded #5247 call site comes first (it is the innermost
 /// position we know), then the resolved native frames outward.
+///
+/// The payload's first character is the `Error.stackTraceLimit` the capture
+/// ran under (an [`ALPHABET`] index); the frame lines stop there. An empty
+/// payload is a capture that found nothing.
 pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
+    let (limit, payload) = match payload.split_first() {
+        Some((c, rest)) => match decode_char(*c) {
+            Some(limit) => (limit as usize, rest),
+            None => (RENDER_LIMIT, payload),
+        },
+        None => (RENDER_LIMIT, payload),
+    };
+    if limit == 0 {
+        return String::new();
+    }
     let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
         Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
         None => (payload, None),
     };
-    let resolved = render_frames(blob);
+    // The recorded #5247 line is the innermost frame and counts toward it.
+    let resolved = render_frames(blob, limit - usize::from(recorded.is_some()));
     match (recorded, resolved) {
         (Some(line), Some(frames)) => format!("{line}\n{frames}"),
         (Some(line), None) => line.to_string(),
@@ -792,7 +983,7 @@ pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut St
         head
     };
     let payload = read_string_header_owned((*error).frames);
-    let text = format!("{head}\n{}", frames_payload_to_lines(payload.as_bytes()));
+    let text = join_stack(&head, &frames_payload_to_lines(payload.as_bytes()));
 
     // The string birth can collect, and `error` is a bare pointer: root it
     // across the allocation and re-read it afterwards, or a moving scavenge
@@ -934,14 +1125,14 @@ mod tests {
         let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
         let len = encode_pcs(&[BUNDLE_START + 32, ip], &mut blob);
         assert_eq!(
-            render_frames(&blob[..len]).as_deref(),
+            render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
             Some("    at bundleWitness9979 (<anonymous>)"),
             "rendering must retain the bundle frame and omit the runtime thunk"
         );
         let far_ip = BUNDLE_START + MAX_FUNCTION_SPAN / 2 + 2;
         let len = encode_pcs(&[far_ip], &mut blob);
         assert_eq!(
-            render_frames(&blob[..len]),
+            render_frames(&blob[..len], RENDER_LIMIT),
             Some(format!(
                 "    at bundleWitness9979 [{far_ip:#x}] (<anonymous>)"
             )),
@@ -1064,7 +1255,21 @@ mod tests {
         let mut buf = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
         // Address 8, which no registry can plausibly contain.
         let len = encode_pcs(&[8usize], &mut buf);
-        assert_eq!(render_frames(&buf[..len]), None);
+        assert_eq!(render_frames(&buf[..len], RENDER_LIMIT), None);
+    }
+
+    /// The payload carries the `Error.stackTraceLimit` the capture ran
+    /// under: 0 renders no frame lines at all (the header stands alone), and
+    /// a payload with no limit character falls back to the default.
+    #[test]
+    fn the_payload_limit_bounds_the_frame_lines() {
+        assert_eq!(frames_payload_to_lines(b"A"), "");
+        assert_eq!(join_stack("Error: x", ""), "Error: x");
+        assert_eq!(
+            frames_payload_to_lines(b"B\n    at recorded (<anonymous>)"),
+            "    at recorded (<anonymous>)"
+        );
+        assert_eq!(frames_payload_to_lines(b""), "    at <anonymous>");
     }
 
     #[test]
@@ -1074,8 +1279,8 @@ mod tests {
         // half of the capture this crate can test on its own.
         #[inline(never)]
         fn innermost() -> usize {
-            let (_, len) = capture_encoded();
-            len
+            let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
+            capture_ips(&mut pcs) * PC_CHARS
         }
         #[inline(never)]
         fn middle() -> usize {

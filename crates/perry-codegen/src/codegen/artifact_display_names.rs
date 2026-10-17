@@ -125,4 +125,34 @@ pub(super) fn extend_body_symbol_display_names(
             }
         }
     }
+    // ABI clones of a registered body (`<body>$spec_<abi>`, `<body>$generic`)
+    // run the same JS function and are the targets direct calls actually
+    // reach, so a return address inside one is that function's frame.
+    // Unregistered, such a frame either vanished from `Error.stack` or
+    // borrowed the name of whichever registered function precedes it.
+    //
+    // Only those two kinds. A registration takes the clone's address, which
+    // keeps it alive: the speculative per-shape and per-receiver clones
+    // (`$pshape`, `$receiverN`) are often dead after optimization, and
+    // registering them kept 64 KB of otherwise-deleted code in a Zod binary.
+    // Sorted, so the registration order (and the emitted IR) does not depend
+    // on hash order.
+    let by_base: HashMap<&str, &str> = user_fn_display_names
+        .iter()
+        .map(|(symbol, display)| (symbol.as_str(), display.as_str()))
+        .collect();
+    let mut clones: Vec<(String, String)> = llmod
+        .defined_function_names()
+        .filter(|symbol| !by_base.contains_key(symbol))
+        .filter_map(|symbol| {
+            let (base, suffix) = symbol.split_once('$')?;
+            if !(suffix.starts_with("spec_") || suffix == "generic") {
+                return None;
+            }
+            let display = by_base.get(base)?;
+            Some((symbol.to_string(), display.to_string()))
+        })
+        .collect();
+    clones.sort();
+    user_fn_display_names.extend(clones);
 }

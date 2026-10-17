@@ -635,6 +635,11 @@ impl LlModule {
         self.defined_names.contains(name)
     }
 
+    /// Every symbol this module defines, in no particular order.
+    pub fn defined_function_names(&self) -> impl Iterator<Item = &str> {
+        self.defined_names.iter().map(String::as_str)
+    }
+
     pub fn add_global(&mut self, name: &str, ty: LlvmType, init: &str) {
         self.globals
             .push(format!("@{} = global {} {}", name, ty, init));
