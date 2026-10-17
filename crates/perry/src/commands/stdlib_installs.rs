@@ -182,7 +182,28 @@ const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ),
     ("js_runtime_install_url_engine", &["default", "url-engine"]),
     // Always compiled (no Cargo feature): perry names these installs for a
-    // program with an approved native addon / that uses WebAssembly.
+    // program with an approved native addon / that uses WebAssembly, or that
+    // uses the hook-gated Unicode tables, `globalThis` member tables and Node
+    // modules named in `optimized_libs::auto_optimized_cross_features`.
+    ("js_runtime_install_string_normalize", &["string-normalize"]),
+    ("js_runtime_install_intl_segmenter", &["intl-segmenter"]),
+    ("js_runtime_install_intl_locale", &["intl-locale"]),
+    ("js_runtime_install_global_math", &["global-math"]),
+    ("js_runtime_install_global_json", &["global-json"]),
+    ("js_runtime_install_global_reflect", &["global-reflect"]),
+    ("js_runtime_install_global_atomics", &["global-atomics"]),
+    ("js_runtime_install_global_url", &["global-url"]),
+    ("js_runtime_install_global_text", &["global-text"]),
+    ("js_runtime_install_global_websocket", &["global-websocket"]),
+    ("js_runtime_install_global_webcrypto", &["global-webcrypto"]),
+    ("js_runtime_install_global_webfetch", &["global-webfetch"]),
+    ("js_runtime_install_proc_ipc", &["proc-ipc"]),
+    ("js_runtime_install_mod_dgram", &["mod-dgram"]),
+    (
+        "js_runtime_install_mod_http2_constants",
+        &["mod-http2-constants"],
+    ),
+    ("js_runtime_install_mod_node_test", &["mod-node-test"]),
     ("js_runtime_install_node_api_host", &["node-api-host"]),
     ("js_runtime_install_wasm_host", &["wasm-host"]),
 ];

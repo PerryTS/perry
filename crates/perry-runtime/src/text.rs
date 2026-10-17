@@ -758,14 +758,12 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 // does, instead of silently decoding as utf-8.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "global-text")]
 fn require_text_brand(value: f64, class_id: u32, message: &[u8]) {
     if text_native_state(value, class_id).is_none() {
         throw_type_error(message);
     }
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_decode_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -781,7 +779,6 @@ pub(crate) extern "C" fn text_decoder_decode_thunk(
     f64::from_bits(crate::value::JSValue::string_ptr(s as *mut StringHeader).bits())
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_encoding_getter(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -796,7 +793,6 @@ pub(crate) extern "C" fn text_decoder_encoding_getter(
     f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_fatal_getter(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -810,7 +806,6 @@ pub(crate) extern "C" fn text_decoder_fatal_getter(
     js_text_decoder_fatal(this)
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -824,7 +819,6 @@ pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
     js_text_decoder_ignore_bom(this)
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encoding_getter(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -839,7 +833,6 @@ pub(crate) extern "C" fn text_encoder_encoding_getter(
     f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encode_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -854,7 +847,6 @@ pub(crate) extern "C" fn text_encoder_encode_thunk(
     crate::value::js_nanbox_pointer(js_text_encoder_encode_llvm(input))
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encode_into_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

@@ -911,19 +911,19 @@ pub struct CompilationContext {
     /// none of the host-canonicalization/IDNA machinery.
     pub uses_url: bool,
     /// Whether any TS module calls `String.prototype.normalize`,
-    /// `String.prototype.localeCompare`, or constructs `Intl.Collator`. Gates
+    /// `String.prototype.localeCompare`, or constructs `Intl.Collator`. Installs
     /// `perry-runtime/string-normalize` (`unicode-normalization`, ~113 KB of
     /// NFC/NFD/NFKC/NFKD tables); collation needs normalization for canonical
     /// equivalence and locale-primary weights.
     pub uses_string_normalize: bool,
-    /// Whether any TS module constructs an `Intl.Segmenter`. Gates
+    /// Whether any TS module constructs an `Intl.Segmenter`. Installs
     /// `perry-runtime/intl-segmenter` (`unicode-segmentation`, ~73 KB of UAX #29
     /// grapheme/word/sentence tables). Other `Intl.*` APIs don't need it.
     pub uses_intl_segmenter: bool,
     /// Whether any TS module canonicalizes a locale tag via
-    /// `Intl.getCanonicalLocales` or `Intl.*.supportedLocalesOf`. Gates
+    /// `Intl.getCanonicalLocales` or `Intl.*.supportedLocalesOf`. Installs
     /// `perry-runtime/intl-locale` (`icu_locale_core`'s data-free BCP-47 / UTS #35
-    /// structural parser). A program that never canonicalizes a locale links a
+    /// structural parser). A program that never canonicalizes a locale runs a
     /// lighter hand-rolled fallback instead.
     /// The program can reach the `Intl.*` namespace surface (any `Intl`
     /// token or locale-formatting API). Gates `perry-runtime/intl-namespace`
@@ -931,7 +931,7 @@ pub struct CompilationContext {
     /// a dynamic-code site forces it on.
     pub uses_intl_namespace: bool,
     /// Per-namespace `globalThis` member tables (`Math`/`JSON`/`Reflect`/
-    /// `Atomics`). Each gates the matching `perry-runtime/global-*` feature;
+    /// `Atomics`). Each installs the matching `perry-runtime/global-*` member tables;
     /// set when the program mentions the name at all (call sites lower to
     /// intrinsics, so a mention means it may be used as a VALUE).
     pub uses_global_math: bool,
@@ -945,7 +945,7 @@ pub struct CompilationContext {
     pub uses_global_websocket: bool,
     pub uses_global_webcrypto: bool,
     pub uses_global_webfetch: bool,
-    /// `process.send`/`disconnect`/`connected`/`channel` — gates `proc-ipc`.
+    /// `process.send`/`disconnect`/`connected`/`channel` — installs `proc-ipc`.
     pub uses_proc_ipc: bool,
     pub uses_intl_locale: bool,
     /// Whether any TS module localizes a date/time — `Intl.DateTimeFormat`, or
@@ -962,7 +962,7 @@ pub struct CompilationContext {
     /// the same feature and degrade gracefully when it's off, so they're absent
     /// from size-optimized binaries unless one of these APIs is also used.
     pub uses_diagnostics: bool,
-    /// Whether any TS module imports `node:dgram` (UDP sockets). Gates
+    /// Whether any TS module imports `node:dgram` (UDP sockets). Installs
     /// `perry-runtime/mod-dgram` (`crate::dgram` + `crate::dgram_reactor`,
     /// ~43 KB, incl. the `js_dgram_*` externs codegen emits direct calls to).
     /// Detected from `module: "dgram"` in the HIR (a `dgram` namespace can only
@@ -970,7 +970,7 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
-    /// Program imports `node:test` / `node:test/reporters` — gates
+    /// Program imports `node:test` / `node:test/reporters` — installs
     /// `perry-runtime/mod-node-test`.
     pub uses_node_test: bool,
     /// Whether any module calls `process.getBuiltinModule`. The requested

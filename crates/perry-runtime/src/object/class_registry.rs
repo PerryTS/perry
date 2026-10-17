@@ -42,6 +42,9 @@ mod construct;
 pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
 pub(crate) use construct::{ordinary_compiled_function_has_instance, OrdinaryInstanceof};
+pub(in crate::object) use construct::{
+    web_text_construct, web_url_construct, web_webcrypto_construct, web_webfetch_construct,
+};
 mod decl_accessors;
 pub(crate) mod declarations;
 pub(crate) use decl_accessors::{
@@ -136,7 +139,6 @@ pub(crate) use prototype_objects::{test_alloc_synthetic_class_id, SYNTHETIC_CLAS
 // ── class_meta.rs ───────────────────────────────────────────────────────────
 #[cfg(test)]
 pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
-#[cfg(feature = "global-text")]
 pub(crate) use class_meta::text_decoder_bool_option;
 pub(crate) use class_meta::{
     anonymous_class_role, identify_global_builtin_constructor, report_dispatch_miss,

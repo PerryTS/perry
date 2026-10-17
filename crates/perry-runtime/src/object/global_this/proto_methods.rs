@@ -7,7 +7,6 @@ use super::array_error::*;
 /// The prototype's Fetch getter delegates to the native storage of its
 /// receiver, including a source-compiled subclass's stashed native handle.
 /// A real accessor lane must carry this body rather than a no-op placeholder.
-#[cfg(feature = "global-webfetch")]
 fn fetch_prototype_getter(this: crate::closure::JsThis, name: &'static str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(this.as_f64());
@@ -32,8 +31,6 @@ fn fetch_prototype_getter(this: crate::closure::JsThis, name: &'static str) -> f
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
-
-#[cfg(feature = "global-webfetch")]
 macro_rules! fetch_getter_bodies {
     ($($body:ident => $name:literal),+ $(,)?) => {
         $(extern "C" fn $body(
@@ -54,7 +51,6 @@ macro_rules! fetch_getter_bodies {
 
 // A separate body also gives each getter its own reflective function name.
 // These zero-capture closures retain the original bootstrap allocation shape.
-#[cfg(feature = "global-webfetch")]
 fetch_getter_bodies! {
     fetch_body => "body",
     fetch_body_used => "bodyUsed",
@@ -78,8 +74,6 @@ fetch_getter_bodies! {
     fetch_referrer_policy => "referrerPolicy",
     fetch_signal => "signal",
 }
-
-#[cfg(feature = "global-webfetch")]
 unsafe fn install_fetch_prototype_getter(proto: *mut ObjectHeader, name: &str) {
     // Realm installation runs no user code. Keep the receiver and the new
     // key/getter stable until the accessor pair roots them in the prototype.
@@ -405,7 +399,6 @@ fn install_web_getter_accessor(
 /// members are enumerable; `install_proto_method` records the ECMA-262 builtin
 /// shape (`enumerable: false`), which is right for its other callers, so the
 /// text family restates its own entries here instead.
-#[cfg(feature = "global-text")]
 fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
     super::super::set_builtin_property_attrs(
         proto_obj as usize,
@@ -1088,40 +1081,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
             install_object_proto_copies(builtin_name, proto_obj);
         }
-        #[cfg(feature = "global-url")]
         "URLPattern" => {
-            install_proto_method_rest(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Url,
+                builtin_name,
                 proto_obj,
-                "exec",
-                crate::fn_info!(url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
             );
-            install_proto_method_rest(
-                proto_obj,
-                "test",
-                crate::fn_info!(url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
-            for name in [
-                "hasRegExpGroups",
-                "hash",
-                "hostname",
-                "password",
-                "pathname",
-                "port",
-                "protocol",
-                "search",
-                "username",
-            ] {
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                super::super::define_builtin_data_property(
-                    proto_obj,
-                    key,
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                    name.to_string(),
-                    super::super::PropertyAttrs::new(false, false, true),
-                );
-            }
         }
         // #10759/#12697: `%URLSearchParams.prototype%` holds the real method
         // surface and the `size` accessor (WebIDL; arities as node v26).
@@ -1238,262 +1203,75 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         // through the handle-dispatch table. Instances are ordinary objects
         // now, so the prototype carries the real implementations and an
         // ordinary property lookup finds them.
-        #[cfg(feature = "global-text")]
         "TextEncoder" => {
-            install_proto_method(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Text,
+                builtin_name,
                 proto_obj,
-                "encode",
-                crate::fn_info!(crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
             );
-            install_proto_method(
-                proto_obj,
-                "encodeInto",
-                crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                2,
-            );
-            install_web_getter_accessor(
-                proto_obj,
-                "encoding",
-                crate::fn_info!(crate::text::text_encoder_encoding_getter, 0; with_declared(0)),
-            );
-            for name in ["encode", "encodeInto"] {
-                make_proto_member_enumerable(proto_obj, name);
-            }
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
-        #[cfg(feature = "global-text")]
         "TextDecoder" => {
-            install_proto_method(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Text,
+                builtin_name,
                 proto_obj,
-                "decode",
-                crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
             );
-            install_web_getter_accessor(
-                proto_obj,
-                "encoding",
-                crate::fn_info!(crate::text::text_decoder_encoding_getter, 0; with_declared(0)),
-            );
-            install_web_getter_accessor(
-                proto_obj,
-                "fatal",
-                crate::fn_info!(crate::text::text_decoder_fatal_getter, 0; with_declared(0)),
-            );
-            install_web_getter_accessor(
-                proto_obj,
-                "ignoreBOM",
-                crate::fn_info!(crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),
-            );
-            make_proto_member_enumerable(proto_obj, "decode");
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }
-        #[cfg(feature = "global-webfetch")]
         "Headers" => {
-            // WHATWG aliases Headers.prototype[Symbol.iterator] to the exact
-            // same function as `.entries`.  Besides reflection parity, axios
-            // deliberately requires this to be an own prototype member before
-            // treating an untrusted header source as iterable.
-            let entries_value = install_proto_method(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webfetch,
+                builtin_name,
                 proto_obj,
-                "entries",
-                crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                0,
             );
-            install_builtin_iterator_symbol(proto_obj, entries_value);
-            install_noop_proto_methods(
-                proto_obj,
-                &[
-                    ("append", 2),
-                    ("delete", 1),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("getSetCookie", 0),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
-                ],
-            );
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
-        #[cfg(feature = "global-webfetch")]
         "Request" | "Response" => {
-            install_noop_proto_methods(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webfetch,
+                builtin_name,
                 proto_obj,
-                &[
-                    ("arrayBuffer", 0),
-                    ("blob", 0),
-                    ("bytes", 0),
-                    ("clone", 0),
-                    ("formData", 0),
-                    ("json", 0),
-                    ("text", 0),
-                ],
             );
-            // Web Fetch accessors must be visible as accessor descriptors on
-            // the intrinsic prototype, not just as compiler-known handle
-            // fields. Libraries such as srvx copy `Response.prototype`
-            // descriptors onto lightweight response wrappers and provide their
-            // own getter body. If these names are absent from reflection, the
-            // wrapper's inherited `.body`/`.headers` reads become undefined and
-            // streamed SSR responses are dropped before the underlying stream
-            // is ever pulled.
-            let accessors: &[&str] = if builtin_name == "Response" {
-                &[
-                    "body",
-                    "bodyUsed",
-                    "headers",
-                    "ok",
-                    "redirected",
-                    "status",
-                    "statusText",
-                    "type",
-                    "url",
-                ]
-            } else {
-                &[
-                    "body",
-                    "bodyUsed",
-                    "cache",
-                    "credentials",
-                    "destination",
-                    "duplex",
-                    "headers",
-                    "integrity",
-                    "keepalive",
-                    "method",
-                    "mode",
-                    "redirect",
-                    "referrer",
-                    "referrerPolicy",
-                    "signal",
-                    "url",
-                ]
-            };
-            unsafe {
-                for name in accessors {
-                    install_fetch_prototype_getter(proto_obj, name);
-                }
-            }
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
-        #[cfg(feature = "global-webfetch")]
         "Blob" | "File" => {
-            install_noop_proto_methods(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webfetch,
+                builtin_name,
                 proto_obj,
-                &[
-                    ("arrayBuffer", 0),
-                    ("bytes", 0),
-                    ("slice", 0),
-                    ("stream", 0),
-                    ("text", 0),
-                ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
-        #[cfg(feature = "global-webfetch")]
         "FormData" => {
-            install_noop_proto_methods(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webfetch,
+                builtin_name,
                 proto_obj,
-                &[
-                    ("append", 2),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("getAll", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
-                ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
-        #[cfg(feature = "global-websocket")]
         "WebSocket" => {
-            websocket_global::install_proto_methods(proto_obj);
-            install_object_proto_copies(builtin_name, proto_obj);
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Websocket,
+                builtin_name,
+                proto_obj,
+            );
         }
-        #[cfg(feature = "global-webcrypto")]
         "Crypto" => {
-            install_webcrypto_proto_getter(
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webcrypto,
+                builtin_name,
                 proto_obj,
-                "subtle",
-                crate::fn_info!(webcrypto_subtle_getter_thunk, 0; with_declared(0)),
             );
-            install_webcrypto_proto_method(
-                proto_obj,
-                "getRandomValues",
-                crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
-            install_webcrypto_proto_method(
-                proto_obj,
-                "randomUUID",
-                crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                0,
-            );
-            install_object_proto_copies(builtin_name, proto_obj);
         }
-        #[cfg(feature = "global-webcrypto")]
         "CryptoKey" => {
-            for (name, func_ptr) in [
-                (
-                    "algorithm",
-                    crate::fn_info!(cryptokey_algorithm_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "extractable",
-                    crate::fn_info!(cryptokey_extractable_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "type",
-                    crate::fn_info!(cryptokey_type_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "usages",
-                    crate::fn_info!(cryptokey_usages_getter_thunk, 0; with_declared(0)),
-                ),
-            ] {
-                install_webcrypto_proto_getter(proto_obj, name, func_ptr);
-            }
-            install_object_proto_copies(builtin_name, proto_obj);
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webcrypto,
+                builtin_name,
+                proto_obj,
+            );
         }
-        #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
-            for (name, func_ptr, length) in [
-                (
-                    "encapsulateBits",
-                    crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    2,
-                ),
-                (
-                    "decapsulateBits",
-                    crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    3,
-                ),
-                (
-                    "encapsulateKey",
-                    crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    5,
-                ),
-                (
-                    "decapsulateKey",
-                    crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    6,
-                ),
-            ] {
-                install_webcrypto_proto_method_rest_with_length(proto_obj, name, func_ptr, length);
-            }
-            install_object_proto_copies(builtin_name, proto_obj);
+            super::web_hooks::proto_methods(
+                super::web_hooks::WebGroup::Webcrypto,
+                builtin_name,
+                proto_obj,
+            );
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
         | "AggregateError" | "EvalError" | "URIError" => {
@@ -1588,11 +1366,10 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 0,
             );
             web_method_enumerable(proto(), "toString");
-            // Gated like the other `global-url` member tables: the compiler
-            // enables it for any program that names `URL`, so a program that
+            // Installed with the other `global-url` member tables: the compiler
+            // enables them for any program that names `URL`, so a program that
             // cannot reach this prototype links none of the accessors.
-            #[cfg(feature = "global-url")]
-            crate::url::prototype::install_url_prototype_accessors(proto());
+            super::web_hooks::url_prototype_accessors(proto());
             install_proto_method(
                 proto(),
                 "toJSON",
@@ -1702,4 +1479,320 @@ fn install_webcrypto_proto_getter(
         },
         super::super::PropertyAttrs::new(true, true, true),
     );
+}
+
+/// The `global-url` prototype member tables, installed by `web_hooks`.
+pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    match builtin_name {
+        "URLPattern" => {
+            install_proto_method_rest(
+                proto_obj,
+                "exec",
+                crate::fn_info!(url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
+            install_proto_method_rest(
+                proto_obj,
+                "test",
+                crate::fn_info!(url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
+            for name in [
+                "hasRegExpGroups",
+                "hash",
+                "hostname",
+                "password",
+                "pathname",
+                "port",
+                "protocol",
+                "search",
+                "username",
+            ] {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                super::super::define_builtin_data_property(
+                    proto_obj,
+                    key,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                    name.to_string(),
+                    super::super::PropertyAttrs::new(false, false, true),
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The `global-text` prototype member tables, installed by `web_hooks`.
+pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    match builtin_name {
+        "TextEncoder" => {
+            install_proto_method(
+                proto_obj,
+                "encode",
+                crate::fn_info!(crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "encodeInto",
+                crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                2,
+            );
+            install_web_getter_accessor(
+                proto_obj,
+                "encoding",
+                crate::fn_info!(crate::text::text_encoder_encoding_getter, 0; with_declared(0)),
+            );
+            for name in ["encode", "encodeInto"] {
+                make_proto_member_enumerable(proto_obj, name);
+            }
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
+        }
+        "TextDecoder" => {
+            install_proto_method(
+                proto_obj,
+                "decode",
+                crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
+            install_web_getter_accessor(
+                proto_obj,
+                "encoding",
+                crate::fn_info!(crate::text::text_decoder_encoding_getter, 0; with_declared(0)),
+            );
+            install_web_getter_accessor(
+                proto_obj,
+                "fatal",
+                crate::fn_info!(crate::text::text_decoder_fatal_getter, 0; with_declared(0)),
+            );
+            install_web_getter_accessor(
+                proto_obj,
+                "ignoreBOM",
+                crate::fn_info!(crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),
+            );
+            make_proto_member_enumerable(proto_obj, "decode");
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
+        }
+        _ => {}
+    }
+}
+
+/// The `global-webfetch` prototype member tables, installed by `web_hooks`.
+pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    match builtin_name {
+        "Headers" => {
+            // WHATWG aliases Headers.prototype[Symbol.iterator] to the exact
+            // same function as `.entries`.  Besides reflection parity, axios
+            // deliberately requires this to be an own prototype member before
+            // treating an untrusted header source as iterable.
+            let entries_value = install_proto_method(
+                proto_obj,
+                "entries",
+                crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            install_builtin_iterator_symbol(proto_obj, entries_value);
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getSetCookie", 0),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
+        }
+        "Request" | "Response" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("blob", 0),
+                    ("bytes", 0),
+                    ("clone", 0),
+                    ("formData", 0),
+                    ("json", 0),
+                    ("text", 0),
+                ],
+            );
+            // Web Fetch accessors must be visible as accessor descriptors on
+            // the intrinsic prototype, not just as compiler-known handle
+            // fields. Libraries such as srvx copy `Response.prototype`
+            // descriptors onto lightweight response wrappers and provide their
+            // own getter body. If these names are absent from reflection, the
+            // wrapper's inherited `.body`/`.headers` reads become undefined and
+            // streamed SSR responses are dropped before the underlying stream
+            // is ever pulled.
+            let accessors: &[&str] = if builtin_name == "Response" {
+                &[
+                    "body",
+                    "bodyUsed",
+                    "headers",
+                    "ok",
+                    "redirected",
+                    "status",
+                    "statusText",
+                    "type",
+                    "url",
+                ]
+            } else {
+                &[
+                    "body",
+                    "bodyUsed",
+                    "cache",
+                    "credentials",
+                    "destination",
+                    "duplex",
+                    "headers",
+                    "integrity",
+                    "keepalive",
+                    "method",
+                    "mode",
+                    "redirect",
+                    "referrer",
+                    "referrerPolicy",
+                    "signal",
+                    "url",
+                ]
+            };
+            unsafe {
+                for name in accessors {
+                    install_fetch_prototype_getter(proto_obj, name);
+                }
+            }
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
+        }
+        "Blob" | "File" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("arrayBuffer", 0),
+                    ("bytes", 0),
+                    ("slice", 0),
+                    ("stream", 0),
+                    ("text", 0),
+                ],
+            );
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
+        }
+        "FormData" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getAll", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("values", 0),
+                ],
+            );
+            install_object_proto_copies(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
+        }
+        _ => {}
+    }
+}
+
+/// The `global-websocket` prototype member tables, installed by `web_hooks`.
+pub(super) fn web_websocket_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    match builtin_name {
+        "WebSocket" => {
+            websocket_global::install_proto_methods(proto_obj);
+            install_object_proto_copies(builtin_name, proto_obj);
+        }
+        _ => {}
+    }
+}
+
+/// The `global-webcrypto` prototype member tables, installed by `web_hooks`.
+pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+    match builtin_name {
+        "Crypto" => {
+            install_webcrypto_proto_getter(
+                proto_obj,
+                "subtle",
+                crate::fn_info!(webcrypto_subtle_getter_thunk, 0; with_declared(0)),
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "getRandomValues",
+                crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
+            install_webcrypto_proto_method(
+                proto_obj,
+                "randomUUID",
+                crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            install_object_proto_copies(builtin_name, proto_obj);
+        }
+        "CryptoKey" => {
+            for (name, func_ptr) in [
+                (
+                    "algorithm",
+                    crate::fn_info!(cryptokey_algorithm_getter_thunk, 0; with_declared(0)),
+                ),
+                (
+                    "extractable",
+                    crate::fn_info!(cryptokey_extractable_getter_thunk, 0; with_declared(0)),
+                ),
+                (
+                    "type",
+                    crate::fn_info!(cryptokey_type_getter_thunk, 0; with_declared(0)),
+                ),
+                (
+                    "usages",
+                    crate::fn_info!(cryptokey_usages_getter_thunk, 0; with_declared(0)),
+                ),
+            ] {
+                install_webcrypto_proto_getter(proto_obj, name, func_ptr);
+            }
+            install_object_proto_copies(builtin_name, proto_obj);
+        }
+        "SubtleCrypto" => {
+            for (name, func_ptr, length) in [
+                (
+                    "encapsulateBits",
+                    crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "decapsulateBits",
+                    crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    3,
+                ),
+                (
+                    "encapsulateKey",
+                    crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    5,
+                ),
+                (
+                    "decapsulateKey",
+                    crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    6,
+                ),
+            ] {
+                install_webcrypto_proto_method_rest_with_length(proto_obj, name, func_ptr, length);
+            }
+            install_object_proto_copies(builtin_name, proto_obj);
+        }
+        _ => {}
+    }
 }

@@ -782,27 +782,11 @@ pub(crate) fn install_builtin_constructor_statics(
                 1,
             );
         }
-        #[cfg(feature = "global-url")]
         "URL" => {
-            s.method(
-                "canParse",
-                crate::fn_info!(url_can_parse_thunk, 2; with_declared(1)),
-                1,
-            );
-            s.method(
-                "parse",
-                crate::fn_info!(url_parse_thunk, 2; with_declared(1)),
-                1,
-            );
+            super::web_hooks::statics(super::web_hooks::WebGroup::Url, name, s);
         }
-        #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
-            s.method_with_attrs(
-                "supports",
-                crate::fn_info!(subtle_crypto_supports_thunk, 1; with_rest(0)),
-                2,
-                super::super::PropertyAttrs::new(true, true, true),
-            );
+            super::web_hooks::statics(super::web_hooks::WebGroup::Webcrypto, name, s);
         }
         "Proxy" => {
             s.method(
@@ -1289,5 +1273,39 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
             sym as usize,
             super::super::PropertyAttrs::new(false, false, true),
         );
+    }
+}
+
+/// The `global-url` constructor statics, installed by `web_hooks`.
+pub(super) fn web_url_statics(name: &str, s: &mut ConstructorStatics) {
+    match name {
+        "URL" => {
+            s.method(
+                "canParse",
+                crate::fn_info!(url_can_parse_thunk, 2; with_declared(1)),
+                1,
+            );
+            s.method(
+                "parse",
+                crate::fn_info!(url_parse_thunk, 2; with_declared(1)),
+                1,
+            );
+        }
+        _ => {}
+    }
+}
+
+/// The `global-webcrypto` constructor statics, installed by `web_hooks`.
+pub(super) fn web_webcrypto_statics(name: &str, s: &mut ConstructorStatics) {
+    match name {
+        "SubtleCrypto" => {
+            s.method_with_attrs(
+                "supports",
+                crate::fn_info!(subtle_crypto_supports_thunk, 1; with_rest(0)),
+                2,
+                super::super::PropertyAttrs::new(true, true, true),
+            );
+        }
+        _ => {}
     }
 }

@@ -599,7 +599,7 @@ perry-abi = { path = "crates/perry-abi", version = "0.5.1654" }
 # runtime wrappers can share identities without depending on perry-ffi.
 # `default-features = false` so dependency EDGES (perry-stdlib, ext crates, the
 # perry binary) don't force perry-runtime's heavy default features (`full`,
-# `regex-engine`, `temporal`, `url-engine`, `string-normalize`, `intl-segmenter`)
+# `regex-engine`, `temporal`, `url-engine`)
 # back on. The auto-optimize build selects perry-runtime with
 # `--no-default-features` and re-adds only what a given program needs (see
 # optimized_libs.rs), so an edge requesting defaults would defeat that (cargo

@@ -429,7 +429,6 @@ mod tests {
         for n in [
             "libperry_runtime.a",
             "libperry_runtime_abort.a",
-            "libperry_runtime_core.a",
             "libperry_runtime_instr.a",
             "libperry_runtime_ios_sim.a",
             "libperry_stdlib.a",
@@ -464,7 +463,6 @@ mod tests {
             vec![
                 ("libperry_runtime.a".to_owned(), s("libperry_stdlib.a")),
                 ("libperry_runtime_abort.a".to_owned(), None),
-                ("libperry_runtime_core.a".to_owned(), None),
                 ("libperry_runtime_instr.a".to_owned(), None),
                 (
                     "libperry_runtime_ios_sim.a".to_owned(),

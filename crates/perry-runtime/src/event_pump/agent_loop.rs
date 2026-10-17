@@ -1333,14 +1333,8 @@ fn print_stats(id: AgentId, stats: LoopStats) {
     print_extra_stats();
 }
 
-#[cfg(feature = "mod-dgram")]
 fn dgram_sockets_on_turnloop() -> u64 {
-    crate::dgram_reactor::turnloop_sockets()
-}
-
-#[cfg(not(feature = "mod-dgram"))]
-fn dgram_sockets_on_turnloop() -> u64 {
-    0
+    crate::module_hooks::dgram_turnloop_sockets()
 }
 
 #[cfg(test)]

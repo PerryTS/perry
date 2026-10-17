@@ -361,23 +361,17 @@ pub(crate) fn build_optimized_libs(
     }
     let well_known_libs =
         super::wrapper_libs::resolve_prebuilt_ext_libs(&routed_set, target, format);
-    let mut libs = OptimizedLibs {
+    let libs = OptimizedLibs {
         prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
         well_known_libs,
         ..OptimizedLibs::empty()
     };
-    // A runtime-only program that needs none of the optional runtime
-    // features links the packaged core archive when one is installed.
-    if super::prebuilt_core::eligible(ctx, cli_features) {
-        libs.runtime = super::super::library_search::find_runtime_core_library(target);
-    }
     prebuilt_installs(libs, ctx, &features, cli_features)
 }
 
 /// The prebuilt archives carry every feature; the generated installer installs
 /// the ones this program needs (exactly the set the retired auto-optimized
-/// rebuild compiled), so the linker drops the rest. The core runtime archive
-/// (`runtime` is `Some`) has no optional features and installs what it has.
+/// rebuild compiled), so the linker drops the rest.
 fn prebuilt_installs(
     mut libs: OptimizedLibs,
     ctx: &CompilationContext,
@@ -387,14 +381,12 @@ fn prebuilt_installs(
     use crate::commands::stdlib_installs::FeatureInstalls;
     libs.stdlib_installs =
         FeatureInstalls::Selected(features.iter().map(|f| f.to_string()).collect());
-    if libs.runtime.is_none() {
-        libs.runtime_installs = FeatureInstalls::Selected(
-            auto_optimized_cross_features(ctx, features, cli_features)
-                .iter()
-                .filter_map(|f| f.strip_prefix("perry-runtime/"))
-                .map(str::to_string)
-                .collect(),
-        );
-    }
+    libs.runtime_installs = FeatureInstalls::Selected(
+        auto_optimized_cross_features(ctx, features, cli_features)
+            .iter()
+            .filter_map(|f| f.strip_prefix("perry-runtime/"))
+            .map(str::to_string)
+            .collect(),
+    );
     libs
 }

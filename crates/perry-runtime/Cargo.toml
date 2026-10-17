@@ -59,7 +59,7 @@ shape-fact-audit = []
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "bun-cli-utils", "dyn-eval", "keepalive-anchors", "alloc-mimalloc", "gc-instruments", "hot-diag"]
+default = ["full", "regex-engine", "temporal", "url-engine", "intl-namespace", "intl-datetime", "diagnostics", "bun-cli-utils", "dyn-eval", "keepalive-anchors", "alloc-mimalloc", "gc-instruments", "hot-diag"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points so they survive into the staticlib archive. Without these anchors,
@@ -121,10 +121,6 @@ contract-checks = []
 # also drops the relaxed load `enum_on()` cost every string concat.
 hot-diag = []
 
-# Prebuilt native runtime for programs whose existing feature analysis requires
-# only this subset. Keep in sync with optimized_libs/prebuilt_core.rs (tested).
-# Unwind behavior stays unchanged; this is a feature/size profile only.
-prebuilt-core = ["full", "alloc-mimalloc", "keepalive-anchors", "global-math"]
 
 # `PERRY_ALLOC_CENSUS` — a sampling profiler for the Rust heap
 # (`alloc_census`). OFF by default and compiled out entirely: the census wraps
@@ -157,38 +153,6 @@ alloc-mimalloc-hardened = [
     "libmimalloc-sys/secure",
     "libmimalloc-sys/debug",
 ]
-# Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
-# implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
-# `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
-# when the program imports `dgram`. The compiler enables it on `module: "dgram"`
-# usage (see the auto-optimize import-detection path), so a program that never
-# imports `dgram` links none of its code. Pure cfg gate, no extra deps. (This is
-# the first instance of a general per-module gating pattern; more modules can
-# follow the same shape.)
-mod-dgram = []
-# Per-module Node-API gate (binary-size, issue #6468): compiles the
-# `node:http2` module-level constant tables (`crate::node_http2_constants` —
-# the NGHTTP2_*/HTTP_STATUS_* number tables, the `http2.constants`
-# sub-namespace key list, and the lazily-materialized `sensitiveHeaders`
-# symbol, ~20 KB of otherwise-unreachable cold data) only when the program
-# imports `node:http2`. The compiler enables it on `http2` in
-# `native_module_imports` (see `auto_optimized_cross_features`), so a program
-# that never imports `http2` links none of these tables and macOS
-# `-dead_strip` recovers the space. Pure cfg gate, no extra deps. This gates
-# only the constant tables — the HTTP/2 server surface (`js_node_http2_*`) is
-# unaffected (it lives in perry-ext-http, routed via `http-client`).
-mod-http2-constants = []
-# Per-module Node-API gate (binary-size): compiles the `node:test` runner
-# (`node_submodules::test` + its snapshot/property/reporter helpers, ~2.7k LOC)
-# and its two dispatch buckets only when the program imports `node:test` or
-# `node:test/reporters`. Measured with `-why_live`: the runner is the ONLY
-# retainer of the JSON serializer in an otherwise plain program —
-# `test::snapshot::assert_snapshot` calls `js_json_stringify_full`, so every
-# binary carried `crate::json` whether or not it could reach it. The compiler
-# enables this on `test`/`test/reporters` in `native_module_imports`, and on
-# `process.getBuiltinModule` (whose target is only known at runtime), the same
-# way `mod-http2-constants` does. Pure cfg gate, no extra deps.
-mod-node-test = []
 # Bun's small data/CLI utility pack (#9600): YAML/TOML parsing, node-semver
 # compatible ranges, xxHash64, and zstd decompression. The compiler enables
 # this as a unit whenever the `"bun"` module or the opt-in Bun global is used;
@@ -236,17 +200,6 @@ temporal = ["dep:temporal_rs"]
 # site has a benign hand-rolled fallback. (`unicode-normalization`/`-segmentation`
 # are NOT gated here — they're shared with Intl / String.normalize.)
 url-engine = ["dep:url", "dep:idna"]
-# `String.prototype.normalize` (NFC/NFD/NFKC/NFKD) via `unicode-normalization`
-# (~113 KB of Unicode decomposition/composition tables). Only `string/compare.rs`
-# uses it; a program that never calls `.normalize()` links none of it. (This is
-# the *old* `unicode-normalization` crate, distinct from `idna`'s `icu_normalizer`,
-# so it's independent of `url-engine`.)
-string-normalize = ["dep:unicode-normalization"]
-# `Intl.Segmenter` (UAX #29 grapheme/word/sentence segmentation) via
-# `unicode-segmentation` (~73 KB) — the grapheme path backs string-width@7+/
-# wrap-ansi@9+ (and thus ink). Only `intl.rs` uses it; a program that never
-# constructs an `Intl.Segmenter` links none of it.
-intl-segmenter = ["dep:unicode-segmentation"]
 # The `Intl.*` NAMESPACE surface (`Intl.NumberFormat`, `DateTimeFormat`,
 # `Collator`, `RelativeTimeFormat`, `ListFormat`, `PluralRules`,
 # `DisplayNames`, `DurationFormat`, `getCanonicalLocales`,
@@ -260,57 +213,10 @@ intl-segmenter = ["dep:unicode-segmentation"]
 # reachable), so only the `Intl.` namespace members depend on it. The
 # compiler enables it on any `Intl`/locale-formatting token, erring toward
 # enabling (same over-approximation contract as `temporal`).
-intl-namespace = ["dep:icu_decimal", "dep:icu_provider", "dep:icu_locale_core"]
-# Per-namespace `globalThis` member tables. Each installs the reflectable
-# members of one built-in namespace (`Math.max`, `JSON.stringify`,
-# `Reflect.get`, `Atomics.add`, …) as real properties. Call sites in user code
-# are codegen intrinsics that never read these — they exist for reflection
-# (`Object.keys(Math)`) and for namespace-as-value use (`const m = Math;
-# m.max(…)`). `populate_global_this_builtins` installs them unconditionally,
-# so every binary carried all four tables plus everything they reference. The
-# compiler enables each on its identifier token (deliberately over-approximate:
-# any mention of the name, plus any deferred dynamic-code site, turns it on),
-# so a program that only calls the intrinsics links none of the tables while
-# the namespace object itself still exists (`typeof JSON === "object"`).
-global-math = []
-global-json = []
-global-reflect = []
-global-atomics = []
-# Per-group `globalThis` web-platform surfaces: the prototype-method and
-# constructor-static tables for `URL`/`URLPattern`/`URLSearchParams`,
-# `Text{Encoder,Decoder}{,Stream}`, `WebSocket`, `Crypto`/`CryptoKey`/
-# `SubtleCrypto`, and the fetch value types (`Headers`/`Request`/`Response`/
-# `Blob`/`File`/`FormData`). `populate_global_this_builtins` installs all of
-# them unconditionally, so every binary carried each group plus everything it
-# references (the URL family alone is ~106 KB). The compiler enables each
-# group on its identifier tokens — and the fetch group additionally whenever
-# the program uses `fetch`, since a `fetch()` result is a `Response` the
-# source may never name. Constructors themselves stay installed either way, so
-# `typeof URL === "function"` and construction are unaffected; only the
-# reflectable member tables move.
-global-url = []
-global-text = []
-global-websocket = []
-global-webcrypto = []
-global-webfetch = []
-# `process.send` / `disconnect` / `connected` / `channel` — the child-process
-# IPC channel. The send path JSON-serializes every message, so the always-live
-# process-namespace property lookup statically pinned the whole `crate::json`
-# serializer (~84 KB) into binaries that never touch IPC. The compiler enables
-# this on any of the four property tokens (over-approximate: a missed
-# detection would make `process.send` undefined, so err toward enabling).
-proc-ipc = []
-# `Intl.getCanonicalLocales` / `*.supportedLocalesOf` BCP-47 (UTS #35) language-tag
-# canonicalization via ICU4X's structural parser plus compiled CLDR aliases and
-# likely-subtag data. Only Intl locale operations use it; a program that never
-# canonicalizes or expands a locale links none of it. The same data is already
-# pulled transitively by `intl-datetime` in default builds, so the shipped full
-# runtime carries no duplicate tables. A hand-rolled fallback covers the off
-# case for size-optimized builds.
-intl-locale = ["dep:icu_locale", "dep:icu_locale_core"]
+intl-namespace = ["dep:icu_decimal", "dep:icu_provider"]
 # CLDR-accurate Intl.DateTimeFormat / toLocaleString date-time patterns and a
 # compiled IANA database for explicit named `timeZone` options.
-intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core", "dep:timezone_provider", "dep:writeable"]
+intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:timezone_provider", "dep:writeable"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -434,16 +340,16 @@ sha2 = "0.11"
 # object builder in the runtime so that callback path has no stdlib symbol
 # dependency (the DER parser is dead-stripped from programs that never use it).
 x509-cert = { version = "0.3", default-features = false }
-unicode-normalization = { version = "0.1", optional = true }
+unicode-normalization = { version = "0.1" }
 # #4877: extended grapheme-cluster / word / sentence segmentation backing
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,
 # so it gates ink). Pure-Rust UAX #29 implementation, already in our lock graph.
-unicode-segmentation = { version = "1", optional = true }
+unicode-segmentation = { version = "1" }
 # #5298/#5896: BCP-47 (UTS #35) structural locale-tag canonicalization, CLDR
 # aliases, and likely-subtag expansion for the Intl locale APIs. Both crates and
 # their compiled data are already in the default lock graph via icu_datetime.
-icu_locale = { version = "2", optional = true }
-icu_locale_core = { version = "2", optional = true }
+icu_locale = { version = "2" }
+icu_locale_core = { version = "2" }
 # CLDR decimal grouping metadata (primary/secondary group widths and the
 # locale's minimum grouping threshold), shared by Intl.NumberFormat and
 # Number/BigInt.prototype.toLocaleString.

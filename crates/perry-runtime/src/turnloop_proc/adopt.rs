@@ -63,11 +63,8 @@ impl Transport {
 /// for `setsockopt`/`getsockname` only, never for I/O).
 // Datagram-side surface of the P2 handle table: real, exercised by
 // `turnloop_proc::tests`, and consumed in production only by
-// `dgram_reactor`, which is `#[cfg(feature = "mod-dgram")]`. The gate
-// stays LIVE in the configuration that has the consumer -- if
-// `dgram_reactor` ever stops calling this, a `mod-dgram` build goes red.
+// `dgram_reactor`, which the `mod-dgram` install brings in.
 #[cfg(unix)]
-#[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
 pub(crate) fn duplicate_fd(fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<Transport> {
     use std::os::fd::AsRawFd;
     // SAFETY: `fd` is a live borrowed descriptor for the duration of the call,

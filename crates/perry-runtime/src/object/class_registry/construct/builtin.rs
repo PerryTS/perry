@@ -30,11 +30,17 @@ pub(super) unsafe fn construct(
                 args_ptr, args_len,
             ));
         }
-        #[cfg(feature = "global-webcrypto")]
         BuiltinConstructorIdentity::Crypto
         | BuiltinConstructorIdentity::CryptoKey
         | BuiltinConstructorIdentity::SubtleCrypto => {
-            return Some(crate::object::js_webcrypto_illegal_constructor());
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Webcrypto,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
         BuiltinConstructorIdentity::Symbol => {
             return Some(crate::error::js_throw_symbol_constructor_type_error());
@@ -108,44 +114,25 @@ pub(super) unsafe fn construct(
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             return Some(crate::object::js_object_coerce(value));
         }
-        #[cfg(feature = "global-webfetch")]
         BuiltinConstructorIdentity::Blob => {
-            let parts = args
-                .first()
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let options = args
-                .get(1)
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::object::global_this_blob_thunk(
-                std::ptr::null(),
-                crate::closure::JsThis::UNDEFINED,
-                parts,
-                options,
-            ));
-        }
-        #[cfg(feature = "global-webfetch")]
-        BuiltinConstructorIdentity::File => {
-            let parts = args
-                .first()
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let name = args
-                .get(1)
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let options = args
-                .get(2)
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::object::global_this_file_thunk(
-                std::ptr::null(),
-                crate::closure::JsThis::UNDEFINED,
-                parts,
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Webfetch,
                 name,
-                options,
-            ));
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
+        }
+        BuiltinConstructorIdentity::File => {
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Webfetch,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
         // Global builtins reached through a VALUE (alias variable,
         // intrinsic lookup, cross-module re-export) rather than by name.
@@ -177,39 +164,25 @@ pub(super) unsafe fn construct(
                 init,
             ));
         }
-        #[cfg(feature = "global-webfetch")]
         BuiltinConstructorIdentity::Request => {
-            let input = args
-                .first()
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let init = args
-                .get(1)
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::object::global_this_request_thunk(
-                std::ptr::null(),
-                crate::closure::JsThis::UNDEFINED,
-                input,
-                init,
-            ));
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Webfetch,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
-        #[cfg(feature = "global-webfetch")]
         BuiltinConstructorIdentity::Response => {
-            let body = args
-                .first()
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            let init = args
-                .get(1)
-                .copied()
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-            return Some(crate::object::global_this_response_thunk(
-                std::ptr::null(),
-                crate::closure::JsThis::UNDEFINED,
-                body,
-                init,
-            ));
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Webfetch,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
         BuiltinConstructorIdentity::Event => {
             let event_type = args
@@ -371,19 +344,25 @@ pub(super) unsafe fn construct(
             };
             return Some(crate::value::js_nanbox_pointer(ta as i64));
         }
-        #[cfg(feature = "global-text")]
         BuiltinConstructorIdentity::TextEncoderStream => {
-            return Some(text_encoding_stream_new_with_constructor(
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Text,
+                name,
                 func_value,
-                CLASS_ID_TEXT_ENCODER_STREAM,
-            ));
+                args,
+            ) {
+                return Some(value);
+            }
         }
-        #[cfg(feature = "global-text")]
         BuiltinConstructorIdentity::TextDecoderStream => {
-            return Some(text_encoding_stream_new_with_constructor(
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Text,
+                name,
                 func_value,
-                CLASS_ID_TEXT_DECODER_STREAM,
-            ));
+                args,
+            ) {
+                return Some(value);
+            }
         }
         BuiltinConstructorIdentity::CompressionStream => {
             let format = args
@@ -435,34 +414,35 @@ pub(super) unsafe fn construct(
                 .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
             return Some(crate::messaging::js_broadcast_channel_new(name));
         }
-        #[cfg(feature = "global-url")]
         BuiltinConstructorIdentity::URL => {
-            let input = args
-                .first()
-                .copied()
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            let input_ptr = crate::url::js_url_coerce_string(input);
-            let url = if let Some(base) = args.get(1).copied() {
-                let base_ptr = crate::url::js_url_coerce_string(base);
-                crate::url::js_url_new_with_base(input_ptr, base_ptr)
-            } else {
-                crate::url::js_url_new(input_ptr)
-            };
-            return Some(crate::value::js_nanbox_pointer(url as i64));
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Url,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
-        #[cfg(feature = "global-url")]
         BuiltinConstructorIdentity::URLSearchParams => {
-            let params = if let Some(init) = args.first().copied() {
-                crate::url::js_url_search_params_new_any(init)
-            } else {
-                crate::url::js_url_search_params_new_empty()
-            };
-            return Some(crate::value::js_nanbox_pointer(params as i64));
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Url,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
-        #[cfg(feature = "global-text")]
         BuiltinConstructorIdentity::TextEncoder => {
-            let encoder = crate::text::js_text_encoder_new();
-            return Some(crate::value::js_nanbox_pointer(encoder));
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Text,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
         // `new P(executor)` where `P` holds the global Promise constructor
         // VALUE (`const P = Promise;` / a polyfill alias). Without this arm
@@ -486,20 +466,15 @@ pub(super) unsafe fn construct(
             let promise = crate::promise::js_promise_new_with_executor(exec_ptr);
             return Some(crate::value::js_nanbox_pointer(promise as i64));
         }
-        #[cfg(feature = "global-text")]
         BuiltinConstructorIdentity::TextDecoder => {
-            let label = args
-                .first()
-                .copied()
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            let options = args
-                .get(1)
-                .copied()
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            let fatal = text_decoder_bool_option(options, "fatal");
-            let ignore_bom = text_decoder_bool_option(options, "ignoreBOM");
-            let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
-            return Some(crate::value::js_nanbox_pointer(decoder));
+            if let Some(value) = crate::object::global_this::web_hooks::construct(
+                crate::object::global_this::web_hooks::WebGroup::Text,
+                name,
+                func_value,
+                args,
+            ) {
+                return Some(value);
+            }
         }
         // `new $ArrayBuffer(n)` / `new $DataView(buf, off?, len?)` where the
         // constructor was obtained as a VALUE (e.g. the bundle reads
@@ -532,5 +507,179 @@ pub(super) unsafe fn construct(
         _ => {}
     }
 
+    None
+}
+
+/// The `global-webcrypto` intrinsic factories, installed by `web_hooks`.
+pub(in crate::object) unsafe fn web_webcrypto_construct(
+    name: BuiltinConstructorIdentity,
+    _func_value: f64,
+    _args: &[f64],
+) -> Option<f64> {
+    match name {
+        BuiltinConstructorIdentity::Crypto
+        | BuiltinConstructorIdentity::CryptoKey
+        | BuiltinConstructorIdentity::SubtleCrypto => {
+            return Some(crate::object::js_webcrypto_illegal_constructor());
+        }
+        _ => {}
+    }
+    None
+}
+
+/// The `global-webfetch` intrinsic factories, installed by `web_hooks`.
+pub(in crate::object) unsafe fn web_webfetch_construct(
+    name: BuiltinConstructorIdentity,
+    _func_value: f64,
+    args: &[f64],
+) -> Option<f64> {
+    match name {
+        BuiltinConstructorIdentity::Blob => {
+            let parts = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            let options = args
+                .get(1)
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            return Some(crate::object::global_this_blob_thunk(
+                std::ptr::null(),
+                crate::closure::JsThis::UNDEFINED,
+                parts,
+                options,
+            ));
+        }
+        BuiltinConstructorIdentity::File => {
+            let parts = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            let name = args
+                .get(1)
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            let options = args
+                .get(2)
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            return Some(crate::object::global_this_file_thunk(
+                std::ptr::null(),
+                crate::closure::JsThis::UNDEFINED,
+                parts,
+                name,
+                options,
+            ));
+        }
+        BuiltinConstructorIdentity::Request => {
+            let input = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            let init = args
+                .get(1)
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            return Some(crate::object::global_this_request_thunk(
+                std::ptr::null(),
+                crate::closure::JsThis::UNDEFINED,
+                input,
+                init,
+            ));
+        }
+        BuiltinConstructorIdentity::Response => {
+            let body = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            let init = args
+                .get(1)
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            return Some(crate::object::global_this_response_thunk(
+                std::ptr::null(),
+                crate::closure::JsThis::UNDEFINED,
+                body,
+                init,
+            ));
+        }
+        _ => {}
+    }
+    None
+}
+
+/// The `global-text` intrinsic factories, installed by `web_hooks`.
+pub(in crate::object) unsafe fn web_text_construct(
+    name: BuiltinConstructorIdentity,
+    func_value: f64,
+    args: &[f64],
+) -> Option<f64> {
+    match name {
+        BuiltinConstructorIdentity::TextEncoderStream => {
+            return Some(text_encoding_stream_new_with_constructor(
+                func_value,
+                CLASS_ID_TEXT_ENCODER_STREAM,
+            ));
+        }
+        BuiltinConstructorIdentity::TextDecoderStream => {
+            return Some(text_encoding_stream_new_with_constructor(
+                func_value,
+                CLASS_ID_TEXT_DECODER_STREAM,
+            ));
+        }
+        BuiltinConstructorIdentity::TextEncoder => {
+            let encoder = crate::text::js_text_encoder_new();
+            return Some(crate::value::js_nanbox_pointer(encoder));
+        }
+        BuiltinConstructorIdentity::TextDecoder => {
+            let label = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            let options = args
+                .get(1)
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            let fatal = text_decoder_bool_option(options, "fatal");
+            let ignore_bom = text_decoder_bool_option(options, "ignoreBOM");
+            let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
+            return Some(crate::value::js_nanbox_pointer(decoder));
+        }
+        _ => {}
+    }
+    None
+}
+
+/// The `global-url` intrinsic factories, installed by `web_hooks`.
+pub(in crate::object) unsafe fn web_url_construct(
+    name: BuiltinConstructorIdentity,
+    _func_value: f64,
+    args: &[f64],
+) -> Option<f64> {
+    match name {
+        BuiltinConstructorIdentity::URL => {
+            let input = args
+                .first()
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            let input_ptr = crate::url::js_url_coerce_string(input);
+            let url = if let Some(base) = args.get(1).copied() {
+                let base_ptr = crate::url::js_url_coerce_string(base);
+                crate::url::js_url_new_with_base(input_ptr, base_ptr)
+            } else {
+                crate::url::js_url_new(input_ptr)
+            };
+            return Some(crate::value::js_nanbox_pointer(url as i64));
+        }
+        BuiltinConstructorIdentity::URLSearchParams => {
+            let params = if let Some(init) = args.first().copied() {
+                crate::url::js_url_search_params_new_any(init)
+            } else {
+                crate::url::js_url_search_params_new_empty()
+            };
+            return Some(crate::value::js_nanbox_pointer(params as i64));
+        }
+        _ => {}
+    }
     None
 }

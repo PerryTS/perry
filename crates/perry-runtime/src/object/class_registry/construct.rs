@@ -44,6 +44,9 @@ pub(crate) use compiled_function::{
     forget_birth_record_of_class, ordinary_compiled_function_has_instance, OrdinaryInstanceof,
 };
 mod builtin;
+pub(in crate::object) use builtin::{
+    web_text_construct, web_url_construct, web_webcrypto_construct, web_webfetch_construct,
+};
 mod collections;
 mod native_receiver;
 mod rooted_arguments;

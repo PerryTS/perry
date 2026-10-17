@@ -1474,13 +1474,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"globalAgent",
         ]),
         // #6468: the http2 namespace + `http2.constants` key lists live in
-        // `crate::node_http2_constants`, gated behind `mod-http2-constants`.
+        // `crate::node_http2_constants`, installed by `mod-http2-constants`.
         // These keys are only enumerated for an existing http2 namespace object,
-        // which only exists after a `node:http2` import turns the gate on.
-        #[cfg(feature = "mod-http2-constants")]
-        "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
-        #[cfg(feature = "mod-http2-constants")]
-        "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
+        // which only exists after a `node:http2` import installs the tables.
+        "http2" | "http2.constants" => crate::module_hooks::http2_keys(module_name),
         // #3906: native-module default/namespace objects previously enumerated
         // only the internal `__module__` sentinel. List each module's supported
         // export surface (the same set the api-manifest / docs / DTS expose and

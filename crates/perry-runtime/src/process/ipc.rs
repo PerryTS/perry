@@ -5,8 +5,6 @@
 //! parent side and speaks either newline-delimited JSON or Node's advanced
 //! `[u32 BE length][V8 payload]` frames.
 
-#![cfg_attr(not(feature = "proc-ipc"), allow(dead_code))]
-
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
     ClosureHeader,
@@ -311,18 +309,25 @@ fn ipc_is_connected() -> bool {
     state.available && state.connected
 }
 
-/// IPC-backed `process` properties. Behind `proc-ipc` (default-on, compiler
-/// detected): with the feature off the channel can never be used by this
-/// program, so returning `None` keeps the always-live process-namespace
-/// lookup from statically pinning the IPC send path and, through it, the JSON
-/// serializer.
-#[cfg(not(feature = "proc-ipc"))]
-pub(crate) fn process_ipc_property(_name: &str) -> Option<f64> {
-    None
+/// IPC-backed `process` properties, through a slot the `proc-ipc` install
+/// fills (the compiler installs it on any `process.send` / `disconnect` /
+/// `connected` / `channel` token). With no install the channel can never be
+/// used by this program, so returning `None` keeps the always-live
+/// process-namespace lookup from statically pinning the IPC send path and,
+/// through it, the JSON serializer.
+static IPC_PROPERTY: crate::feature_hooks::Hook<fn(&str) -> Option<f64>> =
+    crate::feature_hooks::Hook::empty();
+
+pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
+    IPC_PROPERTY.get().and_then(|f| f(name))
 }
 
-#[cfg(feature = "proc-ipc")]
-pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
+/// The `proc-ipc` install.
+pub(crate) fn install() {
+    IPC_PROPERTY.set(process_ipc_property_impl);
+}
+
+fn process_ipc_property_impl(name: &str) -> Option<f64> {
     match name {
         "send" | "disconnect" | "connected" | "channel" => {}
         _ => return None,

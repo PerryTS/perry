@@ -46,7 +46,6 @@ impl<'a> Wtf8Str<'a> {
     /// Only the NFC re-borrow in `locale_compare_canonical` needs this in a
     /// product build, and that is behind `string-normalize`; without the
     /// feature it would be dead code, which `-D warnings` rejects.
-    #[cfg(any(test, feature = "string-normalize"))]
     #[inline]
     pub(crate) fn from_str(s: &'a str) -> Self {
         Wtf8Str {
@@ -60,7 +59,6 @@ impl<'a> Wtf8Str<'a> {
     /// Used for the intermediate buffers the run-splitting transforms produce
     /// — which, like [`Wtf8Str::from_str`], only exist under
     /// `string-normalize` outside of tests.
-    #[cfg(any(test, feature = "string-normalize"))]
     #[inline]
     pub(crate) fn from_wtf8_bytes(bytes: &'a [u8]) -> Self {
         Wtf8Str {
@@ -200,24 +198,7 @@ impl NormalizeForm {
     }
 }
 
-#[cfg(feature = "string-normalize")]
-fn normalize_run(run: &str, form: NormalizeForm) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    match form {
-        NormalizeForm::Nfc => run.nfc().collect(),
-        NormalizeForm::Nfd => run.nfd().collect(),
-        NormalizeForm::Nfkc => run.nfkc().collect(),
-        NormalizeForm::Nfkd => run.nfkd().collect(),
-    }
-}
-
-/// Normalize engine gated off: the four valid forms pass the text through
-/// unchanged (no Unicode decomposition tables linked). Form *validity* is
-/// still enforced by the caller, so a bad form throws either way.
-#[cfg(not(feature = "string-normalize"))]
-fn normalize_run(run: &str, _form: NormalizeForm) -> String {
-    run.to_string()
-}
+use super::normalize_hooked::normalize_run;
 
 /// Unicode-normalize a payload, preserving lone surrogates verbatim.
 pub(crate) fn normalize(subject: Wtf8Str<'_>, form: NormalizeForm) -> Vec<u8> {
@@ -364,7 +345,6 @@ mod tests {
     /// `node --experimental-strip-types`. Perry matched it before #10692 only
     /// by the accident of `unicode-normalization` tolerating an out-of-range
     /// `char`; this pins it as a property of the implementation instead.
-    #[cfg(feature = "string-normalize")]
     #[test]
     fn wtf8_normalize_matches_the_node_oracle() {
         use NormalizeForm::*;
@@ -463,7 +443,6 @@ mod tests {
     /// The run-splitting path must not change well-formed text: for any input
     /// without surrogates it has to agree with `unicode-normalization` applied
     /// to the whole string at once.
-    #[cfg(feature = "string-normalize")]
     #[test]
     fn run_splitting_agrees_with_whole_string_normalization() {
         use unicode_normalization::UnicodeNormalization;

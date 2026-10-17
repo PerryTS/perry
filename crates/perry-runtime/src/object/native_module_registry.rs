@@ -1015,7 +1015,6 @@ mod tests {
     /// the bucket slot, else another test's arming lingers, and the `cfg(test)`
     /// lazy install-all (RAII-suppressed), else the `nm_attach_lookup` inside
     /// the runner self-heals the registry and the assertion cannot fail.
-    #[cfg(feature = "mod-node-test")]
     #[test]
     fn node_test_run_arms_the_stream_attach_bucket_itself() {
         struct LazyInstallGuard;

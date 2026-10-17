@@ -6871,12 +6871,8 @@ pub fn run_with_parse_cache(
         let mut undefined_syms: HashSet<String> = HashSet::new();
         let mut defined_syms: HashSet<String> = HashSet::new();
         let mut emitted_ext_syms: BTreeSet<String> = BTreeSet::new();
-        // Prefer the auto-built runtime so the symbol-stub scan and the
-        // final link see the same artifact (panic mode + feature set).
-        let runtime_lib_path = optimized_libs
-            .runtime
-            .clone()
-            .or_else(|| find_runtime_library(target.as_deref()).ok());
+        // The symbol-stub scan and the final link see the same artifact.
+        let runtime_lib_path = find_runtime_library(target.as_deref()).ok();
         let stdlib_lib_path = stdlib_lib_resolved.clone();
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
         let target_is_windows = is_windows_target(target.as_deref());
@@ -7429,10 +7425,7 @@ pub fn run_with_parse_cache(
     // emits `perry_module_init` instead of `main` (see is_dylib branch in
     // codegen/entry.rs, which now also covers `staticlib`).
     if is_staticlib {
-        let runtime_lib_for_manifest = optimized_libs
-            .runtime
-            .clone()
-            .or_else(|| find_runtime_library(target.as_deref()).ok());
+        let runtime_lib_for_manifest = find_runtime_library(target.as_deref()).ok();
         if let Some(runtime) = &runtime_lib_for_manifest {
             ensure_runtime_library_compatible(runtime)?;
         }
@@ -7806,8 +7799,6 @@ pub fn run_with_parse_cache(
     };
     let runtime_lib = if let Some(ref libs) = geisterhand_libs {
         libs.runtime.clone()
-    } else if let Some(core) = optimized_libs.runtime.clone() {
-        core
     } else {
         find_runtime_library(target.as_deref())?
     };

@@ -901,13 +901,12 @@ pub(crate) unsafe fn get_native_module_constant(
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
             // #6468: `sensitiveHeaders` / `http2.constants` are the only http2
-            // props backed by `crate::node_http2_constants`, gated behind
+            // props backed by `crate::node_http2_constants`, installed by
             // `mod-http2-constants`. This whole `"http2"` arm is only reached
             // through the http2 namespace object, which materializes on a
-            // `node:http2` import — the same signal that enables the gate — so
-            // the `None` fallback when the gate is off is never observed.
-            #[cfg(feature = "mod-http2-constants")]
-            "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
+            // `node:http2` import — the same signal that installs the tables — so
+            // the `None` fallback of an empty slot is never observed.
+            "sensitiveHeaders" => crate::module_hooks::http2_sensitive_headers(),
             // `Http2ServerRequest` / `Http2ServerResponse` imported as VALUES are
             // used by libraries purely for `req instanceof Http2ServerRequest`
             // brand checks (e.g. @hono/node-server distinguishing HTTP/2 from
@@ -928,8 +927,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" => Some(native_namespace_or_create("http2", namespace_obj)),
             _ => None,
         },
-        #[cfg(feature = "mod-http2-constants")]
-        "http2.constants" => crate::node_http2_constants::constant(property),
+        "http2.constants" => crate::module_hooks::http2_constant(property),
         // Histograms returned by perf_hooks.monitorEventLoopDelay /
         // .createHistogram. Every stat accessor (`count`/`min`/`max`/`mean`/
         // `stddev`/`exceeds`, their BigInt twins, and the `percentiles` Map)

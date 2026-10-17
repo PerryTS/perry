@@ -133,7 +133,6 @@ fn the_bytes_the_old_borrow_accepted_are_not_valid_utf8() {
 }
 
 /// The oracle table. Node v26.5.1, all four forms, twelve inputs.
-#[cfg(feature = "string-normalize")]
 #[test]
 fn normalize_matches_node_on_lone_surrogate_payloads() {
     // (input, NFC, NFD, NFKC, NFKD)
@@ -288,7 +287,6 @@ fn locale_compare_matches_node_on_lone_surrogate_payloads() {
 /// Canonical equivalence is a mandatory part of the `localeCompare` contract,
 /// and it has to keep holding when a lone surrogate is in the string. Node
 /// answers 0 for both of these.
-#[cfg(feature = "string-normalize")]
 #[test]
 fn canonical_equivalence_survives_a_lone_surrogate() {
     for (a, b) in [

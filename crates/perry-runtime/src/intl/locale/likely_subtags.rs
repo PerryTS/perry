@@ -8,8 +8,16 @@
 //! `maximize`/`minimize` total and side-effect-free rather than wrong.
 
 use super::ParsedLocale;
+use crate::feature_hooks::Hook;
 
-#[cfg(feature = "intl-locale")]
+/// The ICU4X likely-subtags expander, filled by the `intl-locale` install; with
+/// no install the curated table below answers.
+static TRANSFORM: Hook<fn(&mut ParsedLocale, bool)> = Hook::empty();
+
+pub(in crate::intl) fn install() {
+    TRANSFORM.set(transform_with_icu);
+}
+
 fn transform_with_icu(p: &mut ParsedLocale, maximize: bool) {
     let Ok(mut locale) = super::full_string(p).parse::<icu_locale::Locale>() else {
         return;
@@ -26,7 +34,6 @@ fn transform_with_icu(p: &mut ParsedLocale, maximize: bool) {
 }
 
 /// `language -> (script, region)` — the maximal expansion of a bare language.
-#[cfg(not(feature = "intl-locale"))]
 const LANG: &[(&str, &str, &str)] = &[
     ("en", "Latn", "US"),
     ("es", "Latn", "ES"),
@@ -114,7 +121,6 @@ const LANG: &[(&str, &str, &str)] = &[
 
 /// `(language, region) -> script` overrides where the region disambiguates the
 /// script (e.g. `zh-TW` is `Hant`, not the bare-`zh` default `Hans`).
-#[cfg(not(feature = "intl-locale"))]
 const LANG_REGION: &[(&str, &str, &str)] = &[
     ("zh", "TW", "Hant"),
     ("zh", "HK", "Hant"),
@@ -127,7 +133,6 @@ const LANG_REGION: &[(&str, &str, &str)] = &[
 
 /// `script -> language` — the most likely language for a script, used to fill a
 /// `und`-language tag during maximization.
-#[cfg(not(feature = "intl-locale"))]
 const SCRIPT_LANG: &[(&str, &str)] = &[
     ("Latn", "en"),
     ("Cyrl", "ru"),
@@ -147,14 +152,12 @@ const SCRIPT_LANG: &[(&str, &str)] = &[
     ("Beng", "bn"),
 ];
 
-#[cfg(not(feature = "intl-locale"))]
 fn lang_defaults(lang: &str) -> Option<(&'static str, &'static str)> {
     LANG.iter()
         .find(|(l, _, _)| *l == lang)
         .map(|(_, s, r)| (*s, *r))
 }
 
-#[cfg(not(feature = "intl-locale"))]
 fn script_for_region(lang: &str, region: &str) -> Option<&'static str> {
     LANG_REGION
         .iter()
@@ -162,7 +165,6 @@ fn script_for_region(lang: &str, region: &str) -> Option<&'static str> {
         .map(|(_, _, s)| *s)
 }
 
-#[cfg(not(feature = "intl-locale"))]
 fn lang_for_script(script: &str) -> Option<&'static str> {
     SCRIPT_LANG
         .iter()
@@ -172,7 +174,6 @@ fn lang_for_script(script: &str) -> Option<&'static str> {
 
 /// Fully expand `(language, script, region)`, filling missing script/region from
 /// the table. Returns the (possibly unchanged) maximal triple.
-#[cfg(not(feature = "intl-locale"))]
 fn maximize_triple(
     language: &str,
     script: Option<String>,
@@ -212,12 +213,10 @@ fn maximize_triple(
 
 /// `Intl.Locale.prototype.maximize`: add the most likely script and region.
 pub(super) fn maximize(p: &mut ParsedLocale) {
-    #[cfg(feature = "intl-locale")]
-    {
-        transform_with_icu(p, true);
+    if let Some(transform) = TRANSFORM.get() {
+        transform(p, true);
         return;
     }
-    #[cfg(not(feature = "intl-locale"))]
     {
         let (lang, script, region) =
             maximize_triple(&p.language, p.script.clone(), p.region.clone());
@@ -231,12 +230,10 @@ pub(super) fn maximize(p: &mut ParsedLocale) {
 /// likely-subtags expansion would re-add. Chooses the shortest base subtags
 /// whose maximization round-trips to the same maximal triple.
 pub(super) fn minimize(p: &mut ParsedLocale) {
-    #[cfg(feature = "intl-locale")]
-    {
-        transform_with_icu(p, false);
+    if let Some(transform) = TRANSFORM.get() {
+        transform(p, false);
         return;
     }
-    #[cfg(not(feature = "intl-locale"))]
     {
         let max = maximize_triple(&p.language, p.script.clone(), p.region.clone());
         // Minimization operates on the fully-resolved tag, so the result language is

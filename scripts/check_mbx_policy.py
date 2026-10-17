@@ -8,7 +8,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ("dev", "perry-dev", "release", "dist", "prod", "test", "bench", "gcaudit")
 TARGETS = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
-SCRIPTS = ("build_core_runtime.sh", "build_linux_glibc_2_31.sh", "build_linux_musl.sh")
+SCRIPTS = ("build_linux_glibc_2_31.sh", "build_linux_musl.sh")
 
 
 def check(policy, scripts):

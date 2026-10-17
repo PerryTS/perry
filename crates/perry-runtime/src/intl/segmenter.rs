@@ -2,10 +2,64 @@ use super::*;
 
 use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::closure::ClosureHeader;
+use crate::feature_hooks::Hook;
 use crate::object::{js_object_alloc, ObjectHeader};
 use crate::value::js_nanbox_pointer;
-#[cfg(feature = "intl-segmenter")]
-use unicode_segmentation::UnicodeSegmentation;
+
+// The UAX #29 tables (`unicode-segmentation`, ~73 KB) are reached only through
+// these slots, which the `intl-segmenter` install fills; the compiler installs
+// it on any `Intl.Segmenter` use. An empty slot segments per code point, which
+// keeps iteration / spread working without the segmentation crate.
+static SEGMENT_BOUNDS: Hook<for<'a> fn(&str, &'a str) -> Vec<&'a str>> = Hook::empty();
+static NEXT_GRAPHEME_BOUNDARY: Hook<fn(&str, usize) -> Option<usize>> = Hook::empty();
+
+/// The segments of `input` under `granularity` (`"word"`, `"sentence"`, or the
+/// default extended grapheme clusters).
+fn segment_bounds<'a>(granularity: &str, input: &'a str) -> Vec<&'a str> {
+    match SEGMENT_BOUNDS.get() {
+        Some(f) => f(granularity, input),
+        None => input
+            .char_indices()
+            .map(|(i, c)| &input[i..i + c.len_utf8()])
+            .collect(),
+    }
+}
+
+/// The end of the grapheme cluster starting at byte `from`.
+pub(super) fn next_grapheme_boundary(text: &str, from: usize) -> Option<usize> {
+    match NEXT_GRAPHEME_BOUNDARY.get() {
+        Some(f) => f(text, from),
+        None => text[from..].chars().next().map(|c| from + c.len_utf8()),
+    }
+}
+
+fn segment_bounds_impl<'a>(granularity: &str, input: &'a str) -> Vec<&'a str> {
+    use unicode_segmentation::UnicodeSegmentation;
+    match granularity {
+        "word" => input.split_word_bounds().collect(),
+        "sentence" => input.split_sentence_bounds().collect(),
+        // "grapheme" (default): extended grapheme clusters (emoji ZWJ
+        // sequences, combining marks, regional-indicator flags).
+        _ => input.graphemes(true).collect(),
+    }
+}
+
+fn next_grapheme_boundary_impl(text: &str, from: usize) -> Option<usize> {
+    if from >= text.len() {
+        return None;
+    }
+    let mut c = unicode_segmentation::GraphemeCursor::new(from, text.len(), true);
+    match c.next_boundary(text, 0) {
+        Ok(Some(next)) if next > from => Some(next),
+        _ => None,
+    }
+}
+
+/// The `intl-segmenter` install.
+pub(crate) fn install() {
+    SEGMENT_BOUNDS.set(segment_bounds_impl);
+    NEXT_GRAPHEME_BOUNDARY.set(next_grapheme_boundary_impl);
+}
 
 const KEY_SEGMENTS_BRAND: &str = "__intlSegmentsBrand";
 const KEY_SEGMENTS_LENGTH: &str = "__intlSegmentsLength";
@@ -25,7 +79,6 @@ pub(crate) fn normalize_granularity(value: Option<String>) -> String {
 /// A segment is "word-like" when it contains at least one alphanumeric
 /// character — i.e. it is not pure whitespace/punctuation. This mirrors the
 /// `isWordLike` flag the spec attaches to word-granularity segments.
-#[cfg(feature = "intl-segmenter")]
 pub(crate) fn segment_is_word_like(segment: &str) -> bool {
     segment.chars().any(|c| c.is_alphanumeric())
 }
@@ -274,87 +327,20 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         unsafe { input_handle.with_const_ptr::<StringHeader, _>(|ptr| segmenter_input_text(ptr)) };
     let mut arr = js_array_alloc(0);
     let mut index = 0u32;
-    #[cfg(feature = "intl-segmenter")]
-    match granularity {
-        "word" => {
-            for segment in input.split_word_bounds() {
-                let end = index + utf16_len(segment);
-                let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
-                    crate::string::js_string_slice(ptr, index as i32, end as i32)
-                });
-                let record = make_segment_record(
-                    string_pointer_value(segment_ptr),
-                    index,
-                    input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
-                    Some(segment_is_word_like(segment)),
-                );
-                arr = js_array_push_f64(arr, record);
-                index = end;
-            }
-        }
-        "sentence" => {
-            for segment in input.split_sentence_bounds() {
-                let end = index + utf16_len(segment);
-                let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
-                    crate::string::js_string_slice(ptr, index as i32, end as i32)
-                });
-                let record = make_segment_record(
-                    string_pointer_value(segment_ptr),
-                    index,
-                    input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
-                    None,
-                );
-                arr = js_array_push_f64(arr, record);
-                index = end;
-            }
-        }
-        // "grapheme" (default): extended grapheme clusters (emoji ZWJ
-        // sequences, combining marks, regional-indicator flags).
-        _ => {
-            for segment in input.graphemes(true) {
-                let end = index + utf16_len(segment);
-                let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
-                    crate::string::js_string_slice(ptr, index as i32, end as i32)
-                });
-                let record = make_segment_record(
-                    string_pointer_value(segment_ptr),
-                    index,
-                    input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
-                    None,
-                );
-                arr = js_array_push_f64(arr, record);
-                index = end;
-            }
-        }
-    }
-    // Segmenter engine gated off: no UAX #29 tables. Fall back to per-code-point
-    // segmentation (one segment per `char`) for every granularity — enough to
-    // keep iteration / spread working without the segmentation crate.
-    #[cfg(not(feature = "intl-segmenter"))]
-    {
-        // Preserve the `isWordLike` field for word granularity so the record
-        // shape matches the engine-enabled path (this block is dead in practice
-        // — the compiler enables `intl-segmenter` on any `Intl.Segmenter` use).
-        let is_word = granularity == "word";
-        for segment in input.chars().map(|c| c.to_string()).collect::<Vec<_>>() {
-            let end = index + utf16_len(&segment);
-            let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
-                crate::string::js_string_slice(ptr, index as i32, end as i32)
-            });
-            let word_like = if is_word {
-                Some(segment.chars().any(|c| c.is_alphanumeric()))
-            } else {
-                None
-            };
-            let record = make_segment_record(
-                string_pointer_value(segment_ptr),
-                index,
-                input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
-                word_like,
-            );
-            arr = js_array_push_f64(arr, record);
-            index = end;
-        }
+    let is_word = granularity == "word";
+    for segment in segment_bounds(granularity, &input) {
+        let end = index + utf16_len(segment);
+        let segment_ptr = input_handle.with_const_ptr::<StringHeader, _>(|ptr| {
+            crate::string::js_string_slice(ptr, index as i32, end as i32)
+        });
+        let record = make_segment_record(
+            string_pointer_value(segment_ptr),
+            index,
+            input_handle.with_const_ptr::<StringHeader, _>(|ptr| string_pointer_value(ptr)),
+            is_word.then(|| segment_is_word_like(segment)),
+        );
+        arr = js_array_push_f64(arr, record);
+        index = end;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let segments = scope.root_raw_mut_ptr(arr as *mut ObjectHeader);

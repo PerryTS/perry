@@ -119,6 +119,7 @@ mod intern;
 mod io;
 mod iter_object;
 mod locale;
+pub(crate) mod normalize_hooked;
 mod pad;
 mod provenance;
 use provenance::{combine_string_flags, raw_string_metadata};

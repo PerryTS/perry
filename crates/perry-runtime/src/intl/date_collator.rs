@@ -1513,17 +1513,7 @@ pub(crate) fn swedish_collation_key(s: &str) -> Vec<u32> {
 /// `Collator.compare` treats canonical equivalents as 0 (canonically-equivalent
 /// -strings.js). Without `string-normalize` this is an identity passthrough, so
 /// the precomposed/decomposed pair still compares unequal (best effort).
-#[cfg(feature = "string-normalize")]
-fn collation_normalize(s: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    // NFC (composition), not NFD: it makes canonical equivalents equal while
-    // keeping precomposed `å/ä/ö` intact for the Swedish fast path below.
-    s.nfc().collect()
-}
-#[cfg(not(feature = "string-normalize"))]
-fn collation_normalize(s: &str) -> String {
-    s.to_string()
-}
+use crate::string::normalize_hooked::{base_collation_key, collation_normalize};
 
 fn locale_base_name(locale: &str) -> String {
     locale
@@ -1602,30 +1592,6 @@ pub(crate) fn resolve_collator_locale(
         effective_numeric,
         effective_case_first,
     )
-}
-
-#[cfg(feature = "string-normalize")]
-fn base_collation_key(s: &str, preserve_case: bool) -> String {
-    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
-    s.nfd()
-        .filter(|ch| !is_combining_mark(*ch))
-        .flat_map(|ch| {
-            if preserve_case {
-                ch.to_string().chars().collect::<Vec<_>>()
-            } else {
-                ch.to_lowercase().collect::<Vec<_>>()
-            }
-        })
-        .collect()
-}
-
-#[cfg(not(feature = "string-normalize"))]
-fn base_collation_key(s: &str, preserve_case: bool) -> String {
-    if preserve_case {
-        s.to_string()
-    } else {
-        s.to_lowercase()
-    }
 }
 
 fn german_phonebook_key(s: &str) -> String {

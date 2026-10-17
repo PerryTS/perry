@@ -39,9 +39,8 @@ pub(crate) unsafe fn nm_dispatch_dgram(ctx: &NmCtx, module_name: &str, method_na
         typed_kind
     );
     match (module_name, method_name) {
-        #[cfg(feature = "mod-dgram")]
         ("dgram", "createSocket") | ("dgram", "Socket") => {
-            crate::dgram::js_dgram_create_socket(pack_args())
+            crate::module_hooks::dgram_create_socket(pack_args())
         }
 
         // ── console module namespace (`node:console` / `console`) ──

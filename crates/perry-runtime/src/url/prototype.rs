@@ -2,8 +2,7 @@
 //! property lookup and reflection use these descriptors on URL.prototype.
 
 // Only reached through the `global-url` member-table install (see
-// `global_this::proto_methods`); a build without that feature links none of it.
-#![cfg_attr(not(feature = "global-url"), allow(dead_code))]
+// `global_this::web_hooks`); a program that never installs it links none of it.
 
 use super::parse::*;
 use super::url_class::*;

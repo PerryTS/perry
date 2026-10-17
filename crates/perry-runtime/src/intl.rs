@@ -6,12 +6,7 @@
 //! explicit locale/options combinations used by Perry's Node parity suite.
 
 #![cfg_attr(
-    not(any(
-        feature = "intl-namespace",
-        feature = "intl-locale",
-        feature = "intl-datetime",
-        feature = "intl-segmenter"
-    )),
+    not(any(feature = "intl-namespace", feature = "intl-datetime")),
     allow(dead_code, unused_imports)
 )]
 
@@ -27,6 +22,8 @@ use crate::StringHeader;
 
 mod ctor_guard;
 pub(crate) mod hooked;
+static CANONICALIZE_LANGUAGE_TAG: crate::feature_hooks::Hook<fn(&str) -> Option<String>> =
+    crate::feature_hooks::Hook::empty();
 use ctor_guard::{constructor_target_prototype, require_new_target};
 mod display_names;
 mod duration_format;
@@ -464,7 +461,6 @@ fn throw_invalid_language_tag(tag: &str) -> ! {
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
-#[allow(dead_code)] // used only in the #[cfg(not(feature = "intl-locale"))] fallback branch
 pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return None;
@@ -506,31 +502,41 @@ pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
 /// canonicalization. Returns `None` when the tag is not a structurally valid
 /// `unicode_locale_id` (the caller raises `RangeError`).
 ///
-/// With the `intl-locale` feature this delegates to ICU4X's structural parser
+/// With the `intl-locale` install this delegates to ICU4X's structural parser
 /// and compiled CLDR canonicalizer, which cover case/variant/extension
 /// normalization as well as language, script, region, variant, and transformed
 /// extension aliases. Perry's small post-pass supplies the handful of Unicode
 /// extension type aliases that ICU4X does not currently include. The fallback
 /// path uses the lighter hand-rolled `canonical_locale`.
 fn canonicalize_language_tag(tag: &str) -> Option<String> {
-    #[cfg(feature = "intl-locale")]
-    {
-        let mut locale = match tag.parse::<icu_locale::Locale>() {
-            Ok(locale) => locale,
-            Err(_)
-                if (5..=8).contains(&tag.len()) && tag.bytes().all(|b| b.is_ascii_alphabetic()) =>
-            {
-                return Some(tag.to_ascii_lowercase());
-            }
-            Err(_) => return None,
-        };
-        icu_locale::LocaleCanonicalizer::new_extended().canonicalize(&mut locale);
-        Some(canonicalize_unicode_extension_types(&locale.to_string()))
+    match CANONICALIZE_LANGUAGE_TAG.get() {
+        Some(canonicalize) => canonicalize(tag),
+        None => canonical_locale(tag).map(|c| canonicalize_unicode_extension_types(&c)),
     }
-    #[cfg(not(feature = "intl-locale"))]
-    {
-        canonical_locale(tag).map(|c| canonicalize_unicode_extension_types(&c))
-    }
+}
+
+/// Whether the `intl-locale` install ran: the ICU4X canonicalizer is the
+/// authority for `Intl.Locale` tags.
+fn icu_locale_installed() -> bool {
+    CANONICALIZE_LANGUAGE_TAG.get().is_some()
+}
+
+fn canonicalize_language_tag_icu(tag: &str) -> Option<String> {
+    let mut locale = match tag.parse::<icu_locale::Locale>() {
+        Ok(locale) => locale,
+        Err(_) if (5..=8).contains(&tag.len()) && tag.bytes().all(|b| b.is_ascii_alphabetic()) => {
+            return Some(tag.to_ascii_lowercase());
+        }
+        Err(_) => return None,
+    };
+    icu_locale::LocaleCanonicalizer::new_extended().canonicalize(&mut locale);
+    Some(canonicalize_unicode_extension_types(&locale.to_string()))
+}
+
+/// The `intl-locale` install.
+pub(crate) fn install_intl_locale_feature() {
+    CANONICALIZE_LANGUAGE_TAG.set(canonicalize_language_tag_icu);
+    locale::install_likely_subtags();
 }
 
 /// CanonicalizeLocaleList's `HasProperty(O, ToString(index))`.
@@ -1744,6 +1750,7 @@ fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
 pub use hooked::install_intl_namespace;
 #[cfg(feature = "intl-namespace")]
 pub(crate) use hooked::install_intl_namespace_feature;
+pub(crate) use segmenter::install as install_intl_segmenter_feature;
 
 /// The `Intl.*` members `install_intl_namespace` adds once the
 /// `intl-namespace` install has filled its slot.

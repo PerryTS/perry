@@ -29,9 +29,6 @@ cd "$ROOT"
 
 # Default features WASI cannot build yet — each one must name its blocker.
 WASI_EXCLUDED=(
-  # dgram is built on turnloop, which is not compiled for wasm32; WASI sockets
-  # arrive with the WASI event-loop backend (phase 2b, #11377).
-  mod-dgram
   # mimalloc's dependency is 64-bit-only (`cfg(target_pointer_width = "64")`),
   # so on wasm32 this feature enables nothing — excluded to say so explicitly.
   alloc-mimalloc

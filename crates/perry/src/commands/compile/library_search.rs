@@ -1254,15 +1254,6 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
     })
 }
 
-/// Optional feature-trimmed runtime shipped for source-free Unix installs.
-/// The existing search also resolves `.a.zst` archives from npm packages.
-pub(super) fn find_runtime_core_library(target: Option<&str>) -> Option<PathBuf> {
-    if is_windows_target(target) {
-        return None;
-    }
-    find_library("libperry_runtime_core.a", target)
-}
-
 /// Find the stdlib library for linking (optional - only needed for native modules)
 pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
     let lib_name = if is_windows_target(target) {

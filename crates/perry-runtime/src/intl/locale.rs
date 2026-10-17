@@ -725,10 +725,12 @@ pub(super) extern "C" fn locale_constructor_thunk(
         throw_type_error("Intl.Locale: tag must be a String or an Intl.Locale instance");
     };
 
-    #[cfg(feature = "intl-locale")]
-    let canonical_tag = super::canonicalize_language_tag(&tag);
-    #[cfg(not(feature = "intl-locale"))]
-    let canonical_tag = Some(tag.clone());
+    let icu = super::icu_locale_installed();
+    let canonical_tag = if icu {
+        super::canonicalize_language_tag(&tag)
+    } else {
+        Some(tag.clone())
+    };
     let Some(mut parsed) = canonical_tag.as_deref().and_then(parse_language_tag) else {
         throw_range_error(&format!("Incorrect locale information provided: {tag}"));
     };
@@ -745,8 +747,7 @@ pub(super) extern "C" fn locale_constructor_thunk(
     // ApplyOptionsToTag canonicalizes both before and after the overrides. The
     // second pass is observable for numeric region aliases (`554` -> `NZ`) and
     // for replacements whose result depends on an overridden base subtag.
-    #[cfg(feature = "intl-locale")]
-    {
+    if icu {
         let adjusted = full_string(&parsed);
         let canonical = super::canonicalize_language_tag(&adjusted)
             .unwrap_or_else(|| throw_range_error("Incorrect locale information provided"));
@@ -1201,3 +1202,4 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
 
 mod info;
 mod likely_subtags;
+pub(in crate::intl) use likely_subtags::install as install_likely_subtags;

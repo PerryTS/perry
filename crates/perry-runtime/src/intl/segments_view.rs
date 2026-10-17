@@ -232,22 +232,7 @@ fn with_input<R>(fields: CursorFields, f: impl FnOnce(&str) -> R) -> Option<R> {
     Some(f(text))
 }
 
-#[cfg(feature = "intl-segmenter")]
-fn next_boundary(text: &str, from: usize) -> Option<usize> {
-    if from >= text.len() {
-        return None;
-    }
-    let mut c = unicode_segmentation::GraphemeCursor::new(from, text.len(), true);
-    match c.next_boundary(text, 0) {
-        Ok(Some(next)) if next > from => Some(next),
-        _ => None,
-    }
-}
-
-#[cfg(not(feature = "intl-segmenter"))]
-fn next_boundary(text: &str, from: usize) -> Option<usize> {
-    text[from..].chars().next().map(|c| from + c.len_utf8())
-}
+use super::segmenter::next_grapheme_boundary as next_boundary;
 
 // --- entry points -----------------------------------------------------------
 
@@ -665,7 +650,6 @@ mod view_mode_tests {
         );
         let got = walk(cursor);
 
-        #[cfg(feature = "intl-segmenter")]
         {
             use unicode_segmentation::UnicodeSegmentation;
             let mut want = Vec::new();

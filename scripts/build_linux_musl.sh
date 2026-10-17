@@ -118,8 +118,6 @@ env CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
 cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
    "$target_dir/$target/prod/libperry_runtime_abort.a"
 
-bash scripts/build_core_runtime.sh "$target"
-
 # GC effects sidecars (<archive>.gc-effects) over the final runtime bytes.
 bash scripts/gc_call_effects/sidecars.sh "$target_dir/$target/prod"
 

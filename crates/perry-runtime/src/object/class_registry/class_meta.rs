@@ -322,7 +322,6 @@ pub(crate) fn identify_global_builtin_constructor(value: f64) -> Option<&'static
     super::super::global_this_tables::constructor_identity(value).map(|id| id.name())
 }
 
-#[cfg(feature = "global-text")]
 pub(crate) fn text_decoder_bool_option(options: f64, name: &str) -> f64 {
     let jsval = crate::value::JSValue::from_bits(options.to_bits());
     if !jsval.is_pointer() {

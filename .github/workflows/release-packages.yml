@@ -816,10 +816,6 @@ jobs:
           cp "target-abort/${{ matrix.target }}/prod/libperry_runtime.a" \
              "target/${{ matrix.target }}/prod/libperry_runtime_abort.a"
 
-      - name: Build core runtime profile (Unix)
-        if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: bash scripts/build_core_runtime.sh '${{ matrix.target }}'
-
       - name: Build native ext libraries (Unix)
         # #2532 — the perry-ext-* wrapper crates ship the host functions for
         # node:http (server), ws, net, zlib, fastify, the db drivers, etc.
@@ -888,8 +884,8 @@ jobs:
           src="target-glibc231/$TARGET/prod"
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a \
-              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects libperry_runtime_core.a.gc-effects; do
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a \
+              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -935,8 +931,8 @@ jobs:
           src="target-musl/$TARGET/prod"
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a \
-              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects libperry_runtime_core.a.gc-effects \
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a \
+              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects \
               libperry_wasm_host.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
@@ -1057,7 +1053,7 @@ jobs:
       # A stale cached archive fails the release here instead of breaking
       # consumer links with `undefined symbol: _perry_macos_bundle_chdir`.
       # GC effects sidecars (design 4.3): one `<archive>.gc-effects` beside
-      # every runtime archive (default, _abort, _core, iOS, Android, ...),
+      # every runtime archive (default, _abort, iOS, Android, ...),
       # computed over the exact bytes staged below and after the last cargo
       # call. The rules the analyzer enforces make this the release gate for
       # the effects tables. The glibc 2.31 and musl legs run the same script
@@ -1100,7 +1096,7 @@ jobs:
           mkdir -p staging
           cp target/${{ matrix.target }}/prod/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
-          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
+          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/prod/$lib" ]; then
               cp "target/${{ matrix.target }}/prod/$lib" staging/
               # The GC effects sidecar travels beside its runtime archive.

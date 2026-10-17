@@ -28,6 +28,7 @@ use crate::closure::{
     js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader, JsFunctionInfo,
 };
 use crate::codegen_abi::{JsBody1, JsBody2, JsBody3};
+use crate::feature_hooks::Hook;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
     PropertyAttrs,
@@ -92,7 +93,6 @@ pub(crate) mod consumers;
 mod fs_promises;
 mod hono_jsx;
 mod stream_promises;
-#[cfg(feature = "mod-node-test")]
 pub(crate) mod test;
 mod timers;
 mod trace_events;
@@ -132,7 +132,6 @@ use fs_promises::{
     thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
 };
 use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
-#[cfg(feature = "mod-node-test")]
 use test::{
     thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
     thunk_reporter_tap, thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before,
@@ -731,7 +730,6 @@ static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
     ],
 };
 
-#[cfg(feature = "mod-node-test")]
 static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
     key: "test",
     exports: &[
@@ -812,7 +810,6 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
     ],
 };
 
-#[cfg(feature = "mod-node-test")]
 static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
     key: "test_reporters",
     exports: &[
@@ -846,9 +843,6 @@ static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
 use std::sync::atomic::AtomicPtr;
 #[derive(Copy, Clone)]
 #[repr(usize)]
-// `Test`/`TestReporters` keep their discriminants (they size and index
-// `SUBMOD_REGISTRY`) but are only constructed under `mod-node-test`.
-#[cfg_attr(not(feature = "mod-node-test"), allow(dead_code))]
 enum SubmodBucket {
     Vm,
     Timers,
@@ -884,9 +878,7 @@ fn submod_index(key: &str) -> Option<SubmodBucket> {
         "sys" => Some(SubmodBucket::Sys),
         "diagnostics_channel" => Some(SubmodBucket::DiagnosticsChannel),
         "trace_events" => Some(SubmodBucket::TraceEvents),
-        #[cfg(feature = "mod-node-test")]
         "test" => Some(SubmodBucket::Test),
-        #[cfg(feature = "mod-node-test")]
         "test_reporters" => Some(SubmodBucket::TestReporters),
         _ => None,
     }
@@ -1036,7 +1028,6 @@ pub extern "C" fn js_node_submod_install_trace_events() {
         Ordering::Relaxed,
     );
 }
-#[cfg(feature = "mod-node-test")]
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_test() {
     SUBMOD_REGISTRY[SubmodBucket::Test as usize].store(
@@ -1044,7 +1035,6 @@ pub extern "C" fn js_node_submod_install_test() {
         Ordering::Relaxed,
     );
 }
-#[cfg(feature = "mod-node-test")]
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_test_reporters() {
     SUBMOD_REGISTRY[SubmodBucket::TestReporters as usize].store(
@@ -1067,10 +1057,9 @@ pub extern "C" fn js_node_submod_install_all() {
     js_node_submod_install_sys();
     js_node_submod_install_diagnostics_channel();
     js_node_submod_install_trace_events();
-    #[cfg(feature = "mod-node-test")]
-    {
-        js_node_submod_install_test();
-        js_node_submod_install_test_reporters();
+    // `node:test` only when the program installed it (`mod-node-test`).
+    if let Some(install) = TEST_INSTALL_BUCKETS.get() {
+        install();
     }
 }
 static SUBMOD_INSTALL_ALL_HOOK: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
@@ -1244,8 +1233,7 @@ fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
                 name.len(),
             ))
         }
-        #[cfg(feature = "mod-node-test")]
-        "test" => test::test_special_export_value(name),
+        "test" => TEST_SPECIAL_EXPORT.get().and_then(|f| f(name)),
         _ => None,
     };
     if value.is_some() {
@@ -1255,10 +1243,10 @@ fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
 }
 
 /// `node:test` wraps a handful of its exports so `test.skip`/`test.only`-style
-/// chaining works. Behind `mod-node-test` so a program that never imports
-/// `node:test` links none of the runner (see the feature's comment in
-/// `Cargo.toml` for why that also unpins the JSON serializer).
-#[cfg(feature = "mod-node-test")]
+/// chaining works. The runner is reached only through the slots below, which
+/// the `mod-node-test` install fills, so a program that never imports
+/// `node:test` links none of it (see `crate::feature_hooks` for why that also
+/// unpins the JSON serializer).
 fn maybe_decorate_test_export(
     submod: &'static SubmoduleSpec,
     export: &'static ExportSpec,
@@ -1271,7 +1259,8 @@ fn maybe_decorate_test_export(
             "default" | "test" | "suite" | "describe" | "it"
         )
     {
-        Some(test::decorate_test_export(
+        let decorate = TEST_DECORATE.get()?;
+        Some(decorate(
             allocated,
             key_name == "test",
             matches!(export.name, "suite" | "describe"),
@@ -1281,15 +1270,33 @@ fn maybe_decorate_test_export(
     }
 }
 
-#[cfg(not(feature = "mod-node-test"))]
-fn maybe_decorate_test_export(
-    _submod: &'static SubmoduleSpec,
-    _export: &'static ExportSpec,
-    _key_name: &'static str,
-    _allocated: *mut ClosureHeader,
-) -> Option<*mut ClosureHeader> {
-    None
+static TEST_INSTALL_BUCKETS: Hook<fn()> = Hook::empty();
+static TEST_SPECIAL_EXPORT: Hook<fn(&str) -> Option<f64>> = Hook::empty();
+static TEST_DECORATE: Hook<fn(*mut ClosureHeader, bool, bool) -> *mut ClosureHeader> =
+    Hook::empty();
+static TEST_SCAN_ROOTS: Hook<for<'a, 'b> fn(&'a mut crate::gc::RuntimeRootVisitor<'b>)> =
+    Hook::empty();
+
+fn install_test_buckets() {
+    js_node_submod_install_test();
+    js_node_submod_install_test_reporters();
 }
+
+/// The `mod-node-test` install: the `node:test` runner and its reporters.
+pub(crate) fn install_node_test() {
+    TEST_INSTALL_BUCKETS.set(install_test_buckets);
+    TEST_SPECIAL_EXPORT.set(test::test_special_export_value);
+    TEST_DECORATE.set(test::decorate_test_export);
+    TEST_SCAN_ROOTS.set(test::scan_test_module_roots_mut);
+    crate::feature_hooks::NODE_TEST_ROOT_SCANNER.set(test::runner::scan_node_test_runner_roots_mut);
+    crate::gc::gc_register_named_mutable_root_scanner(
+        NODE_TEST_ROOT_SCANNER_NAME,
+        test::runner::scan_node_test_runner_roots_mut,
+    );
+}
+
+pub(crate) const NODE_TEST_ROOT_SCANNER_NAME: &str =
+    "crate::node_submodules::test::runner::scan_node_test_runner_roots_mut";
 
 fn ensure_export_singleton(
     submod: &'static SubmoduleSpec,
@@ -1637,8 +1644,9 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
     });
     diagnostics_tail::scan_diagnostics_tail_roots_mut(visitor);
     trace_events::scan_trace_events_roots_mut(visitor);
-    #[cfg(feature = "mod-node-test")]
-    test::scan_test_module_roots_mut(visitor);
+    if let Some(scan) = TEST_SCAN_ROOTS.get() {
+        scan(visitor);
+    }
 }
 
 #[cfg(test)]

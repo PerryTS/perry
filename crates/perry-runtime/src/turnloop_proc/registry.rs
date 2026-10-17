@@ -18,7 +18,6 @@ use super::NodeError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Owner {
     /// A `node:dgram` socket, keyed by `dgram_reactor`'s own socket id.
-    #[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
     Dgram { socket: u64 },
     /// A process-wide OS signal subscription, keyed by signal number.
     ProcessSignal { signum: i32 },
@@ -43,12 +42,10 @@ pub(crate) enum StreamEvent {
     /// Bytes arrived on a stream.
     Data(Vec<u8>),
     /// One datagram arrived, with its source endpoint.
-    #[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
     Datagram { bytes: Vec<u8>, from: SocketAddr },
     /// The peer closed its write side.
     Eof,
     /// A queued datagram reached the OS. `user` echoes the caller's token.
-    #[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
     Wrote { user: u64, len: usize },
     /// A subscribed signal was delivered to this agent. Which signal it was is
     /// already in the [`Owner`], so the payload would only be a second copy.
@@ -60,7 +57,6 @@ pub(crate) enum StreamEvent {
     /// send token whose failure this is, and is zero for a read-side failure —
     /// which is what lets a caller tell "this datagram could not be sent" from
     /// "this socket errored", two different Node reporting shapes.
-    #[cfg_attr(not(feature = "mod-dgram"), allow(dead_code))]
     Error {
         user: u64,
         error: NodeError,
@@ -75,12 +71,7 @@ pub(crate) enum StreamEvent {
 /// may run JS, allocate, collect and submit new work.
 pub(crate) fn deliver(owner: Owner, id: u64, event: StreamEvent) {
     match owner {
-        #[cfg(feature = "mod-dgram")]
-        Owner::Dgram { socket } => crate::dgram_reactor::on_completion(socket, event),
-        #[cfg(not(feature = "mod-dgram"))]
-        Owner::Dgram { .. } => {
-            let _ = event;
-        }
+        Owner::Dgram { socket } => crate::module_hooks::dgram_on_completion(socket, event),
         #[cfg(unix)]
         Owner::ProcessSignal { signum } => crate::os::signal::on_signal_completion(signum, event),
         #[cfg(not(unix))]

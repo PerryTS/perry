@@ -145,7 +145,7 @@ pub(crate) use gc_slots::{
 };
 pub(crate) mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
-mod global_this;
+pub(crate) mod global_this;
 /// Lane 3: the (receiver shape, key) -> (holder, slot) cache that gives an
 /// INHERITED read an inline-cache hit. See the module docs for the guard and
 /// the GC contract.

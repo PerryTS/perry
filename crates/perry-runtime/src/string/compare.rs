@@ -681,37 +681,7 @@ fn locale_compare_canonical(
     if a.bytes().is_ascii() && b.bytes().is_ascii() {
         return compare(a, b);
     }
-    #[cfg(feature = "string-normalize")]
-    {
-        use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
-        // Non-ASCII text is still usually *already* NFC — precomposed letters,
-        // CJK and emoji all are; only combining marks and decomposable
-        // singletons are not. The quick check is a table lookup per scalar and
-        // allocates nothing, so only text that genuinely needs rewriting pays
-        // for the two `String`s. (#10094: this ran on every comparison, and a
-        // sort pays it O(n log n) times.)
-        if let (Some(a_str), Some(b_str)) = (a.as_str(), b.as_str()) {
-            if is_nfc_quick(a_str.chars()) == IsNormalized::Yes
-                && is_nfc_quick(b_str.chars()) == IsNormalized::Yes
-            {
-                return compare(a, b);
-            }
-            let a_nfc: String = a_str.nfc().collect();
-            let b_nfc: String = b_str.nfc().collect();
-            return compare(Wtf8Str::from_str(&a_nfc), Wtf8Str::from_str(&b_nfc));
-        }
-        // A WTF-8 payload: `is_nfc_quick` takes `char`s, so there is no quick
-        // check to take, and the run-splitting normalizer does the work
-        // instead. (#10692)
-        let a_nfc = wtf8::normalize(a, wtf8::NormalizeForm::Nfc);
-        let b_nfc = wtf8::normalize(b, wtf8::NormalizeForm::Nfc);
-        compare(
-            Wtf8Str::from_wtf8_bytes(&a_nfc),
-            Wtf8Str::from_wtf8_bytes(&b_nfc),
-        )
-    }
-    #[cfg(not(feature = "string-normalize"))]
-    compare(a, b)
+    super::normalize_hooked::canonical(a, b, compare)
 }
 
 /// One step of the streaming lowercase view that the primary collation pass
@@ -1386,7 +1356,6 @@ mod numeric_collation_tests {
         super::locale_compare_numeric(Wtf8Str::from_str(a), Wtf8Str::from_str(b))
     }
 
-    #[cfg(feature = "string-normalize")]
     fn locale_compare_canonical_default(a: &str, b: &str) -> f64 {
         super::locale_compare_canonical(
             Wtf8Str::from_str(a),
@@ -1414,7 +1383,6 @@ mod numeric_collation_tests {
         assert_eq!(locale_compare_numeric("2foo", "10foo"), -1.0);
     }
 
-    #[cfg(feature = "string-normalize")]
     #[test]
     fn locale_compare_treats_canonical_equivalents_as_equal() {
         for (a, b) in [
@@ -1962,7 +1930,6 @@ mod locale_collation_tests {
 
     /// Canonical equivalence is a mandatory part of the contract, so it has to
     /// survive the rewrite of the pass that runs after it.
-    #[cfg(feature = "string-normalize")]
     #[test]
     fn canonical_equivalents_stay_equal() {
         for (a, b) in [

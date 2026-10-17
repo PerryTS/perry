@@ -149,6 +149,22 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_regex_engine();
     #[cfg(feature = "url-engine")]
     js_runtime_install_url_engine();
+    js_runtime_install_string_normalize();
+    js_runtime_install_intl_segmenter();
+    js_runtime_install_intl_locale();
+    js_runtime_install_global_math();
+    js_runtime_install_global_json();
+    js_runtime_install_global_reflect();
+    js_runtime_install_global_atomics();
+    js_runtime_install_global_url();
+    js_runtime_install_global_text();
+    js_runtime_install_global_websocket();
+    js_runtime_install_global_webcrypto();
+    js_runtime_install_global_webfetch();
+    js_runtime_install_proc_ipc();
+    js_runtime_install_mod_dgram();
+    js_runtime_install_mod_http2_constants();
+    js_runtime_install_mod_node_test();
     // The user-facing diagnostics are always compiled; unit tests that reach
     // them expect the real builders. A shipped archive's installer does not
     // name them (the core archive would link the serializers).
@@ -173,6 +189,8 @@ pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = 
 
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static WASM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+pub(crate) static DGRAM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 
 /// Node-API addon hosting (#8523): `process.dlopen`, `require` of an
 /// allowlisted `.node` addon, and the addon environment's pump, roots and
@@ -260,6 +278,118 @@ pub extern "C" fn js_runtime_install_regex_engine() {
 pub extern "C" fn js_runtime_install_url_engine() {
     perry_install_once!({
         crate::url::install_engine();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_string_normalize() {
+    perry_install_once!({
+        crate::string::normalize_hooked::install();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_intl_segmenter() {
+    perry_install_once!({
+        crate::intl::install_intl_segmenter_feature();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_intl_locale() {
+    perry_install_once!({
+        crate::intl::install_intl_locale_feature();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_math() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_math();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_json() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_json();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_reflect() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_reflect();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_atomics() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_atomics();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_url() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_url();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_text() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_text();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_websocket() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_websocket();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_webcrypto() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_webcrypto();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_global_webfetch() {
+    perry_install_once!({
+        crate::object::global_this::web_hooks::install_webfetch();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_proc_ipc() {
+    perry_install_once!({
+        crate::process::ipc::install();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_mod_dgram() {
+    perry_install_once!({
+        crate::module_hooks::install_dgram();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_mod_http2_constants() {
+    perry_install_once!({
+        crate::module_hooks::install_http2_constants();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn js_runtime_install_mod_node_test() {
+    perry_install_once!({
+        crate::node_submodules::install_node_test();
     });
 }
 
