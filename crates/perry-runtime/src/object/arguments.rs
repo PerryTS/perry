@@ -1041,8 +1041,10 @@ pub(crate) unsafe fn arguments_object_to_vec(obj: *const ObjectHeader) -> Option
 }
 
 /// Typed lowering's fast arm. The selected method VALUE must be the
-/// intrinsic apply at this call; an override returns the internal miss value
-/// and codegen invokes that already-selected value through its ordinary site.
+/// intrinsic apply at this call, or the lookup's by-name answer for a
+/// function whose pristine `Function.prototype` holds it; an override returns
+/// the internal miss value and codegen invokes that already-selected value
+/// through its ordinary site.
 #[no_mangle]
 pub extern "C-unwind" fn js_arguments_forward_apply(
     method: f64,
@@ -1051,7 +1053,13 @@ pub extern "C-unwind" fn js_arguments_forward_apply(
     args: f64,
 ) -> f64 {
     let bits = method.to_bits();
-    if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+    if bits == super::method_call::METHOD_CALL_BY_NAME_DIRECT {
+        let pair = [receiver, args];
+        if let Some(value) = unsafe { super::builtin_method::by_name_function_apply(target, &pair) }
+        {
+            return value;
+        }
+    } else if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
         let address = (bits & crate::value::POINTER_MASK) as usize;
         if crate::closure::is_closure_ptr(address) {
             if let Some(info) =

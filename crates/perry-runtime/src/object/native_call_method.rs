@@ -15,6 +15,7 @@ mod common_methods;
 pub(crate) use common_methods::call_function_with_explicit_this;
 mod disposal;
 mod function_shape;
+pub(crate) use compiled_target::compiled_target_call;
 pub(crate) use function_shape::run_function_intrinsic;
 mod handle_methods;
 mod namespace_override;

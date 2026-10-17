@@ -73,6 +73,13 @@ pub(crate) unsafe fn compiled_target_call(
             ));
         }
     }
+    // A packed ordinary Array (or `null` / `undefined`): its Gets run no
+    // code, so the values are copied and the body entered with no
+    // collection between.
+    let mut packed = [f64::from_bits(crate::value::TAG_UNDEFINED); 6];
+    if let Some(n) = crate::closure::packed_apply_values(arg(1), &mut packed) {
+        return Some(enter_compiled_body(closure, info, this, packed.as_ptr(), n));
+    }
     // Mutated Arguments can run accessors in CreateListFromArrayLike.
     let scope = crate::gc::RuntimeHandleScope::new();
     let callee = scope.root_nanbox_f64(recv);

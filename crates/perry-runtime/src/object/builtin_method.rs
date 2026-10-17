@@ -168,15 +168,68 @@ const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 #[inline(always)]
 unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
     heap_cell(v).is_some_and(|h| {
-        (*h).obj_type == crate::gc::GC_TYPE_CLOSURE
-            && crate::closure::shape::function_shape_inherits_from_function_prototype(
-                (*(raw(v) as *const crate::closure::ClosureHeader)).shape_id,
-                name,
-            )
+        (*h).obj_type == crate::gc::GC_TYPE_CLOSURE && {
+            let id = (*(raw(v) as *const crate::closure::ClosureHeader)).shape_id;
+            crate::closure::shape::function_shape_inherits_from_function_prototype(id, name)
+                || kind_function_ok(id, name)
+        }
     }) && pristine(BuiltinProto::Function)
 }
 
+/// An async, generator or async-generator function without an own `name`:
+/// its kind's intrinsic prototype, while unwritten, defines none of
+/// `Function.prototype`'s methods and inherits them from it.
+#[inline(never)]
+fn kind_function_ok(id: u32, name: &[u8]) -> bool {
+    crate::closure::shape::function_shape_kind_lacking(id, name)
+        .is_some_and(super::global_this::function_kind_prototype_unwritten)
+}
+
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
+/// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,
+/// "apply")` is the intrinsic, so this runs it. A builtin body, and a
+/// compiled body with a packed list or an `arguments` object, are entered
+/// directly; anything else runs the intrinsic's full arm. `None` only where
+/// the intrinsic declines (the caller's dispatcher answers).
+#[inline(never)]
+unsafe fn function_apply(recv: f64, args: &[f64]) -> Option<f64> {
+    let this = args.first().copied().unwrap_or(UNDEFINED);
+    let list = args.get(1).copied().unwrap_or(UNDEFINED);
+    if let Some(value) = crate::closure::try_native_apply(recv, this, list) {
+        return Some(value);
+    }
+    super::native_call_method::run_function_intrinsic(recv, "apply", args.as_ptr(), args.len())
+}
+
+/// `target.apply(this, arguments)` whose lookup answered "by name"
+/// (`js_bm_lookup` admitted a function receiver): the operands between the
+/// lookup and the call may have run code, so the same O(1) proof is taken
+/// again before the intrinsic runs. `None`: the site's ordinary call half.
+pub(crate) unsafe fn by_name_function_apply(target: f64, args: &[f64]) -> Option<f64> {
+    if function_ok(target, b"apply") {
+        return function_apply(target, args);
+    }
+    None
+}
+
+/// `recv.call(args…)` on a function `function_ok` admitted: a compiled body
+/// is entered directly, anything else takes the intrinsic's explicit-`this`
+/// call.
+#[inline(never)]
+unsafe fn function_call(recv: f64, args: &[f64]) -> f64 {
+    if let Some(value) =
+        super::native_call_method::compiled_target_call(false, recv, args.as_ptr(), args.len())
+    {
+        return value;
+    }
+    let this = args.first().copied().unwrap_or(UNDEFINED);
+    super::native_call_method::call_function_with_explicit_this(
+        recv,
+        this,
+        args.get(1..).unwrap_or(&[]),
+    )
+}
+
 #[inline(never)]
 unsafe fn array_push(recv: f64, values: &[f64]) -> f64 {
     let arr = raw(recv) as *mut crate::array::ArrayHeader;
@@ -223,12 +276,12 @@ pub unsafe extern "C-unwind" fn js_bm_apply0(
     key: u64,
     method_id: i64,
 ) -> f64 {
+    let args: [f64; 0] = [];
     if function_ok(recv, b"apply") {
-        if let Some(value) = crate::closure::try_native_apply(recv, UNDEFINED, UNDEFINED) {
+        if let Some(value) = function_apply(recv, &args) {
             return value;
         }
     }
-    let args: [f64; 0] = [];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -241,12 +294,12 @@ pub unsafe extern "C-unwind" fn js_bm_apply1(
     method_id: i64,
     a0: f64,
 ) -> f64 {
+    let args: [f64; 1] = [a0];
     if function_ok(recv, b"apply") {
-        if let Some(value) = crate::closure::try_native_apply(recv, a0, UNDEFINED) {
+        if let Some(value) = function_apply(recv, &args) {
             return value;
         }
     }
-    let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -260,12 +313,12 @@ pub unsafe extern "C-unwind" fn js_bm_apply2(
     a0: f64,
     a1: f64,
 ) -> f64 {
+    let args: [f64; 2] = [a0, a1];
     if function_ok(recv, b"apply") {
-        if let Some(value) = crate::closure::try_native_apply(recv, a0, a1) {
+        if let Some(value) = function_apply(recv, &args) {
             return value;
         }
     }
-    let args: [f64; 2] = [a0, a1];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -301,10 +354,10 @@ pub unsafe extern "C-unwind" fn js_bm_at1(
 /// `recv.call()` (families F).
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_bm_call0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
-    if function_ok(recv, b"call") {
-        return super::native_call_method::call_function_with_explicit_this(recv, UNDEFINED, &[]);
-    }
     let args: [f64; 0] = [];
+    if function_ok(recv, b"call") {
+        return function_call(recv, &args);
+    }
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -317,10 +370,10 @@ pub unsafe extern "C-unwind" fn js_bm_call1(
     method_id: i64,
     a0: f64,
 ) -> f64 {
-    if function_ok(recv, b"call") {
-        return super::native_call_method::call_function_with_explicit_this(recv, a0, &[]);
-    }
     let args: [f64; 1] = [a0];
+    if function_ok(recv, b"call") {
+        return function_call(recv, &args);
+    }
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -334,10 +387,10 @@ pub unsafe extern "C-unwind" fn js_bm_call2(
     a0: f64,
     a1: f64,
 ) -> f64 {
-    if function_ok(recv, b"call") {
-        return super::native_call_method::call_function_with_explicit_this(recv, a0, &[a1]);
-    }
     let args: [f64; 2] = [a0, a1];
+    if function_ok(recv, b"call") {
+        return function_call(recv, &args);
+    }
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -352,10 +405,10 @@ pub unsafe extern "C-unwind" fn js_bm_call3(
     a1: f64,
     a2: f64,
 ) -> f64 {
-    if function_ok(recv, b"call") {
-        return super::native_call_method::call_function_with_explicit_this(recv, a0, &[a1, a2]);
-    }
     let args: [f64; 3] = [a0, a1, a2];
+    if function_ok(recv, b"call") {
+        return function_call(recv, &args);
+    }
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
@@ -371,14 +424,10 @@ pub unsafe extern "C-unwind" fn js_bm_call4(
     a2: f64,
     a3: f64,
 ) -> f64 {
-    if function_ok(recv, b"call") {
-        return super::native_call_method::call_function_with_explicit_this(
-            recv,
-            a0,
-            &[a1, a2, a3],
-        );
-    }
     let args: [f64; 4] = [a0, a1, a2, a3];
+    if function_ok(recv, b"call") {
+        return function_call(recv, &args);
+    }
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
 }
 
