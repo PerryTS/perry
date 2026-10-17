@@ -72,7 +72,9 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
             let flags = u32::from(protocol != 0.0)
                 | (u32::from(state == 2.0) << 1)
                 | (u32::from(op == 4) << 2);
-            super::iterator_record_cleanup::js_array_record_finish(
+            // Completion's result is the operation's result: the pending
+            // error for a throw completion (op 4), which the caller rethrows.
+            return super::iterator_record_cleanup::js_array_record_finish(
                 payload.get_nanbox_f64(),
                 index,
                 if op == 4 {
@@ -182,6 +184,24 @@ mod tests {
             );
         }
     }
+    /// A throw completion (op 4) returns the pending error; the compiled
+    /// catch rethrows exactly that value. Dropping it rethrew `undefined`
+    /// from every `for...of` body throw on targets that lower the iterator
+    /// cleanup as a registered catch (all but x86_64 linux-gnu).
+    #[test]
+    fn throw_completion_returns_the_pending_error() {
+        let mut record = ArrayStackRecord {
+            payload: f64::from_bits(TAG_UNDEFINED),
+            next: f64::from_bits(TAG_UNDEFINED),
+            value: 33.0,
+            index: 1.0,
+            state: 2.0,
+            protocol: 0.0,
+        };
+        let result = unsafe { js_array_record_stack_dispatch(&mut record, 4) };
+        assert_eq!(result.to_bits(), 33.0f64.to_bits());
+    }
+
     #[test]
     fn stack_record_release_is_complete_and_preserves_scalars() {
         let mut record = ArrayStackRecord {
