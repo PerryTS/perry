@@ -1118,10 +1118,14 @@ unsafe fn ordinary_has_property(
     // asking later is the same answer.
     let mut cur = obj_ptr;
     let mut last_valid = obj_ptr;
-    let mut guard = 0u32;
+    // Bounded by the chain, not a hop count (#12698: `"k" in o` was false
+    // past 1024 hops).
+    let mut cycle = super::super::prototype_chain::ChainCycle::new();
     loop {
-        guard += 1;
-        if guard > 1024 || cur.is_null() || !super::super::is_valid_obj_ptr(cur as *const u8) {
+        if cur.is_null()
+            || cycle.repeats(cur as usize)
+            || !super::super::is_valid_obj_ptr(cur as *const u8)
+        {
             break;
         }
         last_valid = cur;

@@ -1861,7 +1861,14 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
     }
 
     let mut current = target;
-    for _ in 0..64 {
+    // Bounded by the chain, not a hop count: past 64 hops a store on a deep
+    // `Object.create` chain was refused (#12698; silent in sloppy code,
+    // "Cannot assign to read only property" in strict code).
+    let mut cycle = crate::object::prototype_chain::ChainCycle::new();
+    loop {
+        if cycle.repeats(current.to_bits() as usize) {
+            return false;
+        }
         // A Proxy hop in the prototype chain: `OrdinarySetWithOwnDescriptor`
         // step 2.a-b dispatches the full `[[Set]]` on the parent with the
         // ORIGINAL `receiver`, not the raw own-descriptor walk below (which
@@ -2012,7 +2019,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         };
         current = proto;
     }
-    false
 }
 
 /// #11201: `[[Set]]` reaching a class-backed link — a declared or

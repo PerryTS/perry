@@ -37,7 +37,7 @@ fn ordinary_named_misses_skip_all_exotic_probes() {
     ));
     for receiver in [&plain, &instance] {
         // Give the receiver a keys view so an absent lookup reaches the
-        // full shared tail, including the final URLSearchParams probe.
+        // full shared tail.
         let own = scope.root_raw_const_ptr(key(b"own"));
         js_object_set_field_by_name(ptr(receiver), own.get_raw_const_ptr(), 21.0);
         let descriptor = unsafe {
@@ -58,26 +58,14 @@ fn ordinary_named_misses_skip_all_exotic_probes() {
         assert_eq!(
             super::exotic_named_read::ordinary_probe_counts(),
             before,
-            "ordinary misses must enter none of the three exotic probe blocks"
-        );
-        let name = scope.root_raw_const_ptr(key(b"probeGateMissing"));
-        let obj = ptr(receiver);
-        let name = name.get_raw_const_ptr::<crate::StringHeader>();
-        let before = super::exotic_named_read::ordinary_probe_counts();
-        assert!(
-            get_field_by_name_tail::get_field_by_name_object_tail_with_kind(obj, name, Some(false))
-                .is_undefined()
-        );
-        let after = super::exotic_named_read::ordinary_probe_counts();
-        assert!(
-            after[2] > before[2],
-            "test control: the ungated tail really probes URLSearchParams"
+            "ordinary misses must enter none of the exotic probe blocks"
         );
     }
 }
 
 #[test]
 fn exotic_named_reads_keep_native_properties() {
+    crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let date = scope.root_nanbox_f64(crate::date::js_date_new_from_timestamp(0.0));
     let params = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -96,10 +84,18 @@ fn exotic_named_reads_keep_native_properties() {
     assert!(read(&date, b"getTime").is_pointer());
     let after = super::exotic_named_read::probe_counts();
     assert!(after[1] > before[1], "Date must still reach its cell probe");
+    // #12697: URLSearchParams is born on its declared layout, an ordinary
+    // shape; `size` and the methods are its prototype's, found through the
+    // layout's prototype family like any inherited property.
     assert_eq!(read(&params, b"size").to_number(), 0.0);
-    assert!(read(&params, b"append").is_pointer());
-    assert!(
-        super::exotic_named_read::probe_counts()[2] > after[2],
-        "unmarked URLSearchParams must still reach its shape probe"
+    let append = read(&params, b"append");
+    assert!(append.is_pointer());
+    let proto = crate::object::js_object_get_prototype_of(params.get_nanbox_f64());
+    let proto = scope.root_nanbox_f64(proto);
+    assert_eq!(
+        read(&proto, b"append").bits(),
+        append.bits(),
+        "the method is URLSearchParams.prototype's own"
     );
+    assert!(read(&params, b"probeGateMissing").is_undefined());
 }

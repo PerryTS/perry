@@ -372,8 +372,7 @@ extern "C" fn object_prototype_dunder_proto_setter_thunk(
 /// the same entry afterwards: interface members are
 /// `{ enumerable: true, configurable: true }`, and node prints
 /// `for-in d: decode,encoding,fatal,ignoreBOM`.
-#[cfg(feature = "global-text")]
-fn install_text_accessor(
+fn install_web_getter_accessor(
     proto_obj: *mut ObjectHeader,
     name: &str,
     getter: *const crate::closure::JsFunctionInfo,
@@ -1124,52 +1123,90 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 );
             }
         }
-        // #10759: `URLSearchParams` previously had ONLY the `#10555` arm
-        // below (moved here): `install_web_builtin_to_string_tag` and
-        // nothing else, because its methods dispatch through type-directed
-        // static dispatch / the small-int/handle dispatch tables and never
-        // needed reified closures for ordinary `x.method()` calls. That
-        // design has no answer for a method read AS A VALUE --
-        // `URLSearchParams.prototype.append`, `.prototype["has"]`, or
-        // through a Proxy `get` trap indirection -- which returned
-        // `undefined` instead of a callable closure. node-fetch's
-        // `Headers extends URLSearchParams` -- whose constructor returns
-        // `new Proxy(this, { get(target, p, receiver) { ... return
-        // (...)=> URLSearchParams.prototype[p].call(target, ...); } })` --
-        // then threw "Function.prototype.call was called on a value that is
-        // not a function" on the very first `headers.has(...)`, reached by
-        // every `fetch()` call before the request is even sent. Same
-        // mechanism as the `Stream.prototype`/`Object.hasOwnProperty`/
-        // `Function.toString` fixes elsewhere (`install_static.rs`,
-        // `node_stream_dispatch.rs`): install the no-op-backed reified
-        // closures so a value read resolves to a real (name-carrying)
-        // function, which `Function.prototype.call`/`.apply`'s
-        // `try_dispatch_value_called_proto_method` re-dispatches by name
-        // through `try_url_search_params_dynamic_dispatch` using the
-        // caller-supplied receiver. Method set + arities verified against
-        // `node --experimental-strip-types` (v26.5.1). The
-        // `install_web_builtin_to_string_tag` call is retained so
+        // #10759/#12697: `%URLSearchParams.prototype%` holds the real method
+        // surface and the `size` accessor (WebIDL; arities as node v26).
+        // Every native params object is born on
+        // `runtime_layouts::URL_SEARCH_PARAMS`, whose prototype family names
+        // this prototype (sealed below by its declaration's serial), so a
+        // read of `p.size` or `p.append` is an ordinary inherited read, and a
+        // method read as a value (`URLSearchParams.prototype.has.call(t, k)`,
+        // node-fetch's `Headers extends URLSearchParams` Proxy) is a real
+        // function. Each member dispatches on its `this`, the native shape or
+        // a subclass instance's backing, and throws on any other receiver.
+        // `install_web_builtin_to_string_tag` keeps
         // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
-        // Symbol.toStringTag)` keeps reflecting a real descriptor -- see
-        // that function's doc comment. The other six members of the
-        // `#10555` group have their value-read methods below (#10808).
+        // Symbol.toStringTag)` reflecting a real descriptor.
         "URLSearchParams" => {
-            install_noop_proto_methods(
+            use crate::closure::{FN_BUILTIN, FN_NON_CONSTRUCTOR};
+            use crate::url::search_params as usp;
+            for (name, info, arity) in [
+                (
+                    "append",
+                    crate::fn_info!(usp::usp_proto_append, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "delete",
+                    crate::fn_info!(usp::usp_proto_delete, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "entries",
+                    crate::fn_info!(usp::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "forEach",
+                    crate::fn_info!(usp::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "get",
+                    crate::fn_info!(usp::usp_proto_get, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "getAll",
+                    crate::fn_info!(usp::usp_proto_get_all, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "has",
+                    crate::fn_info!(usp::usp_proto_has, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "keys",
+                    crate::fn_info!(usp::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "set",
+                    crate::fn_info!(usp::usp_proto_set, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "sort",
+                    crate::fn_info!(usp::usp_proto_sort, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "toString",
+                    crate::fn_info!(usp::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "values",
+                    crate::fn_info!(usp::usp_proto_values, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+            ] {
+                install_proto_method(proto_obj, name, info, arity);
+            }
+            install_web_getter_accessor(
                 proto_obj,
-                &[
-                    ("append", 2),
-                    ("delete", 1),
-                    ("entries", 0),
-                    ("forEach", 1),
-                    ("get", 1),
-                    ("getAll", 1),
-                    ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("sort", 0),
-                    ("toString", 0),
-                    ("values", 0),
-                ],
+                "size",
+                crate::fn_info!(usp::usp_proto_size_getter, 0; with_declared(0)),
             );
             install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
@@ -1215,7 +1252,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            install_text_accessor(
+            install_web_getter_accessor(
                 proto_obj,
                 "encoding",
                 crate::fn_info!(crate::text::text_encoder_encoding_getter, 0; with_declared(0)),
@@ -1234,17 +1271,17 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            install_text_accessor(
+            install_web_getter_accessor(
                 proto_obj,
                 "encoding",
                 crate::fn_info!(crate::text::text_decoder_encoding_getter, 0; with_declared(0)),
             );
-            install_text_accessor(
+            install_web_getter_accessor(
                 proto_obj,
                 "fatal",
                 crate::fn_info!(crate::text::text_decoder_fatal_getter, 0; with_declared(0)),
             );
-            install_text_accessor(
+            install_web_getter_accessor(
                 proto_obj,
                 "ignoreBOM",
                 crate::fn_info!(crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),

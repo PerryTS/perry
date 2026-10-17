@@ -86,8 +86,8 @@ pub(crate) unsafe fn own_position(
     // A layout that can have holes: an optional key whose slot holds the
     // hole is absent (`key_view`), and the answer is this object's alone.
     let holey = !table_owned && crate::object::key_view::summary_may_have_holes(shape.summary);
-    let position = position
-        .filter(|&p| !holey || !crate::object::key_view::position_is_hole(obj, view, p));
+    let position =
+        position.filter(|&p| !holey || !crate::object::key_view::position_is_hole(obj, view, p));
 
     if position.is_some() {
         if class_id != 0 && super::super::is_internal_runtime_key_bytes(name) {
@@ -203,6 +203,61 @@ pub(crate) unsafe fn try_shape_has_property(receiver: f64, key: f64) -> Option<b
         obj = next;
     }
     None
+}
+
+/// Where an inherited read must continue on a chain (see
+/// [`first_possible_holder`]).
+pub(crate) enum ChainHolder {
+    /// The first object whose shapes do not prove it lacks the key: it holds
+    /// the key, or its own lookup must decide.
+    At(*const ObjectHeader),
+    /// The shapes prove no object on the chain has the key.
+    Absent,
+}
+
+/// Skip, without recursing, every object from `obj` up its chain whose shape
+/// proves `name` is not its own property (the membership [`own_position`]
+/// answers for `in`). Any object the shapes cannot decide stops the walk, so
+/// the caller's generic lookup resumes exactly there. A cycle of objects that
+/// all lack the key (a malformed chain) is absent.
+pub(crate) unsafe fn first_possible_holder(
+    mut obj: *const ObjectHeader,
+    name: &[u8],
+) -> ChainHolder {
+    let mut cycle = crate::object::prototype_chain::ChainCycle::new();
+    loop {
+        if cycle.repeats(obj as usize) {
+            return ChainHolder::Absent;
+        }
+        let Some((position, pid, _kind, _reusable)) = own_position(obj, name) else {
+            return ChainHolder::At(obj);
+        };
+        if position.is_some() {
+            return ChainHolder::At(obj);
+        }
+        let next = if pid == shapes::PROTO_ID_NULL {
+            return ChainHolder::Absent;
+        } else if pid == shapes::PROTO_ID_DEFAULT {
+            let prototype = crate::array::object_prototype_addr_if_resolved();
+            if prototype == 0 {
+                return ChainHolder::At(obj);
+            }
+            if prototype == obj as usize {
+                return ChainHolder::Absent;
+            }
+            prototype as *const ObjectHeader
+        } else {
+            let Some(record) = shapes::shape_record_by_id(shapes::object_shape_stamp(obj)) else {
+                return ChainHolder::At(obj);
+            };
+            let prototype = JSValue::from_bits(record.prototype_word());
+            if !prototype.is_pointer() {
+                return ChainHolder::At(obj);
+            }
+            prototype.as_pointer::<ObjectHeader>() as *const ObjectHeader
+        };
+        obj = next;
+    }
 }
 
 #[cfg(test)]

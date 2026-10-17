@@ -41,6 +41,52 @@ crate::perry_thread_local! {
         const { RefCell::new(crate::exception::CatchStack::new()) };
 }
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
+/// From this resolution depth on, an inherited read first skips every
+/// prototype whose shape proves it lacks the key
+/// (`shape_presence::first_possible_holder`),
+/// so the recursion depth counts only the prototypes that may hold it or
+/// that the shapes cannot decide, never the chain's length (#12698: a
+/// 270-deep `Object.create` chain read `undefined` once the recursion reached
+/// the cap). Shallower reads recurse directly: each recursive read's layout
+/// probe already answers several hops at once.
+const SKIP_PROVEN_ABSENT_FROM_DEPTH: usize = 8;
+
+/// Bounds a prototype walk by the chain itself rather than by a hop count:
+/// `repeats` reports a node the walk already visited (Brent's tortoise), so a
+/// malformed cyclic chain still ends while a long acyclic chain is walked to
+/// its end (#12698: a hop cap answered "absent" past it, or refused a store).
+/// `Object.setPrototypeOf` rejects cycles; residual/native owners are the
+/// only way to build one.
+pub(crate) struct ChainCycle {
+    mark: usize,
+    lap: usize,
+    steps: usize,
+}
+
+impl ChainCycle {
+    pub(crate) const fn new() -> Self {
+        Self {
+            mark: 0,
+            lap: 1,
+            steps: 0,
+        }
+    }
+
+    /// Call once per visited node, in walk order.
+    #[inline]
+    pub(crate) fn repeats(&mut self, node: usize) -> bool {
+        if node == self.mark {
+            return true;
+        }
+        self.steps += 1;
+        if self.steps == self.lap {
+            self.mark = node;
+            self.lap <<= 1;
+            self.steps = 0;
+        }
+        false
+    }
+}
 
 /// Stack entry separating an accessor body (user code) from the resolution
 /// that invoked it. Never a NaN-boxed pointer, so the root scanner skips it.
@@ -48,6 +94,8 @@ const USER_CODE_BOUNDARY: u64 = crate::value::TAG_UNDEFINED;
 
 struct PrototypeResolutionGuard {
     depth_before: usize,
+    /// Resolutions of the current `[[Get]]` already on the stack below this one.
+    segment_depth: usize,
 }
 
 impl PrototypeResolutionGuard {
@@ -69,7 +117,8 @@ impl PrototypeResolutionGuard {
                 .iter()
                 .rposition(|&bits| bits == USER_CODE_BOUNDARY)
                 .map_or(0, |i| i + 1);
-            if stack.len() - segment_start >= MAX_PROTOTYPE_RESOLUTION_DEPTH
+            let segment_depth = stack.len() - segment_start;
+            if segment_depth >= MAX_PROTOTYPE_RESOLUTION_DEPTH
                 || stack
                     .iter()
                     .skip(segment_start)
@@ -80,7 +129,10 @@ impl PrototypeResolutionGuard {
             let depth_before = stack.len();
             crate::gc::runtime_write_barrier_root_nanbox(owner_bits);
             stack.push(mark, owner_bits);
-            Some(Self { depth_before })
+            Some(Self {
+                depth_before,
+                segment_depth,
+            })
         })
     }
 }
@@ -837,7 +889,7 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     proto_bits: u64,
     key: *const crate::StringHeader,
 ) -> Option<crate::value::JSValue> {
-    let _guard = PrototypeResolutionGuard::enter(obj_ptr)?;
+    let guard = PrototypeResolutionGuard::enter(obj_ptr)?;
     if proto_bits == TAG_NULL {
         return None;
     }
@@ -871,9 +923,29 @@ pub(crate) fn resolve_inherited_field_from_prototype(
     if proto_ptr == 0 || proto_ptr == obj_ptr {
         return None;
     }
-    let proto = proto_ptr as *const crate::ObjectHeader;
+    let mut proto = proto_ptr as *const crate::ObjectHeader;
     if !super::is_valid_obj_ptr(proto as *const u8) {
         return None;
+    }
+    if guard.segment_depth >= SKIP_PROVEN_ABSENT_FROM_DEPTH && !key.is_null() {
+        // SAFETY: a live key string and a validated object pointer; the skip
+        // makes the same shape reads `in` makes and runs no user code.
+        let holder = unsafe {
+            let name = std::slice::from_raw_parts(
+                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                (*key).byte_len as usize,
+            );
+            super::field_get_set::has_property::shape_presence::first_possible_holder(proto, name)
+        };
+        match holder {
+            super::field_get_set::has_property::shape_presence::ChainHolder::At(holder) => {
+                proto = holder
+            }
+            super::field_get_set::has_property::shape_presence::ChainHolder::Absent => return None,
+        }
+        if proto as usize == obj_ptr || !super::is_valid_obj_ptr(proto as *const u8) {
+            return None;
+        }
     }
     // `js_object_get_field_by_name` handles its own further prototype hops
     // (recorded protos on the proto object), so this is the full walk.

@@ -1508,7 +1508,6 @@ fn get_field_by_name_past_data_probe(
         }
         return own;
     }
-    let ordinary_receiver = read_kind == NamedReadKind::Ordinary;
     // #2128: a plain JS number value (a finite double or canonical NaN —
     // anything `JSValue::is_number` returns true for *minus* the raw-I64
     // pointer convention where top16 == 0) reaches this generic property-get
@@ -1936,11 +1935,7 @@ fn get_field_by_name_past_data_probe(
             return JSValue::undefined();
         }
     }
-    super::get_field_by_name_tail::get_field_by_name_object_tail_with_kind(
-        obj,
-        key,
-        Some(ordinary_receiver),
-    )
+    super::get_field_by_name_tail::get_field_by_name_object_tail(obj, key)
 }
 
 #[cfg(test)]

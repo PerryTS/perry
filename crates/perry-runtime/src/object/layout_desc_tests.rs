@@ -263,6 +263,10 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
         (std::ptr::addr_of!(runtime_layouts::WRITABLE_STATE), INTRINSIC_SERIAL_WRITABLE_STATE),
         (std::ptr::addr_of!(runtime_layouts::TIMEOUT), INTRINSIC_SERIAL_TIMEOUT),
         (std::ptr::addr_of!(runtime_layouts::IMMEDIATE), INTRINSIC_SERIAL_IMMEDIATE),
+        (
+            std::ptr::addr_of!(runtime_layouts::URL_SEARCH_PARAMS),
+            INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
+        ),
     ] {
         unsafe {
             assert_eq!((*(*desc).proto).serial, serial);

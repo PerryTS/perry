@@ -154,7 +154,7 @@ builtin_constructors! {
     TransformStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0062),
     Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID),
     URL => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL; instance BuiltinInstanceIdentity::Class(0xFFFF0063),
-    URLSearchParams => NOOP_CONSTRUCTOR_INFO,
+    URLSearchParams => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
     URLPattern => crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2)),
     AbortController => NOOP_CONSTRUCTOR_INFO,
     AbortSignal => NOOP_CONSTRUCTOR_INFO,

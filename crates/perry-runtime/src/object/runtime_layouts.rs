@@ -173,6 +173,7 @@ runtime_prototype_family!(
     WRITABLE_STATE_PROTO_FAMILY = INTRINSIC_SERIAL_WRITABLE_STATE,
     TIMEOUT_PROTO_FAMILY = INTRINSIC_SERIAL_TIMEOUT,
     IMMEDIATE_PROTO_FAMILY = INTRINSIC_SERIAL_IMMEDIATE,
+    URL_SEARCH_PARAMS_PROTO_FAMILY = INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
 );
 
 include!("runtime_layouts/records.rs");
@@ -235,8 +236,8 @@ mod spawn_sync_result {
         pub(crate) const STDERR: u32 = 6;
     }
 }
-pub use spawn_sync_result::SPAWN_SYNC_RESULT;
 pub(crate) use spawn_sync_result::spawn_sync_slot;
+pub use spawn_sync_result::SPAWN_SYNC_RESULT;
 
 /// Allocate a fixed record with every declared property present, including undefined values.
 ///
@@ -1316,7 +1317,7 @@ pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
     slot_count: 2,
     layout_id: super::layout_desc::LAYOUT_ID_CARRIED,
     rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    proto: &raw const URL_SEARCH_PARAMS_PROTO_FAMILY,
     keys: URL_SEARCH_PARAMS_KEYS.as_ptr(),
     key_count: 2,
     index_mask: 3,

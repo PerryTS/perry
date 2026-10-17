@@ -1,0 +1,1 @@
+Inherited reads, `in` and stores walk prototype chains of any length: a read past ~128 `Object.create` hops answered `undefined`, `in` answered `false` past 1024 hops, and a store on an object more than 64 hops deep was refused. Deep reads skip the prototypes whose shapes prove the key absent before recursing, and the walks stop on a repeated prototype instead of a hop count.

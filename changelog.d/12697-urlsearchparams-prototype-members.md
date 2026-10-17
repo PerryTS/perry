@@ -1,0 +1,1 @@
+`URLSearchParams.prototype` holds the real methods and the `size` accessor, and the URLSearchParams layout names that prototype through its prototype family, so a type-erased `p.size` or `p.append` is an ordinary inherited read (it printed `undefined undefined`; node prints `0 function`). The by-kind URLSearchParams probe in the named-read tail is deleted.

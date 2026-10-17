@@ -8,16 +8,6 @@ pub(crate) fn get_field_by_name_object_tail(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    // Direct tail callers usually resolve a slot or method before the URL
-    // fallback. Defer classification until that fallback actually needs it.
-    get_field_by_name_object_tail_with_kind(obj, key, None)
-}
-
-pub(super) fn get_field_by_name_object_tail_with_kind(
-    obj: *const ObjectHeader,
-    key: *const crate::StringHeader,
-    ordinary_receiver: Option<bool>,
-) -> JSValue {
     if crate::hot_diag::receiver_repr_on() {
         let addr = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) as usize;
         crate::hot_diag::receiver_repr_note_decoded_pointer(addr);
@@ -1876,16 +1866,6 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     let bound = js_class_method_bind(this_f64, heap_name, key_bytes.len());
                     return JSValue::from_bits(bound.to_bits());
                 }
-            }
-        }
-
-        let ordinary_receiver = ordinary_receiver.unwrap_or_else(|| {
-            super::exotic_named_read::named_read_receiver_kind(obj)
-                == super::exotic_named_read::NamedReadKind::Ordinary
-        });
-        if !ordinary_receiver {
-            if let Some(value) = super::exotic_named_read::search_params_read(obj, key, key_bytes) {
-                return value;
             }
         }
 

@@ -49,6 +49,9 @@ pub(crate) const INTRINSIC_SERIAL_IMMEDIATE: u64 = 10;
 /// `runtime_layouts::ARRAY_PROTOTYPE_NAMED`): its identity word is how an
 /// array read reaches it.
 pub(crate) const INTRINSIC_SERIAL_ARRAY_PROTOTYPE: u64 = 11;
+/// `%URLSearchParams.prototype%`, which `runtime_layouts::URL_SEARCH_PARAMS`
+/// names through its prototype family.
+pub(crate) const INTRINSIC_SERIAL_URL_SEARCH_PARAMS: u64 = 12;
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
