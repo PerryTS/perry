@@ -340,9 +340,9 @@ js_assert_throws	Reenters	yes
 js_assimilate_thenable	Reenters	yes
 js_async_context_als_clear	Leaf	no
 js_async_context_als_enter_with	Leaf	no
-js_async_context_als_exit_enter	Reenters	yes
+js_async_context_als_exit_enter	Leaf	no
 js_async_context_als_get_store	Leaf	no
-js_async_context_als_run_enter	Reenters	yes
+js_async_context_als_run_enter	Leaf	no
 js_async_context_als_scope_leave	Leaf	no
 js_async_disposable_stack_dispose_async	Reenters	yes
 js_async_disposable_stack_new	Reenters	yes
@@ -947,7 +947,7 @@ js_console_table_with_properties	Reenters	yes
 js_console_time	Reenters	yes
 js_console_time_end	Reenters	yes
 js_console_time_end_value	Reenters	yes
-js_console_time_log	Reenters	yes
+js_console_time_log	Leaf	no
 js_console_time_log_spread	Reenters	yes
 js_console_time_log_value	Reenters	yes
 js_console_time_value	Reenters	yes
@@ -1528,7 +1528,7 @@ js_fs_utf8_stream_flush	Reenters	yes
 js_fs_utf8_stream_flush_sync	Reenters	yes
 js_fs_utf8_stream_listener_count	Reenters	yes
 js_fs_utf8_stream_new	Reenters	yes
-js_fs_utf8_stream_off	Reenters	yes
+js_fs_utf8_stream_off	Leaf	no
 js_fs_utf8_stream_on	Reenters	yes
 js_fs_utf8_stream_once	Reenters	yes
 js_fs_utf8_stream_remove_all	Leaf	no
@@ -1671,7 +1671,7 @@ js_http_setter_noop	Leaf	no
 js_http_validate_header_name	Reenters	yes
 js_http_validate_header_value	Reenters	yes
 js_https_global_agent_emit	Reenters	yes
-js_https_global_agent_override_value	Reenters	yes
+js_https_global_agent_override_value	Leaf	no
 js_https_global_agent_sync_maps	Reenters	yes
 js_https_server_construct_with_this	Reenters	yes
 js_i32_box_alloc	AllocOnly	no
@@ -3036,7 +3036,7 @@ js_register_class_static_method	Reenters	yes
 js_register_class_static_method_bind_length	Leaf	no
 js_register_class_static_method_entry	Reenters	yes
 js_register_class_static_setter	Reenters	yes
-js_register_class_string_member_order	Reenters	yes
+js_register_class_string_member_order	Leaf	no
 js_register_class_to_string_tag	Leaf	no
 js_register_embedded_asset	Leaf	no
 js_register_embedded_text_asset	Leaf	no
@@ -3480,8 +3480,8 @@ js_string_index_to_i32	Reenters	yes
 js_string_intern	Leaf	no
 js_string_is_well_formed	Leaf	no
 js_string_italics	AllocOnly	no
-js_string_last_index_of	Leaf	no
-js_string_last_index_of_from	Leaf	no
+js_string_last_index_of	Reenters	yes
+js_string_last_index_of_from	Reenters	yes
 js_string_length	Leaf	no
 js_string_length__Str	Leaf	no
 js_string_link	AllocOnly	no
@@ -3646,8 +3646,8 @@ js_symbol_new	Reenters	yes
 js_symbol_new_empty	AllocOnly	no
 js_symbol_to_string	Reenters	yes
 js_symbol_typeof	Reenters	yes
-js_symbol_well_known_async_iterator	Leaf	no
-js_symbol_well_known_iterator	Leaf	no
+js_symbol_well_known_async_iterator	Reenters	yes
+js_symbol_well_known_iterator	Reenters	yes
 js_syntaxerror_new	Reenters	yes
 js_ta_read_receiver_is_kind	Leaf	no
 js_tagged_template_get_or_init	Reenters	yes
@@ -3742,7 +3742,7 @@ js_tls_server_close	Reenters	yes
 js_tls_server_event_names	Reenters	yes
 js_tls_server_get_ticket_keys	Reenters	yes
 js_tls_server_listen	Reenters	yes
-js_tls_server_listener_count	Leaf	no
+js_tls_server_listener_count	Reenters	yes
 js_tls_server_on	Reenters	yes
 js_tls_server_once	Reenters	yes
 js_tls_server_remove_all_listeners	Reenters	yes
@@ -4613,7 +4613,7 @@ perry_probe_get_value	Leaf	no
 perry_probe_own_method	Reenters	yes
 perry_probe_set	Reenters	yes
 perry_register_static_plugin	Leaf	no
-perry_resolve_static_plugin	Reenters	yes
+perry_resolve_static_plugin	Leaf	no
 perry_retain_memory_profile_init	Leaf	no
 perry_runtime_image_result	Reenters	yes
 perry_runtime_widget_init	Reenters	no
