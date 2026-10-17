@@ -360,14 +360,19 @@ fn test_string_method_split_roots_receiver_across_separator_materialization_gc()
 }
 
 #[test]
-fn test_string_method_replace_roots_receiver_across_pattern_materialization_gc() {
+// A one-unit pattern and replacement are immediates and the native replace
+// output no longer materializes either, so a short fixture reaches no
+// allocation point at all. The receiver and result are long enough to be heap
+// strings: the result allocation is what the armed trigger fires on, with the
+// receiver only reachable through its handle.
+fn test_string_method_replace_roots_receiver_across_result_allocation_gc() {
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     activate_malloc_registry_for_tests();
     register_runtime_handle_root_scanner_for_tests();
 
-    let receiver = crate::string::js_string_from_bytes(b"a-a".as_ptr(), 3);
+    let receiver = crate::string::js_string_from_bytes(b"aaaaaaaa-aaaaaaaa".as_ptr(), 17);
     let receiver_value = f64::from_bits(string_bits(receiver as usize));
     assert!(crate::arena::pointer_in_nursery(receiver as usize));
     let receiver_scope = RuntimeHandleScope::new();
@@ -393,16 +398,18 @@ fn test_string_method_replace_roots_receiver_across_pattern_materialization_gc()
     };
 
     let result_root = receiver_scope.root_nanbox_f64(result);
-    drain_scheduled_minor_gc(before, "replace pattern materialization");
+    drain_scheduled_minor_gc(before, "replace result allocation");
     let rooted_receiver = receiver_root.get_raw_const_ptr::<crate::StringHeader>();
     unsafe {
-        assert_string_bytes(rooted_receiver, b"a-a");
-        // A result of at most five ASCII units is an immediate string.
+        assert_string_bytes(rooted_receiver, b"aaaaaaaa-aaaaaaaa");
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let (data, len) =
             crate::string::str_bytes_from_jsvalue(result_root.get_nanbox_f64(), &mut scratch)
                 .expect("replace should return a string");
-        assert_eq!(std::slice::from_raw_parts(data, len as usize), b"a:a");
+        assert_eq!(
+            std::slice::from_raw_parts(data, len as usize),
+            b"aaaaaaaa:aaaaaaaa"
+        );
     }
 }
 

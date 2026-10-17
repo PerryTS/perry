@@ -64,6 +64,8 @@ fn json_short_arrays_preserve_values_and_use_exact_completed_width() {
 
 #[test]
 fn json_short_arrays_allocate_no_intermediate_array() {
+    // Seed the thread's runtime state before the first accounting baseline.
+    let _ = crate::state::state();
     let _suppressed = Suppressed::new();
     for length in 0..=8 {
         let source = format!("[{}]", vec!["17"; length].join(","));

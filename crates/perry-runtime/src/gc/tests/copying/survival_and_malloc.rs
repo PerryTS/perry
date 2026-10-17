@@ -884,7 +884,10 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
     let date_addr = (crate::date::alloc_date_cell(ts).to_bits() & POINTER_MASK) as usize;
     assert!(crate::arena::pointer_in_nursery(date_addr));
 
-    let expando_val = f64::from_bits(crate::value::JSValue::int32(42).bits());
+    // A plain double: the property holder stores numbers in their canonical
+    // double form, so an int32-tagged value would not read back bit-identical
+    // and this test is about migration, not number canonicalization.
+    let expando_val = 42.0_f64;
     crate::object::exotic_expando::test_define_exotic_property(
         date_addr,
         "tag",

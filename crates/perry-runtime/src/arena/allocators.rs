@@ -23,6 +23,8 @@ fn try_inline_bump(size: usize, align: usize) -> *mut u8 {
     unsafe {
         let state = &mut *crate::arena::hot_inline_state();
         if state.data.is_null() {
+            #[cfg(test)]
+            crate::test_support::bootstrap_test_thread();
             return std::ptr::null_mut();
         }
         let Some(end) = state
@@ -45,6 +47,8 @@ fn try_inline_bump(size: usize, align: usize) -> *mut u8 {
 #[cold]
 #[inline(never)]
 fn arena_alloc_slow(size: usize, align: usize) -> *mut u8 {
+    #[cfg(test)]
+    crate::test_support::bootstrap_test_thread();
     // #7469: both thread-locals come off the one cached hot-TLS base rather
     // than two `_tlv_get_addr` calls. The comment above about "two extra TLS
     // reads cost ~5-10ns" was measuring exactly that toll.
@@ -545,6 +549,8 @@ unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8
 #[cold]
 #[inline(never)]
 fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) -> *mut u8 {
+    #[cfg(test)]
+    crate::test_support::bootstrap_test_thread();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
     // Large arena-backed GC objects are born directly in non-moving old

@@ -1804,7 +1804,7 @@ mod tests;
 /// `CLOSURE_PROPS`) must hold this, or the gc test guards' global state reset
 /// on a parallel test thread can wipe its entries mid-test.
 #[cfg(test)]
-pub(crate) use tests::support::copying_nursery_isolation_lock as global_side_table_test_lock;
+pub(crate) use tests::support::global_side_table_test_lock;
 #[cfg(test)]
 pub(crate) use tests::support::{
     register_runtime_handle_root_scanner_for_tests, CopyingNurseryTestGuard,

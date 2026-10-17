@@ -265,6 +265,8 @@ pub use self::subclass::{
 };
 #[cfg(test)]
 pub(crate) use indexing_support::test_swap_array_index_fast_path_invalidated;
+#[cfg(test)]
+pub(crate) use indexing_support::perry_array_iteration_init;
 // #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.

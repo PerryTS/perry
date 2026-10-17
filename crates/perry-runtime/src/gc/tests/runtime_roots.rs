@@ -210,10 +210,11 @@ fn test_scoped_root_scanner_registry_guard_restores_counts() {
         register_runtime_handle_root_scanner_for_tests();
         let during = root_scanner_registry_counts();
         assert_eq!(during.0, before.0 + 1);
-        // The guard starts the mutable registry from its two runtime-state
-        // scanners (the intrinsic prototype addresses and the property atom
-        // table), then the handle scanner.
-        assert_eq!(during.1, 3);
+        // The guard starts the mutable registry from its runtime-state
+        // scanners (the array prototype address cache, the intrinsic
+        // prototype roots, and the property atom table), then the handle
+        // scanner.
+        assert_eq!(during.1, 4);
         assert_eq!(during.2, before.2);
         assert_eq!(during.3, before.3);
     }

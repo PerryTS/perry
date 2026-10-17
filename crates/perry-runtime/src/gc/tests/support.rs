@@ -221,9 +221,22 @@ static COPYING_NURSERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new((
 /// Such tests must take this lock too — reachable crate-wide as
 /// `crate::gc::global_side_table_test_lock()`.
 pub(crate) fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
+    // Fixtures under the bare lock (old-generation and trace accounting) count
+    // exact bytes and reads on a pristine thread; keep the implicit bootstrap
+    // off for them. `global_side_table_test_lock` seeds explicitly instead.
+    crate::test_support::opt_out_of_thread_bootstrap();
     COPYING_NURSERY_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The crate-wide test lock (`crate::gc::global_side_table_test_lock`): the
+/// isolation lock plus an explicit per-thread runtime bootstrap
+/// (`crate::test_support::bootstrap_test_thread` covers lock-less fixtures).
+pub(crate) fn global_side_table_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    let guard = copying_nursery_isolation_lock();
+    let _ = crate::state::state();
+    guard
 }
 
 pub(super) fn root_scanner_registry_counts() -> (usize, usize, usize, usize) {

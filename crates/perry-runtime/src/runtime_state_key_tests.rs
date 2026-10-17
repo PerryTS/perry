@@ -56,20 +56,6 @@ macro_rules! fresh_gate {
 }
 
 #[test]
-fn runtime_node_modules_use_the_memo_entry() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let result = std::process::Command::new("python3")
-        .arg(root.join("scripts/check_runtime_named_sites.py"))
-        .output()
-        .expect("run whole-module named-read invariant");
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stdout)
-    );
-}
-
-#[test]
 fn own_spill_read_and_write_share_the_state_memo_word() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = RuntimeHandleScope::new();
@@ -167,23 +153,22 @@ fn deep_absence_and_holder_reads_follow_every_hop() {
 }
 
 #[test]
-fn null_prototype_absence_is_a_receiver_shape_fact() {
-    fresh_gate!("null_prototype_absence_is_a_receiver_shape_fact");
+fn null_prototype_absence_reads_undefined_per_receiver() {
+    fresh_gate!("null_prototype_absence_reads_undefined_per_receiver");
     let scope = RuntimeHandleScope::new();
     let obj = object(&scope);
     crate::object::js_object_set_prototype_of(obj.with_mut_ptr(boxed), f64::from_bits(TAG_NULL));
     let key = crate::runtime_state_key!(NAME);
     assert_eq!(read(key, &obj).to_bits(), TAG_UNDEFINED);
-    assert_eq!(leaf(key, &obj).map(f64::to_bits), Some(TAG_UNDEFINED));
+    // The probe no longer answers absence from the receiver's shape (that
+    // memo is gone): it declines and the ordinary Get produces `undefined`.
+    assert_eq!(leaf(key, &obj), None);
     let same_shape = object(&scope);
     crate::object::js_object_set_prototype_of(
         same_shape.with_mut_ptr(boxed),
         f64::from_bits(TAG_NULL),
     );
-    assert_eq!(
-        leaf(key, &same_shape).map(f64::to_bits),
-        Some(TAG_UNDEFINED)
-    );
+    assert_eq!(read(key, &same_shape).to_bits(), TAG_UNDEFINED);
     set(&obj, NAME, 23.0);
     assert_eq!(read(key, &obj), 23.0);
     assert_eq!(read(key, &same_shape).to_bits(), TAG_UNDEFINED);

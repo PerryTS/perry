@@ -17,7 +17,6 @@ crates/perry-runtime/src/json/mod.rs | scan_parse_roots_mut | classify_heap_gene
 crates/perry-runtime/src/json/parser_scan_tests.rs | large_unescaped_parsed_strings_are_individually_tracked_leaves | gc_malloc_header_is_tracked | 1 | Test of parser malloc-leaf ownership.
 crates/perry-runtime/src/object/field_set_by_name.rs | js_object_set_field_by_name | classify_heap_generation | 1 | Array forwarding before a property write; no string admission.
 crates/perry-runtime/src/object/class_value/tests.rs | write_once_then_minors | classify_heap_generation | 1 | Test of prototype-barrier generation preservation.
-crates/perry-runtime/src/object/native_get.rs | try_data_lookup_key | classify_heap_generation | 1 | Ordinary object data-slot proof; no string admission.
 crates/perry-runtime/src/object/method_site.rs | address_is_prime_stable | classify_heap_generation | 1 | Object method memo publication requires a stable heap generation.
 crates/perry-runtime/src/promise/then_probe.rs | prove_no_then | classify_heap_generation | 1 | Ordinary-object thenable shape proof; no string admission.
 crates/perry-runtime/src/object/class_registry/construct.rs | drop | classify_heap_generation | 1 | Test fixture teardown of constructor-owned objects.

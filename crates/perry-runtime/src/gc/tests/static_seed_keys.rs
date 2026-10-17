@@ -116,9 +116,12 @@ fn check_seed_survives(order_seed_first: bool, tag: &str, requested: u32) {
     let _precise = NoConservativeScan::new();
     collect_all();
     let published_after = crate::object::canonical_keys::published_lists_for_test().len();
+    // Shapes now keep the key lists they were minted with, so the transient
+    // receiver's lists no longer die with it; the seed must still own the
+    // canonical list for its names either way, which is what is checked below.
     assert!(
-        published_after < published_before,
-        "premise: the transient receiver's lists died ({published_before} -> {published_after})"
+        published_after <= published_before,
+        "the collection must not publish key lists ({published_before} -> {published_after})"
     );
     let seeded = shapes::shape_descriptor_by_id(id).map(|d| d.keys);
     let names: Vec<&[u8]> = literal.iter().map(|n| n.as_bytes()).collect();

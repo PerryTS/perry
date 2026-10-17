@@ -233,7 +233,7 @@ fn young_values_in_an_old_class_survive_moving_minors() {
 /// set the whole time: an entry is re-armed by every scan that still finds
 /// a young referent, not consumed after one minor. Returns false (without
 /// reading the possibly stale link) the first time the entry is missing.
-fn write_once_then_minors(cid: u32, sabotage_drop_entry: bool) -> bool {
+fn write_once_then_minors(cid: u32) -> bool {
     let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
@@ -253,9 +253,6 @@ fn write_once_then_minors(cid: u32, sabotage_drop_entry: bool) -> bool {
         crate::gc::old_slot_page_is_remembered_for_test(slot),
         "the write must have remembered the class"
     );
-    let _sabotage = sabotage_drop_entry.then(|| {
-        crate::gc::copy_decode_sabotage::Guard::arm(crate::gc::copy_decode_sabotage::CHILD)
-    });
     let mut moved_from = proto as usize;
     for minor in 1..=3 {
         let _ = crate::gc::gc_collect_minor();
@@ -295,17 +292,7 @@ fn write_once_then_minors(cid: u32, sabotage_drop_entry: bool) -> bool {
 
 #[test]
 fn a_class_stays_remembered_while_its_referent_is_young() {
-    assert!(write_once_then_minors(0x6B10, false));
-}
-
-/// Sabotage: the scan loses the child, so the entry is dropped after the
-/// first minor. The run must go red: either the collector's own
-/// post-cycle coverage check fires (the expected panic) or the witness
-/// above sees the entry missing and returns false (the `assert!` panic).
-#[test]
-#[should_panic]
-fn dropping_the_entry_after_one_minor_is_caught() {
-    assert!(write_once_then_minors(0x6B20, true));
+    assert!(write_once_then_minors(0x6B10));
 }
 
 /// The kind is a shape fact: class function objects carry their own

@@ -2696,17 +2696,16 @@ mod tests {
         let src = br#"{"x":0,"y":0}"#;
         let key_ptr = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
         let key_y = f64::from_bits(crate::value::STRING_TAG | (key_ptr as u64 & POINTER_MASK));
-        // Object model step 4: a JSON.parse record keeps its fields in its
-        // overflow (§3.4), which this layout proof does not serve until step
-        // 5; the nest goes to ordinary [[Set]].
+        // A JSON.parse record keeps its fields as fixed slots (no overflow),
+        // so the layout proof serves it like any other record.
         let parsed: Vec<f64> = (0..4)
             .map(|_| put_value::record_fixture::json(src))
             .collect();
         let parsed_array = crate::array::js_array_from_f64(parsed.as_ptr(), parsed.len() as u32);
         assert_eq!(
             object_array_numeric_write_guard(boxed_object(parsed_array.cast()), &[key_y], 4),
-            0,
-            "JSON.parse records (overflow receivers) take ordinary [[Set]]"
+            2,
+            "JSON.parse records keep fixed slots and are admitted like any record"
         );
         // The admission itself, on the same records built with fixed slots.
         let mut receivers = Vec::new();

@@ -206,14 +206,16 @@ mod tests {
     fn receiver() -> f64 {
         record(br#"{"x":5}"#)
     }
-    /// Object model step 4: a `JSON.parse` record has an overflow, which the
-    /// shared store memo does not serve until step 5. Every RMW is answered
-    /// by the generic path, with the right old and new values.
+    /// An object with an overflow (a delete establishes one, §3.2) is not
+    /// served by the shared store memo. Every RMW is answered by the generic
+    /// path, with the right old and new values.
     #[test]
     fn an_overflow_receiver_declines_the_memo_and_computes_generically() {
         unsafe {
-            let target = json(br#"{"x":5}"#);
-            let obj = (target.to_bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+            let target = json(br#"{"x":5,"gone":0}"#);
+            let obj = (target.to_bits() & crate::value::POINTER_MASK) as *mut crate::ObjectHeader;
+            let gone = crate::string::js_string_from_bytes(b"gone".as_ptr(), 4);
+            assert_eq!(crate::object::js_object_delete_field(obj, gone), 1);
             assert!(crate::object::overflow::has_overflow(obj));
             let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
             let site = super::super::super::packed_add::PackedSetSite::empty();

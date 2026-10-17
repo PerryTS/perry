@@ -180,6 +180,8 @@ fn test_array_numeric_producers_stay_pointer_free() {
 
 #[test]
 fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
+    // Counts exact trace reads: keep this thread unseeded (see test_support).
+    crate::test_support::opt_out_of_thread_bootstrap();
     clear_marks();
     clear_mark_seeds();
 

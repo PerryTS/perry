@@ -96,6 +96,7 @@ fn named_properties_refuse_the_skip() {
 
 #[test]
 fn an_owned_prototype_bag_refuses_the_skip() {
+    let _latch = crate::test_support::ArrayPrototypeLatchGuard::new();
     let _guard = GcTestIsolationGuard::new();
     unsafe {
         let (arr, _) = pointer_free_array(4);

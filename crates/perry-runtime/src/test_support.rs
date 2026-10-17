@@ -52,3 +52,59 @@ pub(crate) fn isolated_test(body: impl FnOnce()) {
         output.status
     );
 }
+
+std::thread_local! {
+    static PRISTINE_ARENA_FIXTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Per-thread runtime bootstrap for test threads. Runtime state is created
+/// lazily per thread and libtest gives every case a fresh thread, so without
+/// this a fixture that reaches a producer before any `state()` call sees
+/// closures without a base shape, undefined layout-born fields, or aborts on an
+/// unregistered layout. Called from the arena's slow allocation path, which the
+/// first allocation on any thread always reaches, so it is the one place every
+/// fixture passes through, locked or not. A no-op once the thread has state.
+///
+/// Fixtures that assert exact byte counts on a pristine arena opt out with
+/// [`opt_out_of_thread_bootstrap`] (seeding places the static atoms in it).
+pub(crate) fn bootstrap_test_thread() {
+    if !PRISTINE_ARENA_FIXTURE.with(|c| c.get()) {
+        let _ = crate::state::state();
+    }
+}
+
+/// Keep this thread's arena unseeded until the fixture asks for `state()`.
+pub(crate) fn opt_out_of_thread_bootstrap() {
+    PRISTINE_ARENA_FIXTURE.with(|c| c.set(true));
+}
+
+/// Restores the two process-wide array-prototype latches a test may set by
+/// retargeting a real array's prototype (`ARRAY_TARGET_PROTO_RECORDED` and the
+/// array-index fast-path invalidation). Left latched they stand
+/// `plain_array_index_guard` down for every later typed-feedback guard test in
+/// the process. Takes the typed-feedback test lock for the window, as
+/// `dyn_eval`'s guard of the same name does; take it before other locks.
+pub(crate) struct ArrayPrototypeLatchGuard {
+    _guard_tests: std::sync::MutexGuard<'static, ()>,
+    latch: bool,
+    invalidated: u8,
+}
+
+impl ArrayPrototypeLatchGuard {
+    pub(crate) fn new() -> Self {
+        let _guard_tests = crate::typed_feedback::typed_feedback_test_lock();
+        Self {
+            _guard_tests,
+            latch: crate::object::prototype_chain::array_static_proto_recorded(),
+            invalidated: crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+impl Drop for ArrayPrototypeLatchGuard {
+    fn drop(&mut self) {
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.latch);
+        crate::array::test_swap_array_index_fast_path_invalidated(self.invalidated);
+    }
+}

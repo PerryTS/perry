@@ -165,12 +165,16 @@ mod readpath_decl_class_identity_tests {
         crate::object::class_registry::class_decl_prototype_object_root_store(alias, other);
         let holder = crate::object::js_object_alloc(0, 0);
         let pid = PROTO_ID_CLASS | u64::from(cid);
+        // R6: the shape's kind must agree with the receiver's own record (a
+        // bare `js_object_alloc` is not born marked ordinary), so take the
+        // kind from the holder rather than assuming `Ordinary`.
+        let kind = unsafe { crate::object::shapes::store_kind::receiver_ordinary_kind(holder) };
         let shape = shape_descriptor_ensure_with_generation(
             std::ptr::null(),
             0,
             0,
             0x8000_0000_0000_0000,
-            ShapeObjectKind::Ordinary,
+            kind,
             pid,
             ReceiverFacts::NONE,
         )

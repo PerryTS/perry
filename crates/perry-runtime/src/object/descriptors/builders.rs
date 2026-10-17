@@ -220,6 +220,7 @@ mod birth_tests {
     #[test]
     fn descriptor_records_carry_the_resolved_birth_shape() {
         let _gc = crate::gc::GcSuppressScope::new();
+        let mut first_birth = [None::<u32>; 2];
         unsafe {
             for accessor in [false, true] {
                 for _ in 0..3 {
@@ -234,17 +235,22 @@ mod birth_tests {
                         build_data_descriptor(17.0, false, true, false)
                     };
                     let object = extract_obj_ptr(value);
-                    let (_, birth_id) = crate::object::shape_cache_get_with_id(if accessor {
-                        0x0D_E5_C1
-                    } else {
-                        0x0D_E5_C0
-                    });
-                    assert_ne!(birth_id, 0, "the allocator must resolve its key list");
-                    assert_eq!(
-                        crate::object::shapes::object_shape_id(object),
-                        birth_id,
-                        "a plain descriptor record must carry the resolved birth facts",
+                    // Descriptor records are born from declared runtime
+                    // layouts (no shape-cache key list any more): the record
+                    // carries its layout's ShapeId, stable across births.
+                    let birth_id = crate::object::shapes::object_shape_id(object);
+                    assert_ne!(birth_id, 0, "the record must carry a real birth shape");
+                    assert!(
+                        crate::object::shapes::shape_descriptor_by_id(birth_id).is_some(),
+                        "the birth shape must be registered",
                     );
+                    match first_birth[accessor as usize] {
+                        None => first_birth[accessor as usize] = Some(birth_id),
+                        Some(first) => assert_eq!(
+                            birth_id, first,
+                            "descriptor records of one kind share their birth shape",
+                        ),
+                    }
                     assert_eq!(
                         crate::object::shapes::shape_object_kind_by_id(birth_id),
                         Some(crate::object::shapes::ShapeObjectKind::Ordinary),

@@ -31,7 +31,9 @@ fn spread_tail_retains_the_confirmed_image_key_in_its_shape_owner() {
     struct Image {
         gc: crate::gc::GcHeader,
         string: crate::StringHeader,
-        bytes: [u8; 2],
+        bytes: [u8; 8],
+        // The atom-hash trailer every program literal image carries.
+        hash: u64,
     }
     static IMAGE: Image = Image {
         gc: crate::gc::GcHeader {
@@ -40,19 +42,22 @@ fn spread_tail_retains_the_confirmed_image_key_in_its_shape_owner() {
                 | crate::gc::GC_FLAG_PINNED
                 | crate::gc::GC_FLAG_INTERNED,
             _reserved: 0x494d,
-            size: 30,
+            size: crate::string::image_string_gc_size(6) as u32,
         },
         string: crate::StringHeader {
-            utf16_len: 1,
-            byte_len: 1,
-            capacity: 1,
+            utf16_len: 6,
+            byte_len: 6,
+            capacity: 6,
             refcount: 0,
             flags: crate::string::STRING_FLAG_WTF8_VALIDATED,
         },
-        bytes: *b"x\0",
+        bytes: *b"xkey_1\0\0",
+        hash: 0,
     };
+    // The key must be longer than an inline short string: those are canonical
+    // immediates in the shape owner and have no image spelling to retain.
     unsafe {
-        let source = object(&[("x", 3.0), ("y", 5.0), ("z", 7.0)]);
+        let source = object(&[("xkey_1", 3.0), ("y", 5.0), ("z", 7.0)]);
         let result = js_object_spread_fresh_leading(empty_prefix(), source);
         let id = shapes::object_shape_stamp(receiver(result));
         let record = shapes::shape_record_by_id(id).unwrap();
@@ -62,10 +67,10 @@ fn spread_tail_retains_the_confirmed_image_key_in_its_shape_owner() {
         assert_eq!(record.plain_own_identity_slot(key.bits()), Some(0));
         assert_eq!(shapes::object_shape_stamp(receiver(result)), id);
         assert_eq!(record.summary(), 0);
-        assert_eq!(get(result, "x"), 9.0);
+        assert_eq!(get(result, "xkey_1"), 9.0);
         assert_eq!(get(result, "y"), 5.0);
         assert_eq!(get(result, "z"), 7.0);
-        assert_eq!(get(source, "x"), 3.0);
+        assert_eq!(get(source, "xkey_1"), 3.0);
     }
 }
 

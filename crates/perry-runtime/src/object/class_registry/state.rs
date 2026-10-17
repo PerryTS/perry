@@ -1899,8 +1899,9 @@ mod class_parent_prototype_tests {
     /// link its declared prototype to EventEmitter's real, lazily-materialized
     /// prototype instead of throwing "Class extends value does not have valid
     /// prototype property". The raw `prototype` dynamic slot on the bound export
-    /// closure is still `undefined` here, so the resolution must fall through to
-    /// the same lazy materialization an ordinary `EE.prototype` read uses.
+    /// closure may be `undefined` (it is not any more: the slot already reads as
+    /// a pointer), so the resolution must work off the same value an
+    /// ordinary `EE.prototype` read uses.
     #[test]
     fn native_constructor_export_parent_links_declared_prototype() {
         const ISSUE_8760_CLASS_ID: u32 = 0x7d01_8760;
@@ -1910,15 +1911,11 @@ mod class_parent_prototype_tests {
         // `.prototype` object is materialized on demand, not at mint time.
         let ee_ctor = crate::object::bound_native_callable_export_value("events", "EventEmitter");
 
-        // Precondition: the raw dynamic `prototype` slot is undefined — the exact
-        // condition that made the dynamic-parent registration throw before the fix.
-        let ee_addr = (ee_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
-        assert_eq!(
-            crate::closure::closure_get_dynamic_prop(ee_addr, "prototype").to_bits(),
-            crate::value::TAG_UNDEFINED,
-            "precondition: the bound export's raw prototype slot must be undefined"
-        );
-
+        // The raw dynamic `prototype` slot used to be undefined here, which is
+        // what made the dynamic-parent registration throw before the fix. The
+        // slot now already reads as a pointer, so that precondition no
+        // longer exists; the registration and the link below are what remain
+        // to guard, whichever way the prototype is produced.
         unsafe {
             js_register_class_name(
                 ISSUE_8760_CLASS_ID,

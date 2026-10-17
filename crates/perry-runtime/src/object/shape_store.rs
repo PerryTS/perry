@@ -1584,6 +1584,7 @@ mod tests {
 
     #[test]
     fn array_chain_projection_declines_a_changed_prototype_after_warmup() {
+        let _latch = crate::test_support::ArrayPrototypeLatchGuard::new();
         let _lock = crate::gc::global_side_table_test_lock();
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let key = crate::string::canonical_key(b"rangeEnd");

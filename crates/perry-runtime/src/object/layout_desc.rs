@@ -737,6 +737,8 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
 /// `desc` is a registered descriptor of this program.
 #[no_mangle]
 pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
+    #[cfg(test)]
+    crate::test_support::bootstrap_test_thread();
     let d = &*desc;
     let Some(id) = registered_layout_id(d.layout_id) else {
         eprintln!(

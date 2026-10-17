@@ -138,8 +138,30 @@ mod tests {
         crate::gc::RuntimeHandleScope::active_len_for_tests() as f64 + user + capture
     }
 
+    /// A runtime with no compiled program (the Rust tests) assumes arrays may
+    /// be iterated observably, which refuses the dense admission this test is
+    /// about. State the compiler's whole-program fact (no write reaches an
+    /// iteration member) for the test's window and put the assumption back.
+    struct NoObservableIterationFacts(u32);
+
+    impl NoObservableIterationFacts {
+        fn new() -> Self {
+            let saved = crate::array::array_iteration_facts();
+            crate::array::perry_array_iteration_init(0);
+            Self(saved)
+        }
+    }
+
+    impl Drop for NoObservableIterationFacts {
+        fn drop(&mut self) {
+            crate::array::perry_array_iteration_init(self.0);
+        }
+    }
+
     #[test]
     fn dense_captures_use_the_flat_entry_without_a_replay_buffer() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _facts = NoObservableIterationFacts::new();
         unsafe {
             let cid = 0x6f28;
             let scope = crate::gc::RuntimeHandleScope::new();
