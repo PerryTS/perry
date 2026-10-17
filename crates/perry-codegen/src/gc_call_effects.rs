@@ -5,16 +5,17 @@
 //! system allocator and still be safe to omit as a Perry GC safepoint. The
 //! only question answered here is: can this call enter Perry's collector?
 //!
-//! # Source of truth: the generated table (RFC deferred collection, step S1)
+//! # Source of truth: the table of the linked archives (RFC deferred collection, S1)
 //!
-//! The answer for a runtime helper is no longer a hand-kept allowlist. It is
-//! read from `gc_effects/<target>.tsv`, generated from the linked runtime and
-//! stdlib archives by `scripts/gc_call_effects/callgraph.py` and checked in CI
-//! against freshly built archives for Linux x86-64, macOS aarch64 and Windows
-//! x86-64 (`cargo xwin`). The generator builds a symbol-level call graph from
-//! the object code and classifies every exported symbol by what it can reach
-//! (seeds, cuts and every audited exemption, each with its reason, are in
-//! `scripts/gc_call_effects/seeds.txt`):
+//! The answer for a runtime helper is not a hand-kept allowlist and not a
+//! checked-in table. It is the table of the runtime archives this compilation
+//! links: computed from their machine code by `perry-gc-effects sidecars` when
+//! the archives are built, shipped beside each archive as
+//! `<archive>.gc-effects`, and verified against the archive bytes by the
+//! compiler before codegen (`perry`'s `gc_effects_sidecar`). The analyzer
+//! builds a symbol-level call graph from the object code and classifies every
+//! exported symbol by what it can reach (seeds, cuts and every audited
+//! exemption, each with its reason, are in `scripts/gc_call_effects/seeds.txt`):
 //!
 //! * `Leaf`      reaches no collector entry, poll, JS entry, unaudited
 //!               indirect call or unknown external symbol;
@@ -23,20 +24,20 @@
 //! * `ThrowOnly` additionally reaches JS only through the throw funnel;
 //! * `Reenters`  everything else.
 //!
-//! Every row also carries a `throws` bit (a fourth solve, see the generator's
+//! Every row also carries a `throws` bit (a fourth solve, see the analyzer's
 //! docs): `yes` if a call can reach `js_throw`, an unwinding raise, JavaScript
 //! or an unaudited callee. It is independent of the class (a poll is
 //! `Reenters` but may be unable to throw); `Leaf` and `AllocOnly` imply `no`.
-//! [`runtime_throws`] reads it, and `eh_mode::nothrow_callee` is its only
-//! consumer: a symbol absent from any table is `throws=yes`.
+//! [`GcEffects::runtime_throws`] reads it, and `eh_mode::nothrow_callee` is its
+//! only consumer: a symbol absent from the table is `throws=yes`.
 //!
-//! Codegen uses the MOST conservative class across the three target tables,
-//! and a symbol missing from any table is `Reenters`. Under today's runtime
-//! (an allocation can still start a collection) only `Leaf` may be marked
-//! `"gc-leaf-function"`. `AllocOnly` keeps its previous meaning,
+//! The table is per target and per archive: one compilation reads exactly the
+//! archive it links, and a symbol absent from it is `Reenters`. Under today's
+//! runtime (an allocation can still start a collection) only `Leaf` may be
+//! marked `"gc-leaf-function"`. `AllocOnly` keeps its previous meaning,
 //! [`GcCallEffect::AllocNoReentry`]: a leaf only under the research-only
-//! `PERRY_GC_SAFEPOINT_ONLY` contract. `ThrowOnly` is computed and committed
-//! for RFC step S5 but is not used for leaf-marking yet.
+//! `PERRY_GC_SAFEPOINT_ONLY` contract. `ThrowOnly` is computed for RFC step S5
+//! but is not used for leaf-marking yet.
 //!
 //! The graph found what the hand audit missed: `js_array_length`'s Proxy arm
 //! reaches `js_proxy_get` (#11522), and every helper whose
@@ -68,7 +69,7 @@ pub(crate) enum GcCallEffect {
     Unknown,
 }
 
-/// A runtime symbol's class in the generated table, ordered from least to
+/// A runtime symbol's class in the archive's table, ordered from least to
 /// most conservative.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum RuntimeClass {
@@ -79,6 +80,7 @@ pub(crate) enum RuntimeClass {
 }
 
 impl RuntimeClass {
+    #[cfg(test)]
     fn parse(s: &str) -> Option<Self> {
         match s {
             "Leaf" => Some(Self::Leaf),
@@ -90,7 +92,7 @@ impl RuntimeClass {
     }
 }
 
-/// What the generated tables say about one runtime symbol.
+/// What the archive's table says about one runtime symbol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeFacts {
     pub(crate) class: RuntimeClass,
@@ -98,24 +100,10 @@ pub(crate) struct RuntimeFacts {
     pub(crate) throws: bool,
 }
 
-/// The committed per-target tables. Regenerate with
-/// `scripts/gc_call_effects/regen.sh <target>` (or take the CI artifact);
-/// never edit by hand.
-pub(crate) const GENERATED_TABLES: &[(&str, &str)] = &[
-    ("linux-x86_64", include_str!("gc_effects/linux-x86_64.tsv")),
-    (
-        "macos-aarch64",
-        include_str!("gc_effects/macos-aarch64.tsv"),
-    ),
-    (
-        "windows-x86_64",
-        include_str!("gc_effects/windows-x86_64.tsv"),
-    ),
-];
-
 /// Symbols the archives cannot speak for, each with its reason. Kept tiny on
 /// purpose: an entry here shadows the graph, so it must name something the
-/// graph does not contain (checked by a unit test).
+/// archives do not export (checked over the workspace sidecar by
+/// `perry-gc-effects`' `workspace_sidecar` test, which reads this list).
 pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
     ("perry_birth_class", GcCallEffect::AllocNoReentry,
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
@@ -123,7 +111,7 @@ pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
 ];
 
-/// The merged runtime call-effect facts one compilation reads.
+/// The runtime call-effect facts one compilation reads.
 ///
 /// Built once per compilation and carried explicitly (`CompileOptions::
 /// gc_effects`, then the module and every function's register counter), never
@@ -131,8 +119,9 @@ pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
 /// different tables, and the object-cache key carries [`GcEffects::digest`] so
 /// a module compiled under one table is never served for another.
 ///
-/// Today the rows are the merge of the three committed per-target tables
-/// ([`GcEffects::from_committed`]).
+/// The rows are the verified sidecar table of the runtime archive the program
+/// links ([`GcEffects::from_sidecar`]), or nothing at all
+/// ([`GcEffects::all_unsafe`]) when no table speaks for the link set.
 pub struct GcEffects {
     rows: HashMap<String, RuntimeFacts>,
     digest: u64,
@@ -147,117 +136,79 @@ impl std::fmt::Debug for GcEffects {
     }
 }
 
+/// The default proves nothing ([`GcEffects::all_unsafe`]): a table is only
+/// ever the table of the archives a compilation links, and the compiler
+/// installs it in every compilation's `CompileOptions`. perry-codegen's own
+/// unit tests, which build `CompileOptions::default()` with no archives, get
+/// their explicit test world instead ([`test_effects`]), exactly as a module
+/// built outside a compilation does ([`GcEffects::outside_compilation`]).
 impl Default for GcEffects {
     fn default() -> Self {
-        Self::from_committed()
+        #[cfg(test)]
+        {
+            table_from_rows(TEST_WORLD)
+        }
+        #[cfg(not(test))]
+        {
+            Self::all_unsafe()
+        }
     }
 }
 
 impl GcEffects {
-    /// The merge of the committed per-target tables ([`GENERATED_TABLES`]).
-    pub fn from_committed() -> Self {
-        Self::from_tables(GENERATED_TABLES)
-    }
-
-    /// The table a function or module built outside a compilation (a unit
-    /// test) reads: the committed tables, named explicitly. A compilation
-    /// always installs its own `CompileOptions::gc_effects` instead.
-    pub(crate) fn committed_fallback() -> std::sync::Arc<Self> {
-        #[cfg(test)]
-        {
-            std::sync::Arc::clone(committed_for_tests())
-        }
-        #[cfg(not(test))]
-        {
-            std::sync::Arc::new(Self::from_committed())
-        }
-    }
-
-    /// Merge target tables: the most conservative class wins, `throws` is
-    /// `yes` if any target says so, and a symbol absent from any table is
-    /// dropped (reads as `Reenters`, `throws=yes`). Panics on a malformed row:
-    /// a table codegen cannot read must fail the build, never degrade
-    /// silently.
-    pub fn from_tables(tables: &[(&str, &str)]) -> Self {
-        let mut merged: HashMap<String, (RuntimeFacts, usize)> = HashMap::new();
-        for (target, text) in tables {
-            let mut seen: HashSet<&str> = HashSet::new();
-            for (n, line) in text.lines().enumerate() {
-                if line.starts_with('#') || line.trim().is_empty() {
-                    continue;
-                }
-                let mut cols = line.split('\t');
-                let (Some(sym), Some(class), Some(throws), None) =
-                    (cols.next(), cols.next(), cols.next(), cols.next())
-                else {
-                    panic!("gc_effects/{target}.tsv:{}: malformed row", n + 1)
+    /// The table of a verified sidecar section: the runtime archive (alone or
+    /// with its stdlib) this compilation links, as the analyzer classified its
+    /// bytes.
+    pub fn from_sidecar(table: &perry_gc_effects::Table) -> Self {
+        use perry_gc_effects::Class;
+        let rows: HashMap<String, RuntimeFacts> = table
+            .iter()
+            .map(|(sym, e)| {
+                let class = match e.class {
+                    Class::Leaf => RuntimeClass::Leaf,
+                    Class::AllocOnly => RuntimeClass::AllocOnly,
+                    Class::ThrowOnly => RuntimeClass::ThrowOnly,
+                    Class::Reenters => RuntimeClass::Reenters,
                 };
-                let class = RuntimeClass::parse(class)
-                    .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: bad class", n + 1));
-                let throws = match throws {
-                    "yes" => true,
-                    "no" => false,
-                    _ => panic!("gc_effects/{target}.tsv:{}: bad throws", n + 1),
-                };
-                let row = RuntimeFacts { class, throws };
-                assert!(
-                    seen.insert(sym),
-                    "gc_effects/{target}.tsv:{}: duplicate {sym}",
-                    n + 1
-                );
-                let e = merged.entry(sym.to_string()).or_insert((row, 0));
-                e.0.class = e.0.class.max(class);
-                e.0.throws |= throws;
-                e.1 += 1;
-            }
-        }
-        let rows: HashMap<String, RuntimeFacts> = merged
-            .into_iter()
-            .filter(|(_, (_, count))| *count == tables.len())
-            .map(|(sym, (facts, _))| (sym, facts))
+                (
+                    sym.clone(),
+                    RuntimeFacts {
+                        class,
+                        throws: e.throws,
+                    },
+                )
+            })
             .collect();
         let digest = digest_of(&rows);
         Self { rows, digest }
     }
 
     /// The table that proves nothing: every runtime symbol reads `Reenters`,
-    /// `throws=yes` ([`OVERRIDES`] still apply). Sound for any link set. An
-    /// installed perry whose sidecar is missing or does not match the
-    /// archives, and a WASI build (no native link set), compile under it.
+    /// `throws=yes` ([`OVERRIDES`] still apply). Sound for any link set. A
+    /// compilation no table speaks for compiles under it: an installed perry
+    /// whose sidecar is missing or does not match the archives, a WASI build
+    /// (no native link set), a `--no-link` compile with no runtime archive, a
+    /// runtime cargo builds after codegen (Geisterhand), and a module built
+    /// outside a compilation.
     pub fn all_unsafe() -> Self {
         let rows = HashMap::new();
         let digest = digest_of(&rows);
         Self { rows, digest }
     }
 
-    /// Per row, the weaker (more conservative) of `self` and a sidecar table:
-    /// the larger class, `throws` if either says so, and a symbol absent from
-    /// either dropped (it reads `Reenters`, `throws=yes`). The result proves
-    /// nothing that one of the two does not prove.
-    pub fn weaker_of(&self, sidecar: &perry_gc_effects::Table) -> Self {
-        use perry_gc_effects::Class;
-        let rows: HashMap<String, RuntimeFacts> = self
-            .rows
-            .iter()
-            .filter_map(|(sym, mine)| {
-                let theirs = sidecar.get(sym.as_str())?;
-                let class = match theirs.class {
-                    Class::Leaf => RuntimeClass::Leaf,
-                    Class::AllocOnly => RuntimeClass::AllocOnly,
-                    Class::ThrowOnly => RuntimeClass::ThrowOnly,
-                    Class::Reenters => RuntimeClass::Reenters,
-                };
-                Some((
-                    sym.clone(),
-                    RuntimeFacts {
-                        class: mine.class.max(class),
-                        throws: mine.throws || theirs.throws,
-                    },
-                ))
-            })
-            .collect();
-        let digest = digest_of(&rows);
-        Self { rows, digest }
+    /// The table a function or module built outside a compilation reads. In a
+    /// unit test it is the test world ([`test_effects`]); in the compiler it
+    /// proves nothing, because only a compilation knows its archives and every
+    /// compilation installs its own `CompileOptions::gc_effects`.
+    pub(crate) fn outside_compilation() -> std::sync::Arc<Self> {
+        #[cfg(test)]
+        {
+            std::sync::Arc::clone(test_effects())
+        }
+        #[cfg(not(test))]
+        {
+            std::sync::Arc::new(Self::all_unsafe())
+        }
     }
 
     /// The number of symbols the table proves anything about (diagnostics).
@@ -351,14 +302,53 @@ fn effect_of_class(class: RuntimeClass) -> GcCallEffect {
     }
 }
 
-/// The committed tables, parsed once for unit tests that have no compilation
-/// to take them from. Production code never calls this: it takes the
-/// compilation's own [`GcEffects`].
+/// An explicit table from `symbol<TAB>class<TAB>throws` rows (`#` lines are
+/// comments), for unit tests: a test states the table it means. Panics on a
+/// malformed row.
 #[cfg(test)]
-pub(crate) fn committed_for_tests() -> &'static std::sync::Arc<GcEffects> {
-    static COMMITTED: std::sync::OnceLock<std::sync::Arc<GcEffects>> = std::sync::OnceLock::new();
-    COMMITTED.get_or_init(|| std::sync::Arc::new(GcEffects::from_committed()))
+pub(crate) fn table_from_rows(text: &str) -> GcEffects {
+    let mut rows: HashMap<String, RuntimeFacts> = HashMap::new();
+    for (n, line) in text.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let mut cols = line.split('\t');
+        let (Some(sym), Some(class), Some(throws), None) =
+            (cols.next(), cols.next(), cols.next(), cols.next())
+        else {
+            panic!("test table line {}: malformed row", n + 1)
+        };
+        let class = RuntimeClass::parse(class)
+            .unwrap_or_else(|| panic!("test table line {}: bad class", n + 1));
+        let throws = match throws {
+            "yes" => true,
+            "no" => false,
+            _ => panic!("test table line {}: bad throws", n + 1),
+        };
+        assert!(
+            rows.insert(sym.to_string(), RuntimeFacts { class, throws })
+                .is_none(),
+            "test table line {}: duplicate {sym}",
+            n + 1
+        );
+    }
+    let digest = digest_of(&rows);
+    GcEffects { rows, digest }
 }
+
+/// The test world: the runtime facts the codegen unit tests assume, stated
+/// explicitly (`gc_effects_test_world.tsv`). It is not a description of any
+/// runtime archive and production never reads it; the facts about the real
+/// archives are checked where the archives are: the pinned-facts test of
+/// `perry-gc-effects` over the workspace sidecar.
+#[cfg(test)]
+pub(crate) fn test_effects() -> &'static std::sync::Arc<GcEffects> {
+    static WORLD: std::sync::OnceLock<std::sync::Arc<GcEffects>> = std::sync::OnceLock::new();
+    WORLD.get_or_init(|| std::sync::Arc::new(table_from_rows(TEST_WORLD)))
+}
+
+#[cfg(test)]
+const TEST_WORLD: &str = include_str!("gc_effects_test_world.tsv");
 
 /// The direct callee token and its argument-list opening parenthesis.
 ///
@@ -605,175 +595,62 @@ mod tests {
     use super::*;
 
     // The unit tests have no compilation to take a table from: they read the
-    // committed merge, named explicitly.
-    fn generated() -> &'static HashMap<String, RuntimeFacts> {
-        &committed_for_tests().rows
-    }
-    fn merge_tables(tables: &[(&str, &str)]) -> HashMap<String, RuntimeFacts> {
-        GcEffects::from_tables(tables).rows
-    }
-    fn runtime_class(name: &str) -> RuntimeClass {
-        committed_for_tests().runtime_class(name)
-    }
-    fn runtime_throws(name: &str) -> bool {
-        committed_for_tests().runtime_throws(name)
-    }
+    // test world (`test_effects`) or build the table they mean. The facts
+    // about the real runtime archives (pinned hot leaves, #11522, #11523, the
+    // polls, the root-dominance checker's authority) are checked over the
+    // workspace sidecar by `perry-gc-effects`' `workspace_sidecar` test.
     fn classify_direct_callee(name: &str) -> GcCallEffect {
-        committed_for_tests().classify_direct_callee(name)
+        test_effects().classify_direct_callee(name)
     }
     fn external_callee_cannot_collect(name: &str) -> bool {
-        committed_for_tests().external_callee_cannot_collect(name)
+        test_effects().external_callee_cannot_collect(name)
     }
     fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<String> {
-        super::transitive_leaf_functions(committed_for_tests(), functions)
+        super::transitive_leaf_functions(test_effects(), functions)
     }
 
     #[test]
-    fn ungenerated_constfn_finalizer_and_class_mint_are_collecting_edges() {
-        // New helpers are absent from generated archives until regeneration;
-        // unknown is conservative in both ordinary and safepoint-only builds.
+    fn a_symbol_no_table_proves_is_a_collecting_edge() {
+        // A helper the archive does not export (new, renamed, or user code)
+        // is unknown: conservative in ordinary and safepoint-only builds.
         for name in [
             "js_object_finalize_constfn_static",
-            "js_object_final_shape_id_for_class_keys_static_constfn",
+            "user_function_not_in_any_archive",
         ] {
-            if !generated().contains_key(name) {
-                assert_eq!(classify_direct_callee(name), GcCallEffect::Unknown);
-                assert!(!external_callee_cannot_collect(name));
-            }
-            // Regeneration may prove the current noncollecting mint Leaf;
-            // no handwritten override may hide future collecting effects.
+            assert!(!test_effects().rows.contains_key(name));
+            assert_eq!(classify_direct_callee(name), GcCallEffect::Unknown);
+            assert!(!external_callee_cannot_collect(name));
+            assert!(test_effects().runtime_throws(name));
+            // No handwritten override may hide a helper's effects.
             assert!(!OVERRIDES.iter().any(|(symbol, _, _)| *symbol == name));
         }
-    }
-
-    /// #11522: `js_array_length`'s Proxy arm runs the `get` trap and a
-    /// `valueOf` coercion; the other three reach JS or the collector too. The
-    /// hand audit called them leaf / alloc-no-reentry; the graph proves they
-    /// are neither, and S1 classifies them conservatively.
-    const ISSUE_11522: &[&str] = &[
-        "js_array_length",
-        "js_object_alloc_class_inline_keys",
-        "js_object_alloc_class_inline_keys_stamped",
-        "js_object_get_own_field_or_undef",
-    ];
-
-    /// #11523: these take the typed-feedback registry's root lock. With an
-    /// ordinary `GcRootRegistryGuard` the release can flush a deferred
-    /// collection, and the graph proved all of them collecting. The registry
-    /// now uses `NonCollectingRootRegistryGuard`, a distinct type whose drop
-    /// has no path to `flush_deferred_gc_request`, so the generated table
-    /// proves them `Leaf` again. If this goes red, a flushing lock is back on
-    /// their path: run `scripts/gc_call_effects/why.py`.
-    const ISSUE_11523: &[&str] = &[
-        "js_gc_note_slot_layout",
-        "js_gc_note_slot_layout_aware",
-        "js_typed_feedback_record_guard_pass",
-        "js_typed_feedback_record_guard_fail",
-        "js_typed_feedback_record_fallback_call",
-        "js_typed_feedback_observe_property_get",
-        "js_typed_feedback_observe_property_set",
-        "js_typed_feedback_closure_direct_call_guard",
-        "js_typed_feedback_plain_array_index_get_guard",
-        "js_typed_feedback_numeric_array_index_get_guard",
-        "js_typed_feedback_plain_array_index_set_guard",
-        "js_typed_feedback_numeric_array_index_set_guard",
-        "js_typed_feedback_numeric_array_push_guard",
-        "js_packed_arraylike_loop_revalidate_live",
-        "js_array_clear_numeric_layout",
-        "js_array_note_numeric_write",
-        "js_array_declare_all_pointer_elements",
-        "js_closure_set_capture_bits",
-        "js_closure_set_box_capture_ptr",
-        "js_closure_set_capture_ptr",
-    ];
-
-    /// Helpers the graph proves `Leaf` on every checked target. Pinned by
-    /// name because they carry most of today's leaf-marked call sites; a
-    /// runtime change that taints one of them turns this red, which is the
-    /// moment to look at `why.py`, not after a relocation regression.
-    const PINNED_LEAF: &[&str] = &[
-        "js_nanbox_pointer",
-        "js_nanbox_get_pointer",
-        "js_is_truthy",
-        "js_string_compare",
-        "js_string_addref",
-        "js_gc_temp_root_push",
-        "js_write_barrier",
-        "js_write_barrier_root_nanbox",
-        "js_gc_register_global_root",
-        "js_object_get_class_id",
-        "js_closure_get_capture_bits",
-        "js_closure_exact_func_guard",
-        // js_box_alloc_bits is deliberately NOT pinned here: #11179 made box/
-        // scope-cell allocation go through arena_alloc -> arena_cell_alloc,
-        // which can reach gc_try_emergency_reclaim, so the generated tables
-        // now (correctly) classify it AllocOnly, not Leaf. The read/write
-        // helpers below still are.
-        "js_box_set_bits",
-        "js_i32_box_get",
-        "js_box_release",
-        "js_box_scope_release",
-        "js_tdz_suppress_begin",
-        "js_tdz_suppress_end",
-    ];
-
-    #[test]
-    fn generated_tables_parse_and_are_live() {
-        for (target, text) in GENERATED_TABLES {
-            assert!(
-                text.contains(&format!("# target: {target}\n")),
-                "gc_effects/{target}.tsv does not name its own target"
-            );
-            let rows = text
-                .lines()
-                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-                .count();
-            assert!(
-                rows >= 1000,
-                "gc_effects/{target}.tsv has only {rows} rows -- a vacuous table would \
-                 classify every helper Unknown and this suite would still pass"
-            );
-        }
-        let merged = generated();
-        let leaves = merged
-            .values()
-            .filter(|f| f.class == RuntimeClass::Leaf)
-            .count();
-        assert!(
-            merged.len() >= 1000 && leaves >= 200,
-            "merged table: {} symbols, {leaves} Leaf",
-            merged.len()
-        );
     }
 
     #[test]
     fn the_digest_follows_the_rows_and_only_the_rows() {
         let a = "# target: a\nx\tLeaf\tno\ny\tReenters\tyes\n";
         let a_reordered = "# target: a\ny\tReenters\tyes\nx\tLeaf\tno\n";
-        let a_other_target_name = "# target: z\nx\tLeaf\tno\ny\tReenters\tyes\n";
+        let a_other_comment = "# target: z\nx\tLeaf\tno\ny\tReenters\tyes\n";
         let class_changed = "# target: a\nx\tAllocOnly\tno\ny\tReenters\tyes\n";
         let throws_changed = "# target: a\nx\tLeaf\tyes\ny\tReenters\tyes\n";
         let row_added = "# target: a\nx\tLeaf\tno\ny\tReenters\tyes\nw\tLeaf\tno\n";
-        let d = |t: &str| GcEffects::from_tables(&[("a", t)]).digest();
+        let d = |t: &str| table_from_rows(t).digest();
         assert_eq!(
             d(a),
             d(a_reordered),
             "row order never leaks into the digest"
         );
-        assert_eq!(d(a), d(a_other_target_name), "comments are not rows");
+        assert_eq!(d(a), d(a_other_comment), "comments are not rows");
         for changed in [class_changed, throws_changed, row_added] {
             assert_ne!(d(a), d(changed));
         }
-        assert_eq!(
-            GcEffects::from_committed().digest(),
-            GcEffects::from_committed().digest()
-        );
+        assert_ne!(d(a), GcEffects::all_unsafe().digest());
     }
 
     #[test]
     fn two_tables_answer_independently() {
-        let leaf = GcEffects::from_tables(&[("a", "# target: a\nhelper\tLeaf\tno\n")]);
-        let slow = GcEffects::from_tables(&[("a", "# target: a\nhelper\tReenters\tyes\n")]);
+        let leaf = table_from_rows("helper\tLeaf\tno\n");
+        let slow = table_from_rows("helper\tReenters\tyes\n");
         assert_eq!(
             leaf.classify_direct_callee("helper"),
             GcCallEffect::CannotCollect
@@ -784,412 +661,83 @@ mod tests {
     }
 
     #[test]
-    fn merge_takes_the_most_conservative_class_and_drops_partial_symbols() {
-        let a = "# target: a\na_only\tLeaf\tno\nboth\tLeaf\tno\nweaker\tAllocOnly\tno\nthr\tReenters\tno\n";
-        let b = "# target: b\nboth\tLeaf\tno\nweaker\tReenters\tno\nthr\tReenters\tyes\n";
-        let m = merge_tables(&[("a", a), ("b", b)]);
-        assert_eq!(m.get("both").map(|f| f.class), Some(RuntimeClass::Leaf));
-        assert_eq!(
-            m.get("weaker").map(|f| f.class),
-            Some(RuntimeClass::Reenters)
-        );
-        assert_eq!(m.get("both").map(|f| f.throws), Some(false));
-        assert_eq!(
-            m.get("thr").map(|f| f.throws),
-            Some(true),
-            "throws is yes if any target says yes"
-        );
-        assert_eq!(
-            m.get("a_only"),
-            None,
-            "a symbol one target does not prove must read as Reenters"
-        );
-    }
-
-    #[test]
     #[should_panic(expected = "bad class")]
-    fn a_malformed_table_fails_the_build() {
-        merge_tables(&[("x", "sym\tMaybeLeaf\tno\n")]);
+    fn a_malformed_table_fails() {
+        table_from_rows("sym\tMaybeLeaf\tno\n");
     }
 
     #[test]
     #[should_panic(expected = "malformed row")]
-    fn a_row_without_the_throws_column_fails_the_build() {
-        merge_tables(&[("x", "sym\tLeaf\n")]);
+    fn a_row_without_the_throws_column_fails() {
+        table_from_rows("sym\tLeaf\n");
     }
 
     #[test]
     #[should_panic(expected = "bad throws")]
-    fn a_bad_throws_value_fails_the_build() {
-        merge_tables(&[("x", "sym\tLeaf\tmaybe\n")]);
+    fn a_bad_throws_value_fails() {
+        table_from_rows("sym\tLeaf\tmaybe\n");
     }
 
-    /// The classification of every runtime callee flows from the table:
-    /// Leaf -> CannotCollect, AllocOnly -> AllocNoReentry, else Unknown.
+    fn sidecar_table(rows: &[(&str, perry_gc_effects::Class, bool)]) -> perry_gc_effects::Table {
+        rows.iter()
+            .map(|(sym, class, throws)| {
+                (
+                    (*sym).to_string(),
+                    perry_gc_effects::Entry {
+                        class: *class,
+                        throws: *throws,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// The classification of every runtime callee flows from the sidecar
+    /// table: Leaf -> CannotCollect, AllocOnly -> AllocNoReentry, else
+    /// Unknown, with the throws column carried as is.
     #[test]
-    fn classification_flows_from_the_generated_table() {
-        let merged = generated();
-        let mut seen = [0usize; 4];
-        for (sym, facts) in merged {
-            let class = &facts.class;
-            if OVERRIDES.iter().any(|(n, _, _)| n == sym) {
-                continue;
-            }
-            let want = match class {
-                RuntimeClass::Leaf => GcCallEffect::CannotCollect,
-                RuntimeClass::AllocOnly => GcCallEffect::AllocNoReentry,
-                RuntimeClass::ThrowOnly | RuntimeClass::Reenters => GcCallEffect::Unknown,
-            };
-            assert_eq!(classify_direct_callee(sym), want, "{sym} ({class:?})");
-            seen[*class as usize] += 1;
-        }
-        assert!(
-            seen[0] > 0 && seen[1] > 0 && seen[3] > 0,
-            "table exercises too few classes: {seen:?}"
-        );
+    fn classification_flows_from_the_sidecar_table() {
+        use perry_gc_effects::Class;
+        let t = GcEffects::from_sidecar(&sidecar_table(&[
+            ("js_l", Class::Leaf, false),
+            ("js_a", Class::AllocOnly, false),
+            ("js_t", Class::ThrowOnly, true),
+            ("js_r", Class::Reenters, true),
+            ("js_poll", Class::Reenters, false),
+        ]));
+        assert_eq!(t.proven_rows(), 4);
         assert_eq!(
-            classify_direct_callee("user_function_not_in_any_archive"),
-            GcCallEffect::Unknown
-        );
-    }
-
-    #[test]
-    fn overrides_name_only_symbols_the_graph_cannot_see() {
-        for (name, _, reason) in OVERRIDES {
-            assert!(reason.len() >= 20, "override {name} needs a real reason");
-            assert!(
-                !generated().contains_key(*name),
-                "override {name} shadows a symbol the generated table already classifies"
-            );
-        }
-    }
-
-    #[test]
-    fn removed_native_shadow_helpers_have_no_linux_export_or_leaf_claim() {
-        let linux = include_str!("gc_effects/linux-x86_64.tsv");
-        for name in [
-            "js_shadow_frame_enter",
-            "js_shadow_frame_push",
-            "js_shadow_frame_pop",
-            "js_shadow_state_addr",
-            "js_shadow_slot_bind",
-            "js_shadow_slot_get",
-            "js_shadow_slot_set",
-        ] {
-            assert!(
-                !linux.lines().any(|line| line
-                    .split_once('\t')
-                    .is_some_and(|(symbol, _)| symbol == name)),
-                "{name}"
-            );
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn pinned_hot_helpers_are_leaf() {
-        for name in PINNED_LEAF {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name}: run scripts/gc_call_effects/why.py to see what now taints it"
-            );
-        }
-    }
-
-    fn table_row<'a>(text: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
-        text.lines().find_map(|l| {
-            let mut c = l.split('\t');
-            (c.next() == Some(name)).then(|| (c.next().unwrap_or(""), c.next().unwrap_or("")))
-        })
-    }
-
-    /// The hand audit behind the nounwind attribute groups becomes a checked
-    /// claim: every helper they mark must be `throws=no` in all three tables.
-    /// A helper the graph cannot prove loses its `nounwind` declaration (or
-    /// gets an audited cut in seeds.txt); there is no allowlist of exceptions.
-    #[test]
-    fn nounwind_declared_helpers_are_proven_not_to_throw() {
-        let mut checked = 0;
-        for name in crate::module::nounwind_declared_helpers() {
-            for (target, text) in GENERATED_TABLES {
-                let proven = table_row(text, name).is_some_and(|(_, throws)| throws == "no");
-                assert!(
-                    proven,
-                    "{name} is declared nounwind but gc_effects/{target}.tsv does not \
-                     prove throws=no (run scripts/gc_call_effects/why.py)"
-                );
-            }
-            checked += 1;
-        }
-        assert!(checked >= 15, "only {checked} nounwind helpers enumerated");
-    }
-
-    /// Leaf and AllocOnly reach no throw seed, so they can never throw. The
-    /// generator enforces this; the merged table is checked again here so a
-    /// hand-edited or mixed-generation table cannot slip past.
-    #[test]
-    fn leaf_and_alloc_only_helpers_never_throw() {
-        for (sym, facts) in generated() {
-            if matches!(facts.class, RuntimeClass::Leaf | RuntimeClass::AllocOnly) {
-                assert!(!facts.throws, "{sym}: {:?} but throws=yes", facts.class);
-            }
-        }
-    }
-
-    #[test]
-    fn throws_column_answers_from_the_table() {
-        for name in [
-            "js_throw",
-            "js_closure_call0",
-            "js_native_call_value",
-            "js_to_primitive",
-            "js_number_coerce",
-            // The read entries behind the probe run getters and throw.
-            "js_object_get_field_slow",
-            "js_object_get_field_value",
-            // not in any table: user code, a new helper
-            "user_function_not_in_any_archive",
-        ] {
-            assert!(runtime_throws(name), "{name}");
-        }
-        // Declared polls are `Reenters` (a collection can begin) yet cannot throw.
-        for name in ["js_gc_safepoint", "js_gc_loop_safepoint", "js_gc_collect"] {
-            assert_eq!(runtime_class(name), RuntimeClass::Reenters, "{name}");
-            assert!(!runtime_throws(name), "{name}");
-        }
-    }
-
-    #[test]
-    fn issue_11522_helpers_are_not_leaf() {
-        for name in ISSUE_11522 {
-            assert_ne!(runtime_class(name), RuntimeClass::Leaf, "{name}");
-            assert_ne!(runtime_class(name), RuntimeClass::AllocOnly, "{name}");
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn issue_11523_noncollecting_guard_helpers_are_provably_leaf() {
-        let mut leaf = 0;
-        for name in ISSUE_11523 {
-            // Six (the numeric index guards and the lazy-array layout
-            // helpers) reach JS or a materializing allocator on their own
-            // paths; none may be collecting through the root lock alone,
-            // which is exactly what AllocOnly would mean here.
-            assert_ne!(
-                runtime_class(name),
-                RuntimeClass::AllocOnly,
-                "{name} reaches a collector again (a flushing root lock?)"
-            );
-            leaf += usize::from(classify_direct_callee(name) == GcCallEffect::CannotCollect);
-        }
-        // P4 retired three object-layout helpers that were Leaf. The surviving
-        // list has 14 Leaf helpers and six helpers that reenter on their own paths.
-        assert_eq!(leaf, ISSUE_11523.len() - 6, "#11523 Leaf census changed");
-    }
-
-    /// The box/closure family's containment in the root-dominance checker's
-    /// `NONCOLLECTING` authority: every member the generated table proves
-    /// `Leaf` must be there, so codegen never leaf-marks a call the checker
-    /// would call collecting (the #7510 drift). The members #11523 demoted
-    /// are simply no longer leaves; containment is only required in the safe
-    /// direction.
-    #[test]
-    fn box_and_closure_helpers_stay_contained_in_the_checker_authority() {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        let py_path = format!("{manifest}/../../scripts/gc_root_dominance_check.py");
-        let py_src = std::fs::read_to_string(&py_path).expect("read gc_root_dominance_check.py");
-        let noncollecting = extract_python_set(&py_src, "NONCOLLECTING");
-        assert!(
-            noncollecting.len() > 50,
-            "parsed only {} NONCOLLECTING names -- the extraction broke",
-            noncollecting.len()
-        );
-        let family: Vec<&str> = [
-            "js_closure_get_capture_bits",
-            "js_closure_get_capture_ptr",
-            "js_box_alloc_bits",
-            "js_i32_box_alloc",
-            "js_bool_box_alloc",
-            "js_box_set_bits",
-            "js_box_set_bits_trusted_no_barrier",
-            "js_i32_box_set",
-            "js_bool_box_set",
-            "js_i32_box_get",
-            "js_bool_box_get",
-            "js_box_release",
-            "js_i32_box_release",
-            "js_bool_box_release",
-            "js_box_scope_release",
-            "js_i32_box_scope_release",
-            "js_bool_box_scope_release",
-        ]
-        .into_iter()
-        .filter(|n| classify_direct_callee(n) == GcCallEffect::CannotCollect)
-        .collect();
-        assert!(
-            family.len() >= 8,
-            "only {} of the box/closure family is Leaf ({family:?})",
-            family.len()
-        );
-        let missing: Vec<&str> = family
-            .iter()
-            .filter(|n| !noncollecting.contains(**n))
-            .copied()
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "Leaf box/closure callees absent from NONCOLLECTING: {missing:?}"
-        );
-    }
-
-    /// Collect the string literals of a top-level `NAME = {...}` python set.
-    fn extract_python_set<'a>(src: &'a str, name: &str) -> std::collections::HashSet<&'a str> {
-        let mut out = std::collections::HashSet::new();
-        let mut inside = false;
-        for line in src.lines() {
-            if !inside {
-                if line.starts_with(&format!("{name} = {{")) {
-                    inside = true;
-                }
-                continue;
-            }
-            if line == "}" {
-                break;
-            }
-            let code = line.split('#').next().unwrap_or("");
-            out.extend(quoted_literals(code));
-        }
-        out
-    }
-
-    fn quoted_literals(s: &str) -> Vec<&str> {
-        let mut out = Vec::new();
-        let mut rest = s;
-        while let Some(a) = rest.find('"') {
-            let tail = &rest[a + 1..];
-            let Some(b) = tail.find('"') else { break };
-            out.push(&tail[..b]);
-            rest = &tail[b + 1..];
-        }
-        out
-    }
-
-    /// #11522's runtime split: the plain-array fast lane is a separate export
-    /// the graph proves leaf, and `js_array_length` itself stays collecting.
-    #[test]
-    fn array_length_is_split_into_a_leaf_lane_and_a_collecting_call() {
-        assert_eq!(
-            classify_direct_callee("js_array_length"),
-            GcCallEffect::Unknown,
-            "js_array_length reaches js_proxy_get / js_number_coerce"
-        );
-        assert_eq!(
-            classify_direct_callee("js_array_length_leaf"),
+            t.classify_direct_callee("js_l"),
             GcCallEffect::CannotCollect
         );
-        assert!(!external_callee_cannot_collect("js_array_length"));
-        assert!(external_callee_cannot_collect("js_array_length_leaf"));
-    }
-
-    /// RFC S2 (#11554, `expr/ic_fast_split.rs`): each full-outline IC hit is
-    /// a GC-leaf `_fast` export and its decline continues into a collecting
-    /// call. S2 hand-listed the four hits because this table did not exist
-    /// yet; the graph now proves them `Leaf` on every checked target. Two
-    /// edges S2's census had to cut are modelled here without a hand entry:
-    /// the `Arena as Drop` TLS destructor registered by `tls_hot::fill`'s lazy
-    /// init is a `teardown` cut in `seeds.txt` (it runs at thread exit), and
-    /// `typed_feedback::invalidate_representation_change` takes the registry
-    /// through `NonCollectingRootRegistryGuard`, whose drop has no path to a
-    /// flush. The continuations are the control: a `_fast_miss` classified
-    /// `CannotCollect` SIGSEGVs S2's evacuating slow-path test.
-    #[test]
-    fn ic_fast_split_hits_are_leaf_and_their_continuations_collect() {
-        for name in ["perry_probe_set"] {
-            assert_eq!(runtime_class(name), RuntimeClass::Leaf, "{name}");
-            assert!(external_callee_cannot_collect(name), "{name}");
-        }
-        for name in ["js_put_value_set"] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn register_global_root_tracks_the_barrier_it_wraps() {
         assert_eq!(
-            classify_direct_callee("js_gc_register_global_root"),
-            classify_direct_callee("js_write_barrier_root_heap_word"),
-            "js_gc_register_global_root's entire body is that barrier plus a \
-             TLS Vec::push; they cannot have different GC effects"
+            t.classify_direct_callee("js_a"),
+            GcCallEffect::AllocNoReentry
         );
-    }
-
-    /// Helpers that allocate, run JS or throw must never be `CannotCollect`.
-    /// `js_nanbox_string`'s null guard allocates an empty string; the TDZ box
-    /// getters throw a ReferenceError; the sloppy `this` reader boxes
-    /// primitives.
-    #[test]
-    fn allocating_reentering_and_throwing_helpers_are_not_cannot_collect() {
-        for name in [
-            "js_nanbox_string",
-            "js_string_from_bytes",
-            "js_array_alloc",
-            "js_string_compare_value",
-            "js_rel_lt",
-            "js_rel_gt",
-            "js_object_get_field_slow",
-            "js_object_get_field_value",
-            "js_object_get_field_nonptr",
-            "js_this_coerce_sloppy",
-            "js_box_get_bits",
-            "js_box_get_bits_trusted",
-            "js_box_get_bits_named",
-            "js_box_get_bits_trusted_named",
-            "js_value_length_f64",
-            "js_value_length_property_f64",
-            "js_value_length_property_key_f64",
-            "js_array_get_f64",
-        ] {
-            assert_ne!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name} can allocate, throw or run JS and must not be marked gc-leaf"
-            );
-        }
+        assert_eq!(t.classify_direct_callee("js_t"), GcCallEffect::Unknown);
+        assert_eq!(t.classify_direct_callee("js_r"), GcCallEffect::Unknown);
+        assert_eq!(t.runtime_class("js_poll"), RuntimeClass::Reenters);
+        assert!(!t.runtime_throws("js_poll"));
+        assert!(t.runtime_throws("js_t"));
+        assert!(!t.runtime_throws("js_l"));
+        assert_eq!(
+            t.classify_direct_callee("user_function_not_in_any_archive"),
+            GcCallEffect::Unknown
+        );
+        let same = GcEffects::from_sidecar(&sidecar_table(&[
+            ("js_poll", Class::Reenters, false),
+            ("js_r", Class::Reenters, true),
+            ("js_t", Class::ThrowOnly, true),
+            ("js_a", Class::AllocOnly, false),
+            ("js_l", Class::Leaf, false),
+        ]));
+        assert_eq!(t.digest(), same.digest());
     }
 
     #[test]
-    fn collection_polls_and_reentering_calls_stay_conservative() {
-        for name in [
-            "js_gc_collect",
-            "js_gc_loop_safepoint",
-            "js_array_map",
-            "js_array_sort_with_comparator",
-            "js_number_coerce",
-            "js_dynamic_string_or_number_add",
-            "js_object_get_field_by_name_f64",
-            "js_native_call_value",
-            "js_proxy_get",
-            "user_function",
-        ] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name} is a poll or can re-enter JS: never a leaf, never AllocNoReentry"
-            );
+    fn overrides_carry_a_reason() {
+        for (name, _, reason) in OVERRIDES {
+            assert!(reason.len() >= 20, "override {name} needs a real reason");
         }
     }
 
@@ -1360,99 +908,7 @@ mod tests {
         }
     }
 
-    fn sidecar_table(rows: &[(&str, perry_gc_effects::Class, bool)]) -> perry_gc_effects::Table {
-        rows.iter()
-            .map(|(n, class, throws)| {
-                (
-                    (*n).to_owned(),
-                    perry_gc_effects::Entry {
-                        class: *class,
-                        throws: *throws,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Slice 6: the compile-time table is, per row, the weaker of the sidecar
-    /// and the committed merge. Neither side can make a row stronger.
-    #[test]
-    fn weaker_of_takes_the_conservative_side_per_row() {
-        use perry_gc_effects::Class;
-        let committed = GcEffects::from_tables(&[(
-            "t",
-            "js_a\tLeaf\tno\njs_b\tReenters\tyes\njs_c\tAllocOnly\tno\njs_d\tLeaf\tno\njs_e\tThrowOnly\tno\n",
-        )]);
-        // js_a: the sidecar is weaker and wins; js_b: the sidecar is stronger,
-        // the committed row wins; js_c: the committed row is weaker and wins;
-        // js_e: `throws` from the sidecar only; js_new: absent from the
-        // committed rows and js_d absent from the sidecar, so both unproven.
-        let sidecar = sidecar_table(&[
-            ("js_a", Class::Reenters, true),
-            ("js_b", Class::Leaf, false),
-            ("js_c", Class::Leaf, false),
-            ("js_e", Class::ThrowOnly, true),
-            ("js_new", Class::Leaf, false),
-        ]);
-        let j = committed.weaker_of(&sidecar);
-        assert_eq!(j.runtime_class("js_a"), RuntimeClass::Reenters);
-        assert!(j.runtime_throws("js_a"));
-        assert_eq!(j.runtime_class("js_b"), RuntimeClass::Reenters);
-        assert!(j.runtime_throws("js_b"));
-        assert_eq!(j.runtime_class("js_c"), RuntimeClass::AllocOnly);
-        assert!(!j.runtime_throws("js_c"));
-        assert_eq!(j.runtime_class("js_d"), RuntimeClass::Reenters);
-        assert!(j.runtime_throws("js_d"));
-        assert_eq!(j.runtime_class("js_e"), RuntimeClass::ThrowOnly);
-        assert!(j.runtime_throws("js_e"));
-        assert_eq!(j.runtime_class("js_new"), RuntimeClass::Reenters);
-        assert!(j.runtime_throws("js_new"));
-        assert_ne!(j.digest(), committed.digest());
-    }
-
-    /// A sidecar equal to (or stronger than) the committed rows changes
-    /// nothing, digest included: the workspace release archives compile to
-    /// the same IR and hit the same object-cache entries as before.
-    #[test]
-    fn weaker_of_with_an_equal_or_stronger_table_is_the_identity() {
-        let committed = committed_for_tests();
-        let mut same: perry_gc_effects::Table = Default::default();
-        for (sym, f) in &committed.rows {
-            let class = match f.class {
-                RuntimeClass::Leaf => perry_gc_effects::Class::Leaf,
-                RuntimeClass::AllocOnly => perry_gc_effects::Class::AllocOnly,
-                RuntimeClass::ThrowOnly => perry_gc_effects::Class::ThrowOnly,
-                RuntimeClass::Reenters => perry_gc_effects::Class::Reenters,
-            };
-            same.insert(
-                sym.clone(),
-                perry_gc_effects::Entry {
-                    class,
-                    throws: f.throws,
-                },
-            );
-        }
-        let j = committed.weaker_of(&same);
-        assert_eq!(j.rows, committed.rows);
-        assert_eq!(j.digest(), committed.digest());
-        // Every row proven Leaf/no: still the committed rows.
-        let strongest: perry_gc_effects::Table = committed
-            .rows
-            .keys()
-            .map(|s| {
-                (
-                    s.clone(),
-                    perry_gc_effects::Entry {
-                        class: perry_gc_effects::Class::Leaf,
-                        throws: false,
-                    },
-                )
-            })
-            .collect();
-        assert_eq!(committed.weaker_of(&strongest).rows, committed.rows);
-    }
-
-    /// The installed-perry fallback: nothing proven, overrides kept.
+    /// The no-table fallback: nothing proven, overrides kept.
     #[test]
     fn all_unsafe_proves_no_runtime_symbol() {
         let u = GcEffects::all_unsafe();
@@ -1465,7 +921,10 @@ mod tests {
         for (name, effect, _) in OVERRIDES {
             assert_eq!(u.classify_direct_callee(name), *effect);
         }
-        assert!(committed_for_tests().proven_rows() > 1000);
-        assert_ne!(u.digest(), committed_for_tests().digest());
+        // In these tests the default is the test world (outside the tests it
+        // is the all-unsafe table: `not(test)` arm of `Default`).
+        assert_eq!(GcEffects::default().digest(), test_effects().digest());
+        assert!(test_effects().proven_rows() > 0);
+        assert_ne!(u.digest(), test_effects().digest());
     }
 }

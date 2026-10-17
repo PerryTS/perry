@@ -287,12 +287,9 @@ pub(super) fn check(ir: &str) {
                         );
                     } else if line.contains("call ") {
                         let callee = line.split('@').nth(1).unwrap().split('(').next().unwrap();
-                        let effects = include_str!("../gc_effects/linux-x86_64.tsv");
                         assert!(
-                            effects.lines().any(|effect| {
-                                let mut cols = effect.split('\t');
-                                cols.next() == Some(callee) && cols.next() == Some("Leaf")
-                            }),
+                            crate::gc_call_effects::test_effects().runtime_class(callee)
+                                == crate::gc_call_effects::RuntimeClass::Leaf,
                             "collecting call before completed birth: {line}"
                         );
                     }

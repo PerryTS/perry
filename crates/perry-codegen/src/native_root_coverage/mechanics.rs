@@ -351,8 +351,7 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
             Some(p) => p as isize,
             None => {
                 assert_eq!(
-                    crate::gc_call_effects::committed_for_tests()
-                        .classify_direct_callee("js_gc_init"),
+                    crate::gc_call_effects::test_effects().classify_direct_callee("js_gc_init"),
                     crate::gc_call_effects::GcCallEffect::CannotCollect,
                     "[{target}] entry `main` must initialize the GC: {:?}",
                     callees()

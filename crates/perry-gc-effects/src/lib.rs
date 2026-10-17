@@ -1,7 +1,7 @@
 //! GC and unwind effects derived from the machine code of a runtime link set.
 //!
-//! This is the compatibility port of scripts/gc_call_effects/callgraph.py.
-//! It deliberately retains that analyzer's ownership scan and conservative
+//! It began as a byte-identical port of the retired Python analyzer
+//! (`callgraph.py`) and keeps its ownership scan and conservative
 //! relocation/alias semantics.
 //!
 //! Without the default `analyzer` feature the crate is only the sidecar
@@ -28,7 +28,7 @@ pub use graph::{classify, Classification, Graph, Mode, Node, Stats};
 pub use rules::{load_rules, Rule, SEEDS};
 #[cfg(feature = "analyzer")]
 pub use table::shadowed_symbols;
-pub use table::{compare, parse_table, read_table, write_table, Class, Drift, Entry, Table};
+pub use table::{parse_table, read_table, write_table, Class, Entry, Table};
 
 #[cfg(feature = "analyzer")]
 use anyhow::{bail, Result};

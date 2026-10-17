@@ -589,7 +589,8 @@ pub struct CompileOptions {
     /// The runtime call-effect table this compilation lowers under: which
     /// runtime calls can collect or unwind. One value per compilation, shared
     /// by every module; its digest is in the object-cache key. Default: the
-    /// committed per-target tables ([`crate::GcEffects::from_committed`]).
+    /// table that proves nothing ([`crate::GcEffects::all_unsafe`]); the
+    /// compiler installs the verified sidecar table of the archive it links.
     pub gc_effects: std::sync::Arc<crate::GcEffects>,
 }
 

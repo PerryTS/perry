@@ -294,9 +294,7 @@ pub(crate) fn build_and_run_link(
     // perry-runtime may not include all symbols (e.g., perry_init_guard_check_and_set).
     // watchOS: swiftc treats duplicate symbols as errors (not warnings like clang),
     // so skip the standalone runtime when the UI lib already bundles it.
-    let skip_runtime = (is_android || is_watchos || is_visionos)
-        && (ctx.needs_ui || is_watchos)
-        && find_ui_library(target).is_some();
+    let skip_runtime = ui_lib_provides_runtime(ctx.needs_ui, target);
     let mut source_well_known_libs = well_known_libs.to_vec();
     let mut seen_well_known = std::collections::HashSet::new();
     source_well_known_libs.retain(|path| seen_well_known.insert(path.clone()));

@@ -612,12 +612,8 @@ mod tests {
                   \x20 %lp = landingpad { ptr, i32 } catch ptr null\n\
                   \x20 ret i64 0\n\
                   }\n";
-        let lowered = lower_precise_roots_to_native_stack(
-            crate::gc_call_effects::committed_for_tests(),
-            ir,
-            "f",
-            0,
-        );
+        let lowered =
+            lower_precise_roots_to_native_stack(crate::gc_call_effects::test_effects(), ir, "f", 0);
         for expected in [
             "  %a = invoke i64 @js_closure_get_capture_bits(i64 0, i32 0) \"gc-leaf-function\" to label %ok1 unwind label %pad\n",
             "  invoke void @js_box_set_bits(i64 %a, i64 1) \"gc-leaf-function\" to label %ok2 unwind label %pad\n",
@@ -686,12 +682,8 @@ entry:
   ret i64 %r3
 }
 "#;
-        let lowered = lower_precise_roots_to_native_stack(
-            crate::gc_call_effects::committed_for_tests(),
-            ir,
-            "f",
-            1,
-        );
+        let lowered =
+            lower_precise_roots_to_native_stack(crate::gc_call_effects::test_effects(), ir, "f", 1);
         // THE discriminating clause: reverting `rewrite_root_access`'s two load
         // arms fails here. The RS4GC-level clauses below are the structural
         // companion — they show WHY the launder is needed (the second
@@ -775,12 +767,8 @@ entry:
 }
 "#;
 
-        let lowered = lower_precise_roots_to_native_stack(
-            crate::gc_call_effects::committed_for_tests(),
-            ir,
-            "f",
-            1,
-        );
+        let lowered =
+            lower_precise_roots_to_native_stack(crate::gc_call_effects::test_effects(), ir, "f", 1);
         assert!(lowered.contains("%a = alloca ptr addrspace(1)"));
         assert!(lowered.contains("%b = alloca ptr addrspace(1)"));
         assert!(!lowered.contains("@js_shadow_slot_bind"));

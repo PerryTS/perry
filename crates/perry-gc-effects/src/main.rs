@@ -1,8 +1,6 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use perry_gc_effects::{
-    analyze, compare, load_rules, read_table, workspace_root, Class, Classification, Mode, SEEDS,
-};
+use perry_gc_effects::{analyze, load_rules, workspace_root, Classification, Mode, SEEDS};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -27,20 +25,6 @@ enum Command {
         #[arg(required = true)]
         archives: Vec<PathBuf>,
     },
-    Check {
-        #[arg(long)]
-        target: String,
-        #[arg(long)]
-        table: PathBuf,
-        #[arg(long)]
-        write_fresh: Option<PathBuf>,
-        #[arg(long)]
-        allow_safe_drift: bool,
-        #[arg(long, default_value_t = 1000)]
-        min_symbols: usize,
-        #[arg(required = true)]
-        archives: Vec<PathBuf>,
-    },
     /// Write `<runtime archive>.gc-effects` beside every runtime archive in a
     /// directory: the runtime alone, and the runtime with its stdlib.
     Sidecars {
@@ -56,10 +40,6 @@ enum Command {
         archives: Vec<PathBuf>,
         #[arg(required = true)]
         symbols: Vec<String>,
-    },
-    Lint {
-        #[arg(long, default_value_t = 1000)]
-        min_symbols: usize,
     },
 }
 fn stats(res: &Classification) {
@@ -109,70 +89,6 @@ fn run() -> Result<()> {
                 "[gc-call-effects] wrote {} ({} symbols)",
                 out.display(),
                 res.table.len()
-            );
-        }
-        Command::Check {
-            target,
-            table,
-            write_fresh,
-            allow_safe_drift,
-            min_symbols,
-            archives,
-        } => {
-            let (g, res) = analyze(&archives, &rules, &root)?;
-            stats(&res);
-            if res.table.len() < min_symbols {
-                bail!(
-                    "only {} exported symbols (< {min_symbols})",
-                    res.table.len()
-                );
-            }
-            if let Some(out) = write_fresh {
-                perry_gc_effects::write_table(&res.table, &target, &archives, &out)?;
-            }
-            let committed = read_table(&table)?;
-            let (unsafe_drift, safe) = compare(&committed, &res.table);
-            if !unsafe_drift.is_empty() {
-                eprintln!("UNSAFE: {} changes", unsafe_drift.len());
-                for d in unsafe_drift.iter().take(60) {
-                    eprintln!(
-                        "  {}: committed {}, archives say {}",
-                        d.name, d.committed, d.fresh
-                    );
-                    let mode = if d.throws {
-                        Mode::Throws
-                    } else {
-                        match d.committed.as_str() {
-                            "Leaf" => Mode::L2,
-                            "AllocOnly" => Mode::L2b,
-                            _ => Mode::L2bThrow,
-                        }
-                    };
-                    for step in res.witness_path(&g, &d.name, mode).iter().take(12) {
-                        eprintln!("      {step}");
-                    }
-                }
-            }
-            if !safe.is_empty() {
-                eprintln!(
-                    "::{}::DRIFT: {} safe changes",
-                    if allow_safe_drift { "warning" } else { "error" },
-                    safe.len()
-                );
-                for d in safe.iter().take(40) {
-                    eprintln!(
-                        "  {}: committed {}, archives say {}",
-                        d.name, d.committed, d.fresh
-                    );
-                }
-            }
-            if !unsafe_drift.is_empty() || !safe.is_empty() && !allow_safe_drift {
-                bail!("table differs from archives");
-            }
-            eprintln!(
-                "[gc-call-effects] {}: no UNSAFE drift ({} safe)",
-                table.display(),
-                safe.len()
             );
         }
         Command::Sidecars {
@@ -232,26 +148,6 @@ fn run() -> Result<()> {
                         println!("    {step}");
                     }
                 }
-            }
-        }
-        Command::Lint { min_symbols } => {
-            for kind in ["collector", "poll", "js", "throw", "panic", "extern"] {
-                if !rules.iter().any(|r| r.kind == kind) {
-                    bail!("seeds.txt has no {kind} rule");
-                }
-            }
-            for target in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
-                let path = root.join(format!("crates/perry-codegen/src/gc_effects/{target}.tsv"));
-                let text = std::fs::read_to_string(&path)?;
-                let table = read_table(&path)?;
-                if !text.contains(&format!("# target: {target}\n"))
-                    || table.len() < min_symbols
-                    || !table.values().any(|e| e.class == Class::Leaf)
-                    || !table.values().any(|e| !e.throws)
-                {
-                    bail!("invalid/vacuous {}", path.display());
-                }
-                eprintln!("[gc-call-effects] {target}: {} symbols", table.len());
             }
         }
     }

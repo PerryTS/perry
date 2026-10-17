@@ -283,7 +283,7 @@ impl LlModule {
     pub(crate) fn gc_effects(&self) -> Arc<crate::gc_call_effects::GcEffects> {
         self.gc_effects
             .clone()
-            .unwrap_or_else(crate::gc_call_effects::GcEffects::committed_fallback)
+            .unwrap_or_else(crate::gc_call_effects::GcEffects::outside_compilation)
     }
 
     /// Append a raw metadata definition line (e.g. `!1 = distinct !{!1}`).

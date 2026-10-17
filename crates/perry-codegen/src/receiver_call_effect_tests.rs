@@ -11,7 +11,7 @@ fn readonly_calls_preserve_receiver_proofs_and_other_calls_invalidate_them() {
         "js_typed_i32_arg_to_raw",
     ] {
         assert_eq!(
-            crate::gc_call_effects::committed_for_tests().classify_direct_callee(callee),
+            crate::gc_call_effects::test_effects().classify_direct_callee(callee),
             crate::gc_call_effects::GcCallEffect::CannotCollect,
             "proof preservation also needs a noncollecting call"
         );

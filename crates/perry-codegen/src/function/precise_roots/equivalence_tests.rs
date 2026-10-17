@@ -348,12 +348,12 @@ fn linear_lowering_matches_the_per_root_reference_on_generated_functions() {
         let g = generate(&mut rng, roots, lines, case % 2 == 0);
         let lines_vec: Vec<&str> = g.ir.lines().collect();
         let reference = reference_lower_roots_for_rs4gc(
-            crate::gc_call_effects::committed_for_tests(),
+            crate::gc_call_effects::test_effects(),
             &lines_vec,
             &g.root_ptrs,
         );
         let linear = super::lower_roots_for_rs4gc(
-            crate::gc_call_effects::committed_for_tests(),
+            crate::gc_call_effects::test_effects(),
             &lines_vec,
             &g.root_ptrs,
         );
@@ -411,7 +411,7 @@ fn linear_lowering_handles_a_wide_function_without_per_root_work() {
     let lines_vec: Vec<&str> = g.ir.lines().collect();
     let started = std::time::Instant::now();
     let linear = super::lower_roots_for_rs4gc(
-        crate::gc_call_effects::committed_for_tests(),
+        crate::gc_call_effects::test_effects(),
         &lines_vec,
         &g.root_ptrs,
     );
@@ -436,7 +436,7 @@ fn reference_timing_on_the_wide_function() {
     let lines_vec: Vec<&str> = g.ir.lines().collect();
     let started = std::time::Instant::now();
     let reference = reference_lower_roots_for_rs4gc(
-        crate::gc_call_effects::committed_for_tests(),
+        crate::gc_call_effects::test_effects(),
         &lines_vec,
         &g.root_ptrs,
     );
@@ -447,7 +447,7 @@ fn reference_timing_on_the_wide_function() {
     assert_eq!(
         reference,
         super::lower_roots_for_rs4gc(
-            crate::gc_call_effects::committed_for_tests(),
+            crate::gc_call_effects::test_effects(),
             &lines_vec,
             &g.root_ptrs
         )

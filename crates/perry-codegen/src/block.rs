@@ -174,8 +174,8 @@ pub struct RegCounter {
     /// The compilation's runtime call-effect table, injected by
     /// `LlModule::define_function` (and the other module entry points) from
     /// `CompileOptions::gc_effects`. `None` for functions built outside a
-    /// module (tests): [`Self::gc_effects`] then names the committed tables
-    /// explicitly.
+    /// module (tests): [`Self::gc_effects`] then reads
+    /// `GcEffects::outside_compilation`.
     gc_effects: RefCell<Option<Arc<crate::gc_call_effects::GcEffects>>>,
 }
 
@@ -202,14 +202,15 @@ impl RegCounter {
     }
 
     /// The compilation's call-effect table. A function built outside a module
-    /// (unit tests) was given none and reads the committed tables.
+    /// (unit tests) was given none and reads
+    /// [`GcEffects::outside_compilation`](crate::gc_call_effects::GcEffects::outside_compilation).
     pub(crate) fn gc_effects(&self) -> Arc<crate::gc_call_effects::GcEffects> {
         if let Some(effects) = &*self.gc_effects.borrow() {
             return Arc::clone(effects);
         }
-        let committed = crate::gc_call_effects::GcEffects::committed_fallback();
-        *self.gc_effects.borrow_mut() = Some(Arc::clone(&committed));
-        committed
+        let outside = crate::gc_call_effects::GcEffects::outside_compilation();
+        *self.gc_effects.borrow_mut() = Some(Arc::clone(&outside));
+        outside
     }
 
     /// Point this function's null-guard loads at `global` (a bare symbol

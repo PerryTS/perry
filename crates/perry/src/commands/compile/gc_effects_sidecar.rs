@@ -1,18 +1,22 @@
-//! The runtime call-effect table a compilation reads (GC effects design §4.3,
-//! slice 6): the `.gc-effects` sidecar shipped beside the prebuilt runtime
-//! archive this program links, checked against the archive bytes.
+//! The runtime call-effect table a compilation reads (GC effects design §4.3):
+//! the `.gc-effects` sidecar shipped beside the prebuilt runtime archive this
+//! program links, checked against the archive bytes.
 //!
 //! The sidecar was computed from the archive bytes when the archives were
 //! built (`scripts/gc_call_effects/sidecars.sh`); perry only reads it. Its key
 //! is the size and SHA-256 of every archive of the link combination, re-hashed
 //! here on every compile: a stamp or an mtime would be a cache, and a cache can
-//! be stale. Until the committed tables are dropped (slice 7) the table is, per
-//! row, the weaker of the sidecar and the committed merge.
+//! be stale. The table is the one of the archive that links, for its target
+//! and variant (default or instrumented): nothing else is consulted.
 //!
 //! A sidecar that is missing, unreadable or keyed to other bytes is a hard
 //! error in a perry that runs from its workspace (the fix is one command). An
 //! installed perry compiles under the all-unsafe table instead and says so
-//! once: sound, slower, and only reachable by replacing shipped files.
+//! once: sound, slower, and only reachable by replacing shipped files. A
+//! compilation with no prebuilt runtime archive to describe (WASI, a
+//! `--no-link` compile with no archive, Geisterhand's cargo-built runtime, the
+//! runtime copy inside an Android/watchOS/visionOS UI library) compiles under
+//! the all-unsafe table: no table speaks for what links.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,12 +31,12 @@ use super::library_search::{locate_runtime_library, locate_stdlib_library, Locat
 
 /// What a compilation links, as far as the effects table is concerned.
 pub(super) enum EffectsLinkSet {
-    /// No native link set (a standalone WASI build): nothing to read.
-    Wasi,
-    /// Archives built by cargo while this program compiles (Geisterhand),
-    /// after codegen: no sidecar exists for them yet. Interim, until those
-    /// builds are prebuilt; their table is the committed merge, as before.
-    BuiltAtCompileTime,
+    /// A runtime no sidecar describes: no native link set (a standalone WASI
+    /// build), Geisterhand's runtime (cargo builds it after codegen, with the
+    /// `geisterhand` feature), or the runtime copy bundled in the UI library
+    /// on Android/watchOS/visionOS (`link::ui_lib_provides_runtime`). The
+    /// table proves nothing.
+    Undescribed(&'static str),
     /// The prebuilt runtime archive (variant chosen before codegen), and the
     /// stdlib archive when the link line carries it.
     Prebuilt { with_stdlib: bool },
@@ -65,20 +69,23 @@ pub(super) fn compilation_gc_effects(
     verbose: u8,
 ) -> Result<Arc<GcEffects>> {
     let with_stdlib = match link_set {
-        EffectsLinkSet::Wasi => return Ok(Arc::new(GcEffects::all_unsafe())),
-        EffectsLinkSet::BuiltAtCompileTime => return Ok(Arc::new(GcEffects::from_committed())),
+        EffectsLinkSet::Undescribed(why) => {
+            if verbose > 0 {
+                eprintln!("  gc effects: {why}; all-unsafe table");
+            }
+            return Ok(Arc::new(GcEffects::all_unsafe()));
+        }
         EffectsLinkSet::Prebuilt { with_stdlib } => with_stdlib,
     };
     // No runtime archive at all: there is no link set to bind a table to. A
-    // linking compile fails at the link with the archive search report, as
-    // before; a `--no-link` compile (codegen-only CI census, IR tests) keeps
-    // the committed merge, which is what it compiled under before (interim,
-    // until slice 7 drops the committed tables).
+    // linking compile fails at the link with the archive search report; a
+    // `--no-link` compile (codegen-only census, IR tests) proves nothing about
+    // runtime calls.
     let Ok(runtime) = locate_runtime_library(target) else {
         if verbose > 0 {
-            eprintln!("  gc effects: no runtime archive located; committed tables (interim)");
+            eprintln!("  gc effects: no runtime archive located; all-unsafe table");
         }
-        return Ok(Arc::new(GcEffects::from_committed()));
+        return Ok(Arc::new(GcEffects::all_unsafe()));
     };
     let stdlib = if with_stdlib {
         locate_stdlib_library(target)
@@ -88,16 +95,13 @@ pub(super) fn compilation_gc_effects(
     let t = std::time::Instant::now();
     match read_verified(&runtime, stdlib.as_ref()) {
         Ok((table, combination)) => {
-            let committed = GcEffects::from_committed();
-            let effects = committed.weaker_of(&table);
+            let effects = GcEffects::from_sidecar(&table);
             if verbose > 0 {
                 eprintln!(
-                    "  gc effects: {} [{combination}] verified in {:.0} ms; {} proven rows \
-                     (committed merge {})",
+                    "  gc effects: {} [{combination}] verified in {:.0} ms; {} proven rows",
                     sidecar_path(&runtime.candidate).display(),
                     t.elapsed().as_secs_f64() * 1e3,
                     effects.proven_rows(),
-                    committed.proven_rows()
                 );
             }
             Ok(Arc::new(effects))

@@ -358,6 +358,12 @@ const COLD_HELPERS: &[&str] = &[
     "js_stack_overflow",
 ];
 
+// Every helper in the three nounwind groups below (`#2`, `#3`, `#4`) is an
+// audited promise that the call never unwinds; the runtime archive's table
+// must prove it `throws=no`. `perry-gc-effects`' `workspace_sidecar` test
+// reads these three lists by name from this file and checks them over the
+// freshly built archives of every CI target.
+
 /// Group `#2`: nounwind, willreturn, readnone.
 const PURE_HELPERS: &[&str] = &[
     // PURE — each verified: pure bit tests/masking on the f64/i64 args,
@@ -504,18 +510,6 @@ fn helper_decl_contract(name: &str) -> HelperDeclContract {
     } else {
         HelperDeclContract::Conservative
     }
-}
-
-/// Every helper whose `declare` carries a `nounwind` group (`#2`, `#3`, `#4`).
-/// Each one is an audited promise that the call never unwinds; the generated
-/// table's `throws` column must agree (checked in `gc_call_effects` tests).
-#[cfg(test)]
-pub(crate) fn nounwind_declared_helpers() -> impl Iterator<Item = &'static str> {
-    PURE_HELPERS
-        .iter()
-        .chain(READONLY_HELPERS)
-        .chain(NOUNWIND_HELPERS)
-        .copied()
 }
 
 enum HelperDeclContract {

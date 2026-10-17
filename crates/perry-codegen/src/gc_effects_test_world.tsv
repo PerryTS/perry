@@ -1,0 +1,71 @@
+# The test world of the perry-codegen unit tests: the runtime call effects the
+# tests assume, stated explicitly. It describes no runtime archive and the
+# compiler never reads it (a compilation reads the verified sidecar of the
+# archive it links; see gc_call_effects.rs). Add a row only when a test needs
+# that fact; the real archives' facts are pinned by perry-gc-effects'
+# workspace_sidecar test.
+# symbol	class	throws
+js_array_numeric_value_to_raw_f64	Leaf	no
+js_box_alloc_bits	AllocOnly	no
+js_box_set_bits	Leaf	no
+js_bun_ffi_has_active_threadsafe_callbacks	Leaf	no
+js_callback_timer_has_pending	Leaf	no
+js_catch_enter	Leaf	no
+js_clear_exception	Leaf	no
+js_closure_alloc_empty	AllocOnly	no
+js_closure_get_capture_bits	Leaf	no
+js_closure_set_capture_bits	Leaf	no
+js_derived_super_scope_pop	Leaf	no
+js_derived_super_scope_push	Leaf	no
+js_eh_handle_height	Leaf	no
+js_eh_pad_enter	Leaf	no
+js_event_loop_host_driven	Leaf	no
+js_gc_loop_safepoint	Reenters	no
+js_gc_note_black_birth	Leaf	no
+js_gc_note_slot_layout	Leaf	no
+js_gc_register_global_root	Leaf	no
+js_gc_safepoint	Reenters	no
+js_gc_write_barriers_emitted	Leaf	no
+js_get_exception	Leaf	no
+js_has_exception	Leaf	no
+js_i32_box_set	Leaf	no
+js_immediate_has_pending	Leaf	no
+js_inline_arena_slow_alloc	AllocOnly	no
+js_inline_arena_state	Leaf	no
+js_interval_timer_has_pending	Leaf	no
+js_is_truthy	Leaf	no
+js_microtasks_pending	Leaf	no
+js_nanbox_pointer	Leaf	no
+js_nanbox_string	AllocOnly	no
+js_native_buffer_data_ptr	Leaf	no
+js_new_target_enter	Leaf	no
+js_new_target_leave	Leaf	no
+js_object_get_class_id	Leaf	no
+js_object_shape_id_for_class_keys	Reenters	no
+js_object_shape_id_for_class_keys_live	Reenters	no
+js_object_shape_id_for_class_keys_static	Reenters	no
+js_process_pending_exit_code	Leaf	no
+js_register_anon_shape_class_id	Leaf	no
+js_register_class_constructor	Leaf	no
+js_register_class_string_member_order	Leaf	no
+js_register_function_names_static	Leaf	no
+js_string_addref_if_heap_string	Leaf	no
+js_string_compare	Leaf	no
+js_string_register_property_atoms	Leaf	no
+js_throw	ThrowOnly	yes
+js_timer_has_pending	Leaf	no
+js_trace_events_flush_output	Leaf	no
+js_typed_feedback_maybe_dump_trace	Leaf	no
+js_typed_i32_arg_guard	Leaf	no
+js_typed_i32_arg_to_raw	Leaf	no
+js_write_barrier	Leaf	no
+js_write_barrier_slot	Leaf	no
+js_write_barrier_slot_validated_parent	Leaf	no
+perry_alloc_layout	AllocOnly	no
+perry_array_iteration_init	Leaf	no
+perry_class_value_dir_cell	Leaf	no
+perry_intrinsic_proto	Leaf	no
+perry_probe_get	Leaf	no
+perry_probe_get_keyed	Leaf	no
+perry_probe_get_length	Leaf	no
+perry_probe_get_value	Leaf	no

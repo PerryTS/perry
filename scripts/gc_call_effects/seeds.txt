@@ -1,4 +1,4 @@
-# Seeds, cuts and audited exemptions for scripts/gc_call_effects/callgraph.py.
+# Seeds, cuts and audited exemptions for the GC effects analyzer (crates/perry-gc-effects).
 #
 # Format:   kind  match  pattern  -- reason
 #   match   exact | prefix | contains | regex, applied to every spelling of a
@@ -206,9 +206,9 @@ trusted regex ^(?!perry|turnloop).+ -- foreign Rust crates: their indirect calls
 trusted regex ^perry_(parser|diagnostics)$ -- the SWC wrapper and diagnostics crates do not depend on perry-runtime; their indirect calls are SWC's own trait objects (source maps, error payloads) and can reach runtime code only through a callback the runtime hands them, which it does not
 #
 # ------------------------------------------------------------------- idiom
-# Indirect-call idioms the parser recognizes structurally (callgraph._idiom);
+# Indirect-call idioms the parser recognizes structurally (the analyzer's idiom rules, instructions.rs);
 # each names the only functions the idiom can land on, which become callees.
-indirect regex ^perry_runtime::object::shapes::stamp_object_shape_id_with_carrier_note$ -- aarch64 only: its indirect calls are Mach-O thread-local accesses, `ldr x10,[x19]; mov x0,x19; blr x10` at two sites (disassembly of the macos archive: +0x68 and +0x2c8 from the symbol, 0x597960 `adrp x19; ldr x19,[x19]` loads the TLVP descriptor). The generator's reaching-definitions proof for the TLV idiom (callgraph.py _tlv_thunk_call) gives up because x19 is a callee-saved register redefined later in the function; the callee is dyld's TLV getter, which never enters Perry code
+indirect regex ^perry_runtime::object::shapes::stamp_object_shape_id_with_carrier_note$ -- aarch64 only: its indirect calls are Mach-O thread-local accesses, `ldr x10,[x19]; mov x0,x19; blr x10` at two sites (disassembly of the macos archive: +0x68 and +0x2c8 from the symbol, 0x597960 `adrp x19; ldr x19,[x19]` loads the TLVP descriptor). The generator's reaching-definitions proof for the TLV idiom (instructions.rs, the TLV thunk call) gives up because x19 is a callee-saved register redefined later in the function; the callee is dyld's TLV getter, which never enters Perry code
 idiom io_os_functions => regex ^std::sys::(io::error|pal)::\w+::(decode_error_kind|error_string|is_interrupted) -- the OS_FUNCTIONS table only ever holds std's own errno helpers
 idiom io_error_drop => regex ^alloc::io::error::custom_owner_from_box::drop_box_raw -- dropping an io::Error's custom payload calls the owner-drop fn std stored in the box: always a drop_box_raw::<T> instantiation. Same bit-packed repr on every 64-bit target; on x86_64-pc-windows-msvc the box is passed in %rcx (`movq %r, %rcx ; decq %rcx ; callq *0x17(%r)`), which covers the stdio / fs / child-process result drops of js_console_*, js_checkpoint and the tui writers (#12479)
 #

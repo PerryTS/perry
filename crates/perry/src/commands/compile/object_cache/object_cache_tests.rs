@@ -125,22 +125,22 @@ fn key_changes_with_perry_version() {
 /// rows built twice are the same key.
 #[test]
 fn key_changes_with_gc_effects_table() {
-    let rows = |class: &str| {
-        format!("# target: t\njs_array_length_leaf\t{class}\tno\nother\tReenters\tyes\n")
-    };
-    let build = |class: &str| {
-        let text = rows(class);
-        std::sync::Arc::new(perry_codegen::GcEffects::from_tables(&[(
-            "t",
-            text.as_str(),
-        )]))
+    let build = |class: perry_gc_effects::Class| {
+        let table: perry_gc_effects::Table = [
+            ("js_array_length_leaf", class, false),
+            ("other", perry_gc_effects::Class::Reenters, true),
+        ]
+        .into_iter()
+        .map(|(sym, class, throws)| (sym.to_string(), perry_gc_effects::Entry { class, throws }))
+        .collect();
+        std::sync::Arc::new(perry_codegen::GcEffects::from_sidecar(&table))
     };
     let mut leaf = empty_opts();
-    leaf.gc_effects = build("Leaf");
+    leaf.gc_effects = build(perry_gc_effects::Class::Leaf);
     let mut again = empty_opts();
-    again.gc_effects = build("Leaf");
+    again.gc_effects = build(perry_gc_effects::Class::Leaf);
     let mut reenters = empty_opts();
-    reenters.gc_effects = build("Reenters");
+    reenters.gc_effects = build(perry_gc_effects::Class::Reenters);
     assert_eq!(
         compute_object_cache_key(&leaf, 1, "0.5.156"),
         compute_object_cache_key(&again, 1, "0.5.156"),
@@ -154,7 +154,7 @@ fn key_changes_with_gc_effects_table() {
     assert_ne!(
         compute_object_cache_key(&leaf, 1, "0.5.156"),
         compute_object_cache_key(&empty_opts(), 1, "0.5.156"),
-        "the committed tables differ from a one-row table"
+        "the all-unsafe default differs from a one-row table"
     );
 }
 

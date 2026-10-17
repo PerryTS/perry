@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 #[cfg(feature = "analyzer")]
 use std::collections::HashSet;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt,
     path::{Path, PathBuf},
     str::FromStr,
@@ -165,64 +165,6 @@ pub fn parse_table(text: &str, label: &str) -> Result<Table> {
         }
     }
     Ok(out)
-}
-#[derive(Debug, PartialEq, Eq)]
-pub struct Drift {
-    pub name: String,
-    pub committed: String,
-    pub fresh: String,
-    pub throws: bool,
-}
-pub fn compare(committed: &Table, fresh: &Table) -> (Vec<Drift>, Vec<Drift>) {
-    let names: BTreeSet<_> = committed.keys().chain(fresh.keys()).collect();
-    let mut unsafe_drift = Vec::new();
-    let mut safe = Vec::new();
-    for throws in [false, true] {
-        for name in &names {
-            let c = committed.get(*name);
-            let f = fresh.get(*name);
-            let changed = if throws {
-                c.map(|e| e.throws) != f.map(|e| e.throws)
-            } else {
-                c.map(|e| e.class) != f.map(|e| e.class)
-            };
-            let weaker = if throws {
-                !c.is_none_or(|e| e.throws) && f.is_none_or(|e| e.throws)
-            } else {
-                c.map(|e| e.class).unwrap_or(Class::Reenters)
-                    < f.map(|e| e.class).unwrap_or(Class::Reenters)
-            };
-            let text = |e: Option<&Entry>| {
-                e.map(|e| {
-                    if throws {
-                        format!("throws={}", e.throws_name())
-                    } else {
-                        e.class.to_string()
-                    }
-                })
-                .unwrap_or_else(|| {
-                    if throws {
-                        "throws=(absent)"
-                    } else {
-                        "(absent)"
-                    }
-                    .into()
-                })
-            };
-            let row = Drift {
-                name: (*name).clone(),
-                committed: text(c),
-                fresh: text(f),
-                throws,
-            };
-            if weaker {
-                unsafe_drift.push(row);
-            } else if changed {
-                safe.push(row);
-            }
-        }
-    }
-    (unsafe_drift, safe)
 }
 pub(crate) fn table_text(table: &Table, target: &str, archives: &[PathBuf]) -> String {
     let mut text = include_str!("table-header.txt")

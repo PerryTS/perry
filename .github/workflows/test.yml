@@ -387,20 +387,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo fmt --all -- --check
 
-      # RFC deferred collection S1: codegen's GC call effects come from the
-      # generated tables in crates/perry-codegen/src/gc_effects/. The self-test
-      # compiles a C fixture to ELF, Mach-O and COFF objects and runs the real
-      # classifier over them, including a planted js_proxy_get call in a Leaf
-      # helper that must come back Reenters and be reported as UNSAFE drift, so
-      # a green archive check means something. `lint` checks that the rules and
-      # the three committed tables parse. The archive comparison itself runs in
-      # gc-call-effects-linux and gc-call-effects (macOS aarch64, Windows).
-      - name: GC call-effects classifier self-test and table lint
-        if: ${{ !cancelled() }}
-        run: |
-          python3 scripts/gc_call_effects/callgraph.py --self-test
-          python3 scripts/gc_call_effects/callgraph.py lint
-
       # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
       # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
       # docs-only PRs skip the compile tier, an empty file listing is treated
@@ -3675,18 +3661,19 @@ jobs:
   # await-tests keys on. If a standing failure must not block a release,
   # triage it into test-parity/known_failures.json — do not soften the job.
   # ---------------------------------------------------------------------------
-  # RFC deferred collection S1 (owner decision 4). The committed table
-  # crates/perry-codegen/src/gc_effects/<target>.tsv must equal the table
-  # scripts/gc_call_effects/callgraph.py derives from THIS commit's release
-  # runtime archives, and no symbol may be committed weaker than the archives
-  # prove (UNSAFE drift: codegen would skip a statepoint the runtime needs).
-  # On failure the regenerated table is uploaded as `gc-effects-<target>`:
-  # commit it (or run scripts/gc_call_effects/regen.sh <target> locally).
-  # On a PR only UNSAFE drift fails (new symbols from main read as Unknown,
-  # which is safe); on main-line tiers any drift fails, so it gets regenerated.
+  # RFC deferred collection S1, GC effects design §5. Nothing is checked in:
+  # perry reads the `.gc-effects` sidecar of the runtime archive it links,
+  # computed from the archive bytes by `perry-gc-effects sidecars`. These jobs
+  # run that step over freshly built archives of each checked target (the
+  # analyzer's hard rule checks: solves agree, forbid premises, no dead seed
+  # rules, the symbol floor), the analyzer's fixture self-test (a planted
+  # js_proxy_get call in a Leaf helper must come back Reenters), and the
+  # pinned facts over the fresh sidecar (`perry-gc-effects` test
+  # `workspace_sidecar`: hot helpers Leaf, #11522, #11523, polls, the
+  # root-dominance checker's authority).
   #
-  # Linux reuses gap-suite-build's archives (same build command as regen.sh);
-  # in the full tier, where gap-suite-build does not run, it builds them.
+  # Linux reuses gap-suite-build's archives; in the full tier, where
+  # gap-suite-build does not run, it builds them.
   gc-call-effects-linux:
     needs: [plan, gap-suite-build]
     if: >-
@@ -3738,26 +3725,16 @@ jobs:
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
-      - name: Committed table vs. the archives
-        env:
-          GC_EFFECTS_SKIP_BUILD: "1"
-          GC_EFFECTS_FRESH_OUT: gc-effects/linux-x86_64.tsv
-          GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
+      - name: Sidecars, analyzer self-test and pinned facts
         run: |
-          mkdir -p gc-effects
-          scripts/gc_call_effects/regen.sh linux-x86_64 --check
-      - name: Upload the regenerated table
-        if: always()
-        uses: ./.github/actions/perry/actions/upload-artifact # v7
-        with:
-          name: gc-effects-linux-x86_64
-          path: gc-effects/
-          if-no-files-found: warn
-          retention-days: 7
+          scripts/gc_call_effects/sidecars.sh target/release
+          cargo test -p perry-gc-effects
+          PERRY_GC_EFFECTS_SIDECAR=target/release/libperry_runtime.a.gc-effects \
+            cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
 
   # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
-  # uses). Each leg compares only its own table.
+  # uses). Each leg writes its own sidecars and checks the pinned facts.
   gc-call-effects:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects
@@ -3825,25 +3802,24 @@ jobs:
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
-      - name: Build the archives and compare the committed table
+      - name: Build the archives, write their sidecars, check the pinned facts
         # cargo-xwin runs OpenSSL's Windows Configure script with Linux Perl.
         # OpenSSL's windows-checker rejects that host by default; CONFIGURE_INSIST
         # is its explicit override for cross-host configurations.
         env:
           CONFIGURE_INSIST: ${{ matrix.target == 'windows-x86_64' && '1' || '' }}
-          GC_EFFECTS_FRESH_OUT: gc-effects/${{ matrix.target }}.tsv
-          GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
-          mkdir -p gc-effects
-          scripts/gc_call_effects/regen.sh "${{ matrix.target }}" --check
-      - name: Upload the regenerated table
-        if: always()
-        uses: ./.github/actions/perry/actions/upload-artifact # v7
-        with:
-          name: gc-effects-${{ matrix.target }}
-          path: gc-effects/
-          if-no-files-found: warn
-          retention-days: 7
+          unset RUSTFLAGS
+          if [[ "${{ matrix.target }}" == windows-x86_64 ]]; then
+            cargo xwin build --release --target x86_64-pc-windows-msvc -p perry-runtime-static -p perry-stdlib-static
+            libdir=target/x86_64-pc-windows-msvc/release; runtime=perry_runtime.lib
+          else
+            cargo build --release -p perry-runtime-static -p perry-stdlib-static
+            libdir=target/release; runtime=libperry_runtime.a
+          fi
+          scripts/gc_call_effects/sidecars.sh "$libdir"
+          PERRY_GC_EFFECTS_SIDECAR="$libdir/$runtime.gc-effects" \
+            cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
 
   parity:
     # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does

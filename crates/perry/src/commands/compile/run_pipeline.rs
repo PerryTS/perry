@@ -3578,10 +3578,14 @@ pub fn run_with_parse_cache(
             compilation_gc_effects, stdlib_on_link_line, EffectsLinkSet,
         };
         let link_set = if native_link_set_skipped {
-            EffectsLinkSet::Wasi
+            EffectsLinkSet::Undescribed("no native link set (WASI)")
         } else if ctx.needs_geisterhand {
             // Geisterhand builds its runtime with cargo after codegen.
-            EffectsLinkSet::BuiltAtCompileTime
+            EffectsLinkSet::Undescribed("Geisterhand builds its runtime after codegen")
+        } else if super::link::ui_lib_provides_runtime(ctx.needs_ui, target.as_deref()) {
+            // The UI library's bundled runtime copy links, not the archive
+            // a sidecar describes (a UI-lib sidecar is #12744).
+            EffectsLinkSet::Undescribed("the UI library bundles the runtime that links")
         } else {
             EffectsLinkSet::Prebuilt {
                 with_stdlib: stdlib_on_link_line(ctx.needs_stdlib, ctx.needs_ui, target.as_deref()),

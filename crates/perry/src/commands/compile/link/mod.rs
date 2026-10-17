@@ -69,6 +69,21 @@ pub(super) use windows_link::WINDOWS_APP_MANIFEST; // consumed only by windows_l
 #[cfg(test)]
 pub(super) use windows_link::{embed_app_manifest, linker_is_msvc_link_exe}; // windows_link_tests (#6023)
 
+/// Whether the final link takes perry-runtime from the UI library instead of
+/// `libperry_runtime`: Android, watchOS and visionOS link the UI staticlib,
+/// which bundles its own copy of the runtime, and leave the standalone runtime
+/// archive off the link line (ELF would pick either copy; swiftc rejects the
+/// duplicates). watchOS links the UI library even without `needs_ui`
+/// (#607). The link and the GC effects table (`gc_effects_sidecar`) both ask
+/// this one question, so the table always describes the runtime that links.
+pub(super) fn ui_lib_provides_runtime(needs_ui: bool, target: Option<&str>) -> bool {
+    let is_watchos = matches!(target, Some("watchos") | Some("watchos-simulator"));
+    let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
+    (is_android_target(target) || is_watchos || is_visionos)
+        && (needs_ui || is_watchos)
+        && find_ui_library(target).is_some()
+}
+
 /// Symbols a plugin host must export so `dlopen`'d / `LoadLibrary`'d plugin
 /// shared libraries can resolve them against the host process at load time.
 ///
