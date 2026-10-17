@@ -691,9 +691,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             )
         }
         // Issue #650: `urlSearchParams.size` property — runtime returns
-        // i32 length of the internal _entries array. Pre-fix the access
+        // i32 length of the internal entries array. Pre-fix the access
         // fell through to the generic object-field lookup which returned
-        // undefined (URLSearchParams stores entries under "_entries", not
+        // undefined (URLSearchParams stores entries in a private slot, not
         // "size"). Routed via `is_url_search_params_expr` so it only
         // fires on receivers we can prove are URLSearchParams (immediate
         // ctor, typed locals, `url.searchParams` accessor).

@@ -1342,6 +1342,17 @@ pub extern "C" fn js_object_rest(
                 None => continue,
             };
 
+            // CopyDataProperties copies enumerable properties only. A private
+            // entry (a class's `#x` field, a runtime layout's internal slot)
+            // is non-enumerable as well as never a property, so the entry at
+            // the key's position drops both.
+            let entry = keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                crate::object::key_attrs::keys_entry(keys, i as u32)
+            });
+            if entry & crate::object::key_attrs::ENTRY_NON_ENUMERABLE != 0 {
+                continue;
+            }
+
             // Check if field was deleted. An accessor key's slot holds its
             // accessor pair (`accessor_pair.rs`), not a value: it is copied
             // below through [[Get]].

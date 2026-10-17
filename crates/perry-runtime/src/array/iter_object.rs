@@ -375,7 +375,7 @@ unsafe fn collection_iter_obj_for_receiver(arr: *const ArrayHeader, kind: u8) ->
             _ => crate::collection_iter_object::js_set_values_iter_obj(s),
         });
     }
-    // Native URLSearchParams (ordinary heap object, `_entries`-leading shape —
+    // Native URLSearchParams (ordinary heap object, entries-slot-leading shape —
     // NOT a fetch-band handle): the #597 any-typed fold lands here too, e.g.
     // `const sp = new URL(u).searchParams; sp.entries()` where `sp`'s static
     // type erased to Any. Reading the params object as an `ArrayHeader`

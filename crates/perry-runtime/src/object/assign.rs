@@ -1052,9 +1052,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
             // A class instance's runtime-internal keys are hidden by name. A
-            // private field (#11791) is a non-enumerable entry, so the
-            // enumerability check below drops it with the shape's own
-            // attributes; no other lookup is needed for it.
+            // private entry (a class's `#x` field #11791, or a runtime
+            // layout's internal slot) is never a property, so a lookup by
+            // name cannot answer for it: the entry at the key's position in
+            // the shape's own list does.
             let hide_internal = (*src).class_id != 0;
             let holey = crate::object::key_view::object_may_have_holes(src);
             for i in 0..key_count {
@@ -1070,6 +1071,11 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 }
                 // An optional key whose slot holds the hole is absent.
                 if holey && crate::object::key_view::own_key_is_hole(src, key_val) {
+                    continue;
+                }
+                if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
+                    src_keys, i as u32,
+                )) {
                     continue;
                 }
                 if hide_internal {

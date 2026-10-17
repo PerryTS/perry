@@ -561,9 +561,9 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
             let obj = raw_addr as *mut crate::ObjectHeader;
             // #1668: `[...searchParams]` / `Array.from(searchParams)` yield the
             // `[key, value]` entry pairs. Detect a URLSearchParams by its shape
-            // (`_entries` leads the keys array) and return its entries array.
+            // (its private entries slot leads the keys array) and return its entries array.
             // The previous heuristic required `keys_array.length == 1`, but a
-            // URL-adopted URLSearchParams also carries a `_owner` key (2 keys),
+            // URL-adopted URLSearchParams also carries an owner key (2 keys),
             // so spread fell through to the array-like path and produced `[]`.
             if crate::url::try_read_as_search_params(obj).is_some() {
                 let boxed = crate::url::js_url_search_params_entries_arr(obj);

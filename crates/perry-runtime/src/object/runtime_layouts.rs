@@ -727,16 +727,16 @@ static ATOM_10: StaticAtom = StaticAtom {
 };
 
 #[used(linker)]
-#[export_name = "perry_image_literal_0_5f656e7472696573"]
+#[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d732d656e74726965733e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
     not(any(target_vendor = "apple", target_os = "windows")),
     link_section = "perry_strings"
 )]
-static IMAGE_11: ImageString<9> = image(*b"_entries\0");
+static IMAGE_11: ImageString<35> = image(*b"#<perry:url-search-params-entries>\0");
 #[used(linker)]
-#[export_name = "perry_atom_5f656e7472696573"]
+#[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d732d656e74726965733e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
@@ -744,7 +744,7 @@ static IMAGE_11: ImageString<9> = image(*b"_entries\0");
     link_section = "perry_atoms"
 )]
 static ATOM_11: StaticAtom = StaticAtom {
-    hash: atom_hash(b"_entries"),
+    hash: atom_hash(b"#<perry:url-search-params-entries>"),
     string: std::ptr::addr_of!(IMAGE_11.string),
     kind: crate::codegen_abi::ATOM_KIND_STRING,
     _pad: [0; 3],
@@ -752,16 +752,16 @@ static ATOM_11: StaticAtom = StaticAtom {
 };
 
 #[used(linker)]
-#[export_name = "perry_image_literal_0_5f6f776e6572"]
+#[export_name = "perry_image_literal_0_233c70657272793a75726c2d7365617263682d706172616d732d6f776e65723e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
     not(any(target_vendor = "apple", target_os = "windows")),
     link_section = "perry_strings"
 )]
-static IMAGE_12: ImageString<7> = image(*b"_owner\0");
+static IMAGE_12: ImageString<33> = image(*b"#<perry:url-search-params-owner>\0");
 #[used(linker)]
-#[export_name = "perry_atom_5f6f776e6572"]
+#[export_name = "perry_atom_233c70657272793a75726c2d7365617263682d706172616d732d6f776e65723e"]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
 #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
 #[cfg_attr(
@@ -769,7 +769,7 @@ static IMAGE_12: ImageString<7> = image(*b"_owner\0");
     link_section = "perry_atoms"
 )]
 static ATOM_12: StaticAtom = StaticAtom {
-    hash: atom_hash(b"_owner"),
+    hash: atom_hash(b"#<perry:url-search-params-owner>"),
     string: std::ptr::addr_of!(IMAGE_12.string),
     kind: crate::codegen_abi::ATOM_KIND_STRING,
     _pad: [0; 3],
@@ -1296,17 +1296,17 @@ static URL_SEARCH_PARAMS_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_11),
         slot: 0,
-        attrs: 0,
+        attrs: 66,
         _pad: [0; 3],
     },
     PerryLayoutKey {
         atom: std::ptr::addr_of!(ATOM_12),
         slot: 1,
-        attrs: 0,
+        attrs: 66,
         _pad: [0; 3],
     },
 ];
-static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [u32::MAX, 1, 0, u32::MAX];
+static URL_SEARCH_PARAMS_INDEX: [u32; 4] = [0, 1, u32::MAX, u32::MAX];
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]

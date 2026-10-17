@@ -61,7 +61,7 @@
 //! secondary probe rather than by a gate above: `arguments` objects (class 0,
 //! but `arguments_object_get_field` answers only for an OWN key, excluded by
 //! the own-`then` scan) and `URLSearchParams`-shaped objects (class 0 with
-//! `keys[0] == "_entries"`, but its method table has no `then`).
+//! the private entries slot at `keys[0]`, but its method table has no `then`).
 //!
 //! **Half 2 — `Object.prototype`, cached under a signature.** The verdict
 //! "`Get(Object.prototype, "then")` is `undefined`" is computed by CALLING THE

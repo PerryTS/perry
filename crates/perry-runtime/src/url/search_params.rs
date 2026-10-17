@@ -16,6 +16,23 @@ pub(crate) const URL_SEARCH_PARAMS_ENTRIES: u32 = 0; // Array of [key, value] pa
 /// `new URLSearchParams(...)`.
 pub(crate) const URL_SEARCH_PARAMS_OWNER: u32 = 1;
 
+/// The spelling of the entries slot's key on `runtime_layouts::URL_SEARCH_PARAMS`.
+/// Both slots are private entries (like URL's components), so no own-key
+/// reader lists them and no script can name them.
+const URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "#<perry:url-search-params-entries>";
+
+/// True when a keys array leads with the native params' private entries
+/// slot. Only the layout carries that key as a private entry, so an ordinary
+/// object whose first key has the same spelling never passes.
+///
+/// # Safety
+/// `keys` is a live eager keys array with at least one key.
+unsafe fn keys_lead_with_entries_slot(keys: *const ArrayHeader) -> bool {
+    crate::object::key_attrs::keys_entry(keys, 0) & crate::object::key_attrs::ENTRY_PRIVATE != 0
+        && get_string_content(crate::array::js_array_get_f64(keys, 0))
+            == URL_SEARCH_PARAMS_ENTRIES_KEY
+}
+
 /// Hidden field installed on a `class X extends URLSearchParams` instance by
 /// `js_url_search_params_subclass_init`, holding the native backing params
 /// object that the inherited method surface actually operates on.
@@ -474,7 +491,7 @@ pub extern "C" fn js_url_search_params_new_any(init: f64) -> *mut ObjectHeader {
 
         let obj_ptr = ptr_i64 as *mut ObjectHeader;
 
-        // Detect another URLSearchParams: its `_entries` field holds the
+        // Detect another URLSearchParams: its entries slot holds the
         // ArrayHeader of [k, v] pair arrays. We can't tell apart by class
         // (both are class_id 0), so peek at the keys array's first entry.
         // Simpler heuristic: try to read it as an entries-table; fall back
@@ -553,10 +570,10 @@ pub(crate) fn try_read_as_search_params(
         // A genuine URLSearchParams is always allocated with `class_id == 0`
         // (an ordinary object, see `create_url_search_params`). Other native
         // classes — notably `util.MIMEParams` — ALSO store their data in a
-        // leading `_entries` slot but carry a distinct registered class id and
-        // a different field layout (no `_owner` slot). Without this guard such
+        // leading entries slot but carry a distinct registered class id and
+        // a different field layout (no owner slot). Without this guard such
         // an object is mis-detected below, then read with the URLSearchParams
-        // layout (an out-of-bounds `_owner` field read) → segfault when e.g.
+        // layout (an out-of-bounds owner field read) → segfault when e.g.
         // `String(mimeParams)` / `mimeParams.toString()` routes through
         // `js_jsvalue_to_string`. Bail for any non-zero class id.
         if (*params).class_id != 0 {
@@ -571,15 +588,9 @@ pub(crate) fn try_read_as_search_params(
             return None;
         }
         let keys_len = keys_arr_view.count();
-        // URLSearchParams objects carry the `_entries` slot (and now `_owner`
-        // for URL-adopted instances). The first slot is always `_entries`;
-        // any extra field beyond that is fine as long as `_entries` leads.
-        if keys_len == 0 {
-            return None;
-        }
-        let key0 = crate::array::js_array_get_f64(keys_arr, 0);
-        let key0_str = get_string_content(key0);
-        if key0_str != "_entries" {
+        // URLSearchParams objects lead with the private entries slot; any
+        // expando after the layout's keys is fine.
+        if keys_len == 0 || !keys_lead_with_entries_slot(keys_arr) {
             return None;
         }
     }
@@ -823,7 +834,7 @@ pub extern "C" fn js_url_search_params_delete2(
 
 /// Issue #650: `URLSearchParams.size` getter — returns the number of
 /// entries (key/value pairs) currently stored. Reads the length of the
-/// `_entries` ArrayHeader directly; null receiver / missing array
+/// entries ArrayHeader directly; null receiver / missing array
 /// returns 0.
 #[no_mangle]
 pub extern "C" fn js_url_search_params_size(params: *mut ObjectHeader) -> i32 {
@@ -984,7 +995,7 @@ pub extern "C" fn js_url_search_params_get_all(params: *mut ObjectHeader, name_v
 // them runs the dynamic dispatch below on its `this`.
 
 /// True when `obj` has the native URLSearchParams shape: an ordinary object
-/// (class_id == 0) whose leading own key is `_entries`. Mirrors the guard in
+/// (class_id == 0) whose leading key is the private entries slot. Mirrors the guard in
 /// [`try_read_as_search_params`] without materializing the entries.
 pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
     if obj.is_null() {
@@ -1031,8 +1042,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         if keys_arr_view.count() == 0 {
             return false;
         }
-        let key0 = crate::array::js_array_get_f64(keys_arr, 0);
-        get_string_content(key0) == "_entries"
+        keys_lead_with_entries_slot(keys_arr)
     }
 }
 
