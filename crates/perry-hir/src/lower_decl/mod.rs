@@ -13,6 +13,7 @@ mod body_stmt;
 mod class_captures;
 mod class_computed;
 mod class_decl;
+pub(crate) mod class_field_assign;
 mod class_members;
 mod class_validation;
 mod enum_decl;

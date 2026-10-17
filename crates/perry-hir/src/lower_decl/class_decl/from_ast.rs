@@ -15,6 +15,10 @@ pub(crate) fn lower_class_from_ast(
 ) -> Result<Class> {
     // Consume the flag before any nested class in this body is lowered.
     let fresh_class_expr = std::mem::take(&mut ctx.pending_fresh_class_expr);
+    let synthesized =
+        crate::lower_decl::class_field_assign::with_synthesized_constructor(ctx, class);
+    let class = synthesized.as_ref().unwrap_or(class);
+    let field_inits = crate::lower_decl::class_field_assign::assigned_field_inits(ctx, class);
     validate_legacy_decorator_surface(class, name)?;
     validate_class_element_early_errors(class, name)?;
     let class_id = match ctx.lookup_class(name) {
@@ -350,7 +354,7 @@ pub(crate) fn lower_class_from_ast(
     for (member_index, member) in class.body.iter().enumerate() {
         match member {
             ast::ClassMember::Constructor(ctor) => {
-                constructor = Some(lower_constructor(ctx, name, ctor)?);
+                constructor = Some(lower_constructor(ctx, name, ctor, &field_inits)?);
             }
             ast::ClassMember::Method(method) => {
                 // Skip TypeScript overload declarations (no body)
@@ -707,6 +711,8 @@ pub(crate) fn lower_class_from_ast(
         }
         ctx.register_class_accessor_names(name.to_string(), accessor_names);
     }
+
+    crate::lower_decl::class_field_assign::settle_reservations(ctx, class, &mut fields);
 
     // Issue #740: synthesize __perry_cap_* capture machinery for class
     // expressions that reference enclosing-fn locals (e.g. `const Inner =

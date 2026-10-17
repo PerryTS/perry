@@ -53,6 +53,7 @@ pub fn lower_constructor(
     ctx: &mut LoweringContext,
     class_name: &str,
     ctor: &ast::Constructor,
+    field_inits: &[&ast::ClassProp],
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
@@ -186,6 +187,15 @@ pub fn lower_constructor(
         }
     }
 
+    // Assigned field initializers (`class_field_assign`), in the
+    // constructor's scope, as the `this.x = v` TypeScript emits.
+    let mut field_stores = Vec::with_capacity(field_inits.len());
+    for prop in field_inits {
+        if let Some(store) = super::class_field_assign::field_store(prop) {
+            field_stores.push(Stmt::Expr(lower_expr(ctx, &store)?));
+        }
+    }
+
     // Lower body — issue #569; constructor body may contain hoisted
     // inner function declarations that need PreallocateBoxes for sibling
     // captures.
@@ -198,6 +208,26 @@ pub fn lower_constructor(
     // Synthesize `this.field = param` assignments for parameter properties.
     // In TypeScript, `constructor(public name: string)` automatically assigns
     // `this.name = name` at the start of the constructor body.
+    let super_pos = body
+        .iter()
+        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
+    if !field_stores.is_empty() {
+        // After super() and the parameter properties, as TypeScript emits.
+        let at = match super_pos {
+            Some(pos) => pos + 1,
+            None if ctx.current_class_is_derived => {
+                return Err(anyhow!(
+                    "class {class_name}: a 'super' call must be a root-level statement \
+                     within a constructor of a derived class that contains initialized \
+                     properties (TS2401)"
+                ));
+            }
+            None => 0,
+        };
+        let tail = body.split_off(at);
+        body.extend(field_stores);
+        body.extend(tail);
+    }
     if !param_prop_assignments.is_empty() {
         let assignments: Vec<Stmt> = param_prop_assignments
             .iter()
@@ -219,10 +249,7 @@ pub fn lower_constructor(
         // during effect Schema init (#1758). Base classes (no super() call)
         // keep prepending. The default-param / destructuring prologues below
         // touch only params (not `this`), so they stay at the very top.
-        if let Some(super_pos) = body
-            .iter()
-            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))))
-        {
+        if let Some(super_pos) = super_pos {
             let tail = body.split_off(super_pos + 1);
             body.extend(assignments);
             body.extend(tail);
@@ -1086,6 +1113,18 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             .map(|v| infer_type_from_expr(v, ctx))
             .unwrap_or(Type::Any),
     };
+    if super::class_field_assign::assigned_instance_field(ctx, prop) {
+        return Ok(ClassField {
+            origin: crate::ClassFieldOrigin::ConstructorStore,
+            name,
+            key_expr,
+            ty,
+            init: None,
+            is_private: false,
+            is_readonly: prop.readonly,
+            decorators: lower_decorators(ctx, &prop.decorators),
+        });
+    }
 
     // Lower initializer expression if present. Mark the field-initializer
     // context so a direct `eval` in the initializer rejects `arguments`

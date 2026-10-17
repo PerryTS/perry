@@ -225,6 +225,7 @@ impl LoweringContext {
             module_strict: false,
             strict_mode_stack: Vec::new(),
             is_external_module: false,
+            assign_class_fields: false,
             optional_require_try_depth: 0,
             require_local_is_create_require: false,
             import_meta_require_local: None,

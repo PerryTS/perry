@@ -572,6 +572,13 @@ fn collect_module_one(
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
+    // JavaScript class fields are always [[Define]]; a TypeScript module
+    // follows its tsconfig's `useDefineForClassFields`.
+    let assign_class_fields = canonical
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext, "ts" | "tsx" | "mts" | "cts"))
+        && !super::resolve::tsconfig_paths::use_define_for_class_fields(&canonical);
 
     // If type checking is enabled, resolve types from tsgo before lowering
     let resolved_types = if ctx.type_checker.is_some() {
@@ -759,6 +766,7 @@ fn collect_module_one(
         is_entry_module,
         is_external_module,
         if ctx.bun_platform { &["Bun"] } else { &[] },
+        assign_class_fields,
     );
     progress.heartbeat(ProgressSnapshot {
         stage: "lower",

@@ -66,6 +66,9 @@ struct TsConfig {
     /// `baseUrl` resolved to an absolute directory, if set.
     base_url: Option<PathBuf>,
     jsx_import_source: Option<String>,
+    /// `compilerOptions.target`, lowercased.
+    target: Option<String>,
+    use_define_for_class_fields: Option<bool>,
     inputs: BTreeSet<PathBuf>,
 }
 
@@ -107,16 +110,49 @@ pub(crate) fn resolve_tsconfig_paths(import_source: &str, importer_path: &Path) 
 /// A dependency without its own tsconfig must not inherit the application's JSX
 /// dialect across a node_modules boundary. Reuse JSONC and extends resolution.
 pub(crate) fn jsx_config(importer_path: &Path) -> (Option<String>, BTreeSet<PathBuf>) {
-    let config = importer_path.parent().and_then(|dir| {
+    governing_config(importer_path)
+        .map(|c| (c.jsx_import_source, c.inputs))
+        .unwrap_or_default()
+}
+
+/// TypeScript's `useDefineForClassFields` for a source: the governing
+/// tsconfig's value, else the default from its `target` (true from ES2022
+/// and ESNext, false before). Without a tsconfig or a `target`, class fields
+/// keep [[Define]], as JavaScript and TypeScript 6's default target do. The
+/// config files are build-cache inputs through [`jsx_config`].
+pub(crate) fn use_define_for_class_fields(source_path: &Path) -> bool {
+    let Some(config) = governing_config(source_path) else {
+        return true;
+    };
+    config.use_define_for_class_fields.unwrap_or_else(|| {
+        config
+            .target
+            .as_deref()
+            .is_none_or(target_defines_class_fields)
+    })
+}
+
+/// Whether a `compilerOptions.target` defaults to [[Define]] class fields.
+fn target_defines_class_fields(target: &str) -> bool {
+    match target {
+        "es3" | "es5" | "es6" => false,
+        _ => target
+            .strip_prefix("es")
+            .and_then(|year| year.parse::<u32>().ok())
+            .is_none_or(|year| year >= 2022),
+    }
+}
+
+/// The nearest tsconfig of a source, not crossing a `node_modules` boundary,
+/// merged with its `extends` chain and read afresh (watch builds).
+fn governing_config(source_path: &Path) -> Option<TsConfig> {
+    source_path.parent().and_then(|dir| {
         dir.ancestors()
             .take_while(|dir| dir.file_name().is_none_or(|name| name != "node_modules"))
             .map(|dir| dir.join("tsconfig.json"))
             .find(|path| path.is_file())
             .and_then(|path| build_merged_config(&path, &mut Vec::new()))
-    });
-    config
-        .map(|c| (c.jsx_import_source, c.inputs))
-        .unwrap_or_default()
+    })
 }
 
 /// Resolve a specifier against an already-merged config (split out for unit
@@ -270,6 +306,18 @@ fn build_merged_config(tsconfig_path: &Path, seen: &mut Vec<PathBuf>) -> Option<
     merged.inputs.insert(tsconfig_path.to_path_buf());
     if let Some(source) = compiler_options.and_then(|c| c.get("jsxImportSource")) {
         merged.jsx_import_source = source.as_str().map(str::to_owned);
+    }
+    if let Some(target) = compiler_options
+        .and_then(|c| c.get("target"))
+        .and_then(|v| v.as_str())
+    {
+        merged.target = Some(target.to_ascii_lowercase());
+    }
+    if let Some(define) = compiler_options
+        .and_then(|c| c.get("useDefineForClassFields"))
+        .and_then(|v| v.as_bool())
+    {
+        merged.use_define_for_class_fields = Some(define);
     }
 
     // baseUrl declared here resolves relative to THIS config's dir.
@@ -677,5 +725,47 @@ mod tests {
         let resolved = resolve_with_config("@/util", &merged).expect("resolve via extended paths");
         assert!(resolved.ends_with("util.ts"));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn class_field_semantics_follow_target_and_extends() {
+        for (target, define) in [
+            ("ES5", false),
+            ("es6", false),
+            ("ES2021", false),
+            ("ES2022", true),
+            ("ESNext", true),
+        ] {
+            assert_eq!(
+                target_defines_class_fields(&target.to_ascii_lowercase()),
+                define,
+                "{target}"
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("base.json"),
+            r#"{"compilerOptions":{"target":"es2020"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("app/src")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        // Comments are allowed (JSONC); the target comes from `extends`.
+        std::fs::write(
+            root.join("app/tsconfig.json"),
+            "{ // app\n \"extends\": \"../base.json\" }",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("lib/tsconfig.json"),
+            r#"{"extends":"../base.json","compilerOptions":{"useDefineForClassFields":true}}"#,
+        )
+        .unwrap();
+        assert!(!use_define_for_class_fields(&root.join("app/src/a.ts")));
+        assert!(use_define_for_class_fields(&root.join("lib/b.ts")));
+        // No governing tsconfig: [[Define]], as JavaScript.
+        let bare = tempfile::tempdir().unwrap();
+        assert!(use_define_for_class_fields(&bare.path().join("c.ts")));
     }
 }

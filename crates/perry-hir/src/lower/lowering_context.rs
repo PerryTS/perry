@@ -1211,6 +1211,10 @@ pub struct LoweringContext {
     /// `@perryts/redis` deliberately use `require(literal)` to defer
     /// cycle-breaking imports inside method bodies that may never execute.
     pub(crate) is_external_module: bool,
+    /// `useDefineForClassFields: false` governs this module: instance fields
+    /// are constructor-store reservations and initializers are assignments
+    /// in the constructor (`lower_decl::class_field_assign`).
+    pub(crate) assign_class_fields: bool,
     /// Depth of nested `try { ... }` bodies currently being lowered.
     /// Optional platform modules in Electron-style code commonly use
     /// `try { var x = require("native-addon") } catch {}`. Let those sites

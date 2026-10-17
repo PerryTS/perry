@@ -879,6 +879,7 @@ pub fn lower_module_full(
         is_entry_module,
         is_external_module,
         &[],
+        false,
     )
 }
 
@@ -921,6 +922,7 @@ pub fn lower_module_full_with_platform_globals(
     is_entry_module: bool,
     is_external_module: bool,
     platform_globals: &[&str],
+    assign_class_fields: bool,
 ) -> Result<(Module, ClassId)> {
     // #6812: fold straight-line builder sequences (`const o = {…}; o.k = v;`)
     // into the literal they spell out, so they lower through the anon-shape
@@ -931,6 +933,10 @@ pub fn lower_module_full_with_platform_globals(
     let ast_module = specialized.as_ref().unwrap_or(ast_module);
     let folded = super::builder_fold::fold_builder_sequences(ast_module);
     let ast_module = folded.as_ref().unwrap_or(ast_module);
+    let declared_statics = assign_class_fields
+        .then(|| crate::lower_decl::class_field_assign::declare_uninitialized_statics(ast_module))
+        .flatten();
+    let ast_module = declared_statics.as_ref().unwrap_or(ast_module);
     // #7177: salt on the module NAME (checkout-invariant), not the absolute
     // source path, so the same source compiled from two directories emits the
     // same `__perry_cap_*` symbols.
@@ -953,6 +959,7 @@ pub fn lower_module_full_with_platform_globals(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
+    ctx.assign_class_fields = assign_class_fields;
     ctx.module_strict = module_has_strict_mode(ast_module, source_file_path);
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
