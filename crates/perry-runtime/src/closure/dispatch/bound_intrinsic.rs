@@ -219,7 +219,10 @@ unsafe fn call_resolved_body(
 /// An ordinary Array's existing descriptor/prototype flags and present packed
 /// elements prove these Gets cannot execute user code. Everything else uses
 /// CreateListFromArrayLike through the original adapter.
-unsafe fn packed_apply_values(value: f64, out: &mut [f64; 4]) -> Option<usize> {
+pub(crate) unsafe fn packed_apply_values<const N: usize>(
+    value: f64,
+    out: &mut [f64; N],
+) -> Option<usize> {
     let value = JSValue::from_bits(value.to_bits());
     if value.is_undefined() || value.is_null() {
         return Some(0);
