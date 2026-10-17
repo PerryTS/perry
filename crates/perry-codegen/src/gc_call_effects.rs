@@ -1383,13 +1383,16 @@ mod tests {
             "t",
             "js_a\tLeaf\tno\njs_b\tReenters\tyes\njs_c\tAllocOnly\tno\njs_d\tLeaf\tno\njs_e\tThrowOnly\tno\n",
         )]);
+        // js_a: the sidecar is weaker and wins; js_b: the sidecar is stronger,
+        // the committed row wins; js_c: the committed row is weaker and wins;
+        // js_e: `throws` from the sidecar only; js_new: absent from the
+        // committed rows and js_d absent from the sidecar, so both unproven.
         let sidecar = sidecar_table(&[
-            ("js_a", Class::Reenters, true), // sidecar weaker: wins
-            ("js_b", Class::Leaf, false),    // sidecar stronger: committed wins
-            ("js_c", Class::Leaf, false),    // committed weaker: wins
-            ("js_e", Class::ThrowOnly, true), // throws from the sidecar only
-            ("js_new", Class::Leaf, false),  // absent from committed: unproven
-            // js_d absent from the sidecar: unproven
+            ("js_a", Class::Reenters, true),
+            ("js_b", Class::Leaf, false),
+            ("js_c", Class::Leaf, false),
+            ("js_e", Class::ThrowOnly, true),
+            ("js_new", Class::Leaf, false),
         ]);
         let j = committed.weaker_of(&sidecar);
         assert_eq!(j.runtime_class("js_a"), RuntimeClass::Reenters);

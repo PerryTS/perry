@@ -32,6 +32,11 @@ cat > "$WORK/bin/cargo" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+# After the build the harness writes the archives' GC effects sidecars; the
+# mock archives have none to write.
+mkdir -p "$WORK/scripts/gc_call_effects"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/scripts/gc_call_effects/sidecars.sh"
+chmod +x "$WORK/scripts/gc_call_effects/sidecars.sh"
 # The mock compiler: a slow compile that then produces a working binary.
 cat > "$WORK/perry" <<'EOF'
 #!/bin/sh
