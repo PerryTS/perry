@@ -17,9 +17,9 @@ mod yield_await;
 // `use super::*`) reference. Globs do not propagate transitively in this
 // repo, so spell every cross-module symbol explicitly.
 pub(crate) use abrupt::{
-    build_abrupt_routing, build_async_throw_body, build_completion_resume_stmts,
-    build_finally_run_stmts, build_yield_star_return_routes, build_yield_star_throw_routes,
-    catch_route_condition, wrap_dispatch_loop,
+    build_abrupt_routing, build_completion_resume_stmts, build_finally_run_stmts,
+    build_throw_routing, build_yield_star_return_routes, build_yield_star_throw_routes,
+    wrap_dispatch_loop,
 };
 pub(crate) use async_step::build_async_step_driver_direct;
 pub(crate) use call_this::generator_body_uses_call_this;
@@ -983,17 +983,11 @@ pub fn transform_generator_function_with_extra_captures(
         // into the step closure body — eliminating the per-call
         // `__next` allocation, the closure dispatch, and the captures-
         // box re-lookup that the separate closure-call path required.
-        // Inline the throw path too when user try/catch with awaits was
-        // lifted by linearize_body: it must update the same step-local
-        // control flow that resumes after a catch route. When no such catch
-        // routes exist, the throw path collapses to a pure rethrow.
-        // When no user try/catch with awaits was lifted by linearize_body
-        // (`catches` empty), the throw closure body collapses to a single
-        // `throw __throw_val` — pure rethrow, no captures referenced.
-        // Skip the closure construction entirely and let the step driver
-        // emit `Stmt::Throw(value)` inline in its is-error arm, saving one
-        // closure allocation per async-fn invocation (50k/run on the
-        // promise_all_chains kernel).
+        // The throw path is inlined into the step's is-error arm: a rejected
+        // `await` throws at the suspended state, routed by the same
+        // `build_throw_routing` as a generator's `.throw()` (#12632) and then
+        // continued by the step's dispatch loop. With no try around any await
+        // (`catches` and `finallys` empty) it collapses to a pure rethrow.
         // Every cell in the activation is named at its terminal states. The
         // runtime publishes unobserved cells immediately; closure-visible
         // cells remain registered until the GC proves the final capturing
@@ -1018,10 +1012,29 @@ pub fn transform_generator_function_with_extra_captures(
             ids.dedup();
             ids
         };
-        let throw_routes_for_step = if catches.is_empty() {
+        let throw_routing_for_step = if catches.is_empty() && finallys.is_empty() {
             None
         } else {
-            Some((catches, state_id, hoisted_ids.clone()))
+            // The step's catch re-enters with the error after an unhandled
+            // throw during dispatch; the dispatch handler already ran the
+            // pending finallys and completed the activation, so only reject.
+            let mut routing = vec![Stmt::If {
+                condition: Expr::LocalGet(done_id),
+                then_branch: vec![Stmt::Throw(Expr::LocalGet(throw_param_id))],
+                else_branch: None,
+            }];
+            routing.extend(build_throw_routing(
+                &catches,
+                &finallys,
+                state_id,
+                done_id,
+                throw_param_id,
+                pending_type_id,
+                pending_value_id,
+                &hoisted_ids,
+            ));
+            rewrite_iter_results_in_stmts(&mut routing);
+            Some(routing)
         };
         let mut next_body_for_step = next_resume_body;
         rewrite_iter_results_in_stmts(&mut next_body_for_step);
@@ -1030,8 +1043,7 @@ pub fn transform_generator_function_with_extra_captures(
             next_param_id,
             captures.clone(),
             mutable_captures.clone(),
-            None,
-            throw_routes_for_step,
+            throw_routing_for_step,
             throw_param_id,
             next_local_id,
             next_func_id,
@@ -1143,6 +1155,7 @@ pub fn transform_generator_function_with_extra_captures(
                 2.0,
                 false,
                 false,
+                &hoisted_ids,
                 return_fallback,
             ));
             if is_async_generator {
@@ -1254,24 +1267,19 @@ pub fn transform_generator_function_with_extra_captures(
         } else {
             throw_param_id
         };
-        // #4374: fresh binding for the inner catch that re-runs a try's finally
-        // when its catch handler itself throws (catch-rethrow-with-finally).
-        let inner_catch_id = alloc_local(next_local_id);
         // #4374: continue the state machine after a catch — run the inlined
         // finally and reach the next yield/completion within the `.throw()` call.
         // The returned routing body deliberately excludes the dispatcher: all
         // routes below fall through to one shared copy.
-        let ordinary_throw_fallback = build_async_throw_body(
+        let ordinary_throw_fallback = build_throw_routing(
             &catches,
             &finallys,
             state_id,
             done_id,
             throw_val_id,
-            inner_catch_id,
             pending_type_id,
             pending_value_id,
             &hoisted_ids,
-            true,
         );
         let yield_star_throw_routes = build_yield_star_throw_routes(
             &delegations,

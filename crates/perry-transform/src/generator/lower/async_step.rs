@@ -1,102 +1,9 @@
 //! The async-step driver for `was_plain_async` generators (the Promise-
-//! returning step closure that drives the state machine, plus the direct
-//! variants of the throw/catch-route builders it uses). Split out of
+//! returning step closure that drives the state machine). Split out of
 //! `lower.rs`.
 
 use super::*;
 use crate::generator::build_box_release_stmts;
-
-pub(crate) fn build_async_throw_body_direct(
-    catches: Vec<CatchRoute>,
-    state_id: LocalId,
-    throw_param_id: LocalId,
-    hoisted_ids: &std::collections::HashSet<LocalId>,
-    step_done_label: &str,
-) -> Vec<Stmt> {
-    let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
-
-    for route in catches.into_iter().rev() {
-        // #8681: a LINEARIZED catch (its body became real dispatch states) must
-        // use the state-based upper bound (`protected_end_state`, which EXCLUDES
-        // the catch's own states) so an error raised *inside* the catch — e.g.
-        // `catch (e) { await x; throw wrap(e); }` — ESCAPES to an enclosing
-        // handler instead of re-matching this same route and re-entering the
-        // catch. The legacy inline path (catch_entry_state == None) keeps the
-        // async `post_catch_state` upper bound it always used.
-        let state_based = route.catch_entry_state.is_some();
-        let condition = catch_route_condition(&route, state_id, state_based, false);
-        let then_branch = build_async_catch_route_body_direct(
-            route,
-            state_id,
-            throw_param_id,
-            hoisted_ids,
-            step_done_label,
-        );
-        fallback = vec![Stmt::If {
-            condition,
-            then_branch,
-            else_branch: Some(fallback),
-        }];
-    }
-
-    fallback
-}
-
-pub(crate) fn build_async_catch_route_body_direct(
-    route: CatchRoute,
-    state_id: LocalId,
-    throw_param_id: LocalId,
-    hoisted_ids: &std::collections::HashSet<LocalId>,
-    step_done_label: &str,
-) -> Vec<Stmt> {
-    let mut body = Vec::new();
-    if let Some(cp_id) = route.param_id {
-        body.push(Stmt::Expr(Expr::LocalSet(
-            cp_id,
-            Box::new(Expr::LocalGet(throw_param_id)),
-        )));
-    }
-
-    // #8681: when the catch body was linearized into its own dispatch states
-    // (`catch_entry_state`), route the delivered error INTO those states —
-    // bind the catch param (above), set `state = catch_entry_state`, and fall
-    // through to the step's `while (true)` dispatch loop — exactly as the sync
-    // path does in `build_abrupt_routing`. The old behavior inlined a raw copy
-    // of the catch body here and ran `rewrite_yield_to_await_in_stmts` over it,
-    // turning every `await` inside the catch into a BLOCKING busy-wait
-    // (`fs_await.rs`: `js_wait_for_event` + `js_unsettled_top_level_await_exit`).
-    // Reached re-entrantly from inside the async-step / async-generator pull
-    // cascade (a rejected awaited promise in a `try` routing to a `catch` that
-    // itself awaits — the Anthropic SDK stream error path), that blocking wait
-    // monopolises the single runtime thread and self-deadlocks: the
-    // `perry_closure __85891` `-p` hang. The linearized catch states suspend via
-    // the async-step driver (`AsyncStepChain`) like any other await, so the
-    // driver keeps making progress.
-    if let Some(catch_entry_state) = route.catch_entry_state {
-        body.push(Stmt::Expr(Expr::LocalSet(
-            state_id,
-            Box::new(Expr::Number(catch_entry_state as f64)),
-        )));
-        return body;
-    }
-
-    // Legacy fallback: the catch body was NOT linearized (no await/yield inside
-    // it, so there is nothing to suspend on) — inline it directly. A yield-free
-    // catch has no `await` to turn into a block-wait, so this stays correct.
-    let mut rewritten = route.body;
-    rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
-    rewrite_yield_to_await_in_stmts(&mut rewritten);
-    rewrite_catch_returns_to_iter_result(&mut rewritten);
-    rewrite_returns_to_labeled_break(&mut rewritten, step_done_label);
-    rewrite_iter_results_in_stmts(&mut rewritten);
-    body.extend(rewritten);
-
-    body.push(Stmt::Expr(Expr::LocalSet(
-        state_id,
-        Box::new(Expr::Number(route.post_catch_state as f64)),
-    )));
-    body
-}
 
 /// Build the async step driver without allocating the `__iter` object.
 /// allocation entirely. Used for `was_plain_async = true` generators
@@ -113,8 +20,11 @@ pub fn build_async_step_driver_direct(
     next_param_id: LocalId,
     next_captures: Vec<LocalId>,
     next_mutable_captures: Vec<LocalId>,
-    throw_closure_expr: Option<Expr>,
-    throw_routes_direct: Option<(Vec<CatchRoute>, LocalId, std::collections::HashSet<LocalId>)>,
+    // The error resume's routing of `throw_param_id` to the enclosing
+    // catch/finally of the suspended state (`build_throw_routing`), continued
+    // by the inlined dispatch. `None` when no try encloses any await: the
+    // error resume is then a plain rethrow.
+    throw_routing: Option<Vec<Stmt>>,
     throw_param_id: LocalId,
     next_local_id: &mut u32,
     next_func_id: &mut u32,
@@ -127,13 +37,6 @@ pub fn build_async_step_driver_direct(
     // cell an escaped closure can still observe.
     release_ids: &[LocalId],
 ) -> Vec<Stmt> {
-    // When `throw_closure_expr` is None, the function had no awaiting
-    // try/catch so the throw path is a plain rethrow — we inline it
-    // directly into the step body and skip the per-invocation
-    // `__async_throw` allocation entirely.
-    let throw_id = throw_closure_expr
-        .as_ref()
-        .map(|_| alloc_local(next_local_id));
     // #691 Phase 2: step closure no longer captures itself. Body
     // uses `Expr::CurrentStepClosure` (reads INLINE_TRAP.current_step
     // TLS) wherever it previously did `LocalGet(step_id)`. The
@@ -204,8 +107,9 @@ pub fn build_async_step_driver_direct(
     //   try {
     //     "__step_done": do {
     //        if (isError) {
-    //            // when no user catch: throw value; (caught by outer try)
-    //            // when user catch: __throw(value);
+    //            // no try around an await: throw value; (caught by outer try)
+    //            // otherwise: route value to the suspended state's
+    //            //   catch/finally, then run the inlined dispatch
     //        } else { let __val = value; <next_body inlined> }
     //     } while (false);
     //   } catch (e) {
@@ -214,41 +118,23 @@ pub fn build_async_step_driver_direct(
     //   }
     //   if (js_iter_result_get_done()) return Promise.resolve(js_iter_result_get_value());
     //   return AsyncStepChain(js_iter_result_get_value(), __step);
-    let mut direct_routes_enabled = false;
-    let throw_arm: Vec<Stmt> =
-        if let Some((catches, route_state_id, route_hoisted_ids)) = throw_routes_direct {
-            direct_routes_enabled = true;
-            let mut body = vec![Stmt::Let {
-                id: throw_param_id,
-                name: "__throw_val".to_string(),
-                ty: any_ty.clone(),
-                mutable: false,
-                init: Some(Expr::LocalGet(value_param_id)),
-            }];
-            let direct_body = build_async_throw_body_direct(
-                catches,
-                route_state_id,
-                throw_param_id,
-                &route_hoisted_ids,
-                &step_done_label,
-            );
-            body.extend(direct_body);
-            body
-        } else if let Some(tid) = throw_id {
-            vec![Stmt::Expr(Expr::Call {
-                callee: Box::new(Expr::LocalGet(tid)),
-                args: vec![Expr::LocalGet(value_param_id)],
-                type_args: vec![],
-                byte_offset: 0,
-            })]
-        } else {
-            // No __async_throw closure was constructed (callee passed None).
-            // The throw body would have been a plain rethrow, so inline it:
-            // the outer try/catch re-enters __step(e, true) which then hits
-            // this same path with isError=true a second time, and the catch
-            // arm returns Promise.reject (the `if (isError)` short-circuit).
-            vec![Stmt::Throw(Expr::LocalGet(value_param_id))]
-        };
+    let direct_routes_enabled = throw_routing.is_some();
+    let throw_arm: Vec<Stmt> = if let Some(mut routing) = throw_routing {
+        rewrite_returns_to_labeled_break(&mut routing, &step_done_label);
+        let mut body = vec![Stmt::Let {
+            id: throw_param_id,
+            name: "__throw_val".to_string(),
+            ty: any_ty.clone(),
+            mutable: false,
+            init: Some(Expr::LocalGet(value_param_id)),
+        }];
+        body.extend(routing);
+        body
+    } else {
+        // No try encloses an await: the error resume is a plain rethrow. The
+        // outer try/catch sees `isError` and returns Promise.reject.
+        vec![Stmt::Throw(Expr::LocalGet(value_param_id))]
+    };
     let labeled_body = if direct_routes_enabled {
         let mut normal_tail = next_body;
         let normal_sent = if normal_tail.is_empty() {
@@ -366,15 +252,11 @@ pub fn build_async_step_driver_direct(
         })),
     ];
 
-    // step closure captures = next_captures + [throw_id?]
     // #691 Phase 2: step_id is NOT captured — the body reads its own
     // pointer via `Expr::CurrentStepClosure` (INLINE_TRAP.current_step
     // TLS). This saves one capture slot per step closure and removes
     // the per-invocation `js_box_alloc` for step_id.
     let mut step_captures: Vec<LocalId> = next_captures;
-    if let Some(tid) = throw_id {
-        step_captures.push(tid);
-    }
     step_captures.sort();
     step_captures.dedup();
     let step_mut_captures: Vec<LocalId> = next_mutable_captures;
@@ -415,21 +297,11 @@ pub fn build_async_step_driver_direct(
     };
 
     // Outer wrapper:
-    //   let __throw = <throw_closure>;   // omitted when throw_id is None
     //   let __step = <step_closure>;     // #691 Phase 2: immutable,
     //                                    //   no js_box_alloc
     //   return AsyncFirstCall(__step);   // sets TLS, calls
     //                                    //   step(undefined, false)
-    let mut wrapper: Vec<Stmt> = Vec::with_capacity(3);
-    if let (Some(tid), Some(tc_expr)) = (throw_id, throw_closure_expr) {
-        wrapper.push(Stmt::Let {
-            id: tid,
-            name: "__async_throw".to_string(),
-            ty: any_ty.clone(),
-            mutable: false,
-            init: Some(tc_expr),
-        });
-    }
+    let mut wrapper: Vec<Stmt> = Vec::with_capacity(2);
     wrapper.extend([
         Stmt::Let {
             id: step_id,

@@ -405,6 +405,12 @@ pub struct CatchRoute {
     /// generators (runtime throws + `.throw()` route here); `None` when the
     /// catch was not linearized into states.
     pub catch_entry_state: Option<u32>,
+    /// Position of this route in the function's one handler order (catches
+    /// and finallys share the sequence; see [`next_route_seq`]). A route is
+    /// pushed after every route nested inside its try body, so among the
+    /// routes whose interval holds a state the smallest `seq` is the
+    /// innermost handler.
+    pub seq: u32,
 }
 
 /// A `finally` block that protects a state interval. On abrupt completion
@@ -439,6 +445,17 @@ pub struct FinallyRoute {
     /// re-raises a pending throw/return completion (the completion check is
     /// appended in `transform_generator_function`).
     pub completion_check_state: Option<u32>,
+    /// Shared handler order with [`CatchRoute::seq`]: smaller is inner.
+    pub seq: u32,
+}
+
+/// The next handler sequence number. `catches` and `finallys` only ever grow
+/// during linearization and every recursion shares them, so their combined
+/// length is a strictly increasing order in which inner handlers (pushed
+/// while linearizing a try body) precede the handlers of the try enclosing
+/// them, and a try's catch precedes its own finally.
+pub(crate) fn next_route_seq(catches: &[CatchRoute], finallys: &[FinallyRoute]) -> u32 {
+    (catches.len() + finallys.len()) as u32
 }
 
 /// Normalize statements built from a loop HEADER (a condition or update the
@@ -1321,7 +1338,9 @@ pub fn linearize_body(
                         .as_ref()
                         .map(|(id, name)| (Some(*id), Some(name.clone())))
                         .unwrap_or((None, None));
+                    let seq = next_route_seq(catches, finallys);
                     catches.push(CatchRoute {
+                        seq,
                         param_id,
                         param_name,
                         body: catch_clause.body.clone(),
@@ -1390,7 +1409,9 @@ pub fn linearize_body(
                         let post_finally_state = *state_num;
                         states[comp_idx].exit = StateExit::Goto(post_finally_state);
 
+                        let seq = next_route_seq(catches, finallys);
                         finallys.push(FinallyRoute {
+                            seq,
                             body: fin.clone(),
                             protected_start_state,
                             post_finally_state,
@@ -1403,7 +1424,9 @@ pub fn linearize_body(
                         // #4374: a non-yielding finally is inlined into the
                         // .return()/.throw()/dispatch closures on abrupt
                         // completion (and pushed as-is for the happy path).
+                        let seq = next_route_seq(catches, finallys);
                         finallys.push(FinallyRoute {
+                            seq,
                             body: fin.clone(),
                             protected_start_state,
                             post_finally_state: post_catch_state,
