@@ -623,7 +623,8 @@ fn find_opt() -> Option<PathBuf> {
 }
 
 /// The external tools object emission runs, for the object-cache key: each
-/// tool's resolved path and `--version` text. PATH and the `PERRY_LLVM_*`
+/// tool's resolved path, size, mtime and `--version` text (two snapshot
+/// builds of one LLVM can share a path and a version string). PATH and the `PERRY_LLVM_*`
 /// overrides reach an object only through these, so another `opt` or `clang`
 /// changes the key and an unrelated PATH entry does not. Resolved once per
 /// process.
@@ -640,7 +641,17 @@ pub fn object_toolchain_key() -> &'static str {
                         .output()
                         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
                         .unwrap_or_default();
-                    format!("{name}={}:{version}", tool.display())
+                    let (len, mtime) = fs::metadata(&tool)
+                        .map(|meta| {
+                            let mtime = meta
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map_or(0, |d| d.as_nanos());
+                            (meta.len(), mtime)
+                        })
+                        .unwrap_or((0, 0));
+                    format!("{name}={}:{len}:{mtime}:{version}", tool.display())
                 }
                 None => format!("{name}=none"),
             })
