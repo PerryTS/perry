@@ -18,6 +18,7 @@
 #[cfg(test)]
 mod dead_statepoint_tests;
 mod function_layout;
+mod loop_interrupt;
 mod nanbox_operands;
 mod native_homes;
 mod optimize_emit;
@@ -111,6 +112,8 @@ static ANNOUNCE: Once = Once::new();
 fn global_init(mllvm: &[String]) {
     LLVM_GLOBAL_INIT.call_once(|| {
         let mut mllvm = mllvm.to_vec();
+        // #12633: the options of the loop interrupt poll placement.
+        mllvm.extend(loop_interrupt::PLACE_SAFEPOINTS_OPTIONS.map(String::from));
         // These options affect only the WebAssembly backend. Initialize
         // them even if a native unit happens to be compiled first.
         #[cfg(feature = "target-wasi")]

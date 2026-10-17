@@ -176,6 +176,19 @@ pub(super) fn optimize_and_emit(
             .verify()
             .map_err(|e| anyhow!("native root homes: {e}"))?;
     }
+    // #12633: back-edge interrupt polls, placed on the final loops (see
+    // `loop_interrupt` for why after the optimizer and not before it).
+    if super::loop_interrupt::polls_enabled_for(effective_target) {
+        let poll_started = std::time::Instant::now();
+        super::loop_interrupt::place(module, &tm)?;
+        if std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some() {
+            eprintln!(
+                "[perry] codegen: loop interrupt polls {:.3}s (opt {:.3}s)",
+                poll_started.elapsed().as_secs_f64(),
+                poll_started.duration_since(optimize_started).as_secs_f64(),
+            );
+        }
+    }
     // Include small units as well as budget offenders, so before/after size
     // audits do not lose their subject when a fix brings it below the cap.
     if std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some() {

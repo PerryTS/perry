@@ -229,6 +229,10 @@ struct WorkerSender {
     /// The worker's agent id, published by the worker thread before it runs
     /// any JS (so before it can have I/O in flight); 0 until then.
     agent: std::sync::Arc<AtomicU64>,
+    /// #12633: how `terminate()` reaches the worker while it runs JS. A
+    /// `Terminate` command is read only when the worker returns to its event
+    /// loop; this stops it at the next loop back-edge poll as well.
+    termination: perry_runtime::loop_interrupt::TerminationHandle,
 }
 
 impl WorkerSender {
@@ -236,6 +240,7 @@ impl WorkerSender {
         Self {
             tx,
             agent: std::sync::Arc::new(AtomicU64::new(0)),
+            termination: perry_runtime::loop_interrupt::TerminationHandle::new(),
         }
     }
 
@@ -1245,6 +1250,9 @@ fn worker_terminate_by_id(worker_id: u64) -> f64 {
             Some(worker) if !worker.alive => true,
             Some(worker) => {
                 worker.terminate_promise = Some(promise_ptr);
+                // Running JS stops at its next loop back-edge; an idle worker
+                // reads the command.
+                worker.sender.termination.request();
                 let _ = worker.sender.send(WorkerCommand::Terminate);
                 false
             }
@@ -1420,6 +1428,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
     let sender = WorkerSender::new(tx);
     let published_agent = sender.agent.clone();
+    let termination = sender.termination.clone();
     let worker_obj = worker_object(worker_id, &options_state);
     let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
     let mut async_resources = [perry_runtime::async_hooks::AsyncResourceIds {
@@ -1508,6 +1517,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             // a route that keeps its wake until this worker's loop exists.
             perry_runtime::event_pump::claim_agent_loop_route();
             published_agent.store(worker_agent, Ordering::SeqCst);
+            perry_runtime::loop_interrupt::install_current(termination);
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
@@ -1595,6 +1605,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                     }
                 })
             }));
+            // Retire the termination request before anything else: from here
+            // on no JS of this worker runs, so no poll may answer it.
+            let terminated = perry_runtime::loop_interrupt::take_terminated();
+            perry_runtime::loop_interrupt::clear_current();
             restore_worker_env(previous_env);
             // This arena is about to go away; purge any queue entry still tagged
             // with this agent rather than leave it for a drain that can never
@@ -1603,6 +1617,9 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
 
             let exit_code = match result {
                 Ok(Ok(())) => exit_code,
+                // Stopped by `terminate()` mid-JS: Node reports exit code 1
+                // and no error.
+                Ok(Err(_)) if terminated => 1,
                 Ok(Err(thrown)) => {
                     let error = worker_error_message(thrown);
                     push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));
