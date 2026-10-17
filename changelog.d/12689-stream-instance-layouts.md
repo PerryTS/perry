@@ -1,0 +1,1 @@
+Native emitter and stream instances (EventEmitter, legacy Stream, Readable, Writable, Duplex, Transform) are born on static instance layouts that name their sealed prototypes, with node's own keys as slots in node order; optional members (hooks, _eventsCount) are holes until filled. A filled hole enumerates last, as node appends it. new Stream() now has node's three own keys.

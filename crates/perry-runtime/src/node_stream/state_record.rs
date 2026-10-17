@@ -319,6 +319,23 @@ fn state_data_object(stream: f64, readable: bool) -> Option<*mut ObjectHeader> {
         unsafe { side.read_own(object) }
     }
     let object = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
+    // A stream born on its instance layout holds the state at a fixed slot.
+    // SAFETY: a live ordinary object (checked above).
+    if let Some(slot) = unsafe {
+        super::constructors::instance_birth::state_object_slot(object, readable)
+    } {
+        // SAFETY: the layout's slots are inline storage of the live object.
+        let bits = unsafe {
+            *((object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+                .add(slot as usize)
+        };
+        if bits == crate::value::TAG_HOLE {
+            return None;
+        }
+        return crate::object::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+            bits,
+        ));
+    }
     let value = if readable {
         own(object, crate::runtime_state_key!(b"_readableState"))
     } else {

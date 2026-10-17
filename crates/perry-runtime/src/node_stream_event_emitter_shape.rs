@@ -502,7 +502,8 @@ mod method_body_tests {
     fn emitter_operations_use_spilled_state_despite_unrelated_attributes() {
         let _global = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
-        let target = crate::node_stream::js_node_stream_readable_new(undefined_value());
+        // PassThrough: a layout-born stream keeps its state in fixed slots.
+        let target = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
         init_event_emitter_state(target);
         // Node inherits its initial zero count. Give this storage witness an
         // own count before asking the two-own-slot reset helper to accept it.

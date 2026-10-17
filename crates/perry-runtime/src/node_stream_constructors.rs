@@ -433,7 +433,9 @@ use birth::stream_birth_field;
 mod builders;
 #[path = "node_stream_constructors/event_emitter_new.rs"]
 mod event_emitter_new;
-pub(crate) use event_emitter_new::own_prototype_by_bag;
+#[path = "node_stream_constructors/instance_birth.rs"]
+pub(crate) mod instance_birth;
+pub(crate) use event_emitter_new::{emitter_new, own_prototype_by_bag};
 #[path = "node_stream_constructors/introspection.rs"]
 mod introspection;
 #[path = "node_stream_constructors/pipeline.rs"]

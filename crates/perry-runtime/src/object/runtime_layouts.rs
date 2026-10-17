@@ -1599,6 +1599,8 @@ pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
+mod stream_instances;
+pub(crate) use stream_instances::*;
 #[used(linker)]
 #[export_name = "perry_image_literal_0_696e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]

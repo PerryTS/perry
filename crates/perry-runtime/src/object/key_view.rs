@@ -206,3 +206,31 @@ unsafe fn own_key_is_hole_slow(obj: *const ObjectHeader, key: JSValue) -> bool {
         .find(|&position| view.keys.get(position).bits() == key.bits())
         .is_some_and(|position| !view.present(position))
 }
+
+/// Create the own data property whose layout slot `slot` holds the hole, the
+/// way `[[DefineOwnProperty]]` creates a new key: it enumerates LAST. When
+/// every key after it in the layout's sequence is a hole and the object has
+/// no overflow, its key position already is the end, and the value goes into
+/// the slot. Otherwise the ordered overflow becomes the order authority and
+/// the key is appended to it as a reference to the slot (§3.2 "delete, then
+/// re-add"). The caller has already settled `[[Set]]`'s semantics (no
+/// inherited setter or read-only data, the object is extensible).
+///
+/// # Safety
+/// `obj` is a live ordinary object whose layout holds `slot`, which holds the
+/// hole. Can collect when the overflow is created.
+pub(crate) unsafe fn fill_hole(obj: *mut ObjectHeader, slot: u32, value: u64) {
+    let keys = super::object_keys(obj);
+    let position = (0..keys.count()).find(|&p| keys.storage_slot(p) == slot);
+    let at_end = !super::overflow::has_overflow(obj)
+        && position.is_some_and(|position| {
+            !super::layout_desc::later_late_key_present(obj, keys.arr(), keys.count(), position)
+        });
+    match position {
+        Some(position) if !at_end => {
+            let key = keys.get(position);
+            super::overflow::store_routed(obj, key.as_string_ptr(), f64::from_bits(value));
+        }
+        _ => super::store_object_field_slot(obj, slot as usize, value),
+    }
+}

@@ -314,13 +314,14 @@ fn layout_holes_are_absent_for_every_reader() {
                 }
             });
             ctx(&format!("fill {:#x}", (*desc).family));
-            // Filling a hole makes the key present, at its key position.
+            // Filling a hole creates the key, which enumerates last, as
+            // node's [[Set]] appends it.
             object.with_mut_ptr(|obj| {
                 js_object_set_field_by_name(obj, H_C.string, 3.0);
                 assert_order_in(
                     obj,
-                    &["holes_b", "holes_c", "holes_d"],
-                    &["holes_b", "holes_c", "holes_d", "holes_a"],
+                    &["holes_b", "holes_d", "holes_c"],
+                    &["holes_b", "holes_d", "holes_c", "holes_a"],
                 );
                 assert_present(obj, &H_C);
                 soft_eq!(get(obj, &H_C), 3.0f64.to_bits());
@@ -332,8 +333,8 @@ fn layout_holes_are_absent_for_every_reader() {
                 soft_eq!(js_object_delete_field(obj, H_B.string), 1);
                 assert_order_in(
                     obj,
-                    &["holes_c", "holes_d"],
-                    &["holes_c", "holes_d", "holes_a"],
+                    &["holes_d", "holes_c"],
+                    &["holes_d", "holes_c", "holes_a"],
                 );
                 assert_absent_own(obj, &H_A);
                 soft_eq!(get(obj, &H_A), 7.0f64.to_bits());
@@ -342,8 +343,8 @@ fn layout_holes_are_absent_for_every_reader() {
             object.with_mut_ptr(|obj| {
                 assert_order_in(
                     obj,
-                    &["holes_c", "holes_d"],
-                    &["holes_c", "holes_d", "holes_a"],
+                    &["holes_d", "holes_c"],
+                    &["holes_d", "holes_c", "holes_a"],
                 )
             });
         }

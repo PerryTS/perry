@@ -21,6 +21,20 @@ impl Kind {
             Self::PassThrough => ("PassThrough", "stream\0PassThrough"),
         }
     }
+
+    /// The instance layout a direct birth of this class is born on
+    /// (`runtime_layouts::stream_instances`). PassThrough's prototype is not
+    /// a sealed runtime prototype, so it has none.
+    pub(crate) fn layout(self) -> Option<*const crate::object::layout_desc::PerryLayoutDesc> {
+        use crate::object::runtime_layouts as rl;
+        match self {
+            Self::Readable => Some(&raw const rl::READABLE),
+            Self::Writable => Some(&raw const rl::WRITABLE),
+            Self::Duplex => Some(&raw const rl::DUPLEX),
+            Self::Transform => Some(&raw const rl::TRANSFORM),
+            Self::PassThrough => None,
+        }
+    }
 }
 thread_local! {
     static R_SHELL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -85,6 +99,10 @@ impl BirthWriteSite {
         let obj = crate::object::field_get_set::runtime_read_site::object_receiver(stream)
             .expect("stream receiver");
         if unsafe { key.write_existing(obj, value) } {
+            return;
+        }
+        // SAFETY: a live receiver.
+        if unsafe { super::instance_birth::layout_birth_store(obj, key.bytes, value) } {
             return;
         }
         let from = unsafe { crate::object::shapes::object_shape_stamp(obj) };
@@ -249,13 +267,20 @@ mod tests {
                 );
             }
             let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
+            let kind = match name {
+                "Readable" => Kind::Readable,
+                "Writable" => Kind::Writable,
+                _ => Kind::Duplex,
+            };
             assert_eq!(
-                unsafe { crate::object::object_live_slot_count(obj) },
-                2,
-                "fixed births preserve the stream inline prefix"
+                unsafe { (*obj).parent_class_id },
+                unsafe { (*kind.layout().unwrap()).layout_id },
+                "a direct birth is born on its instance layout"
             );
             let keys = unsafe { crate::object::object_keys(obj) };
+            // The present keys: an optional member's hole is absent.
             let own: Vec<_> = (0..keys.count())
+                .filter(|&i| unsafe { !crate::object::key_view::position_is_hole(obj, keys, i) })
                 .map(|i| {
                     crate::fs::validate::read_js_string_pub(f64::from_bits(unsafe {
                         keys.get(i).bits()

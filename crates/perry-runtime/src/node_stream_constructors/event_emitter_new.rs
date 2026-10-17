@@ -110,198 +110,64 @@ fn alloc_emitter(export: &str) -> f64 {
     crate::object::js_object_create(proto.get_nanbox_f64())
 }
 
-/// What `new EventEmitter()`'s site memo proved about one prototype ShapeId:
-/// the three state keys are plain writable own data, and `_maxListeners`
-/// reads inline slot `max_slot` (below `live`, the shape's inline bound).
-#[derive(Clone, Copy)]
-struct PlainPrototype {
-    shape: u32,
-    max_slot: u32,
-    live: u32,
-}
-
-crate::perry_thread_local! {
-    /// `new EventEmitter()`'s site memo: the prototype ShapeId it last proved
-    /// (see [`PlainPrototype`]), so that `init`'s three `[[Set]]`s are three
-    /// own-property creations. A ShapeId names one key list, one descriptor
-    /// state and one `[[Prototype]]`, and every use compares it with the
-    /// prototype's current one: an accessor, a descriptor or a deletion on the
-    /// prototype re-stamps it and the full `init` runs instead.
-    static PLAIN_PROTOTYPE: std::cell::Cell<Option<PlainPrototype>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// The prototype's `_maxListeners` when `proto` holds the three state keys
-/// as ordinary writable own data (consulting the memo first); `None` sends
-/// construction down the full `init`.
-fn plain_prototype_max(proto: f64) -> Option<f64> {
-    let jsval = JSValue::from_bits(proto.to_bits());
-    if !jsval.is_pointer() {
-        return None;
-    }
-    let obj = jsval.as_pointer::<ObjectHeader>();
-    // SAFETY: a live prototype object (rooted by the caller).
-    let shape = unsafe { crate::object::shapes::object_shape_stamp(obj) };
-    if shape == 0 {
-        return None;
-    }
-    let memo = PLAIN_PROTOTYPE
-        .with(|memo| memo.get())
-        .filter(|memo| memo.shape == shape);
-    let memo = match memo {
-        Some(memo) => memo,
-        None => {
-            let plain = [&b"_events"[..], b"_eventsCount", b"_maxListeners"]
-                .into_iter()
-                .all(|name| own_plain_data(proto, name));
-            if !plain {
-                return None;
-            }
-            // SAFETY: as above; the descriptor and key list are the shape's.
-            let memo = unsafe {
-                let descriptor = crate::object::shapes::object_shape_descriptor(obj)?;
-                let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
-                if keys.is_null() {
-                    return None;
-                }
-                let slot = crate::object::keys_find_slot_by_bytes_resolved(
-                    keys,
-                    descriptor.logical_key_count,
-                    b"_maxListeners",
-                )?;
-                let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
-                if slot >= descriptor.live_inline_slot_count {
-                    return None;
-                }
-                PlainPrototype {
-                    shape,
-                    max_slot: slot,
-                    live: descriptor.live_inline_slot_count,
-                }
-            };
-            PLAIN_PROTOTYPE.with(|cell| cell.set(Some(memo)));
-            memo
-        }
-    };
-    // SAFETY: the memo's shape is the prototype's current one, which pins
-    // `max_slot` as an inline data slot below `live`.
-    let value = unsafe {
-        crate::object::field_get_set::object_field_at_with_live(obj, memo.max_slot, memo.live)
-    };
-    Some(f64::from_bits(value.bits()))
-}
-
-/// `name` is an own data property of `obj` that a `[[Set]]` through a
-/// derived object would shadow: no accessor and no non-writable attribute.
-fn own_plain_data(obj: f64, name: &[u8]) -> bool {
-    let jsval = JSValue::from_bits(obj.to_bits());
-    let addr = jsval.as_pointer::<u8>() as usize;
-    // SAFETY: the lookup validates the address before it reads anything.
-    let found = unsafe { crate::object::native_get::try_data_lookup_bytes(jsval, name) };
-    if !matches!(found, Some(Some(_))) {
-        return false;
-    }
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
-        return false;
-    };
-    if header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS == 0 {
-        return true;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_nanbox_f64(obj);
-    let key = f64::from_bits(
-        JSValue::string_ptr(crate::string::intern_ascii_literal(name) as *mut _).bits(),
-    );
-    let addr = JSValue::from_bits(obj.get_nanbox_u64()).as_pointer::<u8>() as usize;
-    // SAFETY: a live object (rooted above).
-    unsafe { crate::object::own_descriptors_skip_key(addr, key) }
-}
-
-thread_local! {
-    /// `new EventEmitter()`'s birth memo: the ShapeId the last full birth
-    /// ended on (the state keys at slots 0..3, linked to the prototype). A
-    /// later birth replays it when the record still names those facts for
-    /// the prototype in hand (`shapes::shape_is_filled_birth`); ShapeIds are
-    /// never reused, so a stale id simply stops replaying.
-    static FINAL_SHAPE: std::cell::Cell<(u32, bool)> = const { std::cell::Cell::new((0, false)) };
-}
-
-/// An emitter born initialized: the state keys' shape, linked to `proto` as
-/// `Object.create` links, and node's `init` values in its slots
-/// (`this._maxListeners || undefined` reads the prototype's `inherited_max`).
-fn born_emitter(proto: f64, inherited_max: f64) -> f64 {
+/// node's `EventEmitter.init` on a fresh object whose prototype is `proto`,
+/// born on `layout` (the emitter's, or the legacy Stream's) when `proto` is
+/// the sealed prototype it names and its chain is unwritten
+/// (`instance_birth::sealed_chain`): `_events` a fresh null-prototype
+/// object, `_eventsCount` 0, and `_maxListeners ||= undefined` reading the
+/// prototype's `undefined`. Any other prototype runs the ordinary `init` on
+/// `Object.create(proto)`. The flag says whether the layout birth ran.
+fn emitter_birth(proto: f64, layout: *const crate::object::layout_desc::PerryLayoutDesc) -> (f64, bool) {
+    use crate::object::runtime_layouts::emitter_slot;
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
-    // Node omits the own max slot for a truthy inherited value. When the
-    // slot is present its birth value is always undefined, so no value/root
-    // or representation query is needed per instance.
-    let own_max = crate::value::js_is_truthy(inherited_max) == 0;
+    // SAFETY: `layout` is a registered emitter layout.
+    if !unsafe { super::instance_birth::sealed_chain(proto.get_nanbox_f64(), layout) } {
+        let instance =
+            scope.root_nanbox_f64(crate::object::js_object_create(proto.get_nanbox_f64()));
+        init_event_emitter_state(instance.get_nanbox_f64());
+        return (instance.get_nanbox_f64(), false);
+    }
     let events = scope.root_nanbox_f64(crate::node_stream::new_events_object());
-    let (recorded, recorded_own_max) = FINAL_SHAPE.with(std::cell::Cell::get);
-    if recorded != 0 && recorded_own_max == own_max {
-        // One allocation stamped with the recorded final shape, then each
-        // slot through the store funnel; nothing allocates in between.
-        if let Some(obj) = crate::object::object_alloc_recorded_birth(
-            recorded,
-            proto.get_nanbox_u64(),
-            if own_max { 3 } else { 2 },
-            3,
-            false,
-        ) {
-            let events = JSValue::from_bits(events.get_nanbox_u64());
-            // SAFETY: a fresh object born with three inline slots, which
-            // nothing has observed yet. A number (`_eventsCount = 0`, whose
-            // bits are valid in an Any or an F64 lane) and an `undefined` in
-            // an Any lane are written as they are; anything else goes
-            // through the store funnel.
-            unsafe {
-                let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-                // The recorded constructor birth owns an Any events slot:
-                // its first store was the same fresh ordinary events object.
-                crate::gc::runtime_store_jsvalue_slot_layout_deferred(
-                    obj as usize,
-                    fields as usize,
-                    0,
-                    events.bits(),
-                );
-                // GC_STORE_AUDIT(INIT): non-pointer bits into an unobserved newborn.
-                *fields.add(1) = 0f64.to_bits();
-                if own_max {
-                    // GC_STORE_AUDIT(INIT): this birth's own max slot is Any
-                    // and starts undefined; the cold birth proves that fact.
-                    *fields.add(2) = crate::value::TAG_UNDEFINED;
-                }
-            }
-            return crate::value::js_nanbox_pointer(obj as i64);
-        }
-    }
-    let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(3));
-    instance.with_mut_ptr::<ObjectHeader, _>(|obj| {
-        crate::object::prototype_chain::object_link_created_prototype(
+    // SAFETY: a registered descriptor; nothing observes the newborn until the
+    // three stores below are done.
+    // The three slots are the layout's whole key sequence, filled in its
+    // order: each fill is the newest key, so in place.
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(layout);
+        let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+        crate::gc::runtime_store_jsvalue_slot_layout_deferred(
             obj as usize,
-            proto.get_nanbox_u64(),
-        )
-    });
-    crate::runtime_state_key!(b"_events").write_value(
-        instance.with_mut_ptr::<ObjectHeader, _>(|o| box_pointer(o.cast())),
-        events.get_nanbox_f64(),
-    );
-    crate::runtime_state_key!(b"_eventsCount").write_value(
-        instance.with_mut_ptr::<ObjectHeader, _>(|o| box_pointer(o.cast())),
-        0.0,
-    );
-    if own_max {
-        crate::runtime_state_key!(b"_maxListeners").write_value(
-            instance.with_mut_ptr::<ObjectHeader, _>(|o| box_pointer(o.cast())),
-            f64::from_bits(crate::value::TAG_UNDEFINED),
+            fields.add(emitter_slot::EVENTS as usize) as usize,
+            emitter_slot::EVENTS as usize,
+            events.get_nanbox_u64(),
         );
+        // GC_STORE_AUDIT(INIT): non-pointer bits into an unobserved newborn.
+        *fields.add(emitter_slot::EVENTS_COUNT as usize) = 0f64.to_bits();
+        // GC_STORE_AUDIT(INIT): undefined into an unobserved newborn.
+        *fields.add(emitter_slot::MAX_LISTENERS as usize) = crate::value::TAG_UNDEFINED;
+        (box_pointer(obj.cast()), true)
     }
-    instance.with_mut_ptr::<ObjectHeader, _>(|obj| {
-        // SAFETY: the live instance just built.
-        let id = unsafe { crate::object::shapes::object_shape_stamp(obj) };
-        FINAL_SHAPE.with(|cell| cell.set((id, own_max)));
-        crate::value::js_nanbox_pointer(obj as i64)
-    })
+}
+
+/// node's `EventEmitter(opts)` on a fresh object linked to `proto`: the
+/// emitter birth, then the `captureRejections` option. On a layout birth the
+/// sealed, unwritten `EventEmitter.prototype` holds its `kCapture` default
+/// (false), so without options there is nothing to record.
+pub(crate) fn emitter_new(
+    proto: f64,
+    options: f64,
+    layout: *const crate::object::layout_desc::PerryLayoutDesc,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    let (instance, sealed) = emitter_birth(proto, layout);
+    if sealed && options.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
+        return instance;
+    }
+    let instance = scope.root_nanbox_f64(instance);
+    crate::node_stream::event_emitter::init_newborn_emitter_capture(&instance, &options, None);
+    instance.get_nanbox_f64()
 }
 
 /// `new EventEmitter(opts)`.
@@ -309,30 +175,15 @@ fn born_emitter(proto: f64, inherited_max: f64) -> f64 {
 pub extern "C" fn js_event_emitter_object_new(options: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options = scope.root_nanbox_f64(options);
-    let ctor = scope.root_nanbox_f64(event_emitter_constructor_value("EventEmitter"));
-    let proto = scope.root_nanbox_f64(own_prototype_by_bag(ctor.get_nanbox_f64()).unwrap_or_else(
-        || crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64()),
-    ));
-    let max = plain_prototype_max(proto.get_nanbox_f64());
-    let ordinary_birth = max.is_some();
-    let instance = if let Some(max) = max {
-        born_emitter(proto.get_nanbox_f64(), max)
-    } else {
-        let instance =
-            scope.root_nanbox_f64(crate::object::js_object_create(proto.get_nanbox_f64()));
-        init_event_emitter_state(instance.get_nanbox_f64());
-        instance.get_nanbox_f64()
-    };
-    let instance = scope.root_nanbox_f64(instance);
-    crate::node_stream::event_emitter::init_newborn_emitter_capture(
-        &instance,
-        &options,
-        (ordinary_birth && options.get_nanbox_u64() == crate::value::TAG_UNDEFINED)
-            .then(|| (ctor.get_nanbox_f64(), proto.get_nanbox_f64())),
-    );
-    instance.get_nanbox_f64()
+    let ctor = event_emitter_constructor_value("EventEmitter");
+    let proto = own_prototype_by_bag(ctor)
+        .unwrap_or_else(|| crate::object::js_function_prototype_value_for_read(ctor));
+    emitter_new(
+        proto,
+        options.get_nanbox_f64(),
+        &raw const crate::object::runtime_layouts::EVENT_EMITTER,
+    )
 }
-
 /// `new EventEmitterAsyncResource(opts)`.
 #[no_mangle]
 pub extern "C" fn js_event_emitter_async_resource_object_new(options: f64) -> f64 {

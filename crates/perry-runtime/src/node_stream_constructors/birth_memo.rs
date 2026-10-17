@@ -444,9 +444,11 @@ mod tests {
     extern "C" fn read_hook(_: *const ClosureHeader, _: crate::closure::JsThis, _: f64) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }
+    // PassThrough: the direct births of the sealed stream classes are born
+    // on their instance layouts and take no replay.
     #[test]
     fn warm_presence_change_does_not_keep_an_own_hook() {
-        R_DIRECT.with(|site| site.set(None));
+        P_DIRECT.with(|site| site.set(None));
         let scope = crate::gc::RuntimeHandleScope::new();
         let opts =
             scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc_plain(2).cast()));
@@ -456,10 +458,10 @@ mod tests {
             crate::runtime_state_key!(b"read"),
             box_pointer(hook.get_raw_mut_ptr::<ClosureHeader>().cast()),
         );
-        let first = scope.root_nanbox_f64(js_node_stream_readable_new(opts.get_nanbox_f64()));
-        let _second = scope.root_nanbox_f64(js_node_stream_readable_new(opts.get_nanbox_f64()));
+        let first = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(opts.get_nanbox_f64()));
+        let _second = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(opts.get_nanbox_f64()));
         assert!(
-            R_DIRECT.with(|site| site.get()).is_some(),
+            P_DIRECT.with(|site| site.get()).is_some(),
             "must witness a primed birth"
         );
         let old_shape = unsafe {
@@ -474,7 +476,7 @@ mod tests {
                 object_ptr_from_value(opts.get_nanbox_f64()).unwrap(),
             )
         });
-        let changed = scope.root_nanbox_f64(js_node_stream_readable_new(opts.get_nanbox_f64()));
+        let changed = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(opts.get_nanbox_f64()));
         let key = crate::runtime_state_key!(b"_read");
         assert!(
             unsafe { key.read_own(object_ptr_from_value(first.get_nanbox_f64()).unwrap()) }

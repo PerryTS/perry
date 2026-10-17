@@ -411,6 +411,14 @@ pub(super) fn alloc_stream_instance(
             ordinary.get_nanbox_f64(),
         ));
     }
+    if let Some(layout) = kind.layout() {
+        // SAFETY: a registered stream instance layout.
+        if let Some(obj) =
+            unsafe { super::constructors::instance_birth::alloc_on_layout(proto.get_nanbox_f64(), layout) }
+        {
+            return (box_pointer(obj.cast()), None);
+        }
+    }
     let (stream, proof) =
         super::constructors::birth_memo::alloc(proto.get_nanbox_f64(), opts.get_nanbox_f64(), kind);
     if let Some(stream) = stream {

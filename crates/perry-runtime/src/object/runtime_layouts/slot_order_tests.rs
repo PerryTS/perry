@@ -590,14 +590,17 @@ fn the_probe_serves_a_holey_runtime_layout() {
                 "an own written member is one probe store"
             );
             assert_eq!(js_object_get_field(obj, 0).as_number(), 5.0);
-            // The absent member's store: nothing on the chain intercepts it,
-            // so the probe adds it in its hole slot, in the layout's order,
-            // exactly as the complete [[Set]] does.
+            // The absent member's store adds a key, which enumerates last; a
+            // later key is present, so its key position is not the end and
+            // the probe leaves the add to the complete [[Set]]. (This layout
+            // declares no optional key: the hole is an unfinished birth, whose
+            // store fills its slot.)
             assert_eq!(
                 crate::object::layout_probe::perry_probe_set(dir, value, second, second_hash, 7.0),
-                1,
-                "a hole slot's store is served"
+                0,
+                "an out-of-order hole fill is the complete [[Set]]'s"
             );
+            js_object_set_field_by_name(obj, SECOND.string, 7.0);
         });
         let obj = object.get_raw_mut_ptr::<ObjectHeader>();
         assert_eq!(js_object_get_field_by_name_f64(obj, SECOND.string), 7.0);

@@ -199,36 +199,31 @@ pub(crate) unsafe fn nm_ctor_stream(
             _ => unreachable!(),
         });
     }
-    // #10430: `new Stream()` (legacy `Stream`, i.e. `new (require('stream'))()`)
-    // is an ordinary instance of `Stream.prototype`, whose EventEmitter methods
-    // act on the receiver. Build it the way an ordinary function constructor's
-    // instance is built (the constructor's stable synthetic class id plus a
-    // class-default link to its `prototype`), not via `Object.create`, which
-    // mints a fresh synthetic class per call. Without this arm the instance
-    // had no `on`/`emit` and was not `instanceof Stream`.
+    // #10430: `new Stream(opts)` (legacy `Stream`, i.e.
+    // `new (require('stream'))()`) is node's `EE.call(this, opts)` on an
+    // instance of `Stream.prototype`: an emitter, born on the emitter's
+    // layout that names the sealed legacy `Stream.prototype`.
     if method == "Stream" {
         let scope = crate::gc::RuntimeHandleScope::new();
+        let options = scope.root_nanbox_f64(nm_ctor_arg(args_ptr, args_len, 0));
         let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
             "stream", "Stream",
         ));
-        let cid = 0;
-        let instance = scope.root_raw_mut_ptr(js_object_alloc(cid, 0));
-        let proto = crate::closure::closure_get_dynamic_prop(
+        let mut proto = crate::closure::closure_get_dynamic_prop(
             (ctor.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
             "prototype",
         );
-        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
-            instance.with_mut_ptr::<ObjectHeader, _>(|obj| {
-                super::super::super::prototype_chain::object_link_class_default_prototype(
-                    obj as usize,
-                    proto.to_bits(),
-                )
-            });
+        if !crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+            // A primitive `.prototype`: the instance inherits from
+            // %Object.prototype%, as `OrdinaryCreateFromConstructor` does.
+            let plain = crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
+            proto = crate::object::js_object_get_prototype_of(plain);
         }
-        return Some(
-            instance
-                .with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64)),
-        );
+        return Some(crate::node_stream::emitter_new(
+            proto,
+            options.get_nanbox_f64(),
+            &raw const crate::object::runtime_layouts::LEGACY_STREAM,
+        ));
     }
     None
 }

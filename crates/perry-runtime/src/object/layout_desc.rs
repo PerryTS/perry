@@ -1678,7 +1678,7 @@ unsafe fn family_slot_word(obj: *const ObjectHeader, slot: u32) -> u64 {
     super::spill::spill_get_present(obj as usize, slot as usize).unwrap_or(0)
 }
 
-/// Is a late key after position `pos` of `obj`'s list present (its slot
+/// Is a key after position `pos` of `obj`'s list present (its slot
 /// written)? Then a fill of `pos` in place would enumerate out of order.
 pub(crate) unsafe fn later_late_key_present(
     obj: *const ObjectHeader,
@@ -1699,10 +1699,10 @@ pub(crate) unsafe fn later_late_key_present(
                 .any(|k| *fields.add(k.slot as usize) != crate::value::TAG_HOLE);
         }
     }
+    // Any present key after `pos` (a required one always is, an optional or
+    // an added one once written): node appends a new key after it.
     (pos + 1..count).any(|p| {
-        super::key_attrs::keys_entry(keys, p) & super::key_attrs::ENTRY_OPTIONAL != 0
-            && family_slot_word(obj, super::key_attrs::key_storage_slot(keys, p))
-                != crate::value::TAG_HOLE
+        family_slot_word(obj, super::key_attrs::key_storage_slot(keys, p)) != crate::value::TAG_HOLE
     })
 }
 
