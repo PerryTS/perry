@@ -266,29 +266,57 @@ fn is_symbol_assignment(line: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.')
 }
 
+/// Every spelling LLVM's asm printer gives a symbol attribute
+/// (`MCAsmStreamer::emitSymbolAttribute`, one per `MCSymbolAttr`), for every
+/// object format. A symbol attribute never emits bytes, and LLVM prints the
+/// attributes of a symbol defined by assignment (an alias) wherever the
+/// assignment lands, which can be inside the stack-map block: on Mach-O an
+/// `internal alias` prints `.alt_entry sym` + `sym = expr` after the map, before
+/// `.subsections_via_symbols`. The list is the whole attribute set, not the
+/// subset seen so far, so a new alias or linkage in the IR cannot refuse a
+/// module on one format only.
+const SYMBOL_ATTRIBUTE_DIRECTIVES: &[&str] = &[
+    // ELF / common
+    ".globl",
+    ".global",
+    ".local",
+    ".weak",
+    ".hidden",
+    ".protected",
+    ".internal",
+    ".type",
+    ".memtag",
+    // Mach-O
+    ".private_extern",
+    ".no_dead_strip",
+    ".alt_entry",
+    ".weak_definition",
+    ".weak_reference",
+    ".weak_def_can_be_hidden",
+    ".lazy_reference",
+    ".reference",
+    ".symbol_resolver",
+    ".indirect_symbol",
+    ".cold",
+    // COFF
+    ".weak_anti_dep",
+];
+
 fn is_zero_width_directive(directive: &str) -> bool {
-    matches!(
-        directive,
-        ".globl"
-            | ".global"
-            | ".local"
-            | ".weak"
-            | ".hidden"
-            | ".protected"
-            | ".internal"
-            | ".type"
-            | ".size"
-            | ".set"
-            | ".equ"
-            | ".file"
-            | ".ident"
-            | ".loc"
-            | ".no_dead_strip"
-            | ".private_extern"
-            | ".addrsig"
-            | ".addrsig_sym"
-            | ".end"
-    ) || directive.starts_with(".cfi_")
+    SYMBOL_ATTRIBUTE_DIRECTIVES.contains(&directive)
+        || matches!(
+            directive,
+            ".size"
+                | ".set"
+                | ".equ"
+                | ".file"
+                | ".ident"
+                | ".loc"
+                | ".addrsig"
+                | ".addrsig_sym"
+                | ".end"
+        )
+        || directive.starts_with(".cfi_")
 }
 
 /// The assembled bytes of the stack-map block, plus the byte offsets at which

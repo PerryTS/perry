@@ -631,6 +631,51 @@ fn symbol_assignments_inside_the_block_are_re_emitted() {
     );
 }
 
+/// Mach-O prints an `internal alias` (the per-function name aliases,
+/// `@m_.fnname.N = internal alias i8, getelementptr (...)`) as
+/// `.alt_entry sym` + `sym = expr` at the end of the file: after the
+/// stack map, before `.subsections_via_symbols`. Both lines are zero-width
+/// and must survive the rewrite in their order; before the full symbol
+/// attribute set was listed, `.alt_entry` refused every macOS module that
+/// declared a named function.
+#[test]
+fn macho_alias_attributes_after_the_map_are_carried() {
+    let asm = sample_asm().replace(
+        "\t.subsections_via_symbols\n",
+        concat!(
+            "\t.alt_entry\t_m_ts_.fnname.0\n",
+            "_m_ts_.fnname.0 = _perry_image_literal_0_66+8+20\n",
+            "\t.subsections_via_symbols\n",
+        ),
+    );
+    let (out, stats) = compact_stack_map_asm(&asm, "arm64-apple-macosx15.0.0")
+        .expect("a Mach-O stack map followed by an alias must parse")
+        .expect("a Mach-O stack map must be rewritten");
+    assert_eq!(stats.functions, 1);
+    assert_eq!(stats.roots, 1);
+    let alt = out
+        .find("\t.alt_entry\t_m_ts_.fnname.0\n")
+        .expect("the alias's .alt_entry must be re-emitted");
+    let assign = out
+        .find("\n_m_ts_.fnname.0 = _perry_image_literal_0_66+8+20\n")
+        .expect("the alias assignment must be re-emitted");
+    let map = out.find("_perry_gc_map:").expect("compact map label");
+    let tail = out.find(".subsections_via_symbols").expect("epilogue");
+    assert!(map < alt && alt < assign && assign < tail, "{out}");
+}
+
+/// Every symbol attribute LLVM can print is zero-width, on every format.
+#[test]
+fn every_symbol_attribute_is_zero_width() {
+    for directive in super::SYMBOL_ATTRIBUTE_DIRECTIVES {
+        assert!(super::is_zero_width_directive(directive), "{directive}");
+        assert!(
+            super::directive_width(directive, 8).is_none(),
+            "{directive}"
+        );
+    }
+}
+
 #[test]
 fn trailing_llvm_buffer_nul_is_not_an_assembly_directive() {
     let asm = concat!(
