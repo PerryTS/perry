@@ -67,7 +67,10 @@ use import_meta_require::rewrite_import_meta_require_addons;
 pub(super) use native_addon::{collect_declared_addons, package_has_unsupported_node_addon};
 use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
 use parse_error::annotate_parse_error;
+pub(super) use source_prep::{PreparedSources, WalkSources};
+#[cfg(test)]
 pub(super) use walk::collect_modules;
+pub(super) use walk::collect_modules_with_sources;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
@@ -149,6 +152,7 @@ fn collect_module_one(
     progress: &VerboseProgress,
     parse_cache: Option<&mut ParseCache>,
     prefetch: Option<&source_prep::SourcePrefetch>,
+    sources: &mut source_prep::WalkSources,
 ) -> Result<ModuleDiscovery> {
     let mut pending = Vec::new();
 
@@ -306,22 +310,37 @@ fn collect_module_one(
         is_text: is_text_asset && plain_source,
         is_entry: cjs_is_entry_module,
     };
-    // A plain file is read and prepared by `prepare_plain` — on a source-prep
-    // worker ahead of the walk when one has it ready for this classification,
-    // otherwise here. Asset adapters, `--bunfs-root` sources and sources that
-    // need the `import.meta.require` rewrite take the walk-only path below.
+    // A plain file is read and prepared by `prepare_plain` — by the
+    // compile's first walk when this is the second and the first prepared it
+    // for this classification, else on a source-prep worker ahead of the walk
+    // when one has it ready for this classification, otherwise here. Asset
+    // adapters, `--bunfs-root` sources and sources that need the
+    // `import.meta.require` rewrite take the walk-only path below.
     let read = if plain_source && ctx.bunfs_root.is_none() {
-        let prefetched = prefetch
-            .and_then(|prefetch| prefetch.claim(&canonical))
-            .filter(|prefetched| prefetched.class == prep_class);
-        Some(match prefetched {
-            Some(prefetched) => prefetched.read?,
-            None => source_prep::prepare_plain(
-                &canonical,
-                prep_class,
-                &source_prep::PrepInputs::of(ctx, target),
-            )?,
-        })
+        let earlier = match sources {
+            source_prep::WalkSources::Reuse(earlier) => earlier.take(&canonical, prep_class),
+            source_prep::WalkSources::Keep(_) => None,
+        };
+        let read = match earlier {
+            Some(read) => read,
+            None => {
+                let prefetched = prefetch
+                    .and_then(|prefetch| prefetch.claim(&canonical))
+                    .filter(|prefetched| prefetched.class == prep_class);
+                match prefetched {
+                    Some(prefetched) => prefetched.read?,
+                    None => source_prep::prepare_plain(
+                        &canonical,
+                        prep_class,
+                        &source_prep::PrepInputs::of(ctx, target),
+                    )?,
+                }
+            }
+        };
+        if let source_prep::WalkSources::Keep(kept) = sources {
+            kept.keep(&canonical, prep_class, &read);
+        }
+        Some(read)
     } else {
         None
     };
@@ -341,6 +360,9 @@ fn collect_module_one(
             prepared
         }
         read => {
+            // A plain source that needs the `import.meta.require` rewrite:
+            // only what follows the rewrite can come from an earlier walk.
+            let after_rewrite = matches!(read, Some(source_prep::ReadSource::NeedsWalk(_)));
             let raw_source = match read {
                 Some(source_prep::ReadSource::NeedsWalk(raw_source)) => raw_source,
                 Some(source_prep::ReadSource::Prepared { .. }) => {
@@ -413,18 +435,43 @@ fn collect_module_one(
                     }
                 }
             }
-            source_prep::prepare_from_raw(
-                raw_source,
-                &canonical,
-                prep_class,
-                &source_prep::PrepInputs::of(ctx, target),
-            )
+            let earlier = match sources {
+                source_prep::WalkSources::Reuse(earlier) if after_rewrite => {
+                    earlier.take_after_rewrite(&canonical, prep_class, &raw_source)
+                }
+                _ => None,
+            };
+            match earlier {
+                Some(prepared) => Ok(prepared),
+                None => {
+                    let kept_raw = match sources {
+                        source_prep::WalkSources::Keep(_) if after_rewrite => {
+                            Some(raw_source.clone())
+                        }
+                        _ => None,
+                    };
+                    let prepared = source_prep::prepare_from_raw(
+                        raw_source,
+                        &canonical,
+                        prep_class,
+                        &source_prep::PrepInputs::of(ctx, target),
+                    );
+                    if let (source_prep::WalkSources::Keep(kept), Some(raw), Ok(prepared)) =
+                        (&mut *sources, kept_raw, &prepared)
+                    {
+                        kept.keep_after_rewrite(&canonical, prep_class, raw, prepared);
+                    }
+                    prepared
+                }
+            }
         }
     };
     let source_prep::PreparedSource {
         source,
         was_cjs_wrapped,
         messages,
+        computed_require_warnings,
+        wrap_dump,
         stdlib_modules,
         debug_prefix_line_count,
     } = prepared?;
@@ -433,6 +480,14 @@ fn collect_module_one(
     }
     for message in messages {
         eprintln!("{message}");
+    }
+    if ctx.cjs_require_diagnostics {
+        for warning in computed_require_warnings {
+            eprintln!("{warning}");
+        }
+    }
+    if let Some(dump) = wrap_dump {
+        eprintln!("{dump}");
     }
     for module in stdlib_modules {
         ctx.needs_stdlib = true;

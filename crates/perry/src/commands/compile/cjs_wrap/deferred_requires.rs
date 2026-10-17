@@ -13,25 +13,27 @@ use swc_ecma_visit::{Visit, VisitWith};
 /// function-local classification (some CJS sources need wrapping to parse).
 #[cfg(test)]
 fn deferred_require_specs(source: &str) -> HashSet<String> {
-    analyze_require_specs(source, None, &mut Vec::new())
+    analyze_require_specs(source, std::path::Path::new(""), &mut Vec::new(), None)
 }
 
-/// Diagnostics (computed-require warnings, recoverable parse warnings) go to
-/// `messages` for the caller to print: this runs on source-preparation worker
-/// threads, and stderr must keep the module walk's order.
+/// Recoverable parse warnings go to `messages` and computed-require warnings
+/// to `computed_require_warnings` (not looked for when `None`) for the caller
+/// to print: this runs on source-preparation worker threads, and stderr must
+/// keep the module walk's order.
 pub(super) fn deferred_require_specs_for_path(
     source: &str,
     path: &std::path::Path,
-    diagnose_computed_requires: bool,
     messages: &mut Vec<String>,
+    computed_require_warnings: Option<&mut Vec<String>>,
 ) -> HashSet<String> {
-    analyze_require_specs(source, diagnose_computed_requires.then_some(path), messages)
+    analyze_require_specs(source, path, messages, computed_require_warnings)
 }
 
 fn analyze_require_specs(
     source: &str,
-    path: Option<&std::path::Path>,
+    path: &std::path::Path,
     messages: &mut Vec<String>,
+    computed_require_warnings: Option<&mut Vec<String>>,
 ) -> HashSet<String> {
     let Ok(module) = perry_parser::parse_typescript_with_warnings(source, "requires.cjs", messages)
     else {
@@ -41,12 +43,12 @@ fn analyze_require_specs(
     module.visit_with(&mut visitor);
     // Reuse the mandatory dependency walk as a zero-allocation admission
     // check. Literal-only CJS modules need no alias/scope diagnostic analysis.
-    if let Some(path) = path.filter(|_| visitor.computed_call_candidate) {
+    if let Some(warnings) = computed_require_warnings.filter(|_| visitor.computed_call_candidate) {
         for offset in super::computed_requires::computed_require_offsets(&module) {
             let prefix = &source[..offset.min(source.len())];
             let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
             let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-            messages.push(format!(
+            warnings.push(format!(
                 "warning: {}:{}:{}: computed CommonJS require does not automatically include target files; add static imports for the possible targets and use explicit file extensions in computed requests (#10438)",
                 path.display(), line, column,
             ));

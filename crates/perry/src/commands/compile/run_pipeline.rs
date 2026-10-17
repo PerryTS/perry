@@ -917,7 +917,10 @@ pub fn run_with_parse_cache(
         }
     }
 
-    collect_modules(
+    // The sources this walk prepares feed the second walk
+    // (`rerun_collect_with_class_field_types`), which drops them.
+    let mut prepared_sources = collect_modules::PreparedSources::default();
+    collect_modules::collect_modules_with_sources(
         &args.input,
         &mut ctx,
         &mut visited,
@@ -927,6 +930,7 @@ pub fn run_with_parse_cache(
         skip_transforms,
         &progress,
         parse_cache.as_deref_mut(),
+        collect_modules::WalkSources::Keep(&mut prepared_sources),
     )?;
 
     // Bundle extensions if --bundle-extensions specified
@@ -942,6 +946,7 @@ pub fn run_with_parse_cache(
                 &progress,
                 parse_cache.as_deref_mut(),
                 format,
+                &mut prepared_sources,
             )?
         } else {
             Vec::new()
@@ -956,6 +961,7 @@ pub fn run_with_parse_cache(
         &progress,
         parse_cache.as_deref_mut(),
         format,
+        prepared_sources,
     )?;
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;

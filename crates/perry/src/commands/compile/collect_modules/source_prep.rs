@@ -16,6 +16,13 @@
 //! touch the compilation context. Every effect on it, every error and every
 //! diagnostic line is carried in the result and applied or printed by the
 //! walk when it consumes the module, so they keep the walk's order.
+//!
+//! A compile walks the module graph twice (the second walk lowers against
+//! the class field types the first one found), and the second walk prepares
+//! the same files with the same settings. So the first walk returns the
+//! sources it prepared, as [`PreparedSources`], and the second takes them as
+//! an input ([`WalkSources`]) and uses each one prepared for the settings
+//! and classification it computes itself, preparing the rest as usual.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -129,7 +136,6 @@ pub(super) struct PrepInputs<'a> {
     pub(super) compile_packages: &'a HashSet<String>,
     pub(super) native_addon_paths: &'a BTreeMap<PathBuf, String>,
     pub(super) bunfs_root: Option<&'a Path>,
-    pub(super) cjs_require_diagnostics: bool,
     pub(super) debug_symbols: bool,
 }
 
@@ -140,8 +146,41 @@ impl<'a> PrepInputs<'a> {
             compile_packages: &ctx.compile_packages,
             native_addon_paths: &ctx.native_addon_paths,
             bunfs_root: ctx.bunfs_root.as_deref(),
-            cjs_require_diagnostics: ctx.cjs_require_diagnostics,
             debug_symbols: ctx.debug_symbols,
+        }
+    }
+}
+
+/// Owned copy of [`PrepInputs`] for a walk that prepares modules ahead
+/// (never with `--bunfs-root`), taken when the walk starts.
+#[derive(PartialEq, Eq)]
+struct PrepConfig {
+    target: Option<String>,
+    compile_packages: HashSet<String>,
+    native_addon_paths: BTreeMap<PathBuf, String>,
+    debug_symbols: bool,
+}
+
+impl PrepConfig {
+    fn of(ctx: &CompilationContext, target: Option<&str>) -> Option<Self> {
+        if ctx.bunfs_root.is_some() {
+            return None;
+        }
+        Some(Self {
+            target: target.map(str::to_string),
+            compile_packages: ctx.compile_packages.clone(),
+            native_addon_paths: ctx.native_addon_paths.clone(),
+            debug_symbols: ctx.debug_symbols,
+        })
+    }
+
+    fn inputs(&self) -> PrepInputs<'_> {
+        PrepInputs {
+            target: self.target.as_deref(),
+            compile_packages: &self.compile_packages,
+            native_addon_paths: &self.native_addon_paths,
+            bunfs_root: None,
+            debug_symbols: self.debug_symbols,
         }
     }
 }
@@ -161,11 +200,20 @@ pub(super) struct PrepClass {
 
 /// A module's source ready for parsing, with the context effects the walk
 /// applies and the diagnostics it prints.
+#[derive(Clone)]
 pub(super) struct PreparedSource {
     pub(super) source: String,
     pub(super) was_cjs_wrapped: bool,
-    /// Diagnostic lines from the CommonJS wrap, printed by the walk.
+    /// Recoverable parse warnings from the CommonJS wrap, printed by the walk.
     pub(super) messages: Vec<String>,
+    /// Computed-`require` warnings from the CommonJS wrap, printed by the
+    /// walk after `messages` when `CompilationContext::cjs_require_diagnostics`
+    /// is on (the second walk turns it off). Always collected, so the
+    /// prepared source does not depend on that setting.
+    pub(super) computed_require_warnings: Vec<String>,
+    /// The wrapped source under `PERRY_DEBUG_CJS_WRAP`, printed by the walk
+    /// last.
+    pub(super) wrap_dump: Option<String>,
     /// Built-in modules named by literal `require()` or `getBuiltinModule`
     /// sites that need the stdlib, in source order (`node:` stripped).
     pub(super) stdlib_modules: Vec<String>,
@@ -176,7 +224,14 @@ pub(super) struct PreparedSource {
 
 impl PreparedSource {
     fn bytes(&self) -> usize {
-        self.source.len() + self.messages.iter().map(String::len).sum::<usize>()
+        self.source.len()
+            + self
+                .messages
+                .iter()
+                .chain(&self.computed_require_warnings)
+                .chain(&self.wrap_dump)
+                .map(String::len)
+                .sum::<usize>()
     }
 }
 
@@ -222,6 +277,8 @@ pub(super) fn prepare_from_raw(
     // CommonJS (`is_commonjs` returns false) and is left untouched.
     let was_cjs_wrapped = class.wrap_eligible && is_commonjs(&raw_source);
     let mut messages = Vec::new();
+    let mut computed_require_warnings = Vec::new();
+    let mut wrap_dump = None;
     // #5247 / #7036: when source locations are requested, capture where the
     // original module body lands inside the wrapped output so debug frames and
     // opt reports can map a wrapped-coordinate byte offset back to an
@@ -235,9 +292,16 @@ pub(super) fn prepare_from_raw(
             class.is_entry,
             Some(inputs.compile_packages),
             Some(inputs.native_addon_paths),
-            inputs.cjs_require_diagnostics,
             &mut messages,
+            Some(&mut computed_require_warnings),
         );
+        if std::env::var("PERRY_DEBUG_CJS_WRAP").is_ok() {
+            wrap_dump = Some(format!(
+                "=== CJS WRAP for {} ===\n{}\n=== END ===",
+                canonical.display(),
+                wrapped
+            ));
+        }
         if inputs.debug_symbols {
             // Preserve original-source locations after injecting the wrapper.
             body_prefix_lines = body_off.map(|off| {
@@ -302,6 +366,8 @@ pub(super) fn prepare_from_raw(
         source,
         was_cjs_wrapped,
         messages,
+        computed_require_warnings,
+        wrap_dump,
         stdlib_modules,
         debug_prefix_line_count,
     })
@@ -397,31 +463,30 @@ pub(super) fn worker_count(ctx: &CompilationContext) -> usize {
 
 /// Owned copy of the settings workers read, taken when a walk starts.
 pub(super) struct PrepSettings {
-    target: Option<String>,
+    config: PrepConfig,
     entry_canonical: Option<PathBuf>,
-    compile_packages: HashSet<String>,
-    native_addon_paths: BTreeMap<PathBuf, String>,
-    cjs_require_diagnostics: bool,
-    debug_symbols: bool,
     aot_discovered_modules: HashSet<PathBuf>,
     compile_package_dirs: BTreeSet<PathBuf>,
+    /// Modules an earlier walk prepared, which this walk takes from there.
+    earlier: HashSet<PathBuf>,
 }
 
 impl PrepSettings {
     /// `None` when modules cannot be prepared ahead (`--bunfs-root`).
-    pub(super) fn of(ctx: &CompilationContext, target: Option<&str>) -> Option<Self> {
-        if ctx.bunfs_root.is_some() {
-            return None;
-        }
+    pub(super) fn of(
+        ctx: &CompilationContext,
+        target: Option<&str>,
+        sources: &WalkSources,
+    ) -> Option<Self> {
         Some(Self {
-            target: target.map(str::to_string),
+            config: PrepConfig::of(ctx, target)?,
             entry_canonical: ctx.entry_canonical.clone(),
-            compile_packages: ctx.compile_packages.clone(),
-            native_addon_paths: ctx.native_addon_paths.clone(),
-            cjs_require_diagnostics: ctx.cjs_require_diagnostics,
-            debug_symbols: ctx.debug_symbols,
             aot_discovered_modules: ctx.aot_discovered_modules.clone(),
             compile_package_dirs: ctx.compile_package_dirs.clone(),
+            earlier: match sources {
+                WalkSources::Reuse(earlier) => earlier.modules.keys().cloned().collect(),
+                WalkSources::Keep(_) => HashSet::new(),
+            },
         })
     }
 
@@ -430,6 +495,7 @@ impl PrepSettings {
     fn prefetch(&self, canonical: &Path) -> Option<Prefetched> {
         if canonical.extension().and_then(|ext| ext.to_str()) == Some("node")
             || is_wasm_asset(canonical)
+            || self.earlier.contains(canonical)
         {
             return None;
         }
@@ -438,7 +504,7 @@ impl PrepSettings {
             &RouteInputs {
                 bunfs_root: None,
                 aot_discovered_modules: &self.aot_discovered_modules,
-                compile_packages: &self.compile_packages,
+                compile_packages: &self.config.compile_packages,
                 compile_package_dirs: &self.compile_package_dirs,
             },
         );
@@ -451,18 +517,173 @@ impl PrepSettings {
             is_text: is_recognized_text_asset(canonical),
             is_entry: self.entry_canonical.as_deref() == Some(canonical),
         };
-        let inputs = PrepInputs {
-            target: self.target.as_deref(),
-            compile_packages: &self.compile_packages,
-            native_addon_paths: &self.native_addon_paths,
-            bunfs_root: None,
-            cjs_require_diagnostics: self.cjs_require_diagnostics,
-            debug_symbols: self.debug_symbols,
-        };
         Some(Prefetched {
             class,
-            read: prepare_plain(canonical, class, &inputs),
+            read: prepare_plain(canonical, class, &self.config.inputs()),
         })
+    }
+}
+
+/// A plain module's prepared source as a walk consumed it.
+struct KeptSource {
+    class: PrepClass,
+    read: KeptRead,
+    prepared: PreparedSource,
+}
+
+enum KeptRead {
+    /// Prepared straight from the file ([`prepare_plain`]).
+    Plain {
+        require_specs: Vec<String>,
+        node_targets: Vec<PathBuf>,
+    },
+    /// Prepared by the walk from this source, the file after the
+    /// `import.meta.require` rewrite. The rewrite records addons in the
+    /// context, so every walk runs it; its output decides reuse.
+    AfterRewrite { raw_source: String },
+}
+
+/// The plain module sources one walk prepared, keyed by canonical path, with
+/// the settings they were prepared for. The compile's first walk returns
+/// them and its second walk takes them as an input; nothing else holds them.
+#[derive(Default)]
+pub(crate) struct PreparedSources {
+    config: Option<PrepConfig>,
+    modules: HashMap<PathBuf, KeptSource>,
+}
+
+impl PreparedSources {
+    /// Modules held.
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.modules.len()
+    }
+
+    /// Record `read`, prepared for `class` with the settings the walk
+    /// started with (see [`WalkSources::start`]).
+    pub(super) fn keep(&mut self, canonical: &Path, class: PrepClass, read: &ReadSource) {
+        if self.config.is_none() {
+            return;
+        }
+        if let ReadSource::Prepared {
+            require_specs,
+            node_targets,
+            prepared: Ok(prepared),
+        } = read
+        {
+            self.modules.insert(
+                canonical.to_path_buf(),
+                KeptSource {
+                    class,
+                    read: KeptRead::Plain {
+                        require_specs: require_specs.clone(),
+                        node_targets: node_targets.clone(),
+                    },
+                    prepared: prepared.clone(),
+                },
+            );
+        }
+    }
+
+    /// Record `prepared`, prepared by the walk for `class` from `raw_source`
+    /// (the file after the `import.meta.require` rewrite).
+    pub(super) fn keep_after_rewrite(
+        &mut self,
+        canonical: &Path,
+        class: PrepClass,
+        raw_source: String,
+        prepared: &PreparedSource,
+    ) {
+        if self.config.is_none() {
+            return;
+        }
+        self.modules.insert(
+            canonical.to_path_buf(),
+            KeptSource {
+                class,
+                read: KeptRead::AfterRewrite { raw_source },
+                prepared: prepared.clone(),
+            },
+        );
+    }
+
+    /// Take the source prepared straight from the file for `canonical`, if
+    /// it was prepared for `class` (the settings were checked when the walk
+    /// started). A source prepared after the rewrite stays for
+    /// [`Self::take_after_rewrite`].
+    pub(super) fn take(&mut self, canonical: &Path, class: PrepClass) -> Option<ReadSource> {
+        if matches!(
+            self.modules.get(canonical)?.read,
+            KeptRead::AfterRewrite { .. }
+        ) {
+            return None;
+        }
+        let kept = self.modules.remove(canonical)?;
+        let KeptRead::Plain {
+            require_specs,
+            node_targets,
+        } = kept.read
+        else {
+            unreachable!("checked above");
+        };
+        (kept.class == class).then(|| ReadSource::Prepared {
+            require_specs,
+            node_targets,
+            prepared: Ok(kept.prepared),
+        })
+    }
+
+    /// Take the source the earlier walk prepared for `canonical` after the
+    /// `import.meta.require` rewrite, if it was prepared for `class` from
+    /// exactly `raw_source`, this walk's rewrite output.
+    pub(super) fn take_after_rewrite(
+        &mut self,
+        canonical: &Path,
+        class: PrepClass,
+        raw_source: &str,
+    ) -> Option<PreparedSource> {
+        let kept = self.modules.remove(canonical)?;
+        match kept.read {
+            KeptRead::AfterRewrite { raw_source: kept_raw }
+                if kept.class == class && kept_raw == raw_source =>
+            {
+                Some(kept.prepared)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// What a walk does with prepared module sources besides using them.
+pub(crate) enum WalkSources<'a> {
+    /// Keep every plain module source this walk prepares, for a later walk.
+    Keep(&'a mut PreparedSources),
+    /// Use the sources an earlier walk prepared, where they were prepared for
+    /// this walk's settings and classification.
+    Reuse(&'a mut PreparedSources),
+}
+
+impl WalkSources<'_> {
+    /// Called when a walk starts, before anything is prepared. Sources are
+    /// kept for one set of settings and reused only under the same settings;
+    /// the walk-thread path reads the same settings from the context, and
+    /// nothing changes them while a walk runs.
+    pub(super) fn start(&mut self, ctx: &CompilationContext, target: Option<&str>) {
+        match self {
+            WalkSources::Keep(sources) => {
+                let config = PrepConfig::of(ctx, target);
+                if sources.config != config {
+                    sources.modules.clear();
+                    sources.config = config;
+                }
+            }
+            WalkSources::Reuse(sources) => {
+                let config = PrepConfig::of(ctx, target);
+                if config.is_none() || sources.config != config {
+                    sources.modules.clear();
+                }
+            }
+        }
     }
 }
 

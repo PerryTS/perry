@@ -87,6 +87,7 @@ use bootstrap::harvest_harmonyos_index_ets;
 use build_cache::BuildCacheProbe;
 use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
 use bundle_ios::build_ios_app_bundle;
+#[cfg(test)]
 use collect_modules::collect_modules;
 use harmonyos_shim::emit_harmonyos_arkts_stubs;
 use host_config::apply_pkg_and_toml_config;

@@ -30,7 +30,7 @@ use anyhow::Result;
 use crate::OutputFormat;
 
 use super::audit_manifest::write_audit_manifest_logging_failures;
-use super::collect_modules::collect_modules;
+use super::collect_modules::{collect_modules_with_sources, PreparedSources, WalkSources};
 use super::resolve::discover_extension_entries;
 use super::resources::find_project_root_for_resources;
 use crate::commands::progress::VerboseProgress;
@@ -107,6 +107,7 @@ pub(super) fn bundle_extensions_into_ctx(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
     format: OutputFormat,
+    prepared_sources: &mut PreparedSources,
 ) -> Result<Vec<(PathBuf, String)>> {
     let ext_entries = discover_extension_entries(ext_dir)?;
     match format {
@@ -121,7 +122,7 @@ pub(super) fn bundle_extensions_into_ctx(
             }
             OutputFormat::Json => {}
         }
-        collect_modules(
+        collect_modules_with_sources(
             entry_path,
             ctx,
             visited,
@@ -131,6 +132,7 @@ pub(super) fn bundle_extensions_into_ctx(
             skip_transforms,
             progress,
             parse_cache.as_deref_mut(),
+            WalkSources::Keep(prepared_sources),
         )?;
         bundled_extensions.push((entry_path.canonicalize()?, plugin_id.clone()));
     }
@@ -149,6 +151,10 @@ pub(super) fn bundle_extensions_into_ctx(
 /// but the per-module cost is dominated by SWC parsing (cached by
 /// `parse_cache`) not HIR lowering, so the overhead in practice is
 /// small. See ECS demo-simple repro / #412.
+///
+/// `prepared_sources` are the module sources pass 1 prepared; pass 2 uses
+/// each one prepared for the settings and classification it computes, and
+/// they are dropped when it returns.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn rerun_collect_with_class_field_types(
     args: &CompileArgs,
@@ -159,6 +165,7 @@ pub(super) fn rerun_collect_with_class_field_types(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
     format: OutputFormat,
+    mut prepared_sources: PreparedSources,
 ) -> Result<()> {
     // Backstop for the pre-lowering scan: a source site that lowering left to
     // the interpreter but the scan did not record has the same reach.
@@ -257,7 +264,7 @@ pub(super) fn rerun_collect_with_class_field_types(
     ctx.worker_url_entries.clear();
     visited.clear();
     *next_class_id = 1;
-    collect_modules(
+    collect_modules_with_sources(
         &args.input,
         ctx,
         visited,
@@ -267,11 +274,12 @@ pub(super) fn rerun_collect_with_class_field_types(
         skip_transforms,
         progress,
         parse_cache.as_deref_mut(),
+        WalkSources::Reuse(&mut prepared_sources),
     )?;
     if let Some(ext_dir) = &args.bundle_extensions {
         let ext_entries = discover_extension_entries(ext_dir)?;
         for (entry_path, _plugin_id) in &ext_entries {
-            collect_modules(
+            collect_modules_with_sources(
                 entry_path,
                 ctx,
                 visited,
@@ -281,6 +289,7 @@ pub(super) fn rerun_collect_with_class_field_types(
                 skip_transforms,
                 progress,
                 parse_cache.as_deref_mut(),
+                WalkSources::Reuse(&mut prepared_sources),
             )?;
         }
     }

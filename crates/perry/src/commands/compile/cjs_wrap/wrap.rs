@@ -214,8 +214,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         is_entry_module,
         compile_packages,
         None,
-        false,
         &mut Vec::new(),
+        None,
     )
 }
 
@@ -228,8 +228,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     is_entry_module: bool,
     compile_packages: Option<&HashSet<String>>,
     native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
-    diagnose_computed_requires: bool,
     messages: &mut Vec<String>,
+    computed_require_warnings: Option<&mut Vec<String>>,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -430,7 +430,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // target with no default export never is — so a side-effect-only dependency
     // was deferred and then never evaluated at all.
     let mut lazy_specs =
-        deferred_require_specs_for_path(source, source_path, diagnose_computed_requires, messages);
+        deferred_require_specs_for_path(source, source_path, messages, computed_require_warnings);
     let cyclic_specs = cyclic_require_specs(&all_require_specs, source_path);
     let parent_sensitive_specs = parent_sensitive_require_specs(&all_require_specs, source_path);
     lazy_specs.extend(cyclic_specs.iter().cloned());
@@ -1536,13 +1536,6 @@ return __perry_cjs_factory();
 "#
         )
     };
-    if std::env::var("PERRY_DEBUG_CJS_WRAP").is_ok() {
-        messages.push(format!(
-            "=== CJS WRAP for {} ===\n{}\n=== END ===",
-            source_path.display(),
-            wrapped
-        ));
-    }
     // #5247: locate the original body within the wrapped output so callers can
     // translate a wrapped-coordinate byte offset back to original coordinates.
     // `body_for_iife` is interpolated verbatim into `wrapped`, so the first

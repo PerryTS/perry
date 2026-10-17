@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
-use super::source_prep::{worker_count, PrepSettings, SourcePrefetch};
+use super::source_prep::{worker_count, PrepSettings, SourcePrefetch, WalkSources};
 use super::*;
 
-/// Collect all modules to compile (transitive closure of imports).
-///
-/// Worker threads prepare module sources ahead of the walk (see
-/// `source_prep`); the walk itself, and everything that depends on its order,
-/// runs on this thread exactly as without them.
+/// Collect all modules to compile (transitive closure of imports) in a
+/// single walk.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_modules(
     entry_path: &PathBuf,
@@ -20,9 +18,44 @@ pub(crate) fn collect_modules(
     progress: &VerboseProgress,
     parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
+    collect_modules_with_sources(
+        entry_path,
+        ctx,
+        visited,
+        format,
+        target,
+        next_class_id,
+        skip_transforms,
+        progress,
+        parse_cache,
+        WalkSources::Keep(&mut super::source_prep::PreparedSources::default()),
+    )
+}
+
+/// Collect all modules to compile (transitive closure of imports).
+///
+/// Worker threads prepare module sources ahead of the walk (see
+/// `source_prep`); the walk itself, and everything that depends on its order,
+/// runs on this thread exactly as without them. `sources` says whether the
+/// walk keeps the sources it prepares for a later walk, or uses the ones an
+/// earlier walk kept.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_modules_with_sources(
+    entry_path: &PathBuf,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    format: OutputFormat,
+    target: Option<&str>,
+    next_class_id: &mut perry_hir::ClassId,
+    skip_transforms: bool,
+    progress: &VerboseProgress,
+    parse_cache: Option<&mut ParseCache>,
+    mut sources: WalkSources,
+) -> Result<()> {
+    sources.start(ctx, target);
     let workers = worker_count(ctx);
     let settings = (workers > 0)
-        .then(|| PrepSettings::of(ctx, target))
+        .then(|| PrepSettings::of(ctx, target, &sources))
         .flatten();
     let Some(settings) = settings else {
         return walk_modules(
@@ -36,6 +69,7 @@ pub(crate) fn collect_modules(
             progress,
             parse_cache,
             None,
+            &mut sources,
         );
     };
     let prefetch = SourcePrefetch::default();
@@ -60,6 +94,7 @@ pub(crate) fn collect_modules(
             progress,
             parse_cache,
             Some(&prefetch),
+            &mut sources,
         );
         prefetch.finish();
         result
@@ -78,6 +113,7 @@ fn walk_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
     prefetch: Option<&SourcePrefetch>,
+    sources: &mut WalkSources,
 ) -> Result<()> {
     // Hand every path pushed onto the walk stack to the source-prep workers,
     // in push order (the last pushed is popped first). Skips paths already
@@ -191,6 +227,7 @@ fn walk_modules(
                 progress,
                 parse_cache.as_deref_mut(),
                 prefetch,
+                sources,
             );
             if let Some(prefetch) = prefetch {
                 prefetch.release(&canonical);
