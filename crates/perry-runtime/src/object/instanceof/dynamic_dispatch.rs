@@ -171,6 +171,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     if let Some(true) = super::global_this::webassembly_value_ctor_instanceof(value, type_ref) {
         return f64::from_bits(crate::value::TAG_TRUE);
     }
+    // Native diagnostics wrappers have ordinary shapes, not constructor-linked prototypes.
+    if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
+        return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
+    if crate::node_submodules::is_diagnostics_bounded_channel_constructor_value(type_ref) {
+        return if crate::node_submodules::diagnostics_bounded_channel_is_instance_value(value) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     // Hooks precede OrdinaryHasInstance. A class must still consult its
     // lifted/static hooks before using this primitive fact.
     let primitive = instanceof_lhs_is_primitive(value);
@@ -610,13 +625,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             primitive,
             lhs_non_proxy,
         );
-    }
-    if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
-        return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {
-            f64::from_bits(crate::value::TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        };
     }
     // `inst instanceof Intl.<Ctor>`: Intl instances are plain heap objects whose
     // `[[Prototype]]` is `Intl.<Ctor>.prototype` but carry no class-id, so the

@@ -261,13 +261,6 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
 #[inline]
 fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
     use crate::value::TAG_FALSE;
-    if crate::node_submodules::is_diagnostics_bounded_channel_constructor_value(type_ref) {
-        return if crate::node_submodules::diagnostics_bounded_channel_is_instance_value(value) {
-            f64::from_bits(crate::value::TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        };
-    }
     if is_callable_function_value(type_ref) {
         return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
             crate::value::TAG_TRUE
