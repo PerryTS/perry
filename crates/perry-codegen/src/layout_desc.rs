@@ -663,7 +663,7 @@ pub(crate) fn emit_module_layouts(
             &site.keys,
             &atom_names,
             family,
-            site.keys.len().max(1) as u32,
+            site.slots.max(1),
             0,
             LAYOUT_ID_CARRIED,
             None,

@@ -480,7 +480,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                 });
             }
             // Object model step 1: adding an `Object.create(P)` family's key.
-            if let Some(add) = crate::layout_desc::create_families::add_site(object, property) {
+            if let Some(add) = crate::layout_desc::create_families::add_site(ctx, object, property)
+            {
                 return crate::layout_desc::create_families::lower_add(
                     ctx,
                     &add,
