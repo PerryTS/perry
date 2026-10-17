@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
-    FN_HAS_LENGTH, FN_HAS_NAME, FN_HAS_SOURCE, FN_NON_CONSTRUCTOR, FN_NON_STRICT_ORDINARY,
+    FN_HAS_LENGTH, FN_HAS_NAME, FN_HAS_SOURCE, FN_NAME_IMAGE, FN_NON_CONSTRUCTOR, FN_NON_STRICT_ORDINARY,
     FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS,
     FN_STRICT, NOT_PLAIN,
 };
@@ -71,6 +71,9 @@ pub(crate) struct RetainedSource {
 pub(crate) struct RetainedName {
     pub global: String,
     pub byte_len: usize,
+    /// The bytes are an image string's text (`FN_NAME_IMAGE`): that string
+    /// is the function's own `name` value.
+    pub image: bool,
 }
 
 /// What the module knows about one of its bodies beyond its parameter
@@ -292,7 +295,11 @@ fn render_definition(
     let flags = facts.flags
         | FN_COMPILED_BODY
         | source_flags
-        | if facts.name.is_some() { FN_HAS_NAME } else { 0 }
+        | match &facts.name {
+            Some(name) if name.image => FN_HAS_NAME | FN_NAME_IMAGE,
+            Some(_) => FN_HAS_NAME,
+            None => 0,
+        }
         | if permanent_image {
             FN_PERMANENT_IMAGE
         } else {
@@ -399,6 +406,7 @@ mod tests {
             facts.name = Some(RetainedName {
                 global: "name_bytes".into(),
                 byte_len: 5,
+                image: false,
             });
             facts.source = Some(RetainedSource {
                 global: "source_bytes".into(),

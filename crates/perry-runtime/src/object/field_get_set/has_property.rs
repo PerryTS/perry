@@ -1461,19 +1461,15 @@ pub(crate) unsafe fn closure_get_is_complete(obj: usize, key: *const crate::Stri
     )
 }
 
-/// Inherited Function/Object prototype methods that reify into a BOUND_METHOD
-/// closure bound to the receiver function when read as a value.
+/// The inherited `%Function.prototype%` methods a read off a function value
+/// resolves on its actual [[Prototype]] (`reify_function_method_value`).
+/// Every other inherited member (`toString`, `isPrototypeOf`, ...) is the
+/// prototype's own value, read like any property.
 pub(crate) fn reified_function_method_name(name: &str) -> Option<&'static [u8]> {
     match name {
         "bind" => Some(b"bind"),
         "call" => Some(b"call"),
         "apply" => Some(b"apply"),
-        "isPrototypeOf" => Some(b"isPrototypeOf"),
-        // `fn.toString` read as a VALUE (`original.toString.bind(original)` —
-        // Next.js's unhandled-rejection extension preserves patched-function
-        // toString this way). Previously read back `undefined`, so the
-        // subsequent `.bind` threw "Bind must be called on a function".
-        "toString" => Some(b"toString"),
         _ => None,
     }
 }

@@ -331,6 +331,30 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
     }
 }
 
+/// `Function.prototype.caller` and `.arguments` (ECMA-262 §10.2.4
+/// AddRestrictedFunctionProperties): each an accessor whose getter and setter
+/// are `%ThrowTypeError%`, in the slots the static layout lists.
+fn install_function_restricted_accessors(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    let thrower = super::super::arguments::thrower_closure_value().to_bits();
+    for key in [&b"arguments"[..], b"caller"] {
+        // SAFETY: the fresh intrinsic, under the bootstrap's no-move scope.
+        unsafe {
+            crate::object::accessor_pair::store_own_accessor_bytes(
+                proto_obj as usize,
+                key,
+                Some(crate::object::accessor_pair::Accessor {
+                    get: thrower,
+                    set: thrower,
+                    ..Default::default()
+                }),
+            );
+        }
+    }
+}
+
 extern "C" fn object_prototype_dunder_proto_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -867,7 +891,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::fn_info!(native_args function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            install_object_proto_copies(builtin_name, proto_obj);
+            // `valueOf` and `toLocaleString` are inherited from
+            // `%Object.prototype%` (ECMA-262 §20.2.3 lists neither).
+            install_function_restricted_accessors(proto_obj);
             install_function_has_instance_symbol(proto_obj);
         }
         "String" => {

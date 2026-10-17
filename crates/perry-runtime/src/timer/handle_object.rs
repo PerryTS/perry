@@ -492,6 +492,12 @@ fn build_timer_prototypes() {
     }
 }
 
+/// `Timeout.prototype` and `Immediate.prototype`, built on first use.
+#[cfg(test)]
+pub(crate) fn timer_prototypes_for_tests() -> [*mut crate::object::ObjectHeader; 2] {
+    [timer_prototype(CallbackTimerKind::Timeout), timer_prototype(CallbackTimerKind::Immediate)]
+}
+
 fn timer_prototype(kind: CallbackTimerKind) -> *mut crate::object::ObjectHeader {
     let slot = match kind {
         CallbackTimerKind::Immediate => &IMMEDIATE_PROTOTYPE_PTR,

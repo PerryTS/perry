@@ -891,9 +891,10 @@ unsafe fn own_absent<const ABSENT: bool>(
 ///   from `%Array.prototype%`, whose holder lists every builtin method, then
 ///   `%Object.prototype%`;
 /// * a function on a described Function shape (`closure::shape`: no accessor,
-///   delete or recorded [[Prototype]]) of a plain body inherits from
-///   `%Function.prototype%`, except for the names a function answers outside
-///   its bag ([`function_reads_outside_bag`]).
+///   delete or recorded [[Prototype]]) of a plain body: its own keys are its
+///   layout's intrinsic `length`, `name` and (a constructor's) `prototype`
+///   ([`function_own_intrinsic`]) and its bag; then it inherits from
+///   `%Function.prototype%`.
 ///
 /// Everything else declines.
 #[cold]
@@ -923,22 +924,22 @@ unsafe fn exotic_get<const ABSENT: bool>(
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return hole();
     }
-    let (named, proto) = match (*header).obj_type {
+    let (named, proto, function) = match (*header).obj_type {
         crate::gc::GC_TYPE_ARRAY => {
             let named = (*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader;
             if (*header)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
-                (named, None)
+                (named, None, false)
             } else {
-                (named, Some(crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE))
+                (named, Some(crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE), false)
             }
         }
         crate::gc::GC_TYPE_CLOSURE => {
             let c = obj as *const crate::closure::ClosureHeader;
-            let inherits = crate::closure::shape::closure_on_plain_function_shape(c)
-                && !function_reads_outside_bag(hash);
+            let plain = crate::closure::shape::closure_on_plain_function_shape(c);
             (
                 (*c).props as *const ObjectHeader,
-                inherits.then_some(crate::closure::shape::INTRINSIC_SERIAL_FUNCTION),
+                plain.then_some(crate::closure::shape::INTRINSIC_SERIAL_FUNCTION),
+                plain,
             )
         }
         _ => return hole(),
@@ -964,6 +965,12 @@ unsafe fn exotic_get<const ABSENT: bool>(
     let Some(serial) = proto else {
         return hole();
     };
+    if function {
+        // Not in the bag: the function layout's intrinsic own keys.
+        if let Some(v) = function_own_intrinsic(obj.cast(), key_bits, hash) {
+            return v;
+        }
+    }
     let Some(p) = intrinsic_prototype(dir, serial) else {
         return hole();
     };
@@ -1009,44 +1016,78 @@ unsafe fn exotic_chain<const ABSENT: bool>(
     chain_from::<ABSENT>(dir, std::ptr::null(), std::ptr::null(), next, key_bits, hash)
 }
 
-/// Does a function answer `hash`'s key outside its own-property bag? Its
-/// synthesized own properties (`name`, `length`, `prototype`, and a sloppy
-/// function's `caller` / `arguments`), and the members a read off a function
-/// produces itself (`call`, `apply`, `bind`, `toString` and `isPrototypeOf`
-/// read as bound values; `constructor`, `valueOf`, `toLocaleString` by their
-/// own dispatch) are not read from `%Function.prototype%`'s layout. A set of
-/// names fixed at compile time: a branch, not a lookup.
+/// A plain function's own intrinsic keys, which its layout lists before its
+/// bag's (ECMA-262 §10.2.9 SetFunctionLength / §10.2.8 SetFunctionName,
+/// §10.2.5 MakeConstructor): `length` and `name`, static data of its body,
+/// and a constructor's `prototype`. `None` for any other key (it continues at
+/// `%Function.prototype%`); otherwise the own value, or the hole marker when
+/// the value is not static data: a name that is not an image string, or a
+/// constructor's `prototype`, created on its first read. A bag entry (a
+/// redefinition, a materialized `prototype`) was answered before this.
+///
+/// # Safety
+/// `c` is a closure on a described Function shape of a plain body.
 #[inline(always)]
-fn function_reads_outside_bag(hash: u64) -> bool {
+unsafe fn function_own_intrinsic(
+    c: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Option<f64> {
     use crate::object::runtime_layouts::atom_hash as h;
     const NAME: u64 = h(b"name");
     const LENGTH: u64 = h(b"length");
     const PROTOTYPE: u64 = h(b"prototype");
-    const CALLER: u64 = h(b"caller");
-    const ARGUMENTS: u64 = h(b"arguments");
-    const CALL: u64 = h(b"call");
-    const APPLY: u64 = h(b"apply");
-    const BIND: u64 = h(b"bind");
-    const TO_STRING: u64 = h(b"toString");
-    const IS_PROTOTYPE_OF: u64 = h(b"isPrototypeOf");
-    const CONSTRUCTOR: u64 = h(b"constructor");
-    const VALUE_OF: u64 = h(b"valueOf");
-    const TO_LOCALE_STRING: u64 = h(b"toLocaleString");
-    matches!(
-        hash,
-        NAME | LENGTH
-            | PROTOTYPE
-            | CALLER
-            | ARGUMENTS
-            | CALL
-            | APPLY
-            | BIND
-            | TO_STRING
-            | IS_PROTOTYPE_OF
-            | CONSTRUCTOR
-            | VALUE_OF
-            | TO_LOCALE_STRING
-    )
+    if !matches!(hash, NAME | LENGTH | PROTOTYPE) {
+        return None;
+    }
+    function_own_intrinsic_keyed(c, key_bits, hash)
+}
+
+#[inline(never)]
+unsafe fn function_own_intrinsic_keyed(
+    c: *const crate::closure::ClosureHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Option<f64> {
+    use crate::object::runtime_layouts::atom_hash as h;
+    let text: &[u8] = match hash {
+        x if x == h(b"name") => b"name",
+        x if x == h(b"length") => b"length",
+        _ => b"prototype",
+    };
+    // A hash equal to an intrinsic's is that key only if the texts agree.
+    if key_bits & TAG_MASK != STRING_TAG {
+        return Some(hole());
+    }
+    let key = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+    if (*key).byte_len as usize != text.len()
+        || std::slice::from_raw_parts(
+            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+            text.len(),
+        ) != text
+    {
+        return None;
+    }
+    let info = (*c).info;
+    Some(match text {
+        b"length" => crate::closure::info_length(&*info)
+            .or_else(|| crate::closure::info_arity(&*info))
+            .unwrap_or(0) as f64,
+        b"name" => match crate::builtins::function_name_image(info) {
+            Some(s) => f64::from_bits(STRING_TAG | s as u64),
+            None => hole(),
+        },
+        _ => {
+            // Arrows and non-constructors have no own `prototype`.
+            let header = crate::gc::header_from_trusted_user_ptr(c.cast());
+            if (*info).flags & (crate::closure::FN_ARROW | crate::closure::FN_NON_CONSTRUCTOR) != 0
+                || (*header)._reserved & crate::gc::GC_CLOSURE_NON_CONSTRUCTABLE != 0
+            {
+                return None;
+            }
+            hole()
+        }
+    })
 }
 
 /// The builtin prototype object a reserved intrinsic `serial` names, read

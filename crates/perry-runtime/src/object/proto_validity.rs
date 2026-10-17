@@ -69,6 +69,27 @@ pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
     None
 }
 
+/// Mark `obj`, a newborn on a builtin prototype's declared layout
+/// (`layout_desc::alloc_layout_prototype`), as a prototype. Every object born
+/// on such a layout is one, so "is a prototype" is already a fact of the
+/// layout: no private lineage is minted, and the object stays on its
+/// declared layout id.
+///
+/// # Safety
+/// `obj` is a live, unpublished `GC_TYPE_OBJECT` newborn, old and never
+/// moving; collection is suppressed by the caller.
+pub(crate) unsafe fn mark_born_prototype(obj: *mut crate::object::ObjectHeader) {
+    let meta = crate::object::object_meta_ensure(obj);
+    if meta.is_null() {
+        return;
+    }
+    ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
+    crate::gc::never_move::request_never_move(obj as usize);
+    // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
+    (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
+    keep_prototype_in_record(obj, meta);
+}
+
 /// Serials below this are reserved for INTRINSIC prototypes, assigned at
 /// creation (`assign_intrinsic_prototype_serial`) so a receiver kind's base
 /// shape can name its prototype before that object exists

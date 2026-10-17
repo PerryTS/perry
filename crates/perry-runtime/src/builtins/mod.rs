@@ -147,7 +147,7 @@ pub(crate) use console::{
     try_console_instance_method_dispatch, CONSOLE_INSTANCE_CLASS_ID,
 };
 
-pub(crate) use fn_metadata::function_name_for_closure;
+pub(crate) use fn_metadata::{function_name_for_closure, function_name_image};
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub(crate) use fn_metadata::with_bundle_function_names;
 

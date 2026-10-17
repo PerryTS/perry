@@ -568,6 +568,10 @@ pub const FN_NON_STRICT_ORDINARY: u32 = 1 << 15;
 /// Compiled name bytes follow the info (and any retained-source tail) as
 /// an i32 relative displacement and a u32 byte length. No GC edge or birth work.
 pub const FN_HAS_NAME: u32 = 1 << 21;
+/// With [`FN_HAS_NAME`]: the name bytes are the text of an immutable image
+/// string, whose `StringHeader` immediately precedes them. That string is
+/// the function's own `name` value, static data of its body.
+pub const FN_NAME_IMAGE: u32 = 1 << 22;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;

@@ -258,6 +258,14 @@ impl StringPool {
         idx
     }
 
+    /// An entry for `value` that belongs to no pool, for data that needs only
+    /// its image string.
+    pub(crate) fn detached_entry(value: &str) -> StringEntry {
+        let mut pool = StringPool::new();
+        let idx = pool.intern(value);
+        pool.entries.swap_remove(idx as usize)
+    }
+
     pub fn entry(&self, idx: u32) -> &StringEntry {
         &self.entries[idx as usize]
     }

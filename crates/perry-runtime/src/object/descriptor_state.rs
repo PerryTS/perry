@@ -1328,12 +1328,16 @@ pub(crate) fn define_builtin_data_property_bytes(
             });
             return;
         } else if super::key_attrs::attrs_live_in_keys_for_install(obj as usize) {
-            let _no_move = crate::gc::GcSuppressScope::new();
-            let entry = super::key_attrs::attr_bits_to_entry(attrs.bits);
-            if entry != 0 {
-                super::object_ops::ensure_key_in_keys_array_with_entry(obj, key, entry);
-            }
-            super::object_ops::define_property_force_store_value(obj, key, value);
+            // The runtime's own definition, not a program write: a marked
+            // prototype's slot store sets no shadow bit (`shadow`).
+            super::own_override::as_builtin_definition(|| {
+                let _no_move = crate::gc::GcSuppressScope::new();
+                let entry = super::key_attrs::attr_bits_to_entry(attrs.bits);
+                if entry != 0 {
+                    super::object_ops::ensure_key_in_keys_array_with_entry(obj, key, entry);
+                }
+                super::object_ops::define_property_force_store_value(obj, key, value);
+            });
         } else {
             super::own_override::as_builtin_definition(|| {
                 js_object_set_field_by_name(obj, key, value);

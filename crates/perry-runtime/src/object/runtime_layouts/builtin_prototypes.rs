@@ -15,8 +15,9 @@ const BUILTIN_METHOD: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 /// A function's `length` and `name`: read-only, not enumerable, configurable.
 const BUILTIN_READ_ONLY: u8 =
     crate::object::key_attrs::ENTRY_NON_ENUMERABLE | crate::object::key_attrs::ENTRY_NON_WRITABLE;
-/// `Object.prototype.__proto__`: an accessor with a getter and a setter, not
-/// enumerable, configurable.
+/// `Object.prototype.__proto__`, and `Function.prototype.caller` /
+/// `arguments`: an accessor with a getter and a setter, not enumerable,
+/// configurable.
 const BUILTIN_ACCESSOR: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE
     | crate::object::key_attrs::ENTRY_ACCESSOR
     | crate::object::key_attrs::ENTRY_HAS_GET
@@ -51,6 +52,8 @@ mod builtin_prototype_atoms {
     runtime_atom!(BP_ATOM_APPLY, "apply", "6170706c79");
     runtime_atom!(BP_ATOM_BIND, "bind", "62696e64");
     runtime_atom!(BP_ATOM_CALL, "call", "63616c6c");
+    runtime_atom!(BP_ATOM_ARGUMENTS, "arguments", "617267756d656e7473");
+    runtime_atom!(BP_ATOM_CALLER, "caller", "63616c6c6572");
     runtime_atom!(BP_ATOM_SLICE, "slice", "736c696365");
     runtime_atom!(BP_ATOM_ENTRIES, "entries", "656e7472696573");
     runtime_atom!(BP_ATOM_FLAT_MAP, "flatMap", "666c61744d6170");
@@ -141,26 +144,29 @@ runtime_layout!(OBJECT_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0010, 0,
     BP_ATOM_TO_LOCALE_STRING => BUILTIN_METHOD,
 ]);
 
-// `%Function.prototype%` (a callable ordinary object), with the members the
-// realm installs on it.
+// `%Function.prototype%` (a callable ordinary object): ECMA-262 §20.2.3 and
+// the restricted `caller` / `arguments` accessors of §10.2.4
+// (AddRestrictedFunctionProperties), in V8's own-key order. `valueOf` and
+// `toLocaleString` are not its own: it inherits them from
+// `%Object.prototype%`.
 runtime_layout!(FUNCTION_PROTOTYPE, kind = LAYOUT_KIND_CALLABLE, 0x5254_0011, 0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    BP_ATOM_CONSTRUCTOR => BUILTIN_METHOD,
     BP_ATOM_LENGTH => BUILTIN_READ_ONLY,
     BP_ATOM_NAME => BUILTIN_READ_ONLY,
+    BP_ATOM_ARGUMENTS => BUILTIN_ACCESSOR,
+    BP_ATOM_CALLER => BUILTIN_ACCESSOR,
+    BP_ATOM_CONSTRUCTOR => BUILTIN_METHOD,
     BP_ATOM_APPLY => BUILTIN_METHOD,
     BP_ATOM_BIND => BUILTIN_METHOD,
-    BP_ATOM_TO_STRING => BUILTIN_METHOD,
     BP_ATOM_CALL => BUILTIN_METHOD,
-    BP_ATOM_TO_LOCALE_STRING => BUILTIN_METHOD,
-    BP_ATOM_VALUE_OF => BUILTIN_METHOD,
+    BP_ATOM_TO_STRING => BUILTIN_METHOD,
     ATOM_SYMBOL_HAS_INSTANCE,
 ]);
 
 // `%Array.prototype%`'s named layout (`ArrayHeader.named`, object model step
 // 7): `Symbol.iterator` is its fixed slot 0, so array iteration reads one
 // slot; every builtin method follows it.
-runtime_layout!(ARRAY_PROTOTYPE_NAMED, 0x5254_000C, 0,
+runtime_layout!(ARRAY_PROTOTYPE_NAMED, kind = LAYOUT_KIND_UNMARKED, 0x5254_000C, 0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
     ATOM_SYMBOL_ITERATOR => BUILTIN_METHOD,
     BP_ATOM_CONSTRUCTOR => BUILTIN_METHOD,
@@ -206,3 +212,21 @@ runtime_layout!(ARRAY_PROTOTYPE_NAMED, 0x5254_000C, 0,
 ]);
 /// The fixed slot of `Symbol.iterator` in [`ARRAY_PROTOTYPE_NAMED`].
 pub(crate) const ARRAY_PROTOTYPE_ITERATOR_SLOT: u32 = 0;
+
+/// Is `obj` on one of the three builtin prototypes' declared layouts? Such a
+/// prototype's layout is its authority for life (only a program write moves
+/// it, and sets its shadow bit): nothing the runtime learns about it is
+/// stamped as another layout id. A compare against a fixed set of layouts.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn on_declared_prototype_layout(obj: *const crate::object::ObjectHeader) -> bool {
+    let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
+    [
+        std::ptr::addr_of!(OBJECT_PROTOTYPE),
+        std::ptr::addr_of!(FUNCTION_PROTOTYPE),
+        std::ptr::addr_of!(ARRAY_PROTOTYPE_NAMED),
+    ]
+    .iter()
+    .any(|d| (**d).layout_id == id)
+}

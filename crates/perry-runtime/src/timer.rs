@@ -411,6 +411,8 @@ use handle_object::{timer_handle_id, timer_object};
 pub(crate) use handle_object::timer_handle_parts;
 #[cfg(test)]
 pub(crate) use handle_object::TIMEOUT_CLASS_ID;
+#[cfg(test)]
+pub(crate) use handle_object::timer_prototypes_for_tests;
 
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);

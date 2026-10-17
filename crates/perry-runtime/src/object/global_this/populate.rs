@@ -22,14 +22,27 @@ fn finish_builtin_prototype(
     // object would. The declaration on the member decides, never the
     // prototype's name; a store or delete of the member revokes its
     // lane (a new ShapeId).
+    // A prototype born on its declared layout keeps that layout id: its
+    // members are its layout's slots, never lanes of a new id.
     // SAFETY: the live, just-populated prototype.
     unsafe {
-        crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, _| true);
+        let learn = |obj: *mut ObjectHeader| {
+            if !crate::object::runtime_layouts::on_declared_prototype_layout(obj) {
+                crate::object::shapes::learn_object_constfn_lanes(obj, |_, _| true);
+            }
+        };
+        if crate::value::addr_class::try_read_gc_header(proto_obj as usize)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        {
+            learn(proto_obj);
+        } else {
+            crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, _| true);
+        }
         // Some native prototypes own symbol slots through an ordinary
         // descriptor holder. Its members carry the same declarations.
         if let Some(holder) = crate::object::shaped_symbols::owner(proto_obj as usize) {
             if holder != proto_obj {
-                crate::object::shapes::learn_object_constfn_lanes(holder, |_, _| true);
+                learn(holder);
             }
         }
     }

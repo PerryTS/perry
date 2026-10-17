@@ -15,6 +15,10 @@ use super::spec_function_length;
 mod class_birth_image;
 mod image;
 
+/// Bytes of an image string's `StringHeader`: its text follows them
+/// (perry-runtime `fn_metadata::function_name_image`).
+const IMAGE_STRING_HEADER_BYTES: usize = 20;
+
 pub(super) fn image_pointer(entry: &crate::strings::StringEntry) -> String {
     image::pointer(entry)
 }
@@ -341,6 +345,10 @@ pub(super) fn emit_string_pool(
     // registration also cost a duplicate copy of the name in rodata.
     // Deterministic: the map only reuses a global the loop already minted in
     // its (already sorted) input order, so emission order is unchanged (#7622).
+    //
+    // In an executable the name bytes are an image string's text, named by an
+    // internal alias: the image string is the function's own `name` value
+    // (`FN_NAME_IMAGE`), read with no allocation.
     let mut name_constant_cache: std::collections::HashMap<&str, (String, usize)> =
         std::collections::HashMap::new();
     for (wrapper_sym, display_name) in user_fn_display_names {
@@ -350,7 +358,28 @@ pub(super) fn emit_string_pool(
         let (const_name, byte_len) = match name_constant_cache.get(display_name.as_str()) {
             Some(hit) => hit.clone(),
             None => {
-                let minted = llmod.add_string_constant(display_name);
+                let minted = if image_literals {
+                    // A pool entry's image is emitted above; any other name
+                    // emits its own (weak_odr: one per spelling per program).
+                    let image = match strings.lookup(display_name) {
+                        Some(entry) => image::pointer(entry),
+                        None => image::emit(
+                            llmod,
+                            &crate::strings::StringPool::detached_entry(display_name),
+                        ),
+                    };
+                    let alias = if module_prefix.is_empty() {
+                        format!(".fnname.{}", name_constant_cache.len())
+                    } else {
+                        format!("{module_prefix}_.fnname.{}", name_constant_cache.len())
+                    };
+                    llmod.add_raw_global(format!(
+                        "@{alias} = internal alias i8, getelementptr (i8, ptr {image}, i64 {IMAGE_STRING_HEADER_BYTES})"
+                    ));
+                    (alias, display_name.len())
+                } else {
+                    llmod.add_string_constant(display_name)
+                };
                 name_constant_cache.insert(display_name.as_str(), minted.clone());
                 minted
             }
@@ -359,6 +388,7 @@ pub(super) fn emit_string_pool(
             f.name = Some(crate::fn_info::RetainedName {
                 global: const_name.clone(),
                 byte_len,
+                image: image_literals,
             });
         });
         user_fn_name_constants.push((wrapper_sym.clone(), const_name, byte_len));

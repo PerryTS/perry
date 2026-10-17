@@ -390,6 +390,36 @@ pub fn bundle_function_name_registry_entries() -> Option<Vec<(usize, std::sync::
     )
 }
 
+/// The image string a compiled body's name range is the text of
+/// ([`FN_NAME_IMAGE`](crate::codegen_abi::FN_NAME_IMAGE)): the function's own
+/// `name` value, static data of its body, with nothing to allocate. `None`
+/// for a body whose name is not image data.
+///
+/// # Safety
+/// `info` is null or a live function info.
+#[inline(always)]
+pub(crate) unsafe fn function_name_image(
+    info: *const crate::closure::JsFunctionInfo,
+) -> Option<*const crate::StringHeader> {
+    let body = info.as_ref()?;
+    const IMAGE_NAME: u32 = crate::codegen_abi::FN_HAS_NAME | crate::codegen_abi::FN_NAME_IMAGE;
+    if body.flags & IMAGE_NAME != IMAGE_NAME {
+        return None;
+    }
+    let base = info.cast::<u8>();
+    let source_tail =
+        body.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 && !body.versioned_code.is_null();
+    let tail = base.add(
+        std::mem::size_of::<crate::closure::JsFunctionInfo>() + if source_tail { 8 } else { 0 },
+    );
+    let bytes: *const u8 = descriptor_pointer(base, tail.cast::<i32>().read_unaligned());
+    Some(bytes.sub(std::mem::size_of::<crate::StringHeader>()).cast())
+}
+const _: () = assert!(
+    std::mem::size_of::<crate::StringHeader>() == 20,
+    "codegen places an image name's bytes 20 bytes past its header"
+);
+
 /// A compiled closure's immutable name range comes from its body descriptor.
 /// Legacy/native names retain their existing code-address metadata fallback.
 ///

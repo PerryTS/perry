@@ -879,6 +879,10 @@ pub(crate) unsafe fn alloc_layout_prototype(
         // GC_STORE_AUDIT(INIT): the hole marker is a scalar.
         *fields.add(i) = crate::value::TAG_HOLE;
     }
+    // Every birth on this layout is a prototype: marked now, it never leaves
+    // the layout for a private lineage.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::proto_validity::mark_born_prototype(obj);
     obj
 }
 
