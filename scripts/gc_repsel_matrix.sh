@@ -67,6 +67,8 @@
 # Portable to bash 3.2 (macOS system bash): no associative arrays, no mapfile.
 #
 # Usage:
+#   Fixture parity-node-argv options reach Node. parity-rlimit-as-mb caps
+#   only loop_polls native execution and fails closed if unsupported.
 #   scripts/gc_repsel_matrix.sh [--arms pr|all|<csv>] [--filter <substr>]
 #                               [--pressure <MB>] [--jobs N] [--no-build]
 #                               [--profile <cargo profile>] [--json <path>]
@@ -469,15 +471,18 @@ progress "selected files=${#CORPUS[@]} corpus_total=$CORPUS_TOTAL"
 # before compiling/running anything; no eval, shell quoting, or arbitrary env
 # keys are accepted. Apply the same settings at compile time so auto-optimize
 # selects gc-instruments for seeded/protected witnesses (freshness.rs).
-FIXTURE_ENVS=()
+FIXTURE_ENVS=(); FIXTURE_LIMITS=()
 for b in "${CORPUS[@]}"; do
     fixture_env=""
+    fixture_limit=""
     case ",$SELECTED," in
         *,loop_polls,*)
             fixture_env="$(python3 "$SCRIPT_DIR/gc_matrix_fixture_env.py" "test-files/$b.ts")" || exit 2
+            fixture_limit="$(python3 -B "$SCRIPT_DIR/parity_fixture_limits.py" --print-limit "test-files/$b.ts")" || exit 2
             ;;
     esac
     FIXTURE_ENVS+=("$fixture_env")
+    FIXTURE_LIMITS+=("$fixture_limit")
 done
 
 # ---------------------------------------------------------------------------
@@ -515,7 +520,10 @@ for b in "${CORPUS[@]}"; do
     oracle_i=$((oracle_i+1))
     echo "  oracle [$oracle_i/${#CORPUS[@]}] $b"
     progress "oracle-start test=$b"
-    if ! node --experimental-strip-types "test-files/$b.ts" > "$WORK/oracle/$b.out" 2>/dev/null; then
+    node_argv=()
+    node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "test-files/$b.ts" | head -1)
+    if [ -n "$node_argv_line" ]; then read -r -a node_argv <<< "$node_argv_line"; fi
+    if ! node --experimental-strip-types ${node_argv[@]+"${node_argv[@]}"} "test-files/$b.ts" > "$WORK/oracle/$b.out" 2>/dev/null; then
         echo "${RED}ORACLE FAIL${NC} node cannot run test-files/$b.ts -- it would drop out of the gate" >&2
         oracle_fail=1
         progress "oracle-result test=$b result=FAIL"
@@ -653,7 +661,13 @@ while [ "$ai" -lt "$NARMS" ]; do
             # both liveness signals (PERRY_GC_TRACE=1 -> one `[gc] cycle`
             # marker per collection; PERRY_GC_DIAG=1 -> evacuation counters).
             # shellcheck disable=SC2086
-            env $renv PERRY_GC_TRACE=1 PERRY_GC_DIAG=1 "$bin" \
+            runtime_command=("$bin")
+            # A witness ceiling is execution-only and must never alter the
+            # oracle, compiler, shipped controls, or OFF arms.
+            if [ "$id" = loop_polls ] && [ -n "${FIXTURE_LIMITS[$ti]}" ]; then
+                runtime_command=(python3 -B "$SCRIPT_DIR/parity_fixture_limits.py" "test-files/$b.ts" "$bin")
+            fi
+            env $renv PERRY_GC_TRACE=1 PERRY_GC_DIAG=1 "${runtime_command[@]}" \
                 > "$WORK/out/$b.$id.out" 2> "$WORK/out/$b.$id.err"
             rc=$?
             # Two trace formats exist: a runtime staticlib built WITHOUT the

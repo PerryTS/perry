@@ -7,3 +7,8 @@ report for existing path-attributed Rust tests. Reject empty visual manifests.
 Classify explicit Node-core skips before compilation instead of counting them
 as executed parity passes; preserve non-exiting skip-message behavior.
 Add public-runner regression coverage to the required lint workflow.
+
+Preserve old-sweep protection and explicit seeded GC metadata in newly
+registered witnesses. Forward fixture Node options in the GC matrix and
+enforce declared address-space ceilings on native execution, refusing to run
+uncapped when the host cannot provide containment.

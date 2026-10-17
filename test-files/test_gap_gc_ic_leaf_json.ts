@@ -1,6 +1,5 @@
-// #12435: run with PERRY_GC_SCHEDULE_SEED=12435,
-// PERRY_GC_SCHEDULE_RATE=1, PERRY_GC_SCHEDULE_ALLOC_KB=0,
-// PERRY_GC_PROTECT_FROMSPACE=1 and PERRY_GC_VERIFY_EVACUATION=1.
+// parity-env: PERRY_GC_SCHEDULE_SEED=12435 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1
+// #12435: force moving collection at every loop poll with protected from-space.
 // The same IC sees an ordinary array, a lazy JSON array, and an own-key
 // override. Keep young objects live across the property read and loop polls.
 function read(receiver: any, live: any): string {

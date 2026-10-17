@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -78,6 +79,19 @@ def check_receipts(root: Path, result: subprocess.CompletedProcess[str]) -> None
 
 
 def self_test() -> None:
+    for fixture, seed in [("protected_poll_reclaim", "1"), ("ic_leaf_json", "12435")]:
+        result = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts/gc_matrix_fixture_env.py"),
+             str(ROOT / f"test-files/test_gap_gc_{fixture}.ts")],
+            capture_output=True, text=True, check=True,
+        )
+        settings = assignments(result.stdout)
+        assert settings["PERRY_GC_SCHEDULE_SEED"] == seed
+        assert settings["PERRY_GC_SCHEDULE_RATE"] == "1"
+        assert settings["PERRY_GC_SCHEDULE_ALLOC_KB"] == "0"
+        assert settings["PERRY_GC_PROTECT_FROMSPACE"] == "1"
+        if fixture == "ic_leaf_json":
+            assert settings["PERRY_GC_VERIFY_EVACUATION"] == "1"
     matrix = (ROOT / "scripts/gc_repsel_matrix.sh").read_text()
     original_fixture = (ROOT / f"test-files/{TEST}.ts").read_text()
     with tempfile.TemporaryDirectory(prefix="gc-matrix-routing-test-") as work:
@@ -85,11 +99,15 @@ def self_test() -> None:
         for directory in ("scripts", "test-files", "test-parity", "probes", "target/release"):
             (root / directory).mkdir(parents=True)
         shutil.copy(ROOT / "scripts/gc_matrix_fixture_env.py", root / "scripts")
+        shutil.copy(ROOT / "scripts/parity_fixture_limits.py", root / "scripts")
         shutil.copy(ROOT / ".node-version", root)
         (root / f"test-files/{TEST}.ts").write_text(original_fixture)
         (root / "test-parity/gc_repsel_corpus.txt").write_text(TEST + "\n")
         (root / "probes/node").write_text(
-            "#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
+            "#!/usr/bin/env python3\nimport json, os, sys\nfrom pathlib import Path\n"
+            "if '--version' not in sys.argv:\n"
+            " with open(os.environ['ROUTING_RECEIPTS'], 'a') as f: "
+            "f.write(json.dumps({'stage':'oracle','argv':sys.argv[1:]})+'\\n')\n"
             "print('v' + Path('.node-version').read_text().strip() if '--version' in sys.argv else 'routing-probe-only')\n"
         )
         compiler = root / "target/release/perry"
@@ -102,6 +120,7 @@ def self_test() -> None:
             "runtime = '#!/usr/bin/env python3\\nimport json, os\\n'\n"
             "runtime += 'receipt = '+repr({'stage':'run','compile_env':captured})+'\\n'\n"
             "runtime += \"receipt['run_env'] = {k:v for k,v in os.environ.items() if k.startswith('PERRY_')}\\n\"\n"
+            "runtime += \"import resource; receipt['limit_as'] = resource.getrlimit(resource.RLIMIT_AS)\\n\"\n"
             "runtime += \"with open(os.environ['ROUTING_RECEIPTS'], 'a') as f: f.write(json.dumps(receipt)+'\\\\n')\\n\"\n"
             "runtime += \"print('routing-probe-only')\\n\"\n"
             "output.write_text(runtime); output.chmod(0o755)\n"
@@ -109,6 +128,12 @@ def self_test() -> None:
         compiler.chmod(0o755)
         (root / "probes/node").chmod(0o755)
         check_receipts(root, run_probe(root, matrix))
+        exposed = "// parity-node-argv: --expose-gc\n" + original_fixture
+        check_receipts(root, run_probe(root, matrix, exposed))
+        oracle = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()
+                  if json.loads(line)["stage"] == "oracle"]
+        assert len(oracle) == 1 and "--expose-gc" in oracle[0]["argv"], oracle
+        (root / f"test-files/{TEST}.ts").write_text(original_fixture)
         mutations = {
             "missing compile-time instruments": (
                 'effective_cenv="$effective_cenv ${FIXTURE_ENVS[$ti]}"', 'effective_cenv="$effective_cenv"'),
@@ -129,6 +154,34 @@ def self_test() -> None:
         result = run_probe(root, matrix, "// parity-env: PERRY_NO_AUTO_OPTIMIZE=1\n" + original_fixture)
         assert result.returncode == 2, result.stdout
         assert not (root / "receipts.jsonl").exists(), "malformed metadata reached compiler"
+        for name in ("fetch_streaming_chunks", "worker_transfer_ownership", "ic_leaf_json", "protected_poll_reclaim"):
+            fixture = ROOT / f"test-files/test_gap_gc_{name}.ts"
+            result = run_probe(root, matrix, fixture.read_text())
+            report = json.loads((root / "report.json").read_text())
+            receipts = [json.loads(line) for line in (root / "receipts.jsonl").read_text().splitlines()]
+            oracle = next(r for r in receipts if r["stage"] == "oracle")
+            assert ("--expose-gc" in oracle["argv"]) == (name in ("fetch_streaming_chunks", "worker_transfer_ownership"))
+            expected = assignments(subprocess.check_output(
+                [sys.executable, "-B", str(ROOT / "scripts/gc_matrix_fixture_env.py"), str(fixture)], text=True))
+            for cell in report["cells"]:
+                for field in ("compile_env", "run_env"):
+                    delivered = assignments(cell[field])
+                    for key, value in expected.items():
+                        if cell["arm"] == "loop_polls":
+                            assert delivered[key] == value, (name, field, key)
+                        else:
+                            assert key not in delivered, (name, cell["arm"], key)
+                if cell["arm"] == "loop_polls" and "exit=125" in cell["evidence"]:
+                    assert name == "protected_poll_reclaim" and cell["result"] == "FAIL"
+                    assert not any(r["stage"] == "run" and
+                                   r["compile_env"].get("PERRY_GC_SCHEDULE_SEED") == expected["PERRY_GC_SCHEDULE_SEED"]
+                                   for r in receipts), "unsupported ceiling must not run witness"
+                else:
+                    assert cell["result"] == ("PASS" if cell["arm"] == "shipped_default" else "UNVER")
+            if name == "protected_poll_reclaim":
+                for receipt in (r for r in receipts if r["stage"] == "run"):
+                    if "PERRY_GC_SCHEDULE_SEED" in receipt["compile_env"]:
+                        assert all(0 < limit <= 2147483648 for limit in receipt["limit_as"])
     print("GC matrix routing self-test: PASS (actual command env, 3 sabotage controls, early refusal; no GC acceptance)")
 
 

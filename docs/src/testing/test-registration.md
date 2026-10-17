@@ -112,6 +112,21 @@ Two ways out, and only two:
 There is deliberately no third way. No threshold to bump, no `--allow-dark`, no
 environment variable.
 
+## GC witness execution metadata
+
+Registration is not proof that a witness ran under its required conditions.
+Use `// parity-env: KEY=VALUE ...` for explicit stress settings. The matrix
+validates its GC-only settings and applies them at compile time and runtime
+only in `loop_polls`; shipped/default/OFF controls remain unchanged.
+`// parity-node-argv: --expose-gc` reaches the Node oracle in both harnesses.
+
+`// parity-rlimit-as-mb: 2048` requires a 2048 MiB **process address-space**
+ceiling, not an RSS limit or GC pressure target. Both harnesses validate this
+positive integer and apply it only to the native witness run (only `loop_polls`
+in the matrix), never to Node or compilation. Setup/readback failure refuses
+execution with exit 125. Hosts that cannot enforce `RLIMIT_AS` need native
+acceptance on a supported host; an uncapped run is not a substitute.
+
 ## Not covered
 
 `tests/*.sh`, `tests/*.py` and `tests/*.ts` have no registry to diff against —

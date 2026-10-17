@@ -1,4 +1,6 @@
-// Run with an instrumented runtime, every-poll seeded collection, from-space
+// parity-env: PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0 PERRY_GC_PROTECT_FROMSPACE=1
+// parity-rlimit-as-mb: 2048
+// Run with an instrumented runtime, deterministic seed 1, every-poll collection, from-space
 // protection, and a 2 GiB process address-space ceiling. A missing idle-Eden
 // reclaim exhausts that ceiling; a healthy run must finish and match node.
 class ProtectedCell {

@@ -21,6 +21,7 @@ ON_KEYS = {
     "PERRY_GC_FORCE_EVACUATE",
     "PERRY_GC_VERIFY_EVACUATION",
     "PERRY_GC_BUDGETED_OLD_RECLAIM",
+    "PERRY_GC_PROTECT_OLD_SWEEP",
 }
 UINT_KEYS = {
     "PERRY_GC_SCHEDULE_SEED",
@@ -80,6 +81,7 @@ def self_test() -> None:
         assert fixture_env(arm, "// parity-env: PATH=/tmp/evil") == ""
     budgeted = "PERRY_GC_BUDGETED_OLD_RECLAIM=1 PERRY_GC_MAJOR_PACING_FLOOR_MB=1 PERRY_GC_MAJOR_PACING_GROWTH=1"
     assert parse("// parity-env: " + budgeted + "\n") == budgeted
+    assert parse("// parity-env: PERRY_GC_PROTECT_OLD_SWEEP=1\n") == "PERRY_GC_PROTECT_OLD_SWEEP=1"
     assert parse("// no metadata\n") == ""
     assert parse("  // parity-env: PERRY_GC_MOVING_LOOP_POLLS=1\n") == "PERRY_GC_MOVING_LOOP_POLLS=1"
     invalid = (
@@ -92,6 +94,7 @@ def self_test() -> None:
         "PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1.01", "PERRY_GC_PROTECT_FROMSPACE_DEPTH=0",
         "PERRY_GC_PROTECT_FROMSPACE_DEPTH=4", "PERRY_GC_BUDGETED_OLD_RECLAIM=0",
         "PERRY_GC_MAJOR_PACING_GROWTH=0", "PERRY_GC_MAJOR_PACING_FLOOR_MB=1.5",
+        "PERRY_GC_PROTECT_OLD_SWEEP=0",
         "", "PERRY_GC_FORCE_EVACUATE=1\n// parity-env: PERRY_GC_VERIFY_EVACUATION=1",
     )
     for settings in invalid:
@@ -105,6 +108,8 @@ def self_test() -> None:
     from gc_matrix_fixture_env_test import self_test as routing_self_test
 
     routing_self_test()
+    from parity_fixture_limits_test import self_test as limits_self_test
+    limits_self_test()
 
 
 def main() -> int:
