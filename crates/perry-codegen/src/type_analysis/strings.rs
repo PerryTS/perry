@@ -693,11 +693,16 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 // guard paths lower the non-null case through the string
                 // method dispatch. Without this, `(s: string | null).
                 // toUpperCase()` fell through to the generic path and
-                // returned undefined.
+                // returned undefined. Any other member (`string | number`)
+                // can be a non-string at runtime: `a < b` on two such
+                // numbers compared their decimal strings (`20 < 3`).
                 Some(HirType::Union(members)) => {
-                    members
-                        .iter()
-                        .any(|m| matches!(m, HirType::String | HirType::StringLiteral(_)))
+                    let is_string =
+                        |m: &HirType| matches!(m, HirType::String | HirType::StringLiteral(_));
+                    members.iter().any(is_string)
+                        && members
+                            .iter()
+                            .all(|m| is_string(m) || matches!(m, HirType::Null | HirType::Void))
                 }
                 _ => false,
             }
