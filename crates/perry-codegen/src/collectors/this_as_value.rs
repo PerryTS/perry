@@ -48,7 +48,14 @@ pub fn class_uses_this_as_value(
             break;
         }
     }
-    if let Some(ctor) = &class.constructor {
+    // #12668: check the body scalar replacement actually INLINES, not just the
+    // class's own constructor. A class without one runs its nearest
+    // ancestor's body through the implicit `constructor(...args) {
+    // super(...args) }`; checking only `class.constructor` let
+    // `class Sub extends Base {}` through even when `Base`'s constructor does
+    // `this.parse = this.parse.bind(this)`, and the inlined body then read the
+    // dummy `this` (undefined) and threw "Bind must be called on a function".
+    if let Some((_, ctor)) = inlined_constructor(class, classes) {
         if stmts_use_this_as_value(&ctor.body, &field_names) {
             return true;
         }
@@ -84,6 +91,33 @@ pub fn class_uses_this_as_value(
         }
     }
     false
+}
+
+/// The constructor body that runs for `new <class>(...)`, with the name of the
+/// class that declares it: the class's own constructor, or, for a class
+/// without one (whose implicit `constructor(...args) { super(...args) }`
+/// forwards to its parent), the nearest ancestor's. `None` when no class on
+/// the visible chain declares one.
+///
+/// Scalar replacement inlines exactly this body (`stmt/let_scalar_new.rs`) and
+/// [`class_uses_this_as_value`] proves exactly this body safe; both ask here so
+/// the body that is checked is the body that is inlined (#12668).
+pub(crate) fn inlined_constructor<'c>(
+    class: &'c perry_hir::Class,
+    classes: &std::collections::HashMap<String, &'c perry_hir::Class>,
+) -> Option<(&'c str, &'c perry_hir::Function)> {
+    let mut cur: &'c perry_hir::Class = class;
+    let mut seen: HashSet<&'c str> = HashSet::new();
+    loop {
+        if let Some(ctor) = &cur.constructor {
+            return Some((cur.name.as_str(), ctor));
+        }
+        if !seen.insert(cur.name.as_str()) || seen.len() > 64 {
+            return None;
+        }
+        let parent = cur.extends_name.as_deref()?;
+        cur = classes.get(parent).copied()?;
+    }
 }
 
 /// Issue #573: walk the class's `extends_name` chain and return true if any
@@ -588,6 +622,86 @@ mod tests {
         classes.insert(parent.name.clone(), &parent);
 
         assert!(!class_uses_this_as_value(&child, &classes));
+    }
+
+    /// #12668: `class Sub extends Base {}` runs Base's constructor body, and
+    /// scalar replacement inlines that body. A `this.parse.bind(this)` there
+    /// materializes `this`, so the subclass must escape exactly like Base does.
+    fn bind_in_ctor() -> perry_hir::Function {
+        function(
+            "constructor",
+            vec![Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "parse".to_string(),
+                value: Box::new(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
+                            object: Box::new(Expr::This),
+                            property: "parse".to_string(),
+                        }),
+                        property: "bind".to_string(),
+                    }),
+                    args: vec![Expr::This],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            })],
+        )
+    }
+
+    #[test]
+    fn inherited_ctor_this_as_value_escapes_subclass() {
+        let mut base = class("Base", None);
+        base.constructor = Some(bind_in_ctor());
+        let sub = class("Sub", Some("Base"));
+        let leaf = class("Leaf", Some("Sub"));
+        let mut classes = HashMap::new();
+        classes.insert(base.name.clone(), &base);
+        classes.insert(sub.name.clone(), &sub);
+        classes.insert(leaf.name.clone(), &leaf);
+
+        assert!(class_uses_this_as_value(&base, &classes));
+        assert!(class_uses_this_as_value(&sub, &classes));
+        assert!(class_uses_this_as_value(&leaf, &classes));
+        assert_eq!(
+            inlined_constructor(&leaf, &classes).map(|(n, _)| n),
+            Some("Base")
+        );
+    }
+
+    /// The nearest declaring ancestor wins: a field-only Mid constructor is
+    /// what runs for Leaf, so Base's `this`-as-value body is not inlined (Mid
+    /// itself must call `super()`, which the walker already escapes).
+    #[test]
+    fn inherited_ctor_resolves_nearest_declaring_ancestor() {
+        let mut base = class("Base", None);
+        base.constructor = Some(bind_in_ctor());
+        let mut mid = class("Mid", Some("Base"));
+        mid.constructor = Some(function("constructor", vec![]));
+        let leaf = class("Leaf", Some("Mid"));
+        let mut classes = HashMap::new();
+        classes.insert(base.name.clone(), &base);
+        classes.insert(mid.name.clone(), &mid);
+        classes.insert(leaf.name.clone(), &leaf);
+
+        assert_eq!(
+            inlined_constructor(&leaf, &classes).map(|(n, _)| n),
+            Some("Mid")
+        );
+        assert!(!class_uses_this_as_value(&leaf, &classes));
+    }
+
+    #[test]
+    fn inlined_constructor_stops_on_cyclic_parent_chain() {
+        let a = class("A", Some("B"));
+        let b = class("B", Some("A"));
+        let mut classes = HashMap::new();
+        classes.insert(a.name.clone(), &a);
+        classes.insert(b.name.clone(), &b);
+
+        assert!(inlined_constructor(&a, &classes).is_none());
     }
 
     #[test]

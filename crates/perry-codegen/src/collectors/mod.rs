@@ -161,4 +161,5 @@ pub(crate) use spec_abi_sites::{
 pub(crate) use straight_line_stores::count_straight_line_store_sites;
 pub(crate) use this_as_value::{
     class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,
+    inlined_constructor,
 };

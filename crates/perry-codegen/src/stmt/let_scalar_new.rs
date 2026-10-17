@@ -201,27 +201,20 @@ pub(super) fn try_lower_scalar_replaced_new(
                 // between the inherited-ctor and the leaf get
                 // their fields after the body returns (their
                 // initializers may depend on parent body state).
-                let inherited_ctor_class: Option<String> = if ctor.is_none() && class_has_extends {
-                    let mut walker = ctx
-                        .classes
-                        .get(class_name)
-                        .and_then(|c| c.extends_name.clone());
-                    let mut found: Option<String> = None;
-                    while let Some(pname) = walker {
-                        if let Some(parent_class) = ctx.classes.get(&pname).copied() {
-                            if parent_class.constructor.is_some() {
-                                found = Some(pname);
-                                break;
-                            }
-                            walker = parent_class.extends_name.clone();
-                        } else {
-                            break;
-                        }
-                    }
-                    found
-                } else {
-                    None
-                };
+                // #12668: the inherited body comes from the same resolver the
+                // escape check (`class_uses_this_as_value`) proved safe, so
+                // the body inlined here is the body that was checked.
+                let classes = ctx.classes;
+                let inherited_ctor: Option<(&str, &perry_hir::Function)> =
+                    if ctor.is_none() && class_has_extends {
+                        classes
+                            .get(class_name)
+                            .and_then(|c| crate::collectors::inlined_constructor(c, classes))
+                    } else {
+                        None
+                    };
+                let inherited_ctor_class: Option<String> =
+                    inherited_ctor.map(|(pname, _)| pname.to_string());
                 let init_mode = if let Some(stop_at) = inherited_ctor_class.clone() {
                     crate::lower_call::FieldInitMode::UpToInclusive(stop_at)
                 } else if class_has_extends {
@@ -257,57 +250,45 @@ pub(super) fn try_lower_scalar_replaced_new(
                     ctx.proven_local_types = saved_proven_local_types;
                 } else if class_has_extends {
                     // No own ctor — JS spec defaults to
-                    // `constructor(...args) { super(...args); }`. Walk
-                    // the parent chain to find the first ancestor with
-                    // a body and inline it (forwarding args). Refs #420.
-                    let mut parent_name = ctx
-                        .classes
-                        .get(class_name)
-                        .and_then(|c| c.extends_name.clone());
-                    while let Some(pname) = parent_name {
-                        if let Some(parent_class) = ctx.classes.get(&pname).copied() {
-                            if let Some(parent_ctor) = &parent_class.constructor {
-                                let saved_locals = ctx.locals.clone();
-                                let saved_local_types = ctx.local_types.clone();
-                                let saved_proven_local_types = ctx.proven_local_types.clone();
-                                for (i, param) in parent_ctor.params.iter().enumerate() {
-                                    let slot = ctx.func.alloca_entry(DOUBLE);
-                                    if i < lowered_args.len() {
-                                        ctx.block().store(DOUBLE, &lowered_args[i], &slot);
-                                    } else {
-                                        let undef = crate::nanbox::double_literal(f64::from_bits(
-                                            crate::nanbox::TAG_UNDEFINED,
-                                        ));
-                                        ctx.block().store(DOUBLE, &undef, &slot);
-                                    }
-                                    ctx.locals.insert(param.id, slot);
-                                    ctx.local_types.insert(param.id, param.ty.clone());
-                                    ctx.proven_local_types.remove(&param.id);
-                                    if let Some(Some(proof)) = arg_proofs.get(i) {
-                                        ctx.proven_local_types.insert(param.id, proof.clone());
-                                    }
-                                }
-                                ctx.class_stack.pop();
-                                ctx.class_stack.push(pname.clone());
-                                // #9081: same frame-splice rooting as the
-                                // own-ctor inline above.
-                                crate::expr::root_inlined_ctor_pointer_locals(
-                                    ctx,
-                                    &parent_ctor.params,
-                                    &parent_ctor.body,
-                                );
-                                crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
-                                ctx.class_stack.pop();
-                                ctx.class_stack.push(class_name.clone());
-                                ctx.locals = saved_locals;
-                                ctx.local_types = saved_local_types;
-                                ctx.proven_local_types = saved_proven_local_types;
-                                break;
+                    // `constructor(...args) { super(...args); }`: inline
+                    // the nearest ancestor's body (`inherited_ctor`,
+                    // forwarding args). Refs #420.
+                    if let Some((pname, parent_ctor)) = inherited_ctor {
+                        let saved_locals = ctx.locals.clone();
+                        let saved_local_types = ctx.local_types.clone();
+                        let saved_proven_local_types = ctx.proven_local_types.clone();
+                        for (i, param) in parent_ctor.params.iter().enumerate() {
+                            let slot = ctx.func.alloca_entry(DOUBLE);
+                            if i < lowered_args.len() {
+                                ctx.block().store(DOUBLE, &lowered_args[i], &slot);
+                            } else {
+                                let undef = crate::nanbox::double_literal(f64::from_bits(
+                                    crate::nanbox::TAG_UNDEFINED,
+                                ));
+                                ctx.block().store(DOUBLE, &undef, &slot);
                             }
-                            parent_name = parent_class.extends_name.clone();
-                        } else {
-                            break;
+                            ctx.locals.insert(param.id, slot);
+                            ctx.local_types.insert(param.id, param.ty.clone());
+                            ctx.proven_local_types.remove(&param.id);
+                            if let Some(Some(proof)) = arg_proofs.get(i) {
+                                ctx.proven_local_types.insert(param.id, proof.clone());
+                            }
                         }
+                        ctx.class_stack.pop();
+                        ctx.class_stack.push(pname.to_string());
+                        // #9081: same frame-splice rooting as the
+                        // own-ctor inline above.
+                        crate::expr::root_inlined_ctor_pointer_locals(
+                            ctx,
+                            &parent_ctor.params,
+                            &parent_ctor.body,
+                        );
+                        crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
+                        ctx.class_stack.pop();
+                        ctx.class_stack.push(class_name.clone());
+                        ctx.locals = saved_locals;
+                        ctx.local_types = saved_local_types;
+                        ctx.proven_local_types = saved_proven_local_types;
                     }
                     // Apply leaf's own field initializers AFTER the
                     // parent body chain has run. Issue #631-followup:

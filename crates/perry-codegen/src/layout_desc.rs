@@ -139,9 +139,21 @@ pub(crate) fn key_is_atom(key: &str) -> bool {
 /// Longest key spelling that is an atom (the runtime's `INTERN_MAX_BYTE_LEN`).
 const ATOM_MAX_BYTES: usize = 64;
 
+/// The section of a record the runtime finds by walking its section (atoms,
+/// layout descriptors, the shadow-name descriptor), not by a reference from
+/// code. Many of those records have no reference at all: the entry module's
+/// coloured-key atoms, the atoms and descriptors of literal families emitted
+/// as static data. On ELF the `__start_`/`__stop_` bounds the runtime names
+/// keep the whole section through `--gc-sections`; Mach-O has no such rule,
+/// and perry links with `-dead_strip`, which dropped every unreferenced record
+/// while the runtime's own (`#[used]`) records stayed. The runtime then never
+/// seeded those atoms or colours: the program's literal keys got a second,
+/// heap atom, and a coloured read of the image atom answered absent (zod's
+/// `this.refinement.bind(this)` threw "Bind must be called on a function" on
+/// macOS). `no_dead_strip` on the section keeps each record in it.
 fn section(triple: &str, elf: &str, mach: &str, win: &str) -> String {
     if triple.contains("apple") {
-        mach.to_string()
+        format!("{mach},regular,no_dead_strip")
     } else if triple.contains("windows") {
         win.to_string()
     } else {

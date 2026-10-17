@@ -588,3 +588,53 @@ fn born_wide_array_element_evidence() {
     ];
     assert_literal_width(&module, 3);
 }
+
+/// The runtime finds atoms and layout descriptors by walking their sections;
+/// many have no reference from code. Mach-O's `-dead_strip` dropped them
+/// (ELF keeps a section its `__start_`/`__stop_` bounds name), so on macOS the
+/// program's key atoms were never seeded and a coloured read answered absent
+/// (zod: "Bind must be called on a function"). Every Mach-O record section
+/// must carry `no_dead_strip`; ELF spells the plain section.
+#[test]
+fn section_walked_records_survive_mach_o_dead_strip() {
+    for (target, plain, kept) in [
+        (
+            "aarch64-apple-darwin",
+            "\"__DATA,__perry_",
+            ",regular,no_dead_strip\"",
+        ),
+        ("x86_64-unknown-linux-gnu", "\"perry_", "\""),
+    ] {
+        let mut options = super::super::class_field_barrier_tests::ir_opts();
+        options.output_type = "executable".into();
+        options.target = Some(target.into());
+        let text =
+            String::from_utf8(crate::compile_module(&method_fixture(), options).unwrap()).unwrap();
+        let records: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                ["atoms", "layouts", "shnames", "shadow_names"]
+                    .iter()
+                    .any(|s| l.contains(&format!("section {plain}{s}")))
+            })
+            .collect();
+        assert!(
+            records.iter().any(|l| l.contains("perry_atoms")),
+            "{target}: the fixture must emit atom records"
+        );
+        assert!(
+            records.iter().any(|l| l.contains("perry_layouts")),
+            "{target}: the fixture must emit layout descriptors"
+        );
+        for line in records {
+            let section = &line[line.find("section ").unwrap() + 8..];
+            let section = &section[..section[1..].find('"').unwrap() + 2];
+            assert!(section.ends_with(kept), "{target}: {line}");
+            assert_eq!(
+                section.contains("no_dead_strip"),
+                target.contains("apple"),
+                "{target}: {line}"
+            );
+        }
+    }
+}
