@@ -93,6 +93,8 @@ tests/test-*
 !tests/test_zfs_build_storage.py
 !tests/test_npm_sweep.py
 !tests/test_repsel_census.py
+!tests/test_node_core_subset.py
+!tests/test_visual_test_check.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*

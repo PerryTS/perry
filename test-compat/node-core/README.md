@@ -40,9 +40,16 @@ now feeds user `.js`/`.cjs` through the native AOT pipeline and rewrites
 - `diff`         — both exit 0 but stdout differs.
 - `runtime-fail` — Perry compiled but exited non-zero while Node passed.
 - `compile-fail` — Perry refused to compile (parser / lower / codegen).
-- `node-skip`    — Node itself failed under the shim (missing helper,
+- `node-skip`    — Node explicitly skipped or failed under the shim (missing helper,
                    needs a flag/env, or genuinely env-dependent).
                    Excluded from the Perry verdict.
+
+Explicit `common.skip()` calls are recorded through an oracle-only temporary
+file and excluded before compilation, even though Node exits successfully.
+The receipt is scoped to the main oracle process and thread; child and Worker
+skips do not erase successfully exercised parent coverage.
+`common.printSkipMessage()` does not exit and remains eligible for comparison;
+its identical TAP text alone is not proof that the whole test was skipped.
 
 ## Files
 

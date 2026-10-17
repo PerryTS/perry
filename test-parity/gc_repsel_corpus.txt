@@ -25,6 +25,15 @@
 #
 # One basename per line, without the .ts extension. `#` starts a comment.
 
+# Rooting witnesses recovered by the test-registration audit.
+test_gap_gc_fetch_streaming_chunks
+test_gap_gc_global_scalar_snapshot
+test_gap_gc_ic_leaf_json
+test_gap_gc_locale_options_rooting
+test_gap_gc_protected_poll_reclaim
+test_gap_gc_string_method_coerce_receiver
+test_gap_gc_worker_transfer_ownership
+
 # --- Phase 1: canonical unboxed i32 locals (#6903) --------------------------
 test_gap_repsel_canonical_i32
 test_gap_int_valued_ta_locals

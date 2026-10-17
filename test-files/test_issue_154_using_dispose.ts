@@ -11,9 +11,6 @@
 //   - Skipping disposal when the binding is null
 //
 // Out of scope (separate, broader limitation):
-//   - Class declared inside a function body that closures over an outer
-//     local — the dispose method body silently no-ops (codegen gap on
-//     class-method-captures-enclosing-fn-local; documented by issue #154).
 //   - SuppressedError chaining when the body throws and a disposer also
 //     throws — Perry's try/finally without a catch clause doesn't currently
 //     re-propagate (separate, pre-existing limitation).

@@ -8,10 +8,11 @@
 # documenting it in the spec (or vice versa) silently breaks the
 # verification flow.
 #
-# This script enforces two invariants:
+# This script enforces three invariants:
 #   1. Both files exist.
 #   2. The number of `labeled("N. ...", ...)` calls in the .ts matches
 #      the number of `### N.` section headers in the spec.
+#   3. At least one numbered section exists; an empty pair proves nothing.
 #
 # CI runs this after `run_ui_styling_matrix.sh` to keep the audit
 # infrastructure + the visual-test infrastructure synchronized. The
@@ -47,6 +48,11 @@ ts_sections=$(grep -cE '^\s*labeled\("[0-9]+\.' "$TS")
 # blocks. Header level 3 is reserved for these; the meta sections
 # at the top use level 2.
 spec_sections=$(grep -cE '^### [0-9]+\.' "$SPEC")
+
+if [[ "$ts_sections" -eq 0 && "$spec_sections" -eq 0 ]]; then
+    echo "FAIL: visual test and spec need at least one numbered section"
+    exit 1
+fi
 
 if [[ "$ts_sections" != "$spec_sections" ]]; then
     echo "FAIL: visual test sections drift detected"

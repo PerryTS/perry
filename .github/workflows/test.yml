@@ -1115,6 +1115,12 @@ jobs:
           python3 scripts/check_test_registration.py
           python3 scripts/node_suite_run.py --self-test
 
+      - name: Coverage classifier regression tests
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m unittest discover -s tests -p 'test_node_core_subset.py' -v
+          python3 -m unittest discover -s tests -p 'test_visual_test_check.py' -v
+
       # #7672: the GC test guards CLEAR ~20 process-global side tables from
       # whatever libtest thread constructs a guard, and nothing requires a
       # READER to take the clearing lock. Three flakes in two days came from

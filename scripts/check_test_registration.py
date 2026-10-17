@@ -186,7 +186,9 @@ def _read_toml_paths(tree: Tree, rel: str, key: str) -> set[str]:
 _MOD_RE = r"^[^\S\n]*(?:pub(?:\([^)]*\))?[^\S\n]+)?mod[^\S\n]+%s[^\S\n]*[;{]"
 
 
-def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
+def _rust_module_is_declared(
+    tree: Tree, rel: str, seen: frozenset[str] = frozenset()
+) -> bool:
     """Is `<dir>/<stem>.rs` named by a `mod` declaration that can reach it?
 
     Rust resolves `<dir>/<stem>.rs` as child module `<stem>` of the module
@@ -203,6 +205,9 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
     a gate like this one gets the gate disabled, so the walk goes all the way up
     to the crate root. It is still only a couple of file reads per candidate.
     """
+    if rel in seen:
+        return False
+    seen = seen | {rel}
     path = Path(rel)
     stem = path.stem
     decl = re.compile(_MOD_RE % re.escape(stem), re.M)
@@ -223,6 +228,19 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
                 if (Path(cand).parent / target).as_posix() == rel:
                     return True
         parent = parent.parent
+    # A sibling module can own a path-attributed child under another name.
+    # Count it only if that owner is itself reachable, not a dark-file cycle.
+    for source in tree.glob((path.parent / "*.rs").as_posix()):
+        if source == rel:
+            continue
+        targets = re.findall(
+            r'^\s*#\[path\s*=\s*"([^"]+)"\]\s*'
+            r'(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;',
+            tree.read(source), re.M,
+        )
+        if any((Path(source).parent / target).as_posix() == rel for target in targets):
+            if _rust_module_is_declared(tree, source, seen):
+                return True
     # A test suite root (`crates/<c>/tests/<suite>.rs`) can pull a file from
     # anywhere under `tests/` with `#[path = "…"] mod name;` — e.g.
     # `node_api_host_e2e.rs` registers `fixtures/node_api_host/computed_require.rs`.
@@ -648,6 +666,24 @@ def _self_test(root: Path) -> int:
             "the inline-`mod` false-positive guard's subject %s is gone; "
             "re-point it at another live one rather than dropping the case" % inline
         )
+
+    aliased = "crates/perry-runtime/src/gc/tests/rooted_array_accessors.rs"
+    owner = "crates/perry-runtime/src/gc/tests/rooted_define_property.rs"
+    declaration = '#[path = "rooted_array_accessors.rs"]\nmod array_rebind;'
+    check("sibling path-attributed module is live",
+          _rust_module_is_declared(Tree(root), aliased))
+    check("removing its actual declaration makes the alias dark",
+          not _rust_module_is_declared(Tree(root, overrides={
+              owner: Tree(root).read(owner).replace(declaration, "")
+          }), aliased))
+    a = "crates/perry-runtime/src/gc/tests/selftest_alias_a.rs"
+    b = "crates/perry-runtime/src/gc/tests/selftest_alias_b.rs"
+    cycle = Tree(root, added=[a, b], overrides={
+        a: '#[path = "selftest_alias_b.rs"]\nmod child;',
+        b: '#[path = "selftest_alias_a.rs"]\nmod child;',
+    })
+    check("unregistered sibling cycle stays dark",
+          not _rust_module_is_declared(cycle, a))
 
     # 8. the path matcher does not let `*` cross a directory separator — the bug
     #    that would silently widen every mechanism's candidate set.

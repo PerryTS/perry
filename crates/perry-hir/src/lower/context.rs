@@ -1657,14 +1657,7 @@ impl LoweringContext {
     }
 }
 
-// Internal anchor — keeps the file's outer impl block intact while
-// `native_instance_from_return_type` lives at module scope.
-#[allow(dead_code)]
-struct __PerryHirSentinel;
 impl LoweringContext {
-    #[allow(dead_code)]
-    fn __perry_hir_sentinel(&self) {}
-
     pub(crate) fn register_func_return_type(&mut self, name: String, ty: Type) {
         self.func_return_types.push((name, ty));
     }

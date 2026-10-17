@@ -131,6 +131,11 @@ function platformTimeout(ms) {
 
 function skip(msg) {
   console.log('1..0 # Skipped: ' + (msg || ''));
+  // The oracle installs this only in its top-level thread. Descendants and
+  // printSkipMessage must not exclude an otherwise exercised parent test.
+  if (typeof globalThis.__perryNodeCoreOracleSkip === 'function') {
+    globalThis.__perryNodeCoreOracleSkip();
+  }
   process.exit(0);
 }
 

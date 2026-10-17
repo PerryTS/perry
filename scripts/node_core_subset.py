@@ -24,7 +24,7 @@ Buckets
 - diff         — both exit 0 but stdout differs.
 - runtime-fail — Perry compiled but exited non-zero while Node passed.
 - compile-fail — Perry refused to compile (parser / lower / codegen).
-- node-skip    — Node itself failed under the shim (missing helper, needs a
+- node-skip    — Node explicitly skipped or failed under the shim (missing helper, needs a
                  flag/env, or genuinely env-dependent). Excluded from the
                  Perry verdict — never charged against Perry.
 
@@ -672,6 +672,18 @@ def main() -> int:
         parallel_stage.mkdir()
         bin_dir = stage / "bin"
         bin_dir.mkdir()
+        skip_report = stage / "oracle-skip"
+        oracle_hook = stage / "oracle-hook.cjs"
+        # A process-local callback avoids inherited environment receipts.
+        # Workers inherit --require, so admit only the main oracle thread.
+        # This hook is never loaded or compiled by Perry.
+        oracle_hook.write_text(
+            "if (require('worker_threads').isMainThread && "
+            f"process.ppid === {os.getpid()}) {{\n"
+            "  globalThis.__perryNodeCoreOracleSkip = () => "
+            f"require('fs').writeFileSync({json.dumps(str(skip_report))}, '');\n"
+            "}\n"
+        )
 
         # #1842: under auto-optimize (global or per-API #2156), the first
         # compile that needs a given ext-crate / feature triggers a COLD
@@ -751,9 +763,10 @@ def main() -> int:
                 shutil.copy(tf, staged)
 
                 # 1) Node is the oracle — with our shim in place.
-                n_exit, n_out = run(["node", str(staged)], base_env,
+                skip_report.unlink(missing_ok=True)
+                n_exit, n_out = run(["node", "--require", str(oracle_hook), str(staged)], base_env,
                                     args.timeout)
-                if n_exit != 0:
+                if n_exit != 0 or skip_report.exists():
                     buckets["node-skip"].add(
                         api, test_name, first_meaningful_line(n_out),
                         args.sample_cap)
