@@ -5,9 +5,9 @@
 //! archives, compressed npm archives, and platform-suffixed archives all carry
 //! their identity with them.
 
-/// Revision/fingerprint produced by `build.rs` from the compiler/runtime
-/// contract sources. Clean checkouts use `git:<commit>`; dirty or source-only
-/// builds use `src:<sha256>`.
+/// Fingerprint produced by `build.rs` from the runtime's own source trees
+/// (`src:<sha256>`), or `git:<commit>` when a release build passes
+/// `PERRY_BUILD_COMMIT`.
 pub const PERRY_RUNTIME_BUILD_ID: &str = env!("PERRY_RUNTIME_BUILD_ID");
 
 /// NUL-terminated record deliberately stored as plain ASCII so the CLI can

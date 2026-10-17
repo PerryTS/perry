@@ -52,33 +52,29 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-/// Source trees that define the compiler <-> runtime contract. A clean git
-/// checkout uses the commit as its build id; dirty/source-only builds hash
-/// these inputs so rebuilding the compiler without rebuilding the archive is
-/// still detected even though the package version did not change.
+/// The source trees an archive is built from: the workspace manifest and lock
+/// file, and every local crate perry-runtime builds with (its normal, optional
+/// and build dependencies; `runtime_build_inputs_cover_the_runtime_closure` in
+/// crates/perry checks this list against `cargo metadata`). Dirty or
+/// source-only builds hash these, so a compiler built against one runtime
+/// source rejects an archive built from another. Compiler-only trees are not
+/// inputs: editing codegen must not rebuild and re-stamp identical archives.
 const RUNTIME_BUILD_INPUTS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
+    "crates/perry-abi/Cargo.toml",
+    "crates/perry-abi/src",
     "crates/perry-base64/Cargo.toml",
     "crates/perry-base64/src",
-    "crates/perry-hex/Cargo.toml",
-    "crates/perry-hex/src",
-    "crates/perry-uuid/Cargo.toml",
-    "crates/perry-uuid/src",
-    "crates/perry-cli-support/Cargo.toml",
-    "crates/perry-cli-support/src",
+    "crates/perry-diagnostics/Cargo.toml",
+    "crates/perry-diagnostics/src",
     "crates/perry-dispatch/Cargo.toml",
     "crates/perry-dispatch/src",
-    "crates/perry/Cargo.toml",
-    "crates/perry/src",
-    "crates/perry-codegen/Cargo.toml",
-    "crates/perry-codegen/src",
-    "crates/perry-hir/Cargo.toml",
-    "crates/perry-hir/src",
-    "crates/perry-transform/Cargo.toml",
-    "crates/perry-transform/src",
+    "crates/perry-hex/Cargo.toml",
+    "crates/perry-hex/src",
+    "crates/perry-parser/Cargo.toml",
+    "crates/perry-parser/src",
     "crates/perry-runtime/Cargo.toml",
     "crates/perry-runtime/build.rs",
     "crates/perry-runtime/src",
@@ -88,19 +84,6 @@ const RUNTIME_BUILD_INPUTS: &[&str] = &[
 /// workspace siblings above. Hash the packaged runtime itself in that layout;
 /// the compiler and static wrapper both consume this same crate artifact.
 const PACKAGED_RUNTIME_BUILD_INPUTS: &[&str] = &["Cargo.toml", "build.rs", "src"];
-
-fn command_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
-}
 
 fn sanitize_build_id(value: &str) -> String {
     value
@@ -188,38 +171,16 @@ fn emit_runtime_build_id() {
     };
     let root = root.canonicalize().unwrap_or(root);
 
-    // Make branch/commit changes rerun this build script even when the source
-    // files themselves are byte-identical (for example after a rebase).
-    if workspace_layout {
-        if let Some(git_head) = command_stdout(&root, &["rev-parse", "--git-path", "HEAD"]) {
-            println!("cargo:rerun-if-changed={}", root.join(git_head).display());
-        }
-        if let Some(symbolic_ref) = command_stdout(&root, &["symbolic-ref", "-q", "HEAD"]) {
-            if let Some(git_ref) =
-                command_stdout(&root, &["rev-parse", "--git-path", &symbolic_ref])
-            {
-                println!("cargo:rerun-if-changed={}", root.join(git_ref).display());
-            }
-        }
-    }
-
     let explicit = std::env::var("PERRY_BUILD_COMMIT")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("git:{}", sanitize_build_id(value.trim())));
 
+    // The id names the source, not the commit: a commit, rebase or checkout
+    // that leaves these inputs byte-identical keeps the archives fresh.
+    // Release builds pass PERRY_BUILD_COMMIT.
     let source_id = source_build_id(&root, inputs);
-    let clean_commit = workspace_layout
-        .then(|| command_stdout(&root, &["rev-parse", "--verify", "HEAD"]))
-        .flatten()
-        .filter(|_| {
-            let mut args = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
-            args.extend_from_slice(inputs);
-            command_stdout(&root, &args).is_some_and(|status| status.is_empty())
-        })
-        .map(|commit| format!("git:{}", sanitize_build_id(&commit)));
-
-    let build_id = explicit.or(clean_commit).unwrap_or(source_id);
+    let build_id = explicit.unwrap_or(source_id);
     println!("cargo:rustc-env=PERRY_RUNTIME_BUILD_ID={build_id}");
 }
 

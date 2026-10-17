@@ -55,11 +55,11 @@ cannot be started makes its workloads SKIP (reason recorded), not FAIL.
 
 Everything runs with cwd=benchmarks/packages and TZ=UTC.
 
-Build-id pitfall: auto-optimize rebuilds the runtime archives stamped with
-the checkout's HEAD. If HEAD moved after `perry` was built (e.g. you
-committed harness edits), every compile fails with "runtime library does not
-match this Perry compiler". Export PERRY_BUILD_COMMIT=<full sha perry was
-built at> for `compile`, and delete stale target/perry-auto-* dirs.
+Build-id pitfall: the runtime archives are stamped with a hash of the
+runtime's own sources. If those sources changed after `perry` was built,
+every compile fails with "runtime library does not match this Perry
+compiler"; rebuild with `cargo build-perry` and delete stale
+target/perry-auto-* dirs.
 
 Typical session (what produced benchmarks/packages/REPORT.md):
   cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
