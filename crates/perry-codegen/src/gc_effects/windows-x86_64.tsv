@@ -2198,6 +2198,8 @@ js_nm_install_worker_threads	Leaf	no
 js_nm_install_zlib	Leaf	no
 js_node_http_response_state_get	Leaf	no
 js_node_http_response_state_set	Reenters	yes
+js_node_http_server_response_birth	Reenters	yes
+js_node_http_server_response_init	Reenters	yes
 js_node_inspector_close	Leaf	no
 js_node_inspector_console_debug	Reenters	yes
 js_node_inspector_console_error	Reenters	yes
@@ -2707,6 +2709,7 @@ js_perry_payload_close_attached	Reenters	yes
 js_perry_payload_external_bytes	Leaf	no
 js_perry_payload_get	Reenters	yes
 js_perry_payload_get_attached	Reenters	yes
+js_perry_payload_has_attached	Leaf	no
 js_perry_payload_js_state	Reenters	yes
 js_perry_payload_lifecycle	Leaf	no
 js_perry_payload_link_close	Reenters	yes
@@ -3294,6 +3297,7 @@ js_runtime_register_feature_installer	Leaf	no
 js_runtime_set_wasm_host_ops	Leaf	no
 js_runtime_state_key_call	Reenters	yes
 js_runtime_state_key_get	Reenters	yes
+js_runtime_state_key_set	Reenters	yes
 js_runtime_validate_crypto_key_arg	Reenters	yes
 js_runtime_validate_integer_arg	Reenters	yes
 js_runtime_validate_string_arg	Reenters	yes
