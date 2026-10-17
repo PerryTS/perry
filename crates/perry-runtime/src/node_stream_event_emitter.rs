@@ -574,6 +574,52 @@ fn own_data_slot(
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
+        // On a node instance layout (born on it, or on its keys under a
+        // derived chain): its index names the key's slot, its keys are plain
+        // data, and a slot holding the hole is an absent key.
+        if let Some(found) =
+            crate::node_stream::instance_birth::instance_layout_slot(obj, name, None)
+        {
+            let meta = (*obj).meta;
+            if !meta.is_null() && (*meta).elements != 0 {
+                return None;
+            }
+            let live = crate::object::object_live_slot_count(obj);
+            return Some(found.and_then(|slot| {
+                (crate::object::field_get_set::object_field_at_with_live(obj, slot, live).bits()
+                    != crate::value::TAG_HOLE)
+                    .then_some((obj, slot, live))
+            }));
+        }
+        // An overflow holds every present own key with its attributes
+        // (object model step 4): a miss is an absent key, and a layout key's
+        // entry names its fixed slot. A value the table holds itself takes
+        // the generic path.
+        let table = crate::object::overflow::table(obj);
+        if !table.is_null() {
+            let meta = (*obj).meta;
+            if !meta.is_null() && (*meta).elements != 0 {
+                return None;
+            }
+            let Some(entry) = crate::object::overflow::find_bytes(table, name) else {
+                return Some(None);
+            };
+            let attrs =
+                crate::object::overflow::entry_attrs(table as *const crate::array::ArrayHeader, entry);
+            if !crate::object::key_attrs::entry_is_plain_writable_data(attrs) {
+                return None;
+            }
+            let slot = crate::object::overflow::fixed_slot_of(table, entry)?;
+            let live = crate::object::object_live_slot_count(obj);
+            if slot >= live {
+                return None;
+            }
+            return Some(
+                (crate::object::field_get_set::object_field_at_with_live(obj, slot, live).bits()
+                    != crate::value::TAG_HOLE)
+                    .then_some((obj, slot, live)),
+            );
+        }
         // A descriptor for THIS key (an attribute or an accessor) is the
         // descriptor tables' to answer; other keys' descriptors do not matter.
         if header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0

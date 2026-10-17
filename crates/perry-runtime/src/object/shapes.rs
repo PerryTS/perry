@@ -2432,6 +2432,12 @@ pub(crate) fn shape_live_inline_slot_count_by_id(shape_id: u32) -> Option<u32> {
     shape_descriptor_field_by_id(shape_id, |d| d.live_inline_slot_count)
 }
 
+/// The key list, logical key count and prototype identity of `shape_id`,
+/// without copying its descriptor.
+pub(crate) fn shape_keys_and_proto_by_id(shape_id: u32) -> Option<(u64, u32, u64)> {
+    shape_descriptor_field_by_id(shape_id, |d| (d.keys, d.logical_key_count, d.proto_id))
+}
+
 /// The descriptor named by `shape_id`, or `None` when the id names no
 /// descriptor in this agent.
 ///

@@ -74,8 +74,19 @@ impl NamedStateKey {
     /// nothing, for every other receiver or add, and for a key text with no
     /// atom yet (no layout names it).
     pub(crate) unsafe fn add_family(self, obj: *mut ObjectHeader, value: f64) -> bool {
+        // A family object, or a node instance layout naming the key (an
+        // optional key whose slot holds the hole: node's lazy
+        // `_eventsCount` on a stream).
         if crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash))
             .is_none()
+            && !matches!(
+                crate::node_stream::instance_birth::instance_layout_slot(
+                    obj,
+                    self.bytes,
+                    Some(self.hash),
+                ),
+                Some(Some(_))
+            )
         {
             return false;
         }
@@ -96,13 +107,29 @@ impl NamedStateKey {
         let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
             return false;
         };
-        // An object with an overflow keeps its keys' attributes and any key
-        // added after it there, not in its layout (object model step 4): the
-        // ordinary Set decides.
-        if header._reserved & crate::gc::OBJ_FLAG_FROZEN != 0
-            || (header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-                && !crate::object::key_attrs::attrs_live_in_keys(obj as usize))
-            || crate::object::overflow::has_overflow(obj)
+        if header._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return false;
+        }
+        // An object with an overflow keeps every present key there, with its
+        // attributes (object model step 4): a live plain writable data entry
+        // is overwritten in place, anything else takes the ordinary Set.
+        let table = crate::object::overflow::table(obj);
+        if !table.is_null() {
+            let Some(entry) = crate::object::overflow::find_bytes(table, self.bytes) else {
+                return false;
+            };
+            let attrs = crate::object::overflow::entry_attrs(
+                table as *const crate::array::ArrayHeader,
+                entry,
+            );
+            // A slot reference to a hole is an absent layout key: an add.
+            return crate::object::key_attrs::entry_is_plain_writable_data(attrs)
+                && crate::object::overflow::get_from(table, obj, entry)
+                    .is_some_and(|bits| bits != crate::value::TAG_HOLE)
+                && crate::object::overflow::store_index(obj, entry, value.to_bits());
+        }
+        if header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+            && !crate::object::key_attrs::attrs_live_in_keys(obj as usize)
         {
             return false;
         }
@@ -122,7 +149,15 @@ impl NamedStateKey {
         ) {
             Some(Some((_, slot))) => slot,
             Some(None) => return false,
-            None => {
+            None => match crate::node_stream::instance_birth::instance_layout_slot(
+                obj,
+                self.bytes,
+                Some(self.hash),
+            ) {
+                // A node instance layout's keys are plain writable data.
+                Some(Some(slot)) => slot,
+                Some(None) => return false,
+                None => {
                 let Some(position) = crate::object::keys_find_property_slot_by_bytes(
                     keys,
                     shape.logical_key_count,
@@ -139,7 +174,8 @@ impl NamedStateKey {
                     return false;
                 }
                 crate::object::key_attrs::key_storage_slot(keys, position)
-            }
+                }
+            },
         };
         if crate::object::object_field_at_with_live(obj, slot, shape.live_inline_slot_count).bits()
             == crate::value::TAG_HOLE
@@ -200,17 +236,24 @@ impl NamedStateKey {
             Some(self.hash),
         ) {
             Some(found) => found?.1,
-            None => {
-                let position = crate::object::keys_find_property_slot_by_bytes(
-                    keys,
-                    shape.logical_key_count,
-                    self.bytes,
-                )?;
-                if crate::object::key_attrs::key_is_accessor_at(keys, position) {
-                    return None;
+            None => match crate::node_stream::instance_birth::instance_layout_slot(
+                obj,
+                self.bytes,
+                Some(self.hash),
+            ) {
+                Some(found) => found?,
+                None => {
+                    let position = crate::object::keys_find_property_slot_by_bytes(
+                        keys,
+                        shape.logical_key_count,
+                        self.bytes,
+                    )?;
+                    if crate::object::key_attrs::key_is_accessor_at(keys, position) {
+                        return None;
+                    }
+                    crate::object::key_attrs::key_storage_slot(keys, position)
                 }
-                crate::object::key_attrs::key_storage_slot(keys, position)
-            }
+            },
         };
         let live = crate::object::object_live_slot_count(obj);
         // A slot holding the hole is an absent optional key (`key_view`).

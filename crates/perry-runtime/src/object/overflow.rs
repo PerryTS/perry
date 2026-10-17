@@ -470,6 +470,17 @@ pub(crate) unsafe fn get(obj: *const ObjectHeader, slot: u32) -> Option<u64> {
     get_from(t, obj, slot)
 }
 
+/// The fixed storage slot entry `slot` of `t` refers to: a layout key's
+/// entry names the slot its value lives in. `None` for a tombstone and for
+/// an entry whose value the table holds.
+///
+/// # Safety
+/// `t` is a live table.
+pub(crate) unsafe fn fixed_slot_of(t: *const Table, slot: u32) -> Option<u32> {
+    (slot < (*t).length && *key_at(t, slot) != TAG_HOLE && *attrs_at(t, slot) & SLOT_REF != 0)
+        .then(|| *value_at(t, slot) as u32)
+}
+
 pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u32) -> Option<u64> {
     if slot >= (*t).length {
         return None;

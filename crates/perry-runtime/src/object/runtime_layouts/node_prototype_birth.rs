@@ -136,6 +136,14 @@ impl NodePrototype {
                 std::process::abort();
             }
         }
+        // Population is the runtime's definition, not a program write: its
+        // slot stores set the shadow bit when the program has a site naming
+        // one of the keys (`shadow::note_prototype_slot_store`), but no
+        // program code can have seen the prototype yet. The sealed word
+        // starts unshadowed unless an overflow holds keys (the bit names it).
+        if !crate::object::overflow::has_overflow(proto) {
+            (*proto).parent_class_id &= !crate::object::layout_desc::LAYOUT_SHADOW_BIT;
+        }
         crate::object::builtin_proto::seal_runtime_prototype(proto, serial);
     }
 }

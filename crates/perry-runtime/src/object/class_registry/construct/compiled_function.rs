@@ -229,6 +229,39 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
     // Marking can collect, so all later pointer reads use the handle.
     let serial = crate::object::proto_validity::mark_object_as_prototype(proto as usize)?;
     let proto = (proto_handle.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    // A native ancestor (`util.inherits(F, http.ServerResponse)`, `Readable`,
+    // `EventEmitter`): born on its instance layout's keys with `F.prototype`
+    // as prototype, so the ancestor's constructor (`X.call(this)`) fills
+    // slots. The chain decides at every birth (one record load per level).
+    let recorded = ((*(*proto).meta).instance_birth >> 32) as u32;
+    {
+        if let Some(layout) =
+            crate::node_stream::instance_birth::derived_layout(proto_handle.get_nanbox_u64())
+        {
+            if let Some(obj) = crate::object::layout_desc::alloc_derived_layout_object(
+                &*layout,
+                serial,
+                &proto_handle,
+                recorded,
+            ) {
+                let shape = crate::object::shapes::object_shape_stamp(obj);
+                if shape != recorded {
+                    let ptr = crate::value::JSValue::from_bits(proto_handle.get_nanbox_u64())
+                        .as_pointer::<ObjectHeader>();
+                    // GC_STORE_AUDIT(POINTER_FREE): the existing weak class-id-zero / ShapeId pair.
+                    (*(*ptr).meta).instance_birth = u64::from(shape) << 32;
+                }
+                let instance = crate::value::js_nanbox_pointer(obj as i64);
+                return Some(run_constructor_body(
+                    func_handle.get_nanbox_f64(),
+                    instance,
+                    args_ptr,
+                    args_len,
+                    true,
+                ));
+            }
+        }
+    }
     let birth = crate::object::shapes::keyless_birth_width(
         serial,
         crate::object::shapes::object_shape_stamp(proto),

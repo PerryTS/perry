@@ -849,6 +849,87 @@ unsafe fn mark_layout_object_facts(obj: *mut ObjectHeader, d: &PerryLayoutDesc) 
     (*gc)._reserved |= d.integrity as u16;
 }
 
+/// An object of `new F` born on instance layout `d`'s keys, every slot the
+/// hole, whose prototype is `F.prototype` (identity `proto_id`, the value
+/// `proto` holds) rather than the sealed node prototype `d` names: the
+/// function-constructed instance with a native ancestor
+/// (`instance_birth::derived_layout`). Its shape is `d`'s key list with that
+/// identity, from the shape tree; `recorded` (the prototype's recorded birth
+/// shape) answers when it is exactly that shape. `None` when `d` is not
+/// registered. Can collect; `proto` stays rooted by the caller.
+///
+/// # Safety
+/// `d` is a runtime instance layout; `proto_id` is the identity of the
+/// object `proto` holds.
+pub(crate) unsafe fn alloc_derived_layout_object(
+    d: &PerryLayoutDesc,
+    proto_id: u64,
+    proto: &crate::gc::RuntimeHandle<'_>,
+    recorded: u32,
+) -> Option<*mut ObjectHeader> {
+    let id = registered_layout_id(d.layout_id)?;
+    let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
+    let obj =
+        crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
+    // No collection from here until the newborn carries its shape.
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let base = super::shapes::shape_descriptor_by_id(id)?;
+    let proto_bits = proto.get_nanbox_u64();
+    if super::shapes::identity_prototype_word(proto_id) != proto_bits {
+        super::shapes::write_identity_word(proto_id, proto_bits);
+    }
+    let shape = match super::shapes::shape_keys_and_proto_by_id(recorded) {
+        Some((keys, count, recorded_proto))
+            if recorded != 0
+                && keys == base.keys
+                && count == base.logical_key_count
+                && recorded_proto == proto_id =>
+        {
+            recorded
+        }
+        _ => super::shapes::publish_shape_result(super::shapes::shape_descriptor_intern_with_rep(
+            base.keys as usize as *const crate::array::ArrayHeader,
+            base.logical_key_count,
+            base.live_inline_slot_count,
+            0,
+            base.object_kind,
+            base.hole_count,
+            proto_id,
+            base.summary,
+            base.rep,
+            &[],
+            None,
+            base.integrity_flags,
+        )),
+    };
+    // GC_STORE_AUDIT(INIT): unpublished header and hole-only declared slots.
+    std::ptr::write(
+        obj,
+        ObjectHeader {
+            class_id: 0,
+            parent_class_id: shape,
+            meta: std::ptr::null_mut(),
+            #[cfg(target_pointer_width = "32")]
+            _slot_alignment_padding: 0,
+        },
+    );
+    let fields = obj
+        .cast::<u8>()
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>();
+    for i in 0..d.slot_count as usize {
+        *fields.add(i) = crate::value::TAG_HOLE;
+    }
+    mark_layout_object_facts(obj, d);
+    if !crate::arena::pointer_in_nursery(obj as usize) {
+        super::shapes::note_old_generation_carrier(super::shapes::shape_record_by_id(shape));
+    }
+    // The prototype edge lives outside the heap, as for every created birth.
+    crate::gc::runtime_shade_external_edge(proto_bits);
+    super::shapes::store_kind::check_store_facts(obj);
+    Some(obj)
+}
+
 /// A builtin prototype holder born on a registered runtime layout (§3.6:
 /// builtin prototypes are families with runtime-defined static layouts). Like
 /// [`perry_alloc_layout`], but born old and never moving, as every builtin
@@ -1809,7 +1890,7 @@ unsafe fn desc_position_by_bytes(d: &PerryLayoutDesc, bytes: &[u8]) -> Option<u3
 
 /// [`desc_position_by_bytes`] for `bytes` whose hash is `hash`.
 #[inline]
-unsafe fn desc_position_hashed(d: &PerryLayoutDesc, bytes: &[u8], hash: u64) -> Option<u32> {
+pub(crate) unsafe fn desc_position_hashed(d: &PerryLayoutDesc, bytes: &[u8], hash: u64) -> Option<u32> {
     if d.index.is_null() || d.keys.is_null() {
         return None;
     }

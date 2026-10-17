@@ -525,13 +525,24 @@ pub unsafe extern "C" fn js_node_http_server_response_init(this: f64, req: f64) 
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let req = scope.root_nanbox_f64(req);
-    let Some(_) =
+    let Some(receiver) =
         crate::object::field_get_set::runtime_read_site::object_receiver(this.get_nanbox_f64())
     else {
         return;
     };
+    // Born on the response layout, or on its keys under a `new F` whose
+    // chain reaches `ServerResponse.prototype` through plain levels: one
+    // chain check here, then each store fills its slot while the object
+    // stays on those keys.
+    let plain_chain = crate::node_stream::instance_birth::on_layout_with_plain_chain(
+        receiver,
+        &raw const layouts::SERVER_RESPONSE,
+    );
     let on_layout = || {
-        crate::object::field_get_set::runtime_read_site::object_receiver(this.get_nanbox_f64())
+        plain_chain
+            && crate::object::field_get_set::runtime_read_site::object_receiver(
+                this.get_nanbox_f64(),
+            )
             .is_some_and(|obj| {
                 crate::node_stream::instance_birth::instance_layout(obj)
                     == Some(&raw const layouts::SERVER_RESPONSE)
