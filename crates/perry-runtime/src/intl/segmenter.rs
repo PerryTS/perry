@@ -26,6 +26,12 @@ fn segment_bounds<'a>(granularity: &str, input: &'a str) -> Vec<&'a str> {
 }
 
 /// The end of the grapheme cluster starting at byte `from`.
+///
+/// `#[inline(always)]`: the slot's indirect call must sit in its one caller,
+/// `js_segments_view_next`, the function the audited delegation in
+/// `scripts/gc_call_effects/seeds.txt` names. Left out of line (prod's codegen
+/// units do), the call would be an unaudited seed and the cursor Reenters.
+#[inline(always)]
 pub(super) fn next_grapheme_boundary(text: &str, from: usize) -> Option<usize> {
     match NEXT_GRAPHEME_BOUNDARY.get() {
         Some(f) => f(text, from),

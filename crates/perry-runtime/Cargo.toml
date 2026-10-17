@@ -303,7 +303,9 @@ ryu.workspace = true
 # ECMAScript shortest-number spelling into a stack buffer (JSON hot path).
 # Already present in the workspace lockfile through SWC.
 ryu-js = "1.0.3"
-simdutf8 = "0.1.5"
+# public_imp: `string::provenance::is_utf8` calls the AVX2/SSE4.2 validators
+# directly instead of through simdutf8's runtime-selected function pointer.
+simdutf8 = { version = "0.1.5", features = ["public_imp"] }
 perry-base64.workspace = true
 dirs = { workspace = true, optional = true }
 # #6559 `dyn-eval`: reuse the compiler's own SWC-based parser for runtime-

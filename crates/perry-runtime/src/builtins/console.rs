@@ -668,7 +668,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Instant;
 
-thread_local! {
+// `perry_thread_local!` (see `async_context::ACTIVE_CONTEXT`): no accessor
+// pointer survives into an out-of-line `LocalKey::with`.
+crate::perry_thread_local! {
     // Keep RandomState for user-provided labels; only construct it on a write.
     // The Option and any populated map retain normal thread-exit destruction.
     static CONSOLE_TIMERS: RefCell<Option<HashMap<String, Instant>>> = const { RefCell::new(None) };

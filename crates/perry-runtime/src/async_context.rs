@@ -156,10 +156,14 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
     }
 }
 
-// Large operation callbacks are outlined explicitly at the affected access
-// sites: LocalKey::with can then specialize its small TLS getter instead of
-// retaining a call through LocalKey's accessor pointer in prod archives.
-thread_local! {
+// `perry_thread_local!`, not `thread_local!`: a landing pad reaches this
+// through `unwind_context_guards`, and `js_eh_pad_enter` is a Leaf. std's
+// `LocalKey::with` reads the value through the key's accessor *pointer*;
+// wherever rustc leaves a `with` instantiation out of line (prod's 16 codegen
+// units do), that is an indirect call the GC call-effects analyzer must treat
+// as reaching JS. `HotKey::with` is `#[inline(always)]`, and its only indirect
+// call is the audited cold `resolve`.
+crate::perry_thread_local! {
     static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new() }) };
 }
 
@@ -380,7 +384,8 @@ pub enum ContextGuardAction {
     TestNoop,
 }
 
-thread_local! {
+// `perry_thread_local!` for the reason given at `ACTIVE_CONTEXT`.
+crate::perry_thread_local! {
     static CONTEXT_GUARDS: RefCell<crate::exception::CatchStack<ContextGuardAction>> =
         const { RefCell::new(crate::exception::CatchStack::new()) };
 }

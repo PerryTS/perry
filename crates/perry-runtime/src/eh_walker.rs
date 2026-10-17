@@ -1197,12 +1197,18 @@ fn diff_mode() -> bool {
     })
 }
 
-thread_local! {
-    /// (predicted pad pc, predicted CFA at the handler frame). Cleared on
-    /// verification so a stale prediction can never carry to a later throw.
-    static PREDICTION: core::cell::Cell<Option<(u64, u64)>> =
-        const { core::cell::Cell::new(None) };
-}
+/// (predicted pad pc, predicted CFA at the handler frame). Cleared on
+/// verification so a stale prediction can never carry to a later throw.
+///
+/// A native `#[thread_local]`, not `thread_local!`: `perry_eh_personality`
+/// reads it, and the personality is a Leaf. std's `LocalKey::with` reads the
+/// value through the key's accessor *pointer*, which stays an indirect call
+/// wherever rustc leaves the `with` instantiation out of line (prod's codegen
+/// units do), and the GC call-effects analyzer must treat that as reaching JS.
+/// A const, drop-free value needs no accessor: one thread-pointer-relative
+/// load, valid from the thread's first instruction.
+#[thread_local]
+static PREDICTION: core::cell::Cell<Option<(u64, u64)>> = core::cell::Cell::new(None);
 
 impl WalkerImage {
     /// The Perry handler verdict for call site `site` (a return address
@@ -1498,7 +1504,7 @@ pub(crate) fn predict_before_raise() {
         DIFF_DECLINED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         eprintln!("perry: eh-walker diff: NO PREDICTION for this throw (walk failed)");
     }
-    PREDICTION.with(|c| c.set(p));
+    PREDICTION.set(p);
 }
 
 /// Print the diff-mode tally at process exit. A run that reports
@@ -1521,10 +1527,7 @@ pub(crate) fn verify_prediction(actual_pad: u64, actual_cfa: u64) {
     if !diff_mode() {
         return;
     }
-    let Some((pad, cfa)) = PREDICTION.with(
-        #[inline(never)]
-        |c| c.take(),
-    ) else {
+    let Some((pad, cfa)) = PREDICTION.take() else {
         return; // walk declined (already reported); system carries the throw
     };
     if pad != actual_pad || cfa != actual_cfa {

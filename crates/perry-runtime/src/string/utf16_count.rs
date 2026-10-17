@@ -19,9 +19,11 @@ pub(super) fn count_bytes(bytes: &[u8]) -> u32 {
         shape::count(bytes).unwrap_or_else(|| super::compute_utf16_len_wtf8(bytes))
     }
     #[cfg(not(target_arch = "aarch64"))]
-    match simdutf8::compat::from_utf8(bytes) {
-        Ok(s) => count(s) as u32,
-        Err(_) => super::compute_utf16_len_wtf8(bytes),
+    if super::provenance::is_utf8(bytes) {
+        // SAFETY: `is_utf8` just validated these bytes.
+        count(unsafe { std::str::from_utf8_unchecked(bytes) }) as u32
+    } else {
+        super::compute_utf16_len_wtf8(bytes)
     }
 }
 

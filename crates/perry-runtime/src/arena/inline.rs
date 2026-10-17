@@ -92,8 +92,14 @@ pub extern "C" fn js_inline_arena_slow_alloc(
     size: usize,
     align: usize,
 ) -> *mut u8 {
-    ARENA.with(|a| unsafe {
-        let arena_ptr = a.get();
+    // The nursery arena through the hot cache (`hot_arena`), not
+    // `ARENA.with`: std's `LocalKey::with` reads the arena through the key's
+    // accessor *pointer*, and wherever rustc leaves that instantiation out of
+    // line (prod's 16 codegen units do) the GC call-effects analyzer sees an
+    // indirect call that may reach JS — this AllocOnly entry and every
+    // generated allocation site would pay statepoints for it.
+    let arena_ptr = super::block::hot_arena();
+    unsafe {
         // Sync inline-state offset back to underlying block (so
         // arena_walk_objects and the slow-path GC trigger see the
         // post-burst offset). Borrows stay short-lived: the GC inside
@@ -119,7 +125,7 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         state_ref.offset = block_offset;
         state_ref.size = super::alloc_sample::inline_limit(block_offset, block_size);
         ptr
-    })
+    }
 }
 
 /// Sync the inline arena state's offset back to the underlying arena

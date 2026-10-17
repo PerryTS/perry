@@ -14,7 +14,9 @@ pub(super) fn raw_string_metadata(data: *const u8, len: u32) -> (u32, u32) {
     if bytes.is_ascii() {
         return (len, STRING_FLAG_WTF8_VALIDATED);
     }
-    if let Ok(text) = simdutf8::basic::from_utf8(bytes) {
+    if is_utf8(bytes) {
+        // SAFETY: `is_utf8` just validated these bytes.
+        let text = unsafe { std::str::from_utf8_unchecked(bytes) };
         return (utf16_count::count(text) as u32, STRING_FLAG_WTF8_VALIDATED);
     }
     match valid_wtf8_metadata(bytes) {
@@ -31,6 +33,37 @@ pub(super) fn raw_string_metadata(data: *const u8, len: u32) -> (u32, u32) {
             },
         ),
         None => (compute_utf16_len_wtf8(bytes), 0),
+    }
+}
+
+/// Whether `bytes` is well-formed UTF-8: the runtime's one SIMD validation
+/// entry. On x86_64 it selects the AVX2 or SSE4.2 validator with std's cached
+/// feature bits and calls it DIRECTLY. `simdutf8::basic::from_utf8` instead
+/// calls through a function pointer it stores on first use; once that is
+/// inlined into a runtime helper (prod's codegen units do it), the GC
+/// call-effects analyzer sees an indirect call that may reach JS, and every
+/// string-making entry that validates (`js_nanbox_string`, the URL getters,
+/// `js_string_builder_new`, ...) turns Reenters.
+#[inline]
+pub(super) fn is_utf8(bytes: &[u8]) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // simdutf8's own cut-over: below one SIMD chunk the scalar check wins.
+        if bytes.len() >= 64 {
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: AVX2 is present on this CPU.
+                return unsafe { simdutf8::basic::imp::x86::avx2::validate_utf8(bytes) }.is_ok();
+            }
+            if std::is_x86_feature_detected!("sse4.2") {
+                // SAFETY: SSE4.2 is present on this CPU.
+                return unsafe { simdutf8::basic::imp::x86::sse42::validate_utf8(bytes) }.is_ok();
+            }
+        }
+        std::str::from_utf8(bytes).is_ok()
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        simdutf8::basic::from_utf8(bytes).is_ok()
     }
 }
 

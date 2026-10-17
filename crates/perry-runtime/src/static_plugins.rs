@@ -12,7 +12,9 @@ use crate::string::StringHeader;
 /// NaN-boxed undefined value
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-thread_local! {
+// `perry_thread_local!` (see `async_context::ACTIVE_CONTEXT`): no accessor
+// pointer survives into an out-of-line `LocalKey::with`.
+crate::perry_thread_local! {
     static STATIC_PLUGINS: RefCell<HashMap<String, f64>> = RefCell::new(HashMap::new());
 }
 
