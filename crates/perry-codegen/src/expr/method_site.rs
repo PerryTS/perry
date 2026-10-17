@@ -145,6 +145,9 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
     }
 }
 
+/// `GC_TYPE_OBJECT` as the `i8` an `obj_type` header byte holds.
+const GC_TYPE_OBJECT_I8: &str = "2";
+
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
 /// re-read from their roots; `feedback_site` is the typed-feedback site id the
 /// miss hands to the dispatcher; `method_id` the static dispatch id.
@@ -299,14 +302,35 @@ pub(crate) fn emit_method_site(
         Some(idx) => ctx.block_label(idx),
         None => probe_l.clone(),
     };
-    // A primitive, a native handle: the slow call.
+    // A primitive, a native handle: the slow call. So is a heap receiver
+    // other than an ordinary object (an array, a function, a collection)
+    // when the key names a builtin method: its direct entry
+    // (`emit_slow_call`) proves the receiver's kind, that it has no own key
+    // of the name and that its family's prototype is unmodified, and
+    // otherwise takes the universal dispatcher, so the probe's prototype
+    // walk would only find the same builtin.
+    let builtin = crate::builtin_proto::builtin_method(property, lowered_args.len()).is_some();
+    let kind_idx = builtin.then(|| ctx.new_block("msite.kind"));
+    let on_object = match kind_idx {
+        Some(idx) => ctx.block_label(idx),
+        None => first_l.clone(),
+    };
     let biased = {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(recv_box);
         let fused = emit_fused_receiver_test(blk, &bits);
-        blk.cond_br(&fused.is_object_pointer, &first_l, &slow_l);
+        blk.cond_br(&fused.is_object_pointer, &on_object, &slow_l);
         fused.biased
     };
+    if let Some(idx) = kind_idx {
+        ctx.current_block = idx;
+        let blk = ctx.block();
+        // GcHeader precedes the cell: obj_type @-8 (i8).
+        let tp = emit_field_ptr(blk, &biased, -8);
+        let ty = blk.load(crate::types::I8, &tp);
+        let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+        blk.cond_br(&ordinary, &first_l, &slow_l);
+    }
     // Static ConstFn lanes: the receiver's completed shape names the body, so
     // the hit is a direct call. The slot value is the callee environment only
     // (factory objects share a body, not captures); the shape proves it is a

@@ -595,6 +595,21 @@ fn own_data_slot(
         if !shape.object_kind.is_ordinary_layout() {
             return None;
         }
+        // A family object (an `extends EventEmitter` class family leads with
+        // the state keys): its layout's index answers, and a slot holding the
+        // hole is an absent key.
+        if let Some(found) = crate::object::layout_desc::family_own_key(obj, name) {
+            return Some(found.and_then(|(_, slot)| {
+                (crate::object::field_get_set::object_field_at_with_live(
+                    obj,
+                    slot,
+                    shape.live_inline_slot_count,
+                )
+                .bits()
+                    != crate::value::TAG_HOLE)
+                    .then_some((obj, slot, shape.live_inline_slot_count))
+            }));
+        }
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
         if keys.is_null() {
             return (shape.logical_key_count == 0).then_some(None);

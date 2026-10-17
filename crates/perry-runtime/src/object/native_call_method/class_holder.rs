@@ -197,6 +197,22 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
         if !shape_answers(holder as usize) {
             return ChainMethod::Get { holder };
         }
+        // A family object with no overflow: its layout's index answers, and
+        // a slot holding the hole is an absent key.
+        let family = crate::object::layout_desc::family_own_key(holder, key.bytes);
+        if let Some(Some((_, slot))) = family {
+            let live = crate::object::object_live_slot_count(holder);
+            let value =
+                crate::object::field_get_set::object_field_at_with_live(holder, slot, live).bits();
+            if value != crate::value::TAG_HOLE {
+                return ChainMethod::Data {
+                    value,
+                    body: None,
+                    holder,
+                    slot: (slot < live).then_some(slot),
+                };
+            }
+        }
         let Some(record) = crate::object::shapes::object_shape_record(holder) else {
             return ChainMethod::Get { holder };
         };
@@ -205,7 +221,7 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
         // its absence (§3.2); any other own key of a shadowed holder is in
         // its overflow.
         let shadowed = crate::object::overflow::shadowed(holder);
-        let position = if keys.is_null() {
+        let position = if keys.is_null() || family.is_some() {
             None
         } else {
             key_position(keys, record.logical_key_count(), key)

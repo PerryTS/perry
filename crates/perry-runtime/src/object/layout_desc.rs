@@ -1804,19 +1804,117 @@ unsafe fn desc_position_by_bytes(d: &PerryLayoutDesc, bytes: &[u8]) -> Option<u3
     if d.index.is_null() || d.keys.is_null() {
         return None;
     }
+    desc_position_hashed(d, bytes, super::key_bytes_hash(bytes.as_ptr(), bytes.len()))
+}
+
+/// [`desc_position_by_bytes`] for `bytes` whose hash is `hash`.
+#[inline]
+unsafe fn desc_position_hashed(d: &PerryLayoutDesc, bytes: &[u8], hash: u64) -> Option<u32> {
+    if d.index.is_null() || d.keys.is_null() {
+        return None;
+    }
     let mask = d.index_mask as u64;
-    let mut at = super::key_bytes_hash(bytes.as_ptr(), bytes.len()) & mask;
+    let mut at = hash & mask;
     for _ in 0..=mask {
         let pos = *d.index.add(at as usize);
         if pos == u32::MAX {
             return None;
         }
-        if pos < d.key_count && atom_bytes((*d.keys.add(pos as usize)).atom) == Some(bytes) {
+        if pos < d.key_count && {
+            let atom = (*d.keys.add(pos as usize)).atom;
+            (*atom).hash == hash && atom_bytes(atom) == Some(bytes)
+        } {
             return Some(pos);
         }
         at = (at + 1) & mask;
     }
     None
+}
+
+/// `obj`'s own key spelled `bytes`, answered by its family layout alone
+/// when `obj` is a family object with no overflow (every own key is then a
+/// layout key, present while its slot holds a value): `Some(Some((pos,
+/// slot)))` when the layout names the key at key position `pos` and storage
+/// slot `slot` (the slot may hold the hole: the key is absent), `Some(None)`
+/// when it names no such key (no own key of that name), `None` when `obj` is
+/// not such an object. One probe of the descriptor's immutable hash index:
+/// no key-list scan. Allocation-free.
+///
+/// # Safety
+/// `obj` is a live object.
+#[inline]
+pub(crate) unsafe fn family_own_key(
+    obj: *const ObjectHeader,
+    bytes: &[u8],
+) -> Option<Option<(u32, u32)>> {
+    family_own_key_hashed(obj, bytes, None)
+}
+
+/// [`family_own_key`] with the key's hash (`key_bytes_hash(bytes)`) when the
+/// caller has it already (a fixed key's compile-time hash).
+///
+/// # Safety
+/// As [`family_own_key`]; `hash`, when given, is `bytes`' hash.
+#[inline]
+pub(crate) unsafe fn family_own_key_hashed(
+    obj: *const ObjectHeader,
+    bytes: &[u8],
+    hash: Option<u64>,
+) -> Option<Option<(u32, u32)>> {
+    // One compare first: a word in the section's layout ids without the
+    // shadow bit (an overflow sets it). Most objects are not family objects.
+    let word = (*obj).parent_class_id;
+    let index = word.wrapping_sub(LAYOUT_BASE);
+    if index >= LAYOUT_INDEX_LIMIT {
+        return None;
+    }
+    let (start, end) = layout_bounds();
+    if index as usize >= end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>() {
+        return None;
+    }
+    let d = &*desc_at(index);
+    if d.class_id == 0
+        || registered_layout_id(d.layout_id) != Some(word)
+        || d.index.is_null()
+        || d.keys.is_null()
+    {
+        return None;
+    }
+    let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
+    let at = |pos: usize| Some(Some((pos as u32, keys[pos].slot)));
+    if let Some(pos) = leading_position(bytes).filter(|&pos| (pos as usize) < keys.len()) {
+        if atom_bytes(keys[pos as usize].atom) == Some(bytes) {
+            return at(pos as usize);
+        }
+    }
+    // A short list: its keys' lengths, then their bytes, with no hashing.
+    if keys.len() <= SHORT_FAMILY_KEYS {
+        return Some(
+            keys.iter()
+                .position(|k| atom_bytes(k.atom) == Some(bytes))
+                .map(|pos| (pos as u32, keys[pos].slot)),
+        );
+    }
+    let hash = hash.unwrap_or_else(|| super::key_bytes_hash(bytes.as_ptr(), bytes.len()));
+    Some(desc_position_hashed(d, bytes, hash).map(|pos| (pos, keys[pos as usize].slot)))
+}
+
+/// A family layout with at most this many keys is searched by comparing
+/// them, cheaper than hashing the name for the index.
+const SHORT_FAMILY_KEYS: usize = 8;
+
+/// The key position a family layout over node's EventEmitter gives the
+/// emitter's state keys: they lead it, in `EventEmitter.init`'s order
+/// (`perry-codegen` `layout_families`, the native parent's init keys). Only
+/// a first guess for [`family_own_key`], which compares the key there.
+#[inline(always)]
+fn leading_position(bytes: &[u8]) -> Option<u32> {
+    match bytes {
+        b"_events" => Some(0),
+        b"_eventsCount" => Some(1),
+        b"_maxListeners" => Some(2),
+        _ => None,
+    }
 }
 
 /// A store of a present key of family object `obj`: a plain writable data

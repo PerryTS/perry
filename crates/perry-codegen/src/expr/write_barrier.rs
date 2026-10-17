@@ -1160,6 +1160,13 @@ pub(crate) fn lower_array_super_init(ctx: &mut FnCtx<'_>, super_args: &[Expr]) -
 /// subclass's real npm source is compiled — e.g. commander's `Command` under
 /// `perry.compilePackages`, where the `new Command()` → `js_commander_*`
 /// native-shim path is intentionally off.
+/// The own keys node's `EventEmitter.init` adds to a fresh `this`, in order
+/// (`perry-runtime` `js_event_emitter_subclass_init`; `_maxListeners` only
+/// when the prototype's is falsy). A subclass's family layout leads with
+/// them (`layout_families`); a birth that adds anything else gets the
+/// object's overflow, so this list decides speed only.
+pub(crate) const EVENT_EMITTER_INIT_KEYS: [&str; 3] = ["_events", "_eventsCount", "_maxListeners"];
+
 pub(crate) fn lower_event_emitter_subclass_init(
     ctx: &mut FnCtx<'_>,
     this_box: &str,

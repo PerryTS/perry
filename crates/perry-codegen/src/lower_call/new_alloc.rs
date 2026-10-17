@@ -501,7 +501,17 @@ fn emit_instance_alloc_inner(
     // family layout, every slot the hole; the constructor prologue stores
     // its keys and a late key's slot stays the hole until it is written.
     if let Some(fam) = ctx.program_layouts.families.get(&cid) {
-        if fam.parent_class_id == parent_cid
+        // The runtime parent edge the module registers for the class
+        // (`codegen::string_pool`): a declared class's id, else a builtin
+        // parent's reserved id.
+        let registered_parent = class.extends_name.as_deref().map_or(0, |p| {
+            ctx.class_ids
+                .get(p)
+                .copied()
+                .or_else(|| crate::expr::builtin_parent_reserved_class_id(p))
+                .unwrap_or(0)
+        });
+        if fam.parent_class_id == registered_parent
             && class.extends_expr.is_none()
             && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
         {

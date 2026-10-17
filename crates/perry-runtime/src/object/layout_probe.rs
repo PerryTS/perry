@@ -86,10 +86,10 @@ const PROBE_FLAGS: u64 = 7 | PROBE_CHECKED | PROBE_ATTRS;
 /// an [`ALIAS_ENTRY`]'s: a short or plain string list word whose text has a
 /// program atom is matched by that atom, which is immortal and never moves.
 ///
-/// `blocks` lists the hashes of the list's entries that can intercept a
-/// `[[Set]]` add of their name on an object inheriting from the record's
-/// receivers (an accessor, a non-writable or a private entry), at most
-/// [`BLOCK_HASHES`]; [`BLOCKS_UNKNOWN`] when there are more, or one has no
+/// After the buckets, `nblocks` words list the hashes of the list's entries
+/// that can intercept a `[[Set]]` add of their name on an object inheriting
+/// from the record's receivers (an accessor, a non-writable or a private
+/// entry), all of them; [`BLOCKS_UNKNOWN`] (and no words) when one has no
 /// hash. Like the buckets, a function of the immutable list alone
 /// ([`chain_admits_family`] reads it).
 #[repr(C)]
@@ -98,12 +98,9 @@ struct KeyIndex {
     count: u32,
     nblocks: u32,
     _pad: u32,
-    blocks: [u64; BLOCK_HASHES],
     words: [u64; 0],
 }
 
-/// The blocking entries a key index lists by hash.
-const BLOCK_HASHES: usize = 4;
 /// [`KeyIndex::nblocks`] of a list whose blocking entries it does not list.
 const BLOCKS_UNKNOWN: u32 = u32::MAX;
 
@@ -115,6 +112,20 @@ impl KeyIndex {
     #[inline(always)]
     unsafe fn buckets(this: *const KeyIndex) -> *const u32 {
         (*this).words.as_ptr().add((*this).count as usize).cast()
+    }
+    /// The blocking hashes: after the buckets, whose count is a power of two
+    /// of at least two, so the words stay 8-aligned.
+    #[inline(always)]
+    unsafe fn blocks(this: *const KeyIndex) -> *const u64 {
+        Self::buckets(this).add((*this).mask as usize + 1).cast()
+    }
+    /// The number of blocking hash words the index holds.
+    #[inline(always)]
+    unsafe fn block_words(this: *const KeyIndex) -> usize {
+        match (*this).nblocks {
+            BLOCKS_UNKNOWN => 0,
+            n => n as usize,
+        }
     }
 }
 
@@ -138,15 +149,19 @@ pub(crate) fn release_probe(word: u64) {
             let t = table as *const KeyIndex;
             std::alloc::dealloc(
                 table as *mut u8,
-                index_layout((*t).count as usize, (*t).mask as usize + 1),
+                index_layout(
+                    (*t).count as usize,
+                    (*t).mask as usize + 1,
+                    KeyIndex::block_words(t),
+                ),
             );
         }
     }
 }
 
-fn index_layout(count: usize, buckets: usize) -> std::alloc::Layout {
+fn index_layout(count: usize, buckets: usize, blocks: usize) -> std::alloc::Layout {
     std::alloc::Layout::from_size_align(
-        std::mem::size_of::<KeyIndex>() + count * 8 + buckets * 4,
+        std::mem::size_of::<KeyIndex>() + count * 8 + buckets * 4 + blocks * 8,
         8,
     )
     .expect("key index layout")
@@ -395,16 +410,9 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         return flags;
     }
     let buckets = (count as usize * 2).next_power_of_two();
-    let layout = index_layout(count as usize, buckets);
-    let table = std::alloc::alloc(layout) as *mut KeyIndex;
-    if table.is_null() {
-        std::alloc::handle_alloc_error(layout);
-    }
-    (*table).mask = (buckets - 1) as u32;
-    (*table).count = count;
-    (*table)._pad = 0;
-    std::ptr::addr_of_mut!((*table).blocks).write([0; BLOCK_HASHES]);
-    let mut nblocks = 0u32;
+    // The blocking entries' hashes (`KeyIndex::blocks`), every one of them.
+    let mut blocking: Vec<u64> = Vec::new();
+    let mut unknown = false;
     if rec.summary()
         & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
             | crate::object::key_attrs::SUMMARY_PRIVATE)
@@ -420,20 +428,32 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
                 continue;
             }
             match h {
-                Some(h) if (nblocks as usize) < BLOCK_HASHES => {
-                    (std::ptr::addr_of_mut!((*table).blocks) as *mut u64)
-                        .add(nblocks as usize)
-                        .write(*h);
-                    nblocks += 1;
-                }
-                _ => {
-                    nblocks = BLOCKS_UNKNOWN;
+                Some(h) => blocking.push(*h),
+                None => {
+                    unknown = true;
+                    blocking.clear();
                     break;
                 }
             }
         }
     }
-    (*table).nblocks = nblocks;
+    let layout = index_layout(count as usize, buckets, blocking.len());
+    let table = std::alloc::alloc(layout) as *mut KeyIndex;
+    if table.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    (*table).mask = (buckets - 1) as u32;
+    (*table).count = count;
+    (*table)._pad = 0;
+    (*table).nblocks = if unknown {
+        BLOCKS_UNKNOWN
+    } else {
+        blocking.len() as u32
+    };
+    let block_out = KeyIndex::blocks(table) as *mut u64;
+    for (i, h) in blocking.iter().enumerate() {
+        *block_out.add(i) = *h;
+    }
     let out = (*table).words.as_mut_ptr();
     for (i, (word, _, _)) in canon.iter().enumerate() {
         // An alias entry's word is its program atom; a TEXT entry's is its
@@ -2248,6 +2268,19 @@ pub(crate) unsafe fn layouts_admit_add(
     chain_admits_add(dir, obj, r, key_bits, hash).then_some(true)
 }
 
+/// The property-atom hash of `__proto__` (FNV-1a, `key_bytes_hash`).
+const PROTO_KEY_HASH: u64 = {
+    let bytes = b"__proto__";
+    let mut h: u64 = 0xcbf29ce484222325;
+    let mut i = 0;
+    while i < bytes.len() {
+        h ^= bytes[i] as u64;
+        h = h.wrapping_mul(0x100000001b3);
+        i += 1;
+    }
+    h
+};
+
 /// Does `obj`'s prototype chain let `[[Set]]` add `key` as an own data
 /// property of `obj` (record `r`)? No accessor and no non-writable property
 /// of that name on any prototype before one that holds it as plain writable
@@ -2271,6 +2304,14 @@ unsafe fn chain_admits_add(
             Next::Unknown => return false,
         };
         let w = (*next).parent_class_id;
+        // An unwritten `%Object.prototype%` ends the chain, and its one
+        // accessor is `__proto__` (a key of that hash takes the walk).
+        if hash != PROTO_KEY_HASH
+            && w < crate::object::layout_desc::UNSHADOWED_WORD_END
+            && object_prototype(dir) == Some(next)
+        {
+            return true;
+        }
         let rn = record_of(dir, w);
         if rn.is_null() {
             return false;
@@ -2465,6 +2506,14 @@ unsafe fn chain_admits_family(
             Next::Unknown => return false,
         };
         let w = (*next).parent_class_id;
+        // An unwritten `%Object.prototype%` (its sealed layout's word, no
+        // shadow bit) ends the chain and holds one accessor, `__proto__`,
+        // which no family layout names.
+        if w < crate::object::layout_desc::UNSHADOWED_WORD_END
+            && object_prototype(dir) == Some(next)
+        {
+            return true;
+        }
         let rn = record_of(dir, w);
         if rn.is_null() {
             return false;
@@ -2510,7 +2559,7 @@ unsafe fn hop_admits_family(
         if n == BLOCKS_UNKNOWN {
             return false;
         }
-        let blocks = std::ptr::addr_of!((*table).blocks) as *const u64;
+        let blocks = KeyIndex::blocks(table);
         return (0..n as usize).all(|i| !desc_holds_hash(d, *blocks.add(i)));
     }
     // A short list the probe scans: its blocking entries by their words.

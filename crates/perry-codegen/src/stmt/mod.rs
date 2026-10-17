@@ -371,12 +371,25 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     // Object model step 2c: a constructor body's run of family stores ends
     // at any statement that is not a `this.k = v` store
-    // (`expr::layout_read::family_run_plan`).
-    if !is_this_key_store(stmt) {
-        if let Some(body) = ctx.inline_ctor_return.last_mut() {
-            body.family_run = None;
-        }
+    // (`expr::layout_read::family_run_plan`), on both sides of it: a store
+    // nested in it (a branch, a loop body) starts its own run, which ends
+    // with the statement.
+    if is_this_key_store(stmt) {
+        return lower_stmt_inner(ctx, stmt);
     }
+    end_family_run(ctx);
+    let lowered = lower_stmt_inner(ctx, stmt);
+    end_family_run(ctx);
+    lowered
+}
+
+fn end_family_run(ctx: &mut FnCtx<'_>) {
+    if let Some(body) = ctx.inline_ctor_return.last_mut() {
+        body.family_run = None;
+    }
+}
+
+fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     // A typed array exposed by this statement is untrusted from here on.
     let_buffer_views::distrust_views_the_stmt_may_expose(ctx, stmt);
     // #11759 (c′): a loop holding first-evaluation guards on a binding it

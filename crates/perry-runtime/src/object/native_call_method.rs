@@ -155,7 +155,22 @@ unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<
         return None;
     }
     let keys = descriptor.keys as usize as *mut ArrayHeader;
-    if !keys.is_null() {
+    // A family object: its layout's index answers, and a slot holding the
+    // hole is an absent key.
+    let family = crate::object::layout_desc::family_own_key(obj, method_bytes);
+    if let Some(Some((_, slot))) = family {
+        if crate::object::field_get_set::object_field_at_with_live(
+            obj,
+            slot,
+            descriptor.live_inline_slot_count,
+        )
+        .bits()
+            != crate::value::TAG_HOLE
+        {
+            return None;
+        }
+    }
+    if !keys.is_null() && family.is_none() {
         let keys_ptr = keys as usize;
         // Band predicate, not a bare floor (#7531/#7709): the 0x10000 floor this
         // replaced sits below the fetch/zlib/proxy handle bands, so a handle id

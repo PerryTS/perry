@@ -838,8 +838,22 @@ pub(crate) fn apply_field_initializers_recursive(
         // elided: declaration order can differ from assignment order.
         let mut init_pairs: Vec<(String, Expr, bool)> = Vec::new();
         let mut init_pairs_computed: Vec<(String, Expr)> = Vec::new();
+        // An imported stub's fields are the defining class's key names, all
+        // `Definition` here. A static family's keys are constructor stores
+        // (`layout_families::own_keys` admits no declared field): its own
+        // constructor adds them, as at the defining module's `new`. Defining
+        // them here first would add every key at birth (the overflow of a
+        // family object, whose keys are holes until stored).
+        let family_stub = ctx
+            .classes
+            .get(&class_name_in_chain)
+            .is_some_and(|class| class.is_imported_stub())
+            && ctx
+                .class_ids
+                .get(&class_name_in_chain)
+                .is_some_and(|cid| ctx.program_layouts.families.contains_key(cid));
         for field in &class_fields {
-            if field.origin == perry_hir::ClassFieldOrigin::ConstructorStore {
+            if field.origin == perry_hir::ClassFieldOrigin::ConstructorStore || family_stub {
                 continue;
             }
             // Closed literals publish their positional keys and undefined fills

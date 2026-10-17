@@ -416,8 +416,20 @@ fn prologue_store<'a>(s: &'a Stmt, params: &BTreeSet<u32>) -> Option<(&'a str, b
 
 /// A class's own constructor keys, in store order, and whether it has
 /// heritage. `None`: not a family member.
+/// Does `class` extend node's `EventEmitter` by that name (an import from
+/// `node:events`, or a binding of it the module does not declare as a
+/// class), the heritage `super(opts)` lowers to its `init` for
+/// (`expr::lower_event_emitter_subclass_init`)?
+fn node_event_emitter_heritage(class: &Class) -> bool {
+    class.extends_name.as_deref() == Some("EventEmitter")
+        && class.extends_expr.is_none()
+        && class.native_extends.as_ref().is_none_or(|(module, export)| {
+            module.trim_start_matches("node:") == "events" && export == "EventEmitter"
+        })
+}
+
 fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
-    if class.native_extends.is_some()
+    if (class.native_extends.is_some() && !node_event_emitter_heritage(class))
         || !class.decorators.is_empty()
         || class.is_literal_shape()
         || class.name.starts_with("__AnonShape_")
@@ -477,23 +489,96 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
         if receiver_free(s) {
             continue;
         }
-        let Some((k, value_inert)) = prologue_store(s, &params) else {
-            return Err(format!(
-                "constructor statement is not a this.k store: {:.300}",
-                format!("{s:?}")
-            ));
-        };
-        if k == "__proto__" || k == "constructor" {
-            return Err("reserved key".into());
+        if let Some((k, value_inert)) = prologue_store(s, &params) {
+            if k == "__proto__" || k == "constructor" {
+                return Err("reserved key".into());
+            }
+            // The store itself runs after its value: a value that may run
+            // code ends the initialization at this key.
+            open &= value_inert;
+            if !keys.iter().any(|(x, _)| x == k) {
+                keys.push((k.to_string(), open));
+            }
+            continue;
         }
-        // The store itself runs after its value: a value that may run code
-        // ends the initialization at this key.
-        open &= value_inert;
-        if !keys.iter().any(|(x, _)| x == k) {
-            keys.push((k.to_string(), open));
+        // Any other statement may run code: the initialization ends here.
+        // The keys it stores itself (a branch, a `switch` case, a loop
+        // body; closures not entered) follow in source order, the order an
+        // execution adds them in; an execution that skips one leaves its
+        // hole, and one that adds keys out of this order gets the object's
+        // overflow (the store probe orders it).
+        open = false;
+        let mut nested: Vec<&str> = Vec::new();
+        nested_this_stores(s, &mut nested);
+        for k in nested {
+            if k == "__proto__" || k == "constructor" {
+                return Err("reserved key".into());
+            }
+            if !keys.iter().any(|(x, _)| x == k) {
+                keys.push((k.to_string(), false));
+            }
         }
     }
     Ok(OwnKeys { keys, super_inert })
+}
+
+/// The `this.k = v` keys statement `s` stores in its own body, in source
+/// order: through blocks, branches, `switch` cases, loop bodies and `try`
+/// arms, not into closures (an arrow's stores run whenever it is called).
+fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
+    let all = |body: &'a [Stmt], out: &mut Vec<&'a str>| {
+        for t in body {
+            nested_this_stores(t, out);
+        }
+    };
+    match s {
+        Stmt::Expr(Expr::PropertySet {
+            object, property, ..
+        }) if matches!(object.as_ref(), Expr::This) => out.push(property.as_str()),
+        Stmt::Expr(Expr::PutValueSet {
+            target,
+            key,
+            receiver,
+            ..
+        }) if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
+            if let Expr::String(k) = key.as_ref() {
+                out.push(k.as_str());
+            }
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            all(then_branch, out);
+            if let Some(b) = else_branch {
+                all(b, out);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            all(body, out)
+        }
+        Stmt::Labeled { body, .. } => nested_this_stores(body, out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            all(body, out);
+            if let Some(c) = catch {
+                all(&c.body, out);
+            }
+            if let Some(f) = finally {
+                all(f, out);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for c in cases {
+                all(&c.body, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// [`own_keys`]: a constructor's keys in store order, each with whether it
@@ -638,7 +723,25 @@ fn module_families(hir: &HirModule) -> Vec<RawFamily> {
         by_name.entry(c.name.as_str()).or_default().push(c);
     }
     let bindings = class_bindings(hir);
+    // A heritage named `EventEmitter` that no class of the module declares
+    // is node's (`super(opts)` lowers to its `init`,
+    // `expr::lower_event_emitter_subclass_init`): an opaque parent at its
+    // reserved runtime class id, whose `init` adds its state keys before the
+    // constructor's own. They lead the layout as holes like every key; the
+    // runtime's adds fill them in order, and anything else they do joins the
+    // overflow (correct, only slower).
+    let native_parent = |c: &Class| -> Option<(u32, &'static [&'static str])> {
+        let n = c.extends_name.as_deref()?;
+        if !node_event_emitter_heritage(c) || by_name.contains_key(n) {
+            return None;
+        }
+        let id = crate::expr::builtin_parent_reserved_class_id(n)?;
+        Some((id, &crate::expr::EVENT_EMITTER_INIT_KEYS[..]))
+    };
     let parent_of = |c: &Class| -> Result<Option<&Class>, ()> {
+        if native_parent(c).is_some() {
+            return Ok(None);
+        }
         let name = if let Some(n) = c.extends_name.as_deref() {
             Some(n.to_string())
         } else if let Some(e) = c.extends_expr.as_deref() {
@@ -718,12 +821,21 @@ fn module_families(hir: &HirModule) -> Vec<RawFamily> {
             }
         }
         let mut keys: Vec<String> = Vec::new();
+        // The chain's root may extend an opaque native parent, whose
+        // constructor runs code and adds its keys first.
+        let native = native_parent(chain[chain.len() - 1]);
         // Evaluation order: every `super(...)`'s arguments (leaf first), then
         // the constructor bodies from the root. The initialization is open
         // while nothing that may run code has been evaluated since the birth.
-        let mut owns = Vec::with_capacity(chain.len());
+        let mut owns = Vec::with_capacity(chain.len() + 1);
+        if let Some((_, native_keys)) = native {
+            owns.push(OwnKeys {
+                keys: native_keys.iter().map(|k| (k.to_string(), false)).collect(),
+                super_inert: false,
+            });
+        }
         for (depth, k) in chain.iter().enumerate().rev() {
-            let own = match own_keys(k, depth + 1 < chain.len()) {
+            let own = match own_keys(k, depth + 1 < chain.len() || native.is_some()) {
                 Ok(own) => own,
                 Err(why) => {
                     if explain() {
@@ -753,7 +865,11 @@ fn module_families(hir: &HirModule) -> Vec<RawFamily> {
         if keys.is_empty() || keys.iter().any(|k| chain.iter().any(|x| accessor(x, k))) {
             continue;
         }
-        let parent = chain.get(1).map_or(0, |p| p.id);
+        let parent = chain
+            .get(1)
+            .map(|p| p.id)
+            .or(native.map(|(id, _)| id))
+            .unwrap_or(0);
         if explain() {
             eprintln!(
                 "perry: layout family: {} (class {}): {}",

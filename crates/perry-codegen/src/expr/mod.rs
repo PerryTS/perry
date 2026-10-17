@@ -223,6 +223,7 @@ pub(crate) use write_barrier::{
     emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
     lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
     lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
+    EVENT_EMITTER_INIT_KEYS,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its

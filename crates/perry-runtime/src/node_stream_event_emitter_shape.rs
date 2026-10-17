@@ -84,6 +84,16 @@ pub(super) fn own_slot_in(
         if !crate::object::shapes::is_site_matchable_shape_id(id) {
             return None;
         }
+        // A family object: its layout's index answers, and a slot holding
+        // the hole is an absent key.
+        if let Some(found) = crate::object::layout_desc::family_own_key(obj, bytes) {
+            return match found {
+                None => Some(None),
+                Some((_, slot)) if slot >= crate::object::object_live_slot_count(obj) => None,
+                Some((_, slot)) if slot_bits(obj, slot) == crate::value::TAG_HOLE => Some(None),
+                Some((_, slot)) => Some(Some(slot)),
+            };
+        }
         let record = crate::object::shapes::shape_record_by_id(id)?;
         match record.own_data_slot_of_value(key_bits, bytes)? {
             Some(slot) if slot_bits(obj, slot) == crate::value::TAG_HOLE => None,
@@ -230,7 +240,7 @@ pub(super) fn state_get(target: f64, key: crate::runtime_state_key::NamedStateKe
 /// holds it and the receiver is not frozen, else `[[Set]]`.
 pub(super) fn state_set(target: f64, key: crate::runtime_state_key::NamedStateKey, value: f64) {
     if let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(target) {
-        if unsafe { key.write_existing(obj, value) } {
+        if unsafe { key.write_existing(obj, value) || key.add_family(obj, value) } {
             return;
         }
     }

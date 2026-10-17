@@ -325,7 +325,9 @@ pub(crate) struct FamilyRun {
 pub(crate) enum RunValue {
     /// Runs no user code: literals, locals, `this`, `this.k` for a key `k`
     /// of the family (a plain data read on a checked chain), function and
-    /// plain object and array literals of such values.
+    /// plain object and array literals of such values, an empty `new Map()`
+    /// or `new Set()`, and `&&` `||` `??` `?:` `!` `===` `!==` `typeof`
+    /// `void` of such values.
     Free,
     /// `this.k.bind(<Free>...)`: no user code when the bound function is a
     /// plain function on a pristine `Function.prototype`
@@ -354,6 +356,28 @@ fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
                 .iter()
                 .all(|(k, v)| k != "__proto__" && free(v, keys)),
             Expr::Array(items) => items.iter().all(|v| free(v, keys)),
+            // An empty collection: a direct runtime allocation, with no
+            // constructor lookup and no iterable to drain.
+            Expr::MapNew | Expr::SetNew => true,
+            // ToBoolean, the nullish test, strict equality, `typeof` and
+            // `void` convert nothing, so they call nothing.
+            Expr::Logical { left, right, .. } => free(left, keys) && free(right, keys),
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => free(condition, keys) && free(then_expr, keys) && free(else_expr, keys),
+            Expr::Unary {
+                op: perry_hir::UnaryOp::Not,
+                operand,
+            }
+            | Expr::TypeOf(operand)
+            | Expr::Void(operand) => free(operand, keys),
+            Expr::Compare {
+                op: perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne,
+                left,
+                right,
+            } => free(left, keys) && free(right, keys),
             _ => false,
         }
     }
