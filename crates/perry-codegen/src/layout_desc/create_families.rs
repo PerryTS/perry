@@ -356,6 +356,16 @@ pub(crate) fn before_stmt(ctx: &mut FnCtx<'_>, stmts: &[Stmt], i: usize) {
     };
     let family = MODULE_CREATE_FAMILIES.with(|m| {
         let m = m.borrow();
+        // CBIRTH-TEMP count
+        if std::env::var_os("PERRY_CBIRTH_COUNT").is_some() {
+            let stores: Vec<&str> = stmts[i + 1..].iter().filter_map(|s| match s { Stmt::Expr(e) => static_store(e).filter(|(t, _)| t == id).map(|(_, k)| k), _ => None }).collect();
+            let why = if !m.borns.contains_key(&p) { "not-followed".to_string() }
+                else if chain_of(p, &m.borns).is_none() { "chain-unfollowed".to_string() }
+                else if stores.is_empty() { "no-stores".to_string() }
+                else if binding_family(&m, *id, p, &stmts[i + 1..]).is_some() { "admitted".to_string() }
+                else { format!("refused:{}", stores.iter().map(|k| format!("{k}[free={} pname={}]", crate::proto_constants::create_add_free(k), crate::proto_constants::is_prototype_name(k))).collect::<Vec<_>>().join(",")) };
+            eprintln!("cbirth-count {} p={p} a={id} {why}", m.prefix);
+        }
         binding_family(&m, *id, p, &stmts[i + 1..])
     });
     ctx.create_families.pending = family.map(|f| (*id, f));
