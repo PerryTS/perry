@@ -4,13 +4,14 @@
 //! that archive (the runtime alone, the runtime with its stdlib), keyed by the
 //! size and SHA-256 of every archive in the combination. The archive file names
 //! in the directory are the only input: no variant list exists anywhere.
-use crate::{analyze, parse_table, table::table_text, Classification, Rule, Table};
+#[cfg(feature = "analyzer")]
+use crate::{analyze, Classification, Rule};
+use crate::{parse_table, table::table_text, Table};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
-use std::{
-    path::{Path, PathBuf},
-    time::Instant,
-};
+use std::path::{Path, PathBuf};
+#[cfg(feature = "analyzer")]
+use std::time::Instant;
 
 /// First line of every sidecar. A different version reads as a missing sidecar.
 pub const SIDECAR_MAGIC: &str = "# perry-gc-effects sidecar v1";
@@ -58,6 +59,89 @@ pub fn archive_key(path: &Path) -> Result<ArchiveKey> {
         size: bytes.len() as u64,
         sha256: hex(&Sha256::digest(&bytes)),
     })
+}
+
+/// The combination name for a link set: the runtime alone, or the runtime
+/// with its stdlib.
+pub fn combination_name(with_stdlib: bool) -> &'static str {
+    if with_stdlib {
+        "runtime+stdlib"
+    } else {
+        "runtime"
+    }
+}
+
+/// Why a sidecar cannot speak for the archives about to be linked.
+#[derive(Debug)]
+pub enum Mismatch {
+    /// The sidecar has no section for this combination.
+    NoCombination(String),
+    /// The section keys a different number of archives than the link set has.
+    ArchiveCount { expected: usize, found: usize },
+    /// An archive's bytes differ from the bytes the table was computed from.
+    Bytes {
+        archive: PathBuf,
+        sidecar: Box<ArchiveKey>,
+        found: Box<ArchiveKey>,
+    },
+}
+impl std::fmt::Display for Mismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoCombination(c) => write!(f, "it has no [combination {c}] section"),
+            Self::ArchiveCount { expected, found } => write!(
+                f,
+                "its section keys {expected} archive(s), the link set has {found}"
+            ),
+            Self::Bytes {
+                archive,
+                sidecar,
+                found,
+            } => write!(
+                f,
+                "{} is {} bytes sha256:{}, the sidecar was computed from {} ({} bytes sha256:{})",
+                archive.display(),
+                found.size,
+                found.sha256,
+                sidecar.name,
+                sidecar.size,
+                sidecar.sha256
+            ),
+        }
+    }
+}
+
+impl Sidecar {
+    /// The table of `combination`, if every archive of the link set (runtime
+    /// first) has exactly the bytes the table was computed from. `keys` are
+    /// the [`archive_key`]s of the archives perry links, in the same order.
+    /// Only size and SHA-256 bind: a staged copy may carry another file name
+    /// (`libperry_runtime_ios.a`), and the bytes are the key.
+    pub fn verified_table(
+        &self,
+        combination: &str,
+        archives: &[(&Path, &ArchiveKey)],
+    ) -> std::result::Result<&Table, Mismatch> {
+        let Some(c) = self.combinations.iter().find(|c| c.name == combination) else {
+            return Err(Mismatch::NoCombination(combination.to_owned()));
+        };
+        if c.archives.len() != archives.len() {
+            return Err(Mismatch::ArchiveCount {
+                expected: c.archives.len(),
+                found: archives.len(),
+            });
+        }
+        for (want, (path, got)) in c.archives.iter().zip(archives) {
+            if want.size != got.size || want.sha256 != got.sha256 {
+                return Err(Mismatch::Bytes {
+                    archive: path.to_path_buf(),
+                    sidecar: Box::new(want.clone()),
+                    found: Box::new((*got).clone()),
+                });
+            }
+        }
+        Ok(&c.table)
+    }
 }
 
 impl Sidecar {
@@ -161,6 +245,7 @@ impl Sidecar {
     }
 }
 
+#[cfg(feature = "analyzer")]
 /// One runtime archive of a directory and the stdlib archive with the same
 /// variant suffix, if the directory has one.
 #[derive(Debug, PartialEq, Eq)]
@@ -168,6 +253,7 @@ pub struct Variant {
     pub runtime: PathBuf,
     pub stdlib: Option<PathBuf>,
 }
+#[cfg(feature = "analyzer")]
 /// `libperry_runtime<suffix>.a` / `perry_runtime<suffix>.lib`, where the suffix
 /// is empty or starts with `_` (`_abort`, `_core`, `_ios_sim`, ...).
 fn archive_parts(file: &str, krate: &str) -> Option<(String, String)> {
@@ -187,6 +273,7 @@ fn archive_parts(file: &str, krate: &str) -> Option<(String, String)> {
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
         })
 }
+#[cfg(feature = "analyzer")]
 /// Every runtime archive in `dir`, in file name order. The file names are the
 /// whole input: a new variant needs no change here.
 pub fn discover(dir: &Path) -> Result<Vec<Variant>> {
@@ -220,6 +307,7 @@ pub fn discover(dir: &Path) -> Result<Vec<Variant>> {
     Ok(out)
 }
 
+#[cfg(feature = "analyzer")]
 /// `<os>-<arch>` of the objects in the archive (the object format names the OS).
 pub fn detect_target(archive: &Path) -> Result<String> {
     use object::Object;
@@ -247,6 +335,7 @@ pub fn detect_target(archive: &Path) -> Result<String> {
     bail!("no object file in {}", archive.display())
 }
 
+#[cfg(feature = "analyzer")]
 /// Analyze every combination of every runtime archive in `dir` and return the
 /// sidecars to write. Rule failures and the symbol floor are hard errors: a
 /// failure writes nothing. `report` sees each combination's classification.
@@ -319,6 +408,7 @@ pub fn produce(
     }
     Ok(out)
 }
+#[cfg(feature = "analyzer")]
 pub fn write_sidecars(sidecars: &[(PathBuf, Sidecar)]) -> Result<()> {
     for (path, s) in sidecars {
         let mut temp = path.as_os_str().to_owned();
@@ -423,6 +513,64 @@ mod tests {
             "libperry_runtime.a.gc-effects"
         );
     }
+    #[test]
+    fn verified_table_binds_the_section_to_size_and_sha256() {
+        let s = sample();
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = tmp.path().join("libperry_runtime_ios.a");
+        // `sample()` keys each archive by the hash of its name: write those
+        // bytes so the real key matches, under a different file name.
+        let write = |p: &Path, name: &str, size: u64| {
+            std::fs::write(p, name.as_bytes()).unwrap();
+            let mut k = archive_key(p).unwrap();
+            k.size = size;
+            k
+        };
+        let k_rt = write(&rt, "libperry_runtime.a", 10);
+        let st = tmp.path().join("libperry_stdlib.a");
+        let k_st = write(&st, "libperry_stdlib.a", 20);
+        let t = s
+            .verified_table("runtime", &[(rt.as_path(), &k_rt)])
+            .unwrap();
+        assert_eq!(t.len(), 2);
+        let t = s
+            .verified_table(
+                "runtime+stdlib",
+                &[(rt.as_path(), &k_rt), (st.as_path(), &k_st)],
+            )
+            .unwrap();
+        assert_eq!(t.len(), 3);
+        // One flipped byte, a different size, a missing section, a short list.
+        let mut flipped = k_rt.clone();
+        flipped.sha256.replace_range(0..1, "x");
+        assert!(matches!(
+            s.verified_table("runtime", &[(rt.as_path(), &flipped)]),
+            Err(Mismatch::Bytes { .. })
+        ));
+        let mut resized = k_rt.clone();
+        resized.size += 1;
+        assert!(s
+            .verified_table("runtime", &[(rt.as_path(), &resized)])
+            .is_err());
+        assert!(matches!(
+            s.verified_table("runtime+instr", &[(rt.as_path(), &k_rt)]),
+            Err(Mismatch::NoCombination(_))
+        ));
+        assert!(matches!(
+            s.verified_table("runtime+stdlib", &[(rt.as_path(), &k_rt)]),
+            Err(Mismatch::ArchiveCount { .. })
+        ));
+        // The order is the link order: runtime first.
+        assert!(s
+            .verified_table(
+                "runtime+stdlib",
+                &[(st.as_path(), &k_st), (rt.as_path(), &k_rt)],
+            )
+            .is_err());
+        assert_eq!(combination_name(false), "runtime");
+        assert_eq!(combination_name(true), "runtime+stdlib");
+    }
+    #[cfg(feature = "analyzer")]
     #[test]
     fn variants_come_from_file_names() {
         let tmp = tempfile::tempdir().unwrap();

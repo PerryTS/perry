@@ -220,6 +220,54 @@ impl GcEffects {
         Self { rows, digest }
     }
 
+    /// The table that proves nothing: every runtime symbol reads `Reenters`,
+    /// `throws=yes` ([`OVERRIDES`] still apply). Sound for any link set. An
+    /// installed perry whose sidecar is missing or does not match the
+    /// archives, and a WASI build (no native link set), compile under it.
+    pub fn all_unsafe() -> Self {
+        let rows = HashMap::new();
+        let digest = digest_of(&rows);
+        Self { rows, digest }
+    }
+
+    /// Per row, the weaker (more conservative) of `self` and a sidecar table:
+    /// the larger class, `throws` if either says so, and a symbol absent from
+    /// either dropped (it reads `Reenters`, `throws=yes`). The result proves
+    /// nothing that one of the two does not prove.
+    pub fn weaker_of(&self, sidecar: &perry_gc_effects::Table) -> Self {
+        use perry_gc_effects::Class;
+        let rows: HashMap<String, RuntimeFacts> = self
+            .rows
+            .iter()
+            .filter_map(|(sym, mine)| {
+                let theirs = sidecar.get(sym.as_str())?;
+                let class = match theirs.class {
+                    Class::Leaf => RuntimeClass::Leaf,
+                    Class::AllocOnly => RuntimeClass::AllocOnly,
+                    Class::ThrowOnly => RuntimeClass::ThrowOnly,
+                    Class::Reenters => RuntimeClass::Reenters,
+                };
+                Some((
+                    sym.clone(),
+                    RuntimeFacts {
+                        class: mine.class.max(class),
+                        throws: mine.throws || theirs.throws,
+                    },
+                ))
+            })
+            .collect();
+        let digest = digest_of(&rows);
+        Self { rows, digest }
+    }
+
+    /// The number of symbols the table proves anything about (diagnostics).
+    pub fn proven_rows(&self) -> usize {
+        self.rows
+            .values()
+            .filter(|f| f.class != RuntimeClass::Reenters || !f.throws)
+            .count()
+    }
+
     /// A stable digest of everything an answer depends on: the merged rows
     /// (sorted, so map order never leaks in) and the codegen-defined
     /// [`OVERRIDES`]. Part of every module's object-cache key.
@@ -1310,5 +1358,111 @@ mod tests {
                 "collecting generated call did not become a statepoint:\n{rewritten}"
             );
         }
+    }
+
+    fn sidecar_table(rows: &[(&str, perry_gc_effects::Class, bool)]) -> perry_gc_effects::Table {
+        rows.iter()
+            .map(|(n, class, throws)| {
+                (
+                    (*n).to_owned(),
+                    perry_gc_effects::Entry {
+                        class: *class,
+                        throws: *throws,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Slice 6: the compile-time table is, per row, the weaker of the sidecar
+    /// and the committed merge. Neither side can make a row stronger.
+    #[test]
+    fn weaker_of_takes_the_conservative_side_per_row() {
+        use perry_gc_effects::Class;
+        let committed = GcEffects::from_tables(&[(
+            "t",
+            "js_a\tLeaf\tno\njs_b\tReenters\tyes\njs_c\tAllocOnly\tno\njs_d\tLeaf\tno\njs_e\tThrowOnly\tno\n",
+        )]);
+        let sidecar = sidecar_table(&[
+            ("js_a", Class::Reenters, true), // sidecar weaker: wins
+            ("js_b", Class::Leaf, false),    // sidecar stronger: committed wins
+            ("js_c", Class::Leaf, false),    // committed weaker: wins
+            ("js_e", Class::ThrowOnly, true), // throws from the sidecar only
+            ("js_new", Class::Leaf, false),  // absent from committed: unproven
+            // js_d absent from the sidecar: unproven
+        ]);
+        let j = committed.weaker_of(&sidecar);
+        assert_eq!(j.runtime_class("js_a"), RuntimeClass::Reenters);
+        assert!(j.runtime_throws("js_a"));
+        assert_eq!(j.runtime_class("js_b"), RuntimeClass::Reenters);
+        assert!(j.runtime_throws("js_b"));
+        assert_eq!(j.runtime_class("js_c"), RuntimeClass::AllocOnly);
+        assert!(!j.runtime_throws("js_c"));
+        assert_eq!(j.runtime_class("js_d"), RuntimeClass::Reenters);
+        assert!(j.runtime_throws("js_d"));
+        assert_eq!(j.runtime_class("js_e"), RuntimeClass::ThrowOnly);
+        assert!(j.runtime_throws("js_e"));
+        assert_eq!(j.runtime_class("js_new"), RuntimeClass::Reenters);
+        assert!(j.runtime_throws("js_new"));
+        assert_ne!(j.digest(), committed.digest());
+    }
+
+    /// A sidecar equal to (or stronger than) the committed rows changes
+    /// nothing, digest included: the workspace release archives compile to
+    /// the same IR and hit the same object-cache entries as before.
+    #[test]
+    fn weaker_of_with_an_equal_or_stronger_table_is_the_identity() {
+        let committed = committed_for_tests();
+        let mut same: perry_gc_effects::Table = Default::default();
+        for (sym, f) in &committed.rows {
+            let class = match f.class {
+                RuntimeClass::Leaf => perry_gc_effects::Class::Leaf,
+                RuntimeClass::AllocOnly => perry_gc_effects::Class::AllocOnly,
+                RuntimeClass::ThrowOnly => perry_gc_effects::Class::ThrowOnly,
+                RuntimeClass::Reenters => perry_gc_effects::Class::Reenters,
+            };
+            same.insert(
+                sym.clone(),
+                perry_gc_effects::Entry {
+                    class,
+                    throws: f.throws,
+                },
+            );
+        }
+        let j = committed.weaker_of(&same);
+        assert_eq!(j.rows, committed.rows);
+        assert_eq!(j.digest(), committed.digest());
+        // Every row proven Leaf/no: still the committed rows.
+        let strongest: perry_gc_effects::Table = committed
+            .rows
+            .keys()
+            .map(|s| {
+                (
+                    s.clone(),
+                    perry_gc_effects::Entry {
+                        class: perry_gc_effects::Class::Leaf,
+                        throws: false,
+                    },
+                )
+            })
+            .collect();
+        assert_eq!(committed.weaker_of(&strongest).rows, committed.rows);
+    }
+
+    /// The installed-perry fallback: nothing proven, overrides kept.
+    #[test]
+    fn all_unsafe_proves_no_runtime_symbol() {
+        let u = GcEffects::all_unsafe();
+        assert_eq!(u.proven_rows(), 0);
+        for name in ["js_nanbox_pointer", "js_is_truthy", "js_string_compare"] {
+            assert_eq!(u.runtime_class(name), RuntimeClass::Reenters);
+            assert!(u.runtime_throws(name));
+            assert_eq!(u.classify_direct_callee(name), GcCallEffect::Unknown);
+        }
+        for (name, effect, _) in OVERRIDES {
+            assert_eq!(u.classify_direct_callee(name), *effect);
+        }
+        assert!(committed_for_tests().proven_rows() > 1000);
+        assert_ne!(u.digest(), committed_for_tests().digest());
     }
 }

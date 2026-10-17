@@ -26,10 +26,14 @@ RUN apt-get update && apt-get install -y \
 # Copy Cargo files first for dependency caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY scripts ./scripts
 
-# Build release binaries
+# Build release binaries. The runtime archive comes from the -static wrapper
+# crate; its GC effects sidecar is computed from the archive bytes and ships
+# beside it (perry reads it at compile time).
 RUN cargo build --release
-RUN cargo build --release -p perry-runtime
+RUN cargo build --release -p perry-runtime-static
+RUN scripts/gc_call_effects/sidecars.sh target/release
 
 # =============================================================================
 # Stage 2: Runtime image for compiling TypeScript
@@ -48,6 +52,7 @@ WORKDIR /perry
 # Copy Perry compiler and runtime library
 COPY --from=builder /perry/target/release/perry /usr/local/bin/perry
 COPY --from=builder /perry/target/release/libperry_runtime.a /usr/local/lib/libperry_runtime.a
+COPY --from=builder /perry/target/release/libperry_runtime.a.gc-effects /usr/local/lib/libperry_runtime.a.gc-effects
 
 # Set library path for linking
 ENV PERRY_RUNTIME_LIB=/usr/local/lib/libperry_runtime.a

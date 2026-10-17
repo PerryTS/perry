@@ -500,6 +500,8 @@ if [ "$DO_BUILD" = 1 ]; then
         -p perry -p perry-runtime -p perry-stdlib \
         -p perry-runtime-static -p perry-stdlib-static \
         || { echo "${RED}build failed${NC}" >&2; exit 2; }
+    scripts/gc_call_effects/sidecars.sh "$TARGET_DIR/$PROFILE" \
+        || { echo "${RED}sidecars failed${NC}" >&2; exit 2; }
 fi
 [ -x "$PERRY_BIN" ] || { echo "${RED}missing $PERRY_BIN${NC}" >&2; exit 2; }
 

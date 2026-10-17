@@ -8,21 +8,49 @@ description = "Archive-derived runtime GC and unwind effects"
 [lints]
 workspace = true
 
+[[bin]]
+name = "perry-gc-effects"
+path = "src/main.rs"
+required-features = ["analyzer"]
+
+[[example]]
+name = "inspect"
+required-features = ["analyzer"]
+
+[[example]]
+name = "profile"
+required-features = ["analyzer"]
+
+# The analyzer (archive reader, call graph, rules) is the default. Without it
+# the crate is the sidecar format alone: the key, the table rows and their
+# parser, which perry reads at compile time (perry never links the analyzer).
+[features]
+default = ["analyzer"]
+analyzer = [
+    "dep:clap",
+    "dep:object",
+    "dep:rustc-demangle",
+    "dep:perry-perex",
+    "dep:regex",
+    "dep:walkdir",
+    "dep:llvm-sys",
+]
+
 [dependencies]
 anyhow.workspace = true
-clap.workspace = true
-object = { version = "0.37", default-features = false, features = ["read", "std"] }
-rustc-demangle = "0.1"
-perry-perex.workspace = true
-regex.workspace = true
 sha2 = "0.11"
-walkdir.workspace = true
+clap = { workspace = true, optional = true }
+object = { version = "0.37", default-features = false, features = ["read", "std"], optional = true }
+rustc-demangle = { version = "0.1", optional = true }
+perry-perex = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+walkdir = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-llvm-sys = "221"
+llvm-sys = { version = "221", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-llvm-sys = { version = "221", features = ["no-llvm-linking"] }
+llvm-sys = { version = "221", features = ["no-llvm-linking"], optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

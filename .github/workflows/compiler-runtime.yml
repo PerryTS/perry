@@ -225,6 +225,7 @@ jobs:
       - name: Build with the llvm-inprocess feature
         run: |
           cargo build-perry --profile perry-dev --features perry/llvm-inprocess
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
       - name: Unit gates (including corpus construction + RS4GC pin)
         run: |
           set -euo pipefail
@@ -680,6 +681,7 @@ jobs:
       - name: Build compiler + runtime archives
         run: |
           cargo build-perry --profile perry-dev
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
       - name: Owned transport — liveness, agreement, fallback, parity
         run: |
           set -euo pipefail
@@ -2485,8 +2487,9 @@ jobs:
           cache: npm
           cache-dependency-path: tests/fixtures/next-app-route/package-lock.json
       - name: Build Perry and provider archives
-        run: >-
+        run: |
           cargo build-perry --profile perry-dev
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
       - name: Focused four-store continuation parity
         env:
           PERRY_BIN: target/perry-dev/perry

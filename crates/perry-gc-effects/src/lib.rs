@@ -2,29 +2,45 @@
 //!
 //! This is the compatibility port of scripts/gc_call_effects/callgraph.py.
 //! It deliberately retains that analyzer's ownership scan and conservative
-//! relocation/alias semantics. No table or compiler pipeline changes live here.
+//! relocation/alias semantics.
+//!
+//! Without the default `analyzer` feature the crate is only the sidecar
+//! format ([`sidecar`]) and the table rows ([`Table`], [`parse_table`]): what
+//! perry reads at compile time. The format has one definition, here, for the
+//! producer and the consumer.
 
+#[cfg(feature = "analyzer")]
 mod archive;
+#[cfg(feature = "analyzer")]
 mod graph;
+#[cfg(feature = "analyzer")]
 mod instructions;
+#[cfg(feature = "analyzer")]
 mod rules;
 pub mod sidecar;
 mod table;
 
+#[cfg(feature = "analyzer")]
 pub use archive::build_graph;
+#[cfg(feature = "analyzer")]
 pub use graph::{classify, Classification, Graph, Mode, Node, Stats};
+#[cfg(feature = "analyzer")]
 pub use rules::{load_rules, Rule, SEEDS};
-pub use table::{
-    compare, parse_table, read_table, shadowed_symbols, write_table, Class, Drift, Entry, Table,
-};
+#[cfg(feature = "analyzer")]
+pub use table::shadowed_symbols;
+pub use table::{compare, parse_table, read_table, write_table, Class, Drift, Entry, Table};
 
+#[cfg(feature = "analyzer")]
 use anyhow::{bail, Result};
+#[cfg(feature = "analyzer")]
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "analyzer")]
 pub fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+#[cfg(feature = "analyzer")]
 /// Analyze with all three hard checks enabled. A failure never writes a table.
 pub fn analyze(
     archives: &[PathBuf],
@@ -46,6 +62,7 @@ pub fn analyze(
     res.validate()?;
     Ok((g, res))
 }
+#[cfg(feature = "analyzer")]
 impl Classification {
     pub fn agreement_violations(&self) -> Vec<String> {
         self.table

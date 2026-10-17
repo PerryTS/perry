@@ -3429,9 +3429,6 @@ pub fn run_with_parse_cache(
         candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
     }
     let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
-    // The runtime call-effect table, one per compilation: every module is
-    // lowered under it and its digest is in each module's object-cache key.
-    let gc_effects = std::sync::Arc::new(perry_codegen::GcEffects::from_committed());
     // #10498: the accessor names every compiled class declares decide which
     // sites carry a class-accessor arm.
     let program_class_accessor_names = std::sync::Arc::new(
@@ -3571,6 +3568,31 @@ pub fn run_with_parse_cache(
             format,
             verbose,
         ))
+    };
+    // The runtime call-effect table, one per compilation (GC effects design
+    // §4.3, slice 6): read from the sidecar of the archives the link set just
+    // resolved, before codegen. Every module is lowered under it and its digest
+    // is in each module's object-cache key. `--no-link` resolves the same set.
+    let gc_effects = {
+        use super::gc_effects_sidecar::{
+            compilation_gc_effects, stdlib_on_link_line, EffectsLinkSet,
+        };
+        let link_set = if native_link_set_skipped {
+            EffectsLinkSet::Wasi
+        } else if ctx.needs_geisterhand {
+            // Geisterhand builds its runtime with cargo after codegen.
+            EffectsLinkSet::BuiltAtCompileTime
+        } else {
+            EffectsLinkSet::Prebuilt {
+                with_stdlib: stdlib_on_link_line(ctx.needs_stdlib, ctx.needs_ui, target.as_deref()),
+            }
+        };
+        compilation_gc_effects(
+            link_set,
+            target.as_deref(),
+            find_perry_workspace_root().is_some(),
+            verbose,
+        )?
     };
     let module_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(module_jobs)

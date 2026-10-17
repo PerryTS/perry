@@ -102,6 +102,8 @@ fslock = "0.2"
 # for the keygen seed.
 ed25519-dalek = { version = "3.0", features = ["rand_core"], optional = true }
 sha2 = "0.11"
+# The `.gc-effects` sidecar format (no analyzer), read before codegen.
+perry-gc-effects.workspace = true
 perry-hex.workspace = true
 rand = { version = "0.10", optional = true }
 

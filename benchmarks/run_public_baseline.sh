@@ -123,6 +123,7 @@ echo "Building Perry at $(git rev-parse HEAD)..."
 cargo build --release \
     -p perry-runtime -p perry-stdlib -p perry \
     -p perry-runtime-static -p perry-stdlib-static
+scripts/gc_call_effects/sidecars.sh "${CARGO_TARGET_DIR:-target}/release"
 
 for archive in libperry_runtime.a libperry_stdlib.a; do
     [[ -f "target/release/$archive" ]] \

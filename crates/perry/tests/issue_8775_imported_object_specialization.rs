@@ -70,6 +70,19 @@ fn ensure_runtime_archive() {
         }
         let output = command.output().expect("build static runtime archive");
         assert_success("static runtime build", &output);
+        // The GC effects sidecar beside the archives just built: perry reads it
+        // before codegen and refuses archives without one in the workspace.
+        assert!(
+            std::process::Command::new("bash")
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/gc_call_effects/sidecars.sh"
+                ))
+                .args(["--cargo-profile", "debug"])
+                .status()
+                .is_ok_and(|status| status.success()),
+            "scripts/gc_call_effects/sidecars.sh failed"
+        );
     });
 }
 

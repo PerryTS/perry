@@ -2083,6 +2083,7 @@ jobs:
                 runtime_packages+=(-p perry-ext-net)
               fi
               cargo build --release "${runtime_packages[@]}"
+              scripts/gc_call_effects/sidecars.sh target/release
             fi
             export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
@@ -2251,7 +2252,10 @@ jobs:
       # below), and both Windows UI crates — the ones cargo-test's ubuntu
       # runner must exclude and therefore never compiles.
       - name: Build compiler + runtime + Windows UI crates (dev)
-        run: cargo build-perry --profile dev -p perry-ui-windows -p perry-ui-windows-winui
+        shell: bash
+        run: |
+          cargo build-perry --profile dev -p perry-ui-windows -p perry-ui-windows-winui
+          scripts/gc_call_effects/sidecars.sh target/debug
 
       # #7356: the full perry-runtime --lib suite is green on Windows for the
       # first time (the SEH/longjmp transport, setjmp alignment, TZ, trim and
@@ -2373,7 +2377,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build ARM64 compiler and static libraries (dev)
-        run: cargo build-perry --profile dev
+        shell: bash
+        run: |
+          cargo build-perry --profile dev
+          scripts/gc_call_effects/sidecars.sh target/debug
 
       - name: Run ARM64 setjmp ABI tests
         run: 'cargo test --profile dev --lib -p perry-runtime ffi::setjmp::tests:: -- --test-threads=1'
@@ -2387,6 +2394,7 @@ jobs:
           # target selection, SDK discovery, final PE link, and execution.
           New-Item -ItemType Directory -Force 'target/windows-arm64-smoke-libs' | Out-Null
           Copy-Item 'target/debug/perry_runtime.lib' 'target/windows-arm64-smoke-libs/'
+          Copy-Item 'target/debug/perry_runtime.lib.gc-effects' 'target/windows-arm64-smoke-libs/'
           $env:PERRY_RUNTIME_DIR = (Resolve-Path 'target/windows-arm64-smoke-libs').Path
           target/debug/perry.exe compile tests/release/link_smoke/fixture.ts `
             --target windows-aarch64 `

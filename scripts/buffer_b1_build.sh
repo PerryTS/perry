@@ -20,4 +20,5 @@ taskset -c 0-55 cargo build --release -j 8 \
     -p perry-ext-sharp -p perry-ext-ws \
     --features perry-stdlib/external-zlib-pump,perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump \
     > "$hostdir/logs/$arm-coherent-build.log" 2>&1
+scripts/gc_call_effects/sidecars.sh "$CARGO_TARGET_DIR/release" >> "$hostdir/logs/$arm-coherent-build.log" 2>&1
 echo "$arm coherent build: PASS"

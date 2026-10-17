@@ -42,6 +42,19 @@ fn runtime_dir() -> PathBuf {
             String::from_utf8_lossy(&build.stdout),
             String::from_utf8_lossy(&build.stderr)
         );
+        // The GC effects sidecar beside the archives just built: perry reads it
+        // before codegen and refuses archives without one in the workspace.
+        assert!(
+            std::process::Command::new("bash")
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/gc_call_effects/sidecars.sh"
+                ))
+                .args(["--cargo-profile", "debug"])
+                .status()
+                .is_ok_and(|status| status.success()),
+            "scripts/gc_call_effects/sidecars.sh failed"
+        );
     });
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)

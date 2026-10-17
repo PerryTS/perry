@@ -343,6 +343,10 @@ elif [[ ! -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
 else
   record_command "packet" "build_runtime_archive" "skipped" 0 "" "using existing runtime archive"
 fi
+if [[ -z "$PERRY_ARG" && -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
+  run_logged "packet" "gc_effects_sidecars" "$OUT_ABS/logs/sidecars.log" \
+    "$ROOT/scripts/gc_call_effects/sidecars.sh" "$(dirname "$RUNTIME_ARCHIVE_RESOLVED")"
+fi
 
 snapshot_tool_artifacts "$PERRY_BIN_RESOLVED" "$RUNTIME_ARCHIVE_RESOLVED"
 

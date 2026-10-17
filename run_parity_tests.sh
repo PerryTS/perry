@@ -849,6 +849,11 @@ if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_wasm_host" -eq 1 ]]; then
         exit 1
     fi
 fi
+if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
+    # GC effects sidecars over the final archive bytes (after every build above).
+    "$SCRIPT_DIR/scripts/gc_call_effects/sidecars.sh" "${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}/release" >"$PARITY_TMP/sidecars.log" 2>&1 \
+        || { tail -40 "$PARITY_TMP/sidecars.log" >&2; exit 1; }
+fi
 # #7629 — PERRY_SKIP_BUILD=1 exports PERRY_NO_AUTO_OPTIMIZE=1 and then builds
 # NOTHING, so every wrapper archive the run needs must already be in
 # PERRY_RUNTIME_DIR *and* must have come from the same `cargo build` as the

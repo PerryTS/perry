@@ -1,5 +1,6 @@
 //! Same compiled C fixtures and sabotage assertions as self_test.py.
 //! Binaries are checked in so cargo test needs LLVM, but never clang/a cross SDK.
+#![cfg(feature = "analyzer")]
 use perry_gc_effects::*;
 use std::path::{Path, PathBuf};
 const RULES: &str = include_str!("fixtures/seeds.txt");

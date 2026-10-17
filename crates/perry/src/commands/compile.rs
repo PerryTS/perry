@@ -35,6 +35,7 @@ mod compressed_libs;
 mod embed;
 mod env_fold;
 mod fn_infer;
+mod gc_effects_sidecar;
 mod geisterhand;
 mod harmonyos_shim;
 mod host_config;

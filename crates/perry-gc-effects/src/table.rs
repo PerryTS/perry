@@ -1,14 +1,18 @@
+#[cfg(feature = "analyzer")]
 use crate::{
     graph::{crate_of, temp_label},
     instructions::rx,
 };
 use anyhow::{bail, Context, Result};
+#[cfg(feature = "analyzer")]
+use std::collections::HashSet;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     fmt,
     path::{Path, PathBuf},
     str::FromStr,
 };
+#[cfg(feature = "analyzer")]
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -56,6 +60,7 @@ impl Entry {
 }
 pub type Table = BTreeMap<String, Entry>;
 
+#[cfg(feature = "analyzer")]
 pub(crate) fn native_stems(root: &Path) -> Result<HashSet<String>> {
     let mut stems = HashSet::new();
     for krate in ["perry-runtime", "perry-stdlib"] {
@@ -78,6 +83,7 @@ pub(crate) fn native_stems(root: &Path) -> Result<HashSet<String>> {
     }
     Ok(stems)
 }
+#[cfg(feature = "analyzer")]
 pub(crate) fn perry_member(obj: &str, name: &str, stems: &HashSet<String>) -> bool {
     if let Some(krate) = crate_of(obj) {
         if !krate.starts_with("perry") {
@@ -94,6 +100,7 @@ pub(crate) fn perry_member(obj: &str, name: &str, stems: &HashSet<String>) -> bo
     }
     !crate::instructions::starts(name, &["_R", "_ZN", "_Z", "__"]) && !temp_label(name)
 }
+#[cfg(feature = "analyzer")]
 pub fn shadowed_symbols(root: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for krate in std::fs::read_dir(root.join("crates"))? {

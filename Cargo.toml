@@ -640,6 +640,8 @@ perry-native-registration = { path = "crates/perry-native-registration", version
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
 perry-perex = { path = "crates/perry-perex" }
+# The sidecar format only (no analyzer): see crates/perry-gc-effects/Cargo.toml.
+perry-gc-effects = { path = "crates/perry-gc-effects", default-features = false }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }

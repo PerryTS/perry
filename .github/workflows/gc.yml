@@ -613,6 +613,7 @@ jobs:
         run: |
           export RUSTFLAGS="-C force-unwind-tables=yes"
           cargo build-perry --profile perry-dev
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
           scripts/build_instr_runtime.sh "" perry-dev
       - name: Provider dylib host-boundary GC and Response
         if: ${{ !cancelled() && runner.os != 'Windows' }}
@@ -917,6 +918,7 @@ jobs:
           # backend itself still has to link the LLVM 22 ABI used by llvm-sys.
           export RUSTFLAGS="-C force-unwind-tables=yes"
           cargo build-perry --profile perry-dev --features perry-codegen/llvm-inprocess
+          scripts/gc_call_effects/sidecars.sh target/perry-dev
 
           # Probe 09 is the whole point: it carries `try`, so every call in it
           # is an `invoke`, which the explicit bridge refuses outright (#7330).
@@ -1098,6 +1100,7 @@ jobs:
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
+          scripts/gc_call_effects/sidecars.sh target/release
       - name: Verify the scanner sees every symbol the archives define
         run: |
           set -euo pipefail
@@ -1255,6 +1258,7 @@ jobs:
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
+          scripts/gc_call_effects/sidecars.sh target/release
       - name: Emit the NATIVE (statepoint) IR corpus
         run: ./scripts/gc_root_dominance_corpus.sh ir-corpus-native --lowering native
       - name: Check GC values across safepoints (native roots)
