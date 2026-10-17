@@ -651,6 +651,10 @@ impl Visit for CensusScanner<'_> {
                     }
                     (Some("Object" | "Reflect"), "defineProperty") => self.define_key_arg(args, 1),
                     (Some("Reflect"), "set" | "deleteProperty") => self.key_arg(args, 1),
+                    // MockTracker.method installs a replacement on its target,
+                    // including declared-class prototypes. As with inherits,
+                    // recognize the member name conservatively across aliases.
+                    (_, "method") => self.key_arg(args, 1),
                     (Some("Object"), "defineProperties") => {
                         self.define_sources(args.get(1..).unwrap_or(&[]))
                     }
