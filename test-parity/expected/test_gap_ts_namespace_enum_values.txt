@@ -1,0 +1,11 @@
+4 Blue 0,4,5,Red,Green,Blue
+true Blue A,B
+Green ?
+10 20 2 True 2
+Element|1
+Element|2 2
+n=3/inner inner
+inner outer
+source(x) module:ns:y createSource
+0 29 30 LastToken 7 -1 -2147483648 8 11 prefix t
+14 28 2 -29 2,14,28,A,B,C,D,-29

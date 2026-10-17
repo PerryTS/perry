@@ -825,6 +825,54 @@ export async function load() {
 }
 
 #[test]
+fn missing_relative_reexport_fails_at_collection() {
+    // TypeScript's `_namespaces/ts.ts` re-exports the build-generated
+    // `diagnosticInformationMap.generated.js`. With the file absent, dropping
+    // the edge left `Diagnostics` as an undefined symbol at link time.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        "export * from \"./missing.generated.js\";\nexport const ok = 1;\n",
+    )
+    .expect("write entry");
+    // A `.d.ts`-only target is type-only and still compiles.
+    std::fs::write(root.join("types.d.ts"), "export type T = number;\n").expect("write d.ts");
+    let typed = root.join("typed.ts");
+    std::fs::write(
+        &typed,
+        "export * from \"./types.js\";\nexport const ok = 1;\n",
+    )
+    .expect("write typed");
+
+    let collect = |path: &std::path::Path| {
+        let mut ctx = CompilationContext::new(root.to_path_buf());
+        ctx.entry_canonical = Some(path.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut next_class_id: perry_hir::ClassId = 1;
+        let progress = VerboseProgress::new(OutputFormat::Json, 0);
+        collect_modules(
+            &path.to_path_buf(),
+            &mut ctx,
+            &mut visited,
+            OutputFormat::Json,
+            None,
+            &mut next_class_id,
+            false,
+            &progress,
+            None,
+        )
+        .map(|_| ())
+    };
+    let error = collect(&entry).unwrap_err().to_string();
+    assert!(error.contains("Could not resolve re-export"), "{error}");
+    assert!(error.contains("missing.generated.js"), "{error}");
+    assert!(error.contains("generated module"), "{error}");
+    collect(&typed).expect("a .d.ts-only re-export is type-only");
+}
+
+#[test]
 fn missing_generated_module_fails_with_preparation_remediation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();

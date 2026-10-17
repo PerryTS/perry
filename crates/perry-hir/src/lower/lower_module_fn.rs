@@ -885,6 +885,31 @@ pub fn lower_module_full(
 /// Lower with names supplied on globalThis by the selected platform (#9745).
 /// These names suppress unknown-identifier warnings while retaining ordinary
 /// lexical shadowing and the same runtime lookup as an undeclared global.
+/// ESM [[RequestedModules]] of a module: static import / re-export
+/// specifiers in source order, type-only declarations excluded.
+fn requested_modules(ast_module: &ast::Module) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in &ast_module.body {
+        let ast::ModuleItem::ModuleDecl(decl) = item else {
+            continue;
+        };
+        let src = match decl {
+            ast::ModuleDecl::Import(import) if !import.type_only => &import.src,
+            ast::ModuleDecl::ExportAll(export) if !export.type_only => &export.src,
+            ast::ModuleDecl::ExportNamed(export) if !export.type_only => match &export.src {
+                Some(src) => src,
+                None => continue,
+            },
+            _ => continue,
+        };
+        let spec = src.value.as_str().unwrap_or("").to_string();
+        if !out.contains(&spec) {
+            out.push(spec);
+        }
+    }
+    out
+}
+
 pub fn lower_module_full_with_platform_globals(
     ast_module: &ast::Module,
     name: &str,
@@ -937,6 +962,7 @@ pub fn lower_module_full_with_platform_globals(
         ctx.seed_imported_class_accessors(seed);
     }
     let mut module = Module::new(name);
+    module.requested_modules = requested_modules(ast_module);
     // #9423: hand codegen the strictness lowering just computed. Set here, next
     // to `ctx.module_strict`, rather than at the end of lowering, so a later
     // early return cannot ship a module that claims to be sloppy.
@@ -976,6 +1002,7 @@ pub fn lower_module_full_with_platform_globals(
     // statement) that references an enum declared later in the file resolves
     // the member instead of silently lowering to 0.
     pre_register_module_enums(ast_module, &mut ctx);
+    module_decl::pre_register_module_namespaces(ast_module, &mut ctx);
 
     // JSX expressions lower directly to the built-in `jsx`/`jsxs` externs in
     // `jsx.rs`. Do not synthesize a `react/jsx-runtime` import here: codegen

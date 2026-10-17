@@ -218,6 +218,12 @@ pub struct Module {
     /// zero means no prologue (the common case — fully inert). Populated by
     /// lowering (`lower_fn_decl` / `lower_fn_expr`).
     pub gen_param_prologue_len: std::collections::HashMap<crate::types::FuncId, usize>,
+    /// ESM [[RequestedModules]]: the specifier of every static `import` and
+    /// `export ... from` declaration, in source order. Module evaluation
+    /// visits dependencies in this order across imports AND re-exports
+    /// (`export * from "./a"` above `import * as b from "./b"` evaluates `a`
+    /// first); `topo_sort_non_entry_modules` follows it.
+    pub requested_modules: Vec<String>,
 }
 
 impl Module {
@@ -257,6 +263,7 @@ impl Module {
             async_generator_funcs: std::collections::HashSet::new(),
             local_source_spans: std::collections::HashMap::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),
+            requested_modules: Vec::new(),
         }
     }
 

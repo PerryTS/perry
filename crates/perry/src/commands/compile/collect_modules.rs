@@ -2053,6 +2053,28 @@ fn collect_module_one(
                     }
                     ModuleKind::NativeRust => {}
                 }
+            } else if let Some(attempted_path) =
+                super::resolve::attempted_relative_import_path(src, entry_path)
+                    .filter(|p| !has_declaration_file(p))
+            {
+                // A relative re-export whose file is missing can never bind
+                // (Node: ERR_MODULE_NOT_FOUND). Dropping the edge left every
+                // name it should have provided as an undefined symbol at link
+                // time, attributed to the re-exporting module.
+                let hint = if looks_like_generated_module(src) {
+                    "This looks like a generated module: run the upstream preparation step first."
+                } else {
+                    "Check the path, or ensure the build step that generates this file runs before compiling."
+                };
+                return Err(anyhow::anyhow!(
+                    "Could not resolve re-export `from \"{src}\"` in {filename} ({path}).\n\
+                     The module file was not found at the path Perry tried:\n  \
+                       {attempted_path}\n\
+                     {hint}",
+                    filename = filename,
+                    path = canonical.display(),
+                    attempted_path = attempted_path.display(),
+                ));
             }
         }
     }
@@ -2065,6 +2087,19 @@ fn collect_module_one(
         }),
         children: pending,
     })
+}
+
+/// A re-export whose only target is a `.d.ts` (`./types` or `./types.js` next
+/// to `types.d.ts`) is type-only: it has no runtime module to resolve.
+fn has_declaration_file(attempted: &Path) -> bool {
+    let text = attempted.to_string_lossy();
+    let stem = ["js", "mjs", "cjs", "ts", "mts", "cts"]
+        .iter()
+        .find_map(|ext| text.strip_suffix(&format!(".{ext}")))
+        .unwrap_or(&text);
+    [".d.ts", ".d.mts", ".d.cts"]
+        .iter()
+        .any(|ext| Path::new(&format!("{stem}{ext}")).is_file())
 }
 
 mod finish;

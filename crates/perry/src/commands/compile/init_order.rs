@@ -102,6 +102,20 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
     }
 }
 
+/// Order a module's dependency edges the way ESM evaluation visits them:
+/// by the module's [[RequestedModules]] (source order across imports and
+/// re-exports). Edges no source declaration requested (synthesized
+/// requires, …) keep their relative order after the requested ones.
+fn esm_request_order(mut edges: Vec<(PathBuf, &str)>, requested: &[String]) -> Vec<PathBuf> {
+    edges.sort_by_key(|(_, spec)| {
+        requested
+            .iter()
+            .position(|r| r == spec)
+            .unwrap_or(requested.len())
+    });
+    edges.into_iter().map(|(path, _)| path).collect()
+}
+
 /// Collect non-entry module names for init function calls.
 ///
 /// Topologically sort by import dependencies so that if module A imports from module B,
@@ -125,7 +139,8 @@ pub(super) fn topo_sort_non_entry_modules(
         path_to_name.insert(path.clone(), hir_module.name.clone());
         name_to_path.insert(hir_module.name.clone(), path.clone());
 
-        let mut module_deps = Vec::new();
+        // (dependency, the specifier that requested it)
+        let mut module_deps: Vec<(PathBuf, &str)> = Vec::new();
         for import in &hir_module.imports {
             // Issue #680: skip whole-decl type-only imports
             // (`import type * as X`, `import type { Foo } from "..."`).
@@ -158,7 +173,7 @@ pub(super) fn topo_sort_non_entry_modules(
             if let Some(ref resolved) = import.resolved_path {
                 let resolved_path = PathBuf::from(resolved);
                 if resolved_path != *entry_path && ctx.native_modules.contains_key(&resolved_path) {
-                    module_deps.push(resolved_path);
+                    module_deps.push((resolved_path, import.source.as_str()));
                 }
             }
         }
@@ -180,12 +195,15 @@ pub(super) fn topo_sort_non_entry_modules(
                     if resolved_path != *entry_path
                         && ctx.native_modules.contains_key(&resolved_path)
                     {
-                        module_deps.push(resolved_path);
+                        module_deps.push((resolved_path, src.as_str()));
                     }
                 }
             }
         }
-        deps.insert(path.clone(), module_deps);
+        deps.insert(
+            path.clone(),
+            esm_request_order(module_deps, &hir_module.requested_modules),
+        );
     }
 
     // DFS-based topological sort (handles circular dependencies gracefully)
@@ -294,4 +312,38 @@ pub(super) fn topo_sort_non_entry_modules(
     }
 
     sorted
+}
+
+#[cfg(test)]
+mod esm_request_order_tests {
+    use super::esm_request_order;
+    use std::path::PathBuf;
+
+    #[test]
+    fn edges_follow_source_order_across_imports_and_reexports() {
+        // TypeScript's compiler barrel: `export * from "../performanceCore.js"`
+        // (line 7) above `import * as performance from "./ts.performance.js"`
+        // (line 78). Imports used to be visited first, so performance.ts read
+        // `timestamp` before performanceCore.ts initialized it.
+        let edges = vec![
+            (PathBuf::from("/p/ts.performance.ts"), "./ts.performance.js"),
+            (PathBuf::from("/p/synthetic.ts"), "./synthetic.js"),
+            (
+                PathBuf::from("/p/performanceCore.ts"),
+                "../performanceCore.js",
+            ),
+        ];
+        let requested = vec![
+            "../performanceCore.js".to_string(),
+            "./ts.performance.js".to_string(),
+        ];
+        assert_eq!(
+            esm_request_order(edges, &requested),
+            vec![
+                PathBuf::from("/p/performanceCore.ts"),
+                PathBuf::from("/p/ts.performance.ts"),
+                PathBuf::from("/p/synthetic.ts"),
+            ]
+        );
+    }
 }

@@ -532,6 +532,15 @@ fn ts_source_counterparts(js_ext: &str) -> &'static [&'static str] {
     }
 }
 
+/// `stem` + `ext` (`ext` includes the dot). The stem of `ts.refactor.js` is
+/// `ts.refactor`; `Path::with_extension` on it would REPLACE `.refactor` and
+/// resolve `./ts.refactor.js` to the sibling `./ts.ts`.
+fn append_extension(stem: &Path, ext: &str) -> PathBuf {
+    let mut s = stem.as_os_str().to_os_string();
+    s.push(ext);
+    PathBuf::from(s)
+}
+
 /// Try to resolve a path with common extensions
 /// Prefers TypeScript source files over JavaScript for native compilation
 pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
@@ -551,7 +560,7 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
             // Strip the JS extension and try the TS counterpart(s) first
             let stem = base.with_extension("");
             for ts_ext in counterparts {
-                let ts_path = stem.with_extension(ts_ext.trim_start_matches('.'));
+                let ts_path = append_extension(&stem, ts_ext);
                 if ts_path.exists() && ts_path.is_file() {
                     return Some(ts_path);
                 }
@@ -571,7 +580,7 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
             if !counterparts.is_empty() {
                 let stem = base.with_extension("");
                 for ts_ext in counterparts {
-                    let ts_path = stem.with_extension(ts_ext.trim_start_matches('.'));
+                    let ts_path = append_extension(&stem, ts_ext);
                     if ts_path.exists() && ts_path.is_file() {
                         return Some(ts_path);
                     }

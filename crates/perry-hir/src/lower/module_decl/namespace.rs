@@ -90,6 +90,98 @@ fn lower_nested_namespace(
     Ok(())
 }
 
+/// The statics a namespace body publishes: (static field names, static method
+/// names). Exported functions with a body are static methods; exported
+/// classes and enums and every nested namespace are static fields.
+fn namespace_static_names(items: &[ast::ModuleItem]) -> (Vec<String>, Vec<String>) {
+    let mut fields = Vec::new();
+    let mut methods = Vec::new();
+    for item in items {
+        match item {
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) => {
+                match &export.decl {
+                    ast::Decl::Fn(fn_decl) if fn_decl.function.body.is_some() => {
+                        methods.push(fn_decl.ident.sym.to_string());
+                    }
+                    ast::Decl::Class(class_decl) => fields.push(class_decl.ident.sym.to_string()),
+                    ast::Decl::TsEnum(enum_decl) if !enum_decl.declare => {
+                        fields.push(enum_decl.id.sym.to_string());
+                    }
+                    // #5130: nested `export namespace Inner { ... }`.
+                    ast::Decl::TsModule(ts_module) if !ts_module.declare => {
+                        fields.extend(nested_namespace_name(ts_module));
+                    }
+                    _ => {}
+                }
+            }
+            // #5130: nested non-exported `namespace Inner { ... }`.
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsModule(ts_module)))
+                if !ts_module.declare =>
+            {
+                fields.extend(nested_namespace_name(ts_module));
+            }
+            _ => {}
+        }
+    }
+    (fields, methods)
+}
+
+/// Register every module-level namespace's class and statics before any body
+/// is lowered: a function above `namespace JsxNames { ... }` (TypeScript's
+/// checker.ts) may legally read `JsxNames.X`, since the namespace binding is
+/// module-scoped. `lower_namespace_as_class` reuses this registration.
+pub(crate) fn pre_register_module_namespaces(ast_module: &ast::Module, ctx: &mut LoweringContext) {
+    for item in &ast_module.body {
+        let ts_module = match item {
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsModule(m))) => m,
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) => {
+                match &export.decl {
+                    ast::Decl::TsModule(m) => m,
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+        if ts_module.declare {
+            continue;
+        }
+        let (Some(ns_name), Some(ast::TsNamespaceBody::TsModuleBlock(block))) =
+            (nested_namespace_name(ts_module), &ts_module.body)
+        else {
+            continue;
+        };
+        if ctx.lookup_class(&ns_name).is_some() {
+            continue;
+        }
+        let id = ctx.fresh_class();
+        ctx.register_class(ns_name.clone(), id);
+        let (fields, methods) = namespace_static_names(&block.body);
+        ctx.register_class_statics(ns_name.clone(), fields, methods);
+        // `Ns.x` for an exported variable reads its module-level local
+        // (`lookup_namespace_var`); bind it now so an earlier reader resolves
+        // to the same local the declaration later initializes.
+        for item in &block.body {
+            let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) = item else {
+                continue;
+            };
+            let ast::Decl::Var(var_decl) = &export.decl else {
+                continue;
+            };
+            for decl in &var_decl.decls {
+                let ast::Pat::Ident(ident) = &decl.name else {
+                    continue;
+                };
+                let name = ident.id.sym.to_string();
+                let id = ctx.define_local(
+                    format!("{ns_name}.{name}"),
+                    extract_binding_type(&decl.name),
+                );
+                ctx.namespace_vars.push((ns_name.clone(), name, id));
+            }
+        }
+    }
+}
+
 pub(crate) fn lower_namespace_as_class(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -140,14 +232,13 @@ pub(crate) fn lower_namespace_as_class(
     };
 
     let mut static_methods = Vec::new();
-    let mut static_method_names = Vec::new();
     // #5130: nested namespace names (`namespace G { export namespace Nested {} }`).
     // Each is surfaced as a static field on the outer namespace class holding a
     // `ClassRef` to the (recursively lowered) inner namespace class, so
     // `G.Nested` resolves to the inner namespace and `G.Nested.value` /
     // `G.Nested.f()` read its statics. Registered as static fields up-front so
     // `has_static_field` routes `G.Nested` to `StaticFieldGet`.
-    let mut ns_static_names: Vec<String> = Vec::new();
+    let (ns_static_names, static_method_names) = namespace_static_names(items);
     // Namespace `export const` members surfaced as static fields so `Ns.member`
     // resolves CROSS-MODULE (the per-module `namespace_vars` local is invisible
     // to importers; only namespace FUNCTIONS — lowered as static methods —
@@ -185,7 +276,42 @@ pub(crate) fn lower_namespace_as_class(
             ctx.class_renames
                 .insert(name, (qualified, class_decl.span().lo.0));
         }
+        // A nested namespace is read by its bare name throughout the outer
+        // body, also above its declaration (TypeScript's `Parser` calls
+        // `JSDocParser.parseJSDocComment(...)`). Alias it like a nested class
+        // and register its statics now; its own lowering reuses both.
+        if let ast::Decl::TsModule(ts_module) = decl {
+            let (false, Some(name), Some(ast::TsNamespaceBody::TsModuleBlock(block))) = (
+                ts_module.declare,
+                nested_namespace_name(ts_module),
+                &ts_module.body,
+            ) else {
+                continue;
+            };
+            let qualified = format!("{ns_name}.{name}");
+            if ctx.lookup_class(&qualified).is_none() {
+                let id = ctx.fresh_class();
+                ctx.register_class(qualified.clone(), id);
+                let (fields, methods) = namespace_static_names(&block.body);
+                ctx.register_class_statics(qualified.clone(), fields, methods);
+            }
+            let index = ctx.classes_index[&qualified];
+            saved_class_bindings
+                .push((name.clone(), ctx.classes_index.insert(name.clone(), index)));
+            ctx.class_renames
+                .insert(name, (qualified, ts_module.span().lo.0));
+        }
     }
+
+    // A namespace body is its own scope: its variables shadow same-named
+    // outer bindings and go out of scope at its end (TypeScript's
+    // `namespace Parser { var SourceFileConstructor }` beside parser.ts's
+    // module-level `let SourceFileConstructor`). Locals from here on are
+    // renamed `Ns.name` at the end, keeping their ids and types.
+    let locals_mark = ctx.locals.len();
+    // Functions likewise: parser.ts's module-level `createSourceFile` and
+    // `namespace Parser { function createSourceFile }` are two functions.
+    let functions_mark = ctx.functions.len();
 
     // First pass: collect exported function names, pre-register all functions and variables
     // (so namespace members can reference each other regardless of declaration order)
@@ -195,57 +321,47 @@ pub(crate) fn lower_namespace_as_class(
                 match &export.decl {
                     ast::Decl::Fn(fn_decl) if fn_decl.function.body.is_some() => {
                         let name = fn_decl.ident.sym.to_string();
-                        static_method_names.push(name.clone());
                         // Pre-register exported functions so other namespace members can call them
-                        if ctx.lookup_func(&name).is_none() {
-                            let id = ctx.fresh_func();
-                            ctx.register_func(name, id);
-                        }
+                        let id = ctx.fresh_func();
+                        ctx.register_func(name, id);
                     }
                     ast::Decl::Var(var_decl) => {
-                        // Pre-register exported namespace variables as module-level locals
+                        // Pre-register exported namespace variables as module-level
+                        // locals scoped to this body (see `locals_mark`).
                         for decl in &var_decl.decls {
                             if let Ok(name) = get_binding_name(&decl.name) {
-                                if ctx.lookup_local(&name).is_none() {
-                                    let ty = extract_binding_type(&decl.name);
-                                    ctx.define_local(name.clone(), ty);
-                                    ctx.pre_registered_module_vars.insert(name.clone());
-                                    if var_decl.kind == ast::VarDeclKind::Var {
-                                        ctx.pre_registered_module_var_decls.insert(name);
+                                let ty = extract_binding_type(&decl.name);
+                                match ctx.lookup_namespace_var(ns_name, &name) {
+                                    Some(id) => ctx.locals.push((name.clone(), id, ty)),
+                                    None => {
+                                        ctx.define_local(name.clone(), ty);
                                     }
+                                }
+                                ctx.pre_registered_module_vars.insert(name.clone());
+                                if var_decl.kind == ast::VarDeclKind::Var {
+                                    ctx.pre_registered_module_var_decls.insert(name);
                                 }
                             }
                         }
                     }
-                    ast::Decl::Class(class_decl) => {
-                        ns_static_names.push(class_decl.ident.sym.to_string());
-                    }
-                    // #5130: nested `export namespace Inner { ... }`.
-                    ast::Decl::TsModule(ts_module) if !ts_module.declare => {
-                        if let Some(name) = nested_namespace_name(ts_module) {
-                            ns_static_names.push(name);
-                        }
+                    // Enums are block-scoped to the namespace body, so a
+                    // member function above the declaration may use them.
+                    ast::Decl::TsEnum(enum_decl) => {
+                        crate::lower::pre_scan::pre_register_enum(enum_decl, ctx);
                     }
                     _ => {}
                 }
             }
-            // #5130: nested non-exported `namespace Inner { ... }`.
-            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsModule(ts_module)))
-                if !ts_module.declare =>
-            {
-                if let Some(name) = nested_namespace_name(ts_module) {
-                    ns_static_names.push(name);
-                }
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsEnum(enum_decl))) => {
+                crate::lower::pre_scan::pre_register_enum(enum_decl, ctx);
             }
             // Pre-register non-exported functions (hoisted like JS)
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl)))
                 if fn_decl.function.body.is_some() =>
             {
                 let name = fn_decl.ident.sym.to_string();
-                if ctx.lookup_func(&name).is_none() {
-                    let id = ctx.fresh_func();
-                    ctx.register_func(name, id);
-                }
+                let id = ctx.fresh_func();
+                ctx.register_func(name, id);
             }
             // Pre-register non-exported variables
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var_decl))) => {
@@ -255,17 +371,15 @@ pub(crate) fn lower_namespace_as_class(
                     }
                     if let ast::Pat::Ident(ident) = &decl.name {
                         let name = ident.id.sym.to_string();
-                        if ctx.lookup_local(&name).is_none() {
-                            let ty = ident
-                                .type_ann
-                                .as_ref()
-                                .map(|ann| extract_ts_type(&ann.type_ann))
-                                .unwrap_or(Type::Any);
-                            ctx.define_local(name.clone(), ty);
-                            ctx.pre_registered_module_vars.insert(name.clone());
-                            if var_decl.kind == ast::VarDeclKind::Var {
-                                ctx.pre_registered_module_var_decls.insert(name);
-                            }
+                        let ty = ident
+                            .type_ann
+                            .as_ref()
+                            .map(|ann| extract_ts_type(&ann.type_ann))
+                            .unwrap_or(Type::Any);
+                        ctx.define_local(name.clone(), ty);
+                        ctx.pre_registered_module_vars.insert(name.clone());
+                        if var_decl.kind == ast::VarDeclKind::Var {
+                            ctx.pre_registered_module_var_decls.insert(name);
                         }
                     }
                 }
@@ -298,6 +412,14 @@ pub(crate) fn lower_namespace_as_class(
                 if !ts_module.declare && nested_namespace_name(ts_module).is_some() =>
             {
                 lower_nested_namespace(ctx, module, ns_name, ts_module, &mut ns_static_fields)?;
+            }
+            // A non-exported function is a module-level function named
+            // `Ns.f`, so it never shares a symbol with a same-named
+            // module-level function.
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl)))
+                if fn_decl.function.body.is_some() =>
+            {
+                crate::lower::stmt::lower_module_fn_decl(ctx, module, fn_decl, Some(ns_name))?;
             }
             // Non-exported items → module-level variables/functions
             ast::ModuleItem::Stmt(stmt) => {
@@ -478,6 +600,29 @@ pub(crate) fn lower_namespace_as_class(
                             false,
                         );
                     }
+                    ast::Decl::TsEnum(enum_decl) => {
+                        let en = lower_enum_decl(ctx, enum_decl, false)?;
+                        let name = en.name.clone();
+                        module.enums.push(en);
+                        if enum_decl.declare {
+                            continue;
+                        }
+                        if let Some((id, bind)) =
+                            crate::lower_decl::enum_value_binding(ctx, &name, true)
+                        {
+                            module.init.push(bind);
+                            ctx.namespace_vars
+                                .push((ns_name.to_string(), name.clone(), id));
+                            publish_namespace_member(
+                                module,
+                                &mut ns_static_fields,
+                                ns_name,
+                                name,
+                                Expr::LocalGet(id),
+                                false,
+                            );
+                        }
+                    }
                     // #5130: nested `export namespace Inner { ... }`.
                     ast::Decl::TsModule(ts_module) => {
                         lower_nested_namespace(
@@ -497,6 +642,15 @@ pub(crate) fn lower_namespace_as_class(
 
     // Restore previous namespace context
     ctx.current_namespace = prev_namespace;
+    ctx.truncate_functions(functions_mark);
+    let scoped: Vec<_> = ctx.locals.drain_from(locals_mark);
+    for (name, id, ty) in scoped {
+        if ctx.sloppy_implicit_global_ids.contains(&id) {
+            ctx.locals.push((name, id, ty));
+        } else {
+            ctx.locals.push((format!("{ns_name}.{name}"), id, ty));
+        }
+    }
     ctx.class_renames = saved_class_renames;
     for (name, previous) in saved_class_bindings.into_iter().rev() {
         if let Some(index) = previous {

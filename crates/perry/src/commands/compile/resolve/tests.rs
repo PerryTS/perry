@@ -1381,6 +1381,20 @@ mod manifest_parse_tests {
     }
 
     #[test]
+    fn dotted_js_specifier_maps_to_dotted_ts_source() {
+        // TypeScript's own sources: `import ... from "./_namespaces/ts.refactor.js"`
+        // next to `./_namespaces/ts.ts`. The `.js` -> `.ts` counterpart must keep
+        // every dotted segment (`ts.refactor.ts`), never resolve to `ts.ts`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("ts.ts"), "export const a = 1;\n").expect("write");
+        std::fs::write(root.join("ts.refactor.ts"), "export const b = 2;\n").expect("write");
+
+        let resolved = resolve_with_extensions(&root.join("ts.refactor.js")).expect("must resolve");
+        assert_eq!(resolved, root.join("ts.refactor.ts"));
+    }
+
+    #[test]
     fn pruned_js_specifier_still_falls_back_to_ts_via_replace() {
         // The REPLACE path is retained for Perry's TS-over-JS preference: a
         // `require("./foo.js")` whose `.js` was pruned but whose `./foo.ts`

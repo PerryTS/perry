@@ -21,7 +21,7 @@ mod typescript;
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
 use default_export_binding::default_export_function_binding;
 pub(super) use default_export_binding::mark_exported_function_bodies;
-pub(crate) use namespace::lower_namespace_as_class;
+pub(crate) use namespace::{lower_namespace_as_class, pre_register_module_namespaces};
 use native_default_import::{
     canonicalize_native_import_source, is_cjs_style_native_default_import,
     node_submodule_default_export_key,
@@ -1383,6 +1383,13 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, true)?;
                     let enum_name = en.name.clone();
+                    if !enum_decl.declare {
+                        if let Some((_, bind)) =
+                            crate::lower_decl::enum_value_binding(ctx, &enum_name, true)
+                        {
+                            module.init.push(bind);
+                        }
+                    }
                     module.enums.push(en);
                     module.exported_objects.push(enum_name.clone());
                     module.exports.push(Export::Named {

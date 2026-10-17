@@ -122,17 +122,28 @@ pub(crate) fn pre_register_module_enums(ast_module: &ast::Module, ctx: &mut Lowe
             _ => None,
         };
         if let Some(e) = enum_decl {
-            // `declare enum` / `const enum` ambient declarations still carry
-            // member values usable as constants; register them too.
-            let name = e.id.sym.to_string();
-            if ctx.lookup_enum(&name).is_some() {
-                continue;
-            }
-            let members = crate::lower_decl::compute_enum_members(e);
-            let member_values: Vec<(String, EnumValue)> =
-                members.into_iter().map(|m| (m.name, m.value)).collect();
-            let id = ctx.fresh_enum();
-            ctx.define_enum(name, id, member_values);
+            pre_register_enum(e, ctx);
         }
+    }
+}
+
+/// Register one enum's members, and (unless ambient) the `var`-like local its
+/// runtime object binds to (`enum_value_binding`), ahead of its declaration.
+/// `declare enum` / `const enum` declarations still carry member values usable
+/// as constants; register them too.
+pub(crate) fn pre_register_enum(e: &ast::TsEnumDecl, ctx: &mut LoweringContext) {
+    let name = e.id.sym.to_string();
+    if ctx.lookup_enum(&name).is_some() {
+        return;
+    }
+    let members = crate::lower_decl::compute_enum_members(e, ctx);
+    let member_values: Vec<(String, EnumValue)> =
+        members.into_iter().map(|m| (m.name, m.value)).collect();
+    let id = ctx.fresh_enum();
+    ctx.define_enum(name.clone(), id, member_values);
+    if !e.declare && ctx.lookup_local(&name).is_none() {
+        ctx.define_local(name.clone(), crate::types::Type::Any);
+        ctx.pre_registered_module_vars.insert(name.clone());
+        ctx.pre_registered_module_var_decls.insert(name);
     }
 }

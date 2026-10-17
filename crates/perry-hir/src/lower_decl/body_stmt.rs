@@ -2390,7 +2390,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
         // diagnostic rather than miscompile.
         ast::Stmt::Decl(ast::Decl::TsEnum(enum_decl)) => {
             let name = enum_decl.id.sym.to_string();
-            let members = compute_enum_members(enum_decl);
+            let members = compute_enum_members(enum_decl, ctx);
             if let Some((_, existing)) = ctx.lookup_enum(&name) {
                 let same_value = |a: &EnumValue, b: &EnumValue| match (a, b) {
                     (EnumValue::Number(x), EnumValue::Number(y)) => x == y,
@@ -2412,6 +2412,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 }
             }
             let lowered = lower_enum_decl(ctx, enum_decl, false)?;
+            if !enum_decl.declare {
+                if let Some((_, bind)) =
+                    crate::lower_decl::enum_value_binding(ctx, &lowered.name, false)
+                {
+                    result.push(bind);
+                }
+            }
             // Only park it once — a function lowered more than once (or a
             // second identical declaration) must not duplicate the entry.
             if !ctx

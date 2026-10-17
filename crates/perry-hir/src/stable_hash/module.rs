@@ -46,10 +46,12 @@ impl SH for Module {
             // therefore must not invalidate the object cache.
             local_source_spans: _,
             gen_param_prologue_len,
+            requested_modules,
         } = self;
         name.hash(h);
         imports.hash(h);
         exports.hash(h);
+        requested_modules.hash(h);
         classes.hash(h);
         interfaces.hash(h);
         type_aliases.hash(h);

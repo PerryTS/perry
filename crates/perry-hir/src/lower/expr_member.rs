@@ -977,20 +977,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 .map(|(_, m)| m.to_vec());
             if let Some(members) = members {
                 let index = lower_expr(ctx, &computed.expr)?;
-                let mut fields: Vec<(String, Expr)> = Vec::new();
-                for (name, value) in &members {
-                    match value {
-                        crate::ir::EnumValue::Number(n) => {
-                            fields.push((name.clone(), Expr::Number(*n as f64)));
-                            fields.push((n.to_string(), Expr::String(name.clone())));
-                        }
-                        crate::ir::EnumValue::String(s) => {
-                            fields.push((name.clone(), Expr::String(s.clone())));
-                        }
-                    }
-                }
                 return Ok(Expr::IndexGet {
-                    object: Box::new(Expr::Object(fields)),
+                    object: Box::new(crate::lower_decl::enum_runtime_object(&members)),
                     index: Box::new(index),
                 });
             }

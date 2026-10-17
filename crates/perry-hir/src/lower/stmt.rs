@@ -398,6 +398,64 @@ pub(crate) fn labeled_body_targets_loop(stmt: &ast::Stmt) -> bool {
     }
 }
 
+/// Lower a function declaration that lives at module level: a top-level
+/// declaration (`namespace: None`) or a non-exported function of a namespace
+/// body, which is named `Ns.f` so it never shares the name-keyed registrations
+/// (dedup, return types, script globals) with a same-named module function.
+pub(crate) fn lower_module_fn_decl(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    fn_decl: &ast::FnDecl,
+    namespace: Option<&str>,
+) -> Result<()> {
+    // Skip declare functions (no body) - they are external FFI declarations
+    if fn_decl.function.body.is_none() {
+        return Ok(());
+    }
+    let mut func = lower_fn_decl(ctx, fn_decl)?;
+    if let Some(ns_name) = namespace {
+        func.name = format!("{ns_name}.{}", func.name);
+    }
+    // Register return type for call-site inference
+    if let Some((module, class)) = native_instance_from_return_type(&func.return_type) {
+        ctx.push_func_return_native_instance((
+            func.name.clone(),
+            module.to_string(),
+            class.to_string(),
+        ));
+    }
+    if !matches!(func.return_type, Type::Any) {
+        ctx.register_func_return_type(func.name.clone(), func.return_type.clone());
+    }
+    // Store parameter defaults for call-site resolution
+    let defaults: Vec<Option<Expr>> = func.params.iter().map(|p| p.default.clone()).collect();
+    let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
+    let rest_idx = func.params.iter().position(|p| p.is_rest);
+    let has_synth_args = func
+        .params
+        .last()
+        .is_some_and(|p| p.arguments_object.is_some());
+    ctx.func_defaults
+        .push((func.id, defaults, param_ids, rest_idx, has_synth_args));
+    // #5579: record bare top-level function declarations for
+    // global-object reflection (Script GlobalDeclarationInst-
+    // antiation). `func` is moved into the dedup helper below,
+    // so capture name+id first. Codegen reflects these onto
+    // `globalThis` only for a non-ESM entry program.
+    let global_decl = (func.name.clone(), func.id);
+    push_function_decl_dedup(module, func);
+    if namespace.is_some() {
+        return Ok(());
+    }
+    // Keep at most one entry per name (last declaration wins,
+    // matching the dedup helper's overwrite semantics).
+    module
+        .script_global_functions
+        .retain(|(n, _)| n != &global_decl.0);
+    module.script_global_functions.push(global_decl);
+    Ok(())
+}
+
 pub(crate) fn lower_stmt(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -426,53 +484,7 @@ fn lower_stmt_inner(
         ast::Stmt::Decl(decl) => {
             match decl {
                 ast::Decl::Fn(fn_decl) => {
-                    // Skip declare functions (no body) - they are external FFI declarations
-                    if fn_decl.function.body.is_none() {
-                        return Ok(());
-                    }
-                    let func = lower_fn_decl(ctx, fn_decl)?;
-                    // Register return type for call-site inference
-                    if let Some((module, class)) =
-                        native_instance_from_return_type(&func.return_type)
-                    {
-                        ctx.push_func_return_native_instance((
-                            func.name.clone(),
-                            module.to_string(),
-                            class.to_string(),
-                        ));
-                    }
-                    if !matches!(func.return_type, Type::Any) {
-                        ctx.register_func_return_type(func.name.clone(), func.return_type.clone());
-                    }
-                    // Store parameter defaults for call-site resolution
-                    let defaults: Vec<Option<Expr>> =
-                        func.params.iter().map(|p| p.default.clone()).collect();
-                    let param_ids: Vec<LocalId> = func.params.iter().map(|p| p.id).collect();
-                    let rest_idx = func.params.iter().position(|p| p.is_rest);
-                    let has_synth_args = func
-                        .params
-                        .last()
-                        .is_some_and(|p| p.arguments_object.is_some());
-                    ctx.func_defaults.push((
-                        func.id,
-                        defaults,
-                        param_ids,
-                        rest_idx,
-                        has_synth_args,
-                    ));
-                    // #5579: record bare top-level function declarations for
-                    // global-object reflection (Script GlobalDeclarationInst-
-                    // antiation). `func` is moved into the dedup helper below,
-                    // so capture name+id first. Codegen reflects these onto
-                    // `globalThis` only for a non-ESM entry program.
-                    let global_decl = (func.name.clone(), func.id);
-                    push_function_decl_dedup(module, func);
-                    // Keep at most one entry per name (last declaration wins,
-                    // matching the dedup helper's overwrite semantics).
-                    module
-                        .script_global_functions
-                        .retain(|(n, _)| n != &global_decl.0);
-                    module.script_global_functions.push(global_decl);
+                    lower_module_fn_decl(ctx, module, fn_decl, None)?;
                 }
                 ast::Decl::Var(var_decl) => {
                     let mutable = var_decl.kind != ast::VarDeclKind::Const;
@@ -1106,6 +1118,13 @@ fn lower_stmt_inner(
                 }
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, false)?;
+                    if !enum_decl.declare {
+                        if let Some((_, bind)) =
+                            crate::lower_decl::enum_value_binding(ctx, &en.name, true)
+                        {
+                            module.init.push(bind);
+                        }
+                    }
                     module.enums.push(en);
                 }
                 ast::Decl::TsInterface(iface_decl) => {

@@ -1761,13 +1761,17 @@ impl LoweringContext {
             self.locals.extend(kept);
         }
         self.truncate_native_instances(mark.1);
-        // Remove index entries for functions being truncated, then restore any
-        // earlier entries that were shadowed by the removed ones.
-        for i in mark.2..self.functions.len() {
+        self.truncate_functions(mark.2);
+    }
+
+    /// Drop function registrations made after `mark`, restoring any earlier
+    /// same-named entries they shadowed (scope exit, namespace body end).
+    pub(crate) fn truncate_functions(&mut self, mark: usize) {
+        for i in mark..self.functions.len() {
             let name = &self.functions[i].0;
             // Find if there's an earlier entry with the same name
             let mut earlier_idx = None;
-            for j in (0..mark.2).rev() {
+            for j in (0..mark).rev() {
                 if self.functions[j].0 == *name {
                     earlier_idx = Some(j);
                     break;
@@ -1779,7 +1783,7 @@ impl LoweringContext {
                 self.functions_index.remove(name);
             }
         }
-        self.functions.truncate(mark.2);
+        self.functions.truncate(mark);
     }
 
     /// Enter a nested block scope for `{ ... }`, `if`/`else`, loop body, etc.
