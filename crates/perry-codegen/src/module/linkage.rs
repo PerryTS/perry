@@ -441,10 +441,9 @@ const NOUNWIND_HELPERS: &[&str] = &[
     // inside a `try`, so the leaf marking never depends on the invoke arm.
     // The store probe (`expr/put_value_store_ic.rs`).
     "perry_probe_set",
-    // A family constructor run's check and its bind test
-    // (`expr/layout_read.rs`): GC leaves with no throw.
+    // A family constructor run's check (`expr/layout_read.rs`): a GC leaf
+    // with no throw.
     "perry_family_run_admits",
-    "perry_bind_is_builtin",
 ];
 
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by

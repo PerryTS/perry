@@ -10,6 +10,9 @@ use crate::gen::{Fx, Gen, ReadSite};
 use crate::model::*;
 use perry_hir::{ArrayElement, CallArg, CompareOp, Expr, LogicalOp, UnaryOp};
 
+/// The sink reason of an unmodeled construct's operands (`Gen::fail_closed`).
+pub(crate) const UNMODELED_OPERAND: &str = "operand of unmodeled HIR construct";
+
 impl<'a> Gen<'a> {
     pub(crate) fn tmp(&mut self, what: &'static str) -> NodeId {
         self.m.node_l(what)
@@ -80,7 +83,7 @@ impl<'a> Gen<'a> {
 
     /// Fail closed: every operand escapes, the result is ⊤.
     pub(crate) fn fail_closed(&mut self, fx: &Fx, e: &Expr, name: &str) -> NodeId {
-        let why = format!("operand of unmodeled HIR construct {name}");
+        let why = format!("{UNMODELED_OPERAND} {name}");
         let mut kids: Vec<&Expr> = Vec::new();
         perry_hir::walker::walk_expr_children(e, &mut |c| kids.push(c));
         for c in kids {

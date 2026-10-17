@@ -86,6 +86,11 @@ pub struct ElisionFacts {
     /// prototype) and takes the site's complete generic operation once it
     /// is set.
     pub interp_guard: bool,
+    /// Compiled code never writes `%Function.prototype%.bind`, `.name` or
+    /// `.length` (wpfacts `fnproto_bind_written`): a `bind` site on a
+    /// base-shape function needs no `Pristine(Function)` test, only the
+    /// `interp_guard` word when that is set (`expr/function_bind.rs`).
+    pub fnproto_bind_unwritten: bool,
 }
 
 impl ElisionFacts {

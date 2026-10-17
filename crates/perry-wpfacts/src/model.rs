@@ -588,6 +588,14 @@ pub struct Model {
     /// An accessor was installed on `Object.prototype` while solving: every
     /// lookup in the program may run it. Kills every fact (derive).
     pub objproto_accessor: bool,
+    /// Why `%Function.prototype%.bind` (or the `name`/`length` it reads off
+    /// its target) may not be the builtin's own data property: the first
+    /// store, accessor, definition or deletion under one of those keys (or a
+    /// computed key) whose target may be a builtin prototype (collapsed into
+    /// `ObjectProto`) or a value from unmodeled code, which may hold any of
+    /// them. `None` after the solve: compiled code never writes them
+    /// ([`Model::note_fnproto_write`]).
+    pub fnproto_write: Option<u32>,
     /// Wall-clock budget on generation and solve; when exceeded the pass
     /// stops and the program gets no facts at all (every fact off: the
     /// sound fallback).
@@ -644,6 +652,33 @@ pub const NO_NODE: NodeId = u32::MAX;
 pub const SUPER_BIT: Tok = 1 << 31;
 
 impl Model {
+    /// Record a write under `key` onto `t` that may reach
+    /// `%Function.prototype%`'s `bind`, `name` or `length`
+    /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
+    /// model does not keep (a definition, a deletion).
+    pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
+        if self.fnproto_write.is_some()
+            || !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto))
+        {
+            return;
+        }
+        let hits = match key {
+            None | Some(Key::Any) => true,
+            Some(Key::Named(a)) => matches!(
+                self.atoms[a as usize].as_str(),
+                "bind" | "name" | "length" | crate::STAR_KEY
+            ),
+        };
+        if hits {
+            let on = if t == TOP {
+                "a value from unmodeled code"
+            } else {
+                "a builtin prototype"
+            };
+            self.fnproto_write = Some(self.reason(&format!("{what} on {on}")));
+        }
+    }
+
     pub fn atom(&mut self, s: &str) -> Atom {
         if let Some(&a) = self.atom_index.get(s) {
             return a;

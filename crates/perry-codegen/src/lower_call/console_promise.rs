@@ -827,11 +827,42 @@ fn emit_native_method_str_dispatch_with(
     // Pass a tagged pointer to the immutable StringPool dispatch descriptor.
     // A GC-backed string handle belongs to the main thread's arena and cannot
     // be resolved safely by a `perry/thread` worker executing this closure.
-    // Object model step 2c: a constructor run's `this.k.bind(...)` value
-    // tests whether the call is the builtin's (`layout_read::note_bind_receiver`).
+    // `f.bind(...)` on a base-shape function is the builtin
+    // (`expr/function_bind.rs`); this dispatch is its miss.
     if property == "bind" {
-        crate::expr::layout_read::note_bind_receiver(ctx, recv_box);
+        return crate::expr::function_bind::emit_bind_call(ctx, recv_box, lowered_args, |ctx| {
+            emit_native_method_dispatch_generic(
+                ctx,
+                property,
+                call_byte_offset,
+                recv_box,
+                lowered_args,
+                site,
+                lanes,
+            )
+        });
     }
+    emit_native_method_dispatch_generic(
+        ctx,
+        property,
+        call_byte_offset,
+        recv_box,
+        lowered_args,
+        site,
+        lanes,
+    )
+}
+
+/// [`emit_native_method_str_dispatch_with`] past its `bind` lowering.
+fn emit_native_method_dispatch_generic(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    call_byte_offset: u32,
+    recv_box: &str,
+    lowered_args: &[String],
+    site: bool,
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
+) -> String {
     let key_idx = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);

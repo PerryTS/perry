@@ -766,6 +766,7 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
                         continue;
                     }
@@ -1609,6 +1610,7 @@ impl Model {
     }
 
     fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        self.note_fnproto_write(t, Some(key), "store");
         if t == TOP {
             let r = self.reason("stored into a value from unmodeled code");
             self.sink_node(src, r);
@@ -2067,6 +2069,19 @@ impl Model {
         if t == TOP || self.is_escaped(t) {
             return;
         }
+        // A builtin prototype as the operand of a compiled construct the
+        // model does not follow (`Gen::fail_closed`) may get any key written
+        // (`fnproto_write` fails closed). The runtime's own operations and
+        // callbacks are not that: they never write the intrinsics, and a
+        // compiled function called from unknown code sees ⊤ parameters, whose
+        // writes `store_into` records.
+        if self.fnproto_write.is_none()
+            && matches!(self.toks[t as usize], TokKind::ObjectProto)
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            self.note_fnproto_write(t, None, &what);
+        }
         // Runtime-owned objects do not "escape": unknown code already holds
         // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
         // operations) or E14 (interpreted code), never a side effect of some
@@ -2214,6 +2229,12 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            self.note_fnproto_write(t, None, kind.code());
+        }
         if t == TOP {
             return;
         }

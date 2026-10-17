@@ -413,7 +413,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[PTR, I64, I64, I32, I32, I32],
     );
-    module.declare_function("perry_bind_is_builtin", I32, &[DOUBLE]);
+    // `Function.prototype.bind` (`expr/function_bind.rs`).
+    module.declare_function("js_function_bind", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_length", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_binding", DOUBLE, &[PTR, I64, I64, I64]);

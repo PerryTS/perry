@@ -81,6 +81,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
+pub(crate) mod function_bind;
 pub(crate) mod layout_read;
 
 /// `PERRY_SITE_STATS=1`: one stderr line `PERRY_SITE <kind>` per lowered
@@ -340,7 +341,8 @@ pub(crate) struct InlineCtorReturn {
     /// `this.k = v` store ends it.
     pub family_run: Option<crate::expr::layout_read::FamilyRun>,
     /// A run store whose value is `this.k.bind(...)` arms this (`Some(None)`);
-    /// the bind call's lowering records its `perry_bind_is_builtin` test.
+    /// the bind call's lowering records whether the builtin ran
+    /// (`function_bind::emit_bind_call`).
     pub bind_watch: Option<Option<String>>,
 }
 

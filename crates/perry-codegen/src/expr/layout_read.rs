@@ -329,9 +329,8 @@ pub(crate) enum RunValue {
     /// or `new Set()`, and `&&` `||` `??` `?:` `!` `===` `!==` `typeof`
     /// `void` of such values.
     Free,
-    /// `this.k.bind(<Free>...)`: no user code when the bound function is a
-    /// plain function on a pristine `Function.prototype`
-    /// (`perry_bind_is_builtin`, tested at the call).
+    /// `this.k.bind(<Free>...)`: no user code when the call takes the
+    /// builtin (`function_bind::emit_bind_call`, which arms the watch).
     Bind,
     /// May run user code: the run ends at it.
     Runs,
@@ -421,7 +420,7 @@ pub(crate) struct RunPlan {
 /// class family stored after its unchecked initialization
 /// (`FamilyLayout::init_count`) at a position and slot every family
 /// descending from the class agrees on. Takes the body's run; a bind value
-/// arms the body's bind watch ([`note_bind_receiver`]).
+/// arms the body's bind watch (`function_bind::emit_bind_call`).
 pub(crate) fn family_run_plan(
     ctx: &mut FnCtx<'_>,
     property: &str,
@@ -484,28 +483,6 @@ pub(crate) fn family_run_plan(
         value,
         run_in,
     })
-}
-
-/// A `bind` method call's receiver `recv_box` (lowered and rooted) in a
-/// constructor body whose run store armed the watch ([`family_run_plan`]):
-/// the watch takes `perry_bind_is_builtin(recv)` (an `i1`), tested before
-/// the call, which itself makes the same test.
-pub(crate) fn note_bind_receiver(ctx: &mut FnCtx<'_>, recv_box: &str) {
-    if !matches!(
-        ctx.inline_ctor_return.last().map(|b| &b.bind_watch),
-        Some(Some(None))
-    ) {
-        return;
-    }
-    let r = ctx.block().call(
-        crate::types::I32,
-        "perry_bind_is_builtin",
-        &[(DOUBLE, recv_box)],
-    );
-    let b = ctx.block().icmp_ne(crate::types::I32, &r, "0");
-    if let Some(body) = ctx.inline_ctor_return.last_mut() {
-        body.bind_watch = Some(Some(b));
-    }
 }
 
 /// The run arm of a planned store, emitted after its value: the run it

@@ -112,6 +112,12 @@ pub struct ProgramFacts {
     /// so with this set every proof is GUARDED: the site tests the word and
     /// takes its complete generic operation once it is set.
     pub interp_guard: Option<String>,
+    /// Compiled code may write `%Function.prototype%.bind` (or the
+    /// `name`/`length` bind reads), and why; `None`: it is the builtin's own
+    /// data property for the whole run as far as compiled code goes (an
+    /// aborted solve answers `Some`). Interpreted code is
+    /// [`ProgramFacts::interp_guard`]'s.
+    pub fnproto_bind_written: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
@@ -284,7 +290,13 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     } else {
         Vec::new()
     };
+    let fnproto_bind_written = if stats.aborted {
+        Some("solve aborted".to_string())
+    } else {
+        g.m.fnproto_write.map(|r| g.m.reasons[r as usize].clone())
+    };
     let mut pf = ProgramFacts {
+        fnproto_bind_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
         sites,

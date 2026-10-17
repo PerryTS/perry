@@ -137,6 +137,12 @@ pub(crate) fn run(
     }
     if std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1") {
         let s = &pf.stats;
+        eprintln!(
+            "perry: wpfacts: Function.prototype.bind {}",
+            pf.fnproto_bind_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
         let t0 = pf
             .sites
             .iter()
@@ -205,7 +211,7 @@ pub(crate) fn view_for(
             elision.receiver_params = r.clone();
         }
     }
-    let digest = if elision.is_empty() {
+    let digest = if elision.is_empty() && !elision.fnproto_bind_unwritten {
         pf.digest_for(&key)
     } else {
         use std::hash::{Hash, Hasher};
@@ -258,6 +264,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // gap tests must then fail).
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
+    // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
+    // program (the bind gap tests that write Function.prototype must fail).
+    out.fnproto_bind_unwritten =
+        pf.fnproto_bind_written.is_none() || pf.sabotage.as_deref() == Some("fnproto-unwritten");
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
