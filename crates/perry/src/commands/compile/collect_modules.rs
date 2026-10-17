@@ -23,10 +23,9 @@ use crate::OutputFormat;
 
 use super::{
     cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
-    has_perry_native_library, is_declaration_file, is_in_compile_package,
-    is_in_perry_native_package, is_js_file, is_recognized_text_asset, parse_cached,
-    parse_native_library_manifest, parse_package_specifier, CompilationContext, JsModule,
-    ParseCache,
+    has_perry_native_library, is_declaration_file, is_in_perry_native_package,
+    is_recognized_text_asset, parse_cached, parse_native_library_manifest, parse_package_specifier,
+    CompilationContext, JsModule, ParseCache,
 };
 
 mod binding_faithfulness;
@@ -43,6 +42,9 @@ mod native_addon;
 mod parse_error;
 pub(crate) mod reexport_prune;
 mod script_string;
+mod source_prep;
+#[cfg(test)]
+mod source_prep_tests;
 pub(super) mod static_require_transform;
 #[cfg(test)]
 mod tests;
@@ -62,11 +64,9 @@ use import_helpers::{
     ensure_bunfs_import_resolves, env_defines_for_lowering,
 };
 use import_meta_require::rewrite_import_meta_require_addons;
-use json_module::synthesize_json_module;
 pub(super) use native_addon::{collect_declared_addons, package_has_unsupported_node_addon};
 use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
 use parse_error::annotate_parse_error;
-use static_require_transform::transform_static_literal_requires_with_bunfs;
 pub(super) use walk::collect_modules;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_module};
 
@@ -148,6 +148,7 @@ fn collect_module_one(
     next_class_id: &mut perry_hir::ClassId,
     progress: &VerboseProgress,
     parse_cache: Option<&mut ParseCache>,
+    prefetch: Option<&source_prep::SourcePrefetch>,
 ) -> Result<ModuleDiscovery> {
     let mut pending = Vec::new();
 
@@ -184,57 +185,12 @@ fn collect_module_one(
     // #5234: `.wasm` is binary, so collect it through an executable synthetic
     // module instead of the UTF-8 source reader.
     let is_wasm = is_wasm_asset(&canonical);
-    // Match a real `node_modules/` directory COMPONENT, not a substring: a
-    // file whose NAME contains "node_modules" (e.g. turbopack's bundled chunks
-    // `.next/server/chunks/ssr/node_modules_next_dist_…._.js`) is NOT in
-    // node_modules and must compile natively, not get force-routed to the
-    // (removed) JS runtime. (Next.js wall 54.)
-    let is_in_node_modules = canonical
-        .components()
-        .any(|c| c.as_os_str() == "node_modules");
-    let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
-    // `--bunfs-root` describes source extracted from a self-contained Bun
-    // executable. Compile every module below that opted-in tree natively,
-    // including paths with a `node_modules` component; otherwise Perry's
-    // ordinary dependency classification can route those mapped modules to
-    // the removed JS fallback despite the resolver selecting NativeCompiled.
-    let is_in_bunfs_root = ctx
-        .bunfs_root
-        .as_ref()
-        .is_some_and(|root| canonical.starts_with(root));
-    let is_in_compiled_pkg = is_in_bunfs_root
-        || ctx.aot_discovered_modules.contains(&canonical)
-        || (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
-        || ctx.compile_package_dirs.iter().any(|dir| {
-            if canonical.starts_with(dir) {
-                // Exclude nested node_modules/ inside the compiled package
-                // (e.g., @solana/web3.js/node_modules/bs58/ is NOT part of @solana/web3.js)
-                let relative = canonical.strip_prefix(dir).unwrap_or(canonical.as_ref());
-                !relative.to_string_lossy().contains("node_modules/")
-            } else {
-                false
-            }
-        })
-        // A file whose canonical path resolves to inside a perry.nativeLibrary package
-        // but is NOT under any node_modules/ component (i.e., reached via a file: dep
-        // that places the package inside the project root, as in #209 "file:./vendor/bloom/")
-        // must still be compiled natively, not handed to the JS runtime.
-        // Guard with !is_in_node_modules so this branch never fires for the standard
-        // node_modules/ethers, node_modules/ws etc. paths that already have their
-        // own handling (is_perry_native above).
-        || (!is_in_node_modules && is_in_perry_native_package(&canonical));
-    // #668 / node-core (#800): a *user* `.js`/`.cjs`/`.mjs` file (entry or a
-    // project source, i.e. NOT under node_modules) is fed through the native
-    // AOT pipeline like a `.ts` file rather than treated as a JS module. The
-    // extension is not the signal — content is: most plain `.js` is valid
-    // TypeScript-subset, and CommonJS shapes (`require(...)`, `module.exports`)
-    // are rewritten to ESM by `cjs_wrap` just below, the same translation
-    // already trusted for `compilePackages` targets. node_modules `.js` keeps
-    // the JS-module classification (post-#1696 there is no V8 fallback, so it
-    // surfaces as an unsupported-module error rather than silently running).
-    let should_use_js_runtime =
-        (is_js_file(&canonical) && !is_in_compiled_pkg && is_in_node_modules)
-            || is_declaration_file(&canonical);
+    let source_prep::Route {
+        is_in_node_modules,
+        is_perry_native,
+        is_in_compiled_pkg,
+        should_use_js_runtime,
+    } = source_prep::route(&canonical, &source_prep::RouteInputs::of(ctx));
 
     // #348 follow-up: JSON module imports (`import data from "./x.json"`,
     // optionally with `with { type: "json" }`) are NOT skipped — they compile
@@ -337,195 +293,159 @@ fn collect_module_one(
         });
     }
 
-    // #5234: synthesize a TypeScript adapter that embeds and instantiates the
-    // binary at module initialization, then feed it through the normal native
-    // module pipeline used by JSON and text assets.
-    let raw_source = if let Some(asset_name) = &imported_file_asset {
-        let virtual_path = format!("$perryfs/{asset_name}");
-        let literal = serde_json::to_string(&virtual_path).map_err(|e| {
-            anyhow!(
-                "Failed to encode imported file asset path {}: {}",
-                canonical.display(),
-                e
-            )
-        })?;
-        format!("export default {literal};\n")
-    } else if is_wasm {
-        let bytes = fs::read(&canonical)
-            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
-        let asset_name = ctx
-            .file_loader_asset_names
-            .get(&canonical)
-            .cloned()
-            .unwrap_or_else(|| imported_file_asset_name(&canonical, &ctx.cache_root));
-        if !ctx
-            .embedded_assets
-            .iter()
-            .any(|(_, path)| path == &canonical)
-        {
-            ctx.embedded_assets
-                .push((asset_name.clone(), canonical.clone()));
-        }
-        let virtual_path = format!("$perryfs/{asset_name}");
-        synthesize_wasm_module(&bytes, &virtual_path).source
-    } else {
-        // It's a TypeScript (or synthetic JSON/text) file to compile natively.
-        fs::read_to_string(&canonical)
-            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
+    // #10735: this module's `require.main` (CJS preamble) must resolve to the
+    // compile-time entry -- same comparison as `is_entry_module` below.
+    let cjs_is_entry_module = ctx.entry_canonical.as_ref() == Some(&canonical);
+    // The explicit file loader and the wasm adapter synthesize executable
+    // TypeScript; extension-based JSON/text loaders must not reinterpret that
+    // generated source as asset bytes.
+    let plain_source = imported_file_asset.is_none() && !is_wasm;
+    let prep_class = source_prep::PrepClass {
+        wrap_eligible: is_in_compiled_pkg || !is_in_node_modules,
+        is_json: is_json && plain_source,
+        is_text: is_text_asset && plain_source,
+        is_entry: cjs_is_entry_module,
     };
-    // Bun exposes `import.meta.require`; unlike CommonJS `require`, aliases of
-    // that function and URL-derived addon paths are invisible to the ordinary
-    // static-require scan. Recover and rewrite exact Node-API loads before HIR
-    // lowering so runtime execution uses only the authenticated sidecar id.
-    // Run before the Bun virtual-literal asset scan so a `.node` call target
-    // ships once in the sidecar rather than also being embedded as inert data.
-    let raw_source = rewrite_import_meta_require_addons(&raw_source, &canonical, ctx)?;
-    register_bunfs_literal_assets(&raw_source, ctx);
-    // CJS wrapping consumes literal `require()` sites and replaces them with
-    // generated loader calls. Queue native targets before that rewrite so the
-    // graph still authenticates and packages the selected `.node` binary.
-    for specifier in super::cjs_wrap::extract_require_specifiers(&raw_source) {
-        ensure_bunfs_import_resolves(&specifier, &canonical, ctx)?;
-        if let Some(target) = super::resolve::resolve_relative_import_path(&specifier, &canonical) {
-            if target.extension().and_then(|extension| extension.to_str()) == Some("node") {
-                pending.push(target);
+    // A plain file is read and prepared by `prepare_plain` — on a source-prep
+    // worker ahead of the walk when one has it ready for this classification,
+    // otherwise here. Asset adapters, `--bunfs-root` sources and sources that
+    // need the `import.meta.require` rewrite take the walk-only path below.
+    let read = if plain_source && ctx.bunfs_root.is_none() {
+        let prefetched = prefetch
+            .and_then(|prefetch| prefetch.claim(&canonical))
+            .filter(|prefetched| prefetched.class == prep_class);
+        Some(match prefetched {
+            Some(prefetched) => prefetched.read?,
+            None => source_prep::prepare_plain(
+                &canonical,
+                prep_class,
+                &source_prep::PrepInputs::of(ctx, target),
+            )?,
+        })
+    } else {
+        None
+    };
+    let prepared = match read {
+        Some(source_prep::ReadSource::Prepared {
+            require_specs,
+            node_targets,
+            prepared,
+        }) => {
+            // Without `--bunfs-root` the `import.meta.require` rewrite and the
+            // Bun asset scan leave this source alone; what remains of them is
+            // the virtual-path check per literal `require()`.
+            for specifier in &require_specs {
+                ensure_bunfs_import_resolves(specifier, &canonical, ctx)?;
             }
+            pending.extend(node_targets);
+            prepared
         }
-    }
-    // JSON module import: turn the data file into a native ESM module whose
-    // default export is the parsed value.
-    let raw_source = if imported_file_asset.is_some() || is_wasm {
-        // The explicit file loader (and the wasm adapter above) already
-        // synthesized executable TypeScript. Extension-based JSON/text
-        // loaders must not reinterpret that generated source as asset bytes.
-        raw_source
-    } else if is_json {
-        synthesize_json_module(&raw_source, &canonical)?
-    } else if is_text_asset {
-        // #5223: text-asset import. The file's contents are exposed verbatim as
-        // the module's default export (a JS string). We never TS-parse the raw
-        // text — instead we synthesize `export default "<escaped-contents>";`.
-        // `serde_json::to_string` of a string produces a valid double-quoted JS
-        // string literal with all required escaping (newlines, quotes, control
-        // chars, unicode), so the contents round-trip byte-for-byte.
-        let literal = serde_json::to_string(&raw_source).map_err(|e| {
-            anyhow!(
-                "Failed to encode text asset {} as a string literal: {}",
-                canonical.display(),
-                e
+        read => {
+            let raw_source = match read {
+                Some(source_prep::ReadSource::NeedsWalk(raw_source)) => raw_source,
+                Some(source_prep::ReadSource::Prepared { .. }) => {
+                    unreachable!("matched above")
+                }
+                // #5234: synthesize a TypeScript adapter that embeds and
+                // instantiates the binary at module initialization, then feed it
+                // through the normal native module pipeline used by JSON and text
+                // assets.
+                None => {
+                    if let Some(asset_name) = &imported_file_asset {
+                        let virtual_path = format!("$perryfs/{asset_name}");
+                        let literal = serde_json::to_string(&virtual_path).map_err(|e| {
+                            anyhow!(
+                                "Failed to encode imported file asset path {}: {}",
+                                canonical.display(),
+                                e
+                            )
+                        })?;
+                        format!("export default {literal};\n")
+                    } else if is_wasm {
+                        let bytes = fs::read(&canonical).map_err(|e| {
+                            anyhow!("Failed to read {}: {}", canonical.display(), e)
+                        })?;
+                        let asset_name = ctx
+                            .file_loader_asset_names
+                            .get(&canonical)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                imported_file_asset_name(&canonical, &ctx.cache_root)
+                            });
+                        if !ctx
+                            .embedded_assets
+                            .iter()
+                            .any(|(_, path)| path == &canonical)
+                        {
+                            ctx.embedded_assets
+                                .push((asset_name.clone(), canonical.clone()));
+                        }
+                        let virtual_path = format!("$perryfs/{asset_name}");
+                        synthesize_wasm_module(&bytes, &virtual_path).source
+                    } else {
+                        // It's a TypeScript (or synthetic JSON/text) file to
+                        // compile natively.
+                        fs::read_to_string(&canonical)
+                            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
+                    }
+                }
+            };
+            // Bun exposes `import.meta.require`; unlike CommonJS `require`,
+            // aliases of that function and URL-derived addon paths are
+            // invisible to the ordinary static-require scan. Recover and
+            // rewrite exact Node-API loads before HIR lowering so runtime
+            // execution uses only the authenticated sidecar id. Run before the
+            // Bun virtual-literal asset scan so a `.node` call target ships once
+            // in the sidecar rather than also being embedded as inert data.
+            let raw_source = rewrite_import_meta_require_addons(&raw_source, &canonical, ctx)?;
+            register_bunfs_literal_assets(&raw_source, ctx);
+            // CJS wrapping consumes literal `require()` sites and replaces them
+            // with generated loader calls. Queue native targets before that
+            // rewrite so the graph still authenticates and packages the
+            // selected `.node` binary.
+            for specifier in super::cjs_wrap::extract_require_specifiers(&raw_source) {
+                ensure_bunfs_import_resolves(&specifier, &canonical, ctx)?;
+                if let Some(target) =
+                    super::resolve::resolve_relative_import_path(&specifier, &canonical)
+                {
+                    if target.extension().and_then(|extension| extension.to_str()) == Some("node") {
+                        pending.push(target);
+                    }
+                }
+            }
+            source_prep::prepare_from_raw(
+                raw_source,
+                &canonical,
+                prep_class,
+                &source_prep::PrepInputs::of(ctx, target),
             )
-        })?;
-        format!("export default {};\n", literal)
-    } else {
-        raw_source
+        }
     };
+    let source_prep::PreparedSource {
+        source,
+        was_cjs_wrapped,
+        messages,
+        stdlib_modules,
+        debug_prefix_line_count,
+    } = prepared?;
     if is_in_compiled_pkg && !ctx.aot_discovered_modules.contains(&canonical) {
         refuse_compile_package_native_addon(ctx, &canonical)?;
     }
-
-    // Issue #348: when a `compilePackages` target ships CommonJS (e.g. React
-    // 18's `module.exports = require('./cjs/react.production.min.js')`),
-    // rewrite the source as ESM before SWC parses it. Only fires for files
-    // inside a `compilePackages` target — user TypeScript and ESM-shaped
-    // packages skip the wrap. See `cjs_wrap.rs` for the wrap shape.
-    // Fire for `compilePackages` targets (the original #348 case) AND for any
-    // user file outside node_modules (#668 / #800): a user `.js` or `.ts`
-    // written in CommonJS — `require(...)` / `module.exports` with no
-    // top-level ESM — is rewritten to ESM here so `require("literal")` lands
-    // as a static namespace import and flows through the normal resolution +
-    // init-order + codegen path. A file that already has top-level
-    // `import`/`export` is not CommonJS (`is_commonjs` returns false) and is
-    // left untouched.
-    let was_cjs_wrapped =
-        (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
-    // #10735: this module's `require.main` (CJS preamble below) must resolve
-    // to the compile-time entry -- same comparison as `is_entry_module` below.
-    let cjs_is_entry_module = ctx.entry_canonical.as_ref() == Some(&canonical);
-    // #5247 / #7036: when source locations are requested, capture where the
-    // original module body lands inside the wrapped output so debug frames and
-    // opt reports can map a wrapped-coordinate byte offset back to an
-    // original-source line. The default build does no extra work.
-    let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
-    let source = if was_cjs_wrapped {
-        let (wrapped, body_off) = super::cjs_wrap::wrap_commonjs_with_addon_paths(
-            &raw_source,
-            &canonical,
-            target,
-            cjs_is_entry_module,
-            Some(&ctx.compile_packages),
-            Some(&ctx.native_addon_paths),
-            ctx.cjs_require_diagnostics,
-        );
-        if ctx.debug_symbols {
-            // Preserve original-source locations after injecting the wrapper.
-            cjs_wrap_body_prefix_lines = body_off.map(|off| {
-                wrapped.as_bytes()[..off]
-                    .iter()
-                    .filter(|&&b| b == b'\n')
-                    .count() as u32
-            });
-        }
-        wrapped
-    } else {
-        raw_source
-    };
-    // #5247: the static-require transform may prepend `import * as` lines,
-    // shifting BOTH the prefix and the body down by the same number of lines.
-    // Capture the wrapped line count, run the transform, then add the line
-    // delta to the prefix so the wrapped-line → original-line subtraction is
-    // computed against the FINAL parsed source.
-    let lines_before_transform = source.bytes().filter(|&b| b == b'\n').count();
-    let source = transform_static_literal_requires_with_bunfs(
-        &source,
-        &ctx.compile_packages,
-        canonical.parent().unwrap_or_else(|| Path::new(".")),
-        ctx.bunfs_root.as_deref(),
-        !was_cjs_wrapped,
-    );
-
-    // #8547: a builtin reached through `require("http")` never appears in the
-    // ESM import walk below, so `needs_stdlib` stayed false, the link came out
-    // runtime-only, `perry-stdlib`'s dispatch init never ran, and every
-    // stdlib-backed export returned `undefined` (`http.createServer` was the
-    // reported case; the bug is not http-specific). The lowered body cannot
-    // answer this — the CJS shim resolves the name through a generated runtime
-    // switch that contains EVERY builtin — so recover it from the literal call
-    // sites, which is what `extract_require_specifiers` already finds for CJS
-    // wrapping. Dynamic `require(someVar)` stays undetectable and unchanged.
-    for spec in super::cjs_wrap::extract_require_specifiers(&source) {
-        if !perry_hir::requires_stdlib(&spec) {
-            continue;
-        }
+    for message in messages {
+        eprintln!("{message}");
+    }
+    for module in stdlib_modules {
         ctx.needs_stdlib = true;
-        let normalized = spec.strip_prefix("node:").unwrap_or(&spec).to_string();
-        ctx.native_module_imports.insert(normalized);
+        ctx.native_module_imports.insert(module);
     }
-    // #11616: the same for `process.getBuiltinModule(id)` — a module asked for
-    // by name was never imported, so auto-optimize stripped it and its methods
-    // returned `undefined`. The id is a runtime string; take every quoted
-    // `node:` literal in a module that mentions `getBuiltinModule`.
-    if source.contains("getBuiltinModule") {
-        for spec in node_specifier_literals(&source) {
-            if !perry_hir::requires_stdlib(spec) {
-                continue;
-            }
-            ctx.needs_stdlib = true;
-            ctx.native_module_imports
-                .insert(spec.strip_prefix("node:").unwrap_or(spec).to_string());
-        }
-    }
-    if was_cjs_wrapped && ctx.debug_symbols {
-        if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
-            let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
-            let added_lines = lines_after_transform.saturating_sub(lines_before_transform) as u32;
-            ctx.cjs_wrap_debug_sources.insert(
-                canonical.clone(),
-                super::types::CjsWrapDebugSource {
-                    wrapped_source: source.clone(),
-                    prefix_line_count: prefix_lines + added_lines,
-                },
-            );
-        }
+    if let Some(prefix_line_count) = debug_prefix_line_count {
+        ctx.cjs_wrap_debug_sources.insert(
+            canonical.clone(),
+            super::types::CjsWrapDebugSource {
+                wrapped_source: source.clone(),
+                prefix_line_count,
+            },
+        );
     }
 
     // Note (#686): we no longer hash source bytes here. The object cache key
@@ -742,7 +662,10 @@ fn collect_module_one(
         .as_ref()
         .unwrap_or(solid_module.as_ref().unwrap_or(ast_module));
     let patched_before = ctx.patched_builtins.len();
-    let guarded_before = ctx.patched_builtins.dynamic_code_reach.disables_builtin_constants();
+    let guarded_before = ctx
+        .patched_builtins
+        .dynamic_code_reach
+        .disables_builtin_constants();
     perry_hir::dynamic_code::scan(
         dynamic_ast,
         &source_file_path,
@@ -756,7 +679,10 @@ fn collect_module_one(
     perry_hir::scan_patched_builtins(dynamic_ast, &mut ctx.patched_builtins);
     // Global reach first seen here: modules lowered before it bound their
     // namespace calls unguarded (`patched_builtins::namespace_call_guarded`).
-    let guarded_now = ctx.patched_builtins.dynamic_code_reach.disables_builtin_constants();
+    let guarded_now = ctx
+        .patched_builtins
+        .dynamic_code_reach
+        .disables_builtin_constants();
     if (ctx.patched_builtins.len() != patched_before || guarded_now != guarded_before)
         && ctx.patched_builtins_lowered_modules > 0
     {

@@ -42,6 +42,12 @@ pub fn extract_require_specifiers(source: &str) -> Vec<String> {
 /// never matches because the pattern requires a `require('...')` literal as
 /// the first argument. Order preserved, deduped.
 pub fn extract_export_star_specs(source: &str) -> Vec<String> {
+    // Every match contains `__exportStar`, then optional whitespace and `)`,
+    // then `(`, whitespace and `require`. Skip the regex scan (slow on a
+    // multi-megabyte bundle) when no occurrence has that shape.
+    if !has_export_star_require_call(source) {
+        return Vec::new();
+    }
     let re = perry_perex::tooling::Regex::new(
         r#"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?__exportStar\s*\)?\s*\(\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*,\s*exports\s*\)"#,
     )
@@ -56,6 +62,31 @@ pub fn extract_export_star_specs(source: &str) -> Vec<String> {
         }
     }
     specs
+}
+
+/// Whether some `__exportStar` occurrence is followed by
+/// `\s*\)?\s*\(\s*require` — a necessary condition for any match of
+/// [`extract_export_star_specs`]'s pattern. Whitespace is Unicode White_Space
+/// or U+FEFF, a superset of both the `regex` crate's and ECMAScript's `\s`, so
+/// the check never rejects a source the pattern would match.
+fn has_export_star_require_call(source: &str) -> bool {
+    let is_space = |c: char| c.is_whitespace() || c == '\u{feff}';
+    let mut from = 0;
+    while let Some(found) = source[from..].find("__exportStar") {
+        from += found + "__exportStar".len();
+        let rest = source[from..].trim_start_matches(is_space);
+        let rest = rest
+            .strip_prefix(')')
+            .unwrap_or(rest)
+            .trim_start_matches(is_space);
+        if rest
+            .strip_prefix('(')
+            .is_some_and(|rest| rest.trim_start_matches(is_space).starts_with("require"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Refs #488 drizzle-sqlite: extract `var <alias> = require("<spec>");`

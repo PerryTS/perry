@@ -105,6 +105,22 @@ pub fn parse_typescript_with_cache(
 /// This is the original parsing function for backward compatibility.
 /// For new code, prefer `parse_typescript_with_cache` for better diagnostics.
 pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
+    let mut warnings = Vec::new();
+    let module = parse_typescript_with_warnings(source, filename, &mut warnings)?;
+    for warning in warnings {
+        eprintln!("{warning}");
+    }
+    Ok(module)
+}
+
+/// [`parse_typescript`] that returns each recoverable-error warning line in
+/// `warnings` instead of printing it, so a caller running on a worker thread
+/// can print them in its own order.
+pub fn parse_typescript_with_warnings(
+    source: &str,
+    filename: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Module> {
     let unicode_source = normalize_unicode_identifier_escapes_with_metadata(source);
     let class_source = normalize_swc_class_syntax_with_metadata(&unicode_source.source);
     let normalized = unicode_source.then(class_source);
@@ -121,7 +137,7 @@ pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
     normalized.remap_module_spans(&mut module, source_file.start_pos);
     // Check for recoverable errors
     for error in parser.take_errors() {
-        eprintln!("Parse warning: {:?}", error);
+        warnings.push(format!("Parse warning: {:?}", error));
     }
 
     Ok(module)

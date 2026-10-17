@@ -440,7 +440,15 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         r"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
     )
     .unwrap();
-    for cap in dot_re.captures_iter(source) {
+    // Each pattern below needs a literal that most modules lack; a substring
+    // search is far cheaper than the regex scan and skips only sources the
+    // pattern cannot match.
+    for cap in source
+        .contains("exports.")
+        .then(|| dot_re.captures_iter(source))
+        .into_iter()
+        .flatten()
+    {
         if let Some(m) = cap.get(1) {
             push_unique(&mut names, m.as_str());
         }
@@ -458,7 +466,12 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         r#"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\[\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*\]\s*="#,
     )
     .unwrap();
-    for cap in bracket_re.captures_iter(source) {
+    for cap in source
+        .contains("exports[")
+        .then(|| bracket_re.captures_iter(source))
+        .into_iter()
+        .flatten()
+    {
         if let Some(m) = cap.get(1) {
             push_unique(&mut names, m.as_str());
         }
@@ -472,8 +485,17 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         r#"(?:^|[^A-Za-z0-9_$.])(Object\s*\.\s*defineProperty\s*\(\s*(?:module\s*\.\s*)?exports\s*,\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*,)"#,
     )
     .unwrap();
-    let stripped = detect::strip_comments_and_strings(source);
-    for cap in descriptor_re.captures_iter(source) {
+    let has_descriptor = source.contains("defineProperty");
+    let stripped = if has_descriptor {
+        detect::strip_comments_and_strings(source)
+    } else {
+        String::new()
+    };
+    for cap in has_descriptor
+        .then(|| descriptor_re.captures_iter(source))
+        .into_iter()
+        .flatten()
+    {
         let call = cap.get(1).unwrap();
         // Ignore examples embedded in comments and strings.
         if stripped
@@ -601,7 +623,12 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         r"(?:^|[^A-Za-z0-9_$])__export[0-9]*\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]*\s*,\s*\{",
     )
     .unwrap();
-    for export_call in esbuild_export_re.find_iter(source) {
+    for export_call in source
+        .contains("__export")
+        .then(|| esbuild_export_re.find_iter(source))
+        .into_iter()
+        .flatten()
+    {
         let Some(open_rel) = source[export_call.start()..export_call.end()].rfind('{') else {
             continue;
         };

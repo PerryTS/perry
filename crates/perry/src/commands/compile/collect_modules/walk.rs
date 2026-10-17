@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 
+use super::source_prep::{worker_count, PrepSettings, SourcePrefetch};
 use super::*;
 
 /// Collect all modules to compile (transitive closure of imports).
+///
+/// Worker threads prepare module sources ahead of the walk (see
+/// `source_prep`); the walk itself, and everything that depends on its order,
+/// runs on this thread exactly as without them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_modules(
     entry_path: &PathBuf,
     ctx: &mut CompilationContext,
@@ -12,8 +18,82 @@ pub(crate) fn collect_modules(
     next_class_id: &mut perry_hir::ClassId,
     skip_transforms: bool,
     progress: &VerboseProgress,
-    mut parse_cache: Option<&mut ParseCache>,
+    parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
+    let workers = worker_count(ctx);
+    let settings = (workers > 0)
+        .then(|| PrepSettings::of(ctx, target))
+        .flatten();
+    let Some(settings) = settings else {
+        return walk_modules(
+            entry_path,
+            ctx,
+            visited,
+            format,
+            target,
+            next_class_id,
+            skip_transforms,
+            progress,
+            parse_cache,
+            None,
+        );
+    };
+    let prefetch = SourcePrefetch::default();
+    let stack_bytes = crate::compiler_stack_bytes();
+    std::thread::scope(|scope| {
+        for index in 0..workers {
+            // A worker that fails to start only means less look-ahead: the
+            // walk prepares any module no worker has.
+            let _ = std::thread::Builder::new()
+                .name(format!("perry-source-prep-{index}"))
+                .stack_size(stack_bytes)
+                .spawn_scoped(scope, || prefetch.work(&settings));
+        }
+        let result = walk_modules(
+            entry_path,
+            ctx,
+            visited,
+            format,
+            target,
+            next_class_id,
+            skip_transforms,
+            progress,
+            parse_cache,
+            Some(&prefetch),
+        );
+        prefetch.finish();
+        result
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_modules(
+    entry_path: &PathBuf,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    format: OutputFormat,
+    target: Option<&str>,
+    next_class_id: &mut perry_hir::ClassId,
+    skip_transforms: bool,
+    progress: &VerboseProgress,
+    mut parse_cache: Option<&mut ParseCache>,
+    prefetch: Option<&SourcePrefetch>,
+) -> Result<()> {
+    // Hand every path pushed onto the walk stack to the source-prep workers,
+    // in push order (the last pushed is popped first). Skips paths already
+    // collected; a path collected later is released when the walk pops it.
+    let submit = |pushed: &[WorkFrame], visited: &HashSet<PathBuf>| {
+        if let Some(prefetch) = prefetch {
+            prefetch.submit(pushed.iter().filter_map(|frame| match frame {
+                WorkFrame::Enter(path) | WorkFrame::EnterWorkerUrl(path)
+                    if !visited.contains(path) =>
+                {
+                    Some(path)
+                }
+                _ => None,
+            }));
+        }
+    };
     let entry_canonical = entry_path.canonicalize()?;
     ctx.reexport_pruner.root(&entry_canonical);
     let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
@@ -46,8 +126,12 @@ pub(crate) fn collect_modules(
                 for f in next_js_files {
                     stack.push(WorkFrame::Enter(f));
                 }
+                submit(&stack, visited);
             }
         }
+    }
+    if stack.len() == 1 {
+        submit(&stack, visited);
     }
     loop {
         while let Some(frame) = stack.pop() {
@@ -96,7 +180,7 @@ pub(crate) fn collect_modules(
                 ..Default::default()
             });
 
-            let discovered = match collect_module_one(
+            let discovered = collect_module_one(
                 &next_path,
                 canonical.clone(),
                 ctx,
@@ -106,7 +190,12 @@ pub(crate) fn collect_modules(
                 next_class_id,
                 progress,
                 parse_cache.as_deref_mut(),
-            ) {
+                prefetch,
+            );
+            if let Some(prefetch) = prefetch {
+                prefetch.release(&canonical);
+            }
+            let discovered = match discovered {
                 Ok(discovered) => discovered,
                 Err(error) if worker_url => {
                     if matches!(format, OutputFormat::Text) {
@@ -128,13 +217,16 @@ pub(crate) fn collect_modules(
             } else {
                 states.insert(canonical, VisitState::Done);
             }
+            let pushed_from = stack.len();
             for child in discovered.children.into_iter().rev() {
                 stack.push(WorkFrame::Enter(child));
             }
+            submit(&stack[pushed_from..], visited);
         }
         let workers = worker_url::accept_pending(ctx, visited);
         if !workers.is_empty() {
             stack.extend(workers.into_iter().rev().map(WorkFrame::EnterWorkerUrl));
+            submit(&stack, visited);
             continue;
         }
         let pending = reexport_prune::settle(ctx);
@@ -142,6 +234,7 @@ pub(crate) fn collect_modules(
             break;
         }
         stack.extend(pending.into_iter().rev().map(WorkFrame::Enter));
+        submit(&stack, visited);
     }
     worker_url::link_accepted(ctx, format);
     Ok(())

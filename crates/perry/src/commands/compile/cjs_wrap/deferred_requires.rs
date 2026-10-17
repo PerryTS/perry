@@ -13,19 +13,28 @@ use swc_ecma_visit::{Visit, VisitWith};
 /// function-local classification (some CJS sources need wrapping to parse).
 #[cfg(test)]
 fn deferred_require_specs(source: &str) -> HashSet<String> {
-    analyze_require_specs(source, None)
+    analyze_require_specs(source, None, &mut Vec::new())
 }
 
+/// Diagnostics (computed-require warnings, recoverable parse warnings) go to
+/// `messages` for the caller to print: this runs on source-preparation worker
+/// threads, and stderr must keep the module walk's order.
 pub(super) fn deferred_require_specs_for_path(
     source: &str,
     path: &std::path::Path,
     diagnose_computed_requires: bool,
+    messages: &mut Vec<String>,
 ) -> HashSet<String> {
-    analyze_require_specs(source, diagnose_computed_requires.then_some(path))
+    analyze_require_specs(source, diagnose_computed_requires.then_some(path), messages)
 }
 
-fn analyze_require_specs(source: &str, path: Option<&std::path::Path>) -> HashSet<String> {
-    let Ok(module) = perry_parser::parse_typescript(source, "requires.cjs") else {
+fn analyze_require_specs(
+    source: &str,
+    path: Option<&std::path::Path>,
+    messages: &mut Vec<String>,
+) -> HashSet<String> {
+    let Ok(module) = perry_parser::parse_typescript_with_warnings(source, "requires.cjs", messages)
+    else {
         return super::extract_requires::function_local_specs(source);
     };
     let mut visitor = Requires::default();
@@ -37,10 +46,10 @@ fn analyze_require_specs(source: &str, path: Option<&std::path::Path>) -> HashSe
             let prefix = &source[..offset.min(source.len())];
             let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
             let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-            eprintln!(
+            messages.push(format!(
                 "warning: {}:{}:{}: computed CommonJS require does not automatically include target files; add static imports for the possible targets and use explicit file extensions in computed requests (#10438)",
                 path.display(), line, column,
-            );
+            ));
         }
     }
     visitor

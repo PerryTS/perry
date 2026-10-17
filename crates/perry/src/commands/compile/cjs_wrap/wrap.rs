@@ -215,6 +215,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         compile_packages,
         None,
         false,
+        &mut Vec::new(),
     )
 }
 
@@ -228,6 +229,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     compile_packages: Option<&HashSet<String>>,
     native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
     diagnose_computed_requires: bool,
+    messages: &mut Vec<String>,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -282,7 +284,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     }
     let source: &str = source_cow.as_ref();
 
-    let mut require_specs = extract_require_specifiers(source);
+    // Each of these scans reads the whole module and several steps below
+    // need its result: scan once and share it.
+    let all_require_specs = extract_require_specifiers(source);
+    let plain_exports = extract_exports_from_source(source);
+    let named_requires = extract_named_exports_from_require(source);
+    let object_literal_requires = extract_object_literal_exports_from_require(source);
+
+    let mut require_specs = all_require_specs.clone();
     let dead_platform_requires = inactive_platform_guarded_requires(source, target);
     if !dead_platform_requires.is_empty() {
         require_specs.retain(|spec| !dead_platform_requires.contains(spec));
@@ -324,7 +333,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // re-exports `export { X }` instead of `export const X = _cjs.X`,
     // so the import resolves to the class declaration directly.
     let (hoisted_class_block, hoisted_class_names, source_without_hoists) =
-        extract_top_level_class_decls(source);
+        extract_top_level_class_decls_with_exports(source, &plain_exports);
 
     // Issue #665 (third pass): for each spec that has a unique CJS-side alias
     // `var/const/let X = require('Y')`, use X as the import local name instead
@@ -369,17 +378,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // module-scope `const X`) and hoisted-class names (already blocked below),
     // so class-identity adoption (#665) is unaffected.
     let export_const_collision_names: std::collections::HashSet<String> = {
-        let plain_exports = extract_exports_from_source(source);
         let mut reexport_names: std::collections::HashSet<String> =
-            extract_named_exports_from_require(source)
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect();
-        for (name, _) in extract_object_literal_exports_from_require(source) {
-            reexport_names.insert(name);
+            named_requires.iter().map(|(n, _)| n.clone()).collect();
+        for (name, _) in &object_literal_requires {
+            reexport_names.insert(name.clone());
         }
         plain_exports
-            .into_iter()
+            .iter()
+            .cloned()
             .filter(|n| !reexport_names.contains(n))
             .filter(|n| !hoisted_class_names.contains(n))
             .collect()
@@ -424,9 +430,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // target with no default export never is — so a side-effect-only dependency
     // was deferred and then never evaluated at all.
     let mut lazy_specs =
-        deferred_require_specs_for_path(source, source_path, diagnose_computed_requires);
-    let cyclic_specs = cyclic_require_specs(source, source_path);
-    let parent_sensitive_specs = parent_sensitive_require_specs(source, source_path);
+        deferred_require_specs_for_path(source, source_path, diagnose_computed_requires, messages);
+    let cyclic_specs = cyclic_require_specs(&all_require_specs, source_path);
+    let parent_sensitive_specs = parent_sensitive_require_specs(&all_require_specs, source_path);
     lazy_specs.extend(cyclic_specs.iter().cloned());
     lazy_specs.extend(parent_sensitive_specs.iter().cloned());
 
@@ -862,7 +868,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let mut named_exports = extract_exports_from_source(source);
+    let mut named_exports = plain_exports.clone();
 
     // Issue #4872: `__exportStar(require('X'), exports)` is tsc's CJS
     // lowering of `export * from 'X'` — emit exactly that as a real ESM
@@ -1030,8 +1036,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     //       the exported name and the alias name coincide, for longhand we look
     //       up the RHS as a require alias and emit the export under the
     //       property name.
-    let mut named_reexport_requires = extract_named_exports_from_require(source);
-    for (name, spec) in extract_object_literal_exports_from_require(source) {
+    let mut named_reexport_requires = named_requires.clone();
+    for (name, spec) in object_literal_requires.iter().cloned() {
         if !named_reexport_requires.iter().any(|(n, _)| *n == name) {
             named_reexport_requires.push((name, spec));
         }
@@ -1531,11 +1537,11 @@ return __perry_cjs_factory();
         )
     };
     if std::env::var("PERRY_DEBUG_CJS_WRAP").is_ok() {
-        eprintln!(
+        messages.push(format!(
             "=== CJS WRAP for {} ===\n{}\n=== END ===",
             source_path.display(),
             wrapped
-        );
+        ));
     }
     // #5247: locate the original body within the wrapped output so callers can
     // translate a wrapped-coordinate byte offset back to original coordinates.
@@ -1664,34 +1670,53 @@ fn fold_parcel_watcher_template_require(source: &str, target: Option<&str>) -> O
     )
 }
 
-fn cyclic_require_specs(source: &str, source_path: &Path) -> std::collections::HashSet<String> {
+/// `require_specs`: `extract_require_specifiers` of the module source.
+fn cyclic_require_specs(
+    require_specs: &[String],
+    source_path: &Path,
+) -> std::collections::HashSet<String> {
     let source_key = source_path
         .canonicalize()
         .unwrap_or_else(|_| source_path.to_path_buf());
-    extract_require_specifiers(source)
-        .into_iter()
+    // Files whose whole require closure a search for an earlier specifier
+    // explored without reaching this module. A later search that meets one
+    // cannot reach the module through it, so each file is read and scanned
+    // at most once per module instead of once per specifier.
+    let mut unreachable = std::collections::HashSet::new();
+    require_specs
+        .iter()
         .filter(|specifier| {
             let Some(target) =
                 super::super::resolve::resolve_relative_import_path(specifier, source_path)
             else {
                 return false;
             };
-            require_graph_reaches(&target, &source_key, &mut std::collections::HashSet::new())
+            let mut visited = std::collections::HashSet::new();
+            let reaches = require_graph_reaches(&target, &source_key, &mut visited, &unreachable);
+            if !reaches {
+                // A search that returned false explored every file it
+                // visited completely: none of them reaches the module.
+                unreachable.extend(visited);
+            }
+            reaches
         })
+        .cloned()
         .collect()
 }
 
+/// `require_specs`: `extract_require_specifiers` of the module source.
 fn parent_sensitive_require_specs(
-    source: &str,
+    require_specs: &[String],
     source_path: &Path,
 ) -> std::collections::HashSet<String> {
-    extract_require_specifiers(source)
-        .into_iter()
+    require_specs
+        .iter()
         .filter(|specifier| {
             super::super::resolve::resolve_relative_import_path(specifier, source_path)
                 .and_then(|target| std::fs::read_to_string(target).ok())
                 .is_some_and(|dependency| dependency.contains("module.parent"))
         })
+        .cloned()
         .collect()
 }
 
@@ -1769,12 +1794,13 @@ fn require_graph_reaches(
     path: &Path,
     target: &Path,
     visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    unreachable: &std::collections::HashSet<std::path::PathBuf>,
 ) -> bool {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if path == target {
         return true;
     }
-    if !visited.insert(path.clone()) {
+    if unreachable.contains(&path) || !visited.insert(path.clone()) {
         return false;
     }
     let Ok(source) = std::fs::read_to_string(&path) else {
@@ -1785,7 +1811,7 @@ fn require_graph_reaches(
         .filter_map(|specifier| {
             super::super::resolve::resolve_relative_import_path(&specifier, &path)
         })
-        .any(|dependency| require_graph_reaches(&dependency, target, visited))
+        .any(|dependency| require_graph_reaches(&dependency, target, visited, unreachable))
 }
 
 fn inactive_platform_guarded_requires(

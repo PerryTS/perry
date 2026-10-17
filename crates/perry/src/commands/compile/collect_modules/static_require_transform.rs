@@ -464,6 +464,11 @@ fn prepend_imports_preserving_shebang(source: &str, imports: &[String]) -> Strin
 }
 
 fn collect_create_require_aliases(source: &str) -> HashSet<String> {
+    // Only an imported `createRequire` yields an alias: skip the regex scan
+    // over a source that never names it.
+    if !source.contains("createRequire") {
+        return HashSet::new();
+    }
     static IMPORT_RE: OnceLock<Regex> = OnceLock::new();
     let import_re = IMPORT_RE.get_or_init(|| {
         Regex::new(

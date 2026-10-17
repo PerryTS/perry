@@ -263,6 +263,27 @@ fn transform_legacy_args(args: Vec<String>) -> Vec<String> {
     new_args
 }
 
+const MAX_STACK_MB: usize = 16 * 1024;
+
+fn requested_stack_mb() -> Option<usize> {
+    std::env::var("PERRY_MAIN_STACK_MB")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|mb: &usize| *mb > 0)
+}
+
+/// Stack size of the compiler thread (`PERRY_MAIN_STACK_MB`, default 128 MB,
+/// clamped to 16 GB). Threads that run front-end work for it (source
+/// preparation workers) use the same size: they run the same recursive
+/// parsers and scanners on the same inputs.
+pub(crate) fn compiler_stack_bytes() -> usize {
+    requested_stack_mb()
+        .map(|mb| mb.min(MAX_STACK_MB))
+        .unwrap_or(128)
+        .checked_mul(1024 * 1024)
+        .expect("stack size in bytes fits usize (clamped above)")
+}
+
 fn main() -> Result<()> {
     // Install a panic hook that prints a Perry-formatted `Error:` line before
     // the default backtrace dump. Without this, a panic deep in the compile
@@ -291,25 +312,12 @@ fn main() -> Result<()> {
     // twice: v0.5.973, #6593). Invalid or zero values fall back to 128;
     // values above 16384 (16 GB) clamp so the MB→bytes conversion cannot
     // overflow usize and the spawn below cannot fail on an absurd request.
-    const MAX_STACK_MB: usize = 16 * 1024;
-    let stack_mb: usize = std::env::var("PERRY_MAIN_STACK_MB")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .filter(|mb| *mb > 0)
-        .map(|mb: usize| {
-            if mb > MAX_STACK_MB {
-                eprintln!(
-                    "perry: PERRY_MAIN_STACK_MB={mb} exceeds the {MAX_STACK_MB} MB ceiling; clamping"
-                );
-                MAX_STACK_MB
-            } else {
-                mb
-            }
-        })
-        .unwrap_or(128);
-    let stack_bytes = stack_mb
-        .checked_mul(1024 * 1024)
-        .expect("stack size in bytes fits usize (clamped above)");
+    if let Some(mb) = requested_stack_mb().filter(|mb| *mb > MAX_STACK_MB) {
+        eprintln!(
+            "perry: PERRY_MAIN_STACK_MB={mb} exceeds the {MAX_STACK_MB} MB ceiling; clamping"
+        );
+    }
+    let stack_bytes = compiler_stack_bytes();
     let builder = std::thread::Builder::new()
         .name("perry-main".into())
         .stack_size(stack_bytes);
@@ -318,7 +326,8 @@ fn main() -> Result<()> {
         Err(err) => {
             return Err(anyhow::anyhow!(
                 "failed to spawn the perry-main compiler thread \
-                 (stack size {stack_mb} MB; try a smaller PERRY_MAIN_STACK_MB): {err}"
+                 (stack size {} MB; try a smaller PERRY_MAIN_STACK_MB): {err}",
+                stack_bytes / (1024 * 1024)
             ));
         }
     };

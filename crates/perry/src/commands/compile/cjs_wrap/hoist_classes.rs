@@ -218,7 +218,18 @@ pub fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
 /// column 0 (strict top-level only — nested classes inside functions /
 /// blocks / object literals are left alone). Skips classes whose name is
 /// already a duplicate of a previously-seen class (defensive).
+#[cfg(test)]
 pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, String) {
+    let exported_names = super::extract_exports::extract_exports_from_source(source);
+    extract_top_level_class_decls_with_exports(source, &exported_names)
+}
+
+/// `exported_names`: `extract_exports_from_source(source)`, which the caller
+/// already computed for its own use.
+pub fn extract_top_level_class_decls_with_exports(
+    source: &str,
+    exported_names: &[String],
+) -> (String, Vec<String>, String) {
     let bytes = source.as_bytes();
 
     // A top-level `class` candidate discovered by the brace-balanced scan.
@@ -285,7 +296,6 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
     let function_decls = collect_top_level_function_decls(source, &stripped_source);
     let function_names: Vec<String> = function_decls.iter().map(|f| f.name.clone()).collect();
     let class_names = top_level_class_names(source);
-    let exported_names = super::extract_exports::extract_exports_from_source(source);
     let mut unsafe_function_names = Vec::new();
     for decl in &function_decls {
         let mut blockers = iife_locals.clone();

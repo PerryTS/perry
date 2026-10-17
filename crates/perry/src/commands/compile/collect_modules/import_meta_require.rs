@@ -268,12 +268,19 @@ fn unique_identifier(source: &str, prefix: &str, index: usize) -> String {
     }
 }
 
+/// Whether [`rewrite_import_meta_require_addons`] can change `source` or the
+/// context. When false the rewrite returns `source` unchanged and touches
+/// nothing, so source preparation may run ahead of the walk without it.
+pub(super) fn import_meta_require_may_apply(source: &str) -> bool {
+    source.contains("import.meta") && source.contains("require")
+}
+
 pub(super) fn rewrite_import_meta_require_addons(
     source: &str,
     module_path: &Path,
     ctx: &mut CompilationContext,
 ) -> Result<String> {
-    if !source.contains("import.meta") || !source.contains("require") {
+    if !import_meta_require_may_apply(source) {
         return Ok(source.to_string());
     }
     let filename = module_path.to_string_lossy();

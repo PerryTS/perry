@@ -1232,6 +1232,10 @@ pub struct CompilationContext {
     /// Gates CJS-wrap source mapping capture for debug symbols and text opt
     /// reports, so the default build never records `cjs_wrap_debug_sources`.
     pub debug_symbols: bool,
+    /// Worker threads that prepare module sources ahead of the module walk.
+    /// `None` sizes them from the available parallelism; `Some(0)` prepares
+    /// every module on the walk thread. Output is the same either way.
+    pub source_prep_workers: Option<usize>,
 }
 
 /// #5247 / #7036: source mapping for a CJS-wrapped module, used by debug
@@ -1416,6 +1420,7 @@ impl CompilationContext {
             cjs_wrap_debug_sources: HashMap::new(),
             cjs_require_diagnostics: true,
             debug_symbols: false,
+            source_prep_workers: None,
         }
     }
 }
