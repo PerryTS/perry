@@ -1175,3 +1175,78 @@ fn the_cap_counts_root_loads_not_derived_values() {
          function and silently leaves all of them in place"
     );
 }
+
+/// Past `MAX_BLOCK_LOAD_PRODUCT`: `BLOCKS` blocks, each with its own root
+/// load, plus one cell address derived at entry and read in every block below
+/// a collecting call (`closure_capture_cells`' entry cache, the shape tsc's
+/// module-body closure carried stale across every collection once it outgrew
+/// the cap). `store_in_body` adds a store to the slot in the last block.
+fn past_the_cap(store_in_body: bool) -> (LlFunction, usize) {
+    const BLOCKS: usize = 2900;
+    let mut f = LlFunction::new("huge", DOUBLE, vec![(DOUBLE, "%arg".into())]);
+    let mut labels = Vec::with_capacity(BLOCKS + 1);
+    labels.push(f.create_block("entry").label.clone());
+    for i in 0..BLOCKS {
+        labels.push(f.create_block(&format!("b{i}")).label.clone());
+    }
+    let slot;
+    let cell;
+    {
+        let b = f.block_mut(0).unwrap();
+        slot = b.alloca(DOUBLE);
+        b.store(DOUBLE, "%arg", &slot);
+        b.call_void(
+            "js_shadow_slot_bind",
+            &[(crate::types::I32, "0"), (PTR, &slot)],
+        );
+        let boxed = b.load(DOUBLE, &slot);
+        let bits = b.bitcast_double_to_i64(&boxed);
+        let base = b.and(I64, &bits, "281474976710655");
+        cell = b.add(I64, &base, "24");
+        b.br(&labels[1]);
+    }
+    for i in 0..BLOCKS {
+        let next = labels.get(i + 2).cloned();
+        let b = f.block_mut(i + 1).unwrap();
+        let boxed = b.load(DOUBLE, &slot);
+        let recv = b.bitcast_double_to_i64(&boxed);
+        b.call(DOUBLE, "js_object_get_field_by_name_f64", &[]);
+        b.call_void(
+            "js_object_set_field_by_name",
+            &[(I64, &recv), (DOUBLE, "0.0")],
+        );
+        b.call(I64, "js_box_get_bits_trusted", &[(I64, &cell)]);
+        if store_in_body && next.is_none() {
+            b.store(DOUBLE, "%arg", &slot);
+        }
+        match next {
+            Some(n) => b.br(&n),
+            None => b.ret(DOUBLE, "0.0"),
+        }
+    }
+    assert!((BLOCKS + 1) * (BLOCKS + 1) > MAX_BLOCK_LOAD_PRODUCT);
+    (f, BLOCKS)
+}
+
+#[test]
+fn past_the_cap_an_entry_stored_root_is_still_reloaded() {
+    let (mut f, blocks) = past_the_cap(false);
+    assert_eq!(
+        apply_to_function(&mut f),
+        2 * blocks,
+        "each block's own receiver and the entry-derived cell address are read \
+         below a collecting call; declining the whole function leaves every \
+         one of them naming the pre-collection address"
+    );
+}
+
+#[test]
+fn past_the_cap_a_root_stored_in_the_body_keeps_its_ir() {
+    let (mut f, _) = past_the_cap(true);
+    assert_eq!(
+        apply_to_function(&mut f),
+        0,
+        "past the cap there is no path walk, so a root the body stores to \
+         cannot be proven unchanged at a use and must be left alone"
+    );
+}
