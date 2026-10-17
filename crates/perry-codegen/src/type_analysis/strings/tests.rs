@@ -49,6 +49,7 @@ fn concat_probe_ir(property: &str) -> String {
     let module = Module {
         name: "alias_string_concat.ts".to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),

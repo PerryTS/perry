@@ -69,6 +69,7 @@ fn module_with(function: Function) -> Module {
     Module {
         name: "declared_string_add.ts".to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),

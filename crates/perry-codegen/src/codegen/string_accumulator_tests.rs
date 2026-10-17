@@ -53,6 +53,7 @@ fn module(init: Expr, body: Vec<Stmt>) -> Module {
     Module {
         name: "string_accumulator.ts".to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),

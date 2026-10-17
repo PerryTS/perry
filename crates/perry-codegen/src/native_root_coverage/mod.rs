@@ -192,6 +192,7 @@ fn bare_module(name: &str) -> Module {
         annexb_global_undefined_names: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),

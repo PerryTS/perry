@@ -121,6 +121,7 @@ pub(crate) fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
     Module {
         name: name.to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),

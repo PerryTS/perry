@@ -73,6 +73,7 @@ fn empty_module() -> Module {
     Module {
         name: "gc_exit_teardown.ts".to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
