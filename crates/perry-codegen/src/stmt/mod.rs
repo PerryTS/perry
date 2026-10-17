@@ -307,7 +307,9 @@ fn lower_stmts_list(
         // top, like a loop region does per loop.
 
         crate::expr::class_guard_memo::before_stmt(ctx, stmts, i);
+        crate::layout_desc::create_families::before_stmt(ctx, stmts, i);
         let lowered = lower_stmt(ctx, &stmts[i]);
+        crate::layout_desc::create_families::after_stmt(ctx);
         crate::expr::class_guard_memo::after_stmt(ctx);
         lowered?;
         let declared = binding_cell::declared_cell_roots(ctx, &stmts[i]);

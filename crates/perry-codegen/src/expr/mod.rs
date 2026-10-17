@@ -1429,6 +1429,9 @@ pub(crate) struct FnCtx<'a> {
     /// (`typed_element::yields_element`). A selection hint for the relational
     /// lowering, which is exact for any value.
     pub typed_element_locals: std::collections::HashSet<u32>,
+    /// The body's `Object.create(P)` binding families
+    /// (`layout_desc::create_families`).
+    pub create_families: crate::layout_desc::create_families::CreateState,
     /// The open class-guard run (`class_guard_memo`).
     pub class_guard_window: Option<class_guard_memo::Window>,
 

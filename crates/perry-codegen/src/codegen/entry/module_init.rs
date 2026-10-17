@@ -438,6 +438,7 @@ pub(super) fn compile_module_init(
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
         typed_element_locals: std::collections::HashSet::new(),
+        create_families: Default::default(),
         class_guard_window: None,
         i1_local_slots: HashMap::new(),
         index_used_locals: init_native_facts.index_used_locals(),

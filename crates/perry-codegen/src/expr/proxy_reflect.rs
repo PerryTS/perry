@@ -942,7 +942,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if same_put_value_receiver_expr(target, receiver) {
                 if let Expr::String(k) = key.as_ref() {
                     // Object model step 1: adding an `Object.create(P)` family's key.
-                    if let Some(add) = crate::layout_desc::create_families::add_site(target, k) {
+                    if let Some(add) = crate::layout_desc::create_families::add_site(ctx, target, k)
+                    {
                         return crate::layout_desc::create_families::lower_add(
                             ctx, &add, target, value, *strict,
                         );
