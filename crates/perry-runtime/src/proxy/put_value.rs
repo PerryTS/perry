@@ -151,6 +151,13 @@ pub extern "C" fn js_put_value_set(
     // headers and only performs a barriered overwrite when the target and
     // receiver are the same ordinary object and codegen supplied an interned
     // heap-string key.
+    // Case 2c: a family object's late key and a key outside its layout
+    // (`layout_desc::family_store`); the layout word stays.
+    if target.to_bits() == receiver.to_bits()
+        && unsafe { crate::object::layout_desc::family_store_value(target, key, value) }
+    {
+        return value;
+    }
     let target_bits = target.to_bits();
     let key_bits = key.to_bits();
     if target_bits == receiver.to_bits()
@@ -474,888 +481,45 @@ fn getter_only_accessor_owner_name(receiver: f64, key: &str) -> Option<String> {
     None
 }
 
-#[path = "put_value/packed_add.rs"]
-mod packed_add;
-#[path = "put_value/packed_set.rs"]
-mod packed_set;
 #[cfg(test)]
 #[path = "put_value/record_fixture.rs"]
 pub(super) mod record_fixture;
-pub(crate) use packed_add::note_packed_add_carriers;
-pub(crate) use packed_add::scan_packed_add_roots_mut;
-pub use packed_add::PackedSetSite;
-pub(crate) use packed_add::{
-    census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,
-};
-pub(crate) use packed_set::scan_setter_site_roots_mut;
-#[cfg(any(test, feature = "regex-engine"))]
-pub(crate) use packed_set::PackedSetWays;
-#[cfg(any(test, feature = "regex-engine"))]
-pub(crate) use packed_set::{js_put_value_set_packed_fast, store_and_prime};
-pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
-/// Words in a per-site static-key write cache (`[shape_token, slot]` × the
-/// four inline ways) and in its outlined poly tail. Both are views of the
-/// same `PicCacheSlot` family the read PIC uses; the arena hands out exactly
-/// this many words for them (#9708).
-pub const WRITE_PIC_WORDS: usize = 8;
 
-/// A per-site write cache, as the emitted slot resolves it.
-pub type WritePicCache = [i64; WRITE_PIC_WORDS];
-/// The emitted `@perry_ic_N = private global ptr null` for a write site:
-/// null until the site's first priming miss (#9708).
-pub type WritePicCacheSlot = *mut WritePicCache;
-
-/// Address of way `way` (a `[token, slot]` pair) inside the cache `slot`
-/// resolves to, allocating the cache on first use. A null `slot` yields null:
-/// the poly tail passes that to mean "prime nothing".
-///
-/// # Safety
-/// `slot` must be null or a live write-cache slot; `way` must index a pair
-/// inside `WRITE_PIC_WORDS`.
-#[inline]
-pub unsafe fn write_pic_way_entry(slot: *mut WritePicCacheSlot, way: i32) -> *mut [i64; 2] {
-    if slot.is_null() {
-        return std::ptr::null_mut();
-    }
-    debug_assert!(
-        (0..(WRITE_PIC_WORDS / 2) as i32).contains(&way),
-        "way {way} is outside the {WRITE_PIC_WORDS}-word write cache"
-    );
-    let cache = crate::object::pic_slot_resolve(slot);
-    (cache as *mut i64).add(way as usize * 2) as *mut [i64; 2]
-}
-
-/// Miss path for one way of the codegen-emitted polymorphic PutValue cache.
-///
-/// The full strict/sloppy `[[Set]]` semantics run first. Only a successful
-/// ordinary own-data overwrite may prime `[shape_token, slot]`; every
-/// exotic, descriptor-bearing, frozen, or typed-layout-intact receiver
-/// remains on the miss path. `cache_slot` is the site's
-/// [`WritePicCacheSlot`] address and `way` the pair to prime; the cache is
-/// allocated only when a prime actually happens (#9708), so a site that never
-/// sees a primeable receiver never allocates.
-#[no_mangle]
-pub extern "C" fn js_put_value_set_ic_miss(
-    target: f64,
-    key: *const crate::StringHeader,
-    value: f64,
-    strict: i32,
-    cache_slot: *mut WritePicCacheSlot,
-    way: i32,
-) -> f64 {
-    // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
-    crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_string_ptr(key);
-    let value_handle = scope.root_nanbox_f64(value);
-    let key_value = if key.is_null() {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits())
-    };
-    // #7341: pair the allocating call with the re-read, so the pre-call `key`
-    // address is never nameable.
-    let (result, key) = key_handle.across_const::<crate::StringHeader, _>(|| {
-        js_put_value_set(
-            target_handle.get_nanbox_f64(),
-            key_value,
-            value_handle.get_nanbox_f64(),
-            target_handle.get_nanbox_f64(),
-            strict,
-        )
-    });
-    if cache_slot.is_null() {
-        return result;
-    }
-
-    unsafe {
-        let target = target_handle.get_nanbox_f64();
-        let target_bits = target.to_bits();
-        if (target_bits & !POINTER_MASK) != POINTER_TAG {
-            return result;
-        }
-        let obj_addr = (target_bits & POINTER_MASK) as usize;
-        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
-            return result;
-        };
-        // Charter step 3 (#10871): no integrity or descriptor bit. Whether
-        // THIS key may be overwritten is a fact of the receiver's keys (its
-        // attribute entry, `key_attrs.rs`), checked per key below before
-        // anything is primed; every attribute or integrity change moves the
-        // ShapeId, so the primed token pins it.
-        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
-            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || gc_header._reserved & BLOCKING_FLAGS != 0
-            || key.is_null()
-        {
-            return result;
-        }
-
-        let obj = obj_addr as *mut crate::ObjectHeader;
-        if !crate::object::object_is_regular(obj)
-            || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
-        {
-            return result;
-        }
-        let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key as usize) else {
-            return result;
-        };
-        if key_gc.obj_type != crate::gc::GC_TYPE_STRING
-            || key_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
-                != crate::gc::GC_FLAG_INTERNED
-        {
-            return result;
-        }
-
-        // A numeric-proof sibling must never enter an own-slot write cache:
-        // a hit would bypass the owner store that retires the proof.
-        if !crate::object::shapes::store_kind::shape_admits_plain_store(
-            crate::object::shapes::object_shape_stamp(obj),
-        ) {
-            return result;
-        }
-        let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
-            return result;
-        };
-        let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
-        if keys.is_null() || (keys as u64) >> 48 != 0 {
-            return result;
-        }
-        let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
-            return result;
-        };
-        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
-            || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        {
-            return result;
-        }
-
-        let mut own_idx = crate::object::prop_plan::read_plan_lookup(
-            keys as usize,
-            key as usize,
-            shape.logical_key_count,
-        );
-        if own_idx.is_none() {
-            let key_count = shape.logical_key_count as usize;
-            if key_count > 4096 {
-                return result;
-            }
-            // #6759: shape-index + dense-slot scan; the old per-element
-            // js_array_get walk was ~60 accessor calls per property op.
-            if let Some(i) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key) {
-                crate::object::prop_plan::read_plan_record(keys as usize, key as usize, i);
-                own_idx = Some(i);
-            }
-        }
-        let Some(idx) = own_idx else {
-            return result;
-        };
-        // Charter step 3: an accessor or a non-writable key (a frozen
-        // object's keys are all non-writable) is never primed.
-        if !crate::object::key_attrs::entry_is_plain_writable_data(
-            crate::object::key_attrs::keys_entry(keys, idx),
-        ) {
-            #[cfg(feature = "attr-census")]
-            crate::object::attr_census::note_global("ic.write_prime_declined.not_plain_key");
-            return result;
-        }
-        let idx = crate::object::key_attrs::key_storage_slot(keys, idx);
-        // #9287: a slot past the inline region primes too, carrying
-        // IC_SLOT_OVERFLOW_BIT exactly like the dynamic-key IC's stub entries.
-        // A way hit on such a slot is served by `dyn_ic_try_store` —
-        // the same validate-and-store the dynamic IC has always used for
-        // overflow properties (spill store, tombstone check, barriers). Before
-        // this, `idx >= alloc_limit` returned without priming, so a property
-        // in overflow storage missed this cache on EVERY access: 3 ms vs
-        // 27 ms for the identical loop with the identical object, decided by
-        // whether the property sat at index 1 or index 2.
-        let alloc_limit = shape.live_inline_slot_count as usize;
-        let slot_word: u32 = if (idx as usize) < alloc_limit {
-            idx
-        } else if (idx as usize) < shape.logical_key_count as usize && idx < IC_SLOT_OVERFLOW_BIT {
-            idx | IC_SLOT_OVERFLOW_BIT
-        } else {
-            return result;
-        };
-
-        // The descriptor above already proves this stamp is live, so the
-        // token comes from the header word rather than from a second full
-        // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
-            | crate::object::shapes::object_shape_stamp(obj) as u64;
-
-        // Publish the token last conceptually: a zero-initialized or stale
-        // token cannot hit this slot until it matches this receiver's current
-        // discriminated shape token. Perry's read PIC uses the same format.
-        let entry = write_pic_way_entry(cache_slot, way);
-        (*entry)[1] = slot_word as i64;
-        (*entry)[0] = shape_token as i64;
-        // Rotating-key sites overflow the single-slot site cache immediately;
-        // the global stub is what lets them hit. Key bits from the rooted key.
-        // `key_handle` here roots a raw STRING pointer (this entry's key arrives
-        // as *const StringHeader) — re-box it the way `key_value` above did
-        // rather than asking the handle for a NaN-boxed read it does not hold.
-        // Scoped read: nothing inside the closure allocates or polls the
-        // collector, so the pointer cannot go stale within it (#7341).
-        key_handle.with_const_ptr::<crate::StringHeader, _>(|key_now| {
-            if !key_now.is_null() {
-                let boxed =
-                    f64::from_bits(crate::value::js_nanbox_string(key_now as i64).to_bits());
-                if let Some(kb) = stub_key_bits(boxed) {
-                    write_stub_insert(shape_token, kb, slot_word);
-                }
-            }
-        });
-    }
-
-    result
-}
-
-// ---------------------------------------------------------------------------
-// #6812 (w12): 3-way dynamic-key write IC.
-//
-// Layout of the per-site `[8 x i64]` cache (same global family as the
-// static write PIC): `[shape_token, k0, s0, k1, s1, k2, s2, _spare]`.
-// A way's key is the NaN-boxed key VALUE's bits: SSO keys (<= 5 bytes)
-// compare by CONTENT — move-immune and hitting across distinct string
-// instances — while heap keys compare by identity (a moved or re-built key
-// simply misses; identity can never false-hit). The shape token mirrors the
-// static PIC (stamped ShapeId lifted with the ID bit, else the shared keys
-// pointer) and, like every Perry IC, is only COMPARED, never dereferenced:
-// stale entries self-heal by missing. That property is what the discarded
-// safepointing-RHS approach lacked — nothing here roots or revalidates
-// across safepoints, so the hot path is pure compares before a store.
-
-const DYN_IC_WAYS: usize = 3;
-
-/// Outlined dynamic-key PutValue with per-site cache. Fast path: shape token
-/// + key-bits match -> validated own-slot overwrite. Everything else falls
-/// through to the full `[[Set]]` semantics and re-primes.
-///
-/// `cache_slot` is the site's [`WritePicCacheSlot`] address; the cache is read
-/// through it here and allocated by the miss handler on the first prime
-/// (#9708).
-#[no_mangle]
-pub extern "C" fn js_put_value_set_dyn_ic(
-    cache_slot: *mut WritePicCacheSlot,
-    target: f64,
-    key: f64,
-    value: f64,
-    strict: i32,
-) -> f64 {
-    #[cfg(perry_contract_checks)]
-    crate::contracts::put_value(target, key, value, target);
-    // SAFETY: a non-null slot is the emitted pointer global (or a test's
-    // stack slot); reading it is the same load the inline hit path performs.
-    let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
-    if !cache.is_null() {
-        let hit = unsafe {
-            let c = &*cache;
-            let token = c[0] as u64;
-            let key_bits = key.to_bits() as i64;
-            // `0` is the empty-way sentinel — and also the NaN-box bits of
-            // the JS number 0, so a dynamic numeric-0 key must never reach
-            // the way compares (it would false-hit an unfilled way).
-            if token != 0 && key_bits != 0 {
-                let mut found = None;
-                for way in 0..DYN_IC_WAYS {
-                    if c[1 + way * 2] == key_bits {
-                        found = Some(c[2 + way * 2] as u32);
-                        break;
-                    }
-                }
-                // Way miss on a rotating-key site: the global stub answers
-                // in one probe. `dyn_ic_try_store` still validates everything.
-                if found.is_none() {
-                    found = stub_key_bits(key).and_then(|kb| write_stub_probe(token, kb));
-                }
-                found.and_then(|slot| dyn_ic_try_store(target, token, slot, value))
-            } else {
-                None
-            }
-        };
-        if let Some(ret) = hit {
-            return ret;
-        }
-    }
-    js_put_value_set_dyn_ic_miss(cache_slot, target, key, value, strict)
-}
-
-/// Megamorphic stub cache for dynamic string-keyed WRITES — V8's answer to a
-/// site that rotates more keys than its per-site ways can hold.
-///
-/// The per-site inline IC has `DYN_IC_WAYS = 3`; a loop writing 500 rotating
-/// keys evicts permanently and every write pays the full miss walk (~400 ns
-/// measured, vs node's ~28 ns/op on the same host). This global table is keyed
-/// on `(shape_token, key_bits)` so capacity scales with the PROGRAM's live
-/// (shape, key) pairs instead of one site's ways.
-///
-/// Correctness leans entirely on [`dyn_ic_try_store`], which re-validates the
-/// receiver's CURRENT shape token, blocking flags and slot bound on every hit.
-/// A stale entry therefore misses; it cannot corrupt. That is why there is no
-/// epoch and no GC hook: entries hold no roots (token is an id, key_bits are
-/// SSO immediates or interned-pointer bits used only for equality, slot is an
-/// index), and wrong entries are rejected by validation.
-///
-/// SSO keys (≤ 5 bytes — every `"k" + i`-style computed name) recur with
-/// identical bits by construction. Heap-string keys recur once canonicalised:
-/// the first write interns the key (write tail) and later concat evaluations
-/// return the canonical pointer (intern hit), so the second prime converges.
-/// Buckets in the megamorphic write stub, each holding [`WRITE_STUB_ASSOC`]
-/// entries. Capacity is `WRITE_STUB_BUCKETS * WRITE_STUB_ASSOC`.
-const WRITE_STUB_BUCKETS: usize = 2048;
-
-/// Two ways per bucket, because a DIRECT-MAPPED table cannot hold a colliding
-/// pair at all: the two keys evict each other on every rotation through the
-/// key set, so both miss forever and neither can ever stabilise. Measured on
-/// the computed-key write loop, that was not a rounding error — the pairs the
-/// runtime reported (`"k10"`/`"k115"`, `"k11"`/`"k125"`) land on one index,
-/// and the writes that never settle were 11.9% of the program, essentially
-/// all of it the full `[[Set]]` walk they fall through to.
-///
-/// A sweep of the 500-key working set puts the worst bucket at two, so two
-/// ways absorb the collisions that exist rather than merely reducing them.
-const WRITE_STUB_ASSOC: usize = 2;
-
-crate::perry_thread_local! {
-    static WRITE_STUB: [[std::cell::Cell<(u64, u64, u64)>; WRITE_STUB_ASSOC]; WRITE_STUB_BUCKETS] =
-        std::array::from_fn(|_| std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0))));
-}
-
-/// Content-stable cache key for a NaN-boxed property key, or `None` when this
-/// key must not be cached in the stub at all.
-///
-/// Two jobs, and the second one is a safety property.
-///
-/// **Normalization.** A short key can arrive in EITHER representation — as an
-/// SSO immediate, or as a heap `StringHeader*` when some intermediate (a typed
-/// local, a call boundary) materialized it. Those are the same JS string with
-/// completely different bits, and a fresh heap key minted per loop iteration
-/// is what made a raw-bits stub miss 98% of its probes even after the concat
-/// itself started returning SSO. Folding a short ASCII heap key back to the
-/// SSO bits its content would have had makes the cache key depend on the
-/// STRING, not on which representation happened to reach this call.
-///
-/// **Content-only, never an address.** A key that does not fit the inline form
-/// is rejected rather than cached under its pointer bits. Caching an address
-/// would be unsound here in a way the per-hit `dyn_ic_try_store` revalidation
-/// cannot catch: that check confirms the receiver still has the cached SHAPE,
-/// not that the cached SLOT belongs to this KEY. So a long key at address `A`
-/// could be primed, evicted from the intern table (which is direct-mapped and
-/// evicts on collision), collected, and its address recycled by an unrelated
-/// string — whose write would then hit the stale entry and overwrite the wrong
-/// slot. Restricting the table to content-derived bits removes that class
-/// entirely: an entry names a STRING VALUE, holds no pointer, and so needs
-/// neither GC roots nor eviction epochs. Longer keys simply keep the existing
-/// (unchanged) miss path.
-#[inline(always)]
-fn stub_key_bits(key: f64) -> Option<u64> {
-    let bits = key.to_bits();
-    if crate::value::JSValue::from_bits(bits).is_short_string() {
-        // Already an SSO immediate: pure content.
-        return Some(bits);
-    }
-    if (bits & !POINTER_MASK) != crate::value::STRING_TAG {
-        return None;
-    }
-    let ptr = (bits & POINTER_MASK) as *const crate::StringHeader;
-    unsafe { crate::string::short_ascii_sso_bits(ptr) }
-}
-
-/// Way index for a `(shape_token, key_bits)` pair.
-///
-/// Multiplicative (Fibonacci) mixing, taking the TOP bits of the product —
-/// not the low bits of an XOR. The distinction is the whole ballgame for
-/// string keys: an SSO key's bits are its bytes in little-endian order, so a
-/// family like `"k0".."k499"` shares its first byte and varies in bytes 2-4.
-/// Indexing on the low bits therefore collapses hundreds of distinct keys onto
-/// a handful of ways, which evict each other on every write — measured as
-/// 1.17M of 1.19M probes missing with the way occupied by a DIFFERENT key at
-/// the SAME shape token, while the table sat 99% empty.
-#[inline(always)]
-fn write_stub_way(token: u64, key_bits: u64) -> usize {
-    let h = (token ^ key_bits).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    ((h >> 40) as usize) & (WRITE_STUB_BUCKETS - 1)
-}
-
-#[inline(always)]
-fn write_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
-    WRITE_STUB.with(|t| {
-        let bucket = &t[write_stub_way(token, key_bits)];
-        for way in bucket.iter() {
-            let (tok, kb, slot) = way.get();
-            if tok == token && kb == key_bits && tok != 0 {
-                return Some(slot as u32);
-            }
-        }
-        None
-    })
-}
-
-#[inline(always)]
-fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
-    // Never for a dictionary shape (`shapes::SITE_SHAPE_ID_END`).
-    if !crate::object::shapes::is_site_matchable_token(token) || key_bits == 0 {
-        return;
-    }
-    WRITE_STUB.with(|t| {
-        let bucket = &t[write_stub_way(token, key_bits)];
-        let entry = (token, key_bits, slot as u64);
-        // Refresh this key's own way if it is already resident, then fill an
-        // empty one, and only otherwise evict — shifting way 0 down so the
-        // most recently primed key survives.
-        for way in bucket.iter() {
-            let (tok, kb, _) = way.get();
-            if tok == token && kb == key_bits {
-                way.set(entry);
-                return;
-            }
-        }
-        for way in bucket.iter() {
-            if way.get().0 == 0 {
-                way.set(entry);
-                return;
-            }
-        }
-        for i in (1..WRITE_STUB_ASSOC).rev() {
-            bucket[i].set(bucket[i - 1].get());
-        }
-        bucket[0].set(entry);
-    });
-}
-
-/// Slot-word bit marking a cached slot as living in the OVERFLOW store.
-///
-/// Set at prime time, where the full receiver validation runs and the
-/// inline-vs-overflow verdict is known. `object_kind`,
-/// `live_inline_slot_count` and `logical_key_count` are immutable per ordinary
-/// shape id. #9064's private stable-tombstone state is the exception: cached
-/// slots remain placed, but a deleted one contains `TAG_HOLE` and must miss.
-/// Otherwise a hit whose token matches the receiver's
-/// CURRENT stamp has already proved everything the prime proved about kind
-/// and bounds. What remains mutable per object is the GC header — type,
-/// forwarded, and the blocking flags `Object.freeze`-family operations set —
-/// and the hit still checks those on every store.
-
+/// The bit an overflow-held slot carries in a slot word (`read_stub`,
+/// `dynamic_key_read`, the named-set fast paths): the slot indexes the
+/// receiver's spill/overflow storage, not its inline slots.
 pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 
-/// Validated fast store for a cached `(token, slot)` hit. Header checks and
-/// the token compare read the receiver's LIVE state; everything shape-derived
-/// was proved at prime time and is immutable per id (see
-/// [`IC_SLOT_OVERFLOW_BIT`]). A stale entry misses; it cannot store wrongly.
-#[inline]
-unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Option<f64> {
-    let target_bits = target.to_bits();
-    if (target_bits & !POINTER_MASK) != POINTER_TAG {
-        return None;
-    }
-    let obj_addr = (target_bits & POINTER_MASK) as usize;
-    let gc_header = crate::value::addr_class::try_read_gc_header(obj_addr)?;
-    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
-        | crate::gc::OBJ_FLAG_SEALED
-        | crate::gc::OBJ_FLAG_NO_EXTEND
-        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || gc_header._reserved & BLOCKING_FLAGS != 0
-    {
-        return None;
-    }
-    let obj = obj_addr as *mut crate::ObjectHeader;
-    // Token compare against the receiver's CURRENT stamp. On a match, the
-    // shape id is the one every prime-time check ran under — receiver kind,
-    // class-object exclusion, and the slot's inline/overflow placement (now
-    // carried in the slot word) — so none of it is re-derived here. This
-    // took `write_fast_path_receiver_kind_ok` (6.8%), `shape_object_kind_by_id`
-    // (5.1%) and the descriptor bound fetch (4.4%) off every hit of the
-    // combined overwrite loop.
-    let stamp = crate::object::shapes::object_shape_stamp(obj);
-    if (crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64) != token {
-        return None;
-    }
-    if gc_header._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0 {
-        let old_bits = if slot & IC_SLOT_OVERFLOW_BIT != 0 {
-            crate::object::overflow_get(obj_addr, (slot & !IC_SLOT_OVERFLOW_BIT) as usize)?
-        } else {
-            let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
-                as *const crate::JSValue;
-            (*fields_ptr.add(slot as usize)).bits()
-        };
-        if old_bits == crate::value::TAG_HOLE {
-            return None;
-        }
-    }
-    if slot & IC_SLOT_OVERFLOW_BIT != 0 {
-        crate::object::overflow_set(
-            obj_addr,
-            (slot & !IC_SLOT_OVERFLOW_BIT) as usize,
-            value.to_bits(),
-        );
-        return Some(value);
-    }
-    crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
-    Some(value)
-}
-
-// #6088-style keep: codegen emits the only call; a whole-program bitcode
-// link would otherwise dead-strip the IC entry.
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(
-    *mut WritePicCacheSlot,
-    f64,
-    f64,
-    f64,
-    i32,
-) -> f64 = js_put_value_set_dyn_ic;
-
-/// #9287 transition-IC: the emitted hit's SPILL-APPEND arm.
-///
-/// The inline hit has already matched the global transition cache entry
-/// (prev shape, interned key) and validated the target edge; this helper is
-/// its one call, for the slot that lives past the inline region. It
-/// re-validates the receiver against `prev_token` exactly as
-/// `dyn_ic_try_store` does — kind, forwarding, blocking flags, current stamp
-/// — and then performs the spill store ONLY when it cannot grow
-/// (`spill_store_would_be_in_capacity`): a growing spill store allocates,
-/// and the emitted code stamps the target shape with registers it loaded
-/// BEFORE this call, so this function must never be a collection point.
-/// Growth returns 0 and the emitted code falls to the ordinary miss path,
-/// which is built for it.
-///
-/// Stable-tombstone receivers decline outright: an append on one interacts
-/// with hole semantics the ordinary path owns.
+/// A same-receiver dynamic-key store `target[key] = value` (object model
+/// §3.3; perry-codegen `expr/proxy_reflect.rs`): a stable-tombstone re-add,
+/// a key the receiver's layout names (its slot) or any other computed key
+/// (appended to the receiver's overflow, no transition), else the complete
+/// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
-pub extern "C" fn js_transition_ic_spill_append(
-    target: f64,
-    prev_token: i64,
-    slot_idx: u32,
-    value: f64,
-) -> i32 {
-    unsafe {
-        let target_bits = target.to_bits();
-        if (target_bits & !POINTER_MASK) != POINTER_TAG {
-            return 0;
-        }
-        let obj_addr = (target_bits & POINTER_MASK) as usize;
-        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
-            return 0;
-        };
-        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
-            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || gc_header._reserved & BLOCKING_FLAGS != 0
-        {
-            return 0;
-        }
-        let obj = obj_addr as *mut crate::ObjectHeader;
-        let stamp = crate::object::shapes::object_shape_stamp(obj);
-        if (crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64) != prev_token as u64 {
-            return 0;
-        }
-        if !crate::object::spill_store_would_be_in_capacity(obj_addr, slot_idx as usize) {
-            return 0;
-        }
-        crate::object::overflow_set(obj_addr, slot_idx as usize, value.to_bits());
-        1
+pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+    // Case 2c: a family object's late key and a key outside its layout
+    // (`layout_desc::family_store`); the layout word stays.
+    if unsafe { crate::object::layout_desc::family_store_value(target, key, value) } {
+        return value;
     }
-}
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_TRANSITION_IC_SPILL_APPEND: extern "C" fn(f64, i64, u32, f64) -> i32 =
-    js_transition_ic_spill_append;
-
-/// #9287 probe: bumped by the emitted transition hit when the program was
-/// compiled with `PERRY_TRANSITION_IC_PROBE=1`. See
-/// `PERRY_TRANSITION_IC_HITS` for why the proof is a count, not output.
-#[no_mangle]
-pub extern "C" fn js_transition_ic_note_hit() {
-    static REPORT_AT_EXIT: std::sync::Once = std::sync::Once::new();
-    REPORT_AT_EXIT.call_once(|| unsafe {
-        // Probe builds only reach here, so the atexit hook costs nothing in
-        // ordinary programs. The count goes to stderr where the hit-count
-        // test reads it.
-        libc::atexit(transition_ic_report_shim);
-    });
-    crate::object::PERRY_TRANSITION_IC_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-extern "C" fn transition_ic_report_shim() {
-    crate::object::js_transition_ic_probe_report();
-}
-
-/// Full `[[Set]]` semantics + prime. Mirrors the static PIC's prime policy
-/// (only a successful ordinary own-data overwrite on a class-tagged,
-/// unblocked, shape-shared receiver may prime), with the key resolved from
-/// its VALUE (SSO or heap) instead of requiring an interned pointer.
-#[no_mangle]
-pub extern "C" fn js_put_value_set_dyn_ic_miss(
-    cache_slot: *mut WritePicCacheSlot,
-    target: f64,
-    key: f64,
-    value: f64,
-    strict: i32,
-) -> f64 {
     // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
     crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
-    // The slot is read once here; a null cache means the site has never
-    // primed, which the stub probe below treats as "no site token" exactly as
-    // it treated an all-zero global (#9708).
-    let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
-    // The compiled inline IC (`lower_put_value_dyn_ic_inline`) walks its three
-    // ways in GENERATED code and calls straight here on a way miss — it never
-    // enters `js_put_value_set_dyn_ic` above. A rotating-key site therefore
-    // lands here on every write, so the megamorphic stub probe must sit at
-    // THIS entry to be on that path at all. `c[0]` holds the site's primed
-    // shape token; `dyn_ic_try_store` validates it against the receiver's
-    // live state, so a stale site token or stub entry misses into the full
-    // walk below instead of storing wrongly. No allocation precedes the
-    // probe — the handle scope opens only after this fails.
-    if !cache.is_null() {
-        let c = unsafe { &*cache };
-        let token = c[0] as u64;
-        let key_bits = key.to_bits();
-        if token != 0 && key_bits != 0 {
-            if let Some(slot) = stub_key_bits(key).and_then(|kb| write_stub_probe(token, kb)) {
-                if let Some(ret) = unsafe { dyn_ic_try_store(target, token, slot, value) } {
-                    return ret;
-                }
-            }
-        }
-    }
-
-    // Stable-tombstone re-adds own their complete rooted transition. Probe
-    // before constructing this miss handler's general-purpose handle scope so
-    // the hot successful lane does not root target/key/value twice.
     let target_bits = target.to_bits();
     if (target_bits & !POINTER_MASK) == POINTER_TAG {
         let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
-        let stub_bits = stub_key_bits(key);
-        if let Some((slot, obj, value)) = crate::object::try_readd_stable_tombstone(obj, key, value)
-        {
-            let token = crate::object::shapes::PIC_ID_TOKEN_BIT
-                | unsafe { crate::object::shapes::object_shape_stamp(obj) } as u64;
-            if let Some(kb) = stub_bits {
-                write_stub_insert(token, kb, slot);
-                // Through the read stub's own receiver guard, the one its
-                // probe runs (#10768), not a raw insert under `token`.
-                unsafe { crate::object::read_stub::read_stub_prime(obj, kb, slot) };
-            }
+        // Stable-tombstone re-adds own their complete rooted transition.
+        if let Some((_, _, value)) = crate::object::try_readd_stable_tombstone(obj, key, value) {
             return value;
         }
-    }
-
-    // §3.3: a computed key the receiver's layout does not name is appended
-    // to its overflow; a layout key continues to the slot store below. A
-    // decline allocates nothing, so the raw operands stay current.
-    if (target_bits & !POINTER_MASK) == POINTER_TAG {
-        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        // §3.3: a decline allocates nothing, so the raw operands stay
+        // current.
         if let Some(stored) =
             unsafe { crate::object::shape_store::try_dynamic_store(obj, key, value) }
         {
             return stored;
         }
     }
-
-    // A computed write site that constructs the same plain-object shape over
-    // and over changes receiver shape after every append, so the per-site
-    // overwrite IC above cannot hit. Reuse the runtime's global transition
-    // lattice before entering the full `[[Set]]` walk: the helper accepts
-    // only a previously learned transition on a class-id-zero ordinary object
-    // and rejects every receiver with exotic, descriptor, frozen/sealed, or
-    // prototype-interceptor semantics.
-    //
-    // #9287: this try sits BEFORE the handle scope. The value-returning form
-    // roots all three operands itself and re-reads the stored value through
-    // its own root after every internal allocation point, so the operands
-    // need no rooting here — and the fresh-object-construction lane (the
-    // dominant taker of this entry) no longer pays a scope + three roots it
-    // never uses. On a miss, nothing has allocated: `..._fast_impl_value`
-    // opens its scope only after its pre-checks pass, and every pre-check
-    // failure returns before any allocation, so the raw f64 params below are
-    // still valid for the rooted ladder.
-    let mut refreshed: Option<(f64, f64, f64)> = None;
-    let mut target = target;
-    let mut key = key;
-    let mut value = value;
-    if (target_bits & !POINTER_MASK) == POINTER_TAG {
-        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
-        let kb = key.to_bits();
-        if (kb & !POINTER_MASK) == crate::value::STRING_TAG {
-            let key_ptr = (kb & POINTER_MASK) as *const crate::StringHeader;
-            if let Some(stored) = crate::object::object_set_field_by_name_transition_only_fast_value(
-                obj,
-                key_ptr,
-                value,
-                &mut refreshed,
-            ) {
-                return stored;
-            }
-            // A miss AFTER the helper interned the key may have moved the
-            // operands; it hands back re-rooted copies exactly when so.
-            if let Some((t, k, v)) = refreshed {
-                target = t;
-                key = k;
-                value = v;
-            }
-        }
-    }
-
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let value_handle = scope.root_nanbox_f64(value);
-
-    let result = js_put_value_set(
-        target_handle.get_nanbox_f64(),
-        key_handle.get_nanbox_f64(),
-        value_handle.get_nanbox_f64(),
-        target_handle.get_nanbox_f64(),
-        strict,
-    );
-    if cache_slot.is_null() {
-        return result;
-    }
-    unsafe {
-        let target = target_handle.get_nanbox_f64();
-        let key = key_handle.get_nanbox_f64();
-        let target_bits = target.to_bits();
-        if (target_bits & !POINTER_MASK) != POINTER_TAG {
-            return result;
-        }
-        let obj_addr = (target_bits & POINTER_MASK) as usize;
-        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
-            return result;
-        };
-        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
-            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || gc_header._reserved & BLOCKING_FLAGS != 0
-        {
-            return result;
-        }
-        let obj = obj_addr as *mut crate::ObjectHeader;
-        if !crate::object::object_is_regular(obj)
-            || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
-            || crate::array::object_prototype_addr_matches(obj_addr)
-        {
-            return result;
-        }
-        // A numeric-proof sibling must never enter an own-slot write cache:
-        // a hit would bypass the owner store that retires the proof.
-        if !crate::object::shapes::store_kind::shape_admits_plain_store(
-            crate::object::shapes::object_shape_stamp(obj),
-        ) {
-            return result;
-        }
-        let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
-            return result;
-        };
-        let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
-        if keys.is_null() || (keys as u64) >> 48 != 0 {
-            return result;
-        }
-        let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
-            return result;
-        };
-        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
-            || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        {
-            return result;
-        }
-        // Resolve the key's own-field index by VALUE (SSO or heap bytes).
-        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let key_jsval = crate::value::JSValue::from_bits(key.to_bits());
-        let Some(key_bytes) = crate::string::js_string_key_bytes(key_jsval, &mut key_buf) else {
-            return result;
-        };
-        let key_count = shape.logical_key_count as usize;
-        if key_count > 4096 {
-            return result;
-        }
-        let own_idx = crate::object::keys_find_slot_by_bytes(keys, key_count as u32, key_bytes);
-        let Some(idx) = own_idx else {
-            return result;
-        };
-        let idx = crate::object::key_attrs::key_storage_slot(keys, idx);
-        // Generated own-slot hits write raw bits. A ConstFn target must
-        // keep using the checked store funnel so an incompatible overwrite
-        // invalidates its body fact before changing the slot.
-        if crate::object::field_rep::slot_rep(shape.rep, idx)
-            == crate::object::field_rep::REP_SPECIAL
-        {
-            return result;
-        }
-        // The descriptor above already proves this stamp is live, so the
-        // token comes from the header word rather than from a second full
-        // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
-            | crate::object::shapes::object_shape_stamp(obj) as u64;
-        let key_bits = key.to_bits() as i64;
-        // Preserve the empty-way sentinel invariant: never prime bits 0
-        // (only the JS number 0 has them, and numeric keys cannot prime
-        // anyway — the byte resolver above only accepts strings).
-        if key_bits == 0 {
-            return result;
-        }
-        // Feed the megamorphic stub BEFORE the inline-slot bail below: a wide
-        // object keeps every data property in an overflow slot, so gating the
-        // stub on the inline region would starve it for exactly the receivers
-        // it exists for. The slot word carries the inline/overflow verdict
-        // (IC_SLOT_OVERFLOW_BIT), decided HERE where the descriptor is in
-        // hand, so the hit never re-fetches the bound — the verdict is a
-        // fact of the shape id the token pins.
-        let alloc_limit = shape.live_inline_slot_count;
-        if let Some(kb) = stub_key_bits(key) {
-            if idx < alloc_limit {
-                write_stub_insert(shape_token, kb, idx);
-            } else if idx < shape.logical_key_count {
-                // Overflow: bound-checked against the key count at prime,
-                // which the hit-time token match preserves.
-                let slot = idx | IC_SLOT_OVERFLOW_BIT;
-                write_stub_insert(shape_token, kb, slot);
-            }
-        }
-        if idx >= alloc_limit {
-            return result;
-        }
-        let c = &mut *crate::object::pic_slot_resolve(cache_slot);
-        if c[0] as u64 != shape_token {
-            // New shape at this site: restart the way set.
-            c.fill(0);
-        }
-        // MRU insert: shift ways down, newest first. A duplicate key way is
-        // moved to the front rather than duplicated.
-        let mut ways: Vec<(i64, i64)> = (0..DYN_IC_WAYS)
-            .map(|w| (c[1 + w * 2], c[2 + w * 2]))
-            .filter(|(k, _)| *k != 0 && *k != key_bits)
-            .collect();
-        ways.insert(0, (key_bits, idx as i64));
-        ways.truncate(DYN_IC_WAYS);
-        for (w, (k, sl)) in ways.iter().enumerate() {
-            c[1 + w * 2] = *k;
-            c[2 + w * 2] = *sl;
-        }
-        // (The megamorphic stub was already fed above, before the inline-slot
-        // bail — overflow slots feed it too.)
-        // Token last: a zero or stale token cannot hit until it matches the
-        // receiver's current discriminated shape.
-        c[0] = shape_token as i64;
-    }
-    result
+    js_put_value_set(target, key, value, target, strict)
 }
 
 #[cfg(test)]
@@ -1365,16 +529,16 @@ mod tests {
     /// Object model step 4 (§3.3): a computed key the receiver's layout does
     /// not name is appended to the receiver's overflow. The layout id never
     /// changes (the shadow bit marks the overflow) and no shape transition is
-    /// learned or reused, for any receiver of the site; a user-class receiver
-    /// gets the same value semantics.
+    /// learned or reused; a user-class receiver gets the same value
+    /// semantics.
     #[test]
-    fn dynamic_ic_miss_adds_an_unnamed_key_to_the_overflow_without_transitions() {
+    fn a_dynamic_store_adds_an_unnamed_key_to_the_overflow_without_transitions() {
         let _lock = crate::gc::global_side_table_test_lock();
         crate::object::test_reset_transition_fast_hits();
         crate::object::shapes::test_reset_cached_transition_stamps();
 
-        // Longer than the SSO limit so this exercises the heap-string arm
-        // admitted above. A unique name keeps other tests' keys out of it.
+        // Longer than the SSO limit so this exercises the heap-string arm.
+        // A unique name keeps other tests' keys out of it.
         let key_bytes = b"__dyn_ic_transition_fast_test_8783";
         let key_ptr =
             crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
@@ -1388,8 +552,6 @@ mod tests {
             scope.root_raw_mut_ptr(crate::object::js_object_alloc(ANON_CLASS_ID, 0));
         let user_class_handle =
             scope.root_raw_mut_ptr(crate::object::js_object_alloc(USER_CLASS_ID, 0));
-        let mut cache: WritePicCache = [0; WRITE_PIC_WORDS];
-        let mut cache_slot: WritePicCacheSlot = &mut cache;
         let read = |obj: *mut crate::ObjectHeader| {
             let key_ptr = (key_handle.get_nanbox_f64().to_bits() & POINTER_MASK)
                 as *const crate::StringHeader;
@@ -1401,8 +563,7 @@ mod tests {
             let before = unsafe { crate::object::shapes::object_shape_stamp(obj) };
             assert!(!unsafe { crate::object::overflow::has_overflow(obj) });
             assert_eq!(
-                js_put_value_set_dyn_ic_miss(
-                    &mut cache_slot,
+                js_put_value_set_dynamic(
                     crate::value::js_nanbox_pointer(obj as i64),
                     key_handle.get_nanbox_f64(),
                     value,
@@ -1434,8 +595,7 @@ mod tests {
 
         let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
         assert_eq!(
-            js_put_value_set_dyn_ic_miss(
-                &mut cache_slot,
+            js_put_value_set_dynamic(
                 crate::value::js_nanbox_pointer(user_class as i64),
                 key_handle.get_nanbox_f64(),
                 47.0,

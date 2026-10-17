@@ -1858,7 +1858,7 @@ fn class_array_observable_args_keep_lookup_before_call() {
     // the split lookup for a receiver no compiled body claims.
     let select = caller.find("pconst.selected").expect("constant selection");
     let lookup = caller
-        .find("@js_method_site_lookup(")
+        .find("@js_method_lookup(")
         .expect("split lookup half");
     let shift = caller.find("shift").expect("observable argument");
     assert!(select < shift && lookup < shift, "{caller}");

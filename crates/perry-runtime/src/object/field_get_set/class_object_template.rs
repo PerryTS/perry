@@ -1270,6 +1270,9 @@ pub(crate) unsafe fn template_instance(
     class_value: f64,
     class_id: u32,
 ) -> Option<TemplateInstance> {
+    if crate::object::layout_desc::family_of_class(class_id).is_some() {
+        return None;
+    }
     let class = JSValue::from_bits(class_value.to_bits()).as_pointer::<ObjectHeader>();
     if !cell.owned() || class_id == 0 || (*class).class_id != class_id {
         return None;
@@ -1284,7 +1287,13 @@ pub(crate) unsafe fn template_instance(
     // `new` allocates them wider, born in the birth shape of that width: the
     // recorded link names a narrower birth whose later keys would all spill,
     // so the caller allocates the ordinary way and records the wider link.
-    if birth == 0 || linked == 0 || crate::object::learned_inline_field_count(class_id) > width {
+    // A static family's width is its layout's (`object/layout_desc.rs`): the
+    // keys its instances gain live in their overflow, not in learned room.
+    if birth == 0
+        || linked == 0
+        || (crate::object::learned_inline_field_count(class_id) > width
+            && crate::object::layout_desc::family_birth_width(class_id) == 0)
+    {
         return None;
     }
     // The derivation the link was recorded for: this evaluation's

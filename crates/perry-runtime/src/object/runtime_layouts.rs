@@ -154,6 +154,7 @@ macro_rules! runtime_layout {
             key_count: $name::SLOT_COUNT as u32,
             index_mask: (layout_index_size($name::SLOT_COUNT) - 1) as u32,
             index: $name::INDEX.as_ptr(),
+            class_id: 0, parent_class_id: 0,
         };
     };
 }
@@ -1201,6 +1202,8 @@ pub(crate) static mut READABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 6,
     index_mask: 15,
     index: READABLE_STATE_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static WRITABLE_STATE_KEYS: [PerryLayoutKey; 7] = [
@@ -1285,6 +1288,8 @@ pub(crate) static mut WRITABLE_STATE: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 7,
     index_mask: 15,
     index: WRITABLE_STATE_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static URL_SEARCH_PARAMS_KEYS: [PerryLayoutKey; 2] = [
@@ -1322,6 +1327,8 @@ pub(crate) static mut URL_SEARCH_PARAMS: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 2,
     index_mask: 3,
     index: URL_SEARCH_PARAMS_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static URL_COMPONENTS_KEYS: [PerryLayoutKey; 12] = [
@@ -1452,6 +1459,8 @@ pub(crate) static mut URL_COMPONENTS: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 12,
     index_mask: 31,
     index: URL_COMPONENTS_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static ITERATOR_RESULT_KEYS: [PerryLayoutKey; 2] = [
@@ -1489,6 +1498,8 @@ pub(crate) static mut ITERATOR_RESULT: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 2,
     index_mask: 3,
     index: ITERATOR_RESULT_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static ITERATOR_RESULT_DONE_FIRST_KEYS: [PerryLayoutKey; 2] = [
@@ -1526,6 +1537,8 @@ pub(crate) static mut ITERATOR_RESULT_DONE_FIRST: PerryLayoutDesc = PerryLayoutD
     key_count: 2,
     index_mask: 3,
     index: ITERATOR_RESULT_DONE_FIRST_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static TIMEOUT_KEYS: [PerryLayoutKey; 0] = [];
@@ -1550,6 +1563,8 @@ pub(crate) static mut TIMEOUT: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 0,
     index_mask: 1,
     index: TIMEOUT_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 static IMMEDIATE_KEYS: [PerryLayoutKey; 0] = [];
@@ -1574,6 +1589,8 @@ pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 0,
     index_mask: 1,
     index: IMMEDIATE_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
@@ -1743,6 +1760,8 @@ pub(crate) static mut REGEX_EXEC_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 4,
     index_mask: 7,
     index: REGEX_EXEC_NAMED_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static REGEX_EXEC_INDICES_NAMED_KEYS: [PerryLayoutKey; 5] = [
     PerryLayoutKey {
@@ -1815,6 +1834,8 @@ pub(crate) static mut REGEX_EXEC_INDICES_NAMED: PerryLayoutDesc = PerryLayoutDes
     key_count: 5,
     index_mask: 15,
     index: REGEX_EXEC_INDICES_NAMED_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static REGEX_INDICES_GROUPS_NAMED_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
@@ -1852,6 +1873,8 @@ pub(crate) static mut REGEX_INDICES_GROUPS_NAMED: PerryLayoutDesc = PerryLayoutD
     key_count: 2,
     index_mask: 3,
     index: REGEX_INDICES_GROUPS_NAMED_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static ARRAY_NAMED_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: std::ptr::addr_of!(ATOM_SYMBOL_ITERATOR),
@@ -1881,6 +1904,8 @@ pub(crate) static mut ARRAY_NAMED: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 1,
     index_mask: 1,
     index: ARRAY_NAMED_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 // Fixed legacy SQLite column metadata; the five data properties are all present.
@@ -2074,6 +2099,8 @@ pub static mut SQLITE_COLUMN_METADATA: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 5,
     index_mask: 15,
     index: SQLITE_COLUMN_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 
 #[cfg(test)]

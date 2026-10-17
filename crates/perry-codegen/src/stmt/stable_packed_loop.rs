@@ -1346,7 +1346,7 @@ fn finish_revalidated_read(
     let generic = ctx.block().call(
         DOUBLE,
         "js_packed_arraylike_index_get",
-        &[(DOUBLE, &receiver), (DOUBLE, &index), (PTR, "null")],
+        &[(DOUBLE, &receiver), (DOUBLE, &index)],
     );
     let fallback_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);

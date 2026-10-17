@@ -1,6 +1,5 @@
-//! The emitter's shape-answered property access: its state keys through
-//! their site memos (`object::own_slot_memo`) and `_events`' keys through
-//! that object's own key list, with no `[[Get]]` / `[[Set]]` walk when the
+//! The emitter's shape-answered property access: its state keys and
+//! `_events`' keys through the objects' own key lists, with no `[[Get]]` / `[[Set]]` walk when the
 //! shapes answer.
 
 use super::*;
@@ -118,25 +117,12 @@ pub(super) fn own_key(target: f64, key_bits: u64, bytes: &[u8]) -> OwnKey {
     }
 }
 
-thread_local! {
-    /// The method resolver's site memo. Each way also validates the pooled
-    /// method id; two names on identical receiver/holder words cannot alias.
-    static EMIT_METHOD: crate::object::method_site::own_slot_memo::ProtoSlotMemo =
-        const { crate::object::method_site::own_slot_memo::ProtoSlotMemo::new() };
-}
-
 /// `recv[name]` when the shapes answer it as an own data property of the
 /// `[[Prototype]]` `recv`'s shape names while `recv`'s own list lacks it
-/// (every emitter's), through the memo of the receiver words that proved it.
-/// `None` otherwise.
+/// (every emitter's). `None` otherwise.
 pub(in crate::node_stream) fn shape_method(recv: f64, key: i64, name: &[u8]) -> Option<f64> {
+    let _ = key;
     let (obj, _) = ordinary_object(recv)?;
-    // SAFETY: a live ordinary object (validated above).
-    if let Some((holder, slot)) = EMIT_METHOD.with(|memo| unsafe { memo.slot(obj, key) }) {
-        // SAFETY: the memo's words pin `slot` as an inline slot of `holder`.
-        let bits = unsafe { slot_bits(holder, slot) };
-        return (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits));
-    }
     let (_, _, own) = own_slot_of(recv, 0, name)?;
     if own.is_some() {
         return None;
@@ -144,9 +130,6 @@ pub(in crate::node_stream) fn shape_method(recv: f64, key: i64, name: &[u8]) -> 
     let proto = shape_prototype(obj)?;
     let (holder, _, slot) = own_slot_of(proto, 0, name)?;
     let slot = slot?;
-    // SAFETY: `own_slot_of` proved the requested name absent from `obj`'s own list and
-    // own plain data at inline slot `slot` of the prototype its shape names.
-    EMIT_METHOD.with(|memo| unsafe { memo.prime(obj, holder, key, slot) });
     // SAFETY: `own_slot_of` resolved `slot` on the live holder.
     Some(f64::from_bits(unsafe { slot_bits(holder, slot) }))
 }
@@ -162,30 +145,15 @@ pub(super) fn own_get(target: f64, key_bits: u64, bytes: &[u8]) -> Option<f64> {
     }
 }
 
-thread_local! {
-    /// The emitter state keys' site memos (`object::own_slot_memo`): the
-    /// receiver words on which each is an own plain data slot.
-    pub(super) static EVENTS_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
-        const { crate::object::method_site::own_slot_memo::OwnSlotMemo::new() };
-    pub(super) static EVENTS_COUNT_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
-        const { crate::object::method_site::own_slot_memo::OwnSlotMemo::new() };
-    pub(super) static MAX_LISTENERS_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
-        const { crate::object::method_site::own_slot_memo::OwnSlotMemo::new() };
-}
-
-pub(super) type StateMemo =
-    std::thread::LocalKey<crate::object::method_site::own_slot_memo::OwnSlotMemo>;
-
-/// The storage position of the state key `memo` remembers on `target`, priming
-/// the memo from the shape's own key list on a miss. `None` when `target`'s
-/// shape does not hold the key as own plain data.
+/// The storage position of the state key `name` on `target`, from the
+/// shape's own key list. `None` when `target`'s shape does not hold the key
+/// as own plain data.
 pub(super) fn state_slot(
     target: f64,
-    memo: &'static StateMemo,
     name: &[u8],
 ) -> Option<(*mut crate::object::ObjectHeader, u32, u16)> {
     let (obj, flags) = ordinary_object(target)?;
-    state_slot_in(target, obj, memo, name).map(|slot| (obj, slot, flags))
+    state_slot_in(target, obj, name).map(|slot| (obj, slot, flags))
 }
 
 /// [`state_slot`] for `target`, already validated as the ordinary object
@@ -193,25 +161,17 @@ pub(super) fn state_slot(
 pub(super) fn state_slot_in(
     target: f64,
     obj: *mut crate::object::ObjectHeader,
-    memo: &'static StateMemo,
     name: &[u8],
 ) -> Option<u32> {
-    // SAFETY: a live ordinary object the caller validated.
-    let slot = match memo.with(|memo| unsafe { memo.slot(obj) }) {
-        Some(slot) => slot,
-        None => {
-            let (own, slot, live) = own_data_slot(target, name)??;
-            if own as usize != obj as usize {
-                return None;
-            }
-            let slot = if slot >= live {
-                slot | STATE_SPILL
-            } else {
-                slot
-            };
-            // SAFETY: `own_data_slot` proved the plain data position; the
-            // shape also pins whether it resides inline or in spill storage.
-            memo.with(|memo| unsafe { memo.prime(obj, slot) });
+    let slot = {
+        let (own, slot, live) = own_data_slot(target, name)??;
+        if own as usize != obj as usize {
+            return None;
+        }
+        // The shape also pins whether it resides inline or in spill storage.
+        if slot >= live {
+            slot | STATE_SPILL
+        } else {
             slot
         }
     };
@@ -236,7 +196,7 @@ pub(super) fn state_slot_in(
 
 // Reuse the holder representation: the shape word pins both the position
 // and its storage kind. No pointer or additional memo is retained.
-const STATE_SPILL: u32 = crate::codegen_abi::PIC_HOLDER_SLOT_SPILL_BIT as u32;
+const STATE_SPILL: u32 = 1 << 31;
 
 /// Read a position returned by `state_slot_in`, without allocation.
 #[inline]
@@ -351,8 +311,8 @@ fn emitter_view(target: f64, meta: &[u8]) -> Option<EmitterView> {
     if flags & (ADD_REFUSING_FLAGS & !crate::gc::OBJ_FLAG_HAS_DESCRIPTORS) != 0 {
         return None;
     }
-    let events_slot = state_slot_in(target, obj, &EVENTS_SLOT, EVENTS_KEY)?;
-    let count_slot = state_slot_in(target, obj, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY)?;
+    let events_slot = state_slot_in(target, obj, EVENTS_KEY)?;
+    let count_slot = state_slot_in(target, obj, EVENTS_COUNT_KEY)?;
     // SAFETY: the memo resolved the slot on the live object.
     let events = f64::from_bits(unsafe { state_bits(obj, events_slot) });
     let (events_obj, events_flags) = ordinary_object(events)?;
@@ -370,32 +330,10 @@ fn emitter_view(target: f64, meta: &[u8]) -> Option<EmitterView> {
     })
 }
 
-thread_local! {
-    /// The `_events` words with no `newListener` / `removeListener` key.
-    static NO_NEW_LISTENER: crate::object::method_site::own_slot_memo::AbsentKeyMemo =
-        const { crate::object::method_site::own_slot_memo::AbsentKeyMemo::new() };
-    static NO_REMOVE_LISTENER: crate::object::method_site::own_slot_memo::AbsentKeyMemo =
-        const { crate::object::method_site::own_slot_memo::AbsentKeyMemo::new() };
-}
-
 /// Does `_events` (validated, `flags` its header flags) lack the meta-event
-/// key `meta` as its own? Through the memo of the words that proved it.
+/// key `meta` as its own?
 fn meta_event_absent(events: *mut crate::object::ObjectHeader, flags: u16, meta: &[u8]) -> bool {
-    let memo = if meta == b"newListener" {
-        &NO_NEW_LISTENER
-    } else {
-        &NO_REMOVE_LISTENER
-    };
-    // SAFETY: a live ordinary object the caller validated.
-    if memo.with(|memo| unsafe { memo.absent(events) }) {
-        return true;
-    }
-    if own_slot_in(events, flags, 0, meta) != Some(None) {
-        return false;
-    }
-    // SAFETY: as above; the shape's own list lacks the key.
-    memo.with(|memo| unsafe { memo.prime(events) });
-    true
+    own_slot_in(events, flags, 0, meta) == Some(None)
 }
 
 /// `this._eventsCount = n` on a validated emitter.
@@ -516,7 +454,7 @@ pub(super) fn remove_only_listener_fast(target: f64, event: f64, listener: f64) 
 /// listener (a function or an array of them), `Some(undefined)` when none.
 pub(super) fn listeners_of_fast(target: f64, event: f64) -> Option<f64> {
     let (obj, _) = ordinary_object(target)?;
-    let events_slot = state_slot_in(target, obj, &EVENTS_SLOT, EVENTS_KEY)?;
+    let events_slot = state_slot_in(target, obj, EVENTS_KEY)?;
     // SAFETY: the memo resolved the slot on the live object.
     let events = f64::from_bits(unsafe { state_bits(obj, events_slot) });
     let (events_obj, events_flags) = ordinary_object(events)?;
@@ -542,8 +480,8 @@ pub(super) fn reset_events_fast(target: f64, events: f64) -> bool {
         return false;
     }
     let (Some(events_slot), Some(count_slot)) = (
-        state_slot_in(target, obj, &EVENTS_SLOT, EVENTS_KEY),
-        state_slot_in(target, obj, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY),
+        state_slot_in(target, obj, EVENTS_KEY),
+        state_slot_in(target, obj, EVENTS_COUNT_KEY),
     ) else {
         return false;
     };
@@ -569,7 +507,7 @@ mod method_body_tests {
         // Node inherits its initial zero count. Give this storage witness an
         // own count before asking the two-own-slot reset helper to accept it.
         state_set(target, crate::runtime_state_key!(EVENTS_COUNT_KEY), 0.0);
-        let (obj, _, _) = state_slot(target, &EVENTS_SLOT, EVENTS_KEY).unwrap();
+        let (obj, _, _) = state_slot(target, EVENTS_KEY).unwrap();
         assert!(unsafe { crate::object::object_live_slot_count(obj) } <= 2);
         let events = new_events_object();
         assert!(reset_events_fast(target, events));
@@ -611,7 +549,7 @@ mod method_body_tests {
             f64::from_bits(crate::value::TAG_FALSE),
         );
         crate::object::js_object_define_property(target, name_key(EVENTS_COUNT_KEY), descriptor);
-        assert!(state_slot(target, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY).is_none());
+        assert!(state_slot(target, EVENTS_COUNT_KEY).is_none());
         assert!(!reset_events_fast(target, new_events_object()));
         assert_eq!(
             state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
@@ -683,16 +621,7 @@ mod method_body_tests {
                 crate::string::intern_ascii_literal(b"non_static_method_id"),
                 emit,
             );
-            let holder = ordinary_object(proto).unwrap().0;
-            let heap_key = crate::string::intern_ascii_literal(b"non_static_method_id") as i64;
-            let memo = crate::object::method_site::own_slot_memo::ProtoSlotMemo::new();
-            memo.prime(obj, holder, heap_key, 2);
-            assert!(
-                memo.slot(obj, heap_key).is_none(),
-                "heap ids cannot enter the memo"
-            );
-            // The same receiver/holder words cannot answer another method
-            // from the memo's previous slot. The method id is part of each way.
+            let _ = obj;
             assert_eq!(
                 shape_method(target, alias_id, b"alias").unwrap().to_bits(),
                 emit.to_bits()

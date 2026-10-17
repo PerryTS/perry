@@ -4,7 +4,7 @@
 //! ECMA-262 13.3.6.1 reads `recv[key]` BEFORE the arguments, so a getter, a
 //! Proxy `get` trap or a nullish receiver's TypeError runs first. When the
 //! arguments can observe that order (`args_may_observe_lookup`), the read
-//! happens up front through `js_method_site_prepare` (no site slot): it
+//! happens up front through `js_method_prepare`: it
 //! performs the spec Get when the read is observable and returns the value,
 //! or returns `METHOD_SITE_BY_NAME` for a receiver whose read nothing can
 //! observe, which keeps the caller's own by-name dispatch after the
@@ -62,7 +62,7 @@ pub(crate) fn spread_args_may_observe_lookup(ctx: &FnCtx<'_>, args: &[CallArg]) 
 }
 
 /// Lower `object[key](args)` with the method read before the arguments; the
-/// read is answered by `js_method_site_prepare` and `by_name` emits the
+/// read is answered by `js_method_prepare` and `by_name` emits the
 /// caller's own dispatch for the receivers whose read is not observable.
 pub(crate) fn lower<'f>(
     ctx: &mut FnCtx<'f>,
@@ -71,10 +71,6 @@ pub(crate) fn lower<'f>(
     args: Args<'_>,
     by_name: impl FnOnce(&mut FnCtx<'f>, &Parts) -> String,
 ) -> Result<String> {
-    let argc_static = match args {
-        Args::List(a) => a.len(),
-        Args::Spread(_) => 0,
-    };
     let list_len = match args {
         Args::List(a) => a.len(),
         Args::Spread(_) => 0,
@@ -103,13 +99,8 @@ pub(crate) fn lower<'f>(
             let blk = ctx.block();
             let r = blk.call(
                 DOUBLE,
-                "js_method_site_prepare",
-                &[
-                    (PTR, "null"),
-                    (DOUBLE, &recv),
-                    (I64, &id),
-                    (I64, &argc_static.to_string()),
-                ],
+                "js_method_prepare",
+                &[(DOUBLE, &recv), (I64, &id)],
             );
             let bits = blk.bitcast_double_to_i64(&r);
             // Either by-name answer (`BY_NAME` or `BY_NAME_DIRECT`).
@@ -196,13 +187,13 @@ fn emit_diamond<'f>(
     let r_value = if parts.array != "0" {
         ctx.block().call(
             DOUBLE,
-            "js_method_site_call_value_apply",
+            "js_method_call_value_apply",
             &[(DOUBLE, value), (DOUBLE, &parts.recv), (I64, &parts.array)],
         )
     } else {
         ctx.block().call(
             DOUBLE,
-            "js_method_site_call_value",
+            "js_method_call_value",
             &[
                 (DOUBLE, value),
                 (DOUBLE, &parts.recv),

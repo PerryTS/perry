@@ -1,7 +1,7 @@
 //! #11910: `recv.m(args)` reads `recv.m` before arguments that can run code.
 //!
 //! A call whose arguments are order-free keeps the fused method site (no
-//! lookup half, no `js_method_site_lookup`); a call with an effectful
+//! lookup half, no `js_method_lookup`); a call with an effectful
 //! argument emits the lookup half, and the read happens before the argument's
 //! call. `recv.m?.(args)` is one split site whose lookup value its guard
 //! tests, so `recv.m` is read once.
@@ -12,8 +12,8 @@ use perry_hir::{CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 const RECV: u32 = 1;
 const G: u32 = 2;
-const LOOKUP: &str = "call double @js_method_site_lookup(";
-const CALL_SPLIT: &str = "call double @js_method_site_call_split(";
+const LOOKUP: &str = "call double @js_method_lookup(";
+const CALL_SPLIT: &str = "call double @js_method_call_split(";
 
 fn param(id: u32, name: &str) -> Param {
     Param {
@@ -98,7 +98,7 @@ fn an_order_free_argument_keeps_the_fused_site() {
     )));
     let f = f_body(&ir);
     assert!(
-        f.contains("call double @js_method_site_miss"),
+        f.contains("call double @js_method_call_slow("),
         "the site is emitted:\n{f}"
     );
     assert!(

@@ -857,6 +857,7 @@ unsafe fn own_key_via_index(
         return Some(true);
     }
     let keys = crate::object::object_keys(obj);
+    let keys_view = keys;
     if crate::object::overflow::is_table(keys.arr()) {
         // Object model step 4: an object's overflow is its complete, hashed
         // key index (§3.4), so its answer is authoritative either way.
@@ -883,9 +884,12 @@ unsafe fn own_key_via_index(
     match super::super::shapes::shape_slot_lookup_verdict(
         keys, name_bytes, key_hash, key_count, true,
     ) {
-        super::super::shapes::KeysIndexVerdict::Found(slot) => {
-            Some(!properties_only || !slot_is_private_entry(keys, slot as u32))
-        }
+        super::super::shapes::KeysIndexVerdict::Found(slot) => Some(
+            (!properties_only || !slot_is_private_entry(keys, slot as u32))
+                // Object model §3.2: an optional key whose slot holds the
+                // hole is absent (`key_view`).
+                && !crate::object::key_view::position_is_hole(obj, keys_view, slot as u32),
+        ),
         super::super::shapes::KeysIndexVerdict::Absent => Some(false),
         // A shortened or otherwise incomplete index cannot prove absence.
         // Preserve the caller's exact fallback instead of turning a stale miss
@@ -981,9 +985,12 @@ unsafe fn own_key_lookup(
     // growing destination does not scan every preceding key before appending;
     // stale/incomplete indexes retain the dense-slot correctness fallback.
     // Slots and counts are u32 throughout, so there is no 65,536-key ceiling.
-    if properties_only {
-        super::super::keys_find_property_slot_by_key_ptr(keys, key_count, key).is_some()
+    let position = if properties_only {
+        super::super::keys_find_property_slot_by_key_ptr(keys, key_count, key)
     } else {
-        super::super::keys_find_slot_by_key_ptr(keys, key_count, key).is_some()
-    }
+        super::super::keys_find_slot_by_key_ptr(keys, key_count, key)
+    };
+    // Object model §3.2: an optional key whose slot holds the hole is absent
+    // (`key_view`).
+    position.is_some_and(|p| !crate::object::key_view::position_is_hole(obj, keys_view, p))
 }

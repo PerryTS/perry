@@ -101,7 +101,13 @@ pub extern "C" fn js_with_set_binding(
     if strict != 0 && !has_property(coerced, key) {
         crate::error::js_throw_reference_error_unresolvable_assignment(key_as_value(key));
     }
-    crate::proxy::js_put_value_set_ic_miss(coerced, key, value, strict, std::ptr::null_mut(), 0)
+    crate::proxy::js_put_value_set(
+        coerced,
+        crate::value::js_nanbox_string(key as i64),
+        value,
+        coerced,
+        strict,
+    )
 }
 
 #[no_mangle]

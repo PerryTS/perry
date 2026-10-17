@@ -399,12 +399,6 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     keyed_shape_verdict(id) & bit != 0
 }
 
-/// The intrinsic Function and dictionary ids: facts of their fixed layouts.
-#[inline(always)]
-pub(crate) fn function_base_and_dictionary_shapes() -> (u32, u32) {
-    (base_slot(0), base_slot(4))
-}
-
 /// The verdict mask of a keyed ShapeId: whether it is a Function shape over
 /// `Function.prototype`, and which of the three intrinsics it lacks as own
 /// keys. A fact of the (immutable) ShapeId, cached per agent.

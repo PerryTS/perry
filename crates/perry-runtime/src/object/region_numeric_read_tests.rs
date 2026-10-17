@@ -74,7 +74,6 @@ fn unmarked_numeric_read_publishes_and_reads_the_production_slot() {
             crate::object::js_object_get_field_by_name(obj, key).bits(),
             (*raw).to_bits()
         );
-        assert!(!store_kind::shape_admits_plain_store(word as u32));
     }
 }
 

@@ -71,7 +71,7 @@ fn compile(functions: Vec<Function>) -> String {
 fn assert_generic(ir: &str) {
     assert!(!ir.contains("js_regexp_site_"), "{ir}");
     assert!(!ir.contains("js_regexp_new_factory"), "{ir}");
-    assert!(ir.contains("call double @js_method_site_miss"), "{ir}");
+    assert!(ir.contains("call double @js_method_call_slow"), "{ir}");
 }
 
 #[test]

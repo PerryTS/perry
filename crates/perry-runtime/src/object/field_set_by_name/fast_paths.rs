@@ -211,10 +211,10 @@ unsafe fn existing_own_data_overwrite(
         return false;
     };
     if shape.summary
-        & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
+        & (crate::object::key_attrs::SUMMARY_BLOCKS_OVERWRITE
             | crate::object::key_attrs::SUMMARY_PRIVATE)
         != 0
-        && !crate::object::key_attrs::entry_is_plain_writable_data(
+        && !crate::object::key_attrs::entry_is_plain_overwrite(
             crate::object::key_attrs::keys_entry(keys, idx),
         )
     {
@@ -379,6 +379,71 @@ pub(crate) unsafe fn add_absent_key_to_null_proto_object(
     } else {
         overflow_set(obj as usize, slot_idx as usize, vbits);
     }
+    true
+}
+
+/// The store probe's key add (object model §3.7; `layout_probe::probe_add`
+/// has proved from the layouts that `[[Set]]` adds `key` as an own data
+/// property of `obj`, an extensible ordinary object with no overflow): the
+/// canonical key-add edge from `obj`'s layout, when that edge is published,
+/// installs without a remint, and places the key in an inline slot the object
+/// already has. One stamp and one barriered store; `false`, having changed
+/// nothing, otherwise (the caller's `[[Set]]` adds it).
+///
+/// GC leaf: no allocation on the heap, no collection, no user code.
+///
+/// # Safety
+/// As above; `key` is the interned property atom; nothing between the
+/// caller's proof and this call allocates.
+pub(crate) unsafe fn leaf_key_add(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value_bits: u64,
+) -> bool {
+    let prev_shape_id = super::shapes::object_shape_stamp(obj);
+    let Some(hit) = transition_cache_lookup(prev_shape_id, key) else {
+        return false;
+    };
+    if hit.0.is_null() || hit.1 >= crate::object::object_inline_capacity(obj) {
+        return false;
+    }
+    let Some(edge) = super::constfn_key_add::admit_or_store(obj, prev_shape_id, hit, value_bits)
+    else {
+        return false;
+    };
+    let Some((next_keys, slot_idx, target_shape_id, admitted_bits)) = edge.transition_slot_bits()
+    else {
+        return true;
+    };
+    // The target layout names the new slot live: the stamp alone publishes
+    // it (no bound to re-publish, which could mint).
+    if super::shapes::shape_live_inline_slot_count_by_id(target_shape_id)
+        .is_none_or(|live| live <= slot_idx)
+    {
+        return false;
+    }
+    super::builtin_proto::note_write(obj, "probe add");
+    if !super::shapes::install_cached_object_shape_key_add(
+        obj,
+        prev_shape_id,
+        target_shape_id,
+        next_keys,
+        key,
+    ) {
+        return false;
+    }
+    let slot_bits = if admitted_bits == crate::value::POINTER_TAG {
+        crate::value::TAG_UNDEFINED
+    } else {
+        admitted_bits
+    };
+    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let _ = crate::gc::runtime_store_jsvalue_slot_layout_deferred(
+        obj as usize,
+        fields.add(slot_idx as usize) as usize,
+        slot_idx as usize,
+        slot_bits,
+    );
     true
 }
 

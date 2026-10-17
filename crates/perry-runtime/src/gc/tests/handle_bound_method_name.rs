@@ -236,33 +236,6 @@ fn a_bound_timer_method_from_the_ic_miss_path_never_captures_the_key() {
     unsafe {
         let id = live_timer();
         let (key, key_interior) = heap_key("hasRef");
-        // An inherited read registers its resolved cache with the process-
-        // lifetime holder-root scanner. The slot may be local, but its cache
-        // must come from the same immortal arena used by generated sites.
-        struct TestSite(crate::object::PicCacheSlot);
-        impl Drop for TestSite {
-            fn drop(&mut self) {
-                if !self.0.is_null() {
-                    // Retire this fixture's heap roots before its thread arena
-                    // goes away; the scanner's cache address remains valid.
-                    unsafe { (*self.0).fill(0) };
-                }
-            }
-        }
-        let mut site = TestSite(std::ptr::null_mut());
-        let sites_before = crate::object::pic_slots_resolved();
-        // Allocate during setup: worker startup deliberately disables
-        // miss-path cache priming, but the fixture still needs stable storage.
-        crate::object::pic_slot_resolve(&mut site.0);
-        assert!(
-            !site.0.is_null(),
-            "the fixture must allocate a real read site"
-        );
-        assert_eq!(
-            crate::object::pic_slots_resolved(),
-            sites_before + 1,
-            "the fixture must use the production cache allocator"
-        );
         let bits =
             crate::object::field_get_set::get_field_miss(id as *const crate::ObjectHeader, key);
         assert_names_the_installed_method(

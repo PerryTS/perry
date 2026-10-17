@@ -1,45 +1,26 @@
-//! A builtin's fixed-key throwing Set through the generated store site's
-//! cache and miss entries. This full-outline caller reads the existing PIC;
-//! it needs no compact words for a generated inline store. The site has process
-//! lifetime and its cache lives in the existing PIC arena.
-use crate::proxy::PackedSetWays;
-use std::sync::atomic::AtomicPtr;
+//! A builtin's fixed-key throwing Set: the complete strict `[[Set]]`
+//! (`js_put_value_set`), whose own-key store reads the receiver's layout.
+//! Nothing is remembered between stores.
 
-pub(crate) struct RuntimeStoreSite {
-    slot: AtomicPtr<PackedSetWays>,
-}
+pub(crate) struct RuntimeStoreSite;
 
 impl RuntimeStoreSite {
     pub(crate) const fn new() -> Self {
-        Self {
-            slot: AtomicPtr::new(std::ptr::null_mut()),
-        }
-    }
-
-    #[inline]
-    fn try_store(&self, target: f64, value: f64) -> bool {
-        crate::proxy::js_put_value_set_packed_fast(target, value, self.slot.as_ptr()).to_bits()
-            != crate::value::TAG_HOLE
+        Self
     }
 
     pub(crate) fn store(&self, target: f64, key: &'static [u8], value: f64) {
-        if !self.try_store(target, value) {
-            self.store_slow(target, key, value);
-        }
+        self.store_slow(target, key, value);
     }
 
     /// A Rust-owned operation needs an abrupt completion, not a longjmp
-    /// across its native owners. A cache hit is a GC leaf and cannot throw;
-    /// install the exception boundary only for the collecting miss.
+    /// across its native owners.
     pub(crate) fn store_caught(
         &self,
         target: f64,
         key: &'static [u8],
         value: f64,
     ) -> Result<(), f64> {
-        if self.try_store(target, value) {
-            return Ok(());
-        }
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target);
         let value = scope.root_nanbox_f64(value);
@@ -48,10 +29,7 @@ impl RuntimeStoreSite {
         })
     }
 
-    #[cold]
-    #[inline(never)]
     fn store_slow(&self, target: f64, key: &'static [u8], value: f64) {
-        let slot = self.slot.as_ptr();
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target);
         let value = scope.root_nanbox_f64(value);
@@ -62,7 +40,14 @@ impl RuntimeStoreSite {
                 as *const crate::StringHeader,
         };
         let key = scope.root_string_ptr(atom);
-        crate::proxy::store_and_prime(&target, &key, &value, 1, slot, std::ptr::null());
+        let target = target.get_nanbox_f64();
+        crate::proxy::js_put_value_set(
+            target,
+            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+            value.get_nanbox_f64(),
+            target,
+            1,
+        );
     }
 }
 

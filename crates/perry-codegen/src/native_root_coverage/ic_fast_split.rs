@@ -16,15 +16,12 @@
 //! Sabotage run by hand for the PR (2026-09-27): classifying the four slow
 //! continuations `CannotCollect` too makes
 //! `split_sites_keep_their_slow_call_as_the_only_statepoint` fail at
-//! `Statepoints::at("js_put_value_set_packed_miss")` — no subject.
+//! `Statepoints::at("js_put_value_set")` — no subject.
 
 use super::*;
 use perry_hir::{Class, ClassField};
 
-const FAST_SLOW: [(&str, &str); 1] = [(
-    "js_put_value_set_packed_fast",
-    "js_put_value_set_packed_miss",
-)];
+const FAST_SLOW: [(&str, &str); 1] = [("perry_probe_set", "js_put_value_set")];
 
 fn point_class() -> Class {
     Class {

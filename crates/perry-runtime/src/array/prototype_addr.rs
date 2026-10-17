@@ -369,14 +369,6 @@ pub(crate) fn forget_object_prototype_intrinsic() {
     prototype_addrs()[OBJECT_PROTO_CACHE].set(usize::MAX);
 }
 
-/// `%Function.prototype%` if this thread has ALREADY memoized it, else 0 —
-/// never bootstraps, for the same reason as
-/// [`object_prototype_addr_if_resolved`]: the function-receiver holder walk
-/// (`object::method_site::read_holder`) runs under the read miss handler.
-pub(crate) fn function_prototype_addr_if_resolved() -> usize {
-    memoized_prototype_addr(&prototype_addrs()[FUNCTION_PROTO_CACHE]).unwrap_or(0)
-}
-
 /// The prototype a primitive's property read starts at (`%String.prototype%`,
 /// `%Number.prototype%`, `%Boolean.prototype%`), or 0 while this thread
 /// has no `globalThis`. `value` is a NaN-boxed primitive; any other kind

@@ -369,6 +369,14 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
+    // Object model step 2c: a constructor body's run of family stores ends
+    // at any statement that is not a `this.k = v` store
+    // (`expr::layout_read::family_run_plan`).
+    if !is_this_key_store(stmt) {
+        if let Some(body) = ctx.inline_ctor_return.last_mut() {
+            body.family_run = None;
+        }
+    }
     // A typed array exposed by this statement is untrusted from here on.
     let_buffer_views::distrust_views_the_stmt_may_expose(ctx, stmt);
     // #11759 (c′): a loop holding first-evaluation guards on a binding it
@@ -1003,4 +1011,24 @@ fn stmt_variant_name(s: &Stmt) -> &'static str {
 #[allow(dead_code)]
 fn _keep_anyhow_in_scope() -> anyhow::Error {
     anyhow!("")
+}
+
+/// `this.k = v` with a literal key `k`, as an expression statement.
+fn is_this_key_store(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(perry_hir::Expr::PropertySet { object, .. }) => {
+            matches!(object.as_ref(), perry_hir::Expr::This)
+        }
+        Stmt::Expr(perry_hir::Expr::PutValueSet {
+            target,
+            key,
+            receiver,
+            ..
+        }) => {
+            matches!(target.as_ref(), perry_hir::Expr::This)
+                && matches!(receiver.as_ref(), perry_hir::Expr::This)
+                && matches!(key.as_ref(), perry_hir::Expr::String(_))
+        }
+        _ => false,
+    }
 }

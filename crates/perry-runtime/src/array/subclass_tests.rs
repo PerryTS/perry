@@ -19,9 +19,8 @@
 
 use super::subclass::{
     array_object_receiver, array_subclass_fast_index_get, array_subclass_fast_index_set,
-    array_subclass_fast_length, array_subclass_fast_length_with_ic, array_subclass_fast_pop,
-    array_subclass_fast_push_one, array_subclass_named_prefix_token_for_slot,
-    array_subclass_named_prefix_token_matches_class, is_array_subclass_class_id,
+    array_subclass_fast_length, array_subclass_fast_pop,
+    array_subclass_fast_push_one, is_array_subclass_class_id,
     js_packed_arraylike_index_get, js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard,
     raw_receiver_is_heap_object,
 };
@@ -228,7 +227,7 @@ fn dense_array_subclass_reads_slots_until_its_shape_changes() {
     assert_eq!(unsafe { (*obj).shape_word() }, stable_shape);
     assert!(!array_subclass_fast_index_set(receiver, 3, 55.0));
     assert_eq!(
-        js_packed_arraylike_index_get(receiver, 2.0, std::ptr::null_mut()),
+        js_packed_arraylike_index_get(receiver, 2.0),
         33.0
     );
 
@@ -244,7 +243,7 @@ fn dense_array_subclass_reads_slots_until_its_shape_changes() {
         "deleting an indexed property must mint a shape whose dense proof side-exits"
     );
     assert_eq!(
-        js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut()).to_bits(),
+        js_packed_arraylike_index_get(receiver, 1.0).to_bits(),
         crate::value::TAG_UNDEFINED,
         "the wrapper must preserve the generic hole result"
     );
@@ -410,64 +409,6 @@ fn numeric_proof_retires_before_exact_tail_transition_lookup() {
     assert_eq!(array_subclass_fast_push_one(receiver, 44.0), Some(3.0));
     assert_eq!(unsafe { (*obj).shape_word() }, ordinary_shapes[3]);
     assert_eq!(array_subclass_fast_index_get(receiver, 2), Some(44.0));
-}
-
-#[test]
-fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
-    // Pins the shape-carried representation: the elements store is the
-    // default, and this test is about the property-shape machinery.
-    let _representation =
-        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
-    let _global = crate::gc::global_side_table_test_lock();
-    crate::object::array_tail_transition::test_clear();
-    let class_id = 0x0074_867b;
-    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
-    let packed = b"sset\0mask\0";
-    let keys = crate::object::js_build_class_keys_array(
-        class_id,
-        2,
-        packed.as_ptr(),
-        packed.len() as u32,
-        0,
-    );
-    let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 2, keys);
-    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-    crate::node_stream::js_array_subclass_init(receiver, 0.0);
-
-    let mut cache: crate::value::LengthPicCache = [0; crate::value::LENGTH_PIC_WORDS];
-    let mut cache_slot: crate::value::LengthPicCacheSlot = &mut cache;
-    assert_eq!(
-        array_subclass_fast_length_with_ic(receiver, &mut cache_slot),
-        Some(0.0)
-    );
-    {
-        assert_ne!(cache[0] & (1_u64 << 63), 0);
-        assert_eq!(cache[0] & u64::from(u32::MAX), u64::from(class_id));
-        assert_eq!(
-            cache[0],
-            unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-            "an empty subclass can publish the same pointer-free family proof"
-        );
-    }
-    assert!(
-        cache[1] >= cache[2],
-        "this wolf-shaped receiver deliberately stores length in ObjectMeta::spill"
-    );
-
-    js_array_push_f64(obj as *mut ArrayHeader, 11.0);
-    assert_eq!(
-        array_subclass_fast_length_with_ic(receiver, &mut cache_slot),
-        Some(1.0)
-    );
-    {
-        assert_ne!(cache[0] & (1_u64 << 63), 0);
-        assert_eq!(cache[0] & u64::from(u32::MAX), u64::from(class_id));
-        assert_eq!(
-            cache[0],
-            unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-            "the cache stores the receiver-owned scalar proof, not a heap address"
-        );
-    }
 }
 
 /// The metadata-free tail store is admitted only for constructive numeric
@@ -713,264 +654,6 @@ fn spec_and_generic_push_entries_append_to_an_object_backed_subclass_densely() {
     );
     assert_eq!(array_subclass_fast_length(receiver), Some(1.0));
     assert_eq!(array_subclass_fast_index_get(receiver, 0), Some(9.0));
-}
-
-#[test]
-fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transitions() {
-    // Pins the shape-carried representation: the elements store is the
-    // default, and this test is about the property-shape machinery.
-    let _representation =
-        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
-    let _global = crate::gc::global_side_table_test_lock();
-    crate::object::array_tail_transition::test_clear();
-    let class_id = 0x0074_865b;
-    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
-    let packed = b"sset\0mask\0";
-    let keys = crate::object::js_build_class_keys_array(
-        class_id,
-        2,
-        packed.as_ptr(),
-        packed.len() as u32,
-        0,
-    );
-    let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 2, keys);
-    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-    crate::node_stream::js_array_subclass_init(receiver, 0.0);
-    crate::object::descriptor_state::set_property_attrs(
-        obj as usize,
-        "fill".to_string(),
-        crate::object::descriptor_state::PropertyAttrs::new(true, false, true),
-    );
-
-    // Learn both edges and force numeric storage beyond the two declared
-    // inline slots, which gives this object the ObjectMeta that carries the
-    // move-stable family proof.
-    js_array_push_f64(obj as *mut ArrayHeader, 11.0);
-    js_array_push_f64(obj as *mut ArrayHeader, 22.0);
-    let mask_key = crate::string::js_string_from_bytes(b"mask".as_ptr(), 4);
-    crate::object::field_get_set::get_field_miss(obj, mask_key);
-
-    let mut index_ic: super::ArrayLikePicCache = [0; super::ARRAYLIKE_PIC_WORDS];
-    let mut index_ic_slot: super::ArrayLikePicCacheSlot = &mut index_ic;
-    assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0, &mut index_ic_slot),
-        11.0
-    );
-    // S6: the proof lives on the OBJECT only.
-    let token = unsafe { (*(*obj).meta).array_subclass_named_prefix_token };
-    assert_ne!(token, 0);
-    assert!(unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id) });
-    assert!(
-        !unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id.wrapping_add(1)) },
-        "the token must pin the exact class rather than merely the Array-subclass family"
-    );
-    assert_eq!(
-        index_ic[0], token,
-        "a dense numeric read must publish the tail-family token instead of an exact ShapeId"
-    );
-    assert!(
-        index_ic[1] >= index_ic[4],
-        "this fixture keeps Array-subclass length in ObjectMeta::spill"
-    );
-    assert_eq!(
-        index_ic[3], 2,
-        "the cached prefix is a safe high-water mark"
-    );
-
-    let zero_key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
-    assert_eq!(
-        crate::object::field_get_set::get_field_miss(obj, zero_key),
-        11.0
-    );
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        token,
-        "declining a numeric site must not retire the independently valid named-prefix proof"
-    );
-
-    assert_eq!(array_subclass_fast_pop(receiver), Some(22.0));
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        token,
-        "the exact reverse numeric-tail edge must preserve the named-prefix proof"
-    );
-    assert_eq!(array_subclass_fast_push_one(receiver, 33.0), Some(2.0));
-    assert_eq!(
-        unsafe { array_subclass_named_prefix_token_for_slot(obj, 1) },
-        token,
-        "the exact forward edge must retain the same class-wide token"
-    );
-
-    let extra = crate::string::js_string_from_bytes(b"extra".as_ptr(), 5);
-    crate::object::js_object_set_field_by_name(obj, extra, 7.0);
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        0,
-        "generic named structural mutation must retire the family proof before publication"
-    );
-    assert!(
-        !unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id) },
-        "a retired token must not remain consumable as an ordinary-object proof"
-    );
-    assert_eq!(
-        unsafe { array_subclass_named_prefix_token_for_slot(obj, 1) },
-        0,
-        "an instance-specific named suffix must not borrow the class token again"
-    );
-}
-
-/// Wolf's `_ent` / `_updateTo` arrays store `Archetype` instances while each
-/// Archetype's dense numeric tail changes on every entity migration. The
-/// enclosing plain array's element-class proof must be able to consume the
-/// subclass's stable named-prefix token; consulting the new ShapeId on every
-/// overwrite defeats the transition cache that made the tail mutation cheap.
-#[test]
-fn plain_array_element_shape_consumes_array_subclass_prefix_proof() {
-    // Pins the shape-carried representation: the elements store is the
-    // default, and this test is about the property-shape machinery.
-    let _representation =
-        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
-    let _global = crate::gc::global_side_table_test_lock();
-    crate::object::array_tail_transition::test_clear();
-    let class_id = 0x0074_8667;
-    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
-    let packed = b"sset\0mask\0change\0";
-    let keys = crate::object::js_build_class_keys_array(
-        class_id,
-        3,
-        packed.as_ptr(),
-        packed.len() as u32,
-        0,
-    );
-    let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 3, keys);
-    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-    crate::node_stream::js_array_subclass_init(receiver, 0.0);
-    crate::object::descriptor_state::set_property_attrs(
-        obj as usize,
-        "fill".to_string(),
-        crate::object::descriptor_state::PropertyAttrs::new(true, false, true),
-    );
-
-    // Learn the 1 -> 2 edge before publishing the token. The first generic
-    // edge is allowed to rebuild shape metadata; the warm exact edge below is
-    // the one whose preservation contract the ECS path relies on.
-    js_array_push_f64(obj as *mut ArrayHeader, 11.0);
-    js_array_push_f64(obj as *mut ArrayHeader, 22.0);
-    assert_eq!(array_subclass_fast_pop(receiver), Some(22.0));
-    assert_ne!(
-        unsafe { array_subclass_named_prefix_token_for_slot(obj, 1) },
-        0,
-        "precondition: the subclass must carry the ordinary-prefix proof"
-    );
-
-    let mut owners = js_array_alloc(1);
-    owners = js_array_push_f64(owners, receiver);
-    // Proofs are demand-driven: a consumer requests the enclosing array's
-    // class proof, then the keep/clear paths maintain it across stores.
-    assert_eq!(
-        crate::array::js_array_ensure_element_shape(owners),
-        class_id as i32,
-        "the enclosing plain array should prove a class invariant on request"
-    );
-
-    let original_shape = unsafe { (*obj).shape_word() };
-    assert_eq!(array_subclass_fast_push_one(receiver, 33.0), Some(2.0));
-    assert_ne!(
-        unsafe { (*obj).shape_word() },
-        original_shape,
-        "the numeric tail transition must actually change the exact ShapeId"
-    );
-    let hits_before = crate::array::element_shape::test_array_subclass_prefix_store_hits();
-    assert_eq!(
-        crate::array::indexing::try_strict_dense_index_set(owners, 0, receiver),
-        Some(owners)
-    );
-    assert!(
-        crate::array::element_shape::test_array_subclass_prefix_store_hits() > hits_before,
-        "the overwrite should use the stable subclass proof rather than classify the changing ShapeId"
-    );
-    assert_eq!(
-        crate::array::js_array_element_shape_class(owners),
-        class_id as i32,
-        "consuming the subclass proof must retain the enclosing class invariant"
-    );
-}
-
-/// Entity migration removes the last id from its source Archetype before
-/// `_archChange` reads `arch.change` and `arch.mask`. That receiver is an empty,
-/// descriptor-bearing Array subclass: the ordinary exact-shape PIC is closed,
-/// so the class-prefix token must be available before a `"0"` key exists.
-#[test]
-fn empty_array_subclass_named_prefix_token_survives_warm_tail_cycle() {
-    let _global = crate::gc::global_side_table_test_lock();
-    crate::object::array_tail_transition::test_clear();
-    let class_id = 0x0074_8659;
-    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
-    let packed = b"sset\0mask\0change\0";
-    let keys = crate::object::js_build_class_keys_array(
-        class_id,
-        3,
-        packed.as_ptr(),
-        packed.len() as u32,
-        0,
-    );
-    let obj = crate::object::js_object_alloc_class_inline_keys(class_id, CLASS_ID_ARRAY, 3, keys);
-    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-    crate::node_stream::js_array_subclass_init(receiver, 0.0);
-    crate::object::descriptor_state::set_property_attrs(
-        obj as usize,
-        "fill".to_string(),
-        crate::object::descriptor_state::PropertyAttrs::new(true, false, true),
-    );
-
-    // Learn the 0 -> 1 edge once, then return to the exact empty predecessor.
-    // Subsequent cycles use the allocation-free transition cache.
-    js_array_push_f64(obj as *mut ArrayHeader, 11.0);
-    assert_eq!(array_subclass_fast_pop(receiver), Some(11.0));
-
-    let change_key = crate::string::js_string_from_bytes(b"change".as_ptr(), 6);
-    let via_ic = crate::object::field_get_set::get_field_miss(obj, change_key);
-    let via_ladder = crate::object::js_object_get_field_by_name_f64(obj, change_key);
-    assert_eq!(via_ic.to_bits(), via_ladder.to_bits());
-    // S6: the proof stays on the object; a declared-slot read publishes it.
-    let token = unsafe { array_subclass_named_prefix_token_for_slot(obj, 2) };
-    assert_ne!(
-        token, 0,
-        "an empty subclass must carry the declared-prefix proof"
-    );
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        token
-    );
-
-    assert_eq!(array_subclass_fast_push_one(receiver, 22.0), Some(1.0));
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        token,
-        "the warm forward edge must retain the empty-prefix proof"
-    );
-    assert_eq!(array_subclass_fast_pop(receiver), Some(22.0));
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        token,
-        "the warm reverse edge must retain the empty-prefix proof"
-    );
-
-    crate::object::set_accessor_descriptor(
-        obj as usize,
-        "change".to_string(),
-        crate::object::AccessorDescriptor { get: 1, set: 0 },
-    );
-    assert_eq!(
-        unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
-        0,
-        "an accessor mutation must retire the direct-load proof"
-    );
-    assert_eq!(
-        unsafe { array_subclass_named_prefix_token_for_slot(obj, 2) },
-        0,
-        "an accessor-backed declared key must not re-arm the family token"
-    );
 }
 
 /// A direct-mapped transition cache can appear correct on short arrays yet
@@ -1365,7 +1048,7 @@ fn dense_array_subclass_guard_rejects_other_object_brands() {
     assert_eq!(array_subclass_fast_length(receiver), None);
     assert_eq!(array_subclass_fast_index_get(receiver, 0), None);
     assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0, std::ptr::null_mut()),
+        js_packed_arraylike_index_get(receiver, 0.0),
         17.0
     );
 }

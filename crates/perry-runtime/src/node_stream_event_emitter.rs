@@ -668,7 +668,7 @@ fn reset_events(target: f64) {
 
 fn adjust_events_count(target: f64, delta: f64) -> f64 {
     // An own plain `_eventsCount` (every emitter's): read and write its slot.
-    if let Some((obj, slot, flags)) = state_slot(target, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY) {
+    if let Some((obj, slot, flags)) = state_slot(target, EVENTS_COUNT_KEY) {
         if flags & crate::gc::OBJ_FLAG_FROZEN == 0 {
             // SAFETY: `state_slot` resolved the key's own data position on
             // the live object; nothing below allocates.

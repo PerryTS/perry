@@ -27,7 +27,13 @@ unsafe fn construct_class_object_entry(
     // The template's own record, named by the class object; an image
     // static, so it stays put across every allocation below.
     let cell = unsafe { super::super::field_get_set::class_object_template_cell(obj) };
-    let inst = construct_class_object_instance(class_handle.get_nanbox_f64(), class_cid, cell);
+    let birth_args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(args_ptr, args_len) }
+    };
+    let inst =
+        construct_class_object_instance(class_handle.get_nanbox_f64(), class_cid, cell, birth_args);
     // #7280: root the instance across the replay — see the long note
     // in `construct_registered_class_ref`. The replay runs a user
     // constructor body, so a bare `*mut ObjectHeader` held across it
@@ -47,6 +53,13 @@ unsafe fn construct_class_object_entry(
 
     // The linked birth shape already names this exact evaluation before
     // replay; later instances need no per-object evaluation stamp or lookup.
+    // Case 2c: a static family's instance takes its whole layout now, before
+    // the constructor prologue stores it (`object/layout_desc.rs`) and before
+    // the heritage pin below adds its own key (to the family's overflow).
+    let unadopted = inst_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let _ = inst_handle.across_mut::<ObjectHeader, _>(|| unsafe {
+        crate::object::layout_desc::adopt_family_layout(unadopted)
+    });
     inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
         super::pin_instance_constructing_class(inst, class_handle.get_nanbox_f64());
     });
@@ -140,6 +153,7 @@ fn construct_class_object_instance(
     class_value: f64,
     class_cid: u32,
     cell: Option<super::super::field_get_set::TemplateCell>,
+    args: &[f64],
 ) -> *mut ObjectHeader {
     use super::super::field_get_set::TemplateInstance;
     let template = cell.and_then(|cell| unsafe {
@@ -148,7 +162,7 @@ fn construct_class_object_instance(
     let (inst, width) = match template {
         Some(TemplateInstance::Linked(inst)) => return inst,
         Some(TemplateInstance::Birth(inst, width)) => (inst, width),
-        None => allocate_class_instance(class_cid),
+        None => allocate_class_instance(class_cid, args),
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_nanbox_f64(class_value);
@@ -186,7 +200,17 @@ fn construct_class_object_instance(
 
 /// Reserve declared/learned capacity; constructor stores and field definitions
 /// establish key membership in execution order, on every runtime construct path.
-fn allocate_class_instance(class_cid: u32) -> (*mut ObjectHeader, u32) {
+fn allocate_class_instance(class_cid: u32, args: &[f64]) -> (*mut ObjectHeader, u32) {
+    // Case 2c: a static family's instance is exactly its layout's width (the
+    // creation split's layout for its constructor arguments); the keys it
+    // gains later live in its overflow, not in learned inline room.
+    if let Some(descriptor) = crate::object::layout_desc::family_birth_desc(class_cid, args) {
+        let width = unsafe { (*descriptor).slot_count };
+        return (
+            unsafe { crate::object::layout_desc::perry_alloc_layout(descriptor) },
+            width,
+        );
+    }
     let declared = registered_class_keys_array(class_cid).map_or(0, |(_, width)| width);
     let width = declared.max(crate::object::learned_inline_field_count(class_cid));
     (js_object_alloc(class_cid, width), width)
@@ -201,7 +225,7 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let new_target = scope.root_nanbox_f64(new_target);
     let instance_cid = new_target_class_id(new_target.get_nanbox_f64()).unwrap_or(0);
-    let instance = allocate_class_instance(instance_cid).0;
+    let instance = allocate_class_instance(instance_cid, &[]).0;
     let instance = scope.root_raw_mut_ptr(instance);
     let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
         .or_else(global_object_prototype_bits)

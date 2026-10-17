@@ -827,6 +827,11 @@ fn emit_native_method_str_dispatch_with(
     // Pass a tagged pointer to the immutable StringPool dispatch descriptor.
     // A GC-backed string handle belongs to the main thread's arena and cannot
     // be resolved safely by a `perry/thread` worker executing this closure.
+    // Object model step 2c: a constructor run's `this.k.bind(...)` value
+    // tests whether the call is the builtin's (`layout_read::note_bind_receiver`).
+    if property == "bind" {
+        crate::expr::layout_read::note_bind_receiver(ctx, recv_box);
+    }
     let key_idx = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
@@ -846,6 +851,7 @@ fn emit_native_method_str_dispatch_with(
         // direct call. Its miss performs the dispatch below.
         return crate::expr::method_site::emit_method_site(
             ctx,
+            property,
             recv_box,
             lowered_args,
             &site_id,
@@ -962,9 +968,9 @@ pub(crate) fn lower_split_method_call(
         crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
         let lookup = crate::expr::method_site::emit_method_site_lookup(
             ctx,
+            property,
             &recv,
             &method_id,
-            args.len(),
             lanes,
         );
         let value = lookup.value.clone();

@@ -27,7 +27,8 @@ pub use attr_variants::{
 };
 pub use fast_paths::js_object_set_field_by_name_transition_fast;
 pub(crate) use fast_paths::{
-    add_absent_key_to_null_proto_object, object_set_field_by_name_transition_chain_proven_value,
+    add_absent_key_to_null_proto_object, leaf_key_add,
+    object_set_field_by_name_transition_chain_proven_value,
     object_set_field_by_name_transition_only_fast_value, try_existing_own_data_overwrite,
     try_existing_own_data_overwrite_by_content, try_readd_stable_tombstone,
 };
@@ -48,6 +49,17 @@ pub extern "C" fn js_object_set_field_by_name(
 ) {
     #[cfg(perry_contract_checks)]
     crate::contracts::generic_store(obj, key, value);
+    // Case 2c: a family object's late key and a key outside its layout
+    // (`layout_desc::family_store`); the layout word stays.
+    if unsafe {
+        crate::object::layout_desc::family_store_str(
+            (obj as u64 & crate::value::POINTER_MASK) as *mut ObjectHeader,
+            key,
+            value,
+        )
+    } {
+        return;
+    }
     if !key.is_null() {
         unsafe {
             let bytes = std::slice::from_raw_parts(

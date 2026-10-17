@@ -153,6 +153,7 @@ pub(super) fn emit_string_pool(
     // entries, constructors, accessors) key each class by its ClassId, never
     // by a name (`classes` above maps names, and two classes may share one).
     module_classes: &[perry_hir::Class],
+    layouts: &crate::layout_families::ProgramLayouts,
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
@@ -244,6 +245,12 @@ pub(super) fn emit_string_pool(
     // their static methods' entries run in the function object's home.
     fresh_class_templates: &std::collections::HashSet<String>,
 ) {
+    let empty_layouts = crate::layout_families::ProgramLayouts::default();
+    let layouts = if crate::layout_desc::layouts_enabled(output_type, &llmod.target_triple) {
+        layouts
+    } else {
+        &empty_layouts
+    };
     let image_literals = output_type != "dylib" && output_type != "staticlib";
     // Mach-O chained fixups can rewrite the high bytes of an absolute
     // relocation, corrupting a NaN-boxed STRING_TAG. Keep the image-resident
@@ -1265,6 +1272,7 @@ pub(super) fn emit_string_pool(
         strings,
         module_prefix,
         &mut |body| chunker.current_block().fn_info_ref(body),
+        layouts,
     );
     for decl in declarations {
         for global in decl.globals {

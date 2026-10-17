@@ -148,7 +148,7 @@ pub(crate) unsafe fn call_generator_symbol_method(
     let value =
         crate::symbol::js_object_get_symbol_property(recv.get_nanbox_f64(), key.get_nanbox_f64());
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-    crate::object::method_site::js_method_site_call_value(
+    crate::object::method_call::js_method_call_value(
         value,
         recv.get_nanbox_f64(),
         args.as_ptr(),
@@ -245,21 +245,6 @@ pub(super) unsafe fn resume_fixed_state(
             crate::exception::js_throw(value)
         }
     }
-}
-
-/// The existing method memo already proved the live generator brand and
-/// selected intrinsic before argument evaluation. Neither JS writes nor GC
-/// can remove that brand or replace its private edge. Read the refreshed
-/// receiver's edge immediately before entering its rooted compiled body.
-pub(super) unsafe fn resume_proven_receiver(
-    this: crate::closure::JsThis,
-    op: f64,
-    arg: f64,
-) -> f64 {
-    let object = JSValue::from_bits(this.as_f64().to_bits()).as_pointer::<ObjectHeader>();
-    let state = ((*(*object).meta).native_state & crate::value::POINTER_MASK)
-        as *const crate::closure::ClosureHeader;
-    resume_fixed_state(state, op, arg)
 }
 
 /// A previously marked prototype already owns its stable serial. Read those

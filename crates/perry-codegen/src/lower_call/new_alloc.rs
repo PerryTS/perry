@@ -497,6 +497,23 @@ fn emit_instance_alloc_inner(
     // Keep the allocation width, but publish an empty-key birth. Dynamic
     // parents need the same rule; unknown ancestor stores can safely spill.
     let deferred_keys = has_public_fields && !keys_defined_at_birth(class);
+    // Object model case 2c: a static family's instance is born at its
+    // family layout, every slot the hole; the constructor prologue stores
+    // its keys and a late key's slot stays the hole until it is written.
+    if let Some(fam) = ctx.program_layouts.families.get(&cid) {
+        if fam.parent_class_id == parent_cid
+            && class.extends_expr.is_none()
+            && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+        {
+            let desc = crate::layout_desc::note_family_desc_use(cid);
+            let raw = ctx.block().call(
+                crate::types::PTR,
+                "perry_alloc_layout",
+                &[(crate::types::PTR, &desc)],
+            );
+            return ctx.block().ptrtoint(&raw, I64);
+        }
+    }
     if class.extends_expr.is_some()
         || (deferred_keys && !ctx.class_header_image_globals.contains_key(class_name))
     {

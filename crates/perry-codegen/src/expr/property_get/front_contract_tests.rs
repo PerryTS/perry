@@ -168,7 +168,7 @@ pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> 
         || !kind_body[0].contains("getelementptr i8")
         || !kind_body[1].contains("load i64")
         || !kind_body[2].contains("and i64")
-        || !kind_body[2].ends_with(&format!(", {}", perry_abi::PIC_HOLDER_ACCESSOR_BIT))
+        || !kind_body[2].ends_with(&format!(", {}", (1i64 << 61)))
         || !kind_body[3].contains("icmp ne i64")
         || !kind_body[3].ends_with(", 0")
         || targets(body) != [kind, front]

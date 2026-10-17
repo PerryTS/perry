@@ -214,6 +214,22 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
     // before writing `class_ptr`'s own pin above (the ordering rule in
     // `registry_latch.rs`) — that write happens-before this one in this
     // thread's program order, so the latch is already armed here.
+    unsafe {
+        if crate::object::layout_desc::is_family_layout_word((*inst).parent_class_id) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let object = scope.root_raw_mut_ptr(inst);
+            let value = scope.root_nanbox_f64(classobj_value);
+            let (meta, _) =
+                object.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(inst));
+            (*meta).private_evaluation_brand = value.get_nanbox_f64().to_bits();
+            crate::gc::runtime_write_barrier_slot(
+                meta as usize,
+                std::ptr::addr_of!((*meta).private_evaluation_brand) as usize,
+                (*meta).private_evaluation_brand,
+            );
+            return;
+        }
+    }
     let key_bytes = INSTANCE_CONSTRUCTING_CLASS_KEY.as_bytes();
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     crate::object::js_object_set_field_by_name(inst, key, classobj_value);
@@ -225,6 +241,17 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
 pub(crate) fn instance_pinned_constructing_class(obj: *const ObjectHeader) -> Option<f64> {
     if CLASS_OBJECT_HERITAGE_PIN_LATCH.is_idle() {
         return None;
+    }
+    unsafe {
+        if !obj.is_null()
+            && crate::object::layout_desc::is_family_layout_word((*obj).parent_class_id)
+        {
+            let meta = (*obj).meta;
+            if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
+                return Some(f64::from_bits((*meta).private_evaluation_brand));
+            }
+            return None;
+        }
     }
     class_object_own_field_bytes(obj, INSTANCE_CONSTRUCTING_CLASS_KEY.as_bytes())
 }

@@ -86,32 +86,3 @@ fn literal_integer_compare_emits_at_most_24_instructions() {
         "no compact 80 re-compare: {asm}"
     );
 }
-
-#[test]
-fn scalar_store_emits_no_barrier_and_at_most_170_instructions() {
-    let value = Expr::Binary {
-        op: perry_hir::BinaryOp::BitOr,
-        left: Box::new(Expr::LocalGet(2)),
-        right: Box::new(Expr::Number(0.0)),
-    };
-    let store = |value| Expr::PropertySet {
-        object: Box::new(Expr::LocalGet(1)),
-        property: "pos".into(),
-        value: Box::new(value),
-    };
-    let asm = assembly(store(value));
-    assert!(
-        instruction_count(&asm) <= 170,
-        "scalar store and both IC routes: {asm}"
-    );
-    assert!(!asm.contains("write_barrier"), "{asm}");
-    let control = assembly(store(Expr::LocalGet(2)));
-    assert!(
-        control.contains("write_barrier"),
-        "unknown-value negative control: {control}"
-    );
-    assert!(
-        instruction_count(&control) > instruction_count(&asm),
-        "{control}"
-    );
-}

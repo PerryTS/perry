@@ -128,6 +128,11 @@ const SUMMARY_SLOTS: u8 = 0x40;
 const WORD_SLOT: u8 = 0x80;
 /// Bits a plain data store must see clear on every hop of a prototype chain.
 pub(crate) const SUMMARY_BLOCKS_STORE: u8 = SUMMARY_ACCESSOR | SUMMARY_NON_WRITABLE;
+/// Bits that keep a receiver's own key from a store that overwrites its slot
+/// in place (a store cache, an own-store fast lane): [`SUMMARY_BLOCKS_STORE`]
+/// and a key whose slot may hold the hole, where the store is an add
+/// (`layout_desc::family_store`). See [`entry_is_plain_overwrite`].
+pub(crate) const SUMMARY_BLOCKS_OVERWRITE: u8 = SUMMARY_BLOCKS_STORE | SUMMARY_HOLES;
 
 /// Physical slots a keys array that carries attributes reserves in front of
 /// logical element 0: the attributes pointer. The ONE spelling of this
@@ -182,6 +187,14 @@ pub(crate) const fn entry_to_attr_bits(entry: u8) -> u8 {
 #[inline]
 pub(crate) const fn entry_is_plain_writable_data(entry: u8) -> bool {
     entry & (ENTRY_ACCESSOR | ENTRY_NON_WRITABLE | ENTRY_PRIVATE) == 0
+}
+
+/// May a store to the own key with `entry` overwrite its slot in place (a
+/// store cache's way, an own-store fast lane)? Plain writable data that is
+/// not optional: an optional key's slot may hold the hole, and a store then
+/// adds the key (`layout_desc::family_store` decides the order).
+pub(crate) const fn entry_is_plain_overwrite(entry: u8) -> bool {
+    entry_is_plain_writable_data(entry) && entry & ENTRY_OPTIONAL == 0
 }
 
 /// One element of an attributes array: the entry at this position, and the
@@ -1206,39 +1219,6 @@ unsafe fn object_key_entry_filtered(
     match crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key) {
         Some(pos) => keys_entry(keys.arr(), pos),
         None => 0,
-    }
-}
-
-/// [`object_key_entry`] for a key held as a string header. An undecodable key
-/// reads as an accessor — the conservative answer for every caller (a read
-/// declines to prime, a store declines).
-///
-/// # Safety
-/// `obj` is a live `ObjectHeader`; `key` is null or a live string header.
-#[inline]
-pub(crate) unsafe fn object_key_entry_for_string(
-    obj: *const crate::object::ObjectHeader,
-    key: *const crate::StringHeader,
-) -> u8 {
-    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
-        return 0;
-    };
-    if record.summary() & SUMMARY_KEY_BITS == 0 && !crate::object::overflow::has_overflow(obj) {
-        return 0;
-    }
-    if key.is_null() {
-        return 0;
-    }
-    let boxed =
-        crate::value::JSValue::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    match crate::string::js_string_key_bytes(boxed, &mut sso) {
-        Some(bytes) => object_key_entry_filtered(
-            crate::object::object_keys_from_shape_record(obj, record),
-            bytes,
-            false,
-        ),
-        None => ENTRY_ACCESSOR,
     }
 }
 

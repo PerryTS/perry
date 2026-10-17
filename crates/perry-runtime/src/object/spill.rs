@@ -195,6 +195,32 @@ pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usiz
     }
 }
 
+/// The store probe's spilled overwrite (`layout_probe::perry_probe_set`):
+/// store `vbits` over the PRESENT value of spill slot `field_index` in the
+/// spill storage `obj` already has, with `spill_set`'s barrier and notes.
+/// `false`, having stored nothing, for a hole (an absent key), a slot past the
+/// storage, or an Array-subclass owner. GC leaf.
+pub(crate) fn spill_overwrite_present(obj_ptr: usize, field_index: usize, vbits: u64) -> bool {
+    unsafe {
+        let obj = obj_ptr as *mut ObjectHeader;
+        let meta = (*obj).meta;
+        if meta.is_null() || (*meta).elements != 0 {
+            return false;
+        }
+        let spill = (*meta).spill as *mut crate::array::ArrayHeader;
+        if spill.is_null() || field_index >= (*spill).length as usize {
+            return false;
+        }
+        if *spill_elements(spill).add(field_index) == crate::value::TAG_HOLE {
+            return false;
+        }
+        super::builtin_proto::note_value_store(obj, field_index, true, "spill store");
+        crate::array::note_packed_subclass_spill_store(obj, meta);
+        spill_store_slot(spill, field_index, vbits);
+        true
+    }
+}
+
 pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;

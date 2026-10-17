@@ -1,79 +1,26 @@
-//! The one inline path for an existing-property store `o.k = v`.
+//! The static-key store `o.k = v` (object model step 5, phase 2,
+//! `OBJECT_MODEL_2026-10-13.md` §3.7): the 2c colour-slot arm, then the
+//! store probe and the complete `[[Set]]`. The site holds no state.
 //!
 //! Every static-key, same-receiver store that no earlier specialisation took
 //! (class field, POD record, scalar-replaced local, array index or length)
-//! reaches [`emit_static_store_ic`], whatever its right-hand side. The emitted
-//! hit is:
+//! reaches [`emit_static_store_ic`], whatever its right-hand side:
 //!
 //! ```text
-//!   receiver tag test          bits ^ POINTER_TAG, top 16 bits zero
-//!   small-handle test          handle > 0xFFFFF (native registry ids, proxies)
-//!   ONE shape compare          u32 at handle+4 == low half of @..._packed_set
-//!   the store                  handle + 16 + slot*8, slot = high half
-//!   the barrier the GC needs   behind a live test of the stored bits
+//!   [colour slot arm, `expr/layout_read.rs`]
+//!   ok = perry_probe_set(dir, obj, key, hash, v)   (an own plain writable
+//!        data slot or overflow entry: one barriered store; a GC leaf)
+//!   ok ? v : js_put_value_set(obj, key, v, obj, strict)
+//!        (the chain walk for setters and non-writables, the key add)
 //! ```
-//!
-//! and everything else is ONE call, `js_put_value_set_packed_miss`, which runs
-//! the unchanged strict-aware `[[Set]]` and publishes what it learned.
 //!
 //! # Evaluation order: the RHS may collect, so the receiver is read after it
 //!
-//! The previous static PIC admitted only a safepoint-free RHS because it
-//! evaluated the reference, held the receiver in an unrooted register across
-//! the RHS, and stored through it. Here the caller evaluates the target FIRST
-//! (the reference is evaluated before the value, ECMA-262 §13.15.2), keeps it
-//! in an operand root across the RHS (`with_operands_rooted_across`), and
-//! hands this emitter the value RE-READ from that root after the RHS. Nothing
-//! between that re-read and the slot store can collect: the header loads, the
-//! compact-word load and the compares are plain loads, so the handle and the
-//! ShapeId this code tests are the receiver's CURRENT ones — after whatever
-//! moving collection or shape change the RHS caused. No expression is
-//! reordered; only the point at which the receiver's shape is consulted moved,
-//! and it moved to where the spec's PutValue consults it anyway.
-//!
-//! # What the shape compare proves, and why no other header word is read for it
-//!
-//! * **GC kind** (#10828, rule 3): for a POINTER-tagged value, the u32 at
-//!   `+4` equals a live ShapeId only for a `GC_TYPE_OBJECT`.
-//! * **Not forwarded**: a forwarding stub stores the new user address in the
-//!   first eight payload bytes (`gc::types::set_forwarding_address`), so its
-//!   `+4` word is the HIGH half of a user-space address — below `0x0001_0000`
-//!   on every supported target, far below the ShapeId floor `0x8000_0000`. A
-//!   forwarded cell therefore cannot match a primed word.
-//! * **Key present, own, inline, at this slot**: the ShapeId names an
-//!   immutable key list and live inline bound, and the word is published only
-//!   for an inline slot (`put_value/packed_set.rs`).
-//! * **Data, writable, no accessor** (#10824 / #10287, rule 1): descriptor
-//!   installs transition the ShapeId; the miss entry publishes only a key the
-//!   receiver's per-key descriptor summary proves plain.
-//! * **Not frozen / sealed / non-extensible**: the integrity operations mint a
-//!   counter-unique semantic generation, and the miss entry refuses them.
-//! * **Not deleted**: #10826 makes every delete a shape transition.
-//! * **Not a class object or a dictionary**: the shape's `object_kind`.
-//! * **Receiver kind and no numeric proof** (charter step 3): the word is
-//!   published only for a shape of kind `Ordinary`, which is exactly "a class
-//!   instance, or a class-less receiver a birth site marked plain, not a
-//!   typed-array prototype, carrying no Array-subclass numeric proof"
-//!   (`perry_runtime::object::shapes::store_kind`). A class-less exotic or
-//!   native-module receiver is `OrdinaryUnmarked`; a proof-carrying one is
-//!   `OrdinaryNumericProof`; both are other ShapeIds.
-//! * **Not a Proxy**: a Proxy is a POINTER-tagged id in the handle band, below
-//!   `0x200000`, so the small-handle test refuses it before any load.
-//!
-//! # Nothing is re-read per object
-//!
-//! Until charter step 3 the receiver kind and the Array-subclass numeric
-//! proof lived on the object. Both are now shape kinds (see above), so the
-//! one compare proves them. Object layout is also a ShapeId fact; these
-//! stores owe no address-keyed layout note.
-//!
-//! # The barrier
-//!
-//! A pointer-bearing value needs string alias demotion and the generational
-//! and incremental write barrier. The emitted hit skips that bookkeeping
-//! when the RHS is proven scalar by construction or integer range facts.
-//! Otherwise it tests the stored bits, then checks whether the parent may
-//! need remembering. Erased TypeScript annotations alone prove nothing.
+//! The caller evaluates the target FIRST (the reference is evaluated before
+//! the value, ECMA-262 §13.15.2), keeps it in an operand root across the RHS
+//! (`with_operands_rooted_across`), and hands this emitter the value RE-READ
+//! from that root after the RHS. Nothing between that re-read and the probe's
+//! store can collect, so the receiver the probe reads is the CURRENT one.
 
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
@@ -82,143 +29,15 @@ use super::write_barrier::{
 };
 use super::FnCtx;
 
-/// Initial value of `@perry_ic_N_packed_set`. **Must equal
-/// `perry_runtime::proxy::put_value::packed_set::PACKED_SET_EMPTY`**; pinned
-/// by the runtime's `packed_set_empty_matches_codegen`.
-pub(crate) const PACKED_SET_EMPTY: i64 = 0xFFFF_FFFF;
-
-/// Ways of the site's cache the emitted code compares after a word miss.
-/// **Must equal `perry_runtime::proxy::PACKED_SET_INLINE_WAYS`**; pinned by the
-/// runtime's `packed_set_inline_ways_matches_codegen`.
-pub(crate) const PACKED_SET_INLINE_WAYS: usize = 4;
-
-/// Words of a site's record `@perry_ic_N_packed_set` (`[5 x i64]`): the
-/// existing-key word, the key-add memo's shapes and guard words, the
-/// runtime's pointer to further key-add memos, and the site's ConstFn body
-/// (`perry_abi::PACKED_SET_CONSTFN_INFO_WORD`). **Must
-/// equal `perry_runtime::proxy::put_value::packed_add::{PACKED_SET_SITE_WORDS,
-/// ADD_SHAPES_WORD, ADD_GUARD_WORD, ADD_SLOT_BITS}`**; pinned by the runtime's
-/// `packed_set_site_layout_matches_codegen`.
-pub(crate) const PACKED_SET_SITE_WORDS: usize = crate::runtime_abi::PACKED_SET_SITE_WORDS;
-/// The site word naming its ConstFn body (a `JsFunctionInfo` address, 0 =
-/// none); a ConstFn-flagged entry hits only for a closure whose info word
-/// equals it.
-const CONSTFN_INFO_WORD: usize = crate::runtime_abi::PACKED_SET_CONSTFN_INFO_WORD;
-/// The existing-key word's ConstFn bit (`perry_abi::PACKED_SET_CONSTFN_SLOT`).
-const PACKED_SET_CONSTFN_SLOT: u64 = crate::runtime_abi::PACKED_SET_CONSTFN_SLOT;
-/// The key-add guard's ConstFn bit (`perry_abi::PACKED_ADD_CONSTFN_SLOT`).
-const ADD_CONSTFN_SLOT: u64 = crate::runtime_abi::PACKED_ADD_CONSTFN_SLOT;
-const ADD_REP_ONLY_SLOT: u64 = crate::runtime_abi::PACKED_ADD_REP_ONLY_SLOT;
-pub(crate) const ADD_SHAPES_WORD: usize = 1;
-pub(crate) const ADD_GUARD_WORD: usize = 2;
-pub(crate) const ADD_SLOT_BITS: u32 = 16;
-/// The site word holding the runtime's `*AddWay` block (0 = none), and how
-/// the emitted code finds the ways of it that it compares after the primary
-/// memo: from the receiver ShapeId's HOME, the top `ADD_WAYS_LOG2` bits of
-/// `sid * ADD_WAY_HASH` (mod 2^32). A way is two words in the primary pair's
-/// format, `{shapes, guard}`, so the site's words
-/// `ADD_SHAPES_WORD..=ADD_GUARD_WORD` are a way too. **Must equal
-/// `perry_runtime::proxy::put_value::packed_add::{ADD_WAYS_WORD,
-/// ADD_WAY_WORDS, ADD_WAYS_LOG2, ADD_WAY_HASH}`** (and `add_way_home`);
-/// pinned by the runtime's `packed_set_site_layout_matches_codegen`.
-pub(crate) const ADD_WAYS_WORD: usize = 3;
-pub(crate) const ADD_WAY_WORDS: usize = 2;
-pub(crate) const ADD_WAYS_LOG2: u32 = 6;
-pub(crate) const ADD_WAY_HASH: u32 = 0x9E37_79B1;
-/// Ways compared from the home on: the home, then the next (mod the block),
-/// where the runtime places a memo whose home an earlier one holds.
-pub(crate) const ADD_WAY_PROBES: usize = 2;
-/// Charter step 5 (P2c): the guard's slot-field bit that marks a successor
-/// whose lane at the slot is not `Any`. **Must equal
-/// `perry_runtime::proxy::put_value::packed_add::ADD_F64_SLOT`.**
-const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
-const ADD_SLOT_MASK: u64 = ADD_CONSTFN_SLOT - 1;
-const _: () = assert!(ADD_CONSTFN_SLOT == 1 << (ADD_SLOT_BITS - 2));
-/// The store word's slot half without its two flag bits: the runtime's
-/// `packed_set::PACKED_SET_F64_SLOT` (the word's sign bit) and
-/// `PACKED_SET_CONSTFN_SLOT` (bit 62).
-const PACKED_SLOT_INDEX_MASK: &str = "1073741823";
-const _: () = assert!(PACKED_SET_CONSTFN_SLOT == 1 << 62);
-/// A double's exponent field: all ones = an INT32/tagged box, an infinity or
-/// a NaN, the values an `F64` lane refuses inline (DESIGN §3.2).
-const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
-/// Block-name stem of the key-add hit.
-const ADD_STEM: &str = "put.add";
-/// `GC_FLAG_TENURED` (gc_flags byte).
-pub(crate) const ADD_REFUSE_GC_FLAGS: u32 = 0x20;
-/// `_reserved` bits the key-add hit refuses: `OBJ_FLAG_STABLE_TOMBSTONES`
-/// (0x400). Descriptors on other keys cannot intercept an absent key. The numeric proof is not
-/// here: it is a shape kind (charter step 3), and a memo's pre-shape is an
-/// `Ordinary` one. Pinned by the runtime's
-/// `packed_add_refuse_bits_match_codegen`.
-pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0400;
-/// The mask over the GcHeader's first 32-bit word
-/// (obj_type | gc_flags << 8 | _reserved << 16) whose zero admits a
-/// key-add receiver. Layout state is absent for objects.
-fn add_header_refuse_mask() -> i32 {
-    ((ADD_REFUSE_RESERVED << 16) | (ADD_REFUSE_GC_FLAGS << 8)) as i32
-}
-
 /// The barrier-census stem. Shared with the census registry
 /// (`barrier_stem_census_tests::VERIFIED_BARRIER_STEMS`).
 pub(crate) const STORE_IC_STEM: &str = "put.pic";
 
-/// #10663: this site takes the outlined call because its function has too many
-/// once-per-call stores for their inline caches to pay off
-/// ([`crate::codegen::helpers::decide_straight_line_store_outline`]).
-///
-/// A site under a loop keeps its cache: `loop_targets` holds one frame per
-/// enclosing loop, plus `switch` frames with an EMPTY continue label, which do
-/// not repeat anything (the `new_site_is_in_loop` discriminator,
-/// `lower_call/new_alloc.rs`). So does every site of a function the hot-loop
-/// pre-passes marked, which is called from a loop one frame out.
-fn straight_line_site_outlined(ctx: &FnCtx<'_>) -> bool {
-    ctx.func.outlines_straight_line_store_ics()
-        && !ctx.func.hot_loop_callee
-        && !ctx.func.alloc_hot
-        && !ctx
-            .loop_targets
-            .iter()
-            .any(|(continue_label, _, _)| !continue_label.is_empty())
-}
-
-/// The ordinary store memo shared by plain stores and read/modify/write.
-pub(super) fn allocate_packed_store_memo(ctx: &mut FnCtx<'_>) -> String {
-    let site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let name = format!("{}_packed_set", super::inline_cache_global_name(ctx, site));
-    ctx.typed_parse_rodata.push(format!(
-        "@{name} = private global [{PACKED_SET_SITE_WORDS} x i64] \
-         [i64 {PACKED_SET_EMPTY}, i64 {PACKED_SET_EMPTY}, i64 0, i64 0, i64 0], align 8"
-    ));
-    format!("@{name}")
-}
-
 /// Emit the static-key store. `obj_box` is the receiver RE-READ after the
 /// RHS; `value_double` is the stored value and `value_bits` the same value as
 /// the caller lowered it to i64 (used only to recognise an SSA constant).
-/// Returns the
-/// assignment's value (the RHS on a hit, the miss entry's result otherwise).
-///
-/// A nullish receiver fails the receiver test, and the miss entry's `[[Set]]`
-/// throws its TypeError, so the hit path pays nothing for it.
-///
-/// `value_may_be_closure` is false when the stored value's expression can
-/// never evaluate to a closure ([`value_never_closure`]): a ConstFn lane then
-/// admits nothing it could store, so its admission arms are not emitted and a
-/// flagged lane takes the miss, exactly as a failed admission would.
-///
-/// `existing_key` is `Some` for a store to a declared field of a class whose
-/// instances carry that key from birth (`property_set.rs`): the store is an
-/// overwrite of an own data property, so only the site word's hit is inline.
-/// The existing-key ways, the key-add memos and the setter arm stay behind the
-/// same miss entry, which serves (and publishes) every one of them; the
-/// inline copies of them would only make the site wider. `Some(true)` says
-/// the field is born on an `F64` lane in every ShapeId its class compares
-/// (`class_field_site_raw_f64`): the inline hit is then only the `F64`-lane
-/// store of a plain finite double, which carries no pointer and so no GC
-/// bookkeeping; a lane that generalized takes the miss like any other.
-#[allow(clippy::too_many_arguments)]
+/// Returns the assignment's value. A nullish receiver fails the probe, and
+/// `js_put_value_set` throws its TypeError.
 pub(crate) fn emit_static_store_ic(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
@@ -226,14 +45,27 @@ pub(crate) fn emit_static_store_ic(
     value_double: &str,
     value_bits: &str,
     strict: bool,
-    value_may_be_closure: bool,
     value_is_scalar: bool,
-    existing_key: Option<bool>,
+    this_receiver: bool,
+    run: Option<&crate::expr::layout_read::RunArm>,
 ) -> String {
     // Object model step 5 (case 2c): a coloured key's store through any
     // receiver writes the colour slot when the receiver's layout admits it
     // (`expr/layout_read.rs`); every miss is the site below.
     let bits = ctx.block().bitcast_double_to_i64(obj_box);
+    // Step 2c (A): a constructor key's initializing store through `this`.
+    let init = if this_receiver {
+        crate::expr::layout_read::begin_family_init_store(
+            ctx,
+            &bits,
+            value_double,
+            value_bits,
+            value_is_scalar,
+            run,
+        )
+    } else {
+        None
+    };
     let arm = crate::expr::layout_read::begin_store(
         ctx,
         &bits,
@@ -242,802 +74,72 @@ pub(crate) fn emit_static_store_ic(
         value_bits,
         value_is_scalar,
     );
-    let value = emit_static_store_ic_site(
-        ctx,
-        obj_box,
-        property,
-        value_double,
-        value_bits,
-        strict,
-        value_may_be_closure,
-        value_is_scalar,
-        existing_key,
-    );
-    match arm {
+    let value = emit_static_store_ic_site(ctx, obj_box, property, value_double, strict);
+    let value = match arm {
         Some(arm) => crate::expr::layout_read::finish_store(ctx, arm, value_double, &value),
+        None => value,
+    };
+    match init {
+        Some(init) => crate::expr::layout_read::finish_store(ctx, init, value_double, &value),
         None => value,
     }
 }
 
-/// [`emit_static_store_ic`]'s ordinary site.
-#[allow(clippy::too_many_arguments)]
+/// [`emit_static_store_ic`]'s ordinary site: the store probe
+/// (`perry_probe_set`: an own plain writable data slot or overflow entry,
+/// one barriered store), else the complete strict-aware `[[Set]]`
+/// (`js_put_value_set`: the chain walk for setters and non-writables, the
+/// key add). The site holds no state.
 fn emit_static_store_ic_site(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
     property: &str,
     value_double: &str,
-    value_bits: &str,
     strict: bool,
-    value_may_be_closure: bool,
-    value_is_scalar: bool,
-    existing_key: Option<bool>,
 ) -> String {
-    let key_idx = ctx.strings.intern(property);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-
-    // The ways cache (lazily allocated by the runtime) and the compact word.
-    let cache_site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = super::inline_cache_global_name(ctx, cache_site);
-    ctx.pending_declares
-        .push((format!("__ic_decl_{cache_site}"), DOUBLE, vec![]));
-    ctx.ic_globals.push(cache_name.clone());
-    let cache_slot_ref = format!("@{cache_name}");
-
+    let (dir, key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
     let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
-    let strict_i32 = if strict { "1" } else { "0" };
-
-    if crate::codegen::full_outline_ic_enabled() || straight_line_site_outlined(ctx) {
-        super::store_census::bump(ctx, super::store_census::PIC_MISS);
-        let key_handle = emit_key_handle(ctx, &key_handle_global);
-        // S2: an existing-key store from an inline way is a GC-leaf call;
-        // everything else takes the collecting miss entry on a cold arm.
-        return super::ic_fast_split::emit_hole_declining_split(
-            ctx,
-            "pset.outline",
-            "js_put_value_set_packed_fast",
-            &[
-                (DOUBLE, obj_box),
-                (DOUBLE, value_double),
-                (PTR, &cache_slot_ref),
-            ],
-            "js_put_value_set_packed_miss",
-            &[
-                (DOUBLE, obj_box),
-                (I64, &key_handle),
-                (DOUBLE, value_double),
-                (I32, strict_i32),
-                (PTR, &cache_slot_ref),
-                (PTR, "null"),
-            ],
-        );
-    }
-
-    let packed_ref = allocate_packed_store_memo(ctx);
-
-    let tok_idx = ctx.new_block(&format!("{STORE_IC_STEM}.token"));
-    let kind_idx = ctx.new_block(&format!("{STORE_IC_STEM}.kind"));
-    let rep_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.rep"));
-    let store_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.store"));
-    let miss_idx = ctx.new_block(&format!("{STORE_IC_STEM}.miss"));
-    let merge_idx = ctx.new_block(&format!("{STORE_IC_STEM}.merge"));
-    let tok_label = ctx.block_label(tok_idx);
-    let kind_label = ctx.block_label(kind_idx);
-    let miss_label = ctx.block_label(miss_idx);
-
-    // Receiver: POINTER tag AND payload above the handle band, as ONE unsigned
-    // range compare. `t = bits - (POINTER_TAG | 0x200000)` is below
-    // `2^48 - 0x200000` exactly when the top sixteen bits are 0x7FFD and the
-    // payload is >= 0x200000 (a smaller payload, or any other tag, wraps above
-    // the bound). Native registry ids and the Proxy id band live below
-    // 0x200000, so neither is ever dereferenced. The handle is `t + 0x200000`.
-    // The one shared form every read and write route takes
-    // (`crate::expr::receiver_range`).
-    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-    let biased = recv.biased;
-    ctx.block()
-        .cond_br(&recv.is_object_pointer, &tok_label, &miss_label);
-
-    // THE shape compare. The compact word and the receiver's ShapeId word are
-    // independent loads; the ShapeId load's only use is the compare.
-    ctx.current_block = tok_idx;
-    let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &biased);
-    let word = ctx.block().load_atomic_monotonic(I64, &packed_ref, 8);
-    let sid_addr = ctx.block().add(I64, &handle, "4");
-    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
-    let sid = ctx.block().load(I32, &sid_ptr);
-    let stamp = ctx.block().trunc(I64, &word, I32);
-    let shape_eq = ctx.block().icmp_eq(I32, &sid, &stamp);
-    if let Some(f64_only) = existing_key {
-        ctx.block().cond_br(&shape_eq, &kind_label, &miss_label);
-        let site = StoreSite {
-            obj_box,
-            key_handle_global: &key_handle_global,
-            value_double,
-            value_bits,
-            strict_i32,
-            value_may_be_closure,
-            value_is_scalar,
-            cache_slot_ref: &cache_slot_ref,
-            packed_ref: &packed_ref,
-            handle: &handle,
-            kind_idx,
-            rep_idx,
-            store_idx,
-            miss_idx,
-            merge_idx,
-            f64_only,
-        };
-        let hit_end_label = emit_store_hit(ctx, &site, &[(word, tok_label.clone())]);
-        return emit_store_miss_and_merge(ctx, &site, &hit_end_label, None);
-    }
-    let add_idx = ctx.new_block(&format!("{ADD_STEM}.check"));
-    let add_label = ctx.block_label(add_idx);
-    // Setter candidates reuse the one collecting store exit. The shared
-    // runtime consumer validates holder, installation and storage facts.
-    let setter_entry = (setter_arm_target(ctx.target_triple)
-        && ctx.program_may_declare_setter(property))
-    .then(|| ctx.new_block(&format!("{STORE_IC_STEM}.acc")));
-    let shape_miss = setter_entry
-        .map(|idx| ctx.block_label(idx))
-        .unwrap_or_else(|| add_label.clone());
-    ctx.block().cond_br(&shape_eq, &kind_label, &shape_miss);
-    if let Some(entry_idx) = setter_entry {
-        setter_arm::emit_setter_arm(
-            ctx,
-            entry_idx,
-            &word,
-            PACKED_SET_EMPTY,
-            &miss_label,
-            &add_label,
-        );
-    }
-    let mut word_incoming: Vec<(String, String)> = vec![(word, tok_label.clone())];
-
-    // A word miss: the key-add memo's primary pre-shape next, BEFORE the
-    // existing-key ways. A site that has only ever added keys then pays one
-    // compare of the adjacent word instead of the ways-cache load; a site
-    // with existing-key ways pays that one compare more. The two can never
-    // both match one ShapeId: an existing-key memo names a shape that HAS
-    // the key, an add memo one that lacks it.
-    ctx.current_block = add_idx;
-    let ways_entry_idx = ctx.new_block(&format!("{STORE_IC_STEM}.ways"));
-    let ways_entry_label = ctx.block_label(ways_entry_idx);
-    let add_ways_idx = ctx.new_block(&format!("{ADD_STEM}.ways"));
-    let add_ways_label = ctx.block_label(add_ways_idx);
-    let add_hit_idx = ctx.new_block(&format!("{ADD_STEM}.chain"));
-    let add_hit_label = ctx.block_label(add_hit_idx);
-    let primary_ptr = ctx
-        .block()
-        .gep(I64, &packed_ref, &[(I64, &ADD_SHAPES_WORD.to_string())]);
-    let primary = ctx.block().load_atomic_monotonic(I64, &primary_ptr, 8);
-    let primary_pre = ctx.block().trunc(I64, &primary, I32);
-    let primary_eq = ctx.block().icmp_eq(I32, &sid, &primary_pre);
-    ctx.block()
-        .cond_br(&primary_eq, &add_hit_label, &ways_entry_label);
-    // Each entry: (the memo's shapes word, the address of its pair, block).
-    let mut memo_incoming: Vec<(String, String, String)> =
-        vec![(primary, primary_ptr, add_label.clone())];
-
-    // Compare the first ways of the existing-key cache (the read path's #7753
-    // structure), each in the word's own format, so a hit on any of them is
-    // the same ONE ShapeId compare and flows into the same store. A spill
-    // entry is flipped out of the ShapeId range and never matches here. The
-    // cache is lazily allocated: a site that has never primed has none.
-    ctx.current_block = ways_entry_idx;
-    let ways = super::emit_inline_cache_slot(ctx, &cache_name);
-    let first_way_idx = ctx.new_block(&format!("{STORE_IC_STEM}.way"));
-    let mut way_label = ctx.block_label(first_way_idx);
-    ctx.block()
-        .cond_br(&ways.present, &way_label, &add_ways_label);
-    let mut way_idx = first_way_idx;
-    for w in 0..PACKED_SET_INLINE_WAYS {
-        ctx.current_block = way_idx;
-        let entry_ptr = ctx.block().gep(I64, &ways.cache, &[(I64, &w.to_string())]);
-        let entry = ctx.block().load_atomic_monotonic(I64, &entry_ptr, 8);
-        let entry_stamp = ctx.block().trunc(I64, &entry, I32);
-        let way_eq = ctx.block().icmp_eq(I32, &sid, &entry_stamp);
-        let next_label = if w + 1 < PACKED_SET_INLINE_WAYS {
-            way_idx = ctx.new_block(&format!("{STORE_IC_STEM}.way"));
-            ctx.block_label(way_idx)
-        } else {
-            add_ways_label.clone()
-        };
-        ctx.block().cond_br(&way_eq, &kind_label, &next_label);
-        word_incoming.push((entry, way_label.clone()));
-        way_label = next_label;
-    }
-
-    // The key-add ways at the receiver ShapeId's home in the runtime's block
-    // (`packed_add::add_way_home`) and the one after it: a displaced memo is
-    // placed at its home, or when an earlier memo holds that, at the next
-    // free way from it. Whichever pre-shapes a polymorphic site keeps hot,
-    // each is one or two compares away, the same compare as the primary's.
-    // A hit reads its guard from the same pair.
-    ctx.current_block = add_ways_idx;
-    let block_ptr = ctx
-        .block()
-        .gep(I64, &packed_ref, &[(I64, &ADD_WAYS_WORD.to_string())]);
-    let block_word = ctx.block().load_atomic_monotonic(I64, &block_ptr, 8);
-    let has_block = ctx.block().icmp_ne(I64, &block_word, "0");
-    let add_block = ctx.block().inttoptr(I64, &block_word);
-    let mut add_way_idx = ctx.new_block(&format!("{ADD_STEM}.way"));
-    let mut add_way_label = ctx.block_label(add_way_idx);
-    ctx.block().cond_br(&has_block, &add_way_label, &miss_label);
-    ctx.current_block = add_way_idx;
-    let hashed = ctx
-        .block()
-        .mul(I32, &sid, &(ADD_WAY_HASH as i32).to_string());
-    let home = ctx
-        .block()
-        .lshr(I32, &hashed, &(32 - ADD_WAYS_LOG2).to_string());
-    for probe in 0..ADD_WAY_PROBES {
-        ctx.current_block = add_way_idx;
-        let way = if probe == 0 {
-            home.clone()
-        } else {
-            let next = ctx.block().add(I32, &home, &probe.to_string());
-            ctx.block()
-                .and(I32, &next, &((1u32 << ADD_WAYS_LOG2) - 1).to_string())
-        };
-        let way_wide = ctx.block().zext(I32, &way, I64);
-        let word_index = ctx.block().mul(I64, &way_wide, &ADD_WAY_WORDS.to_string());
-        let pair_ptr = ctx.block().gep(I64, &add_block, &[(I64, &word_index)]);
-        let shapes = ctx.block().load_atomic_monotonic(I64, &pair_ptr, 8);
-        let pre = ctx.block().trunc(I64, &shapes, I32);
-        let way_eq = ctx.block().icmp_eq(I32, &sid, &pre);
-        let next_label = if probe + 1 < ADD_WAY_PROBES {
-            add_way_idx = ctx.new_block(&format!("{ADD_STEM}.way"));
-            ctx.block_label(add_way_idx)
-        } else {
-            miss_label.clone()
-        };
-        let hit_label = if super::store_census::enabled() {
-            // A census build counts a way hit on its own edge.
-            let count_idx = ctx.new_block(&format!("{ADD_STEM}.way.census"));
-            let count_label = ctx.block_label(count_idx);
-            ctx.block().cond_br(&way_eq, &count_label, &next_label);
-            ctx.current_block = count_idx;
-            super::store_census::bump(ctx, super::store_census::ADD_WAY_HIT);
-            ctx.block().br(&add_hit_label);
-            count_label
-        } else {
-            ctx.block().cond_br(&way_eq, &add_hit_label, &next_label);
-            add_way_label.clone()
-        };
-        memo_incoming.push((shapes, pair_ptr, hit_label));
-        add_way_label = next_label;
-    }
-
-    let site = StoreSite {
-        obj_box,
-        key_handle_global: &key_handle_global,
-        value_double,
-        value_bits,
-        strict_i32,
-        value_may_be_closure,
-        value_is_scalar,
-        cache_slot_ref: &cache_slot_ref,
-        packed_ref: &packed_ref,
-        handle: &handle,
-        kind_idx,
-        rep_idx,
-        store_idx,
-        miss_idx,
-        merge_idx,
-        f64_only: false,
-    };
-    let hit_end_label = emit_store_hit(ctx, &site, &word_incoming);
-
-    ctx.current_block = add_hit_idx;
-    let (shapes, pair_ptr) = {
-        let shapes_in: Vec<(&str, &str)> = memo_incoming
-            .iter()
-            .map(|(s, _, l)| (s.as_str(), l.as_str()))
-            .collect();
-        let pairs_in: Vec<(&str, &str)> = memo_incoming
-            .iter()
-            .map(|(_, p, l)| (p.as_str(), l.as_str()))
-            .collect();
-        let shapes = ctx.block().phi(I64, &shapes_in);
-        let pair_ptr = ctx.block().phi(PTR, &pairs_in);
-        (shapes, pair_ptr)
-    };
-    let merge_label = ctx.block_label(merge_idx);
-    let add_end_label = emit_key_add_hit(
-        ctx,
-        &shapes,
-        &pair_ptr,
-        &handle,
-        value_double,
-        value_bits,
-        &miss_label,
-        &merge_label,
-        value_may_be_closure,
-        value_is_scalar,
-    );
-    emit_store_miss_and_merge(ctx, &site, &hit_end_label, Some(&add_end_label))
-}
-
-/// The operands and blocks of one static-key store site, for its shared tail.
-struct StoreSite<'a> {
-    obj_box: &'a str,
-    key_handle_global: &'a str,
-    value_double: &'a str,
-    value_bits: &'a str,
-    strict_i32: &'a str,
-    value_may_be_closure: bool,
-    value_is_scalar: bool,
-    cache_slot_ref: &'a str,
-    packed_ref: &'a str,
-    handle: &'a str,
-    kind_idx: usize,
-    rep_idx: usize,
-    store_idx: usize,
-    miss_idx: usize,
-    merge_idx: usize,
-    /// Only the `F64`-lane hit is inline (see `emit_static_store_ic`).
-    f64_only: bool,
-}
-
-/// The existing-key hit: lane check, store, GC bookkeeping. `word_incoming`
-/// is `(word, block)` for every edge into `kind` (the site word's compare,
-/// and the existing-key ways when they are inline). Returns the label of the
-/// block that branches to the merge.
-fn emit_store_hit(
-    ctx: &mut FnCtx<'_>,
-    site: &StoreSite<'_>,
-    word_incoming: &[(String, String)],
-) -> String {
-    let &StoreSite {
-        value_double,
-        value_bits,
-        value_may_be_closure,
-        value_is_scalar,
-        packed_ref,
-        handle,
-        kind_idx,
-        rep_idx,
-        store_idx,
-        miss_idx,
-        merge_idx,
-        f64_only,
-        ..
-    } = site;
-    let rep_label = ctx.block_label(rep_idx);
-    let store_label = ctx.block_label(store_idx);
-    let miss_label = ctx.block_label(miss_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    // A hit. Charter step 3: the matched ShapeId is an `Ordinary` shape (the
-    // only kind the runtime publishes), which proves the receiver kind and
-    // the absence of a numeric proof — no per-object test. `_reserved` is
-    // read only for the GC bookkeeping after the store.
-    ctx.current_block = kind_idx;
-    let word = {
-        let incoming: Vec<(&str, &str)> = word_incoming
-            .iter()
-            .map(|(v, l)| (v.as_str(), l.as_str()))
-            .collect();
-        ctx.block().phi(I64, &incoming)
-    };
-    ctx.block().br(&rep_label);
-
-    // Charter step 5 (P2c, DESIGN §3.2): the store check. A word with its sign
-    // bit set names an `F64` lane: a value whose exponent is not all ones is
-    // a finite double, stored inline as is; anything else (a box, an
-    // infinity, a NaN) takes the miss, whose store is the checked funnel
-    // (canonicalize, or generalize the lane with the shape word first).
-    //
-    // A word with bit 62 set names a ConstFn lane: only a closure of the
-    // site's one body is stored inline (`emit_constfn_value_check`).
-    ctx.current_block = rep_idx;
-    if f64_only {
-        // The `F64` lane (the word's sign bit) and a plain finite double:
-        // stored as is, no pointer, no bookkeeping. Anything else (an `Any` or
-        // ConstFn lane after a generalization, a box, an infinity, a NaN)
-        // takes the miss, whose checked funnel stores it.
-        let f64_slot = ctx.block().icmp_slt(I64, &word, "0");
-        let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
-        let finite = ctx.block().icmp_ne(I64, &exponent, F64_EXP_MASK);
-        let raw = ctx.block().and(I1, &f64_slot, &finite);
-        ctx.block().cond_br(&raw, &store_label, &miss_label);
-        ctx.current_block = store_idx;
-        let slot_half = ctx.block().lshr(I64, &word, "32");
-        let slot = ctx.block().and(I64, &slot_half, PACKED_SLOT_INDEX_MASK);
-        let header_size =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-        let fields = ctx.block().add(I64, handle, &header_size);
-        let fields_ptr = ctx.block().inttoptr(I64, &fields);
-        let slot_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
-        // GC_STORE_AUDIT(POINTER_FREE): an `F64` lane receiving a plain finite
-        // double — no pointer edge, and the lane keeps its representation.
-        ctx.block().store(DOUBLE, value_double, &slot_ptr);
-        super::store_census::bump(ctx, super::store_census::PIC_HIT);
-        let hit_end_label = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
-        return hit_end_label;
-    }
-    let flags = ctx.block().lshr(I64, &word, "62");
-    let plain = ctx.block().icmp_eq(I64, &flags, "0");
-    let lane_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.lane"));
-    let lane_label = ctx.block_label(lane_idx);
-    ctx.block().cond_br(&plain, &store_label, &lane_label);
-    ctx.current_block = lane_idx;
-    let f64_slot = ctx.block().icmp_slt(I64, &word, "0");
-    let f64_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.f64"));
-    let f64_label = ctx.block_label(f64_idx);
-    if value_may_be_closure {
-        let constfn_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.constfn"));
-        let constfn_label = ctx.block_label(constfn_idx);
-        ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
-        ctx.current_block = constfn_idx;
-        let body_ptr = ctx
-            .block()
-            .gep(I64, packed_ref, &[(I64, &CONSTFN_INFO_WORD.to_string())]);
-        emit_constfn_value_check(ctx, &body_ptr, value_bits, &store_label, &miss_label);
-    } else {
-        ctx.block().cond_br(&f64_slot, &f64_label, &miss_label);
-    }
-    ctx.current_block = f64_idx;
-    let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
-    let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
-    ctx.block().cond_br(&boxed, &miss_label, &store_label);
-
-    // The store, then the GC's obligations for the bits actually stored.
-    ctx.current_block = store_idx;
-    let slot_half = ctx.block().lshr(I64, &word, "32");
-    let slot = ctx.block().and(I64, &slot_half, PACKED_SLOT_INDEX_MASK);
-    let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let fields = ctx.block().add(I64, handle, &header_size);
-    let fields_ptr = ctx.block().inttoptr(I64, &fields);
-    let slot_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
-    // GC_STORE_AUDIT(BARRIERED): the slot write is unconditional; the
-    // bookkeeping below is guarded only by live tests of the stored bits and
-    // of the receiver's header.
-    ctx.block().store(DOUBLE, value_double, &slot_ptr);
-    super::store_census::bump(ctx, super::store_census::PIC_HIT);
-    if !value_is_scalar {
-        emit_static_store_ic_bookkeeping(
-            ctx,
-            handle,
-            &slot_ptr,
-            value_double,
-            value_bits,
-            "put.pic",
-        );
-    }
-    let hit_end_label = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-    hit_end_label
-}
-
-/// The site's one miss call and the merge. Leaves the merge block current;
-/// returns its phi.
-fn emit_store_miss_and_merge(
-    ctx: &mut FnCtx<'_>,
-    site: &StoreSite<'_>,
-    hit_end_label: &str,
-    add_end_label: Option<&str>,
-) -> String {
-    let &StoreSite {
-        obj_box,
-        key_handle_global,
-        value_double,
-        strict_i32,
-        cache_slot_ref,
-        packed_ref,
-        miss_idx,
-        merge_idx,
-        ..
-    } = site;
-    let merge_label = ctx.block_label(merge_idx);
-    ctx.current_block = miss_idx;
-    super::store_census::bump(ctx, super::store_census::PIC_MISS);
-    let key_handle = emit_key_handle(ctx, key_handle_global);
-    let miss_value = ctx.block().call(
-        DOUBLE,
-        "js_put_value_set_packed_miss",
+    let stored = ctx.block().call(
+        I32,
+        "perry_probe_set",
         &[
-            (DOUBLE, obj_box),
-            (I64, &key_handle),
+            (PTR, &dir),
+            (I64, &obj_bits),
+            (I64, &key_bits),
+            (I64, &hash),
             (DOUBLE, value_double),
-            (I32, strict_i32),
-            (PTR, cache_slot_ref),
-            (PTR, packed_ref),
         ],
     );
-    let miss_end_label = ctx.block().label.clone();
+    let hit = ctx.block().icmp_ne(I32, &stored, "0");
+    let hit_end = ctx.block().label.clone();
+    let slow_idx = ctx.new_block(&format!("{STORE_IC_STEM}.set"));
+    let merge_idx = ctx.new_block(&format!("{STORE_IC_STEM}.merge"));
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&hit, &merge_label, &slow_label);
+    ctx.current_block = slow_idx;
+    let key_box = ctx.block().bitcast_i64_to_double(&key_bits);
+    let strict_i32 = if strict { "1" } else { "0" };
+    let set = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set",
+        &[
+            (DOUBLE, obj_box),
+            (DOUBLE, &key_box),
+            (DOUBLE, value_double),
+            (DOUBLE, obj_box),
+            (I32, strict_i32),
+        ],
+    );
+    let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
-
     ctx.current_block = merge_idx;
-    let mut incoming: Vec<(&str, &str)> = vec![(value_double, hit_end_label)];
-    if let Some(add_end_label) = add_end_label {
-        incoming.push((value_double, add_end_label));
-    }
-    incoming.push((&miss_value, &miss_end_label));
-    ctx.block().phi(DOUBLE, &incoming)
+    ctx.block().phi(
+        DOUBLE,
+        &[(value_double, &hit_end), (&set, &slow_end)],
+    )
 }
 
-/// Does `triple` take the compiled-setter arm? 64-bit targets only.
-fn setter_arm_target(triple: &str) -> bool {
-    (triple.starts_with("x86_64") || triple.starts_with("aarch64") || triple.starts_with("arm64"))
-        && !triple.contains("32")
-}
-
-#[path = "put_value_store_ic/setter_arm.rs"]
-mod setter_arm;
-
-/// The key-add hit: `k` is not own on the receiver, and one of the site's
-/// add memos (`perry_runtime::proxy::put_value::packed_add`) names the
-/// receiver's PRE-shape. Entered from the pre-shape compare that matched,
-/// with that memo's `shapes` word and the address of its `{shapes, guard}`
-/// pair. Returns the label of the block that branches to `merge_label` on a
-/// hit; every refusal branches to `miss_label` with nothing written.
-///
-/// ```text
-///   ONE pre-shape compare       sid == low half of a memo's shapes (caller)
-///   the chain verdict           PROTO_VALIDITY == guard >> 16
-///   per-object facts            ONE test of the GcHeader word: not TENURED,
-///                               no tombstones or descriptor flag, and no
-///                               layout record to retire (receiver kind and
-///                               numeric proof: the pre-shape is `Ordinary`)
-///   the successor ShapeId       high half of shapes -> handle + 4
-///   the store and barrier       slot = guard & 0xFFFF
-/// ```
-///
-/// A receiver with a layout record (side mask or typed layout) leaves the
-/// one test for a cold block that refuses exactly what the hot test refuses
-/// and retires the record before the same store.
-///
-/// Nothing between the caller's re-read of the receiver and the stores can
-/// collect: plain loads, compares, and two stores.
-#[allow(clippy::too_many_arguments)]
-fn emit_key_add_hit(
-    ctx: &mut FnCtx<'_>,
-    shapes: &str,
-    pair_ptr: &str,
-    handle: &str,
-    value_double: &str,
-    value_bits: &str,
-    miss_label: &str,
-    merge_label: &str,
-    value_may_be_closure: bool,
-    value_is_scalar: bool,
-) -> String {
-    // Static ShapeIds can be seeded into workers. Their matched site words
-    // cannot authorize reading a proof owned by the primary heap.
-    let workers = ctx.block().load_atomic_monotonic(
-        crate::types::I8,
-        "@PERRY_METHOD_SITE_WORKERS_PRESENT",
-        1,
-    );
-    let solo = ctx.block().icmp_eq(crate::types::I8, &workers, "0");
-    let agent_idx = ctx.new_block(&format!("{ADD_STEM}.agent"));
-    let agent_label = ctx.block_label(agent_idx);
-    ctx.block().cond_br(&solo, &agent_label, miss_label);
-    ctx.current_block = agent_idx;
-    let rep_idx = ctx.new_block(&format!("{ADD_STEM}.rep"));
-    let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
-    let store_idx = ctx.new_block(&format!("{ADD_STEM}.hit.store"));
-    let rep_label = ctx.block_label(rep_idx);
-    let obj_label = ctx.block_label(obj_idx);
-    let store_label = ctx.block_label(store_idx);
-
-    // Validate the matched transition's prototype shapes and successor
-    // representation. Unrelated prototype mutations cannot invalidate it.
-    let guard_ptr = ctx.block().gep(
-        I64,
-        pair_ptr,
-        &[(I64, &(ADD_GUARD_WORD - ADD_SHAPES_WORD).to_string())],
-    );
-    let guard = ctx.block().load_atomic_monotonic(I64, &guard_ptr, 8);
-    let proof_bits = ctx.block().lshr(I64, &guard, "16");
-    let proof = ctx.block().inttoptr(I64, &proof_bits);
-    super::shape_chain::guard_store(ctx, &proof, miss_label);
-    let flags = ctx.block().and(I64, &guard, &ADD_REP_ONLY_SLOT.to_string());
-    let plain = ctx.block().icmp_eq(I64, &flags, "0");
-    let snapshot_idx = ctx.new_block(&format!("{ADD_STEM}.snapshot"));
-    let snapshot_label = ctx.block_label(snapshot_idx);
-    ctx.block().cond_br(&plain, &obj_label, &snapshot_label);
-    ctx.current_block = snapshot_idx;
-    let rep_offset = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        8
-    } else {
-        16
-    };
-    let rep_ptr = ctx
-        .block()
-        .gep(crate::types::I8, &proof, &[(I64, &rep_offset.to_string())]);
-    let expected_offset = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        16
-    } else {
-        24
-    };
-    let expected_ptr = ctx.block().gep(
-        crate::types::I8,
-        &proof,
-        &[(I64, &expected_offset.to_string())],
-    );
-    let expected = ctx.block().load(I64, &expected_ptr);
-    let rep_ptr = ctx.block().load(crate::types::PTR, &rep_ptr);
-    let rep = ctx.block().load_atomic_monotonic(I64, &rep_ptr, 8);
-    let valid = ctx.block().icmp_eq(I64, &rep, &expected);
-    ctx.block().cond_br(&valid, &rep_label, miss_label);
-
-    // Charter step 5 (P2c): a memo whose successor has an `F64` lane at the
-    // slot admits only a value whose exponent is not all ones (a finite
-    // double); the miss serves the rest, before anything is stamped.
-    // A memo whose successor's lane is ConstFn admits only a closure of the
-    // successor's body (`emit_constfn_value_check`), also before any stamp.
-    ctx.current_block = rep_idx;
-    let rep_only = ctx
-        .block()
-        .icmp_eq(I64, &flags, &ADD_REP_ONLY_SLOT.to_string());
-    let lane_idx = ctx.new_block(&format!("{ADD_STEM}.lane"));
-    let lane_label = ctx.block_label(lane_idx);
-    ctx.block().cond_br(&rep_only, &obj_label, &lane_label);
-    ctx.current_block = lane_idx;
-    let f64_slot = ctx.block().icmp_eq(I64, &flags, &ADD_F64_SLOT.to_string());
-    let f64_idx = ctx.new_block(&format!("{ADD_STEM}.f64"));
-    let f64_label = ctx.block_label(f64_idx);
-    if value_may_be_closure {
-        let constfn_idx = ctx.new_block(&format!("{ADD_STEM}.constfn"));
-        let constfn_label = ctx.block_label(constfn_idx);
-        ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
-        ctx.current_block = constfn_idx;
-        let body_offset = expected_offset + 8;
-        let body_ptr =
-            ctx.block()
-                .gep(crate::types::I8, &proof, &[(I64, &body_offset.to_string())]);
-        emit_constfn_value_check(ctx, &body_ptr, value_bits, &obj_label, miss_label);
-    } else {
-        ctx.block().cond_br(&f64_slot, &f64_label, miss_label);
-    }
-    ctx.current_block = f64_idx;
-    let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
-    let boxed = ctx.block().icmp_eq(I64, &exponent, F64_EXP_MASK);
-    ctx.block().cond_br(&boxed, miss_label, &obj_label);
-
-    // The GcHeader's first word (obj_type | gc_flags << 8 | _reserved << 16).
-    // No receiver-kind admission: the memo's pre-shape is an `Ordinary` shape
-    // (charter step 3), which proves the receiver kind and no numeric proof.
-    ctx.current_block = obj_idx;
-    let hdr_addr = ctx.block().sub(I64, handle, "8");
-    let hdr_ptr = ctx.block().inttoptr(I64, &hdr_addr);
-    let hdr = ctx.block().load(I32, &hdr_ptr);
-    let refused = ctx
-        .block()
-        .and(I32, &hdr, &add_header_refuse_mask().to_string());
-    let hdr_ok = ctx.block().icmp_eq(I32, &refused, "0");
-    ctx.block().cond_br(&hdr_ok, &store_label, miss_label);
-
-    // The transition: stamp the successor, then store the value, then the
-    // GC's obligations for the bits stored.
-    ctx.current_block = store_idx;
-    super::store_census::bump(ctx, super::store_census::ADD_HIT);
-    let post_wide = ctx.block().lshr(I64, shapes, "32");
-    let post = ctx.block().trunc(I64, &post_wide, I32);
-    let sid_addr = ctx.block().add(I64, handle, "4");
-    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
-    // GC_STORE_AUDIT(POINTER_FREE): a ShapeId is a number, never a heap reference.
-    ctx.block().store(I32, &post, &sid_ptr);
-    let slot = ctx.block().and(I64, &guard, &ADD_SLOT_MASK.to_string());
-    // The transition lane's fix-up: a POINTER-tagged null is stored as
-    // `undefined` (`fast_paths.rs`).
-    // An SSA constant is fixed up (or not) here, so the bookkeeping below
-    // still recognises it and emits no guard for a constant plain double.
-    let constant = constant_double_bits(value_double).or_else(|| constant_i64_bits(value_bits));
-    let fixed = match constant {
-        Some(bits) if bits == crate::nanbox::POINTER_TAG => ctx
-            .block()
-            .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
-        Some(_) => value_double.to_string(),
-        None if value_is_scalar => value_double.to_string(),
-        None => {
-            let raw_bits = ctx.block().bitcast_double_to_i64(value_double);
-            let null_ptr = ctx.block().icmp_eq(
-                I64,
-                &raw_bits,
-                &(crate::nanbox::POINTER_TAG as i64).to_string(),
-            );
-            let fixed_bits = ctx.block().select(
-                I1,
-                &null_ptr,
-                I64,
-                crate::nanbox::TAG_UNDEFINED_I64,
-                &raw_bits,
-            );
-            ctx.block().bitcast_i64_to_double(&fixed_bits)
-        }
-    };
-    let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let fields = ctx.block().add(I64, handle, &header_size);
-    let fields_ptr = ctx.block().inttoptr(I64, &fields);
-    let slot_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
-    // GC_STORE_AUDIT(BARRIERED): the slot write is unconditional; the
-    // bookkeeping below is guarded only by live tests of the stored bits and
-    // of the receiver's header.
-    ctx.block().store(DOUBLE, &fixed, &slot_ptr);
-    if !value_is_scalar {
-        emit_static_store_ic_bookkeeping(ctx, handle, &slot_ptr, &fixed, value_bits, "put.pic");
-    }
-    let end = ctx.block().label.clone();
-    ctx.block().br(merge_label);
-    end
-}
-
-/// The ConstFn store check (a word or memo flagged ConstFn): `value_bits` is
-/// a function object of the checked shape's body, so storing it keeps the
-/// ShapeId's body claim. Branches to `ok_label` or `miss_label`; nothing is
-/// written, nothing can collect.
-///
-/// ```text
-///   POINTER tag, payload above the handle band   the fused receiver test
-///   GcHeader (type, flags)                       GC_TYPE_CLOSURE, not FORWARDED
-///   ClosureHeader::info                          == site word CONSTFN_INFO_WORD (!= 0)
-///   ClosureHeader::capture_count flags           not a rebindable `this` clone
-/// ```
-///
-/// The same three loads as the method site's closure test
-/// (`expr/method_site.rs`) and the guarded direct call
-/// (`lower_call/early_branches.rs`); the shape, not the closure, owns the
-/// body fact, so a factory closure (same body, other captures) is admitted.
-/// An arrow capturing `this` is refused here although the runtime admits it
-/// (`field_rep_store::constfn_store_info`): its miss stores it correctly.
-fn emit_constfn_value_check(
-    ctx: &mut FnCtx<'_>,
-    body_ptr: &str,
-    value_bits: &str,
-    ok_label: &str,
-    miss_label: &str,
-) {
-    use crate::expr::receiver_range::{emit_field_ptr, emit_fused_receiver_test};
-    let header_idx = ctx.new_block(&format!("{STORE_IC_STEM}.constfn.header"));
-    let header_label = ctx.block_label(header_idx);
-    let fused = emit_fused_receiver_test(ctx.block(), value_bits);
-    ctx.block()
-        .cond_br(&fused.is_object_pointer, &header_label, miss_label);
-    ctx.current_block = header_idx;
-    let kind_mask = u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8 | 0xFF;
-    let blk = ctx.block();
-    let kind_ptr = emit_field_ptr(
-        blk,
-        &fused.biased,
-        -(crate::runtime_abi::GC_HEADER_SIZE as i64),
-    );
-    let kind_flags = blk.load(crate::types::I16, &kind_ptr);
-    let masked = blk.and(crate::types::I16, &kind_flags, &kind_mask.to_string());
-    let kind_ok = blk.icmp_eq(
-        crate::types::I16,
-        &masked,
-        &crate::runtime_abi::GC_TYPE_CLOSURE.to_string(),
-    );
-    let info_ptr = emit_field_ptr(
-        blk,
-        &fused.biased,
-        crate::runtime_abi::CLOSURE_INFO_OFFSET as i64,
-    );
-    let info = blk.load(I64, &info_ptr);
-    let body = blk.load_atomic_monotonic(I64, body_ptr, 8);
-    let info_eq = blk.icmp_eq(I64, &info, &body);
-    let body_set = blk.icmp_ne(I64, &body, "0");
-    let count_ptr = emit_field_ptr(blk, &fused.biased, 0);
-    let count = blk.load(I32, &count_ptr);
-    let this_flags = crate::runtime_abi::CLOSURE_CAPTURES_THIS_FLAG
-        | crate::runtime_abi::CLOSURE_NO_THIS_REBIND_FLAG;
-    let count_flags = blk.and(I32, &count, &(this_flags as i32).to_string());
-    let rebindable = blk.icmp_eq(
-        I32,
-        &count_flags,
-        &(crate::runtime_abi::CLOSURE_CAPTURES_THIS_FLAG as i32).to_string(),
-    );
-    let not_rebindable = blk.xor(I1, &rebindable, "true");
-    let body_ok = blk.and(I1, &info_eq, &body_set);
-    let closure_ok = blk.and(I1, &kind_ok, &not_rebindable);
-    let ok = blk.and(I1, &body_ok, &closure_ok);
-    blk.cond_br(&ok, ok_label, miss_label);
-}
 
 /// The GC obligations after an object slot store. Plain doubles and scalar
 /// tags need no bookkeeping; pointer-bearing values need string alias demotion
@@ -1219,48 +321,3 @@ fn is_plain_double_bits(bits: u64) -> bool {
     !(0x7FF9..=0x7FFF).contains(&top16) && !(0x1000..(1u64 << 48)).contains(&bits)
 }
 
-/// The interned key's `StringHeader*`, loaded in the CURRENT (cold) block: the
-/// pool entry is a collector-rewritten global, so every consumer re-reads it.
-fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
-    let blk = ctx.block();
-    let key_box = blk.load(DOUBLE, key_handle_global);
-    let key_bits = blk.bitcast_double_to_i64(&key_box);
-    blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64)
-}
-
-/// Can `value` never evaluate to a closure? Literals, operators whose result
-/// is a primitive, fresh object and array literals, and a conditional or
-/// logical expression all of whose possible results are such values. Anything
-/// else (a read, a call, `new`, a function expression) may be one.
-pub(crate) fn value_never_closure(value: &perry_hir::Expr) -> bool {
-    use perry_hir::Expr;
-    match value {
-        Expr::Undefined
-        | Expr::Null
-        | Expr::Bool(_)
-        | Expr::Number(_)
-        | Expr::Integer(_)
-        | Expr::BigInt(_)
-        | Expr::String(_)
-        | Expr::WtfString(_)
-        | Expr::Binary { .. }
-        | Expr::Unary { .. }
-        | Expr::Compare { .. }
-        | Expr::Update { .. }
-        | Expr::TypeOf(_)
-        | Expr::Void(_)
-        | Expr::InstanceOf { .. }
-        | Expr::In { .. }
-        | Expr::Object(_)
-        | Expr::Array(_) => true,
-        Expr::Logical { left, right, .. } => {
-            value_never_closure(left) && value_never_closure(right)
-        }
-        Expr::Conditional {
-            then_expr,
-            else_expr,
-            ..
-        } => value_never_closure(then_expr) && value_never_closure(else_expr),
-        _ => false,
-    }
-}

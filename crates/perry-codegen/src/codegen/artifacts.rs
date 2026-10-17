@@ -1129,6 +1129,7 @@ pub(super) fn emit_module_artifacts(
         class_ids,
         class_table,
         &hir.classes,
+        &cross_module.program_layouts,
         &hir.class_display_names,
         &class_source_text,
         &ctor_arity_overrides,

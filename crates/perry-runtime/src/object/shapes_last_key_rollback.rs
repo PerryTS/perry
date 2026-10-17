@@ -149,7 +149,6 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
             _ => return 0,
         }
     }
-    crate::array::clear_array_subclass_named_prefix_token(obj);
     stamp_object_shape_id_with_carrier_note(obj, to);
     debug_assert_object_shape_parity(obj);
     to

@@ -662,6 +662,8 @@ pub(crate) static mut READABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 16,
     index_mask: 31,
     index: READABLE_STATE_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static WRITABLE_STATE_PROTO_KEYS: [PerryLayoutKey; 16] = [
     PerryLayoutKey {
@@ -815,6 +817,8 @@ pub(crate) static mut WRITABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 16,
     index_mask: 31,
     index: WRITABLE_STATE_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static DUPLEX_PROTO_KEYS: [PerryLayoutKey; 17] = [
     PerryLayoutKey {
@@ -1006,6 +1010,8 @@ pub(crate) static mut DUPLEX_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 17,
     index_mask: 63,
     index: DUPLEX_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static TRANSFORM_PROTO_KEYS: [PerryLayoutKey; 2] = [
     PerryLayoutKey {
@@ -1042,6 +1048,8 @@ pub(crate) static mut TRANSFORM_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 2,
     index_mask: 3,
     index: TRANSFORM_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static PASSTHROUGH_PROTO_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: std::ptr::addr_of!(A23),
@@ -1070,6 +1078,8 @@ pub(crate) static mut PASSTHROUGH_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 1,
     index_mask: 1,
     index: PASSTHROUGH_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static LEGACY_STREAM_PROTO_KEYS: [PerryLayoutKey; 16] = [
     PerryLayoutKey {
@@ -1223,6 +1233,8 @@ pub(crate) static mut LEGACY_STREAM_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 16,
     index_mask: 31,
     index: LEGACY_STREAM_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static EVENT_EMITTER_PROTO_KEYS: [PerryLayoutKey; 19] = [
     PerryLayoutKey {
@@ -1426,6 +1438,8 @@ pub(crate) static mut EVENT_EMITTER_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     key_count: 19,
     index_mask: 63,
     index: EVENT_EMITTER_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };
 static EE_ASYNC_RESOURCE_PROTO_KEYS: [PerryLayoutKey; 6] = [
     PerryLayoutKey {
@@ -1503,4 +1517,6 @@ pub(crate) static mut EE_ASYNC_RESOURCE_PROTO: PerryLayoutDesc = PerryLayoutDesc
     key_count: 6,
     index_mask: 15,
     index: EE_ASYNC_RESOURCE_PROTO_INDEX.as_ptr(),
+    class_id: 0,
+    parent_class_id: 0,
 };

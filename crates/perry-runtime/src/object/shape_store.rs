@@ -127,9 +127,9 @@ pub(crate) unsafe fn try_own_store(
             // readonly intrinsic or private slot elsewhere on this shape
             // cannot invalidate an ordinary writable property here.
             if record.summary()
-                & (super::key_attrs::SUMMARY_BLOCKS_STORE | super::key_attrs::SUMMARY_PRIVATE)
+                & (super::key_attrs::SUMMARY_BLOCKS_OVERWRITE | super::key_attrs::SUMMARY_PRIVATE)
                 != 0
-                && !super::key_attrs::entry_is_plain_writable_data(super::key_attrs::keys_entry(
+                && !super::key_attrs::entry_is_plain_overwrite(super::key_attrs::keys_entry(
                     record.keys() as usize as *const crate::ArrayHeader,
                     slot as u32,
                 ))
@@ -271,7 +271,14 @@ pub(crate) unsafe fn try_warm_transition(
         || bytes
             .first()
             .is_some_and(|b| *b == b'#' || b.is_ascii_digit())
-        || inherited_store_blocked(
+    {
+        return None;
+    }
+    // The layouts answer first (§3.7: the receiver's complete own list and
+    // its prototypes' layouts); the shape-chain answer covers what they
+    // cannot read.
+    if super::shapes::layout_probe::layouts_admit_add(obj, key) != Some(true)
+        && inherited_store_blocked(
             record,
             obj,
             crate::value::js_nanbox_string(key as i64),
@@ -2042,7 +2049,7 @@ unsafe fn array_bag_chain_blocks(bag: *mut ObjectHeader, key: &[u8]) -> bool {
     chain_blocks(crate::value::js_nanbox_pointer(bag as i64), key)
 }
 
-unsafe fn chain_blocks(receiver: f64, key: &[u8]) -> bool {
+pub(crate) unsafe fn chain_blocks(receiver: f64, key: &[u8]) -> bool {
     let mut hop = super::js_object_get_prototype_of(receiver);
     for _ in 0..64 {
         if hop.to_bits() == crate::value::TAG_NULL {

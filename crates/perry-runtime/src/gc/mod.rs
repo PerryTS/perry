@@ -1138,17 +1138,6 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    reg_scanner!(crate::proxy::scan_packed_add_roots_mut);
-    reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
-    // A site's chain memo names every prototype from the receiver's
-    // [[Prototype]] to the holder of the method it answers; it compares each
-    // one's header word on use, so each is a STRONG root.
-    reg_scanner!(crate::object::method_site::chain_memo::scan_chain_memo_roots_mut);
-    // Read and method sites' holder entries are NOT roots: they name only
-    // stable objects (old, never-move) that the receiver's ShapeId keeps
-    // alive (`gc::never_move`, `read_holder.rs` "Weak entries"). A keyed
-    // entry's KEY is still compared by identity and is rooted here until
-    // keys are immortal atoms.
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
     reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);

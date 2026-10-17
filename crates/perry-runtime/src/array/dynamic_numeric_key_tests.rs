@@ -53,7 +53,7 @@ fn non_element_numeric_keys_do_not_truncate_on_regular_lazy_or_materialized_arra
                 "state={state}, key={key}"
             );
             assert_eq!(
-                js_packed_arraylike_index_get(array.get_nanbox_f64(), key, std::ptr::null_mut())
+                js_packed_arraylike_index_get(array.get_nanbox_f64(), key)
                     .to_bits(),
                 TAG_UNDEFINED,
                 "packed state={state}, key={key}"
@@ -67,7 +67,7 @@ fn non_element_numeric_keys_do_not_truncate_on_regular_lazy_or_materialized_arra
         ] {
             assert_eq!(js_dyn_index_get(array.get_nanbox_f64(), key), expected);
             assert_eq!(
-                js_packed_arraylike_index_get(array.get_nanbox_f64(), key, std::ptr::null_mut()),
+                js_packed_arraylike_index_get(array.get_nanbox_f64(), key),
                 expected
             );
         }
@@ -98,7 +98,7 @@ fn numeric_named_properties_remain_readable_through_the_dynamic_fallback() {
             "key={key}"
         );
         assert_eq!(
-            js_packed_arraylike_index_get(array.get_nanbox_f64(), key, std::ptr::null_mut()),
+            js_packed_arraylike_index_get(array.get_nanbox_f64(), key),
             91.0,
             "packed key={key}"
         );

@@ -433,10 +433,12 @@ const NOUNWIND_HELPERS: &[&str] = &[
     // continuation instead — and no loop outside the audited guards'
     // bounded ones. Being nounwind is also what keeps them a plain `call`
     // inside a `try`, so the leaf marking never depends on the invoke arm.
-    "js_property_rmw_fast",
-    // `js_put_value_set_packed_fast`: `throws=no` since the generated table
-    // cuts `StateOwner::drop` as thread teardown (seeds.txt, `teardown`).
-    "js_put_value_set_packed_fast",
+    // The store probe (`expr/put_value_store_ic.rs`).
+    "perry_probe_set",
+    // A family constructor run's check and its bind test
+    // (`expr/layout_read.rs`): GC leaves with no throw.
+    "perry_family_run_admits",
+    "perry_bind_is_builtin",
 ];
 
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by

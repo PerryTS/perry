@@ -79,6 +79,11 @@ pub struct ClassDeclaration {
     pub birth_shape: u32,
     pub flags: u32,
     pub reserved: u32,
+    /// The compiler-owned instance layout, independent of class evaluation.
+    pub instance_layout: *const crate::object::layout_desc::PerryLayoutDesc,
+    /// The family's creation split (`layout_desc::PerryFamilyVariants`), or
+    /// null: the layouts of births by a constructor argument's constant.
+    pub instance_variants: *const crate::object::layout_desc::PerryFamilyVariants,
 }
 
 // SAFETY: image constants (or leaked test copies): never written after
@@ -97,6 +102,8 @@ impl ClassDeclaration {
             birth_shape: 0,
             flags: Self::flags_of(members),
             reserved: 0,
+            instance_layout: std::ptr::null(),
+            instance_variants: std::ptr::null(),
         }
     }
 
@@ -992,6 +999,8 @@ fn test_declare_member_with(
         birth_shape,
         flags: ClassDeclaration::flags_of(members),
         reserved: 0,
+        instance_layout: std::ptr::null(),
+        instance_variants: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
         index.set(class_id, decl);
@@ -1024,6 +1033,8 @@ pub(crate) fn test_declare_computed_member(
         birth_shape: class_birth_shape(class_id),
         flags: ClassDeclaration::flags_of(members),
         reserved: 0,
+        instance_layout: std::ptr::null(),
+        instance_variants: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
         index.set(class_id, decl);
@@ -1043,6 +1054,8 @@ pub(crate) fn test_declare_birth_shape(class_id: u32, shape_id: u32) {
         birth_shape: shape_id,
         flags: ClassDeclaration::flags_of(members),
         reserved: 0,
+        instance_layout: std::ptr::null(),
+        instance_variants: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
         index.set(class_id, decl);
@@ -1072,6 +1085,8 @@ pub(crate) fn test_set_method_entry(class_id: u32, name: &str, entry: usize) {
         birth_shape: decl.birth_shape,
         flags: ClassDeclaration::flags_of(members),
         reserved: 0,
+        instance_layout: std::ptr::null(),
+        instance_variants: std::ptr::null(),
     }));
     if let Ok(mut index) = CLASS_DECLARATIONS.write() {
         index.set(class_id, decl);

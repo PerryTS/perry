@@ -300,32 +300,6 @@ pub(super) fn wide_prologue_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
-#[test]
-fn constructor_reservations_use_current_shape_store_ic_in_both_modes() {
-    for strict in [false, true] {
-        let mut module = probe_module();
-        let class = &mut module.classes[0];
-        class.fields[0].origin = perry_hir::ClassFieldOrigin::ConstructorStore;
-        let ctor = class.constructor.as_mut().unwrap();
-        ctor.is_strict = strict;
-        ctor.body.push(ctor.body[0].clone());
-        let ir = String::from_utf8(compile_module(&module, ir_opts()).unwrap()).unwrap();
-        let calls: Vec<_> = ir.lines().filter(|line| line.contains("call ")).collect();
-        assert!(
-            calls
-                .iter()
-                .any(|line| line.contains("@js_put_value_set_packed_miss")),
-            "constructor stores must use the current-shape IC, strict={strict}: {ir}"
-        );
-        assert!(
-            !calls
-                .iter()
-                .any(|line| line.contains("@js_class_field_set")),
-            "reservation layout cannot guard stores, strict={strict}: {ir}"
-        );
-    }
-}
-
 /// A class-field store is the static-key store site (#12483): the constructor's
 /// `this.v = v` compares the receiver's ShapeId against the site's word, so a
 /// numeric-proof Array subclass (a sibling ShapeId) is refused by that compare,
@@ -346,6 +320,24 @@ fn class_field_store_is_the_store_site_and_refuses_by_shape() {
         !ir.lines()
             .any(|line| line.contains("and i16") && line.ends_with(", 128")),
         "numeric proof must be refused by ShapeId, not a header bit:\n{ir}"
+    );
+}
+
+/// A pointer-valued class-field store keeps its write barrier on the store
+/// probe path: the site emits no inline slot store at all (the deleted store
+/// IC's `put.pic.hit.store` block), only `perry_probe_set` (whose own-slot
+/// store is the runtime's barriered funnel) and, when it declines, the
+/// complete `[[Set]]`, so no pointer reaches a slot without the barrier.
+#[test]
+fn a_pointer_class_field_store_is_the_barriered_store_probe() {
+    let ir = ir();
+    assert!(
+        ir.contains("call i32 @perry_probe_set(") && ir.contains("call double @js_put_value_set("),
+        "the class-field store must be the store probe, then [[Set]]:\n{ir}"
+    );
+    assert!(
+        !ir.contains("put.pic.hit.store"),
+        "no inline slot store may bypass the runtime's barrier:\n{ir}"
     );
 }
 

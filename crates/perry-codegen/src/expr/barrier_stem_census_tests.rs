@@ -1146,7 +1146,7 @@ fn probe_ir(stem: &str) -> String {
         "idxset.recv_prop" => super::index_set_barrier_tests::ir(),
         "idxset.runtime_key" => idxset_runtime_key_ir(),
         "private_field_set" => private_field_set_ir(),
-        "put.pic" => super::write_pic_barrier_tests::census_put_pic_ir(),
+        "put.pic" => super::region_loop_tests::census_put_pic_ir(),
         "scope_set" => crate::scope_env::pointer_scope_store_ir(),
         other => panic!(
             "VERIFIED_BARRIER_STEMS entry {other:?} has no probe in \
@@ -1295,52 +1295,6 @@ fn sabotage_bypassing_the_gate_goes_red_for_every_stem() {
             }
         }
     }
-}
-
-/// S5 (the static-key store IC) — the slot store moved INSIDE a guard. The IC
-/// stores in `put.pic.hit.store` and classifies the value in the blocks after
-/// it, so the census accepts a store in the value gate's unique-predecessor
-/// chain. That widening must still refuse a store that some path can skip:
-/// move it into the bookkeeping arm (the pointer-only path) and the verdict
-/// must go red.
-#[test]
-fn sabotage_moving_the_store_into_the_guard_goes_red_for_the_store_ic() {
-    assert_default_barrier_env_not_disabled();
-    let stem = "put.pic";
-    let kind = StemKind::PointerTestedStore;
-    let ir = probe_ir(stem);
-    verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
-    let store_label = ir
-        .lines()
-        .filter_map(label_of)
-        .find(|l| label_matches(l, "put.pic.hit.store."))
-        .expect("the store block exists")
-        .to_string();
-    let store_body = block_body_exact(&ir, &store_label).expect("store block has a body");
-    let store_line = store_body
-        .lines()
-        .find(|l| l.trim().starts_with("store double"))
-        .expect("the store block stores")
-        .to_string();
-    let book_label = all_numbered_labels(&ir, "put.pic.gc_bookkeeping.")
-        .into_iter()
-        .next()
-        .expect("the bookkeeping arm exists");
-    let mut out: Vec<String> = Vec::new();
-    for line in ir.lines() {
-        if line == store_line {
-            continue;
-        }
-        out.push(line.to_string());
-        if label_of(line) == Some(book_label.as_str()) {
-            out.push(store_line.clone());
-        }
-    }
-    let doctored = assert_changed(&ir, &out.join("\n"), "move the store into the guard");
-    assert!(
-        verify_stem_ir(&doctored, stem, kind).is_err(),
-        "a slot store that only the pointer arm performs must be caught"
-    );
 }
 
 /// Repeated block labels AND SSA registers across function copies must never

@@ -114,13 +114,8 @@ mod tests {
                 assert!(!bag.is_null(), "%Array.prototype% has no property bag");
                 let header =
                     (bag as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                // Never-move from birth (asked before the memo rule, which
-                // would mark it), and admitted by that rule: old.
+                // Never-move from birth.
                 assert!(crate::gc::never_move::is_never_move(header));
-                assert!(
-                    crate::gc::never_move::stable_memo_referent(bag as usize),
-                    "%Array.prototype%'s bag is young"
-                );
                 let d = crate::object::shapes::object_shape_descriptor(bag).expect("shape");
                 let list = d.keys as usize as *const crate::array::ArrayHeader;
                 for name in ["constructor", "slice", "toString"] {

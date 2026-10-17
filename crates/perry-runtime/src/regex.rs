@@ -198,19 +198,6 @@ static MATCHER_READ: crate::object::IntrinsicPrivateReadSite =
         &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_MATCHER,
     );
 
-/// The slot of the intrinsic private matcher in a shape's key list: the
-/// brand as a fact of that shape.
-///
-/// # Safety
-/// `keys` is a live canonical key list with `count` logical keys.
-#[cfg(feature = "regex-engine")]
-pub(crate) unsafe fn matcher_slot(
-    keys: *const crate::array::ArrayHeader,
-    count: u32,
-) -> Option<u32> {
-    MATCHER_READ.slot_in(keys, count)
-}
-
 /// Read an already branded receiver's immutable data before the next
 /// collecting action. Handles must be re-read after such an action.
 #[inline]

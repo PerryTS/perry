@@ -6082,6 +6082,7 @@ pub fn run_with_parse_cache(
     // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
     let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
         ctx.native_modules.iter().map(|(_, m)| m),
+        args.output_type == "executable",
     ));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<

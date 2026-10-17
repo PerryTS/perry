@@ -198,32 +198,26 @@ fn the_emitted_ir_rereads_both_operands_below_the_read() {
     require_call_line(&ir, "js_to_numeric");
     assert_operand_reread_below(
         &ir,
-        "js_put_value_set_dyn_ic",
-        1,
+        "js_put_value_set_dynamic",
+        0,
         "js_to_numeric",
         "the IndexUpdate receiver",
     );
     assert_operand_reread_below(
         &ir,
-        "js_put_value_set_dyn_ic",
-        2,
+        "js_put_value_set_dynamic",
+        1,
         "js_to_numeric",
         "the IndexUpdate index",
     );
 }
 
-/// `o.count++` — the emitted IR re-derives the RAW `i64` receiver and key
-/// handles below `js_object_get_field_by_name_f64`.
-///
-/// ★ Also a pipeline assertion. #7280's taxonomy lists "a pointer already
-/// unboxed to raw `i64`" as case (a), the class `root_reload` cannot repair —
-/// but that is about a raw handle a helper RETURNS, not one masked out of a
-/// NaN-boxed value the pass has spilled. Here the chain's root is a
-/// `load ptr addrspace(1)`, and the pass rematerialises the whole
-/// `load` → `ptrtoint` → `and` chain at the use. Verified by dropping the
-/// receiver's root entirely: still green.
+/// `o.count++` — the property update is the generic read, ToNumeric, step
+/// and the strict-aware `[[Set]]` (the read/modify/write site's memo is
+/// deleted): the receiver `js_put_value_set` consumes is re-read below the
+/// `js_to_numeric` collection point.
 #[test]
-fn property_update_delegates_the_complete_collection_window_to_one_helper() {
+fn property_update_rereads_the_receiver_below_the_collection_window() {
     let ir = compile_body(
         "issue7628_property_update",
         with_object_local(Stmt::Expr(Expr::PropertyUpdate {
@@ -234,12 +228,14 @@ fn property_update_delegates_the_complete_collection_window_to_one_helper() {
             strict: true,
         })),
     );
-    require_call_line(&ir, "js_property_rmw_fast");
-    require_call_line(&ir, "js_property_rmw");
-    assert!(!ir.contains("call double @js_numeric_step("));
-    assert!(!ir.contains("call double @js_object_get_field_by_name_f64("));
-    assert!(!ir.contains("call double @js_put_value_set("));
-    assert!(ir.contains("_packed_set = private global [5 x i64]"));
+    require_call_line(&ir, "js_to_numeric");
+    assert_operand_reread_below(
+        &ir,
+        "js_put_value_set",
+        0,
+        "js_to_numeric",
+        "the PropertyUpdate receiver",
+    );
 }
 
 /// The RESULT of `a[i]++` is live across `js_put_value_set`, which runs a user
@@ -264,7 +260,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             strict: true,
         }))),
     );
-    let write = require_call_line(&unproven, "js_put_value_set_dyn_ic");
+    let write = require_call_line(&unproven, "js_put_value_set_dynamic");
     let produced = producer_line(&unproven, &returned_register(&unproven));
     assert!(
         produced > write,
@@ -292,7 +288,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             })),
         ],
     );
-    let typed_write = require_call_line(&typed, "js_put_value_set_dyn_ic");
+    let typed_write = require_call_line(&typed, "js_put_value_set_dynamic");
     let typed_produced = producer_line(&typed, &returned_register(&typed));
     assert!(
         typed_produced < typed_write,

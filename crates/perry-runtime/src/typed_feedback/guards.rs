@@ -716,121 +716,6 @@ pub extern "C" fn js_closure_exact_func_guard(
     }
 }
 
-/// Words in a per-site imported-object own-method cache: the one
-/// `(ShapeId << 32 | class_id)` token the emitted guard compares.
-pub const METHOD_PIC_WORDS: usize = 1;
-/// A per-site own-method cache, as the emitted slot resolves it.
-pub type MethodPicCache = [u64; METHOD_PIC_WORDS];
-/// The emitted `@perry_ic_N = private global ptr null` for such a site: null
-/// until the site's first priming miss (#9708).
-pub type MethodPicCacheSlot = *mut MethodPicCache;
-
-/// Revalidate and prime the shape token for an own object-literal method.
-///
-/// The exported adapter object may append ordinary state fields during
-/// `setup()` after its module-initial ShapeId was published. Exact initial-
-/// shape guards therefore miss permanently even though the method's key,
-/// slot, descriptor, and closure are unchanged. This cold IC-miss helper
-/// accepts such append-only successors by re-proving the method key at its
-/// original slot and the live closure identity, then publishes the live packed
-/// `(class_id, ShapeId)` token for an inline hot-path comparison.
-///
-/// Deletion/compaction changes the key at `field_index`; replacement changes
-/// the closure; descriptor/prototype mutation either sets the descriptor bit
-/// or mints a semantic successor. A spill-only metadata record is allowed:
-/// appending past the object's inline birth width creates one even though the
-/// original method slot and its lookup semantics remain unchanged.
-///
-/// `cache_slot` is the site's [`MethodPicCacheSlot`] address (#9708). A miss
-/// that cannot prime clears an existing cache's token but never allocates
-/// one; only the publishing tail below resolves the slot.
-#[no_mangle]
-pub unsafe extern "C" fn js_object_own_method_cache_miss(
-    receiver: f64,
-    expected_class_id: u32,
-    field_index: u32,
-    method_name_ptr: *const i8,
-    method_name_len: usize,
-    expected_info: *const crate::closure::JsFunctionInfo,
-    cache_slot: *mut MethodPicCacheSlot,
-) -> u64 {
-    {
-        let cache = crate::object::pic_slot_peek(cache_slot);
-        if !cache.is_null() {
-            (*cache)[0] = 0;
-        }
-    }
-    if expected_class_id == 0 || expected_info.is_null() || cache_slot.is_null() {
-        return 0;
-    }
-    let Some(method_bytes) = method_name_bytes(method_name_ptr, method_name_len) else {
-        return 0;
-    };
-    let object_addr = normalize_raw_object_addr(receiver.to_bits());
-    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
-        return 0;
-    };
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
-        || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
-            != 0
-    {
-        return 0;
-    }
-    let object = object_addr as *const ObjectHeader;
-    if !crate::object::object_is_regular(object)
-        || (*object).class_id != expected_class_id
-        || receiver_has_numeric_proof_shape(object)
-    {
-        return 0;
-    }
-    if crate::object::shapes::object_prototype_word(object) != 0 {
-        return 0;
-    }
-    let meta = (*object).meta;
-    if !meta.is_null()
-        && ((*meta).flags != 0 || (*meta).private_evaluation_brand != 0 || (*meta).overflow != 0)
-    {
-        return 0;
-    }
-    let Some(shape) = crate::object::shapes::object_shape_descriptor(object) else {
-        return 0;
-    };
-    if shape.has_evaluation_brand()
-        || shape.summary & crate::object::key_attrs::SUMMARY_KEY_BITS != 0
-        || field_index >= shape.logical_key_count
-        || field_index >= shape.live_inline_slot_count
-    {
-        return 0;
-    }
-    let keys = shape.keys as usize as *const ArrayHeader;
-    if keys.is_null()
-        || !crate::string::js_string_key_matches_bytes(
-            crate::array::js_array_get(keys, field_index),
-            method_bytes,
-        )
-    {
-        return 0;
-    }
-
-    let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-    let closure_bits = std::ptr::read(fields.add(field_index as usize));
-    let raw_ptr = closure_ptr_from_value_bits(closure_bits);
-    let closure = crate::closure::clean_closure_ptr(raw_ptr);
-    if !std::ptr::eq(crate::closure::get_valid_info(closure), expected_info) {
-        return 0;
-    }
-
-    let shape_id = crate::object::shapes::object_shape_id(object);
-    if !crate::object::shapes::is_shape_id(shape_id) {
-        return 0;
-    }
-    let cache = crate::object::pic_slot_resolve(cache_slot);
-    (*cache)[0] = ((shape_id as u64) << 32) | expected_class_id as u64;
-    closure as u64
-}
-
 // #1764 (follow-up): the guard helpers in this submodule are codegen-emitted
 // `#[no_mangle]` exports with no Rust-side caller, so the auto-optimize
 // whole-program thin-LTO + `strip=true` build internalizes + dead-strips them
@@ -856,8 +741,6 @@ mod keep_guard_symbols {
     #[used(compiler)] static G3: extern "C" fn(u64, f64, *const crate::closure::JsFunctionInfo, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G3B: extern "C" fn(f64, *const crate::closure::JsFunctionInfo) -> u64 = js_closure_exact_func_guard;
-    #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const crate::closure::JsFunctionInfo, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G4: unsafe extern "C" fn(f64, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]

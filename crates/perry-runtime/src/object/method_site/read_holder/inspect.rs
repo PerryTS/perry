@@ -84,7 +84,28 @@ pub(crate) unsafe fn shape_answer(obj: *const ObjectHeader, key: Key<'_>) -> Opt
         if depth == HOLDER_MAX_DEPTH {
             return None;
         }
-        current = accessor_path::accessor_holder(current_obj)?.0;
+        current = accessor_holder(current_obj)?.0;
     }
     None
 }
+
+/// The object `recv`'s ShapeId pins as its direct prototype, for an accessor
+/// entry: a declared class's prototype ([`class_link`]; `true`), or the object
+/// a serial or default prototype identity names (`false`).
+unsafe fn accessor_holder(
+    recv: *const ObjectHeader,
+) -> Option<(*const ObjectHeader, bool)> {
+    if let Some(holder) = class_link(recv) {
+        return Some((holder, true));
+    }
+    let (pid, word) = admitted_link(recv)?;
+    let holder = match pid {
+        PROTO_ID_NULL => return None,
+        PROTO_ID_DEFAULT => {
+            crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
+        }
+        _ => next_from_word(recv, word),
+    };
+    (!holder.is_null() && holder != recv).then_some((holder, false))
+}
+

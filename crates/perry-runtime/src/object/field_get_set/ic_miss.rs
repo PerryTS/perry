@@ -182,26 +182,6 @@ pub(crate) fn is_array_method_value_name(key: &[u8]) -> bool {
 /// bug cannot be reintroduced by writing the obvious code. Same shape as
 /// `buffer_method_name_static` (#7747).
 
-/// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
-/// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's
-/// view of the same memory.
-pub const PIC_CACHE_WORDS: usize = crate::codegen_abi::PIC_CACHE_WORDS;
-
-/// The runtime view of a `@perry_ic_N` property-read cache.
-///
-/// Layout (#7753 — the ways are new; words 0..2 are unchanged from #51/#6080a
-/// so the monomorphic path is bit-for-bit what it always was):
-///
-/// | word | meaning |
-/// |---|---|
-/// | 0 | `tok0` — most-recently-used ShapeId token |
-/// | 1 | `slot0` — its resolved field slot |
-/// | 2 | unused — was the Array-subclass named-prefix token, retired by S6 (site state must derive from one shape) |
-/// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
-/// | 3 | way state ([`PIC_WAY_STATE`]) |
-/// | 12..=20 | the holder entry for a key that is not own (`method_site::read_holder`) |
-pub type PicCache = [i64; PIC_CACHE_WORDS];
-
 /// Bit flipped into the ShapeId a compact MRU word publishes when the key is
 /// SPILL-located. **Must equal `PACKED_SPILL_FLIP` in perry-codegen.**
 ///
@@ -218,13 +198,6 @@ pub type PicCache = [i64; PIC_CACHE_WORDS];
 /// and a branch) leave the hit path of every site, including the ones whose
 /// field is inline and could never see the bit.
 pub(crate) const PACKED_SPILL_FLIP: u32 = 0xC000_0000;
-
-/// The per-site slot codegen emits for a property-read cache — `@perry_ic_N =
-/// private global ptr null` — holding null until the site's first priming
-/// miss, then the arena cache `pic_slot_resolve` published (#9708). The
-/// emitted hit path reads the cache words through this pointer; every runtime
-/// entry that primes takes the slot's address and resolves it here.
-pub type PicCacheSlot = *mut PicCache;
 
 /// Does this heap property key have exactly these bytes?
 ///

@@ -694,7 +694,12 @@ unsafe fn construct_registered_class_ref_entry(
     args_len: usize,
     entry: Option<(usize, u32, u32)>,
 ) -> f64 {
-    let inst = allocate_class_instance(instance_cid).0;
+    let birth_args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let inst = allocate_class_instance(instance_cid, birth_args).0;
     // #2768: a registered-class constructor reached through this path — static
     // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
     // with a distinct newTarget — must observe `new.target` inside its body.

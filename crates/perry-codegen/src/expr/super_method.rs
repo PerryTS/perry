@@ -181,7 +181,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let recv = group.reread(ctx, r)?;
                 Ok(ctx.block().call(
                     DOUBLE,
-                    "js_method_site_call_value",
+                    "js_method_call_value",
                     &[
                         (DOUBLE, &callable),
                         (DOUBLE, &recv),

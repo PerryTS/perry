@@ -318,7 +318,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                     assert!(!fast.contains("@js_rel_lt"));
                 } else {
                     assert!(
-                        fast.contains("@js_value_length_property_key_ic_f64")
+                        fast.contains("@js_value_length_property_key_f64")
                             || fast.contains("@js_value_length_property_f64("),
                         "length overrides retain full property semantics"
                     );

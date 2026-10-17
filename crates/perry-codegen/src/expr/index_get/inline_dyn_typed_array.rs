@@ -54,7 +54,7 @@
 //! IR (guards, GEPs, loads) plus an out-of-line semantic fallback, so no
 //! register of a GC value spans a lowering here.
 
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
 use super::FnCtx;
 
@@ -107,18 +107,6 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
     let pointer_mask = crate::nanbox::POINTER_MASK_I64;
-
-    // #9708: the site owns an 8-byte pointer SLOT (`__bss`, null until the
-    // runtime primes it), not the cache words. The site no longer reads the
-    // cache at all — the tier that did (the shape-carried Array-subclass IC)
-    // lives behind the exit now — but it still owns the slot, because the exit
-    // is handed the slot's ADDRESS, which is a link-time constant needing no
-    // load.
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = super::super::inline_cache_global_name(ctx, site_id);
-    ctx.ic_globals.push(cache_name.clone());
-    let slot_ref = format!("@{cache_name}");
 
     let u8_brand_idx = ctx.new_block("arrlike.u8.brand");
     let u8_view_idx = ctx.new_block("arrlike.u8.view");
@@ -724,7 +712,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let slow_raw = ctx.block().call(
         DOUBLE,
         "js_packed_arraylike_index_get",
-        &[(DOUBLE, obj_box), (DOUBLE, idx_d), (PTR, &slot_ref)],
+        &[(DOUBLE, obj_box), (DOUBLE, idx_d)],
     );
     // In a number context, coerce the (possibly boxed) slow result here so the
     // merge phi is uniformly a Number and the arithmetic caller skips its own

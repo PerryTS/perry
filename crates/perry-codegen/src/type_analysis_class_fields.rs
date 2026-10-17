@@ -123,6 +123,17 @@ pub(crate) fn class_field_global_index(
     if accessor_in_chain(ctx, class_name, property) {
         return None;
     }
+    // Case 2c: a static family whose coloured layout moves a key off its
+    // constructor-order position (a hole before it) has no compile-time slot
+    // codegen may assume: an instance is at the family layout or, when it
+    // could not adopt it, at the constructor-order one.
+    if ctx
+        .class_ids
+        .get(class_name)
+        .is_some_and(|cid| ctx.program_layouts.slots_moved(*cid))
+    {
+        return None;
+    }
     // Issue #26 / #321 (via #5654): prefer the authoritative, source-prefix-
     // disambiguated ancestor chain — the SAME data the packed-keys global and
     // constructor field-init are built from — so the returned index matches

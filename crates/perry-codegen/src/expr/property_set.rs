@@ -35,7 +35,7 @@ use crate::rooting;
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr, receiver_class_name,
 };
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
@@ -241,29 +241,7 @@ pub(crate) fn lower_put_value_property_set_by_name(
     value: &Expr,
     assignment_strict: bool,
 ) -> Result<String> {
-    lower_static_key_store(ctx, object, property, value, assignment_strict, None)
-}
-
-/// A store to a declared field of a class whose instances carry that key from
-/// birth: the same static-key store site, with only its existing-key hit
-/// inline (`emit_static_store_ic`'s `existing_key`; `f64_lane` when the slot
-/// is an `F64` lane of every ShapeId the class compares).
-fn lower_class_field_store(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    property: &str,
-    value: &Expr,
-    assignment_strict: bool,
-    f64_lane: bool,
-) -> Result<String> {
-    lower_static_key_store(
-        ctx,
-        object,
-        property,
-        value,
-        assignment_strict,
-        Some(f64_lane),
-    )
+    lower_static_key_store(ctx, object, property, value, assignment_strict)
 }
 
 fn lower_static_key_store(
@@ -272,12 +250,17 @@ fn lower_static_key_store(
     property: &str,
     value: &Expr,
     assignment_strict: bool,
-    existing_key: Option<bool>,
 ) -> Result<String> {
     super::store_census::bump(ctx, super::store_census::BY_NAME_PUT_VALUE);
-    let value_may_be_closure = !super::put_value_store_ic::value_never_closure(value);
     let value_is_scalar = expr_produces_non_pointer_bits_by_construction(ctx, value)
         || super::i32_fast_path::is_known_i32_range(ctx, value);
+    // Object model step 2c: a constructor key's store in a run of the
+    // body's family stores (`layout_read::family_run_plan`).
+    let mut plan = if matches!(object, Expr::This) {
+        super::layout_read::family_run_plan(ctx, property, value)
+    } else {
+        None
+    };
     rooting::with_operands_rooted_across(
         ctx,
         &[object],
@@ -295,6 +278,10 @@ fn lower_static_key_store(
             // value's lowering, which is arbitrary user code: a collection that
             // moved it, or a shape change it made, is already visible here.
             let obj_box = vals[0].clone();
+            let run = plan.take().and_then(|plan| {
+                let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                super::layout_read::family_run_arm(ctx, plan, &bits, property)
+            });
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
@@ -305,12 +292,9 @@ fn lower_static_key_store(
                 let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
                 ctx.block().and(I64, &key_bits, POINTER_MASK_I64)
             });
-            // The one inline store path: tag, ShapeId compare, the store, the
-            // barrier; every other case calls `js_put_value_set_packed_miss`,
-            // which is `js_put_value_set` plus the site's publication.
-            // The assignment's value: the RHS on a hit, and on a miss the
-            // runtime's re-read of it from its own root (the miss is a
-            // collection point, so the pre-call register may be stale).
+            // The store probe, else the complete `[[Set]]`. The assignment's
+            // value: the RHS on a probe store, and otherwise the runtime's
+            // re-read of it from its own root (a collection point).
             let result = super::put_value_store_ic::emit_static_store_ic(
                 ctx,
                 &obj_box,
@@ -322,9 +306,9 @@ fn lower_static_key_store(
                 // `[[Set]]` throws it (`js_put_value_set`: node's wording, and
                 // before `Throw` is consulted), so no guard is emitted here.
                 assignment_strict,
-                value_may_be_closure,
                 value_is_scalar,
-                existing_key,
+                matches!(object, Expr::This),
+                run.as_ref(),
             );
             Ok(result)
         },
@@ -462,25 +446,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
         } => {
             // A receiver the wpfacts lowering proves takes the elided read
             // and store below instead of the compound site.
-            if super::private_field_site::private_field_site(ctx, object, property, 1).is_none()
-                && super::wpfacts_access::prove(
-                    ctx,
-                    object,
-                    property,
-                    super::wpfacts_access::Access::Set,
-                )
-                .is_none()
-            {
-                if let Some(result) = super::property_rmw::try_lower_compound(
-                    ctx,
-                    object,
-                    property,
-                    value,
-                    assignment_strict,
-                )? {
-                    return Ok(result);
-                }
-            }
             // #11791: an instance private field write is a shape compare and
             // a slot store.
             if let Some(site) =
@@ -1002,31 +967,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     }
                 }
                 // A declared field of a class whose instances carry their keys
-                // from birth: an own-data overwrite, the store site's
-                // existing-key form.
-                if let Some(field_index) =
-                    crate::type_analysis::class_field_global_index(ctx, &class_name, property)
-                {
-                    if crate::expr::class_field_inline_guard::class_instances_keep_birth_shape(
+                // from birth: an own-data overwrite through the store site.
+                if crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                    .is_some()
+                    && crate::expr::class_field_inline_guard::class_instances_keep_birth_shape(
                         ctx,
                         &class_name,
-                    ) {
-                        let f64_lane =
-                            crate::expr::class_field_inline_guard::class_field_site_raw_f64(
-                                ctx,
-                                &class_name,
-                                property,
-                                field_index,
-                            );
-                        return lower_class_field_store(
-                            ctx,
-                            object,
-                            property,
-                            value,
-                            assignment_strict,
-                            f64_lane,
-                        );
-                    }
+                    )
+                {
+                    return lower_static_key_store(
+                        ctx,
+                        object,
+                        property,
+                        value,
+                        assignment_strict,
+                    );
                 }
             }
             // #9459 / #9495 / #9525: the generic by-name tail is the

@@ -204,15 +204,11 @@ const NON_COLLECTING: &[&str] = &[
     "js_gc_note_slot_layout_aware",
     "js_write_barrier",
     "js_write_barrier_root_nanbox",
-    "perry_transition_cache_base",
-    "js_transition_ic_note_hit",
     // Object model step 5: the unknown-receiver probe, proven `Leaf`.
     "perry_probe_get",
     "perry_probe_get_value",
     "perry_probe_get_binding",
     "perry_probe_get_keyed",
-    "js_put_value_set_packed_fast",
-    "js_transition_ic_spill_append",
     "js_write_barrier_slot",
     "js_write_barrier_slot_validated_parent",
     "js_gc_register_global_root",
@@ -233,7 +229,6 @@ const NON_COLLECTING: &[&str] = &[
     // inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
     "js_closure_exact_func_guard",
-    "js_object_own_method_cache_miss",
     // verified non-allocating bookkeeping stores/reads
     "js_closure_set_capture_bits",
     "js_closure_set_box_capture_ptr",

@@ -1076,14 +1076,13 @@ pub extern "C-unwind" fn js_arguments_forward_apply(
     f64::from_bits(crate::value::TAG_HOLE)
 }
 
-/// Typed `f.call(x, ...arguments)`: reuse the selected method value and the
-/// existing site for its cold dispatch. Only the intrinsic call body and the
+/// Typed `f.call(x, ...arguments)`: reuse the selected method value for its
+/// cold dispatch. Only the intrinsic call body and the
 /// exact unchanged Arguments layout and intrinsic iterator step admit the
 /// borrowed-list arm. The existing iterator owner shape proves the step.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_arguments_call_spread(
     method: f64,
-    site: *mut super::method_site::MethodSiteSlot,
     target: f64,
     method_id: i64,
     receiver: f64,
@@ -1148,9 +1147,8 @@ pub unsafe extern "C-unwind" fn js_arguments_call_spread(
         values.push(scope.root_nanbox_f64(value));
     }
     let values = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&values);
-    super::method_site::js_method_site_call_split(
+    super::method_call::js_method_call_split(
         method.get_nanbox_f64(),
-        site,
         0,
         target.get_nanbox_f64(),
         method_id,

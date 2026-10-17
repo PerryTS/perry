@@ -1,85 +1,38 @@
-//! The region guard itself (#10884) — one entry, shared by every slice.
+//! The region guard's shared pieces (#10884): the per-region state word and
+//! its bounded attempt counter, the kill switch, and the census.
 //!
 //! A region is a single-entry run of accesses over which one receiver's
 //! `(unmasked pointer, ShapeId)` pair is held, entered through ONE shape
 //! compare, whose failure leaves for a generic copy of the whole run and never
-//! rejoins it (design doc §L7.1–L7.3). What varies between slices is only
-//! WHERE the run is found and what is done with the loaded values:
-//!
-//! * slice 1 (`crate::expr::region_read_run`) — a run inside one `+` tree.
-//!
-//! Everything else — the state word, R1, R2, the bounded prime, the miss
-//! edges — lives here, so the two slices cannot drift into two guards with two
-//! soundness arguments. The emitted sequence is:
-//!
-//! ```text
-//! [R1] guard   fused receiver test + ONE ShapeId compare    ─┐ the only two
-//! [R2] load    every key's slot, from one atomic region word │ bail edges,
-//!              (a slice may then verify, then use)          ─┘ before any effect
-//! ```
+//! rejoins it (design doc §L7.1–L7.3). The loop region (`stmt/region_loop`)
+//! is the one remaining user. Slice 1 (a read run inside one `+` tree,
+//! `expr/region_read_run`) was deleted with the read caches (object model
+//! step 5, phase 2): its reads take the ordinary probe.
 //!
 //! # Supplier
 //!
 //! The expected ShapeId is learned (supplier (b), §L14.18.4): a per-region
 //! atomic word primed on a miss by `js_region_guard_prime`. The id and every
 //! key's slot live in ONE word so a concurrent prime can never pair one
-//! shape's id with another's slots. A link-time constant (step 4) would
-//! replace the word load and nothing else.
-//!
-//! # The miss price, measured
-//!
-//! A region that never hits costs **~19 instructions per execution**: 17 for
-//! this prologue (it must materialise the operands before the compare can
-//! exist) and 3 for the retirement bookkeeping, which every miss pays even
-//! after priming retires. Measured with the kill switch on an `Object.create`
-//! receiver, whose fields spill and therefore can never pack a word:
-//! `ocr2` 75 → 94, `ocr4` 450 → 470, against `lit4` (same source, literal
-//! receiver) 216 → 53. Price a guard by everything that must execute to reach
-//! its branch, not by the branch (§L7.6.3).
+//! shape's id with another's slots. This word is a per-site memo; it goes
+//! when object model step 2c's slot agreement makes the loop region
+//! unnecessary.
 
 use std::cell::Cell;
 
 use crate::expr::FnCtx;
-use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Keys one word can address. Must equal
 /// `perry_runtime::object::shapes::REGION_GUARD_MAX_KEYS`.
 pub(crate) const MAX_KEYS: usize = 5;
-/// Must equal the runtime's slot width.
-const SLOT_BITS: u32 = 6;
 /// `REGION_GUARD_WORD_EMPTY`: low half `u32::MAX`, never a live ShapeId.
 const EMPTY_WORD: &str = "4294967295";
-/// Primes attempted per region before it stops trying (process lifetime).
-const PRIME_ATTEMPTS: &str = "8";
 
 thread_local! {
-    /// Non-zero while a generic copy is being lowered. The generic copy lowers
-    /// the SAME code through the ordinary dispatch, which would otherwise form
-    /// the same region again inside itself.
-    static SUPPRESS: Cell<u32> = const { Cell::new(0) };
     static REGIONS_EXPR: Cell<u64> = const { Cell::new(0) };
     static READS_EXPR: Cell<u64> = const { Cell::new(0) };
     static REGIONS_STMT: Cell<u64> = const { Cell::new(0) };
     static READS_STMT: Cell<u64> = const { Cell::new(0) };
-}
-
-pub(crate) struct Suppressed;
-
-impl Suppressed {
-    pub(crate) fn enter() -> Self {
-        SUPPRESS.with(|s| s.set(s.get() + 1));
-        Suppressed
-    }
-}
-
-impl Drop for Suppressed {
-    fn drop(&mut self) {
-        SUPPRESS.with(|s| s.set(s.get() - 1));
-    }
-}
-
-pub(crate) fn suppressed() -> bool {
-    SUPPRESS.with(|s| s.get()) > 0
 }
 
 /// `PERRY_REGION_READS=0` — the kill switch both slices honour, so an A/B can
@@ -90,18 +43,6 @@ pub(crate) fn disabled() -> bool {
         std::env::var("PERRY_REGION_READS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
-}
-
-/// A region is not formed while a profiling build is recording guard pass/fail
-/// on the per-access towers: a read served before them would change a signal
-/// that must stay byte-identical.
-pub(crate) fn emission_allowed() -> bool {
-    !suppressed() && !disabled() && !crate::expr::typed_feedback_emission_enabled()
-}
-
-pub(crate) fn note_expr_region(reads: u64) {
-    REGIONS_EXPR.with(|c| c.set(c.get() + 1));
-    READS_EXPR.with(|c| c.set(c.get() + reads));
 }
 
 /// One region's state: the learned word and its bounded attempt counter.
@@ -124,139 +65,6 @@ pub(crate) fn state_globals(ctx: &mut FnCtx<'_>) -> Sites {
     Sites { word_g, tries_g }
 }
 
-/// What R1 proved and what R2 needs: the receiver's BIASED value (the fused
-/// receiver test's `bits - (POINTER_TAG | 0x10_0000)`, held in a register for
-/// the whole region — reads 2..n re-pay none of the receiver test, and every
-/// slot address is a displacement off it), the loaded word, and the receiver's
-/// own ShapeId for the prime path.
-pub(crate) struct Entry {
-    pub(crate) biased: String,
-    pub(crate) word: String,
-    pub(crate) sid: String,
-}
-
-/// R1, emitted from the CURRENT block. On a hit control reaches `hit_l`; a
-/// shape mismatch goes to `miss_l`; a receiver that is not a heap object at
-/// all goes straight to `generic_l`.
-pub(crate) fn emit_r1(
-    ctx: &mut FnCtx<'_>,
-    recv: &str,
-    sites: &Sites,
-    hit_l: &str,
-    miss_l: &str,
-    generic_l: &str,
-) -> Entry {
-    let r1_idx = ctx.new_block("region.r1");
-    let r1_l = ctx.block_label(r1_idx);
-
-    // R1, part 1: the receiver is a heap object pointer — POINTER tag and a
-    // payload above the native-handle band — in ONE unsigned range compare
-    // (`crate::expr::receiver_range`). Both failures already left for the
-    // same block (`generic_l`), so fusing them changes no edge.
-    let bits = ctx.block().bitcast_double_to_i64(recv);
-    let recv_test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
-    ctx.block()
-        .cond_br(&recv_test.is_object_pointer, &r1_l, generic_l);
-    let biased = recv_test.biased;
-
-    // R1, part 2: ONE shape compare against the learned region word. By
-    // #10828's rule 3 only a GC_TYPE_OBJECT carrying that shape can match, so
-    // this compare is the whole receiver classification.
-    ctx.current_block = r1_idx;
-    crate::expr::receiver_range::emit_route_note(
-        ctx.block(),
-        crate::expr::receiver_range::Route::Region,
-    );
-    let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
-    let expected = ctx.block().trunc(I64, &word, I32);
-    let sid_ptr = crate::expr::receiver_range::emit_field_ptr(ctx.block(), &biased, 4);
-    let sid = ctx.block().load(I32, &sid_ptr);
-    let hit = ctx.block().icmp_eq(I32, &sid, &expected);
-    ctx.block().cond_br(&hit, hit_l, miss_l);
-
-    Entry { biased, word, sid }
-}
-
-/// R2: every key's slot, addressed from the same unmasked pointer and the same
-/// word. Uniform addressing is what lets LLVM turn the run into one
-/// `vgatherqpd` (§L7.6.1).
-pub(crate) fn emit_slot_loads(ctx: &mut FnCtx<'_>, entry: &Entry, keys: usize) -> Vec<String> {
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    let fields_ptr =
-        crate::expr::receiver_range::emit_field_ptr(ctx.block(), &entry.biased, header);
-    let mut values = Vec::with_capacity(keys);
-    for i in 0..keys {
-        let shift = (32 + SLOT_BITS * i as u32).to_string();
-        let shifted = ctx.block().lshr(I64, &entry.word, &shift);
-        let slot = ctx.block().and(I64, &shifted, "63");
-        let field_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
-        values.push(ctx.block().load(DOUBLE, &field_ptr));
-    }
-    values
-}
-
-/// The miss block: prime at most `PRIME_ATTEMPTS` times for the life of the
-/// process, so a polymorphic or spill-located site stops paying for it.
-pub(crate) fn emit_miss(
-    ctx: &mut FnCtx<'_>,
-    sites: &Sites,
-    prime_l: &str,
-    generic_l: &str,
-) -> String {
-    let tries = ctx.block().load(I32, &sites.tries_g);
-    let may_prime = ctx.block().icmp_ult(I32, &tries, PRIME_ATTEMPTS);
-    ctx.block().cond_br(&may_prime, prime_l, generic_l);
-    tries
-}
-
-/// The prime block: bump the counter and hand the runtime the site word plus
-/// the receiver's own shape and this region's keys.
-///
-/// The runtime packs AND publishes (`js_region_guard_prime`): a cache word's
-/// store belongs to the code that owns its memory ordering, the same split the
-/// property IC uses. Emitting the store here instead cost a real program —
-/// `store atomic` parses in the textual backend but NOT in perry's native IR
-/// construction, which every large module takes, so tsc failed codegen in 20
-/// of 50 units while every fixture built.
-pub(crate) fn emit_prime(
-    ctx: &mut FnCtx<'_>,
-    sites: &Sites,
-    entry: &Entry,
-    tries: &str,
-    keys: &[&str],
-    generic_l: &str,
-) {
-    let next_tries = ctx.block().add(I32, tries, "1");
-    ctx.block().store(I32, &next_tries, &sites.tries_g);
-    let mut key_bits: Vec<String> = Vec::with_capacity(MAX_KEYS);
-    for i in 0..MAX_KEYS {
-        if let Some(key) = keys.get(i) {
-            let idx = ctx.strings.intern(key);
-            let handle_global = format!("@{}", ctx.strings.entry(idx).handle_global);
-            let boxed = ctx.block().load(DOUBLE, &handle_global);
-            key_bits.push(ctx.block().bitcast_double_to_i64(&boxed));
-        } else {
-            key_bits.push("0".to_string());
-        }
-    }
-    let n = keys.len().to_string();
-    let word_ptr = sites.word_g.clone();
-    ctx.block().call(
-        I64,
-        "js_region_guard_prime",
-        &[
-            (PTR, &word_ptr),
-            (I32, &entry.sid),
-            (I32, &n),
-            (I64, &key_bits[0]),
-            (I64, &key_bits[1]),
-            (I64, &key_bits[2]),
-            (I64, &key_bits[3]),
-            (I64, &key_bits[4]),
-        ],
-    );
-    ctx.block().br(generic_l);
-}
 
 /// `PERRY_REGION_DIAG=1`: per module, what each slice formed and how many
 /// statement-level runs the static census found — so "what is still uncovered"

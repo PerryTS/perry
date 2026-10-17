@@ -143,7 +143,6 @@ fn deprecate_lane(record: super::shapes::ShapeRecordRef, slot: u32) {
         record.deprecate_rep_slot(slot)
     };
     if changed {
-        crate::proxy::store_census(crate::proxy::C_REP_VALIDITY_BUMP);
     }
 }
 
@@ -190,7 +189,6 @@ unsafe fn converge_key_add(obj: *mut ObjectHeader, id: u32, slot: u32, value_bit
         return id;
     };
     let f64_shape = if number { id } else { sibling };
-    crate::proxy::store_census(crate::proxy::C_REP_CONVERGE);
     if let Some(record) = shape_record_by_id(f64_shape) {
         deprecate_lane(record, slot);
     }
@@ -223,7 +221,6 @@ pub(crate) unsafe fn migrate_deprecated_receiver(obj: *mut ObjectHeader) -> bool
         return false;
     }
     stamp_object_shape_id_with_carrier_note(obj, target);
-    crate::proxy::store_census(crate::proxy::C_REP_MIGRATE);
     true
 }
 

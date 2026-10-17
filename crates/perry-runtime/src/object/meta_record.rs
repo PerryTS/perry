@@ -69,15 +69,10 @@ pub struct ObjectMeta {
     /// shape and allocate no metadata solely for this word. This remains a
     /// traced edge without consuming a user field slot.
     pub private_evaluation_brand: u64,
-    /// Exact class-declared named-prefix identity for an Array-subclass
-    /// receiver. Numeric tail mutations change the ordinary ShapeId on every
-    /// push/pop even though the named slots before that tail remain fixed.
-    /// Property-read PICs may use this nonzero scalar as a second identity
-    /// only after `array_subclass_named_prefix_token` has proved the current
-    /// keys against the class's registered allocation keys. Generic shape or
-    /// semantic transitions clear it; the exact learned numeric-tail
-    /// transition is the only publisher that deliberately preserves it.
-    pub array_subclass_named_prefix_token: u64,
+    /// A retired word (it held the Array-subclass named-prefix token the
+    /// deleted read caches compared), kept so the metadata offsets emitted
+    /// code addresses stay fixed. Always zero.
+    pub reserved_48: u64,
     /// Native pointer to this receiver's per-thread [`ObjectHotTables`].
     /// Array-subclass tail transitions are agent-local: their ShapeIds and
     /// rooted key arrays belong to the same thread that owns the object. Once
@@ -216,7 +211,7 @@ pub struct ObjectMeta {
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
 // codegen and these structs in lock-step.
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
-const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_subclass_named_prefix_token) == 48);
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, reserved_48) == 48);
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_tail_object_hot) == 56);
 // The Array-subclass elements store: codegen's inline `elem.*` tiers load
 // `ObjectHeader.meta` then this word (perry-codegen `expr/index_get` and

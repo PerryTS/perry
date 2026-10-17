@@ -43,7 +43,7 @@ use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
 use crate::rooting::{self, Arg, Repr};
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I32, I64};
 
 use super::{downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
@@ -131,7 +131,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let receiver = group.reread(ctx, recv)?;
                         Ok(ctx.block().call(
                             DOUBLE,
-                            "js_method_site_call_value_apply",
+                            "js_method_call_value_apply",
                             &[(DOUBLE, &function), (DOUBLE, &receiver), (I64, array)],
                         ))
                     })
@@ -157,9 +157,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 crate::strings::emit_static_dispatch_id(ctx.block(), &global);
                             let lookup = super::method_site::emit_method_site_lookup(
                                 ctx,
+                                property,
                                 &target_value,
                                 &method_id,
-                                2,
                                 &[],
                             );
                             let method = group.adopt_emitted(ctx, Repr::Boxed, &lookup.value, true);
@@ -174,7 +174,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 "js_arguments_call_spread",
                                 &[
                                     (DOUBLE, &method),
-                                    (PTR, &lookup.slot_ref),
                                     (DOUBLE, &target),
                                     (I64, &method_id),
                                     (DOUBLE, &receiver),

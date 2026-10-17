@@ -52,6 +52,7 @@ pub(super) fn class_declaration_globals(
     strings: &StringPool,
     module_prefix: &str,
     info_ref: &mut dyn FnMut(&str) -> String,
+    layouts: &crate::layout_families::ProgramLayouts,
 ) -> Vec<ClassDeclarationGlobal> {
     let mut out = Vec::new();
     for &(cid, class) in local_classes {
@@ -174,7 +175,20 @@ pub(super) fn class_declaration_globals(
         }
         let birth_shape =
             super::static_shape_ids::static_prototype_shape(cid).map_or(0, |(id, _)| id);
-        if members.is_empty() && birth_shape == 0 {
+        let layout = layouts
+            .families
+            .get(&cid)
+            .map_or("null".to_owned(), |_| format!("@perry_layout_class_{cid}"));
+        // The creation split's table (`layout_desc::emit_module_layouts`
+        // emits it beside the family's descriptors, in this module).
+        let variants = layouts
+            .families
+            .get(&cid)
+            .filter(|f| !f.variants.is_empty())
+            .map_or("null".to_owned(), |_| {
+                format!("@perry_family_variants_{cid}")
+            });
+        if members.is_empty() && birth_shape == 0 && layout == "null" {
             continue;
         }
         members.sort_by_key(|m| m.order);
@@ -218,7 +232,7 @@ pub(super) fn class_declaration_globals(
                 0
             };
         let decl_global = format!(
-            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32 }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 0 }}",
+            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 0, ptr {layout}, ptr {variants} }}",
             members.len()
         );
         out.push(ClassDeclarationGlobal {

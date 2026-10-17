@@ -1,166 +1,31 @@
-//! The read site's HOLDER entry: `o.k` where `k` is not an own key of the
-//! receiver, answered by facts of two shapes.
+//! The state-free shape walk of a key that is not own: `o.k` answered by
+//! facts of the shapes along the receiver's prototype chain.
 //!
-//! * The receiver's ShapeId `S` vouches that `k` is not own, that the receiver
+//! * The receiver's ShapeId vouches that `k` is not own, that the receiver
 //!   is an ordinary object, and its [[Prototype]] identity. A serial, default
 //!   (the realm's `Object.prototype`), or MIXED explicit identity pins ONE
-//!   object; null terminates the chain. A collecting accessor entry may
-//!   also use a declared class identity: the registry link from a class to
-//!   its declared prototype is written once, and a write that replaces or
-//!   redirects it retires the displaced prototype's ShapeId
-//!   (`class_registry::retire_displaced_decl_prototype`), so the holder-shape
-//!   compare below sees the relink.
-//! * The holder's ShapeId `SH` vouches that `k` is an own inline data slot of
-//!   the holder `H` — or, for an ABSENT entry, that the terminal object lacks
-//!   `k` and has a null [[Prototype]].
-//! * For a holder deeper than the direct prototype, each intermediate hop's
-//!   ShapeId vouches that the hop lacks `k` and still links to the next hop.
+//!   object; null terminates the chain.
+//! * The holder's ShapeId vouches that `k` is an own data slot of the
+//!   holder, or, for absence, that the terminal object lacks `k` and has a
+//!   null [[Prototype]].
+//! * Each intermediate hop's ShapeId vouches that the hop lacks `k` and still
+//!   links to the next hop.
 //!
-//! Data/absence facts are compared on use without a global invalidation word:
-//! a key add, delete, descriptor change or `setPrototypeOf` on any object
-//! the entry names moves that object's ShapeId, and a value store to the
-//! holder's slot is seen because the hit LOADS the slot. A delete is a shape
-//! transition (#10826), so a holder whose ShapeId matches still has the slot:
-//! the hit needs no `TAG_HOLE` test, as the emitted MRU hit needs none. The
-//! collecting accessor route is the same two compares: the holder's ShapeId
-//! declares the key an accessor lane (`ENTRY_ACCESSOR` in its key list), and
-//! the hit loads the lane and compares it with the pair it was primed with,
-//! which names the getter it then calls: a compiled class getter through its
-//! code address, any other function object (a compiled function body or a
-//! builtin thunk) through the closure ABI.
-//!
-//! The primary entry lives in `PicCache` words [`HOLDER_RECV`]..[`HOLDER_STATE`].
-//! Eight further complete answers belong to the same site's bounded record.
-//!
-//! # Weak entries
-//!
-//! No entry word is a GC root, no site is registered, and no collection visits
-//! or rewrites an entry. The same holds for the class entries
-//! (`class_read.rs`), keyed entries' holders (`keyed.rs`; their KEYS are still
-//! rooted until keys are immortal atoms) and method-site entries and chain
-//! proofs (`method_site.rs`). Each premise below is enforced at publication
-//! and backed by a test (`gc/tests/holder_memo.rs`):
-//!
-//! 1. **Stable referents (I1).** Every object address an entry stores — a
-//!    holder, an intermediate hop, a terminal — is admitted by
-//!    `method_site::memo_referents_stable`: a `GC_TYPE_OBJECT` that is old and
-//!    never-move (`gc::never_move`). A minor never moves an old object, and
-//!    the only passes that move old objects (old-page defragmentation and
-//!    idle compaction) decline any block holding a never-move one. So while a
-//!    named object lives, it is at the stored address. A young candidate is
-//!    refused and marked; the next minor promotes it and the site primes again.
-//! 2. **ShapeIds are never reused** (`shapes.rs`), and a hit reads no entry
-//!    word before the live receiver's ShapeId equals the entry's token.
-//! 3. **A receiver ShapeId pins its [[Prototype]]**: a serial, default or
-//!    MIXED identity names one object, and the receiver (its meta record, or
-//!    the shape's identity word) references it, so a live receiver carrying
-//!    the token keeps that prototype alive. Each further hop is admitted only
-//!    if its own ShapeId pins its link (`hop_identity_pins_link`), and the hit
-//!    compares each hop's ShapeId before following it, so by induction every
-//!    named object is reachable from the receiver. A ShapeId whose objects
-//!    have all died can never be carried again (2), so an entry naming a dead
-//!    object can never pass its token compare.
-//! 4. **A bare CLASS identity** names the class's *current* prototype, which a
-//!    relink can displace while receivers of the token (or, for a declared
-//!    parent link, a hop carrying it) live on. Class entries and chain proofs
-//!    compare the live identity word before any holder. For every other
-//!    reader, publication flags each referent memo-named
-//!    (`gc::never_move::note_memo_named`) and the relink's retirement
-//!    (`class_registry::retire_displaced_decl_prototype`) pins a flagged
-//!    prototype, so the entry keeps reading that object, whose re-stamped
-//!    ShapeId no longer matches.
-//! 5. **Accessor pairs** are compared, never dereferenced before the compare:
-//!    the hit loads the holder's live lane and compares it with the primed
-//!    pair. A pair is reachable from its holder while it is in the lane.
-//!    Replacing a pair's getter or setter moves the holder to a fresh ShapeId
-//!    (`descriptor_state::note_accessor_function_replaced`), so a new pair
-//!    reusing a dead pair's address in the same lane matches an old entry
-//!    only if it holds the same functions — and then the entry's getter is
-//!    that pair's getter. A pair that moves only makes the entry miss and
-//!    re-prime.
-//!
-//! The worker gate is unchanged: once a worker starts, no agent reads an
-//! entry, so stale words are inert.
-//!
-//! # Emitted form
-//!
-//! Emitted code holds nothing of the entry. The read site's ShapeId compare
-//! misses, and its one GC-leaf front call
-//! (`field_get_set::ic_miss::read_confirm::js_object_get_field_ic_front`)
-//! asks [`entry_answer`] after the ways, the spill entry and a latched site's
-//! confirm, so an own-key read pays nothing for it. A decline is `TAG_HOLE`
-//! and the site continues to the collecting slow call. The emitted getter arm
-//! expands the shared guard program before calling user code with the
-//! original receiver. Once a worker starts,
-//! the front declines before reading any holder-entry word: the entry belongs
-//! to the primary heap and no agent's GC scans it after the gate.
-//!
-//! # Priming
-//!
-//! Only from the primary agent's read miss handler, which already knows the key
-//! is not own. Data and absent entries are recorded only after the generic
-//! getter's answer agrees with the shapes. An accessor is published only
-//! after its pair is validated, then its getter runs once. A worker
-//! agent's start gates all further holder hits and primes.
-//!
-//! A miss whose receiver a live entry already answers is served from the
-//! entry and primes nothing. Complete answers for other receiver shapes use
-//! bounded eviction in the existing site record. An unsupported receiver
-//! leaves unrelated answers intact; it never permanently retires the site.
+//! Nothing is remembered: every answer reads the shapes and slots it names
+//! when it is asked (the unknown-receiver probe's fallback for builtin
+//! prototypes it declines, `inspect::shape_answer`; the dynamic-key read's
+//! own/absent verdict).
 
-use super::{next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
+use super::{next_prototype, ordinary_receiver};
 use crate::object::shapes::{
-    object_shape_descriptor, object_shape_stamp, shape_proto_id, PIC_ID_TOKEN_BIT, PROTO_ID_CLASS,
+    object_shape_descriptor, object_shape_stamp, shape_proto_id, PROTO_ID_CLASS,
     PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
 };
 use crate::object::ObjectHeader;
-use std::sync::atomic::Ordering;
 
-mod accessor_path;
-pub(crate) use accessor_path::accessor_walk;
 mod inspect;
 pub(crate) use inspect::shape_answer;
 pub(crate) mod keyed;
-pub(crate) mod shared;
-
-/// The answer's kind:
-///
-/// | value | meaning |
-/// |---|---|
-/// | `0 ..= u32::MAX` | depth 1, the value is the holder's slot word ([`HOLDER_SLOT_SPILL`]) |
-/// | [`HOLDER_ABSENT_DEPTH1`] | depth 1, absent: the answer is `undefined` |
-/// | [`HOLDER_ACCESSOR`] + slot word | direct-prototype accessor; collecting hit only |
-/// | [`HOLDER_MULTI_ABSENT`] | depth 1 for up to ten receiver shapes: absent ([`HOLDER_ABSENT_BIT`]) or the holder's slot word ([`multi_slot`]) |
-/// | negative | [`HOLDER_STUB`] set: depth 2..=4 and/or a deep absent entry |
-pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
-/// First of three intermediate hop addresses (depth 2..=4). For accessors,
-/// the first word is the immutable pair root, the second its native getter
-/// code (a scalar used by non-observable probes), and the third is unused.
-pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
-/// Data/absence: first and second hop ShapeIds. Accessor: the code the hit
-/// calls for the getter the primed pair names, `double get(double this, i64
-/// pair)`: a compiled class getter, or the closure-getter entry
-/// (`accessor_pair::holder_closure_getter_entry`), which reads the closure
-/// from the pair at each hit; 0 for a setter-only pair or a deep chain
-/// that needs the collecting validator. A code address, never a GC pointer:
-/// no GC pass reads this word.
-/// The accessor's pair itself (its raw address) is in [`HOLDER_HOPS`]: a
-/// compared word, never a root (see "Weak entries").
-pub const HOLDER_HOP_SHAPES: usize = HOLDER_HOPS + 3;
-/// The site's bounded-record state.
-pub const HOLDER_STATE: usize = crate::codegen_abi::PIC_HOLDER_STATE_WORD;
-/// Legacy ABI bit: no new holder prime sets it.
-#[cfg(test)]
-const STATE_LATCHED: i64 = crate::codegen_abi::PIC_HOLDER_STATE_LATCHED;
-const _: () = assert!(HOLDER_STATE == HOLDER_HOP_SHAPES + 1);
-
-// Deep accessors use the collecting hit, with each intermediate ShapeId
-// checked in the same site's bounded class-read record. Getter word 0 keeps
-// the emitted direct-holder arm from answering without those checks.
-// The emitted accessor arm (`perry-codegen/src/expr/property_get/
-// accessor_arm.rs`) reads the pair and the getter from these words.
-const _: () = assert!(HOLDER_HOPS == crate::codegen_abi::PIC_HOLDER_PAIR_WORD);
-const _: () = assert!(HOLDER_HOP_SHAPES == crate::codegen_abi::PIC_HOLDER_GETTER_WORD);
 
 /// A holder slot word with this bit set names the holder's SPILL position
 /// (the low bits), not an inline slot: a key past the holder's inline region,
@@ -170,7 +35,8 @@ const _: () = assert!(HOLDER_HOP_SHAPES == crate::codegen_abi::PIC_HOLDER_GETTER
 /// as it does for an inline slot. Spill positions stay far below this bit
 /// (`spill::SPILL_MAX_FIELD_INDEX`). Inline words keep the bit clear, so the
 /// common depth-1 inline hit stays one compare.
-pub(super) const HOLDER_SLOT_SPILL: u32 = crate::codegen_abi::PIC_HOLDER_SLOT_SPILL_BIT as u32;
+pub(super) const HOLDER_SLOT_SPILL: u32 = 1 << 31;
+/// The deepest chain the shape answer walks.
 pub(crate) const HOLDER_MAX_DEPTH: usize = 4;
 
 /// The value a holder slot word names on `addr` (see [`HOLDER_SLOT_SPILL`]),
@@ -289,7 +155,7 @@ unsafe fn hop_admitted(addr: usize) -> bool {
 /// recorded [[Prototype]] word that says it: one read of the word serves
 /// both the identity check and the hop ([`next_from_word`]).
 #[inline]
-pub(super) unsafe fn stated_link(obj: *const ObjectHeader) -> (u64, u64) {
+pub(crate) unsafe fn stated_link(obj: *const ObjectHeader) -> (u64, u64) {
     let word = crate::object::shapes::object_prototype_word(obj);
     (crate::object::shapes::object_proto_id_for(obj, word), word)
 }
@@ -351,7 +217,7 @@ pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64
 
 /// The prototype identity `obj`'s shape records, if it admits: a serial, the
 /// default link, null or MIXED explicit link — and equal to what the object says it is.
-pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
+pub(crate) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
     admitted_link(obj).map(|(pid, _)| pid)
 }
 
@@ -423,16 +289,7 @@ pub(crate) unsafe fn recorded_class_link(
     Ok(Some(holder))
 }
 
-pub(crate) struct HolderAccessor {
-    pub(crate) hops: [(usize, u32); HOLDER_MAX_DEPTH - 1],
-    pub(crate) depth: usize,
-    pub(crate) holder: usize,
-    pub(crate) shape: u32,
-    /// The lane's holder slot word ([`HOLDER_SLOT_SPILL`] for a spill lane).
-    pub(crate) slot: u32,
-}
-
-/// [`walk_to`] bounded by the site's own holder entry.
+/// [`walk_to`] bounded by [`HOLDER_MAX_DEPTH`].
 #[inline]
 unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Option<Walk> {
     walk_to(recv, name, class_first, HOLDER_MAX_DEPTH)

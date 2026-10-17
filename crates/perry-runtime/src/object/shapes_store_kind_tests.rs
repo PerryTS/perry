@@ -60,8 +60,6 @@ fn births_carry_the_kind_their_record_derives() {
         let native = with_key(native, "sk_a");
         assert_eq!(kind_of(native), ShapeObjectKind::NativeNamespace);
         assert!(store_facts_agree(native));
-        assert!(!shape_admits_plain_store(object_shape_id(native)));
-        assert!(shape_admits_plain_store(object_shape_id(instance)));
     }
 }
 
@@ -170,10 +168,6 @@ fn the_numeric_proof_is_a_shape_transition() {
         assert_eq!(kind_of(obj), ShapeObjectKind::OrdinaryNumericProof);
         assert!(receiver_carries_numeric_proof(obj));
         assert!(store_facts_agree(obj));
-        assert!(
-            !shape_admits_plain_store(proven),
-            "a proof-carrying shape is never store-admitted"
-        );
 
         assert!(crate::array::clear_packed_subclass_numeric_proof(obj));
         assert_eq!(

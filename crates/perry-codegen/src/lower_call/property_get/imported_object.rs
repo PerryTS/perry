@@ -6,11 +6,8 @@ use perry_hir::Expr;
 use crate::expr::{lower_expr, FnCtx};
 use crate::native_value::LoweredValue;
 use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I64, PTR};
 
-const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
-const GC_TYPE_OBJECT: &str = "2";
 
 fn receiver_binding(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
     match object {
@@ -34,131 +31,40 @@ fn spill_args(ctx: &mut FnCtx<'_>, args: &[String]) -> (String, String) {
     (buf, args.len().to_string())
 }
 
-/// Emit a monomorphic own-method cache that can relearn an append-only shape
-/// successor after an adapter's `setup()` adds state fields. `entry_idx` is
-/// reached only after exact exported-object identity matched. On return the
-/// current block is the direct arm and the result is the validated raw closure
-/// handle to pass to the producer body.
-#[allow(clippy::too_many_arguments)]
-fn emit_cached_own_method_guard(
+/// The guard of the direct arm: the receiver's `property` (the probe: its
+/// own layout, then its prototypes', `OBJECT_MODEL_2026-10-13.md` §3.7) is a
+/// closure of `closure_symbol`'s body. `entry_idx` is reached only after
+/// exact exported-object identity matched. On return the current block is
+/// the direct arm and the result is the validated raw closure handle to pass
+/// to the producer body; anything else branches to `miss_label`.
+fn emit_own_method_guard(
     ctx: &mut FnCtx<'_>,
     entry_idx: usize,
-    recv: &str,
     recv_bits: &str,
-    expected_class_id: u32,
-    field_index: u32,
     property: &str,
     closure_symbol: &str,
     miss_label: &str,
 ) -> String {
-    let key_idx = ctx.strings.intern(property);
-    let key_entry = ctx.strings.entry(key_idx);
-    let bytes_global = format!("@{}", key_entry.bytes_global);
-    let name_len = key_entry.byte_len.to_string();
-
-    let cache_site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = crate::expr::inline_cache_global_name(ctx, cache_site);
-    ctx.ic_globals.push(cache_name.clone());
-
-    let deref_idx = ctx.new_block("object_method_cache.deref");
-    let fast_idx = ctx.new_block("object_method_cache.fast");
-    let cold_idx = ctx.new_block("object_method_cache.revalidate");
-    let direct_idx = ctx.new_block("object_method_cache.direct");
-    let deref_label = ctx.block_label(deref_idx);
-    let fast_label = ctx.block_label(fast_idx);
-    let cold_label = ctx.block_label(cold_idx);
-    let direct_label = ctx.block_label(direct_idx);
-
     ctx.current_block = entry_idx;
-    let heap_floor =
-        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
-    let heap_ceiling =
-        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
-    let recv_handle = ctx
-        .block()
-        .and(I64, recv_bits, crate::nanbox::POINTER_MASK_I64);
-    let tag = ctx.block().lshr(I64, recv_bits, "48");
-    let tagged = ctx.block().icmp_eq(I64, &tag, POINTER_TAG_HI16);
-    let above_floor = ctx.block().icmp_uge(I64, &recv_handle, &heap_floor);
-    let below_ceiling = ctx.block().icmp_ult(I64, &recv_handle, &heap_ceiling);
-    let in_range = ctx.block().and(I1, &above_floor, &below_ceiling);
-    let safe = ctx.block().and(I1, &tagged, &in_range);
-    // #9708: the token lives behind a pointer slot the miss handler fills on
-    // the first prime. `deref` reads it in a flat predicate, so it reads
-    // through `token_cache`: the real cache when present, else the slot itself
-    // — 8 bytes of null, a zero token, which fails `cache_populated` exactly as
-    // the all-zero global did and takes the same revalidate edge.
-    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    let token_cache =
-        ctx.block()
-            .select(I1, &ic_slot.present, PTR, &ic_slot.cache, &ic_slot.slot_ref);
-    ctx.block().cond_br(&safe, &deref_label, miss_label);
-
-    ctx.current_block = deref_idx;
-    let object_ptr = ctx.block().inttoptr(I64, &recv_handle);
-    let gc_header_ptr = ctx.block().gep(I8, &object_ptr, &[(I64, "-8")]);
-    let gc_header = ctx.block().load(I32, &gc_header_ptr);
-    let guarded_gc_bits = ctx
-        .block()
-        .and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-    let gc_header_ok = ctx.block().icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
-    let live_class_shape = ctx.block().load(I64, &object_ptr);
-    let cache_token_ptr = ctx.block().gep(I64, &token_cache, &[(I64, "0")]);
-    let cached_class_shape = ctx.block().load(I64, &cache_token_ptr);
-    let cache_populated = ctx.block().icmp_ne(I64, &cached_class_shape, "0");
-    let shape_matches = ctx
-        .block()
-        .icmp_eq(I64, &live_class_shape, &cached_class_shape);
-    let cache_hit = ctx.block().and(I1, &gc_header_ok, &cache_populated);
-    let cache_hit = ctx.block().and(I1, &cache_hit, &shape_matches);
-    ctx.block().cond_br(&cache_hit, &fast_label, &cold_label);
-
-    ctx.current_block = fast_idx;
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let fields = ctx.block().gep(I8, &object_ptr, &[(I64, &header_skip)]);
-    let slot = ctx
-        .block()
-        .gep(DOUBLE, &fields, &[(I64, &field_index.to_string())]);
-    let closure_value = ctx.block().load(DOUBLE, &slot);
+    let (dir, key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
+    let value = ctx.block().call(
+        DOUBLE,
+        "perry_probe_get_value",
+        &[(PTR, &dir), (I64, recv_bits), (I64, &key_bits), (I64, &hash)],
+    );
     // The guard compares the value's `JsFunctionInfo` with the body's.
     let expected_info = ctx.block().fn_info_ref(closure_symbol);
-    let fast_handle = ctx.block().call(
+    let handle = ctx.block().call(
         I64,
         "js_closure_exact_func_guard",
-        &[(DOUBLE, &closure_value), (PTR, &expected_info)],
+        &[(DOUBLE, &value), (PTR, &expected_info)],
     );
-    let guard_passes = ctx.block().icmp_ne(I64, &fast_handle, "0");
-    let fast_end = ctx.block().label.clone();
-    ctx.block()
-        .cond_br(&guard_passes, &direct_label, &cold_label);
-
-    ctx.current_block = cold_idx;
-    let cold_handle = ctx.block().call(
-        I64,
-        "js_object_own_method_cache_miss",
-        &[
-            (DOUBLE, recv),
-            (I32, &expected_class_id.to_string()),
-            (I32, &field_index.to_string()),
-            (PTR, &bytes_global),
-            (I64, &name_len),
-            (PTR, &expected_info),
-            (PTR, &ic_slot.slot_ref),
-        ],
-    );
-    let cold_passes = ctx.block().icmp_ne(I64, &cold_handle, "0");
-    let cold_end = ctx.block().label.clone();
-    ctx.block().cond_br(&cold_passes, &direct_label, miss_label);
-
+    let passes = ctx.block().icmp_ne(I64, &handle, "0");
+    let direct_idx = ctx.new_block("object_method.direct");
+    let direct_label = ctx.block_label(direct_idx);
+    ctx.block().cond_br(&passes, &direct_label, miss_label);
     ctx.current_block = direct_idx;
-    ctx.block().phi(
-        I64,
-        &[
-            (fast_handle.as_str(), fast_end.as_str()),
-            (cold_handle.as_str(), cold_end.as_str()),
-        ],
-    )
+    handle
 }
 
 pub(super) fn try_lower_imported_object_method_call(
@@ -185,8 +91,7 @@ pub(super) fn try_lower_imported_object_method_call(
         // preserve their dynamic receiver/call semantics.
         return Ok(None);
     };
-    let Some(expected_class_id) = ctx.class_ids.get(&capability.receiver_class_name).copied()
-    else {
+    let Some(_) = ctx.class_ids.get(&capability.receiver_class_name).copied() else {
         return Ok(None);
     };
     // JavaScript evaluates the receiver before arguments. Keep that value (and
@@ -230,13 +135,10 @@ pub(super) fn try_lower_imported_object_method_call(
     ctx.block()
         .cond_br(&receiver_matches, &cache_label, &fallback_label);
 
-    let closure_handle = emit_cached_own_method_guard(
+    let closure_handle = emit_own_method_guard(
         ctx,
         cache_idx,
-        &recv,
         &recv_bits,
-        expected_class_id,
-        method.field_index,
         property,
         &closure_symbol,
         &fallback_label,
@@ -385,13 +287,10 @@ pub(super) fn try_lower_dynamic_object_method_call(
             crate::expr::body_call::js_body_param_types(candidate.method.param_count);
         ctx.pending_declares
             .push((closure_symbol.clone(), DOUBLE, closure_params));
-        let closure_handle = emit_cached_own_method_guard(
+        let closure_handle = emit_own_method_guard(
             ctx,
             cache_idx,
-            &recv,
             &recv_bits,
-            candidate.class_id,
-            candidate.method.field_index,
             property,
             &closure_symbol,
             &miss_label,

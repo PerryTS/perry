@@ -354,80 +354,9 @@ fn element_compare_decides_the_ordered_case_inline() {
     );
 }
 
-#[test]
-fn a_run_reuses_one_guard_and_every_call_clears_it() {
-    let ir = ir(&arena_module(false));
-    let make = body(&ir, "make");
-    assert!(
-        make.contains("tael.set.store"),
-        "make lost its inline stores"
-    );
-    assert_eq!(
-        blocks(make, "property_rmw.memo_set") + blocks(make, "pget.class.memo_set"),
-        1,
-        "make's run must set one receiver proof:\n{make}"
-    );
-    assert_eq!(
-        blocks(make, "pget.class.memo_clear"),
-        2,
-        "size++, h.left and h.right must share one ShapeId proof:\n{make}"
-    );
-    // The flags the guards set are the ones every call in the run clears.
-    let flags: Vec<String> = make
-        .lines()
-        .filter(|l| l.trim_start().starts_with("store i8 1, ptr "))
-        .map(|l| l.trim().trim_start_matches("store i8 1, ptr ").to_string())
-        .collect();
-    assert!(!flags.is_empty(), "no guard sets a run flag:\n{make}");
-    let lines: Vec<&str> = make.lines().collect();
-    let mut calls = 0;
-    for (n, line) in lines.iter().enumerate() {
-        let callee = line.split("call ").nth(1).unwrap_or("");
-        if !line.contains("call ") || callee.contains("@llvm.") || callee.contains("@js_shadow_") {
-            continue;
-        }
-        if !(callee.contains("@js_dyn_index_set_strict(") || callee.contains("@js_property_rmw")) {
-            continue;
-        }
-        calls += 1;
-        for flag in &flags {
-            let cleared = lines[..n]
-                .iter()
-                .rev()
-                .take_while(|l| !l.ends_with(':'))
-                .any(|l| l.trim() == format!("store i8 0, ptr {flag}"));
-            assert!(
-                cleared,
-                "`{line}` does not clear run flag {flag} first:\n{make}"
-            );
-        }
-    }
-    assert!(calls >= 3, "the run's slow exits were not found:\n{make}");
-}
-
 /// The blocks of a body whose label starts with `prefix`.
 fn blocks(body: &str, prefix: &str) -> usize {
     body.lines()
         .filter(|l| l.starts_with(prefix) && l.ends_with(':'))
         .count()
-}
-
-#[test]
-fn a_call_between_accesses_ends_the_run() {
-    // size++ and h.left share the first run; h.right after the call starts a
-    // run of its own and proves its receiver again.
-    assert_eq!(
-        blocks(
-            body(&ir(&arena_module(false)), "make"),
-            "pget.class.memo_clear"
-        ),
-        2
-    );
-    assert_eq!(
-        blocks(
-            body(&ir(&arena_module(true)), "make"),
-            "pget.class.memo_clear"
-        ),
-        1
-    );
 }

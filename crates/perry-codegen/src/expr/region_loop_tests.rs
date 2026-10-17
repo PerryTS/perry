@@ -256,6 +256,16 @@ fn allocating_own_store_split_loop_keeps_poll() {
     );
 }
 
+/// The barrier census's probe for the `put.pic` stem: a loop region's bare
+/// stores (`stmt/region_loop/bare.rs`) of a pointer-capable value carry the
+/// store bookkeeping (`put_value_store_ic::emit_static_store_ic_bookkeeping`).
+pub(super) fn census_put_pic_ir() -> String {
+    loop_ir(
+        "census_put_pic",
+        vec![put("x", Expr::LocalGet(V)), put("y", Expr::LocalGet(I))],
+    )
+}
+
 #[test]
 fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
     // `o.x = v; o.y = i;` — `v` is `any`: pointer-capable.

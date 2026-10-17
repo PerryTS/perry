@@ -13,28 +13,6 @@ use perry_hir::Expr;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
-/// Words in a per-site property-read cache.
-///
-/// **Must equal `perry_runtime::object::field_get_set::PIC_CACHE_WORDS`.**
-/// Since #9708 codegen emits only the 8-byte slot (`@perry_ic_N = private
-/// global ptr null`) and the runtime allocates the words itself, sized from
-/// its own `PicCache` — so the constant is no longer an emission width, but
-/// the runtime's miss entry reads its ways at `PIC_WAY_BASE + PIC_WAYS * 2`
-/// words, which the pairing tests keep inside that allocation. perry-codegen does not depend on
-/// perry-runtime (the same reason `INLINE_SLOT_FLOOR` is duplicated in
-/// `target_layout`), so the pairing is held by `pic_cache_layout_matches_runtime`
-/// here and `pic_cache_words_match_codegen` in the runtime: change one and both
-/// fail.
-#[cfg(test)]
-pub(crate) const PIC_CACHE_WORDS: usize = 21;
-/// First word of the polymorphic way array (words 0..2 are the MRU entry and
-/// word 3 is the gate). Mirrors the runtime's `PIC_WAY_BASE`.
-#[cfg(test)]
-pub(crate) const PIC_WAY_BASE: usize = 4;
-/// `(token, slot)` ways beyond the MRU entry; a site resolves `PIC_WAYS + 1`
-/// shapes inline. Mirrors the runtime's `PIC_WAYS`.
-#[cfg(test)]
-pub(crate) const PIC_WAYS: usize = 4;
 /// A SPILL-located key publishes its ShapeId into the compact word with this
 /// bit flipped. **Must equal `PACKED_SPILL_FLIP` in the runtime.**
 ///
@@ -813,18 +791,14 @@ fn lower_property_site_tail(
 
     // §3.7 case 3: the receiver's own layout answers (`perry_probe_get`,
     // perry-runtime `object/layout_probe.rs`) from the key's atom and its
-    // compile-time hash. A `length` site passes the runtime's empty directory
-    // (an Array subclass serves `length` from its elements store, which no
-    // key list names), so its probe declines to the complete read.
-    let dir = if inline_string_length {
-        EMPTY_SHAPE_DIR.to_string()
-    } else {
-        crate::expr::agent_ptr::emit_agent_ptr_or(
-            ctx,
-            crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
-            EMPTY_SHAPE_DIR,
-        )
-    };
+    // compile-time hash. A `length` site asks `perry_probe_get_length`,
+    // which declines an Array subclass instance (it serves `length` from its
+    // elements store, which no key list names) to the complete read.
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        EMPTY_SHAPE_DIR,
+    );
     let probe_recv = match fused_recv.as_ref() {
         Some(f) => f.biased.clone(),
         None => ctx.block().sub(
@@ -845,6 +819,8 @@ fn lower_property_site_tail(
         // A global binding must tell absent from `undefined`.
         if global_binding || index_name {
             "perry_probe_get_binding"
+        } else if inline_string_length {
+            "perry_probe_get_length"
         } else {
             "perry_probe_get"
         },

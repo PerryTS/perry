@@ -19,9 +19,12 @@
 //! keeps its cost. No cache and no side table: the slot is the authority.
 //!
 //! **Order.** Present keys enumerate in the layout's key sequence order,
-//! holes skipped. A hole filled after birth therefore enumerates at its key
-//! position, not in fill order (a later step may append out-of-order fills
-//! to the ordered overflow; not decided here).
+//! holes skipped. A store that fills a hole is an add of the key
+//! (`layout_desc::family_store`, `layout_desc::family_create`): it fills the
+//! slot in place only when no key after it in the sequence is present, so the
+//! key position is the insertion order; any other fill (and a definition,
+//! `layout_desc::prepare_hole_define`) first gives the object its overflow,
+//! which then orders it.
 //!
 //! **Overflow.** Once an object has an ordered overflow table (§3.4), the
 //! table is the order and presence authority: `overflow::ensure` records a

@@ -239,7 +239,6 @@ mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
-mod ic_slot;
 mod map_set_receiver;
 mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
@@ -351,7 +350,7 @@ pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_set_field_by_property_id, js_private_brand_add, js_private_brand_check,
     js_private_field_add, js_private_guard, js_private_guard_site, js_private_method_call,
-    js_private_method_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
+    js_private_method_guard,
 };
 pub(crate) use ic_miss::{private_lexical_brand_depth, private_lexical_brand_truncate};
 // The read path's spill flip, shared with the static-key store IC's ways
@@ -362,10 +361,6 @@ pub(crate) use ic_miss::PRIVATE_FRESH_EVALUATION_BRAND;
 pub(crate) use ic_miss::{
     primitive_proto_method_name_static, test_pending_private_access_owner,
     test_push_catch_private_hint,
-};
-pub(crate) use ic_slot::pic_slot_census;
-pub use ic_slot::{
-    pic_arena_bytes, pic_slot_peek, pic_slot_resolve, pic_slot_resolve_init, pic_slots_resolved,
 };
 
 #[cfg(test)]

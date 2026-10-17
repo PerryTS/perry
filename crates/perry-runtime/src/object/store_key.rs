@@ -85,59 +85,6 @@ pub(crate) unsafe fn interned_key_for_store(key: f64) -> Option<*const crate::St
     None
 }
 
-/// The receiver's ShapeId word before a slow store, so the miss handler can
-/// tell afterwards whether the store changed the receiver's layout (the
-/// pre-shape a key-add memo is keyed on). 0 for anything that is not a heap
-/// object.
-///
-/// # Safety
-/// `target` is a live value.
-#[inline]
-pub(crate) unsafe fn pre_store_shape(target: f64) -> u32 {
-    let bits = target.to_bits();
-    // Honest pointers: a POINTER_TAG word names a GC-headed object.
-    match crate::value::addr_class::pointer_value_header(bits) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
-            crate::object::shapes::object_shape_stamp(
-                (bits & crate::value::POINTER_MASK) as *const crate::ObjectHeader,
-            )
-        }
-        _ => 0,
-    }
-}
-
-/// Walk `obj`'s prototype chain exactly as `class_instance_set_may_intercept`
-/// does (`js_object_get_prototype_of`) and mark every hop as a prototype, so
-/// a later change to any hop moves `proto_validity`. `false`
-/// when a hop is anything but an ordinary heap object — a Proxy, a function
-/// object, a handle — or the chain does not end within 64 hops; the caller
-/// then records nothing that depends on the chain.
-///
-/// # Safety
-/// `receiver` is a live ordinary object the caller holds rooted.
-pub(crate) unsafe fn mark_chain_hops(scope: &crate::gc::RuntimeHandleScope, receiver: f64) -> bool {
-    let mut hop = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(receiver));
-    for _ in 0..64 {
-        let bits = hop.get_nanbox_f64().to_bits();
-        if bits == crate::value::TAG_NULL {
-            return true;
-        }
-        // Honest pointers: a POINTER_TAG word names a GC-headed object.
-        if !crate::value::addr_class::pointer_value_header(bits)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
-        {
-            return false;
-        }
-        let addr = (bits & crate::value::POINTER_MASK) as usize;
-        if !crate::object::proto_validity::object_is_marked_prototype(addr) {
-            let _ = crate::object::proto_validity::mark_object_as_prototype(addr);
-        }
-        let next = crate::object::js_object_get_prototype_of(hop.get_nanbox_f64());
-        hop = scope.root_nanbox_f64(next);
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,11 +97,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_non_object_target_has_no_pre_store_shape() {
-        unsafe {
-            assert_eq!(pre_store_shape(2.0), 0);
-            assert_eq!(pre_store_shape(f64::from_bits(crate::value::TAG_NULL)), 0);
-        }
-    }
 }

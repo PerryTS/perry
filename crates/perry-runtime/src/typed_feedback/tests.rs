@@ -1406,12 +1406,6 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             guards,
-            "static G3C",
-            "static G3C: unsafe extern \"C\" fn(f64, u32, u32, *const i8, usize, *const crate::closure::JsFunctionInfo, *mut MethodPicCacheSlot) -> u64",
-            "js_object_own_method_cache_miss",
-        ),
-        (
-            guards,
             "static G4",
             "static G4: unsafe extern \"C\" fn(f64, u32, u32) -> i32",
             "js_method_direct_shape_guard",
@@ -2244,111 +2238,6 @@ fn exact_closure_func_guard_is_safe_and_identity_exact() {
         js_closure_exact_func_guard(closure_value, std::ptr::null()),
         0
     );
-}
-
-#[test]
-fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
-    const TEST_CLASS_ID: u32 = 0x7fff_fe75;
-    let object = crate::object::js_object_alloc(TEST_CLASS_ID, 0);
-    let method_key = crate::string::js_string_from_bytes(b"method".as_ptr(), 6);
-    let extra_key = crate::string::js_string_from_bytes(b"state".as_ptr(), 5);
-    let spilled_key = crate::string::js_string_from_bytes(b"spilled".as_ptr(), 7);
-    let fn_ptr: *const crate::closure::JsFunctionInfo = &TEST_DIRECT_CLOSURE_INFO;
-    let closure = crate::closure::js_closure_alloc_singleton(&TEST_DIRECT_CLOSURE_INFO);
-    let closure_value = crate::value::js_nanbox_pointer(closure as i64);
-    crate::object::js_object_set_field_by_name(object, method_key, closure_value);
-    let receiver = crate::value::js_nanbox_pointer(object as i64);
-    let mut cache: MethodPicCache = [0];
-    let mut cache_slot: MethodPicCacheSlot = &mut cache;
-
-    let first = unsafe {
-        js_object_own_method_cache_miss(
-            receiver,
-            TEST_CLASS_ID,
-            0,
-            b"method".as_ptr() as *const i8,
-            6,
-            fn_ptr,
-            &mut cache_slot,
-        )
-    };
-    assert_eq!(first, closure as u64);
-    assert_ne!(cache[0], 0);
-    let initial_shape_token = cache[0];
-
-    crate::object::js_object_set_field_by_name(object, extra_key, 42.0);
-    let after_append = unsafe {
-        js_object_own_method_cache_miss(
-            receiver,
-            TEST_CLASS_ID,
-            0,
-            b"method".as_ptr() as *const i8,
-            6,
-            fn_ptr,
-            &mut cache_slot,
-        )
-    };
-    assert_eq!(after_append, closure as u64);
-    assert_ne!(
-        cache[0], initial_shape_token,
-        "append must publish the live successor shape"
-    );
-
-    // The third property is beyond this zero-field object's two-slot inline
-    // floor. It creates ObjectMeta solely to own spill storage; that metadata
-    // is not a semantic mutation of the original own method.
-    crate::object::js_object_set_field_by_name(object, spilled_key, 84.0);
-    assert!(unsafe { !(*object).meta.is_null() });
-    let after_spilled_append = unsafe {
-        js_object_own_method_cache_miss(
-            receiver,
-            TEST_CLASS_ID,
-            0,
-            b"method".as_ptr() as *const i8,
-            6,
-            fn_ptr,
-            &mut cache_slot,
-        )
-    };
-    assert_eq!(after_spilled_append, closure as u64);
-    assert_ne!(cache[0], 0);
-
-    let replacement =
-        crate::closure::js_closure_alloc_singleton(crate::fn_info!(test_replacement_closure, 1));
-    crate::object::js_object_set_field_by_name(
-        object,
-        method_key,
-        crate::value::js_nanbox_pointer(replacement as i64),
-    );
-    let replaced = unsafe {
-        js_object_own_method_cache_miss(
-            receiver,
-            TEST_CLASS_ID,
-            0,
-            b"method".as_ptr() as *const i8,
-            6,
-            fn_ptr,
-            &mut cache_slot,
-        )
-    };
-    assert_eq!(replaced, 0);
-    assert_eq!(cache[0], 0);
-
-    crate::object::js_object_set_field_by_name(object, method_key, closure_value);
-    crate::object::js_object_delete_field(object, method_key);
-    let deleted = unsafe {
-        js_object_own_method_cache_miss(
-            receiver,
-            TEST_CLASS_ID,
-            0,
-            b"method".as_ptr() as *const i8,
-            6,
-            fn_ptr,
-            &mut cache_slot,
-        )
-    };
-    assert_eq!(deleted, 0);
-    assert_eq!(cache[0], 0);
 }
 
 #[test]

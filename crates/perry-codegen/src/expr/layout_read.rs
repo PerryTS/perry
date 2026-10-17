@@ -27,6 +27,7 @@
 
 use crate::nanbox::TAG_HOLE_I64;
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use perry_hir::Expr;
 
 use super::FnCtx;
 
@@ -284,6 +285,362 @@ pub(crate) fn begin_store(
         );
     }
     let hit_end = ctx.block_label(ctx.current_block);
+    ctx.block().br(&merge_label);
+    ctx.current_block = miss_idx;
+    Some(LayoutStore {
+        hit_label: hit_end,
+        merge_idx,
+    })
+}
+
+/// Are compiler-owned family stores emitted for this target?
+fn family_stores_enabled(ctx: &FnCtx<'_>) -> bool {
+    !(crate::target_layout::target_is_ilp32(ctx.target_triple)
+        || ctx.target_triple.contains("wasm")
+        || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple))
+}
+
+/// One store of a family constructor's run (object model step 2c): `ok` (an
+/// `i1`) is the run's check (`perry_family_run_admits`, which proved the
+/// receiver a family object of the constructor's class or a descendant),
+/// `slot` the slot every family descending from the class gives the key.
+pub(crate) struct RunArm {
+    pub ok: String,
+    pub slot: u32,
+}
+
+/// A constructor run in flight in the innermost constructor body
+/// (`InlineCtorReturn::family_run`): its check `ok` (an `i1`) and the key
+/// position its last plain store wrote.
+#[derive(Clone)]
+pub(crate) struct FamilyRun {
+    pub ok: String,
+    pub last_pos: u32,
+}
+
+/// What evaluating a constructor store's value may do, given the run's check
+/// holds (`perry_family_run_admits`: no prototype holds an accessor, a
+/// non-writable or a private property named like a family key).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunValue {
+    /// Runs no user code: literals, locals, `this`, `this.k` for a key `k`
+    /// of the family (a plain data read on a checked chain), function and
+    /// plain object and array literals of such values.
+    Free,
+    /// `this.k.bind(<Free>...)`: no user code when the bound function is a
+    /// plain function on a pristine `Function.prototype`
+    /// (`perry_bind_is_builtin`, tested at the call).
+    Bind,
+    /// May run user code: the run ends at it.
+    Runs,
+}
+
+fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
+    fn free(e: &Expr, keys: &[&str]) -> bool {
+        match e {
+            Expr::Undefined
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::String(_)
+            | Expr::LocalGet(_)
+            | Expr::This
+            | Expr::Closure { .. } => true,
+            Expr::PropertyGet {
+                object, property, ..
+            } => matches!(object.as_ref(), Expr::This) && keys.contains(&property.as_str()),
+            Expr::Object(fields) => fields
+                .iter()
+                .all(|(k, v)| k != "__proto__" && free(v, keys)),
+            Expr::Array(items) => items.iter().all(|v| free(v, keys)),
+            _ => false,
+        }
+    }
+    if free(e, keys) {
+        return RunValue::Free;
+    }
+    if let Expr::Call { callee, args, .. } = e {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        {
+            if property == "bind"
+                && args.len() <= 3
+                && matches!(object.as_ref(), Expr::PropertyGet { object: o, property: k, .. }
+                    if matches!(o.as_ref(), Expr::This) && keys.contains(&k.as_str()))
+                && args.iter().all(|a| free(a, keys))
+            {
+                return RunValue::Bind;
+            }
+        }
+    }
+    RunValue::Runs
+}
+
+/// A constructor store's place in its body's run of family stores.
+pub(crate) struct RunPlan {
+    pub pos: u32,
+    /// No code since the birth can have run before this store (the chain's
+    /// inert prologue, `FamilyLayout::init_count`): every later key is a hole.
+    pub order_known: bool,
+    /// The constructor's class.
+    pub class_id: u32,
+    pub slot: u32,
+    pub value: RunValue,
+    /// The run this store continues, taken from the body.
+    pub run_in: Option<FamilyRun>,
+}
+
+/// The run plan of `this.<property> = value` in the innermost constructor
+/// body being lowered, when `property` is a constructor key of the body's
+/// class family stored after its unchecked initialization
+/// (`FamilyLayout::init_count`) at a position and slot every family
+/// descending from the class agrees on. Takes the body's run; a bind value
+/// arms the body's bind watch ([`note_bind_receiver`]).
+pub(crate) fn family_run_plan(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    value: &Expr,
+) -> Option<RunPlan> {
+    if ctx.inline_ctor_return.is_empty() || !family_stores_enabled(ctx) {
+        return None;
+    }
+    let class_name = ctx.class_stack.last()?.clone();
+    let class_id = *ctx.class_ids.get(&class_name)?;
+    let fams = &ctx.program_layouts.families;
+    let own = fams.get(&class_id)?;
+    let pos = own.keys.iter().position(|(k, _)| k == property)?;
+    if pos >= own.own_count as usize {
+        return None;
+    }
+    let order_known = pos < own.init_count as usize;
+    let keys: Vec<&str> = own.keys[..own.own_count as usize]
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect();
+    let value = run_value(value, &keys);
+    let descends = |mut c: u32| {
+        for _ in 0..64 {
+            if c == class_id {
+                return true;
+            }
+            match fams.get(&c) {
+                Some(f) if f.parent_class_id != 0 => c = f.parent_class_id,
+                _ => return false,
+            }
+        }
+        false
+    };
+    // Every family layout descending from the class holds the key at the
+    // same position and slot: the run's check proves the receiver one of
+    // them, so each store of the run needs no receiver test of its own.
+    let slot = own.keys[pos].1;
+    for f in fams.values() {
+        if !descends(f.class_id) {
+            continue;
+        }
+        if f.keys.get(pos).map(|(k, s)| (k.as_str(), *s)) != Some((property, slot))
+            || f.variants
+                .iter()
+                .any(|v| v.keys.get(pos).map(|(k, s)| (k.as_str(), *s)) != Some((property, slot)))
+        {
+            crate::expr::note_site("case2c-run-disagree");
+            return None;
+        }
+    }
+    let body = ctx.inline_ctor_return.last_mut()?;
+    let run_in = body.family_run.take();
+    body.bind_watch = (value == RunValue::Bind && run_in.is_some()).then_some(None);
+    Some(RunPlan {
+        pos: pos as u32,
+        order_known,
+        class_id,
+        slot,
+        value,
+        run_in,
+    })
+}
+
+/// A `bind` method call's receiver `recv_box` (lowered and rooted) in a
+/// constructor body whose run store armed the watch ([`family_run_plan`]):
+/// the watch takes `perry_bind_is_builtin(recv)` (an `i1`), tested before
+/// the call, which itself makes the same test.
+pub(crate) fn note_bind_receiver(ctx: &mut FnCtx<'_>, recv_box: &str) {
+    if !matches!(
+        ctx.inline_ctor_return.last().map(|b| &b.bind_watch),
+        Some(Some(None))
+    ) {
+        return;
+    }
+    let r = ctx.block().call(
+        crate::types::I32,
+        "perry_bind_is_builtin",
+        &[(DOUBLE, recv_box)],
+    );
+    let b = ctx.block().icmp_ne(crate::types::I32, &r, "0");
+    if let Some(body) = ctx.inline_ctor_return.last_mut() {
+        body.bind_watch = Some(Some(b));
+    }
+}
+
+/// The run arm of a planned store, emitted after its value: the run it
+/// continues when the value runs no user code and the store writes a later
+/// key position than the run's last plain store, else a fresh check. Returns
+/// the arm (`None`: the store takes the site alone, the run continuing) and
+/// records the run that follows the store in the body.
+pub(crate) fn family_run_arm(
+    ctx: &mut FnCtx<'_>,
+    plan: RunPlan,
+    this_bits: &str,
+    property: &str,
+) -> Option<RunArm> {
+    let watched = ctx
+        .inline_ctor_return
+        .last_mut()
+        .and_then(|b| b.bind_watch.take())
+        .flatten();
+    let carried = match (plan.value, &plan.run_in) {
+        (RunValue::Free, Some(r)) => Some(r.clone()),
+        (RunValue::Bind, Some(r)) => watched.map(|b| FamilyRun {
+            ok: ctx.block().and(crate::types::I1, &r.ok, &b),
+            last_pos: r.last_pos,
+        }),
+        _ => None,
+    };
+    let (run, arm) = match carried {
+        // A key the run already passed: the site stores it (an overwrite,
+        // or an out-of-order add the store probe orders), the run goes on.
+        Some(r) if plan.pos <= r.last_pos => (r, false),
+        Some(r) => (
+            FamilyRun {
+                ok: r.ok,
+                last_pos: plan.pos,
+            },
+            true,
+        ),
+        None => {
+            crate::expr::note_site("case2c-run-check");
+            let (dir, _key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
+            let c = ctx.block().call(
+                crate::types::I32,
+                "perry_family_run_admits",
+                &[
+                    (crate::types::PTR, &dir),
+                    (I64, this_bits),
+                    (I64, &hash),
+                    (crate::types::I32, &plan.pos.to_string()),
+                    (crate::types::I32, if plan.order_known { "1" } else { "0" }),
+                    (crate::types::I32, &plan.class_id.to_string()),
+                ],
+            );
+            let ok = ctx.block().icmp_ne(crate::types::I32, &c, "0");
+            (
+                FamilyRun {
+                    ok,
+                    last_pos: plan.pos,
+                },
+                true,
+            )
+        }
+    };
+    let out = arm.then(|| RunArm {
+        ok: run.ok.clone(),
+        slot: plan.slot,
+    });
+    if let Some(body) = ctx.inline_ctor_return.last_mut() {
+        body.family_run = Some(run);
+    }
+    out
+}
+
+/// Object model step 2c (A): a constructor key's store through `this` in a
+/// run of the constructor's family stores ([`family_run_arm`]) is a plain
+/// slot store when the run's check holds, the receiver is at one of the
+/// family layouts of the constructor's class or of a family descendant
+/// (their class ids, and a static layout word without the shadow bit: no
+/// overflow orders it) and the key's slot still holds the hole its birth
+/// (`perry_alloc_layout`) wrote. The check proved the add plain (nothing on
+/// the chain intercepts a family key) and in order (no later key present),
+/// and the run's stores go in key order with no user code between them.
+/// Every other case is the site below. The returned arm is joined by
+/// [`finish_store`].
+pub(crate) fn begin_family_init_store(
+    ctx: &mut FnCtx<'_>,
+    receiver_bits: &str,
+    value_double: &str,
+    value_bits: &str,
+    value_is_scalar: bool,
+    run: Option<&RunArm>,
+) -> Option<LayoutStore> {
+    let arm = run?;
+    let slot = arm.slot;
+    crate::expr::note_site("case2c-run");
+    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let gate_idx = ctx.new_block("l2i.gate");
+    let word_idx = ctx.new_block("l2i.word");
+    let load_idx = ctx.new_block("l2i.load");
+    let hit_idx = ctx.new_block("l2i.hit");
+    let miss_idx = ctx.new_block("l2i.miss");
+    let merge_idx = ctx.new_block("l2i.merge");
+    let word_label = ctx.block_label(word_idx);
+    let load_label = ctx.block_label(load_idx);
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+
+    // A run's store: its run's one check holds, else the site below.
+    let gate_label = ctx.block_label(gate_idx);
+    ctx.block().cond_br(&arm.ok, &gate_label, &miss_label);
+    ctx.current_block = gate_idx;
+    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), receiver_bits);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
+
+    ctx.current_block = word_idx;
+    // The run's check proved the receiver a family object of the class (or
+    // a descendant), whose layouts all hold the key at `slot`; its word still
+    // carries no shadow bit (a store of the run that took the site below may
+    // have given it an overflow, which orders its keys from then on).
+    let blk = ctx.block();
+    let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+    let word = blk.load(I32, &word_ptr);
+    let base = crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
+    let rel = blk.sub(I32, &word, &(base as i32).to_string());
+    let in_band = blk.icmp_ult(
+        I32,
+        &rel,
+        &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
+    );
+    blk.cond_br(&in_band, &load_label, &miss_label);
+
+    ctx.current_block = load_idx;
+    let blk = ctx.block();
+    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
+        blk,
+        &recv.biased,
+        (header + 8 * slot as u64) as i64,
+    );
+    let current = blk.load(I64, &slot_ptr);
+    let hole = blk.icmp_eq(I64, &current, TAG_HOLE_I64);
+    blk.cond_br(&hole, &hit_label, &miss_label);
+
+    ctx.current_block = hit_idx;
+    // GC_STORE_AUDIT(BARRIERED): the bookkeeping below classifies the stored
+    // bits exactly as the store site's hit does.
+    ctx.block().store(DOUBLE, value_double, &slot_ptr);
+    if !value_is_scalar {
+        let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &recv.biased);
+        crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
+            ctx,
+            &handle,
+            &slot_ptr,
+            value_double,
+            value_bits,
+            "l2i",
+        );
+    }
+    let hit_end = ctx.block_label(ctx.current_block);
+    let merge_label = ctx.block_label(merge_idx);
     ctx.block().br(&merge_label);
     ctx.current_block = miss_idx;
     Some(LayoutStore {

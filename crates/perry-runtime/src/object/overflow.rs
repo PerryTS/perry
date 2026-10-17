@@ -246,6 +246,7 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
     if !existing.is_null() {
         return existing;
     }
+    super::layout_desc::diag_note_install(obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
     super::object_meta_ensure(obj);
@@ -263,6 +264,18 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
         let shape = super::shapes::object_shape_descriptor(obj).unwrap();
         let keys = ObjectKeys::new(shape.keys as usize as *mut ArrayHeader, count);
         let fixed = if i < count { keys.storage_slot(i) } else { i };
+        // A key whose slot holds the hole (an optional key not written, a
+        // tombstone) is a tombstoned entry: no atom, no barrier, no index.
+        if i < count && slot_holds_hole(obj, fixed, shape.live_inline_slot_count) {
+            let attrs = super::key_attrs::keys_entry(shape.keys as usize as *const ArrayHeader, i);
+            let t = rooted.get_raw_mut_ptr::<Table>();
+            *key_at(t, i) = TAG_HOLE;
+            *value_at(t, i) = crate::value::INT32_TAG | fixed as u64;
+            *attrs_at(t, i) = attrs as u64 | SLOT_REF;
+            (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
+            (*t).length = i + 1;
+            continue;
+        }
         let key = if i < count {
             let value = if fixed < shape.live_inline_slot_count {
                 super::field_get_set::object_field_at_with_live(
@@ -314,6 +327,18 @@ pub(crate) unsafe fn ensure(obj: *mut ObjectHeader) -> *mut Table {
     }
     install(owner.get_raw_mut_ptr::<ObjectHeader>(), t);
     t
+}
+
+/// Does storage slot `fixed` of `obj` (live inline slots `live`) hold the
+/// hole?
+#[inline]
+unsafe fn slot_holds_hole(obj: *const ObjectHeader, fixed: u32, live: u32) -> bool {
+    if fixed < live {
+        super::field_get_set::object_field_at_with_live(obj, fixed, live).bits() == TAG_HOLE
+    } else {
+        super::spill::spill_get_present(obj as usize, fixed as usize).unwrap_or(TAG_HOLE)
+            == TAG_HOLE
+    }
 }
 
 unsafe fn reserve(obj: *mut ObjectHeader) -> *mut Table {
@@ -537,6 +562,39 @@ pub(crate) unsafe fn reattach_fixed(obj: *mut ObjectHeader, key: u64) {
     *attrs_at(t, entry) |= SLOT_REF;
 }
 
+/// Is entry `i` a plain writable data property holding its own value (not
+/// a fixed-slot reference, an accessor or a private name)?
+pub(crate) unsafe fn plain_writable_value(t: *const Table, i: u32) -> bool {
+    let attrs = *attrs_at(t, i);
+    attrs & SLOT_REF == 0
+        && *key_at(t, i) != TAG_HOLE
+        && super::key_attrs::entry_is_plain_writable_data(attrs as u8)
+}
+
+/// Case 2c (`layout_desc::route_family_add`): a static family object, whose
+/// layout word never changes, gains `key` (a string or a symbol) that its
+/// layout does not hold. The overflow is installed (it orders the object from
+/// now on) and the key's entry references fixed slot `slot`, past the layout's
+/// slots, where the caller's add stores the value.
+pub(crate) unsafe fn append_fixed_ref(obj: *mut ObjectHeader, key: u64, slot: u32) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_mut_ptr(obj);
+    let key = if crate::JSValue::from_bits(key).is_any_string() {
+        crate::string::property_atom_from_value(key)
+    } else {
+        key
+    };
+    let entry = insert_key_bits(
+        owner.get_raw_mut_ptr::<ObjectHeader>(),
+        key,
+        crate::value::TAG_UNDEFINED,
+        0,
+    );
+    let t = table(owner.get_raw_mut_ptr::<ObjectHeader>());
+    *value_at(t, entry) = crate::value::INT32_TAG | slot as u64;
+    *attrs_at(t, entry) |= SLOT_REF;
+}
+
 /// A table key's positional field is its value or its fixed-slot reference.
 pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) -> bool {
     let t = table(obj);
@@ -578,6 +636,13 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                 {
                     return false;
                 }
+                super::layout_desc::note_install_cause(
+                    if super::key_view::own_key_bytes_is_hole(obj, key) {
+                        super::layout_desc::install_cause::DELETE_HOLE
+                    } else {
+                        super::layout_desc::install_cause::DELETE
+                    },
+                );
                 ensure(obj);
             }
         }

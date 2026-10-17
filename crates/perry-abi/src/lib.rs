@@ -782,203 +782,19 @@ pub const JS_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 1 + 4] = [
     // receiver): a plain call.
     "js_closure_v8_callback",
 ];
-/// `object::method_site::MethodEntry` — the words the emitted method-call site
-/// reads (`perry-codegen/src/expr/method_site.rs`).
-pub const METHOD_SITE_WORD_OFFSET: usize = 0;
-pub const METHOD_SITE_SLOT_OFFSET: usize = 8;
-/// The memoized body's `JsFunctionInfo` (identity: a closure hits when its
-/// info word equals this).
-pub const METHOD_SITE_INFO_OFFSET: usize = 16;
-pub const METHOD_SITE_CLOSURE_OFFSET: usize = 24;
-pub const METHOD_SITE_GEN_OFFSET: usize = 32;
-/// The memoized body's code address, the hit's call target.
-pub const METHOD_SITE_CODE_OFFSET: usize = 40;
-/// Entries per method site, and one entry's size.
-pub const METHOD_SITE_WAYS: usize = 2;
-pub const METHOD_SITE_ENTRY_SIZE: usize = 48;
 
-/// `object::method_site::read_holder` — the property-read cache words
-/// (`PicCache`) holding the read site's holder entry, which the emitted read
-/// tower checks where the MRU word and the ways miss
-/// (`perry-codegen/src/expr/property_get/generic_dispatch.rs`).
-pub const PIC_HOLDER_RECV_WORD: usize = 12;
-pub const PIC_HOLDER_OBJ_WORD: usize = 13;
-pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
-pub const PIC_HOLDER_KIND_WORD: usize = 15;
-/// A class-accessor entry (#10498): its kind word carries
-/// [`PIC_HOLDER_ACCESSOR_BIT`] over the holder's slot word (low 32 bits);
-/// [`PIC_HOLDER_PAIR_WORD`] holds the raw address of the accessor pair that
-/// slot held when the site primed (a strong root the collector rewrites), and
-/// [`PIC_HOLDER_GETTER_WORD`] the code the hit calls for the getter that pair
-/// names, as `double get(double this, i64 pair)` (0 when only the collecting
-/// slow call answers the entry: a setter-only pair or a deep chain):
-/// a compiled class getter, which declares `this` only (the pair is
-/// over-applied), or the runtime's closure-getter entry, which calls the
-/// function object in the pair's getter element through the closure ABI. A
-/// hit is the receiver token, the holder's ShapeId and the slot's value equal
-/// to the pair: then the getter is called with the receiver as `this`.
-pub const PIC_HOLDER_ACCESSOR_BIT: i64 = 1 << 61;
-pub const PIC_HOLDER_PAIR_WORD: usize = 16;
-pub const PIC_HOLDER_GETTER_WORD: usize = 19;
-/// A holder slot word (the low 32 bits of an entry's kind) with this bit set
-/// names a position in the holder's SPILL storage, not an inline slot. The
-/// emitted accessor arm uses the same receiver/holder/pair proof for either
-/// storage location; spill positions are live while the holder ShapeId matches.
-pub const PIC_HOLDER_SLOT_SPILL_BIT: i64 = 1 << 31;
-
-/// `proxy::put_value::setter_site` (#10498): the word of a static-key store
-/// site's ways cache that names the site's compiled-setter entry, as
-/// [`SETTER_SITE_TAG`] over the entry's address ([`SETTER_SITE_ADDRESS_MASK`]).
-/// The entry is a `#[repr(C)]` record the emitted store tower reads
-/// (`perry-codegen/src/expr/put_value_store_ic/setter_arm.rs`): the receiver
-/// ShapeId and the holder ShapeId (u32 each), the holder's raw address, the
-/// holder's inline slot (u32), the raw address of the accessor pair that slot
-/// held at prime time, and the compiled setter it names
-/// (`double set(double this, double v)`).
-pub const PACKED_SET_SETTER_WORD: usize = 8;
-pub const SETTER_SITE_TAG: u64 = 0xA2C2_0000_0000_0000;
-pub const SETTER_SITE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-pub const SETTER_SITE_RECV_SHAPE_OFFSET: usize = 0;
-pub const SETTER_SITE_HOLDER_SHAPE_OFFSET: usize = 4;
-pub const SETTER_SITE_HOLDER_OFFSET: usize = 8;
-
-/// Byte offsets of the entry's pointer-sized fields and the u32 slot, for a
-/// target whose pointers are `ptr_bytes` wide (8 on LP64, 4 on ILP32 such as
-/// wasm32). The entry is `#[repr(C)]` with `usize` address fields, so the
-/// offsets after the two u32 ShapeIds follow the target's pointer width; the
-/// runtime asserts the `SETTER_SITE_*_OFFSET` constants (this crate's own
-/// target width) against `offset_of!`, and codegen asks for the width of the
-/// target it emits for.
-pub const fn setter_site_layout(ptr_bytes: usize) -> SetterSiteLayout {
-    let slot = SETTER_SITE_HOLDER_OFFSET + ptr_bytes;
-    let pair = (slot + 4).next_multiple_of(ptr_bytes);
-    SetterSiteLayout {
-        holder: SETTER_SITE_HOLDER_OFFSET,
-        slot,
-        pair,
-        code: pair + ptr_bytes,
-    }
-}
-
-/// See [`setter_site_layout`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SetterSiteLayout {
-    pub holder: usize,
-    pub slot: usize,
-    pub pair: usize,
-    pub code: usize,
-}
-
-const SETTER_SITE_NATIVE: SetterSiteLayout = setter_site_layout(core::mem::size_of::<usize>());
-pub const SETTER_SITE_SLOT_OFFSET: usize = SETTER_SITE_NATIVE.slot;
-pub const SETTER_SITE_PAIR_OFFSET: usize = SETTER_SITE_NATIVE.pair;
-pub const SETTER_SITE_CODE_OFFSET: usize = SETTER_SITE_NATIVE.code;
-const _: () = assert!(
-    setter_site_layout(8).slot == 16
-        && setter_site_layout(8).pair == 24
-        && setter_site_layout(8).code == 32
-        && setter_site_layout(4).slot == 12
-        && setter_site_layout(4).pair == 16
-        && setter_site_layout(4).code == 20
-);
-/// The site's holder state word, and its bit for a LATCHED site: one that
-/// refused, or whose non-own receivers took several shapes. Its misses ask the
-/// inherited-read hook, as a never-primed site's do.
-pub const PIC_HOLDER_STATE_WORD: usize = 20;
-pub const PIC_HOLDER_STATE_LATCHED: i64 = 2;
-/// The kind word of a depth-1 ABSENT entry: the answer is `undefined`.
-pub const PIC_HOLDER_ABSENT_DEPTH1: i64 = 1 << 62;
-/// Words in a property-read cache: MRU, way state, four ways, the holder entry.
-pub const PIC_CACHE_WORDS: usize = 21;
-/// A method site calls a body with its argument count padded by `undefined`
-/// up to this many extra arguments (never past 16), and admits bodies that
-/// declare up to that many parameters.
-pub const METHOD_SITE_ARG_PAD: usize = 3;
-pub const fn method_site_padded_argc(argc: usize) -> usize {
-    let padded = argc + METHOD_SITE_ARG_PAD;
-    if padded > 16 {
-        if argc > 16 {
-            argc
-        } else {
-            16
-        }
-    } else {
-        padded
-    }
-}
-/// First exotic shape. Method sites on this band compare only the ShapeId:
-/// the low payload word is exotic state (a function's capture count), not a
-/// class id. Ordinary receivers keep their existing shape/class word.
-pub const METHOD_SITE_SHAPE_ONLY_FROM: u32 = 0xB800_0000;
-/// The entry `slot` bit for an inherited entry (the direct holder's slot).
-/// Combined with [`METHOD_SITE_CONSTFN`] the holder's shape fixes the body.
-pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
-/// The entry `slot` bit for an own key in the receiver's spill buffer.
-pub const METHOD_SITE_SPILL: u64 = 1 << 62;
-/// The entry `slot` bit for an own key of a function-object receiver: an
-/// inline slot of the object at `ClosureHeader::props`.
-pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
-/// A method body using the native argument-list ABI (callee, this, args, argc).
-/// Composes with each storage kind; never with ConstFn.
-pub const METHOD_SITE_NATIVE_ARGS: u64 = 1 << 60;
-/// Method-entry info marker for current-value invocation. Function-info pointers
-/// are aligned, so this cannot match a live body (or a null info). It keeps the
-/// direct-body hit unchanged; only a failed body comparison checks this format.
-pub const METHOD_SITE_VALUE_INFO: u64 = 1;
-/// An own inline method whose ShapeId fixes one static body. The hit loads
-/// the receiver's current closure slot for captures, but needs no closure
-/// kind or info load after the shape compare.
-pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
-pub const METHOD_SITE_CHAIN: u64 = 1 << 58;
-/// Entry-owned shape proof ABI: native (address, shape word) pairs.
-pub const SHAPE_CHAIN_LEN_OFFSET: usize = 8;
-pub const SHAPE_CHAIN_HOP_BYTES: usize = 24;
-pub const ADD_CHAIN_REP_OFFSET: usize = 16;
-pub const METHOD_CHAIN_HOLDER_OFFSET: usize = 16;
-pub const METHOD_CHAIN_SLOT_OFFSET: usize = 24;
-/// Shared holder entry offsets for the 64-bit emitted own-symbol guard.
-pub const KEYED_HOLDER_TOKEN_OFFSET: usize = 32;
-pub const KEYED_HOLDER_KEY_OFFSET: usize = 40;
-pub const KEYED_HOLDER_ABSENT_OFFSET: usize = 52;
-
-/// The index bits of an entry's `slot` word (bit 60 is NativeArgs; bit 59 is ConstFn).
-pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 58) - 1;
-/// What `js_method_site_prepare` answers for a call whose method read nothing
-/// can observe: dispatch by name after the arguments (#11910). The array-hole
-/// marker, a bit pattern no JS value takes.
+/// What `js_method_lookup` / `js_method_prepare` answer for a call whose
+/// method read nothing can observe: dispatch by name after the arguments
+/// (#11910). The array-hole marker, a bit pattern no JS value takes.
 pub const METHOD_SITE_BY_NAME: u64 = 0x7FFC_0000_0000_0010;
-/// `js_method_site_prepare`'s by-name answer for a receiver no site entry
-/// describes (a primitive, a native cell): the call goes straight to the
-/// universal dispatcher. In the same never-a-value namespace;
+/// The by-name answer for a receiver whose methods the universal dispatcher
+/// answers (a primitive, a native cell). In the same never-a-value namespace;
 /// `bits | 2 == METHOD_SITE_BY_NAME_DIRECT` tests for either by-name answer.
 pub const METHOD_SITE_BY_NAME_DIRECT: u64 = 0x7FFC_0000_0000_0012;
 const _: () = assert!(METHOD_SITE_BY_NAME | 2 == METHOD_SITE_BY_NAME_DIRECT);
 /// `object::ObjectMeta::spill` (the object-owned overflow buffer).
 pub const OBJECT_META_SPILL_OFFSET: usize = 32;
 
-/// `proxy::put_value::packed_add::PackedSetSite` — the static-key store
-/// site (`@perry_ic_N_packed_set`) the emitted `o.k = v` reads
-/// (`perry-codegen/src/expr/put_value_store_ic.rs`): the existing-key word,
-/// the primary key-add memo `{shapes, guard}`, the runtime's add-way block,
-/// and the site's ConstFn body.
-pub const PACKED_SET_SITE_WORDS: usize = 5;
-/// The site's one ConstFn body: the `JsFunctionInfo` address every
-/// ConstFn-flagged entry of the site (existing-key word, existing-key way,
-/// add memo) names, 0 until the first is published. Written once, before
-/// the first flagged entry, and never changed: a flagged entry hits only for
-/// a closure of exactly this body.
-pub const PACKED_SET_CONSTFN_INFO_WORD: usize = 4;
-/// The existing-key word's (and way's) bit for a slot whose lane is ConstFn
-/// in the word's ShapeId: the emitted hit stores only a closure of the site's
-/// body. Bit 63 is the `F64` lane bit; the slot index is below bit 62.
-pub const PACKED_SET_CONSTFN_SLOT: u64 = 1 << 62;
-/// The key-add guard's bit for a successor whose lane at the slot is
-/// ConstFn (the slot field is the guard's low 16 bits; bit 15 is the `F64`
-/// lane bit, the index is below bit 14).
-pub const PACKED_ADD_CONSTFN_SLOT: u64 = 1 << 14;
-/// Both otherwise exclusive value flags: an Any target with typed prefix
-/// lanes. Validate its representation, but impose no value restriction.
-pub const PACKED_ADD_REP_ONLY_SLOT: u64 = (1 << 15) | PACKED_ADD_CONSTFN_SLOT;
 /// `closure::CAPTURES_THIS_FLAG` / `closure::NO_THIS_REBIND_FLAG`, the high
 /// bits of `ClosureHeader::capture_count`. A closure with the first and not
 /// the second is a rebindable `this` clone, which never satisfies a ConstFn
@@ -1061,13 +877,13 @@ pub const NANBOX_OPERANDS: [u64; 26] = [
     0x7FFC_0000_0000_0004,                    // TAG_TRUE
     (0x7FFD_0000_0000_0000 + RECEIVER_HANDLE_FLOOR as u64).wrapping_neg(), // -(POINTER_TAG + floor)
     0xFFFF_FFFF_0000_0000,                    // the ShapeId half of an object's header word
-    !METHOD_SITE_NATIVE_ARGS,
-    METHOD_SITE_SPILL,     // bit 62, also the token bit of a static ShapeId operand
+    !(1 << 60),
+    1 << 62,               // bit 62, the token bit of a static ShapeId operand
     0xFFFD_0000_0000_0000, // collapses POINTER_TAG and STRING_TAG
     0x7FFE_0000_0000_0000, // INT32_TAG
     (1 << 48) - 4096,      // masks a 48-bit address down to its page
-    ((METHOD_SITE_SHAPE_ONLY_FROM as u64) << 32) - 1, // below the exotic ShapeId band
-    METHOD_SITE_FUNCTION_BAG,
+    (0xB800_0000_u64 << 32) - 1, // below the exotic ShapeId band
+    1 << 61,
     0x7FFA_0000_0000_0000, // BIGINT_TAG
     0x7FFC_0000_0000_0011, // TAG_TDZ
     0x7FFC_0000_0000_0003, // TAG_FALSE

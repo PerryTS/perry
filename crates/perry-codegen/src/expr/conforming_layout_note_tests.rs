@@ -255,33 +255,3 @@ fn store_module(property: &str, value: Expr) -> Module {
 fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
-
-/// A pointer-valued store into a declared pointer slot must retain the
-/// barrier while emitting no object layout note.
-#[test]
-fn pointer_slot_store_keeps_barrier_without_layout_note() {
-    let ir = emit(&store_module("next", Expr::LocalGet(B_ID)));
-    assert!(
-        !ir.contains(NOTE_CALL),
-        "object store emitted a layout note:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.pic.barrier"),
-        "pointer store lost its barrier arm:\n{ir}"
-    );
-}
-
-/// A class field whose declared type is scalar can still receive a heap
-/// pointer through dynamic JS. The emitted barrier must survive that case too.
-#[test]
-fn dynamically_pointer_valued_scalar_slot_keeps_barrier_without_layout_note() {
-    let ir = emit(&store_module("flag", Expr::LocalGet(B_ID)));
-    assert!(
-        !ir.contains(NOTE_CALL),
-        "object store emitted a layout note:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.pic.barrier"),
-        "dynamic pointer store lost its barrier arm:\n{ir}"
-    );
-}

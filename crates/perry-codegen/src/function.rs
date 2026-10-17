@@ -111,10 +111,6 @@ pub struct LlFunction {
     /// function-wide, then appends `"  %r<N> = alloca <ty>"` to this list.
     /// `to_ir()` prepends the list to entry-block instructions in order.
     entry_allocas: Vec<String>,
-    /// The `i64` the split method sites' lookup writes its code address
-    /// into (`expr/method_site.rs`), allocated once per function: each site
-    /// loads it right after the call.
-    method_site_code_slot: Option<String>,
     /// The function's one buffer of staged `double` values (register, the
     /// largest count requested). See [`LlFunction::acquire_staging_values`].
     staging_values: Option<(String, usize)>,
@@ -313,7 +309,6 @@ impl LlFunction {
             reg_counter: Rc::new(RegCounter::new()),
             fp_flags,
             entry_allocas: Vec::new(),
-            method_site_code_slot: None,
             staging_values: None,
             staging_values_held: false,
             entry_post_init_setup: Vec::new(),
@@ -529,18 +524,6 @@ impl LlFunction {
     /// Number of active EH scopes (handlers and action scopes).
     pub fn eh_scope_depth(&self) -> usize {
         self.reg_counter.eh_scope_depth()
-    }
-
-    /// The function's one `i64` slot for a split method site's code address
-    /// (`expr/method_site.rs`). Sites share it: each loads it right after the
-    /// lookup that wrote it.
-    pub fn method_site_code_slot(&mut self) -> String {
-        if let Some(slot) = &self.method_site_code_slot {
-            return slot.clone();
-        }
-        let slot = self.alloca_entry(crate::types::I64);
-        self.method_site_code_slot = Some(slot.clone());
-        slot
     }
 
     /// The function's one entry-block buffer of at least `count` doubles, for

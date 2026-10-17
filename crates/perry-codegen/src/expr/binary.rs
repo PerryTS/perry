@@ -1425,13 +1425,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let materialization_hazard =
                     add_operands_have_pod_materialization_hazard(ctx, left, right);
                 if !(both_numeric || boolean_numeric_add) || materialization_hazard {
-                    // Step 4b stage 1 (#10884): a run of reads of one receiver
-                    // inside this tree is guarded ONCE, and its leaves are
-                    // verified primitive before any addition — which is what
-                    // licenses the fold #10904 had to decline.
-                    if !materialization_hazard {
+                    // Inside a loop region's F-body the region's facts serve
+                    // a run of reads of its receiver (`stmt/region_loop`).
+                    if !materialization_hazard && !ctx.region_loop_facts.is_empty() {
                         if let Some(value) =
-                            super::region_read_run::try_lower_region_add_tree(ctx, expr)?
+                            crate::stmt::region_loop::try_lower_fact_add_tree(ctx, expr)?
                         {
                             return Ok(value);
                         }

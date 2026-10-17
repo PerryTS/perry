@@ -1673,6 +1673,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     result_slot: parent_result_slot,
                     after_label: parent_after_label.clone(),
                     is_derived: parent_is_derived,
+                    family_run: None,
+                    bind_watch: None,
                 });
                 ctx.class_stack.push(effective_parent_name.clone());
                 if parent_is_derived {

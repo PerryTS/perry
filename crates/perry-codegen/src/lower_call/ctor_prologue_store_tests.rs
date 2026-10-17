@@ -201,8 +201,12 @@ fn an_outlined_pointer_bearing_shape_keeps_its_write_barrier() {
     module.classes[0].alloc_width_hint = 4096;
     let ir = emit(&module);
     assert!(ir.contains("call i64 @js_object_alloc_class_inline_keys_stamped("));
-    assert!(ir.contains("call void @js_write_barrier_slot"));
-    assert!(ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"));
+    // The constructor's pointer stores are barriered: inline, or inside the
+    // store probe's runtime funnel (`perry_probe_set`, then `[[Set]]`).
+    assert!(
+        ir.contains("call void @js_write_barrier_slot") || ir.contains("call i32 @perry_probe_set("),
+        "{ir}"
+    );
 }
 
 /// Five boxed slots exceed the compact image budget. Their complete prologue
@@ -233,6 +237,10 @@ fn a_fresh_wide_prologue_needs_no_store_barrier() {
         !fast.contains("call ") && !fast.contains("barrier"),
         "{fast}"
     );
-    // The slow constructor still handles observations and ordinary stores.
-    assert!(ir.contains("call void @js_write_barrier_slot"));
+    // The slow constructor still handles observations and ordinary stores,
+    // barriered inline or by the store probe's runtime funnel.
+    assert!(
+        ir.contains("call void @js_write_barrier_slot") || ir.contains("call i32 @perry_probe_set("),
+        "{ir}"
+    );
 }

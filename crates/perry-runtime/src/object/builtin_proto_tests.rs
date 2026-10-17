@@ -176,7 +176,7 @@ fn a_replaced_prototype_method_is_called_on_a_function_receiver() {
 
         // The `Get` the redirect performs must answer with the replacement.
         let selected =
-            crate::object::method_site::spec_get_value(receiver.get_nanbox_f64(), b"toString");
+            crate::object::method_call::spec_get_value(receiver.get_nanbox_f64(), b"toString");
         assert_eq!(
             selected.to_bits(),
             replacement.get_nanbox_u64(),
@@ -211,7 +211,7 @@ fn a_detached_function_has_no_inherited_method_for_the_redirect() {
             f64::from_bits(crate::value::TAG_NULL),
         );
         assert_eq!(
-            crate::object::method_site::spec_get_value(receiver.get_nanbox_f64(), b"toString")
+            crate::object::method_call::spec_get_value(receiver.get_nanbox_f64(), b"toString")
                 .to_bits(),
             crate::value::TAG_UNDEFINED,
             "a detached function inherits no method"

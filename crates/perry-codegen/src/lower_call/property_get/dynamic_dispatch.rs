@@ -402,11 +402,10 @@ pub(crate) fn try_lower_instance_method_call(
                 crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
                 let lookup = crate::expr::method_site::emit_method_site_lookup_unless(
                     ctx,
+                    property,
                     &recv,
                     &method_id,
-                    args.len(),
                     &claimed,
-                    true,
                 );
                 let value = lookup.value.clone();
                 let any_arg_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
@@ -928,11 +927,10 @@ pub(crate) fn try_lower_instance_method_call(
                     crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
                     let lookup = crate::expr::method_site::emit_method_site_lookup_unless(
                         ctx,
+                        property,
                         &recv,
                         &method_id,
-                        args.len(),
                         &claimed,
-                        true,
                     );
                     let value = lookup.value.clone();
                     let value_root = roots.adopt_emitted(

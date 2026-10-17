@@ -701,7 +701,6 @@ pub(crate) unsafe fn publish_object_shape_holes(
     // survives a ShapeId change, and a stale one lets a cached slot for the
     // deleted key still be served. Every other transition publisher clears it;
     // this one and its stable-tombstone sibling did not.
-    crate::array::clear_array_subclass_named_prefix_token(obj);
     if let Some(id) = try_update_stable_tombstone_shape(
         obj,
         current.keys as usize as *mut super::ArrayHeader,
@@ -912,7 +911,6 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
     // cached slot for the deleted key still be served — the exact hole the
     // shape transition exists to close. Every other transition publisher
     // already clears it; the hole-delete publishes did not.
-    crate::array::clear_array_subclass_named_prefix_token(obj);
     // The key count comes from the SHAPE, which owns it: an O(1) hole delete
     // leaves the count untouched, and a keys array's header length is only
     // an upper bound on it (a canonical backing is as long as its longest

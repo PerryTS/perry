@@ -256,7 +256,7 @@ unsafe fn positional_assign_target_is_safe(
                 key_bytes,
             ) {
                 let entry = super::key_attrs::keys_entry(target_keys.arr(), pos as u32);
-                if !super::key_attrs::entry_is_plain_writable_data(entry) {
+                if !super::key_attrs::entry_is_plain_overwrite(entry) {
                     return false;
                 }
                 continue;

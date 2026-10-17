@@ -126,17 +126,6 @@ pub(crate) unsafe fn mint_kind(
     }
 }
 
-/// The store admission, from the shape alone: `S` is a shape a plain-data
-/// store may be served on. What every word publisher and every region that
-/// stores asks (charter step 3; the 4b lane's store regions pack with it).
-#[inline]
-pub(crate) fn shape_admits_plain_store(shape_id: u32) -> bool {
-    matches!(
-        super::shape_object_kind_by_id(shape_id),
-        Some(ShapeObjectKind::Ordinary | ShapeObjectKind::OrdinaryNativeAlias)
-    )
-}
-
 /// R6, the invariant: `obj`'s shape kind agrees with its per-object record.
 /// A receiver with no ordinary-family shape must not carry the proof.
 ///

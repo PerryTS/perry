@@ -19,7 +19,7 @@
 //! same read to this exit, so the two must produce the same element.
 
 use super::subclass::js_packed_arraylike_index_get;
-use super::{ArrayHeader, ArrayLikePicCache, ArrayLikePicCacheSlot, ARRAYLIKE_PIC_WORDS};
+use super::ArrayHeader;
 use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::object::ObjectHeader;
 use crate::typedarray::{
@@ -109,9 +109,7 @@ fn array_subclass(
 #[track_caller]
 fn assert_matches_generic(receiver: f64, index: f64, what: &str) {
     let expected = crate::value::js_dyn_index_get(receiver, index);
-    let mut cache: ArrayLikePicCache = [0; ARRAYLIKE_PIC_WORDS];
-    let mut slot: ArrayLikePicCacheSlot = &mut cache;
-    let actual = js_packed_arraylike_index_get(receiver, index, &mut slot);
+    let actual = js_packed_arraylike_index_get(receiver, index);
     assert_eq!(
         actual.to_bits(),
         expected.to_bits(),
@@ -131,7 +129,7 @@ fn the_exit_reads_every_element_kind_the_inline_arm_can_serve() {
         for index in 0..3u32 {
             let expected = js_typed_array_get(ta, index as i32);
             let actual =
-                js_packed_arraylike_index_get(receiver, f64::from(index), std::ptr::null_mut());
+                js_packed_arraylike_index_get(receiver, f64::from(index));
             assert_eq!(
                 actual.to_bits(),
                 expected.to_bits(),
@@ -139,7 +137,7 @@ fn the_exit_reads_every_element_kind_the_inline_arm_can_serve() {
             );
         }
         assert_eq!(
-            js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut()),
+            js_packed_arraylike_index_get(receiver, 1.0),
             7.0,
             "kind {kind}: the fixture value must survive the per-kind load"
         );
@@ -156,7 +154,7 @@ fn each_kind_reads_its_own_lane_width_not_a_neighbours() {
         let receiver = nanbox(ta as *const u8);
         for (index, expect) in [(0u32, 1.0), (1, 2.0), (2, 3.0)] {
             assert_eq!(
-                js_packed_arraylike_index_get(receiver, f64::from(index), std::ptr::null_mut()),
+                js_packed_arraylike_index_get(receiver, f64::from(index)),
                 expect,
                 "kind {kind}: element {index} must be read at its own lane offset"
             );
@@ -195,8 +193,8 @@ fn bigint_and_float16_kinds_are_not_served_as_numbers() {
         // pointers. What must hold is the TAG — the site's arm keeps the
         // `kind <= KIND_UINT8_CLAMPED` bound precisely because a BigInt lane
         // is not a Number, and the exit it defers to must produce the BigInt.
-        let through_exit = js_packed_arraylike_index_get(receiver, 0.0, std::ptr::null_mut());
-        let through_dispatcher = js_packed_arraylike_index_get(receiver, 0.0, std::ptr::null_mut());
+        let through_exit = js_packed_arraylike_index_get(receiver, 0.0);
+        let through_dispatcher = js_packed_arraylike_index_get(receiver, 0.0);
         for (value, via) in [(through_exit, "exit"), (through_dispatcher, "dispatcher")] {
             assert!(
                 crate::value::JSValue::from_bits(value.to_bits()).is_bigint(),
@@ -212,7 +210,7 @@ fn a_live_view_changes_the_route_and_not_the_element() {
     let _serialized = crate::array::test_serialize();
     let ta = typed(KIND_FLOAT64, &[1.5, 2.5]);
     let receiver = nanbox(ta as *const u8);
-    let direct = js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut());
+    let direct = js_packed_arraylike_index_get(receiver, 1.0);
     assert_eq!(direct, 2.5, "the exit must serve this receiver");
 
     let view = crate::buffer::store::new_view(
@@ -223,7 +221,7 @@ fn a_live_view_changes_the_route_and_not_the_element() {
         false,
     );
     let guarded =
-        js_packed_arraylike_index_get(nanbox(view.cast::<u8>()), 1.0, std::ptr::null_mut());
+        js_packed_arraylike_index_get(nanbox(view.cast::<u8>()), 1.0);
     assert_eq!(
         guarded, 2.5,
         "external storage must change the ROUTE, never the element"
@@ -249,50 +247,28 @@ fn ordinary_arrays_holes_and_lazy_json_arrays_match_the_generic_accessor() {
         assert_matches_generic(parsed, index, "a lazy JSON array");
     }
     assert_eq!(
-        js_packed_arraylike_index_get(parsed, 1.0, std::ptr::null_mut()),
+        js_packed_arraylike_index_get(parsed, 1.0),
         20.0,
         "the lazy tier must still produce the element, not undefined"
     );
 }
 
 #[test]
-fn an_array_subclass_read_primes_the_site_cache_and_matches_the_generic_accessor() {
+fn an_array_subclass_read_matches_the_generic_accessor() {
     let _representation = shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let obj = array_subclass(0x0074_86A1, 2, b"sset\0mask\0", 3);
     let receiver = nanbox(obj as *const u8);
 
-    // Two reads through two SEPARATE fresh caches: the words the exit
-    // publishes are a function of the receiver, not of what the site already
-    // held, which is what makes "cache decisions unchanged" checkable.
-    let mut first_cache: ArrayLikePicCache = [0; ARRAYLIKE_PIC_WORDS];
-    let mut first_slot: ArrayLikePicCacheSlot = &mut first_cache;
-    let mut second_cache: ArrayLikePicCache = [0; ARRAYLIKE_PIC_WORDS];
-    let mut second_slot: ArrayLikePicCacheSlot = &mut second_cache;
-    assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0, &mut first_slot),
-        11.0
-    );
-    assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0, &mut second_slot),
-        11.0
-    );
-    assert_ne!(
-        first_cache[0], 0,
-        "the fixture must actually prime a cache, or this test is vacuous"
-    );
-    assert_eq!(
-        first_cache, second_cache,
-        "miss + prime must publish the identical layout words every time"
-    );
+    assert_eq!(js_packed_arraylike_index_get(receiver, 0.0), 11.0);
     for index in [1.0, 2.0, 3.0] {
         assert_matches_generic(receiver, index, "a dense Array subclass");
     }
 }
 
 #[test]
-fn a_spilled_length_subclass_and_its_family_token_match_the_generic_accessor() {
+fn a_spilled_length_subclass_matches_the_generic_accessor() {
     let _representation = shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
@@ -303,23 +279,7 @@ fn a_spilled_length_subclass_and_its_family_token_match_the_generic_accessor() {
     let obj = array_subclass(0x0074_86A2, 4, b"a\0b\0c\0d\0", 4);
     let receiver = nanbox(obj as *const u8);
 
-    let mut cache: ArrayLikePicCache = [0; ARRAYLIKE_PIC_WORDS];
-    let mut slot: ArrayLikePicCacheSlot = &mut cache;
-    assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0, &mut slot),
-        11.0
-    );
-    assert_ne!(
-        cache[0], 0,
-        "the fixture must actually prime a cache, or this test is vacuous"
-    );
-    assert!(
-        cache[1] >= cache[4],
-        "this fixture must actually spill the length slot, or the spill arms are untested \
-         (length slot {}, inline bound {})",
-        cache[1],
-        cache[4]
-    );
+    assert_eq!(js_packed_arraylike_index_get(receiver, 0.0), 11.0);
     for index in [0.0, 1.0, 3.0, 4.0] {
         assert_matches_generic(receiver, index, "a spilled Array subclass");
     }
@@ -354,7 +314,7 @@ fn the_exit_returns_a_boxed_element_that_a_number_context_must_coerce() {
     arr = js_array_push_f64(arr, crate::value::js_nanbox_string(text as i64));
     let receiver = nanbox(arr as *const u8);
 
-    let raw = js_packed_arraylike_index_get(receiver, 0.0, std::ptr::null_mut());
+    let raw = js_packed_arraylike_index_get(receiver, 0.0);
     assert!(
         crate::value::JSValue::from_bits(raw.to_bits()).is_any_string(),
         "the exit must leave the element boxed"
@@ -362,9 +322,7 @@ fn the_exit_returns_a_boxed_element_that_a_number_context_must_coerce() {
     assert_eq!(
         crate::builtins::js_number_coerce(js_packed_arraylike_index_get(
             receiver,
-            0.0,
-            std::ptr::null_mut(),
-        )),
+            0.0)),
         12.0,
         "the site's number-context `js_number_coerce` must apply ToNumber"
     );
@@ -373,9 +331,7 @@ fn the_exit_returns_a_boxed_element_that_a_number_context_must_coerce() {
     assert!(
         crate::builtins::js_number_coerce(js_packed_arraylike_index_get(
             receiver,
-            9.0,
-            std::ptr::null_mut(),
-        ))
+            9.0))
         .is_nan(),
         "a coerced out-of-bounds read must be NaN, not the undefined box"
     );

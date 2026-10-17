@@ -214,8 +214,12 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
-    if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
-        return f64::from_bits(JSValue::bool(present).bits());
+    // The probe's presence mode (`layout_probe::probe_has`), else the
+    // complete operation.
+    match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
+        1 => return f64::from_bits(JSValue::bool(true).bits()),
+        0 => return f64::from_bits(JSValue::bool(false).bits()),
+        _ => {}
     }
     in_operator_generic(obj, key)
 }
@@ -232,8 +236,10 @@ pub(crate) fn in_operator_generic(obj: f64, key: f64) -> f64 {
 /// This implements the JavaScript 'in' operator: "key" in obj
 #[no_mangle]
 pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
-    if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
-        return f64::from_bits(JSValue::bool(present).bits());
+    match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
+        1 => return f64::from_bits(JSValue::bool(true).bits()),
+        0 => return f64::from_bits(JSValue::bool(false).bits()),
+        _ => {}
     }
     object_has_property_generic(obj, key)
 }
@@ -273,8 +279,12 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             let obj = f64::from_bits(obj_handle.get_nanbox_u64());
             // Coercion can replace the key and mutate/move the receiver.
             // Consume the resulting shape before the exotic dispatch walk.
-            if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
-                return f64::from_bits(JSValue::bool(present).bits());
+            match unsafe {
+                crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false)
+            } {
+                1 => return f64::from_bits(JSValue::bool(true).bits()),
+                0 => return f64::from_bits(JSValue::bool(false).bits()),
+                _ => {}
             }
             (obj, JSValue::from_bits(obj.to_bits()), key)
         }

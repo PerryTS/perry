@@ -208,8 +208,8 @@ pub fn closure_info_offset_bytes(_target_triple: &str) -> u64 {
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY
 /// object, mirroring `perry_runtime::object::INLINE_SLOT_FLOOR`.
 ///
-/// perry-codegen deliberately does not depend on perry-runtime (the same reason
-/// `PIC_CACHE_WORDS` is duplicated), so the pairing is held by
+/// perry-codegen deliberately does not depend on perry-runtime, so the
+/// pairing is held by
 /// `inline_slot_floor_matches_runtime` here and
 /// `inline_slot_floor_matches_codegen` in `perry-runtime/src/object/tests.rs`:
 /// change one and both fail.

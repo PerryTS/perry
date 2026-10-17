@@ -281,11 +281,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("js_closure_exact_func_guard", I64, &[DOUBLE, PTR]);
     module.declare_function(
-        "js_object_own_method_cache_miss",
-        I64,
-        &[DOUBLE, I32, I32, PTR, I64, PTR, PTR],
-    );
-    module.declare_function(
         "js_typed_feedback_object_set_unboxed_f64_field",
         VOID,
         &[I64, I64, I32, I64, DOUBLE],
@@ -408,7 +403,16 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // receiver payload minus the handle floor, key atom bits, atom hash).
     // A GC leaf; `TAG_HOLE` = declined.
     module.declare_function("perry_probe_get", DOUBLE, &[PTR, I64, I64, I64]);
+    // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
+    module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);
+    module.declare_function(
+        "perry_family_run_admits",
+        I32,
+        &[PTR, I64, I64, I32, I32, I32],
+    );
+    module.declare_function("perry_bind_is_builtin", I32, &[DOUBLE]);
     module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_probe_get_length", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_binding", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_keyed", DOUBLE, &[PTR, I64, I64]);
     // Object rest destructuring: copy all properties from src except excluded keys.
@@ -584,14 +588,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32],
     );
-    // #6812 (w12): outlined 3-way dynamic-key write IC (per-site cache ptr).
+    // A same-receiver dynamic-key store (`expr/proxy_reflect.rs`).
     module.declare_function(
-        "js_transition_ic_spill_append",
-        I32,
-        &[DOUBLE, I64, I32, DOUBLE],
+        "js_put_value_set_dynamic",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
     );
-    module.declare_function("perry_transition_cache_base", PTR, &[]);
-    module.declare_function("js_transition_ic_note_hit", VOID, &[]);
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables (where `use_local_exec_tls` turns this model into
     // local-exec); its slot-1 accessor, and the method-call site's miss entry
@@ -610,34 +612,25 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // pointer it compares, and the overflow arm's (`cold`) throw.
     module.declare_function("llvm.read_register.i64", I64, &["metadata"]);
     module.declare_function("js_stack_overflow", VOID, &[]);
+    // The method call (`expr/method_site.rs`, perry-runtime
+    // `object/method_call.rs`): the slow call, and #11910's split lookup and
+    // call halves.
     module.declare_function(
-        "js_method_site_miss",
+        "js_method_call_slow",
         DOUBLE,
-        &[PTR, I64, DOUBLE, I64, PTR, I64],
+        &[I64, DOUBLE, I64, I64, PTR, I64],
     );
-    module.declare_function("js_method_site_miss0", DOUBLE, &[PTR, I64, DOUBLE, I64]);
+    module.declare_function("js_method_lookup", DOUBLE, &[PTR, DOUBLE, I64, I64, I64]);
+    module.declare_function("js_bm_lookup", DOUBLE, &[PTR, DOUBLE, I64, I64, I64, I64]);
+    // A class method site's own-override check by the site's key atom
+    // (`object/layout_probe.rs`).
+    module.declare_function("perry_probe_own_method", DOUBLE, &[PTR, DOUBLE, I64, I64]);
+    module.declare_function("js_method_prepare", DOUBLE, &[DOUBLE, I64]);
     module.declare_function(
         "js_array_slice_method",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, I64],
     );
-    module.declare_function(
-        "js_method_site_miss1",
-        DOUBLE,
-        &[PTR, I64, DOUBLE, I64, DOUBLE],
-    );
-    module.declare_function(
-        "js_method_site_miss2",
-        DOUBLE,
-        &[PTR, I64, DOUBLE, I64, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_method_site_miss3",
-        DOUBLE,
-        &[PTR, I64, DOUBLE, I64, DOUBLE, DOUBLE, DOUBLE],
-    );
-    // #11910: the split site's lookup half and its call half's runtime path.
-    module.declare_function("js_method_site_prepare", DOUBLE, &[PTR, DOUBLE, I64, I64]);
     // Object model step 3: the prototype-constant contract witness
     // (`PERRY_CHECK_CONTRACTS` builds only).
     module.declare_function(
@@ -652,55 +645,19 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("js_proto_shadow_contract_check", VOID, &[I32, DOUBLE, I64]);
     module.declare_function(
-        "js_method_site_lookup",
+        "js_method_call_split",
         DOUBLE,
-        &[PTR, DOUBLE, I64, I64, PTR],
+        &[DOUBLE, I64, DOUBLE, I64, PTR, I64],
     );
     module.declare_function(
-        "js_method_site_call_split",
-        DOUBLE,
-        &[DOUBLE, PTR, I64, DOUBLE, I64, PTR, I64],
-    );
-    module.declare_function(
-        "js_method_site_call_value",
+        "js_method_call_value",
         DOUBLE,
         &[DOUBLE, DOUBLE, PTR, I64],
     );
     module.declare_function(
-        "js_method_site_call_value_apply",
+        "js_method_call_value_apply",
         DOUBLE,
         &[DOUBLE, DOUBLE, I64],
-    );
-    module.declare_function(
-        "js_put_value_set_dyn_ic",
-        DOUBLE,
-        &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
-    );
-    // The static-key store's one miss entry (`expr/put_value_store_ic.rs`):
-    // target, interned key, value, strict, the site's way-cache SLOT, and the
-    // site's compact `@..._packed_set` word (null in full-outline builds).
-    module.declare_function(
-        "js_put_value_set_packed_miss",
-        DOUBLE,
-        &[DOUBLE, I64, DOUBLE, I32, PTR, PTR],
-    );
-    // S2: the GC-leaf existing-key way store of a full-outline store site.
-    module.declare_function(
-        "js_put_value_set_packed_fast",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, PTR],
-    );
-    module.declare_function("js_property_rmw_fast", DOUBLE, &[DOUBLE, DOUBLE, I32, PTR]);
-    module.declare_function(
-        "js_property_rmw",
-        DOUBLE,
-        &[DOUBLE, I64, DOUBLE, I32, PTR, PTR],
-    );
-    // #9708: takes the site's cache SLOT plus the way index to prime.
-    module.declare_function(
-        "js_put_value_set_ic_miss",
-        DOUBLE,
-        &[DOUBLE, I64, DOUBLE, I32, PTR, I32],
     );
     module.declare_function(
         "js_object_array_numeric_write_guard",

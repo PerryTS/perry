@@ -19,6 +19,7 @@ fn emitted(target: &str, agent_strings_tls: bool) -> String {
         &HashMap::new(),
         &HashMap::<String, &perry_hir::Class>::new(),
         &[],
+        &crate::layout_families::ProgramLayouts::default(),
         &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),

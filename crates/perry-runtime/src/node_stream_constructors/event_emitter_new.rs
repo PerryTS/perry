@@ -44,14 +44,6 @@ pub fn event_emitter_prototype_value(export: &str) -> f64 {
     crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
 }
 
-thread_local! {
-    /// The site memo for a constructor's own `prototype` in its property
-    /// bag (`closure::props`): the bag words on which it is an own plain
-    /// data slot.
-    static BAG_PROTOTYPE_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
-        const { crate::object::method_site::own_slot_memo::OwnSlotMemo::new() };
-}
-
 /// The constructor's own `prototype` read from its property bag, where a
 /// function's own data properties live (`closure::props::bag_get`), through
 /// the bag's shape. A function's `prototype` is non-configurable, so no
@@ -80,31 +72,24 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
     // SAFETY: a live ordinary object; nothing below allocates.
     unsafe {
         const SPILL: u32 = 1 << 31;
-        let encoded = match BAG_PROTOTYPE_SLOT.with(|memo| memo.slot(bag)) {
-            Some(slot) => slot,
-            None => {
-                let meta = (*bag).meta;
-                if !meta.is_null() && (*meta).elements != 0 {
-                    return None;
-                }
-                let id = (*bag).shape_word();
-                if !crate::object::shapes::is_site_matchable_shape_id(id) {
-                    return None;
-                }
-                let record = crate::object::shapes::shape_record_by_id(id)?;
-                let pos = record.own_data_position_of_value(0, b"prototype")??;
-                let encoded = pos
-                    | if pos >= record.live_inline_slot_count() {
-                        SPILL
-                    } else {
-                        0
-                    };
-                BAG_PROTOTYPE_SLOT.with(|memo| memo.prime(bag, encoded));
-                encoded
+        let encoded = {
+            let meta = (*bag).meta;
+            if !meta.is_null() && (*meta).elements != 0 {
+                return None;
+            }
+            let id = (*bag).shape_word();
+            if !crate::object::shapes::is_site_matchable_shape_id(id) {
+                return None;
+            }
+            let record = crate::object::shapes::shape_record_by_id(id)?;
+            let pos = record.own_data_position_of_value(0, b"prototype")??;
+            pos | if pos >= record.live_inline_slot_count() {
+                SPILL
+            } else {
+                0
             }
         };
-        // The same site word records which canonical storage the shape
-        // assigns this slot, avoiding a shape-directory query on every hit.
+        // The shape assigns the slot's canonical storage.
         let slot = (encoded & !SPILL) as usize;
         let bits = if encoded & SPILL == 0 {
             let fields = (bag as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;

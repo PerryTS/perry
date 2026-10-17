@@ -596,7 +596,7 @@ unsafe fn apply_argument_list(
 /// intrinsics (as methods and as values) run once the argument list is in
 /// hand. The explicit receiver is bound and a `this`-capturing method rebound
 /// by the shared forwarder; the native construction aliases run first.
-unsafe fn call_function_with_explicit_this(object: f64, this_arg: f64, args: &[f64]) -> f64 {
+pub(crate) unsafe fn call_function_with_explicit_this(object: f64, this_arg: f64, args: &[f64]) -> f64 {
     let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
     // Constructor-export alias shims only recognize the native bound-method
     // representation. The callee's own body record decides this once, before

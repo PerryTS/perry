@@ -1066,11 +1066,11 @@ mod tests {
     /// `CannotCollect` SIGSEGVs S2's evacuating slow-path test.
     #[test]
     fn ic_fast_split_hits_are_leaf_and_their_continuations_collect() {
-        for name in ["js_put_value_set_packed_fast"] {
+        for name in ["perry_probe_set"] {
             assert_eq!(runtime_class(name), RuntimeClass::Leaf, "{name}");
             assert!(external_callee_cannot_collect(name), "{name}");
         }
-        for name in ["js_put_value_set_packed_miss"] {
+        for name in ["js_put_value_set"] {
             assert_eq!(
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,
@@ -1112,7 +1112,7 @@ mod tests {
             "js_box_get_bits_trusted_named",
             "js_value_length_f64",
             "js_value_length_property_f64",
-            "js_value_length_property_ic_f64",
+            "js_value_length_property_key_f64",
             "js_array_get_f64",
         ] {
             assert_ne!(

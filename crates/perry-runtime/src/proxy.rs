@@ -28,18 +28,8 @@ pub(crate) use has_delete::reflect_ordinary_delete_property_key;
 pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 mod put_value;
-pub(crate) use put_value::note_packed_add_carriers;
-pub(crate) use put_value::scan_packed_add_roots_mut;
-pub(crate) use put_value::scan_setter_site_roots_mut;
-pub use put_value::{js_proxy_set, js_put_value_set};
-pub(crate) use put_value::{
-    js_put_value_set_ic_miss, proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT,
-};
-#[cfg(any(test, feature = "regex-engine"))]
-pub(crate) use put_value::{js_put_value_set_packed_fast, store_and_prime, PackedSetWays};
-pub use put_value::{js_put_value_set_packed_miss, PackedSetSite, PACKED_SET_EMPTY};
-pub(crate) use put_value::{store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP};
-pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
+pub use put_value::{js_proxy_set, js_put_value_set, js_put_value_set_dynamic};
+pub(crate) use put_value::{proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT};
 mod json;
 pub(crate) mod metadata;
 mod own_keys;
@@ -1054,6 +1044,18 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     if small_handle_from_value(target).is_some() {
         return None;
     }
+    // Object model §3.2: an optional layout key whose slot holds the hole is
+    // absent (`key_view`), so the walk goes on to the prototype chain.
+    if target.to_bits() & !POINTER_MASK == POINTER_TAG
+        && unsafe {
+            crate::object::key_view::own_key_is_hole(
+                extract_pointer(target.to_bits()) as *const crate::ObjectHeader,
+                crate::JSValue::from_bits(key.to_bits()),
+            )
+        }
+    {
+        return None;
+    }
 
     // Ordinary prototype holders answer from their shape's key index. A
     // missing key is an indexed absence, not a byte scan of every builtin
@@ -1590,6 +1592,9 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
         }
     } else if crate::object::obj_value_no_extend(receiver) {
         return false;
+    } else if unsafe { crate::object::layout_desc::family_create(receiver, key, value) } {
+        // Case 2c: a family object's late key, or a key outside its layout.
+        return true;
     }
     target_set(receiver, key, value);
     true
@@ -2780,65 +2785,6 @@ mod tests {
                 "restoring the mark restores eligibility"
             );
         }
-    }
-
-    /// #8098: the same admission on the per-site static write PIC, which is the
-    /// path scattered `record.field = …` writes take (the whole-loop clone only
-    /// covers a constant-counted nest). A miss that refuses to prime leaves the
-    /// site on the runtime path forever.
-    #[test]
-    fn record_receivers_prime_the_static_write_pic() {
-        // Object model step 4: a JSON.parse record keeps its fields in its
-        // overflow and primes no site until step 5; this pins the admission
-        // on the same record built with fixed slots.
-        // The key is interned before anything mints an atom for its spelling
-        // (a JSON.parse or a canonical key list would): only an interned
-        // string is admitted as a write site's key.
-        let name: &[u8] = b"n8098";
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let key_ptr = crate::string::js_string_intern(key_ptr, fnv1a(name));
-        let plain_record = || {
-            let obj = crate::object::js_object_alloc_plain(0);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, 1.0);
-            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits())
-        };
-        let target = plain_record();
-        let object = (target.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-
-        let mut cache: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
-        let mut cache_slot: put_value::WritePicCacheSlot = &mut cache;
-        let stored =
-            put_value::js_put_value_set_ic_miss(target, key_ptr, 7.0, 0, &mut cache_slot, 0);
-        assert_eq!(stored, 7.0);
-        let expected_token = unsafe {
-            crate::object::shapes::PIC_ID_TOKEN_BIT
-                | crate::object::shapes::object_shape_id(object) as u64
-        };
-        assert_eq!(
-            cache[0] as u64, expected_token,
-            "a parsed receiver must prime the way with its own ShapeId token"
-        );
-        assert_eq!(cache[1], 0, "`n` is the receiver's first own slot");
-
-        // Discriminating half: an otherwise identical parsed receiver with the
-        // ordinary mark cleared must NOT prime.
-        let value = plain_record();
-        let unmarked = (value.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-        unsafe {
-            let header =
-                (unmarked as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            (*header)._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
-            crate::object::shapes::store_kind::restamp_object_store_kind(unmarked);
-        }
-        let mut cache2: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
-        let mut cache2_slot: put_value::WritePicCacheSlot = &mut cache2;
-        let stored =
-            put_value::js_put_value_set_ic_miss(value, key_ptr, 9.0, 0, &mut cache2_slot, 0);
-        assert_eq!(stored, 9.0, "the write itself still succeeds");
-        assert_eq!(
-            cache2[0], 0,
-            "an unmarked class-less receiver must stay on the miss path"
-        );
     }
 
     /// #7531: `create_list_from_array_like` backs `Reflect.apply(target,

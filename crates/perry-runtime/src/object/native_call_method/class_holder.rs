@@ -22,7 +22,6 @@
 //! for the caller's ordinary [[Get]] from that holder.
 
 use super::*;
-pub(crate) use crate::object::method_site::chain_memo::MemoRef;
 
 /// The name being called.
 #[derive(Clone, Copy)]
@@ -397,7 +396,6 @@ pub(super) unsafe fn try_class_holder_fast_dispatch(
     key: &MethodKey<'_>,
     args_ptr: *const f64,
     args_len: usize,
-    memo: MemoRef,
 ) -> Option<f64> {
     let name = key.bytes;
     let recv = class_receiver_guard(object, key)?;
@@ -418,56 +416,9 @@ pub(super) unsafe fn try_class_holder_fast_dispatch(
     if start.is_null() {
         return None;
     }
-    let ChainMethod::Data {
-        value,
-        body,
-        holder,
-        slot,
-    } = chain_method(start, key)
-    else {
+    let ChainMethod::Data { value, body, .. } = chain_method(start, key) else {
         return None;
     };
-    let (closure, info) = compiled_user_method(value, body)?;
-    if let Some(slot) = slot {
-        // The walk allocated nothing: the objects it read are where it read
-        // them.
-        crate::object::method_site::chain_memo::memo_record(
-            memo,
-            obj_addr as *const ObjectHeader,
-            start,
-            holder,
-            slot,
-            body,
-            name,
-        );
-    }
-    let _depth_guard = CallMethodDepthGuard::enter("")?;
-    Some(crate::closure::call_compiled_body_this(
-        closure,
-        info,
-        crate::closure::JsThis::from_f64(object),
-        args_ptr,
-        args_len,
-    ))
-}
-
-/// A repeat of a call [`try_class_holder_fast_dispatch`] answered at a call
-/// site with its own chain memo (`method_site::chain_memo`): the memo names
-/// the receiver's word, every hop's word and the holder's slot, and the slot
-/// holds a compiled function the fast call may enter. `None` otherwise.
-///
-/// # Safety
-/// `memo` is 0 or names a live memo slot; `args_ptr` holds `args_len` values.
-#[inline]
-pub(super) unsafe fn try_chain_memo_dispatch(
-    object: f64,
-    memo: MemoRef,
-    name: &[u8],
-    args_ptr: *const f64,
-    args_len: usize,
-) -> Option<f64> {
-    let (value, body) =
-        crate::object::method_site::chain_memo::memo_lookup_value(memo, object, name)?;
     let (closure, info) = compiled_user_method(value, body)?;
     let _depth_guard = CallMethodDepthGuard::enter("")?;
     Some(crate::closure::call_compiled_body_this(

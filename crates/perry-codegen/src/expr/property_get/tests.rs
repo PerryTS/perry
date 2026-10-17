@@ -269,7 +269,7 @@ fn guarded_length_read_emits_array_subclass_scalar_ic() {
         assert!(ir.contains(block), "missing {block} from length IC:\n{ir}");
     }
     assert!(
-        ir.contains("call double @js_value_length_property_key_ic_f64"),
+        ir.contains("call double @js_value_length_property_key_f64"),
         "the cold arm must prime the scalar cache while retaining property semantics:\n{ir}"
     );
     assert!(
@@ -306,7 +306,7 @@ fn typed_array_length_uses_property_semantics_after_define_property() {
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");
     assert!(
-        ir.contains("call double @js_value_length_property_key_ic_f64"),
+        ir.contains("call double @js_value_length_property_key_f64"),
         "a descriptor-capable module must not bypass an own typed-array length:\n{ir}"
     );
 }
@@ -333,7 +333,7 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
     assert!(
         ir.contains("load atomic i8, ptr @PERRY_TYPED_NAMED_PROPS_INVALIDATED acquire")
             && ir.contains("load i32")
-            && ir.contains("call double @js_value_length_property_key_ic_f64"),
+            && ir.contains("call double @js_value_length_property_key_f64"),
         "a native view should retain its guarded direct load and pooled fallback:\n{ir}"
     );
 }
@@ -1061,8 +1061,7 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
         ir.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED") && ir.contains("plen.byte_header"),
         "metadata overrides must withdraw the proof:\n{typed}"
     );
-    assert!(!ir.contains("call double @js_value_length_property_ic_f64"));
-    assert!(ir.contains("call double @js_value_length_property_key_ic_f64"));
+    assert!(ir.contains("call double @js_value_length_property_key_f64"));
 }
 
 #[path = "global_read_tests.rs"]

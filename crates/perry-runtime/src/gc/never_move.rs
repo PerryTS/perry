@@ -28,7 +28,7 @@
 //! bytes as pinned bytes, so defragmentation selection skips their pages
 //! instead of selecting a block it then has to decline.
 use super::types::{
-    GcHeader, GC_FLAG_FORWARDED, GC_HEADER_SIZE, GC_TYPE_OBJECT, OBJ_FLAG_MEMO_NAMED,
+    GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT, OBJ_FLAG_MEMO_NAMED,
     OBJ_FLAG_NEVER_MOVE,
 };
 
@@ -98,52 +98,6 @@ pub(crate) unsafe fn lives_old(addr: usize) -> bool {
         crate::arena::classify_heap_generation(addr),
         crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
     )
-}
-
-/// May a per-site memo store `addr` as a plain, unrooted word? True for a
-/// stable object: an ordinary `GC_TYPE_OBJECT`, not a forwarding stub,
-/// marked never-move, in an old-generation block. Asking marks it, so a young
-/// object refused here is promoted by the next minor and admitted after it.
-///
-/// # Safety
-/// `addr` is 0 or a heap address the caller read from a live object graph.
-pub(crate) unsafe fn stable_memo_referent(addr: usize) -> bool {
-    #[cfg(test)]
-    if test_admit::on() {
-        return true;
-    }
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return false;
-    };
-    if header.obj_type != GC_TYPE_OBJECT || header.gc_flags & GC_FLAG_FORWARDED != 0 {
-        return false;
-    }
-    request_never_move(addr);
-    #[cfg(test)]
-    if sabotage::admits_young() {
-        return true;
-    }
-    matches!(
-        crate::arena::classify_heap_generation(addr),
-        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
-    )
-}
-
-/// Flag a stable object a site memo just stored (set-only); see
-/// [`pin_displaced_memo_prototype`].
-///
-/// # Safety
-/// `addr` is 0 or a live heap address.
-pub(crate) unsafe fn note_memo_named(addr: usize) {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return;
-    };
-    if header.obj_type != GC_TYPE_OBJECT || header.gc_flags & GC_FLAG_FORWARDED != 0 {
-        return;
-    }
-    let header = (addr - GC_HEADER_SIZE) as *mut GcHeader;
-    // GC_STORE_AUDIT(POINTER_FREE): a scalar header classification bit.
-    (*header)._reserved |= OBJ_FLAG_MEMO_NAMED;
 }
 
 /// A relink displaced `addr` from its class identity. If a memo named it,

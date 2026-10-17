@@ -257,8 +257,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
                 return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_value_length_property_key_ic_f64",
-                    &[(DOUBLE, &recv), (PTR, "null"), (I64, &key_raw)],
+                    "js_value_length_property_key_f64",
+                    &[(DOUBLE, &recv), (I64, &key_raw)],
                 ));
             }
             let native_idx = ctx.new_block("named.native");
@@ -342,8 +342,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
             let slow_len = ctx.block().call(
                 DOUBLE,
-                "js_value_length_property_key_ic_f64",
-                &[(DOUBLE, &recv), (PTR, "null"), (I64, &key_raw)],
+                "js_value_length_property_key_f64",
+                &[(DOUBLE, &recv), (I64, &key_raw)],
             );
             let slow_end = ctx.block().label.clone();
             ctx.block().br(&done_label);

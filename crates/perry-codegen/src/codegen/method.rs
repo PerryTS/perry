@@ -748,7 +748,6 @@ pub(super) fn compile_method(
         i32_counter_slots: index_i32_param_slots,
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
-        transition_cache_base_slot: None,
         receiver_descriptors: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
@@ -785,7 +784,6 @@ pub(super) fn compile_method(
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
         short_spread_method_candidates: &cross_module.short_spread_method_candidates,
-        program_class_accessor_names: cross_module.program_class_accessor_names.as_deref(),
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -1572,6 +1570,8 @@ pub(super) fn compile_method(
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
                 || class.extends_expr.is_some(),
+            family_run: None,
+            bind_watch: None,
         };
         ctx.inline_ctor_return.push(target.clone());
         Some((target, after_idx))

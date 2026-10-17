@@ -129,7 +129,6 @@ mod proven_view_access;
 mod proven_view_guarded;
 mod range_facts;
 mod regex_literal;
-mod shape_chain;
 mod strings;
 mod typed_feedback;
 mod url_helpers;
@@ -266,8 +265,6 @@ mod scalar_slot_root;
 pub(crate) mod shadow_inline;
 #[cfg(test)]
 mod typed_element_tests;
-#[cfg(test)]
-mod write_pic_barrier_tests;
 // `pub(crate)` since #7615 slice 8: `rooting/temp_root.rs` binds a pooled
 // temp alloca through the same shadow-slot emission every named local uses,
 // and it now lives outside `crate::expr`.
@@ -337,6 +334,13 @@ pub(crate) struct InlineCtorReturn {
     /// `return`s a non-object, non-undefined value throws a TypeError; a base
     /// ctor silently ignores it and keeps `this`.
     pub is_derived: bool,
+    /// Object model step 2c: the body's run of family stores in flight
+    /// (`layout_read::family_run_plan`); every statement that is not a
+    /// `this.k = v` store ends it.
+    pub family_run: Option<crate::expr::layout_read::FamilyRun>,
+    /// A run store whose value is `this.k.bind(...)` arms this (`Some(None)`);
+    /// the bind call's lowering records its `perry_bind_is_builtin` test.
+    pub bind_watch: Option<Option<String>>,
 }
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
@@ -929,9 +933,6 @@ pub(crate) struct FnCtx<'a> {
     /// calls. See `CompileOptions::object_literal_method_candidates`.
     pub object_literal_method_candidates:
         &'a std::collections::HashMap<String, Vec<crate::ObjectLiteralMethodCandidate>>,
-    /// The whole program's class accessor names. See
-    /// `CompileOptions::program_class_accessor_names`.
-    pub program_class_accessor_names: Option<&'a crate::ClassAccessorNames>,
     /// FFI manifest: `name -> (params, return)` from `package.json`
     /// `nativeLibrary.functions`. Descriptors use the shared native-library
     /// ABI vocabulary. `lower_call` consults
@@ -1210,7 +1211,6 @@ pub(crate) struct FnCtx<'a> {
     /// so no conversion exists on either edge; the stale number left in the
     /// root slot during the clone is harmless to a GC scan.
     pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
-    pub transition_cache_base_slot: Option<String>,
     /// #9254 active materialised receiver descriptors. Entries carry
     /// poll-refreshed receiver addresses, cached scalar lengths and bounds,
     /// scoped packed/masked representation proofs, or non-moving native
@@ -2618,34 +2618,6 @@ pub(crate) fn inline_cache_global_definition(name: &str) -> String {
     format!("@{name} = private global ptr null")
 }
 
-/// A site's inline-cache slot, loaded in the current block (#9708).
-///
-/// `slot_ref` is the `@perry_ic_N` global — what the runtime miss entries
-/// take. `cache` is the `ptr` loaded from it and `present` the `i1` proving
-/// it non-null: a site must branch (or fold `present` into a guard that
-/// dominates) before it emits any load through `cache`, because the slot is
-/// null until the site's first priming miss.
-pub(crate) struct InlineCacheSlot {
-    pub slot_ref: String,
-    pub cache: String,
-    pub present: String,
-}
-
-/// Load `@<cache_name>`'s cache pointer in the current block and test it.
-/// The load has no dependency on the receiver, so it is free to issue early;
-/// folding `present` into the receiver guard the site already evaluates costs
-/// a single fused compare on the hit path.
-pub(crate) fn emit_inline_cache_slot(ctx: &mut FnCtx<'_>, cache_name: &str) -> InlineCacheSlot {
-    let slot_ref = format!("@{cache_name}");
-    let cache = ctx.block().load(PTR, &slot_ref);
-    let present = ctx.block().icmp_ne(PTR, &cache, "null");
-    InlineCacheSlot {
-        slot_ref,
-        cache,
-        present,
-    }
-}
-
 /// Record a cold-arm bailout for a compiler-private versioned-loop callback.
 /// The stack context is `[counter_slot_ptr, original_bound, resume_index]` as
 /// three i64 words. The first cold arm stores `counter + 1` and poisons the
@@ -2807,13 +2779,6 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
-    /// May some compiled class of the program declare a setter named `name`?
-    /// Where this is false a store site emits no class-setter arm.
-    pub(crate) fn program_may_declare_setter(&self, name: &str) -> bool {
-        self.program_class_accessor_names
-            .is_none_or(|names| names.may_set(name))
-    }
-
     /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
     /// the class CONSTRUCTOR (an INT32 class ref) rather than an instance?
     ///
@@ -3234,7 +3199,6 @@ mod closure;
 mod compare;
 pub(crate) use compare::ordinary_object_allocation;
 pub(crate) mod region_guard;
-pub(crate) mod region_read_run;
 pub(crate) use compare::lower_string_literal_strict_eq;
 #[cfg(test)]
 mod compare_tests;
@@ -3291,7 +3255,6 @@ mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
-mod property_rmw;
 mod typed_array_rmw;
 mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;

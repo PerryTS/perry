@@ -15,7 +15,7 @@ use crate::temp_root_coverage::{entry_opts, module_with_init};
 const DISPATCH: &str = "call double @js_typed_feedback_native_call_method_by_id(";
 /// The One Path method site's miss: universal dispatch behind the site
 /// (`expr/method_site.rs`), which a plain (non-builtin-named) call now takes.
-const SITE_MISS: &str = "call double @js_method_site_miss";
+const SITE_MISS: &str = "call double @js_method_call_slow";
 
 /// Does `ir` reach universal method dispatch, directly or behind a site?
 fn dispatches(ir: &str) -> bool {

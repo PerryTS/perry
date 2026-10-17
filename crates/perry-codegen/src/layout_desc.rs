@@ -18,6 +18,7 @@ pub(crate) mod create_families;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
+use crate::layout_families::{FamilyLayout as ClassFamilyLayout, ProgramLayouts};
 use perry_hir::{Expr, Module as HirModule, Stmt};
 
 use crate::module::LlModule;
@@ -25,7 +26,7 @@ use crate::strings::StringPool;
 
 /// `%PerryLayoutDesc`: family, variant, kind, integrity, slot_count,
 /// layout_id, rep, proto, keys, key_count, index_mask, index (56 bytes).
-pub const DESC_TY: &str = "{ i32, i16, i8, i8, i32, i32, i64, i64, ptr, i32, i32, ptr }";
+pub const DESC_TY: &str = "{ i32, i16, i8, i8, i32, i32, i64, i64, ptr, i32, i32, ptr, i32, i32 }";
 /// `%PerryLayoutKey`: atom, slot, attrs, pad (16 bytes).
 pub const KEY_TY: &str = "{ ptr, i32, i8, [3 x i8] }";
 /// `%StaticAtom`: hash, string, kind, pad, index (24 bytes; §6a).
@@ -114,6 +115,21 @@ pub(crate) fn family_add(class_name: &str, key: &str) -> Option<FamilyAdd> {
             .filter(|add| add.key == key)
             .cloned()
     })
+}
+
+thread_local! {
+    /// Case 2c: the class family descriptors this module's code allocates
+    /// from (`lower_call/new_alloc.rs`); [`emit_module_layouts`] declares the
+    /// ones another module defines.
+    static FAMILY_DESC_USES: RefCell<std::collections::BTreeSet<u32>> =
+        RefCell::new(std::collections::BTreeSet::new());
+}
+
+/// The descriptor global of class `class_id`'s family layout, noted as used
+/// by this module.
+pub(crate) fn note_family_desc_use(class_id: u32) -> String {
+    FAMILY_DESC_USES.with(|u| u.borrow_mut().insert(class_id));
+    format!("@perry_layout_class_{class_id}")
 }
 
 /// The i32 alias of a carried descriptor's `layout_id` word.
@@ -481,6 +497,56 @@ pub(crate) fn layouts_enabled(output_type: &str, target_triple: &str) -> bool {
         && std::env::var("PERRY_LAYOUT_DESCS").as_deref() != Ok("0")
 }
 
+/// One descriptor plus its keys and index tables. `keys` is the key sequence
+/// in enumeration order with each key's slot.
+#[allow(clippy::too_many_arguments)]
+fn emit_desc(
+    llmod: &mut LlModule,
+    sect: &str,
+    names: (&str, &str, &str),
+    family: u32,
+    keys: &[(String, String, u32)],
+    slot_count: u32,
+    class: (u32, u32),
+) {
+    let (keys_name, index_name, desc_name) = names;
+    let count = keys.len();
+    let cap = (count * 2).next_power_of_two().max(2);
+    let mut index = vec![u32::MAX; cap];
+    for (pos, (k, _, _)) in keys.iter().enumerate() {
+        let mut at = (fnv1a(k.as_bytes()) as usize) & (cap - 1);
+        while index[at] != u32::MAX {
+            at = (at + 1) & (cap - 1);
+        }
+        index[at] = pos as u32;
+    }
+    // Every key of a class family (case 2c) carries
+    // `perry_abi::LAYOUT_KEY_OPTIONAL` (0x80, as i8 -128): absent while its
+    // slot holds the hole. A birth writes no key; a store adds it.
+    let key_items: Vec<String> = keys
+        .iter()
+        .map(|(_, a, slot)| {
+            format!("{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 -128, [3 x i8] zeroinitializer }}")
+        })
+        .collect();
+    llmod.add_raw_global(format!(
+        "@{keys_name} = private unnamed_addr constant [{count} x {KEY_TY}] [{}], align 8",
+        key_items.join(", ")
+    ));
+    let index_items: Vec<String> = index.iter().map(|v| format!("i32 {}", *v as i32)).collect();
+    llmod.add_raw_global(format!(
+        "@{index_name} = private unnamed_addr constant [{cap} x i32] [{}], align 4",
+        index_items.join(", ")
+    ));
+    llmod.add_raw_global(format!(
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {} }}, section \"{sect}\", align 8",
+        if class.0 == 0 { 0 } else { LAYOUT_ID_CARRIED as i32 },
+        cap - 1,
+        class.0,
+        class.1
+    ));
+}
+
 /// Emit the module's layout descriptors (executables only: atoms point at
 /// image strings, which only executables carry). Returns how many.
 pub(crate) fn emit_module_layouts(
@@ -489,18 +555,18 @@ pub(crate) fn emit_module_layouts(
     hir: &HirModule,
     module_prefix: &str,
     output_type: &str,
-    colouring: &crate::layout_families::ProgramLayouts,
+    layouts: &ProgramLayouts,
     is_entry_module: bool,
 ) -> usize {
     if !layouts_enabled(output_type, &llmod.target_triple) {
         return 0;
     }
-    COLOURS.with(|c| *c.borrow_mut() = colouring.colored.clone());
+    COLOURS.with(|c| *c.borrow_mut() = layouts.colored.clone());
     let mut atoms: BTreeMap<String, String> = BTreeMap::new();
     // Step 5 (case 2c): the entry module carries an atom for every coloured
     // key, so the runtime learns every colour from the atom section.
     if is_entry_module {
-        for key in colouring.colored.keys() {
+        for key in layouts.colored.keys() {
             let _ = atom(llmod, strings, &mut atoms, key);
         }
     }
@@ -673,6 +739,106 @@ pub(crate) fn emit_module_layouts(
         );
         n += 1;
     }
+    // Case 2c: the family descriptors this module allocates from but another
+    // module defines.
+    let local: std::collections::BTreeSet<u32> = hir
+        .classes
+        .iter()
+        .filter(|c| layouts.families.contains_key(&c.id))
+        .map(|c| c.id)
+        .collect();
+    for cid in FAMILY_DESC_USES.with(|u| std::mem::take(&mut *u.borrow_mut())) {
+        if !local.contains(&cid) {
+            llmod.add_raw_global(format!(
+                "@perry_layout_class_{cid} = external global {DESC_TY}"
+            ));
+        }
+    }
+    // Case 2c: one descriptor per static class family defined here, with the
+    // slots `layout_families::assign_slots` gave its keys.
+    'class: for class in &hir.classes {
+        let Some(fam): Option<&ClassFamilyLayout> = layouts.families.get(&class.id) else {
+            continue;
+        };
+        let mut named = Vec::with_capacity(fam.keys.len());
+        for (k, slot) in &fam.keys {
+            match atom(llmod, strings, &mut atoms, k) {
+                Some(a) => named.push((k.clone(), a, *slot)),
+                None => continue 'class,
+            }
+        }
+        let family =
+            (fnv1a(format!("{}#class#{}", hir.name, class.name).as_bytes()) as u32) & 0x7FFF_FFFF;
+        // The creation split's layouts first (all or none: the table names
+        // every one).
+        let mut variants: Vec<(u64, Vec<(String, String, u32)>, u32)> = Vec::new();
+        for v in &fam.variants {
+            let mut vnamed = Vec::with_capacity(v.keys.len());
+            for (k, slot) in &v.keys {
+                match atom(llmod, strings, &mut atoms, k) {
+                    Some(a) => vnamed.push((k.clone(), a, *slot)),
+                    None => break,
+                }
+            }
+            if vnamed.len() != v.keys.len() {
+                variants.clear();
+                break;
+            }
+            variants.push((v.key_bits, vnamed, v.slot_count));
+        }
+        emit_desc(
+            llmod,
+            &sect,
+            (
+                &format!("perry_layout_keys_{module_prefix}_{n}"),
+                &format!("perry_layout_index_{module_prefix}_{n}"),
+                &format!("perry_layout_class_{}", fam.class_id),
+            ),
+            family,
+            &named,
+            fam.slot_count,
+            (fam.class_id, fam.parent_class_id),
+        );
+        n += 1;
+        let mut entries = Vec::with_capacity(variants.len());
+        for (j, (key_bits, vnamed, slot_count)) in variants.iter().enumerate() {
+            let name = format!("perry_layout_class_{}_v{j}", fam.class_id);
+            emit_desc(
+                llmod,
+                &sect,
+                (
+                    &format!("perry_layout_keys_{module_prefix}_{n}"),
+                    &format!("perry_layout_index_{module_prefix}_{n}"),
+                    &name,
+                ),
+                family,
+                vnamed,
+                *slot_count,
+                (fam.class_id, fam.parent_class_id),
+            );
+            n += 1;
+            entries.push((*key_bits, name));
+        }
+        // `perry-runtime` `layout_desc::PerryFamilyVariants`: the argument
+        // index, the count, then (constant bits, descriptor) sorted by the
+        // constant's bits.
+        if !entries.is_empty() {
+            entries.sort();
+            let items: Vec<String> = entries
+                .iter()
+                .map(|(k, name)| format!("{{ i64, ptr }} {{ i64 {}, ptr @{name} }}", *k as i64))
+                .collect();
+            llmod.add_raw_global(format!(
+                "@perry_family_variants_{} = constant {{ i32, i32, [{} x {{ i64, ptr }}] }} {{ i32 {}, i32 {}, [{} x {{ i64, ptr }}] [{}] }}, align 8",
+                fam.class_id,
+                entries.len(),
+                fam.discriminant,
+                entries.len(),
+                entries.len(),
+                items.join(", ")
+            ));
+        }
+    }
     n
 }
 
@@ -732,7 +898,7 @@ fn emit_descriptor(
             index_items.join(", ")
         ));
         llmod.add_raw_global(format!(
-            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, i64 {proto}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name} }}, section \"{sect}\", align 8",
+            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, i64 {proto}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0 }}, section \"{sect}\", align 8",
             layout_id as i32,
             rep as i64,
             cap - 1

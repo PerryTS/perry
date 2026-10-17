@@ -136,7 +136,10 @@ pub(crate) enum Route {
     /// number stays reserved: it indexes `RECV_ROUTE_NAMES`.
     #[allow(dead_code)]
     GenericWayHit = 2,
-    /// A read region's receiver test passed (R1 part 1).
+    /// A read region's receiver test passed. No longer emitted: the
+    /// expression read region was deleted (object model step 5). The number
+    /// stays reserved: it indexes `RECV_ROUTE_NAMES`.
+    #[allow(dead_code)]
     Region = 3,
     /// A class-field read guard's receiver test passed.
     ClassRead = 4,

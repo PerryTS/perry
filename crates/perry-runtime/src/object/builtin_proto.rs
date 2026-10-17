@@ -717,7 +717,7 @@ unsafe fn select_and_call(
         &[]
     };
     let arg_handles = scope.root_nanbox_f64_slice(original);
-    let selected = super::method_site::spec_get_value(holder, name);
+    let selected = super::method_call::spec_get_value(holder, name);
     if !call_builtin && is_builtin_method(selected) {
         if let Some((recv, out)) = refresh {
             *recv = this_h.get_nanbox_f64();
@@ -735,7 +735,7 @@ unsafe fn select_and_call(
         // undefined, null, a number, a boolean …: not callable.
         crate::closure::throw_not_callable();
     }
-    Some(super::method_site::js_method_site_call_value(
+    Some(super::method_call::js_method_call_value(
         selected_h.get_nanbox_f64(),
         this_h.get_nanbox_f64(),
         values.as_ptr(),

@@ -188,7 +188,7 @@ fn emit_namespace_generic_call(
     let (argv, argc) = crate::lower_call::emit_method_args_buffer(ctx, &values);
     Ok(ctx.block().call(
         DOUBLE,
-        "js_method_site_call_value",
+        "js_method_call_value",
         &[(DOUBLE, &callee), (DOUBLE, &ns), (PTR, &argv), (I64, &argc)],
     ))
 }
@@ -423,9 +423,148 @@ pub(crate) fn array_entry(method: &str, argc: usize) -> Option<String> {
         .map(|(m, _, _)| format!("js_array_m_{m}{argc}"))
 }
 
+/// The builtin methods a method site on an unproven receiver calls directly
+/// (runtime `object/builtin_method.rs`): `(name, argc, families)`, where
+/// `families` is the set of builtin kinds whose intrinsic prototype holds
+/// `name` as that builtin (1 String, 2 Array, 4 Map, 8 Set, 16 Function).
+/// `js_bm_<name><argc>(site, recv, key, method_id, args…)` proves the
+/// receiver's kind and `Pristine` of its family and calls the body; any other
+/// receiver takes the universal dispatcher with the same operands.
+pub(crate) const BUILTIN_METHODS: &[(&str, usize, u8)] = &[
+    ("add", 1, 8),
+    ("apply", 0, 16),
+    ("apply", 1, 16),
+    ("apply", 2, 16),
+    ("at", 0, 1),
+    ("at", 1, 3),
+    ("bind", 0, 16),
+    ("bind", 1, 16),
+    ("bind", 2, 16),
+    ("bind", 3, 16),
+    ("call", 0, 16),
+    ("call", 1, 16),
+    ("call", 2, 16),
+    ("call", 3, 16),
+    ("call", 4, 16),
+    ("charAt", 0, 1),
+    ("charAt", 1, 1),
+    ("charCodeAt", 0, 1),
+    ("charCodeAt", 1, 1),
+    ("codePointAt", 0, 1),
+    ("codePointAt", 1, 1),
+    ("concat", 0, 1),
+    ("concat", 1, 1),
+    ("concat", 2, 1),
+    ("delete", 1, 12),
+    ("endsWith", 0, 1),
+    ("endsWith", 1, 1),
+    ("endsWith", 2, 1),
+    ("entries", 0, 2),
+    ("every", 1, 2),
+    ("filter", 1, 2),
+    ("find", 1, 2),
+    ("findIndex", 1, 2),
+    ("findLast", 1, 2),
+    ("findLastIndex", 1, 2),
+    ("flat", 0, 2),
+    ("flatMap", 1, 2),
+    ("forEach", 1, 2),
+    ("get", 1, 4),
+    ("has", 1, 12),
+    ("includes", 0, 1),
+    ("includes", 1, 3),
+    ("includes", 2, 3),
+    ("indexOf", 0, 1),
+    ("indexOf", 1, 3),
+    ("indexOf", 2, 3),
+    ("join", 0, 2),
+    ("join", 1, 2),
+    ("keys", 0, 2),
+    ("lastIndexOf", 0, 1),
+    ("lastIndexOf", 1, 3),
+    ("lastIndexOf", 2, 3),
+    ("localeCompare", 0, 1),
+    ("localeCompare", 1, 1),
+    ("map", 1, 2),
+    ("match", 0, 1),
+    ("match", 1, 1),
+    ("matchAll", 0, 1),
+    ("matchAll", 1, 1),
+    ("normalize", 0, 1),
+    ("normalize", 1, 1),
+    ("padEnd", 1, 1),
+    ("padEnd", 2, 1),
+    ("padStart", 1, 1),
+    ("padStart", 2, 1),
+    ("pop", 0, 2),
+    ("push", 1, 2),
+    ("reduce", 1, 2),
+    ("reduce", 2, 2),
+    ("reduceRight", 1, 2),
+    ("reduceRight", 2, 2),
+    ("repeat", 1, 1),
+    ("replace", 0, 1),
+    ("replace", 1, 1),
+    ("replace", 2, 1),
+    ("replaceAll", 0, 1),
+    ("replaceAll", 1, 1),
+    ("replaceAll", 2, 1),
+    ("search", 0, 1),
+    ("search", 1, 1),
+    ("set", 2, 4),
+    ("shift", 0, 2),
+    ("slice", 0, 1),
+    ("slice", 1, 3),
+    ("slice", 2, 3),
+    ("some", 1, 2),
+    ("sort", 1, 2),
+    ("split", 0, 1),
+    ("split", 1, 1),
+    ("split", 2, 1),
+    ("startsWith", 0, 1),
+    ("startsWith", 1, 1),
+    ("startsWith", 2, 1),
+    ("substr", 1, 1),
+    ("substr", 2, 1),
+    ("substring", 0, 1),
+    ("substring", 1, 1),
+    ("substring", 2, 1),
+    ("toLowerCase", 0, 1),
+    ("toReversed", 0, 2),
+    ("toSorted", 0, 2),
+    ("toSorted", 1, 2),
+    ("toUpperCase", 0, 1),
+    ("trim", 0, 1),
+    ("trimEnd", 0, 1),
+    ("trimStart", 0, 1),
+    ("values", 0, 2),
+    ("with", 2, 2),
+];
+
+/// The direct builtin-method entry for `recv.<method>(argc args)`, if any.
+pub(crate) fn builtin_method(method: &str, argc: usize) -> Option<String> {
+    BUILTIN_METHODS
+        .iter()
+        .find(|(m, n, _)| *m == method && *n == argc)
+        .map(|(m, n, _)| format!("js_bm_{m}{n}"))
+}
+
+/// The families holding `method` as a builtin at any argument count.
+pub(crate) fn builtin_method_families(method: &str) -> u8 {
+    BUILTIN_METHODS
+        .iter()
+        .filter(|(m, _, _)| *m == method)
+        .fold(0, |acc, (_, _, f)| acc | f)
+}
+
 /// Declare every checked entry: `double (double recv, double × argc)`.
 pub(crate) fn declare_entries(module: &mut crate::module::LlModule) {
     use crate::types::DOUBLE;
+    for (method, argc, _) in BUILTIN_METHODS {
+        let mut params = vec![crate::types::I64, DOUBLE, crate::types::I64, crate::types::I64];
+        params.extend(std::iter::repeat_n(DOUBLE, *argc));
+        module.declare_function(&format!("js_bm_{method}{argc}"), DOUBLE, &params);
+    }
     for (prefix, table) in [
         ("js_string_m_", STRING_ENTRIES),
         ("js_string_b_", STRING_ENTRIES),

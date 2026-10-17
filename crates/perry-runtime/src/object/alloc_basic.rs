@@ -655,7 +655,6 @@ mod filled_birth_tests {
         let object = crate::JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
         unsafe {
             assert!(crate::gc::never_move::lives_old(object as usize));
-            assert!(crate::gc::never_move::stable_memo_referent(object as usize));
             let shape = shapes::shape_record_by_id((*object).shape_word()).unwrap();
             assert_eq!(shape.object_kind(), shapes::ShapeObjectKind::Ordinary);
             let header = crate::gc::header_from_trusted_user_ptr(object.cast());

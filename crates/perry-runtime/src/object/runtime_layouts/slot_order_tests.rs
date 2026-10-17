@@ -372,6 +372,8 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         key_count: 3,
         index_mask: 0,
         index: std::ptr::null(),
+        class_id: 0,
+        parent_class_id: 0,
     };
     unsafe {
         DESC.keys = std::ptr::addr_of!(KEYS).cast();
@@ -537,5 +539,127 @@ fn static_layout_slot_order_positional_lane_invariant_fails_loudly() {
     unsafe {
         let keys = crate::object::object_keys(object.get_raw_mut_ptr::<ObjectHeader>());
         crate::object::key_attrs::debug_assert_positional(keys.arr(), keys.count());
+    }
+}
+
+/// A runtime layout is born with every slot holding the hole marker
+/// (`perry_alloc_layout`), so an unwritten member is a hole slot: the probe
+/// SERVES it as an absent key (read, presence) instead of declining, and an
+/// own store of a written member is one probe store.
+#[test]
+fn the_probe_serves_a_holey_runtime_layout() {
+    crate::gc::initialize_runtime_fixture();
+    crate::object::ensure_object_intrinsics();
+    let desc = std::ptr::addr_of!(POSITIONAL);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object =
+        scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
+    unsafe {
+        object.with_mut_ptr(|obj| {
+            js_object_set_field(obj, 0, crate::JSValue::number(1.0));
+            js_object_set_field(obj, 2, crate::JSValue::number(3.0));
+            let dir = crate::object::shapes::ordinary_dir_addr();
+            let atom = |s: *const crate::StringHeader| {
+                let a = crate::string::existing_property_atom(s).expect("program atom");
+                (crate::value::STRING_TAG | a as u64, crate::string::property_atom_hash(a))
+            };
+            let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+            let value = crate::js_nanbox_pointer(obj as i64).to_bits();
+            let (second, second_hash) = atom(SECOND.string);
+            let (first, first_hash) = atom(FIRST.string);
+            assert_eq!(
+                crate::object::layout_probe::perry_probe_get(dir, biased, second, second_hash)
+                    .to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "a hole slot is an absent key the probe answers"
+            );
+            assert_eq!(
+                crate::object::layout_probe::probe_has(value, second, false),
+                0,
+                "presence: the hole slot is absent along the whole chain"
+            );
+            assert_eq!(crate::object::layout_probe::probe_has(value, second, true), 0);
+            assert_eq!(crate::object::layout_probe::probe_has(value, first, true), 1);
+            assert_eq!(
+                crate::object::layout_probe::perry_probe_get(dir, biased, first, first_hash),
+                1.0
+            );
+            assert_eq!(
+                crate::object::layout_probe::perry_probe_set(dir, value, first, first_hash, 5.0),
+                1,
+                "an own written member is one probe store"
+            );
+            assert_eq!(js_object_get_field(obj, 0).as_number(), 5.0);
+            // The absent member's store: nothing on the chain intercepts it,
+            // so the probe adds it in its hole slot, in the layout's order,
+            // exactly as the complete [[Set]] does.
+            assert_eq!(
+                crate::object::layout_probe::perry_probe_set(dir, value, second, second_hash, 7.0),
+                1,
+                "a hole slot's store is served"
+            );
+        });
+        let obj = object.get_raw_mut_ptr::<ObjectHeader>();
+        assert_eq!(js_object_get_field_by_name_f64(obj, SECOND.string), 7.0);
+        assert_order(
+            obj,
+            &["slotorder_first", "slotorder_second", "slotorder_third"],
+        );
+        let value = crate::js_nanbox_pointer(obj as i64).to_bits();
+        let a = crate::string::existing_property_atom(SECOND.string).expect("program atom");
+        assert_eq!(
+            crate::object::layout_probe::probe_has(value, crate::value::STRING_TAG | a as u64, true),
+            1
+        );
+    }
+}
+
+/// The store probe keeps the write barrier the deleted inline store IC
+/// emitted: a pointer stored into an OLD object's slot remembers the slot's
+/// page, so the next minor finds the young child.
+#[test]
+fn a_probe_store_of_a_pointer_into_an_old_object_keeps_its_write_barrier() {
+    crate::gc::initialize_runtime_fixture();
+    crate::object::ensure_object_intrinsics();
+    let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    let _age = crate::gc::pin_tenuring_survivals_for_test(1);
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let desc = std::ptr::addr_of!(POSITIONAL);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object =
+        scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
+    object.with_mut_ptr(|obj| unsafe { js_object_set_field(obj, 0, crate::JSValue::number(1.0)) });
+    let _ = crate::gc::gc_collect_minor();
+    let _ = crate::gc::gc_collect_minor();
+    unsafe {
+        let obj = object.get_raw_mut_ptr::<ObjectHeader>();
+        assert!(
+            crate::gc::never_move::lives_old(obj as usize),
+            "the fixture's receiver must be old, or the barrier is untested"
+        );
+        let child = crate::object::object_alloc_plain(0);
+        let child_value = crate::js_nanbox_pointer(child as i64);
+        let a = crate::string::existing_property_atom(FIRST.string).expect("program atom");
+        let (key, hash) = (crate::value::STRING_TAG | a as u64, crate::string::property_atom_hash(a));
+        let slot = (obj as usize) + std::mem::size_of::<ObjectHeader>();
+        assert!(!crate::gc::old_slot_page_is_remembered_for_test(slot));
+        assert_eq!(
+            crate::object::layout_probe::perry_probe_set(
+                crate::object::shapes::ordinary_dir_addr(),
+                crate::js_nanbox_pointer(obj as i64).to_bits(),
+                key,
+                hash,
+                child_value,
+            ),
+            1,
+            "an own plain data slot is one probe store"
+        );
+        assert_eq!(js_object_get_field(obj, 0).bits(), child_value.to_bits());
+        assert!(
+            crate::gc::old_slot_page_is_remembered_for_test(slot),
+            "a pointer store into an old object must remember its page"
+        );
     }
 }

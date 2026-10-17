@@ -15,12 +15,6 @@
 use super::FnCtx;
 use crate::types::I64;
 
-/// Existing-key inline hit (the site word or an inline way).
-pub(crate) const PIC_HIT: usize = 0;
-/// Key-add inline hit.
-pub(crate) const ADD_HIT: usize = 2;
-/// The static-key store's miss call.
-pub(crate) const PIC_MISS: usize = 3;
 /// Class-field store: the shape-proven raw store (no runtime guard).
 pub(crate) const CFIELD_SHAPE_PROVEN: usize = 4;
 // Indices 5-7 (the class guard's inline store, its fallback call and the
@@ -35,9 +29,6 @@ pub(crate) const CFIELD_SETTER: usize = 9;
 pub(crate) const BY_NAME_RUNTIME: usize = 11;
 /// The PutValue by-name lowering.
 pub(crate) const BY_NAME_PUT_VALUE: usize = 12;
-/// Key-add inline hit on one of the runtime block's first ways (counted on
-/// its own edge, then also as [`ADD_HIT`]).
-pub(crate) const ADD_WAY_HIT: usize = 14;
 
 /// Array element read: the guarded tier's in-bounds, non-hole load.
 pub(crate) const ELEM_READ_FAST: usize = 32;

@@ -139,7 +139,6 @@ unsafe fn stamp_reserved_floor_shape(
         Some(d) => d.proto_id,
         None => shapes::object_proto_id(obj),
     };
-    crate::array::clear_array_subclass_named_prefix_token(obj);
     let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_holes(
         keys,
         floor,

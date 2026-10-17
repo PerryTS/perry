@@ -422,52 +422,6 @@ fn generator_proto_method(
     }
 }
 
-/// Declared body identity is the authority for the shared protocol route.
-/// Replacing a slot with another builtin retains ordinary value invocation.
-pub(crate) fn is_sync_generator_protocol_body(code: *const u8) -> bool {
-    code == generator_proto_next_thunk as *const u8
-        || code == generator_proto_return_thunk as *const u8
-        || code == generator_proto_throw_thunk as *const u8
-        || code == generator_proto_iterator_thunk as *const u8
-}
-
-/// A code target justified by the existing memo's generator-family proof.
-/// The selected closure's real intrinsic identity is still checked per use.
-/// These private bodies have the same one-argument ABI as the public methods.
-pub(crate) fn proven_sync_generator_protocol_code(code: *const u8) -> *const u8 {
-    if code == generator_proto_next_thunk as *const u8 {
-        proven_generator_next as *const u8
-    } else if code == generator_proto_return_thunk as *const u8 {
-        proven_generator_return as *const u8
-    } else if code == generator_proto_throw_thunk as *const u8 {
-        proven_generator_throw as *const u8
-    } else {
-        code
-    }
-}
-
-extern "C" fn proven_generator_next(
-    _: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    arg: f64,
-) -> f64 {
-    unsafe { super::generator_state::resume_proven_receiver(this, 0.0, arg) }
-}
-extern "C" fn proven_generator_return(
-    _: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    arg: f64,
-) -> f64 {
-    unsafe { super::generator_state::resume_proven_receiver(this, 1.0, arg) }
-}
-extern "C" fn proven_generator_throw(
-    _: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    arg: f64,
-) -> f64 {
-    unsafe { super::generator_state::resume_proven_receiver(this, 2.0, arg) }
-}
-
 extern "C" fn generator_proto_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

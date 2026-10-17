@@ -239,18 +239,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, PTR, I64],
     );
-    // The same probe on the miss edge of a site with a learned receiver word.
-    module.declare_function(
-        "js_object_get_own_field_or_undef_learn",
-        DOUBLE,
-        &[DOUBLE, PTR, I64, PTR],
-    );
-    // The same probe on the miss edge of a site with a learned receiver word.
-    module.declare_function(
-        "js_object_get_own_field_or_undef_learn",
-        DOUBLE,
-        &[DOUBLE, PTR, I64, PTR],
-    );
     // Issue #629: stub for unresolved namespace imports — returns a stable
     // empty-object pointer so `typeof ns === "object"` and `ns.method`
     // cleanly resolves to undefined (instead of TAG_TRUE → "boolean" /
@@ -982,15 +970,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
     );
-    // Miss edge of a class-method site (`lower_call/method_override.rs`):
-    // learns the receiver word (unless the site address is tagged with bit
-    // 0), then dispatches as above with the chain memo slot that follows the
-    // word.
-    module.declare_function(
-        "js_native_call_method_by_id_learn",
-        DOUBLE,
-        &[DOUBLE, I64, PTR, I64, PTR, I32],
-    );
     // Apply form: takes the args as a JS array handle (i64). The runtime
     // materialises the array elements into a temp f64 buffer and forwards to
     // js_native_call_method. Used by `Expr::CallSpread` for the
@@ -1011,18 +990,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_native_call_method_str_key",
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
-    );
-    // The computed-key call site's forms that pass its chain memo slot
-    // (`lower_call/early_branches.rs`).
-    module.declare_function(
-        "js_native_call_method_str_key_memo",
-        DOUBLE,
-        &[DOUBLE, I64, PTR, I64, PTR],
-    );
-    module.declare_function(
-        "js_native_call_method_value_memo",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, PTR, I64, PTR],
     );
     // #321: dispatch obj[key](args) for a runtime-value key (not statically a
     // string). Binds `this = obj` for any key type — string keys go through

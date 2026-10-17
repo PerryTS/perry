@@ -744,7 +744,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_packed_arraylike_index_get",
         DOUBLE,
-        &[DOUBLE, DOUBLE, PTR],
+        &[DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_packed_arraylike_loop_guard",
@@ -1130,7 +1130,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_arguments_call_spread",
         DOUBLE,
-        &[DOUBLE, PTR, DOUBLE, I64, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, I64, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_arguments_forward_apply",

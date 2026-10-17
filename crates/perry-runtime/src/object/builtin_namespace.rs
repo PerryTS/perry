@@ -267,12 +267,12 @@ pub extern "C-unwind" fn js_builtin_namespace_value(family: u64) -> f64 {
     };
     let global = crate::object::js_get_global_this();
     // SAFETY: the realm global; the name is a static literal.
-    unsafe { super::method_site::spec_get_value(global, name.as_bytes()) }
+    unsafe { super::method_call::spec_get_value(global, name.as_bytes()) }
 }
 
 /// The generic arm's callee: `ns[member]` (a nullish `ns` throws node's
 /// TypeError). The arm then evaluates the arguments and calls the value with
-/// `ns` as `this` (`js_method_site_call_value`).
+/// `ns` as `this` (`js_method_call_value`).
 ///
 /// # Safety
 /// `member_ptr` holds `member_len` bytes.
@@ -282,7 +282,7 @@ pub unsafe extern "C-unwind" fn js_builtin_namespace_member(
     member_ptr: *const u8,
     member_len: usize,
 ) -> f64 {
-    super::method_site::spec_get_value(ns, std::slice::from_raw_parts(member_ptr, member_len))
+    super::method_call::spec_get_value(ns, std::slice::from_raw_parts(member_ptr, member_len))
 }
 
 /// Contract mode (decision 129 §4.5): a guarded namespace site whose test

@@ -35,7 +35,7 @@ pub unsafe extern "C-unwind" fn js_proto_constant_contract_check(
         .map(|r| std::slice::from_raw_parts(r.ptr, r.len))
         .unwrap_or(b"?");
     let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
-    let Some(obj) = miss_entry::is_site_receiver(recv)
+    let Some(obj) = super::is_site_receiver(recv)
         .then(|| ordinary_receiver(addr))
         .flatten()
     else {
@@ -164,7 +164,7 @@ pub unsafe extern "C-unwind" fn js_proto_holder_contract_check(
 #[no_mangle]
 #[inline(never)]
 pub unsafe extern "C-unwind" fn js_proto_shadow_contract_check(ok: i32, recv: f64, method_id: i64) {
-    if ok == 0 || !miss_entry::is_site_receiver(recv) {
+    if ok == 0 || !super::is_site_receiver(recv) {
         return;
     }
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];

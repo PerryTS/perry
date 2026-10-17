@@ -186,13 +186,8 @@ fn a_first_evaluation_prototype_is_born_old_and_never_move() {
     assert!(proto.is_pointer(), "a prototype object");
     let addr = proto.as_pointer::<u8>() as usize;
     let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    // Never-move from birth (asked before the memo rule, which would mark
-    // it), and admitted by that rule: old.
+    // Never-move from birth.
     assert!(unsafe { crate::gc::never_move::is_never_move(header) });
-    assert!(
-        unsafe { crate::gc::never_move::stable_memo_referent(addr) },
-        "the first evaluation's prototype is young"
-    );
 }
 
 /// The template's memo lives in its own cell, and only the thread that

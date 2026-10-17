@@ -343,31 +343,15 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
             return true;
         }
         // #10123: a class-0 proof is the exact ShapeId and NOTHING else. The
-        // two fallbacks below are class-level, and "same class" is vacuous for
-        // class 0 — every plain object shares it — so reaching them would
-        // widen a shape proof into no proof at all. Both already fail closed
-        // for class 0 (`array_subclass_named_prefix_token_matches_class`
-        // returns false, and `element_identity_of_validated_object` requires a
+        // fallback below is class-level, and "same class" is vacuous for
+        // class 0 — every plain object shares it — so reaching it would
+        // widen a shape proof into no proof at all. It already fails closed
+        // for class 0 (`element_identity_of_validated_object` requires a
         // nonzero class), and `class_zero_record_declines_a_different_shape`
         // pins that; this makes the rule local rather than a coincidence of
         // two other functions.
         if record.class_id == 0 {
             return false;
-        }
-        // Object-backed Array subclasses publish a move-stable, class-wide
-        // ordinary-prefix proof precisely because their numeric tail mints a
-        // different ShapeId on every push/pop. Once present, that token is a
-        // stronger ordinary-instance discriminator than another global
-        // ShapeId-kind lookup. It is cleared before every generic semantic or
-        // structural transition; exact numeric-tail transitions are its only
-        // preserving publisher.
-        if crate::array::subclass::array_subclass_named_prefix_token_matches_class(
-            obj,
-            record.class_id,
-        ) {
-            #[cfg(test)]
-            ARRAY_SUBCLASS_PREFIX_STORE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
-            return true;
         }
         element_identity_of_validated_object(obj)
             .is_some_and(|identity| identity.0 == record.class_id)

@@ -41,7 +41,7 @@ use perry_hir::{BinaryOp, Expr};
 
 use crate::nanbox::POINTER_MASK_I64;
 use crate::rooting::{self, Repr};
-use crate::types::{DOUBLE, I32, I64, I8};
+use crate::types::{DOUBLE, I32, I64};
 
 use super::{emit_root_nanbox_store_on_block, lower_expr, FnCtx};
 
@@ -254,12 +254,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
-            // Public properties share the store site's own-slot proof.
-            if super::private_field_site::private_field_site(ctx, object, property, 1).is_none() {
-                return super::property_rmw::lower_update(
-                    ctx, object, property, *op, *prefix, *strict,
-                );
-            }
             // #7628's scope note: the same read-modify-write skeleton as
             // `Expr::IndexUpdate`, and the same repair — with one extra shape
             // on top. The read derives a RAW `i64` handle before
@@ -382,13 +376,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             prefix,
             strict,
         } => {
-            if !matches!(index.as_ref(), Expr::Number(_) | Expr::Integer(_)) {
-                if let Some(property) = super::proxy_reflect::static_write_key(ctx, index) {
-                    return super::property_rmw::lower_update(
-                        ctx, object, &property, *op, *prefix, *strict,
-                    );
-                }
-            }
             // #7628. The operand pair is consumed by FOUR calls with collection
             // points between them:
             //
@@ -519,7 +506,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     group.adopt_emitted(ctx, Repr::Boxed, &new, result_may_be_heap && *prefix);
                 let (obj_box, idx_box) = (group.reread(ctx, obj)?, group.reread(ctx, idx)?);
                 let new_arg = group.reread_emitted(ctx, new_root);
-                super::property_rmw::lower_dynamic_store(
+                super::proxy_reflect::lower_put_value_dyn_ic_inline(
                     ctx, &obj_box, &idx_box, &new_arg, strict_i32,
                 )?;
                 Ok(if *prefix {

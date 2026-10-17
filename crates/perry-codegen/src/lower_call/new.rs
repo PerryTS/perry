@@ -984,6 +984,8 @@ fn lower_new_impl_inner<'a>(
             || class.extends_name.is_some()
             || class.native_extends.is_some()
             || class.extends_expr.is_some(),
+        family_run: None,
+        bind_watch: None,
     });
 
     // Apply ANCESTOR field initializers — refs #420 / #631-followup.
@@ -1268,6 +1270,8 @@ fn lower_new_impl_inner<'a>(
                         result_slot: parent_result_slot,
                         after_label: parent_after_label.clone(),
                         is_derived: parent_is_derived,
+                        family_run: None,
+                        bind_watch: None,
                     });
                     if parent_is_derived {
                         crate::expr::this_super_call::push_shared_super_called_slot(ctx);
