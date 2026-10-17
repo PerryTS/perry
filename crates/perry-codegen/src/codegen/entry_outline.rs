@@ -720,7 +720,7 @@ pub enum OutlineOutcome {
 /// Largest `FuncId` used anywhere in `hir`. New chunk ids are minted strictly
 /// above it so generated functions cannot collide with a class member, nested
 /// closure, or an id retained only in module metadata.
-fn max_func_id(hir: &HirModule) -> u32 {
+pub(crate) fn max_func_id(hir: &HirModule) -> u32 {
     let mut max = 0u32;
     for (_, id) in &hir.script_global_functions {
         max = max.max(*id);

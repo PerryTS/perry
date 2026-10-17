@@ -4954,8 +4954,10 @@ dependencies = [
  "perry-abi",
  "perry-api-manifest",
  "perry-codegen",
+ "perry-diagnostics",
  "perry-dispatch",
  "perry-hir",
+ "perry-parser",
  "serde",
  "serde_json",
 ]

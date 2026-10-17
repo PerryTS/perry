@@ -259,6 +259,21 @@ pub(crate) fn collect_module_finish(
             ..Default::default()
         });
         perry_transform::post_inline_cleanups(&mut hir_module);
+        // Structural function splitting (design note 2026-10-16): oversized
+        // function and closure bodies are cut at single-entry/single-exit
+        // statement ranges into typed region functions. After the inliner
+        // and the post-inline cleanups (the bodies it sees are final), before
+        // the async/generator transforms (their bodies are skipped; regions
+        // are plain synchronous code). See perry-codegen
+        // `codegen::split_regions`.
+        let regions = perry_codegen::codegen::split_regions::split_large_bodies(&mut hir_module);
+        if regions > 0 {
+            log::debug!(
+                "perry: split '{}' into {} region functions",
+                hir_module.name,
+                regions
+            );
+        }
         // Inline `finally` bodies before each abrupt completion
         // (`return` / `break` / `continue` / labeled-break / labeled-
         // continue) reachable inside a `try { ... } finally { Y }`

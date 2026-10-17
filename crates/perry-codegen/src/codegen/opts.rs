@@ -917,6 +917,9 @@ impl ImportedCtor {
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
+    /// Closure regions of the splitter (`split_regions`): one body each,
+    /// typed by the parameter types its only caller proved.
+    pub region_closures: std::collections::HashSet<u32>,
     /// wpfacts slice 2: the elision facts of this module
     /// (`CompileOptions::program_facts`).
     pub wpfacts: std::sync::Arc<super::ElisionFacts>,

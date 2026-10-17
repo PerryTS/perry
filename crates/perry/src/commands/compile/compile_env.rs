@@ -159,6 +159,16 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_SPECIALIZED_ABI",
     "PERRY_SPECIALIZED_ABI_MAX",
     "PERRY_SPEC_PRESERVE_NONE",
+    "PERRY_SPLIT",
+    "PERRY_SPLIT_CHUNK_MIN_NODES",
+    "PERRY_SPLIT_CLOSURES",
+    "PERRY_SPLIT_GUARD_NODES",
+    "PERRY_SPLIT_MAX_CAPTURES",
+    "PERRY_SPLIT_MAX_REGIONS",
+    "PERRY_SPLIT_MIN_NODES",
+    "PERRY_SPLIT_SINK",
+    "PERRY_SPLIT_TARGET_NODES",
+    "PERRY_SPLIT_TYPED",
     "PERRY_STACK_SYMBOLS",
     "PERRY_STATIC_STRING_LOWERING",
     "PERRY_STORE_CENSUS",
@@ -843,6 +853,18 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_SPIN_THROTTLE",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_SPLIT_DUMP",
+        "Writes IR/report files or diagnostic output without changing emitted objects.",
+    ),
+    (
+        "PERRY_SPLIT_DUMP_REGION",
+        "Writes IR/report files or diagnostic output without changing emitted objects.",
+    ),
+    (
+        "PERRY_SPLIT_REPORT",
+        "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
     (
         "PERRY_SSO_FORCE",

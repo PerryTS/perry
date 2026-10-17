@@ -721,7 +721,10 @@ pub(super) fn compile_function(
     // #8595: these functions exist specifically to bound backend work. Letting
     // the ordinary or pre-statepoint inliner fold them back into module init
     // would recreate the single giant function before RS4GC/ISel/regalloc.
-    lf.no_inline = entry_outline_chunk;
+    // A split region (`split_regions`) exists for the same reason: folding it
+    // back into its parent would rebuild the giant function.
+    let split_region = super::split_regions::is_region_function(f) && spec_entry.is_none();
+    lf.no_inline = entry_outline_chunk || split_region;
     if typed_public_trampoline.is_some()
         || guarded_public_plan.is_some()
         || spec_entry.is_some()
@@ -764,6 +767,7 @@ pub(super) fn compile_function(
     // step closure's iter capture, hanging async chains (issue #447).
     let specialized_entry = spec_entry.is_some();
     if !entry_outline_chunk
+        && !split_region
         && !specialized_entry
         && f.body.len() <= 8
         && !f.is_async
@@ -792,6 +796,7 @@ pub(super) fn compile_function(
     // expression is lowered), for the same reason.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
     if !entry_outline_chunk
+        && !split_region
         && !specialized_entry
         && !lf.force_inline
         && inline_hot_small_enabled()
@@ -825,6 +830,11 @@ pub(super) fn compile_function(
     //    never-reassigned ROOTED binding, which keeps the header live for the
     //    whole call.
     //  - `Boxed`/`F64` → exactly today's binding (a raw f64 IS its box).
+    let region_number_params: HashSet<u32> = if split_region {
+        super::split_regions::region_number_params(f)
+    } else {
+        HashSet::new()
+    };
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let mut bound_param_slots: HashSet<u32> = HashSet::new();
     let locals: HashMap<u32, String> = {
@@ -874,6 +884,18 @@ pub(super) fn compile_function(
                 }
                 _ => {}
             }
+            // A split region's Number parameter: its only caller proved a
+            // Number, which may arrive as an int32 box; the body's Number
+            // proof means a plain double, so convert once here.
+            let arg_name = if region_number_params.contains(&p.id) {
+                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
+                let bits = blk.bitcast_double_to_i64(&arg_name);
+                let low = blk.trunc(I64, &bits, I32);
+                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
+                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
+            } else {
+                arg_name
+            };
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
                 bound_param_slots.insert(slot_idx);
@@ -1015,7 +1037,7 @@ pub(super) fn compile_function(
     // ordinary boxed params are proven by `js_param_type_guard` on the sole
     // direct route to this clone. The public body still starts with an empty
     // map and therefore remains the conservative fallback for annotation lies.
-    let spec_param_proofs: HashMap<u32, perry_hir::types::Type> = spec_entry
+    let mut spec_param_proofs: HashMap<u32, perry_hir::types::Type> = spec_entry
         .map(|plan| {
             f.params
                 .iter()
@@ -1046,6 +1068,11 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    // A split region's parameters carry the types its only caller proved at
+    // the call (`split_regions`): its one body is typed by them.
+    if split_region {
+        spec_param_proofs.extend(super::split_regions::region_param_proofs(f));
+    }
     let spec_bool_params: HashSet<u32> = spec_param_proofs
         .iter()
         .filter_map(|(id, ty)| matches!(ty, perry_hir::types::Type::Boolean).then_some(*id))
@@ -1111,13 +1138,28 @@ pub(super) fn compile_function(
     // Closed World 5d: the body's typed locals under this variant's entry
     // proofs (the spec clone's guarded parameters that are never rebound).
     let mut code_unit_locals = std::collections::HashSet::new();
+    let mut body_entry_proofs = crate::collectors::typed_locals::stable_param_proofs(
+        &spec_param_proofs,
+        &f.body,
+        &boxed_vars,
+    );
+    // A region's Number parameters were normalized to plain doubles at entry
+    // (above), so unlike a spec clone's they are Numbers by construction
+    // while never rebound.
+    if split_region {
+        let rebound = crate::collectors::reassigned_locals(&f.body);
+        for id in &region_number_params {
+            if !boxed_vars.contains(id)
+                && !rebound.contains(id)
+                && !crate::collectors::has_any_mutation(&f.body, *id)
+            {
+                body_entry_proofs.insert(*id, perry_hir::types::Type::Number);
+            }
+        }
+    }
     let typed_locals = crate::collectors::typed_locals::apply(
         &f.body,
-        &crate::collectors::typed_locals::stable_param_proofs(
-            &spec_param_proofs,
-            &f.body,
-            &boxed_vars,
-        ),
+        &body_entry_proofs,
         &outer_proofs,
         &boxed_vars,
         module_globals,

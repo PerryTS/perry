@@ -325,6 +325,48 @@ impl Env<'_> {
         let rec = |x: &Expr| self.kind(x, depth + 1);
         match e {
             Expr::Integer(_) | Expr::Number(_) => Some(Kind::Num),
+            // `Number(x)` and the Math functions: the canonical-double
+            // producers codegen trusts (`expr_produces_canonical_raw_f64`).
+            Expr::NumberCoerce(_)
+            | Expr::MathFloor(..)
+            | Expr::MathCeil(..)
+            | Expr::MathRound(..)
+            | Expr::MathTrunc(..)
+            | Expr::MathSign(..)
+            | Expr::MathAbs(..)
+            | Expr::MathSqrt(..)
+            | Expr::MathLog(..)
+            | Expr::MathLog2(..)
+            | Expr::MathLog10(..)
+            | Expr::MathPow(..)
+            | Expr::MathMin(..)
+            | Expr::MathMax(..)
+            | Expr::MathMinSpread(..)
+            | Expr::MathMaxSpread(..)
+            | Expr::MathImul(..)
+            | Expr::MathRandom
+            | Expr::MathSin(..)
+            | Expr::MathCos(..)
+            | Expr::MathTan(..)
+            | Expr::MathAsin(..)
+            | Expr::MathAcos(..)
+            | Expr::MathAtan(..)
+            | Expr::MathAtan2(..)
+            | Expr::MathCbrt(..)
+            | Expr::MathHypot(..)
+            | Expr::MathFround(..)
+            | Expr::MathF16round(..)
+            | Expr::MathClz32(..)
+            | Expr::MathExpm1(..)
+            | Expr::MathLog1p(..)
+            | Expr::MathSinh(..)
+            | Expr::MathCosh(..)
+            | Expr::MathTanh(..)
+            | Expr::MathAsinh(..)
+            | Expr::MathAcosh(..)
+            | Expr::MathAtanh(..)
+            | Expr::MathExp(..)
+            | Expr::DateNow => Some(Kind::Num),
             Expr::String(_)
             | Expr::WtfString(_)
             | Expr::StringCoerce(_)
@@ -335,6 +377,8 @@ impl Env<'_> {
             | Expr::StringFromCharCodeSpread(_)
             | Expr::StringFromCodePoint(_) => Some(Kind::Str),
             Expr::Array(_) | Expr::ArraySpread(_) => Some(Kind::Arr),
+            // `s.split(d)` on a proven String: a fresh dense Array.
+            Expr::StringSplit(string, _) if rec(string) == Some(Kind::Str) => Some(Kind::Arr),
             Expr::LocalGet(id) => self.local(*id),
             Expr::LocalSet(_, v) => rec(v),
             Expr::Sequence(v) => v.last().and_then(rec),
@@ -577,6 +621,8 @@ fn string_method_kind(name: &str) -> Option<Kind> {
         | "substring" | "substr" | "charAt" | "repeat" | "replace" | "replaceAll" | "padStart"
         | "padEnd" | "concat" | "normalize" => Some(Kind::Str),
         "charCodeAt" | "indexOf" | "lastIndexOf" | "search" | "localeCompare" => Some(Kind::Num),
+        // A fresh dense Array of Strings.
+        "split" => Some(Kind::Arr),
         _ => None,
     }
 }

@@ -540,6 +540,34 @@ pub(super) fn compile_closure(
     // every closure's FnCtx. Generated bundles contain thousands of closures,
     // making that O(closures * module locals) in both time and retained memory.
     // Build the precise key set once and project each global oracle through it.
+    // A closure region (`split_regions`): its parameter types are what its
+    // only caller proved at the call, and it has this one body.
+    let region_closure = cross_module.region_closures.contains(&func_id)
+        && typed_body.is_none()
+        && !trusted_box_captures
+        && !versioned_loop_callback;
+    let region_proofs: HashMap<u32, perry_hir::types::Type> = if region_closure {
+        params
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.ty,
+                    perry_hir::types::Type::String
+                        | perry_hir::types::Type::Number
+                        | perry_hir::types::Type::Boolean
+                        | perry_hir::types::Type::Array(_)
+                )
+            })
+            .map(|p| (p.id, p.ty.clone()))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let region_number_params: HashSet<u32> = region_proofs
+        .iter()
+        .filter(|(_, t)| matches!(t, perry_hir::types::Type::Number))
+        .map(|(id, _)| *id)
+        .collect();
     let mut closure_referenced_ids: HashSet<u32> = HashSet::new();
     collect_ref_ids_in_stmts(body, &mut closure_referenced_ids);
     let mut closure_declared_ids: HashSet<u32> = HashSet::new();
@@ -672,6 +700,27 @@ pub(super) fn compile_closure(
         .copied()
         .collect();
     super::arguments::add_arguments_mapped_boxes(params, Some(body), &mut closure_boxed_vars);
+    // The region proofs that hold for the whole body: the parameter is never
+    // rebound (a Number one also normalized at entry, below).
+    let region_entry_proofs: HashMap<u32, perry_hir::types::Type> = if region_closure {
+        let mut m = crate::collectors::typed_locals::stable_param_proofs(
+            &region_proofs,
+            body,
+            &closure_boxed_vars,
+        );
+        let rebound = crate::collectors::reassigned_locals(body);
+        for id in &region_number_params {
+            if !closure_boxed_vars.contains(id)
+                && !rebound.contains(id)
+                && !crate::collectors::has_any_mutation(body, *id)
+            {
+                m.insert(*id, perry_hir::types::Type::Number);
+            }
+        }
+        m
+    } else {
+        HashMap::new()
+    };
 
     // Allocate slots for the closure's own params (captures don't get
     // alloca slots — they're accessed via the runtime).
@@ -688,11 +737,30 @@ pub(super) fn compile_closure(
         // then flows into unrooted Number storage (a typed local copied from
         // it) and across later safepoints. The map entry itself stays until
         // that drop so `capture_root_base` below keeps the original count.
-        let number_params: HashSet<u32> = typed_body
-            .map(|plan| crate::collectors::typed_locals::number_proof_params(&plan.proofs).collect())
+        let mut number_params: HashSet<u32> = typed_body
+            .map(|plan| {
+                crate::collectors::typed_locals::number_proof_params(&plan.proofs).collect()
+            })
             .unwrap_or_default();
+        number_params.extend(
+            region_entry_proofs
+                .iter()
+                .filter(|(_, t)| matches!(t, perry_hir::types::Type::Number))
+                .map(|(id, _)| *id),
+        );
         for p in params {
             let arg_name = format!("%arg{}", p.id);
+            // A closure region's Number parameter: an int32 box becomes the
+            // equal plain double once, here (`split_regions`).
+            let arg_name = if region_number_params.contains(&p.id) {
+                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
+                let bits = blk.bitcast_double_to_i64(&arg_name);
+                let low = blk.trunc(I64, &bits, I32);
+                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
+                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
+            } else {
+                arg_name
+            };
             let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map
                 .get(&p.id)
@@ -927,7 +995,9 @@ pub(super) fn compile_closure(
     let mut code_unit_locals = std::collections::HashSet::new();
     let typed_locals = crate::collectors::typed_locals::apply(
         body,
-        &typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
+        &typed_body
+            .map(|p| p.proofs.clone())
+            .unwrap_or_else(|| region_entry_proofs.clone()),
         &outer_proofs,
         &closure_boxed_vars,
         module_globals,
@@ -1112,7 +1182,9 @@ pub(super) fn compile_closure(
         locals,
         local_types,
         // A typed body's entry check (the public dispatcher) proved these.
-        proven_local_types: typed_body.map(|p| p.proofs.clone()).unwrap_or_default(),
+        proven_local_types: typed_body
+            .map(|p| p.proofs.clone())
+            .unwrap_or_else(|| region_proofs.clone()),
         typed_locals,
         code_unit_locals,
         confined_arrays: &cross_module.definite_init.confined,

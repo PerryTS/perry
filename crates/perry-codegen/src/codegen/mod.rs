@@ -225,6 +225,9 @@ mod indexed_method_artifacts;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+pub mod split_regions;
+#[cfg(test)]
+mod split_regions_tests;
 #[cfg(test)]
 mod string_accumulator_tests;
 mod tdz_names;
@@ -1931,6 +1934,10 @@ fn compile_module_impl(
     let mut typed_string_functions = std::collections::HashSet::new();
     let mut typed_i1_function_param_reps = std::collections::HashMap::new();
     for f in &hir.functions {
+        // A split region is one body by design: no typed-ABI clone.
+        if split_regions::is_region_function(f) {
+            continue;
+        }
         match typed_abi::typed_f64_function_rejection_reason(f) {
             None => {
                 typed_f64_functions.insert(f.id);
@@ -2802,6 +2809,12 @@ fn compile_module_impl(
             .filter(|id| !funcs_reading_dynamic_this.contains(id))
             .collect();
     let mut cross_module = CrossModuleCtx {
+        region_closures: hir
+            .closure_display_names
+            .iter()
+            .filter(|(_, name)| name.contains(split_regions::REGION_MARK))
+            .map(|(id, _)| *id)
+            .collect(),
         wpfacts: opts.program_facts.elision.clone(),
         capture_type_proofs: Default::default(),
         program_layouts: Arc::clone(&opts.program_layouts),
@@ -3319,6 +3332,10 @@ fn compile_module_impl(
     cross_module.typed_closure_capture_reps.clear();
     cross_module.typed_i1_closure_param_reps.clear();
     for (func_id, expr) in &closures {
+        // A closure region is one body by design: no typed-ABI clone.
+        if cross_module.region_closures.contains(func_id) {
+            continue;
+        }
         if let Some(captures) =
             typed_abi::typed_f64_closure_capture_reps(expr, &typed_abi_local_types)
         {
@@ -3462,6 +3479,7 @@ fn compile_module_impl(
         .chain(cross_module.typed_i32_closures.iter())
         .chain(cross_module.typed_i1_closures.iter())
         .chain(cross_module.typed_string_closures.iter())
+        .chain(cross_module.region_closures.iter())
         .copied()
         .collect();
     let trusted_box_closures = closure_collect::select_trusted_box_closures(
@@ -3512,6 +3530,11 @@ fn compile_module_impl(
             // BEFORE any rejection was constructed, so `--opt-report` said
             // nothing at all about the function: indistinguishable from "not
             // analysed" and from "analysed and denied". Say "moot" instead.
+            // A split region has one call site and one body, already typed
+            // by its caller's proofs: no specialized copy.
+            if split_regions::is_region_function(f) {
+                continue;
+            }
             let sites = spec_facts.call_sites.get(&f.id);
             // A guard executed when a generator object is CREATED cannot
             // prove the argument when its body later runs. Likewise, an
