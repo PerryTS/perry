@@ -65,11 +65,12 @@ extern "C" fn perf_timerify_settle(
 
 extern "C" fn perf_timerify_wrapper(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_handle = scope.root_nanbox_f64(this.as_f64());
         let wrapper_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
         let target_handle =
             scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
@@ -115,7 +116,7 @@ extern "C" fn perf_timerify_wrapper(
             }
             crate::closure::js_native_call_value(
                 target,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
                 call_args.as_ptr(),
                 call_args.len(),
             )

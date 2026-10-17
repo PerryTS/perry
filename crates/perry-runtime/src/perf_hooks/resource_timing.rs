@@ -170,6 +170,7 @@ pub extern "C" fn js_perf_mark_resource_timing(
             }
             crate::value::js_nanbox_pointer(out as i64)
         };
+        let obj = link_perf_prototype(obj, "PerformanceResourceTiming");
         entry.object_bits = obj.to_bits();
         notify_observers(&entry);
         // Timeline insertion honors the resource-timing buffer cap (observers

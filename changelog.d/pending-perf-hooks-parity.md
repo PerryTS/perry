@@ -1,0 +1,1 @@
+Fix `perf_hooks` parity by linking node and resource timing entries to their default prototypes before publication, rooting and forwarding exact `timerify` receivers, and preserving specialized `nodeTiming` JSON serialization through inherited entry methods. Add coverage for cached prototype overrides and strict receiver identity. Refs #9202.

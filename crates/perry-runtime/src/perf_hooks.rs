@@ -161,13 +161,13 @@ pub(crate) fn note_event_loop_start() {
     });
 }
 
-/// True when `obj` is a mark/measure entry object produced by
-/// `entry_to_object` — i.e. its `keys_array` is the recorded shared
-/// `PERF_ENTRY_SHAPE` allocation. The toJSON-result object uses a different
-/// shape, so it deliberately does not match. (#1387)
+/// True for runtime-created performance entries, not their toJSON snapshots.
 pub(crate) unsafe fn is_perf_entry_object(obj: *const crate::object::ObjectHeader) -> bool {
     if obj.is_null() {
         return false;
+    }
+    if is_node_timing_object(obj) {
+        return true;
     }
     // A key LIST is the array and its count: lists on one growth chain share
     // an array, so the count must match the entry shape's too.
@@ -296,6 +296,9 @@ pub(crate) unsafe fn perf_entry_to_json(this: f64) -> f64 {
     let src = jv.as_pointer::<crate::object::ObjectHeader>();
     if src.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if is_node_timing_object(src) {
+        return node_timing_to_json(this);
     }
     if is_resource_entry_object(src) {
         let n = RESOURCE_ENTRY_FIELD_COUNT as usize;
@@ -1223,7 +1226,10 @@ unsafe fn make_node_timing_object() -> f64 {
             JSValue::from_bits(uv_metrics_handle.get_nanbox_u64()),
         );
         NODE_TIMING_KEYS_ARRAY.with(|c| c.set(crate::object::object_keys(obj).arr() as usize));
-        crate::value::js_nanbox_pointer(obj as i64)
+        link_perf_prototype(
+            crate::value::js_nanbox_pointer(obj as i64),
+            "PerformanceEntry",
+        )
     }
 }
 
