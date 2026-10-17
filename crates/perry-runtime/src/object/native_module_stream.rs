@@ -2,10 +2,6 @@
 
 use super::*;
 
-crate::perry_thread_local! {
-    static STREAM_EVENT_EMITTER_PROTOTYPES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
-}
-
 const STREAM_STATIC_READABLE_FROM: f64 = 1.0;
 const STREAM_STATIC_DUPLEX_FROM: f64 = 2.0;
 const STREAM_STATIC_READABLE_TO_WEB: f64 = 3.0;
@@ -14,17 +10,6 @@ const STREAM_STATIC_DUPLEX_TO_WEB: f64 = 5.0;
 const STREAM_STATIC_READABLE_FROM_WEB: f64 = 6.0;
 const STREAM_STATIC_WRITABLE_FROM_WEB: f64 = 7.0;
 const STREAM_STATIC_DUPLEX_FROM_WEB: f64 = 8.0;
-
-pub(crate) fn scan_stream_event_emitter_prototype_roots_mut(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-) {
-    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
-        let mut protos = protos.borrow_mut();
-        for bits in protos.iter_mut() {
-            visitor.visit_nanbox_u64_slot(bits);
-        }
-    });
-}
 
 /// The own properties Node hangs off `require('stream')` — which IS the legacy
 /// `Stream` constructor (`lib/stream.js`: `module.exports = Stream`, then
@@ -60,44 +45,34 @@ fn closure_addr_of(value: f64) -> usize {
     (value.to_bits() & crate::value::POINTER_MASK) as usize
 }
 
-/// The NaN-boxed value of a rooted object pointer, read at the call site.
-fn proto_value(proto: &crate::gc::RuntimeHandle<'_>) -> f64 {
-    proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64))
-}
-
 pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
-    // Every step below allocates (the prototype object, its EventEmitter
-    // method closures, each export value, the EventEmitter constructor), so
-    // both the constructor and the prototype are re-read from their handles at
-    // each use rather than held as raw addresses across a collection point.
+    // Every step below allocates (the prototype object, its method closures,
+    // each export value, the EventEmitter constructor), so the constructor is
+    // re-read from its handle at each use rather than held as a raw address
+    // across a collection point.
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
-    let proto = scope.root_raw_mut_ptr(unsafe {
-        super::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            super::runtime_layouts::LEGACY_STREAM_PROTO
-        ))
-    });
-    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
-        js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
-    });
-    // readable-stream's `Readable.prototype.on` borrows `Stream.prototype.on`
-    // via `.call(this)`; expose the EventEmitter methods on the legacy
-    // `Stream.prototype` as receiver-from-`this` values so the borrow works.
-    // (The installer roots `proto` itself.)
-    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
-        crate::node_stream::install_event_emitter_prototype_methods(p)
-    });
-    let proto_bits = proto_value(&proto).to_bits();
-    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
-        let mut protos = protos.borrow_mut();
-        if !protos.contains(&proto_bits) {
-            protos.push(proto_bits);
-        }
-    });
+    // #10430: Node's `lib/internal/streams/legacy.js` does
+    // `ObjectSetPrototypeOf(Stream.prototype, EE.prototype)` and
+    // `ObjectSetPrototypeOf(Stream, EE)`. `Stream.prototype`'s layout names
+    // `EventEmitter.prototype` as its [[Prototype]], so that prototype is
+    // built first. Arm the events attach before minting `EventEmitter`:
+    // minting it earlier would cache a constructor without its statics for
+    // the whole process.
+    super::native_module_registry::js_nm_install_events();
+    let event_emitter =
+        scope.root_nanbox_f64(bound_native_callable_export_value("events", "EventEmitter"));
+    let _ = crate::object::js_function_prototype_value_for_read(event_emitter.get_nanbox_f64());
+    // `Stream.prototype`: node's `constructor`, `pipe` and `eventNames`, born
+    // on its static layout and sealed (readable-stream's `.call(this)` borrows
+    // of the emitter methods reach them on `EventEmitter.prototype`).
+    let proto = scope.root_nanbox_f64(crate::node_stream::build_legacy_stream_prototype(
+        constructor.get_nanbox_f64(),
+    ));
     crate::closure::closure_set_dynamic_prop(
         closure_addr_of(constructor.get_nanbox_f64()),
         "prototype",
-        proto_value(&proto),
+        proto.get_nanbox_f64(),
     );
 
     // #10431: the module value (`require('stream')`, `import Stream from
@@ -139,59 +114,25 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
         );
     }
 
-    // #10430: Node's `lib/internal/streams/legacy.js` does
-    // `ObjectSetPrototypeOf(Stream.prototype, EE.prototype)` and
-    // `ObjectSetPrototypeOf(Stream, EE)`. The constructor edge is what makes
-    // the inherited statics resolve (`require('stream').EventEmitter ===
-    // require('events')`, `.defaultMaxListeners`, `.once`, …); the prototype
-    // edge makes `Object.create(Stream.prototype) instanceof EventEmitter`.
-    // Arm the events attach first: minting `EventEmitter` before it would
-    // cache a constructor without its statics for the whole process.
-    super::native_module_registry::js_nm_install_events();
-    let event_emitter =
-        scope.root_nanbox_f64(bound_native_callable_export_value("events", "EventEmitter"));
+    // The constructor edge makes the inherited statics resolve
+    // (`require('stream').EventEmitter === require('events')`,
+    // `.defaultMaxListeners`, `.once`, …); the prototype edge is the layout's.
     crate::object::js_object_set_prototype_of(
         constructor.get_nanbox_f64(),
         event_emitter.get_nanbox_f64(),
     );
-    let event_emitter_proto = scope.root_nanbox_f64(
-        crate::object::js_function_prototype_value_for_read(event_emitter.get_nanbox_f64()),
-    );
-    if JSValue::from_bits(event_emitter_proto.get_nanbox_u64()).is_pointer() {
-        crate::object::js_object_set_prototype_of(
-            proto_value(&proto),
-            event_emitter_proto.get_nanbox_f64(),
-        );
-    }
 }
 
 pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: &str) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
-    let layout = match name {
-        "Duplex" => Some(std::ptr::addr_of!(super::runtime_layouts::DUPLEX_PROTO)),
-        "Transform" => Some(std::ptr::addr_of!(super::runtime_layouts::TRANSFORM_PROTO)),
-        "PassThrough" => Some(std::ptr::addr_of!(
-            super::runtime_layouts::PASSTHROUGH_PROTO
-        )),
-        _ => None,
-    };
-    let proto = scope.root_raw_mut_ptr(match layout {
-        Some(desc) => unsafe { super::layout_desc::perry_alloc_layout(desc) },
-        None => match name {
-            "Readable" => js_object_alloc_with_shape(0x7FFF_FF34, 1, b"constructor\0".as_ptr(), 12),
-            "Writable" => js_object_alloc_with_shape(0x7FFF_FF35, 1, b"constructor\0".as_ptr(), 12),
-            _ => return,
-        },
-    });
-    proto.with_mut_ptr(|p| {
-        js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
-    });
     // G1 (STREAM-PAYLOAD-DESIGN): the classic stream methods live here, on
-    // `Readable`/`Writable`/`Duplex.prototype`, one receiver-from-`this`
-    // closure each per realm, as in node; `Transform` and `PassThrough`
-    // inherit them through `Duplex.prototype`. `<Ctor>.prototype.<m>.call(this,
-    // …)` borrows (readable-stream) reach the same bodies.
+    // `Readable`/`Writable`/`Duplex`/`Transform.prototype`, one
+    // receiver-from-`this` closure each per realm, as in node; each prototype
+    // is born on its static layout (node's keys, order and attributes) and
+    // sealed. `PassThrough` inherits them through `Transform.prototype`.
+    // `<Ctor>.prototype.<m>.call(this, …)` borrows (readable-stream) reach the
+    // same bodies.
     let kind = match name {
         "Readable" => Some(crate::node_stream::StreamProto::Readable),
         "Writable" => Some(crate::node_stream::StreamProto::Writable),
@@ -199,32 +140,29 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
         "Transform" => Some(crate::node_stream::StreamProto::Transform),
         _ => None,
     };
-    if let Some(kind) = kind {
-        proto.with_mut_ptr(|p| crate::node_stream::install_stream_prototype_methods(p, kind));
-    }
-    let proto_value =
-        proto.with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
-    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
-        let mut protos = protos.borrow_mut();
-        if !protos.contains(&proto_value.to_bits()) {
-            protos.push(proto_value.to_bits());
+    let proto_value = match kind {
+        Some(kind) => {
+            crate::node_stream::build_stream_prototype(constructor.get_nanbox_f64(), kind)
         }
-    });
+        None if name == "PassThrough" => {
+            let proto = scope.root_raw_mut_ptr(unsafe {
+                super::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
+                    super::runtime_layouts::PASSTHROUGH_PROTO
+                ))
+            });
+            proto.with_mut_ptr(|p| {
+                js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
+            });
+            proto.with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64))
+        }
+        None => return,
+    };
     crate::closure::closure_set_dynamic_prop(
         closure_addr_of(constructor.get_nanbox_f64()),
         "prototype",
         proto_value,
     );
     attach_stream_constructor_statics(constructor.get_nanbox_f64(), name);
-}
-
-pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
-    let bits = value.to_bits();
-    let jsval = JSValue::from_bits(bits);
-    if !jsval.is_pointer() {
-        return false;
-    }
-    STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| protos.borrow().contains(&bits))
 }
 
 extern "C" fn stream_static_method_thunk(
@@ -397,8 +335,8 @@ mod tests {
         let stream_ctor = bound_native_callable_export_value("stream", "Stream");
         let stream_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
         let stream_proto = crate::closure::closure_get_dynamic_prop(stream_ptr, "prototype");
-        assert!(is_stream_event_emitter_prototype_value(stream_proto));
-
+        // `Stream.prototype`'s [[Prototype]] is `EventEmitter.prototype` (its
+        // layout's), which `instanceof` walks.
         let event_emitter = bound_native_callable_export_value("events", "EventEmitter");
         assert_eq!(
             js_instanceof_dynamic(stream_proto, event_emitter).to_bits(),

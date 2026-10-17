@@ -1082,7 +1082,8 @@ pub(super) fn writable_hidden_final(value: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(value);
     let visible = crate::runtime_state_key!(b"_final").read_value(stream.get_nanbox_f64());
-    if is_callable_value(visible) {
+    // `Transform.prototype._final` is a builtin, not a user hook.
+    if super::user_hook_value(visible).is_some() {
         Some(visible)
     } else {
         get_hidden_value(stream.get_nanbox_f64(), hidden_writable_final_key())
@@ -1507,7 +1508,10 @@ fn resolve_read_callback(stream: f64) -> Option<f64> {
     if let Some(read) = get_hidden_value(stream, hidden_read_key()) {
         return Some(read);
     }
-    get_hidden_value(stream, crate::runtime_state_key!(b"_read")).filter(|v| is_callable_value(*v))
+    // The prototypes' `_read` is a builtin, not a user hook: a stream without
+    // one takes the default read below.
+    get_hidden_value(stream, crate::runtime_state_key!(b"_read"))
+        .filter(|v| super::user_hook_value(*v).is_some())
 }
 
 fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {

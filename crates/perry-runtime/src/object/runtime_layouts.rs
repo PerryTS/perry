@@ -204,6 +204,8 @@ pub(crate) mod intrinsic_private_atoms {
     );
 }
 include!("runtime_layouts/builtin_prototypes.rs");
+include!("runtime_layouts/node_prototypes.rs");
+include!("runtime_layouts/node_prototype_birth.rs");
 
 /// `child_process.spawnSync`'s result. Node gives it `error` first, and only
 /// when the spawn failed: the key is an optional member (object model §3.2),

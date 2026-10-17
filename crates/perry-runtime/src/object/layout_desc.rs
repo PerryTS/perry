@@ -641,6 +641,10 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
             crate::codegen_abi::ATOM_KIND_STRING if !(*key.atom).string.is_null() => {}
             crate::codegen_abi::ATOM_KIND_WELL_KNOWN_SYMBOL
                 if ((*key.atom).index as usize) < crate::codegen_abi::WELL_KNOWN_SYMBOLS.len() => {}
+            // A symbol of node's own library the runtime binds
+            // (`runtime_layouts::runtime_symbol_of_atom`).
+            crate::codegen_abi::ATOM_KIND_PROGRAM_SYMBOL
+                if super::runtime_layouts::runtime_symbol_of_atom(key.atom).is_some() => {}
             _ => return 0,
         }
     }
@@ -673,7 +677,9 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         let attributes = super::key_attrs::keys_attrs(list);
         for (i, key) in keys.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): unpublished startup list, under suppression.
-            *values.add(i) = match well_known_atom_symbol(key.atom) {
+            *values.add(i) = match well_known_atom_symbol(key.atom)
+                .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(key.atom))
+            {
                 // The key word a symbol data property stores.
                 Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
                 None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),

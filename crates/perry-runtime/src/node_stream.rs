@@ -1209,8 +1209,10 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
     let chunk = scope.root_nanbox_f64(chunk);
     let enc = scope.root_nanbox_f64(enc);
     let callback = scope.root_nanbox_f64(callback);
+    // The prototypes' `_write` is a builtin: a stream with no user hook
+    // writes through its hidden one (`proto_methods::is_builtin_hook`).
     let write = crate::runtime_state_key!(b"_write").read_value(stream.get_nanbox_f64());
-    let write = scope.root_nanbox_f64(if is_callable_value(write) {
+    let write = scope.root_nanbox_f64(if user_hook_value(write).is_some() {
         write
     } else {
         writable_hidden_write(stream.get_nanbox_f64()).unwrap_or(f64::from_bits(TAG_UNDEFINED))
@@ -1870,7 +1872,9 @@ mod destroy_state;
 pub(crate) mod native_hooks;
 mod proto_methods;
 mod state_record;
-pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
+pub(crate) use proto_methods::{
+    build_legacy_stream_prototype, build_stream_prototype, user_hook_value, StreamProto,
+};
 use state_record::*;
 pub(crate) use state_record::{
     is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,

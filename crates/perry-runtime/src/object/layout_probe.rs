@@ -1178,21 +1178,24 @@ unsafe fn walks_from(obj: *const ObjectHeader, r: *const ShapeRecord) -> bool {
 
 /// Are the own keys of `obj`, an object of the unmarked or callable ordinary
 /// `kind`, exactly its list and overflow? An unmarked object qualifies (a
-/// runtime-born record, a user prototype) unless it is an exotic read
-/// receiver, a typed-array prototype, or a sealed intrinsic other than the
-/// builtin prototypes born on complete static layouts
-/// ([`crate::object::builtin_proto::on_static_layout`]); a callable one only
-/// as such a prototype (`%Function.prototype%`).
+/// runtime-born record, a user prototype, a sealed intrinsic of any family:
+/// the builtin and runtime prototypes born on complete static layouts) unless
+/// it is an exotic read receiver or a typed-array prototype; a callable one
+/// only as such a prototype on its static layout (`%Function.prototype%`,
+/// [`crate::object::builtin_proto::on_static_layout`]).
 #[inline(always)]
 unsafe fn listed(obj: *const ObjectHeader, kind: super::ShapeObjectKind) -> bool {
     let meta = (*obj).meta;
     let flags = if meta.is_null() { 0 } else { (*meta).flags };
     if flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
-        return matches!(
-            kind,
-            super::ShapeObjectKind::OrdinaryUnmarked | super::ShapeObjectKind::CallableOrdinary
-        ) && flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
-            && crate::object::builtin_proto::on_static_layout(flags);
+        return flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
+            && match kind {
+                super::ShapeObjectKind::OrdinaryUnmarked => true,
+                super::ShapeObjectKind::CallableOrdinary => {
+                    crate::object::builtin_proto::on_static_layout(flags)
+                }
+                _ => false,
+            };
     }
     if kind != super::ShapeObjectKind::OrdinaryUnmarked
         || flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0

@@ -774,7 +774,8 @@ fn init_transform_kind(
                 let hook = scope.root_nanbox_f64(unsafe {
                     name.read_object(object_ptr_from_value(t()).unwrap())
                 });
-                if is_callable_value(hook.get_nanbox_f64()) {
+                // `Transform.prototype._final` is node's, not the binding's.
+                if crate::node_stream::user_hook_value(hook.get_nanbox_f64()).is_some() {
                     set_hidden_value(t(), slot, hook.get_nanbox_f64());
                 }
             }

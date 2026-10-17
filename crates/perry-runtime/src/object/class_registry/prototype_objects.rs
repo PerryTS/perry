@@ -24,8 +24,17 @@ pub(crate) fn ensure_function_prototype_object(func_value: f64) -> *mut ObjectHe
         Some(ops) => unsafe { (ops.ee_prototype_layout)(func_handle.get_nanbox_f64()) },
         None => std::ptr::null(),
     };
+    // `EventEmitter.prototype` is born on its static layout, old and never
+    // moving like every builtin prototype (`runtime_layouts::node_prototypes`):
+    // its [[Prototype]] is the layout's.
+    let on_node_layout = std::ptr::eq(
+        layout,
+        std::ptr::addr_of!(super::super::runtime_layouts::EVENT_EMITTER_PROTOTYPE),
+    );
     let proto = if layout.is_null() {
         crate::object::object_alloc_prototype_old(0, 0)
+    } else if on_node_layout {
+        unsafe { crate::object::layout_desc::alloc_layout_prototype(layout, 0) }
     } else {
         unsafe { crate::object::layout_desc::perry_alloc_layout(layout) }
     };
@@ -57,7 +66,9 @@ pub(crate) fn ensure_function_prototype_object(func_value: f64) -> *mut ObjectHe
         });
     }
 
-    if let Some(object_proto_bits) = global_object_prototype_bits() {
+    if on_node_layout {
+        // The layout names `%Object.prototype%`.
+    } else if let Some(object_proto_bits) = global_object_prototype_bits() {
         let object_proto = scope.root_nanbox_u64(object_proto_bits);
         proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_set_static_prototype(
@@ -982,7 +993,7 @@ pub(crate) unsafe fn nm_ee_prototype_layout(
         Some((module, method)) if module.trim_start_matches("node:") == "events" => {
             match method.as_str() {
                 "EventEmitter" => {
-                    std::ptr::addr_of!(super::super::runtime_layouts::EVENT_EMITTER_PROTO)
+                    std::ptr::addr_of!(super::super::runtime_layouts::EVENT_EMITTER_PROTOTYPE)
                 }
                 "EventEmitterAsyncResource" => {
                     std::ptr::addr_of!(super::super::runtime_layouts::EE_ASYNC_RESOURCE_PROTO)
@@ -1036,8 +1047,25 @@ pub(crate) unsafe fn nm_ee_prototype_install(
                     crate::node_stream::install_event_emitter_async_resource_prototype(proto)
                 });
             } else {
+                // node's `EventEmitter.prototype`: the state defaults, the
+                // methods, and `kCapture: false`, filling its layout; then
+                // sealed, so a program write sets its shadow bit.
                 proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
                     crate::node_stream::install_event_emitter_prototype(proto)
+                });
+                let layout = super::super::runtime_layouts::NodePrototype::of(std::ptr::addr_of!(
+                    super::super::runtime_layouts::EVENT_EMITTER_PROTOTYPE
+                ));
+                proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
+                    layout.symbol_data(
+                        proto,
+                        std::ptr::addr_of!(super::super::runtime_layouts::NP_SYMBOL_K_CAPTURE),
+                        f64::from_bits(crate::value::TAG_FALSE),
+                    );
+                    layout.seal(
+                        proto,
+                        crate::closure::shape::INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE,
+                    );
                 });
             }
         }

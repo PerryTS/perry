@@ -109,7 +109,13 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
     let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
     let parent_proto = scope.root_nanbox_f64(prototype(parent.get_nanbox_f64()));
     crate::object::js_object_set_prototype_of(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
-    if proto.get_nanbox_u64() != parent_proto.get_nanbox_u64() {
+    // A prototype born on a layout naming its parent (`runtime_layouts::
+    // node_prototypes`) already has it: no relink, which on a sealed
+    // prototype would be a write.
+    if proto.get_nanbox_u64() != parent_proto.get_nanbox_u64()
+        && crate::object::js_object_get_prototype_of(proto.get_nanbox_f64()).to_bits()
+            != parent_proto.get_nanbox_u64()
+    {
         crate::object::js_object_set_prototype_of(
             proto.get_nanbox_f64(),
             parent_proto.get_nanbox_f64(),
@@ -832,13 +838,14 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
             crate::fn_info!(capture_rejections_set, 1; with_declared(1)),
         ),
     ] {
+        // node's `kCapture`: the key `EventEmitter.prototype`'s layout lists
+        // (`runtime_layouts::NP_SYMBOL_K_CAPTURE`), born `false` there.
         let capture_key = if name == "captureRejections" {
-            let description = crate::string::intern_ascii_literal(b"kCapture");
-            Some(scope.root_nanbox_f64(unsafe {
-                crate::symbol::js_symbol_new(f64::from_bits(
-                    JSValue::string_ptr(description as *mut _).bits(),
-                ))
-            }))
+            Some(
+                scope.root_nanbox_f64(crate::object::runtime_layouts::runtime_symbol_value(
+                    &crate::object::runtime_layouts::NP_SYMBOL_K_CAPTURE,
+                )),
+            )
         } else {
             None
         };
@@ -912,18 +919,6 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
             },
             crate::object::PropertyAttrs::new(false, true, false),
         );
-        if let Some(key) = &capture_key {
-            let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
-                ctor.get_nanbox_f64(),
-            ));
-            unsafe {
-                crate::object::js_object_set_property_key(
-                    proto.get_nanbox_f64(),
-                    key.get_nanbox_f64(),
-                    initial,
-                );
-            }
-        }
     }
     ctor.get_nanbox_f64()
 }

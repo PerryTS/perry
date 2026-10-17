@@ -288,6 +288,21 @@ fn well_known_fast_slot(short_name: &str) -> Option<&'static std::sync::atomic::
     Some(&SLOTS[index])
 }
 
+/// A fresh, process-lifetime symbol (not in the `Symbol.for` registry) with
+/// `description`: a symbol of node's own library that a runtime layout lists
+/// as a key (`runtime_layouts::runtime_symbol_of_atom`), the same symbol in
+/// every agent.
+pub(crate) fn persistent_symbol(description: &str) -> *mut SymbolHeader {
+    let sym_ptr = leak_symbol(SymbolHeader {
+        magic: SYMBOL_MAGIC,
+        registered: 0,
+        description: std::ptr::null_mut(),
+        id: next_id(),
+    });
+    record_registered_symbol_description(sym_ptr as usize, description);
+    sym_ptr
+}
+
 fn well_known_symbol_slow(short_name: &str) -> *mut SymbolHeader {
     let mut guard = WELL_KNOWN_SYMBOLS.lock().unwrap();
     if guard.is_none() {
@@ -483,7 +498,8 @@ fn is_persistent_symbol(ptr: usize) -> bool {
         || INTL_FALLBACK_SYMBOL
             .lock()
             .unwrap()
-            .is_some_and(|value| value == ptr);
+            .is_some_and(|value| value == ptr)
+        || crate::object::runtime_layouts::is_runtime_symbol(ptr);
     // No header read until an existing immortal owner proves the address.
     known
         && unsafe {

@@ -391,7 +391,6 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
     // install the `sensitiveHeaders` symbol slot doesn't exist, so there's no
     // root to scan.
     crate::module_hooks::http2_scan_roots(visitor);
-    scan_stream_event_emitter_prototype_roots_mut(visitor);
     scan_tls_derived_prototype_roots_mut(visitor);
 }
 
