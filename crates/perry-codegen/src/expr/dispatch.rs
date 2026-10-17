@@ -143,6 +143,13 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return read;
                 }
+                // §3.6: an inherited method through a class family's layout
+                // is a read of its holder's slot.
+                if let Some(read) =
+                    crate::proto_constants::lower_class_holder_read(ctx, object, property, expr)
+                {
+                    return read;
+                }
                 super::property_get::lower(ctx, expr)
             }
         },

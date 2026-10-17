@@ -452,3 +452,255 @@ fn emit_holder_contract(ctx: &mut crate::expr::FnCtx<'_>, recv: &str, held: &str
         &[(DOUBLE, recv), (DOUBLE, held), (I64, &method_id)],
     );
 }
+
+/// The class `o` is an instance of when `o.m` reads through a class family's
+/// layout ([`lower_class_holder_read`]): `this` in an inlined `new C(…)`
+/// constructor body (the leaf's, also inside an inherited constructor's
+/// body), or a binding constructed by `new C(…)`. Only a guess: the site
+/// compares the receiver's layout word before it trusts it.
+fn holder_read_class(ctx: &crate::expr::FnCtx<'_>, object: &perry_hir::Expr) -> Option<String> {
+    match object {
+        perry_hir::Expr::This => {
+            let top = ctx.this_stack.last()?;
+            ctx.inline_new_leaf
+                .iter()
+                .rev()
+                .find(|(slot, _)| slot == top)
+                .map(|(_, class)| class.clone())
+        }
+        _ => ctx.exact_receiver_class(object),
+    }
+}
+
+/// `i64`: the raw address of class `cid`'s prototype object, or 0 while it
+/// is not materialized (a prototype is created on first demand through the
+/// agent's class-value directory; see [`holder_unshadowed`]).
+fn emit_class_prototype_ptr(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: u32) -> String {
+    let page = ctx.new_block("cholder.page");
+    let ctor = ctx.new_block("cholder.constructor");
+    let link = ctx.new_block("cholder.link");
+    let found = ctx.new_block("cholder.found");
+    let merge = ctx.new_block("cholder.merge");
+    let pl = ctx.block_label(page);
+    let cl = ctx.block_label(ctor);
+    let ll = ctx.block_label(link);
+    let fl = ctx.block_label(found);
+    let ml = ctx.block_label(merge);
+    let start = ctx.block().label.clone();
+    let pages = ctx.block().load(PTR, dir);
+    let at = ctx.block().gep(I8, dir, &[(I64, "8")]);
+    let len = ctx.block().load(I64, &at);
+    let present = ctx.block().icmp_ult(I64, &(cid >> 8).to_string(), &len);
+    ctx.block().cond_br(&present, &pl, &ml);
+    ctx.current_block = page;
+    let at = ctx
+        .block()
+        .gep(PTR, &pages, &[(I64, &(cid >> 8).to_string())]);
+    let p = ctx.block().load(PTR, &at);
+    let present = ctx.block().icmp_ne(PTR, &p, "null");
+    ctx.block().cond_br(&present, &cl, &ml);
+    ctx.current_block = ctor;
+    let at = ctx.block().gep(PTR, &p, &[(I64, &(cid & 255).to_string())]);
+    let c = ctx.block().load(PTR, &at);
+    let present = ctx.block().icmp_ne(PTR, &c, "null");
+    ctx.block().cond_br(&present, &ll, &ml);
+    ctx.current_block = link;
+    let off = crate::runtime_abi::CLOSURE_HEADER_SIZE
+        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE * 8;
+    let at = ctx.block().gep(I8, &c, &[(I64, &off.to_string())]);
+    let bits = ctx.block().load(I64, &at);
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let present = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_TOP16_I64);
+    ctx.block().cond_br(&present, &fl, &ml);
+    ctx.current_block = found;
+    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    ctx.block().br(&ml);
+    ctx.current_block = merge;
+    ctx.block().phi(
+        I64,
+        &[
+            ("0", &start),
+            ("0", &pl),
+            ("0", &cl),
+            ("0", &ll),
+            (&raw, &fl),
+        ],
+    )
+}
+
+/// An inherited method read through a class family's layout (§3.6): `o.m`
+/// where `o` is an instance of class `C` ([`holder_read_class`]), born on
+/// `C`'s family layout, and `C`'s static prototype chain names the holder of
+/// `m` (a ConstFn method slot, `static_prototype::chain`). The site:
+///
+/// ```text
+///   o's layout word == C's family layout id, no meta record
+///       (every own key is in the layout; [[Prototype]] is C.prototype)
+///   m in the layout: its slot, unless the hole        -> the own value
+///   each prototype of the chain materialized and on its static shape
+///       (word == ShapeId: no key added, deleted or redefined, so the
+///       holder lists m as data at its slot and no prototype before it
+///       holds m)
+///   the holder's slot, unless the hole                -> the value
+/// ```
+///
+/// Every word read is the receiver's or a prototype's own data compared
+/// with an immutable layout id; anything else takes the ordinary read.
+/// Returns `None` when the site is not one.
+pub(crate) fn lower_class_holder_read(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    object: &perry_hir::Expr,
+    property: &str,
+    read: &perry_hir::Expr,
+) -> Option<anyhow::Result<String>> {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        || ctx.target_triple.contains("wasm")
+        || property == "__proto__"
+        || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+    {
+        return None;
+    }
+    let class = holder_read_class(ctx, object)?;
+    let cid = *ctx.class_ids.get(&class)?;
+    let own_slot = ctx
+        .program_layouts
+        .families
+        .get(&cid)?
+        .keys
+        .iter()
+        .find(|(k, _)| k == property)
+        .map(|(_, slot)| *slot);
+    let chain = crate::codegen::static_prototype::chain(ctx, &class, property)?;
+    let &(holder_cid, _) = chain.last()?;
+    let (_, shape) = crate::codegen::static_shape_ids::static_prototype_shape(holder_cid)?;
+    let holder_slot = shape
+        .keys
+        .split(|&b| b == 0)
+        .take(shape.key_count as usize)
+        .position(|k| k == property.as_bytes())? as i64;
+    Some((|| {
+        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+        let desc = crate::layout_desc::note_family_desc_use(cid);
+        let recv = crate::expr::lower_expr(ctx, object)?;
+        let check = ctx.new_block("cholder.layout");
+        let chain_idx = ctx.new_block("cholder.chain");
+        let slow = ctx.new_block("cholder.generic");
+        let merge = ctx.new_block("cholder.merge");
+        let check_l = ctx.block_label(check);
+        let chain_l = ctx.block_label(chain_idx);
+        let slow_l = ctx.block_label(slow);
+        let merge_l = ctx.block_label(merge);
+        let mut hits: Vec<(String, String)> = Vec::new();
+        let biased = {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&recv);
+            let fused = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
+            blk.cond_br(&fused.is_object_pointer, &check_l, &slow_l);
+            fused.biased
+        };
+        ctx.current_block = check;
+        // The descriptor's registered id word (written once at startup,
+        // before any user code; a class family's descriptor may live in
+        // another unit, so it is addressed, not aliased).
+        let id = {
+            let blk = ctx.block();
+            let at = blk.gep(
+                I8,
+                &desc,
+                &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
+            );
+            blk.load(I32, &at)
+        };
+        let ok = {
+            let blk = ctx.block();
+            let wp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
+            let word = blk.load(I32, &wp);
+            let registered = blk.icmp_ne(I32, &id, "0");
+            let same = blk.icmp_eq(I32, &word, &id);
+            let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, header - 8);
+            let meta = blk.load(PTR, &mp);
+            let no_meta = blk.icmp_eq(PTR, &meta, "null");
+            let ok = blk.and(I1, &registered, &same);
+            blk.and(I1, &ok, &no_meta)
+        };
+        match own_slot {
+            Some(_) => {
+                let own = ctx.new_block("cholder.own");
+                let own_l = ctx.block_label(own);
+                ctx.block().cond_br(&ok, &own_l, &slow_l);
+                ctx.current_block = own;
+            }
+            None => ctx.block().cond_br(&ok, &chain_l, &slow_l),
+        }
+        if let Some(slot) = own_slot {
+            let hit = ctx.new_block("cholder.own_hit");
+            let hit_l = ctx.block_label(hit);
+            let v = {
+                let blk = ctx.block();
+                let sp = crate::expr::receiver_range::emit_field_ptr(
+                    blk,
+                    &biased,
+                    header + 8 * i64::from(slot),
+                );
+                let v = blk.load(I64, &sp);
+                let hole = blk.icmp_eq(I64, &v, crate::nanbox::TAG_HOLE_I64);
+                blk.cond_br(&hole, &chain_l, &hit_l);
+                v
+            };
+            ctx.current_block = hit;
+            let d = ctx.block().bitcast_i64_to_double(&v);
+            hits.push((d, ctx.block().label.clone()));
+            ctx.block().br(&merge_l);
+        }
+        ctx.current_block = chain_idx;
+        let dir = crate::expr::agent_ptr::emit_agent_ptr(
+            ctx,
+            crate::runtime_abi::AGENT_PTR_CLASS_VALUES,
+            "perry_class_value_dir_cell",
+        );
+        let mut holder = String::new();
+        for &(pcid, shape_id) in &chain {
+            let p = emit_class_prototype_ptr(ctx, &dir, pcid);
+            let on = ctx.new_block("cholder.proto");
+            let on_l = ctx.block_label(on);
+            let present = ctx.block().icmp_ne(I64, &p, "0");
+            ctx.block().cond_br(&present, &on_l, &slow_l);
+            ctx.current_block = on;
+            let next = ctx.new_block("cholder.proto_ok");
+            let next_l = ctx.block_label(next);
+            let blk = ctx.block();
+            let at = blk.add(I64, &p, "4");
+            let wp = blk.inttoptr(I64, &at);
+            let word = blk.load(I32, &wp);
+            let same = blk.icmp_eq(I32, &word, &(shape_id as i32).to_string());
+            blk.cond_br(&same, &next_l, &slow_l);
+            ctx.current_block = next;
+            holder = p;
+        }
+        let hit = ctx.new_block("cholder.hit");
+        let hit_l = ctx.block_label(hit);
+        let v = {
+            let blk = ctx.block();
+            let at = blk.add(I64, &holder, &(header + 8 * holder_slot).to_string());
+            let sp = blk.inttoptr(I64, &at);
+            let v = blk.load(I64, &sp);
+            let hole = blk.icmp_eq(I64, &v, crate::nanbox::TAG_HOLE_I64);
+            blk.cond_br(&hole, &slow_l, &hit_l);
+            v
+        };
+        ctx.current_block = hit;
+        let d = ctx.block().bitcast_i64_to_double(&v);
+        hits.push((d, ctx.block().label.clone()));
+        ctx.block().br(&merge_l);
+        ctx.current_block = slow;
+        let generic = crate::expr::property_get::lower(ctx, read)?;
+        hits.push((generic, ctx.block().label.clone()));
+        ctx.block().br(&merge_l);
+        ctx.current_block = merge;
+        let incoming: Vec<(&str, &str)> =
+            hits.iter().map(|(v, l)| (v.as_str(), l.as_str())).collect();
+        Ok(ctx.block().phi(DOUBLE, &incoming))
+    })())
+}

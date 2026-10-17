@@ -920,6 +920,8 @@ fn lower_new_impl_inner<'a>(
         this_slot.clone()
     });
     ctx.class_stack.push(class_name.to_string());
+    ctx.inline_new_leaf
+        .push((this_slot.clone(), class_name.to_string()));
 
     // #2768/new.target: `new C()` is fully inlined here, so the runtime
     // `js_new_target_*` cell is never set on this path. Bind `new.target`
@@ -1928,5 +1930,6 @@ fn lower_new_impl_inner<'a>(
         ctx.wpfacts_this.retain(|(s, _)| *s != slot);
     }
     ctx.class_stack.pop();
+    ctx.inline_new_leaf.pop();
     Ok(final_box)
 }

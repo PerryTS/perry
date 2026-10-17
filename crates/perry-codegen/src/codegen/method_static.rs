@@ -286,6 +286,7 @@ pub(in crate::codegen) fn compile_static_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        inline_new_leaf: Vec::new(),
         wpfacts_this: Vec::new(),
         this_stack: vec![this_slot],
         super_called_stack: Vec::new(),

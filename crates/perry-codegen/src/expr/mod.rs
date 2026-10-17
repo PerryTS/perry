@@ -366,6 +366,10 @@ pub(crate) struct FnCtx<'a> {
     /// `this_stack` is one of these slots (an inlined constructor pushes its
     /// own).
     pub wpfacts_this: Vec<(String, u32)>,
+    /// `(this slot, class)` of each inlined `new C(…)` constructor body
+    /// being lowered: while the top of `this_stack` is that slot, `this` is
+    /// the instance born for `C` (`proto_constants::lower_class_holder_read`).
+    pub inline_new_leaf: Vec<(String, String)>,
     /// Elided sites emitted so far in this function (witness site ids).
     pub wpfacts_sites: u32,
     /// (stable local, block) pairs whose receiver test already passed in
