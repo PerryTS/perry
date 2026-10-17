@@ -4,6 +4,8 @@
 
 /// Conservatively includes toolchain, linking and runtime-feature selection as
 /// well as lowering gates. Sorted and unique so each input is hashed once.
+/// The object key hashes the tools PATH resolves to instead of PATH itself
+/// (`object_cache::compute_object_cache_key`).
 pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "ANDROID_NDK_HOME",
     "DYLD_LIBRARY_PATH",

@@ -555,24 +555,10 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
     if inprocess_requested(native_roots) {
         return Ok(None);
     }
-    let opt = std::env::var("PERRY_LLVM_OPT")
-        .map(PathBuf::from)
-        .ok()
-        .filter(|p| p.exists())
-        .or_else(|| {
-            [
-                "/opt/homebrew/opt/llvm/bin/opt",
-                "/usr/local/opt/llvm/bin/opt",
-            ]
-            .iter()
-            .map(PathBuf::from)
-            .find(|p| p.exists())
-        })
-        .or_else(|| which_in_path("opt"))
-        .context(
-            "native statepoints require an LLVM `opt` binary: set PERRY_LLVM_OPT, \
+    let opt = find_opt().context(
+        "native statepoints require an LLVM `opt` binary: set PERRY_LLVM_OPT, \
              install Homebrew LLVM, or put `opt` on PATH",
-        )?;
+    )?;
     let passes_arg = format!("-passes={STATEPOINT_REWRITE_PASSES}");
     let mut child = Command::new(&opt)
         .arg(&passes_arg)
@@ -615,6 +601,52 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
         ));
     }
     Ok(Some(String::from_utf8(output.stdout)?))
+}
+
+/// The LLVM `opt` the statepoint rewrite runs: `PERRY_LLVM_OPT`, then
+/// Homebrew LLVM, then PATH.
+fn find_opt() -> Option<PathBuf> {
+    std::env::var("PERRY_LLVM_OPT")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.exists())
+        .or_else(|| {
+            [
+                "/opt/homebrew/opt/llvm/bin/opt",
+                "/usr/local/opt/llvm/bin/opt",
+            ]
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| p.exists())
+        })
+        .or_else(|| which_in_path("opt"))
+}
+
+/// The external tools object emission runs, for the object-cache key: each
+/// tool's resolved path and `--version` text. PATH and the `PERRY_LLVM_*`
+/// overrides reach an object only through these, so another `opt` or `clang`
+/// changes the key and an unrelated PATH entry does not. Resolved once per
+/// process.
+pub fn object_toolchain_key() -> &'static str {
+    static KEY: OnceLock<String> = OnceLock::new();
+    KEY.get_or_init(|| {
+        [("opt", find_opt()), ("clang", find_clang())]
+            .into_iter()
+            .map(|(name, tool)| match tool {
+                Some(tool) => {
+                    let tool = fs::canonicalize(&tool).unwrap_or(tool);
+                    let version = Command::new(&tool)
+                        .arg("--version")
+                        .output()
+                        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+                        .unwrap_or_default();
+                    format!("{name}={}:{version}", tool.display())
+                }
+                None => format!("{name}=none"),
+            })
+            .collect::<Vec<_>>()
+            .join("|")
+    })
 }
 
 fn which_in_path(name: &str) -> Option<PathBuf> {

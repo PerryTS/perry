@@ -788,7 +788,7 @@ fn key_changes_with_codegen_env_vars() {
     // helper calls, or a skipped verifier.
     //
     let opts = empty_opts();
-    for &var in COMPILE_ENV_VARS {
+    for &var in COMPILE_ENV_VARS.iter().filter(|&&var| var != "PATH") {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.
         let k_unset = compute_object_cache_key_with_env(&opts, 1, "0.5.156", |_| None);
@@ -1381,7 +1381,7 @@ fn key_changes_with_non_unicode_contract_mode() {
 #[test]
 fn every_compile_env_var_distinguishes_absent_empty_and_values() {
     let opts = empty_opts();
-    for &var in COMPILE_ENV_VARS {
+    for &var in COMPILE_ENV_VARS.iter().filter(|&&var| var != "PATH") {
         let key = |value: Option<&str>| {
             compute_object_cache_key_with_env(&opts, 1, "test", |name| {
                 (name == var).then(|| value.map(str::to_owned)).flatten()
@@ -1393,4 +1393,21 @@ fn every_compile_env_var_distinguishes_absent_empty_and_values() {
             .collect();
         assert_eq!(keys.len(), 4, "lossy environment key for {var}");
     }
+}
+
+#[test]
+fn path_reaches_the_object_key_only_through_the_tools_it_resolves() {
+    // `perf` and other wrappers prepend their own directories to PATH; the
+    // object key hashes the resolved `opt`/`clang` instead (`object_tools`).
+    let opts = empty_opts();
+    let key = |path: Option<&str>| {
+        compute_object_cache_key_with_env(&opts, 1, "test", |name| {
+            (name == "PATH").then(|| path.map(str::to_owned)).flatten()
+        })
+    };
+    assert_eq!(key(None), key(Some("/usr/bin")));
+    assert_eq!(
+        key(Some("/usr/bin")),
+        key(Some("/usr/libexec/perf-core:/usr/bin"))
+    );
 }
