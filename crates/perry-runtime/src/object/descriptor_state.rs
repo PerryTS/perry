@@ -456,49 +456,87 @@ pub(crate) unsafe fn holder_layout_blocks_store(
 /// prototype edge from its live shape. Reads metadata only; unknown links
 /// return None rather than materializing or walking a chain here.
 #[inline]
-pub(crate) unsafe fn holder_word_blocks_store(bits: u64, name: &[u8]) -> Option<bool> {
-    // A recorded prototype word is a traced edge naming a live heap cell (a
-    // POINTER_TAG value): its header is read directly. Other encodings use
-    // the admitting reader.
-    let payload = bits & crate::value::POINTER_MASK;
-    let header = if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && payload != 0
-    {
-        &*crate::gc::header_from_trusted_user_ptr(payload as *const u8)
-    } else {
-        crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
-    };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
-    }
-    let p = (bits & crate::value::POINTER_MASK) as usize;
-    let holder = p as *const ObjectHeader;
-    let record = super::shapes::object_shape_record(holder)?;
-    // The layout owns ordinary-store admission and the key attributes.
-    // Exotics/unmarked layouts use the generic operation.
-    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary {
-        return None;
-    }
-    let meta = (*holder).meta;
-    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
-        return None;
-    }
-    if super::key_attrs::object_key_blocks_plain_store_from_record(holder, record, name) {
-        return Some(true);
-    }
-    match record.proto_id() {
-        super::shapes::PROTO_ID_NULL => Some(false),
-        super::shapes::PROTO_ID_DEFAULT => Some(object_proto_may_intercept_name(name)),
-        proto
-            if (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED).contains(&proto) =>
+pub(crate) unsafe fn holder_word_blocks_store(mut bits: u64, name: &[u8]) -> Option<bool> {
+    // Each holder's layout answers for its own keys and names its parent; a
+    // parent that is itself an ordinary layout is followed by its recorded
+    // prototype word, so `Response.prototype -> ServerResponse.prototype -> ...`
+    // is proved link by link instead of walked per key.
+    for _ in 0..HOLDER_CHAIN_LIMIT {
+        // A recorded prototype word is a traced edge naming a live heap cell
+        // (a POINTER_TAG value): its header is read directly. Other encodings
+        // use the admitting reader.
+        let payload = bits & crate::value::POINTER_MASK;
+        let header =
+            if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && payload != 0 {
+                &*crate::gc::header_from_trusted_user_ptr(payload as *const u8)
+            } else {
+                crate::value::addr_class::tracked_header_of_bits(bits)?.as_ref()
+            };
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header._reserved
+                & (crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_FROZEN)
+                != 0
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
-            declared_class_chain_blocks_store(proto as u32, name)
+            return None;
         }
-        _ => None,
+        let p = (bits & crate::value::POINTER_MASK) as usize;
+        if crate::array::object_prototype_addr_matches(p) {
+            return Some(object_proto_may_intercept_name(name));
+        }
+        let holder = p as *const ObjectHeader;
+        let record = super::shapes::object_shape_record(holder)?;
+        // The layout owns ordinary-store admission and the key attributes.
+        // Exotics use the generic operation.
+        let unmarked = match record.object_kind() {
+            super::shapes::ShapeObjectKind::Ordinary => false,
+            super::shapes::ShapeObjectKind::OrdinaryUnmarked => true,
+            _ => return None,
+        };
+        let meta = (*holder).meta;
+        if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
+            return None;
+        }
+        if unmarked {
+            // A holder whose own slots are not proven plain data (a function's
+            // `.prototype`, a sealed builtin prototype): the keys carry its
+            // attributes when they are live there, else the walk decides.
+            if (*holder).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+                || class_registry::is_class_object_ptr(holder.cast())
+                || crate::typedarray::lookup_typed_array_kind(p).is_some()
+                || super::exotic_expando::exotic_expando_kind_of_value(
+                    crate::value::js_nanbox_pointer(p as i64),
+                )
+                .is_some()
+                || !super::key_attrs::attrs_live_in_keys_of_bits(bits)
+            {
+                return None;
+            }
+            if super::key_attrs::object_key_blocks_plain_store(holder as *mut ObjectHeader, name) {
+                return Some(true);
+            }
+        } else if super::key_attrs::object_key_blocks_plain_store_from_record(holder, record, name)
+        {
+            return Some(true);
+        }
+        match record.proto_id() {
+            super::shapes::PROTO_ID_NULL => return Some(false),
+            super::shapes::PROTO_ID_DEFAULT => return Some(object_proto_may_intercept_name(name)),
+            proto
+                if (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_MIXED)
+                    .contains(&proto) =>
+            {
+                return declared_class_chain_blocks_store(proto as u32, name);
+            }
+            _ if name == b"__proto__" => return None,
+            _ => bits = super::shapes::object_prototype_word(holder),
+        }
     }
+    None
 }
+
+/// Holders followed by [`holder_word_blocks_store`]; a longer chain walks.
+const HOLDER_CHAIN_LIMIT: u32 = 8;
 
 /// The ordinary receiver's layout is the store authority: own attributes,
 /// recorded prototype edge and declared class chain. Unknown links have no
