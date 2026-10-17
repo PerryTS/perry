@@ -1455,7 +1455,10 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 if !in_bag("prototype")
                     && crate::object::has_own_helpers::closure_own_key_present(ptr, "prototype")
                 {
-                    let at = names.iter().take_while(|n| *n == "length" || *n == "name").count();
+                    let at = names
+                        .iter()
+                        .take_while(|n| *n == "length" || *n == "name")
+                        .count();
                     names.insert(at, "prototype".to_string());
                 }
                 // Accessors a function keeps outside its bag (the descriptor

@@ -97,11 +97,7 @@ pub(crate) fn lower<'f>(
         };
         let (named, value) = {
             let blk = ctx.block();
-            let r = blk.call(
-                DOUBLE,
-                "js_method_prepare",
-                &[(DOUBLE, &recv), (I64, &id)],
-            );
+            let r = blk.call(DOUBLE, "js_method_prepare", &[(DOUBLE, &recv), (I64, &id)]);
             let bits = blk.bitcast_double_to_i64(&r);
             // Either by-name answer (`BY_NAME` or `BY_NAME_DIRECT`).
             let either = blk.or(I64, &bits, "2");

@@ -975,13 +975,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         &class_name,
                     )
                 {
-                    return lower_static_key_store(
-                        ctx,
-                        object,
-                        property,
-                        value,
-                        assignment_strict,
-                    );
+                    return lower_static_key_store(ctx, object, property, value, assignment_strict);
                 }
             }
             // #9459 / #9495 / #9525: the generic by-name tail is the

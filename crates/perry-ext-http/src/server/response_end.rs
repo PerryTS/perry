@@ -145,7 +145,24 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         jsvalue_to_body_bytes(chunk)
     };
 
+    let heap = super::response_payload::is_response(response_root.get());
+    if heap {
+        // node's `end`: an implicit `writeHead(this.statusCode)` when no head
+        // was written, reading the fields a program may have set.
+        let committed = match super::response::response_state(response_root.get()) {
+            Some(sr) if !sr.writable_ended => sr.header_committed,
+            _ => return,
+        };
+        super::response_payload::sync_head_fields(response_root.get());
+        if !committed {
+            let code = super::response::response_state(response_root.get())
+                .map_or(200, |sr| sr.status_code);
+            super::response_payload::write_head_fields(response_root.get(), code, None);
+        }
+    }
     let payload;
+    let head_len;
+    let mut content_length = None;
     {
         let sr = match super::response::response_state_mut(response_root.get()) {
             Some(s) => s,
@@ -187,6 +204,10 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
             }
         };
         let mut bytes = head.bytes;
+        head_len = bytes.len();
+        if auto_content_length {
+            content_length = Some(body.len());
+        }
         if matches!(framing, Framing::Sized(_)) {
             // Preserve the standalone response's existing permissive writes:
             // Content-Length is framing metadata, not an implicit strict
@@ -211,6 +232,32 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         payload = bytes;
         sr.writable_finished = true;
     }
+    if heap {
+        // node's `_storeHeader` / `_send` / `end` fields, then the flush: the
+        // response finishes when the socket has taken the last chunk (never
+        // without one, as in node).
+        let h = response_root.get();
+        super::response_payload::set_header_text(h, &payload[..head_len]);
+        if let Some(n) = content_length {
+            super::response_payload::set_field(h, b"_contentLength", n as f64);
+        }
+        super::response_payload::mark_ended(h);
+        let scope = perry_ffi::TransientRootScope::enter();
+        let socket = scope.root_nanbox(super::response::response_socket(h));
+        let write_cbs =
+            scope.root_addrs(&super::response::take_write_callbacks(response_root.get()));
+        super::response_payload::close(response_root.get());
+        if JsValue::from_bits(socket.get().to_bits()).is_pointer() {
+            socket_write_str(socket.get(), &String::from_utf8_lossy(&payload));
+            super::response_payload::finish_on_flush(
+                response_root.get(),
+                socket.get(),
+                &EndTail::current(&write_cbs),
+                callback_root.get(),
+            );
+        }
+        return;
+    }
     let scope = perry_ffi::TransientRootScope::enter();
     let end_callback = scope.root_addr(callback_root.get());
     let socket = scope.root_nanbox(super::response::response_socket(response_root.get()));
@@ -224,9 +271,6 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         &EndTail::current(&finish),
         &EndTail::current(&close),
     );
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::close(response_root.get());
-    }
     if !JsValue::from_bits(socket.get().to_bits()).is_undefined() {
         socket_write_str(socket.get(), &String::from_utf8_lossy(&payload));
         socket_write_str(socket.get(), "");
@@ -307,6 +351,23 @@ impl<'a> EndTail<'a> {
     fn current(rooted: &[perry_ffi::TransientRootedAddr]) -> Vec<i64> {
         rooted.iter().map(|cb| cb.get()).collect()
     }
+}
+
+/// The head `writeHead` renders for a heap response's `_header` (node's
+/// `_storeHeader`): the headers so far, framed as nothing more is known yet.
+pub(crate) fn render_head(sr: &super::response::ResponseState) -> Option<Vec<u8>> {
+    let mut headers = sr.snapshot_headers();
+    let method = sr.standalone_req_method.as_deref().unwrap_or("GET");
+    let framing = wire::framing_for(&headers, sr.status_code, method, 1, None, false);
+    wire::align_headers(&mut headers, framing, false);
+    wire::encode_head(
+        sr.status_code,
+        sr.status_message.as_deref(),
+        &headers,
+        framing,
+    )
+    .ok()
+    .map(|head| head.bytes)
 }
 
 /// Call a closure pointer with no args, ignoring the result.

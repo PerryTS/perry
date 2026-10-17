@@ -110,7 +110,7 @@ fn ensure_stream_prototype(kind: StreamProto) -> f64 {
 
 /// The hook methods node's stream prototypes carry (`_read`, `_write`,
 /// `_destroy`, `_final`, ...): the bodies [`is_builtin_hook`] recognises.
-static NODE_PROTOTYPE_HOOKS: [&crate::closure::JsFunctionInfo; 12] = [
+static NODE_PROTOTYPE_HOOKS: [&crate::closure::JsFunctionInfo; 13] = [
     &NS_BASE_READ_INFO,
     &NS_BASE_WRITE_INFO,
     &NS_BASE_DESTROY_INFO,
@@ -123,6 +123,7 @@ static NODE_PROTOTYPE_HOOKS: [&crate::closure::JsFunctionInfo; 12] = [
     &NS_TRANSFORM_READ_INFO,
     &NS_TRANSFORM_FINAL_INFO,
     &NS_LEGACY_PIPE_INFO,
+    &NS_PASSTHROUGH_TRANSFORM_INFO,
 ];
 
 /// Is `value` one of node's prototype hook methods, which the stream
@@ -371,6 +372,31 @@ pub(crate) fn build_stream_prototype(constructor: f64, kind: StreamProto) -> f64
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64))
 }
 
+/// `PassThrough.prototype` for `constructor`: born on its layout (node's
+/// `constructor` and `_transform`), filled, sealed.
+pub(crate) fn build_passthrough_prototype(constructor: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor);
+    let _ = ensure_stream_prototype(StreamProto::Transform);
+    let serial = crate::closure::shape::INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE;
+    if let Some(proto) = layouts::node_prototype_of_serial(serial) {
+        return crate::value::js_nanbox_pointer(proto as i64);
+    }
+    // SAFETY: a node prototype descriptor of this runtime.
+    let layout = unsafe { layouts::NodePrototype::of(&raw const layouts::PASSTHROUGH_PROTOTYPE) };
+    let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
+    let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
+    let transform = proto_closure(&scope, &NS_PASSTHROUGH_TRANSFORM_INFO);
+    // SAFETY: the fresh prototype born on `layout`, not yet reachable by
+    // program code; populated before it is sealed.
+    unsafe {
+        layout.data(p(), b"constructor", constructor.get_nanbox_f64());
+        layout.data(p(), b"_transform", transform.get_nanbox_f64());
+        layout.seal(p(), serial);
+    }
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64))
+}
+
 /// `stream.<name>.prototype`, the object a direct `new <name>()` is born on
 /// and the one a subclass prototype's parent edge names
 /// (`class_registry::state::reserved_native_parent_prototype_bits`).
@@ -411,23 +437,23 @@ pub(super) fn alloc_stream_instance(
             ordinary.get_nanbox_f64(),
         ));
     }
-    if let Some(layout) = kind.layout() {
-        // SAFETY: a registered stream instance layout.
-        if let Some(obj) =
-            unsafe { super::constructors::instance_birth::alloc_on_layout(proto.get_nanbox_f64(), layout) }
-        {
-            return (box_pointer(obj.cast()), None);
-        }
+    // SAFETY: a registered stream instance layout.
+    if let Some(obj) = unsafe {
+        super::constructors::instance_birth::alloc_on_layout(proto.get_nanbox_f64(), kind.layout())
+    } {
+        return (box_pointer(obj.cast()), None);
     }
-    let (stream, proof) =
-        super::constructors::birth_memo::alloc(proto.get_nanbox_f64(), opts.get_nanbox_f64(), kind);
-    if let Some(stream) = stream {
-        return (stream, proof);
-    }
-    (
-        super::constructors::alloc_initialized_stream_shell(proto.get_nanbox_f64(), kind),
-        proof,
-    )
+    // A written or relinked chain: the ordinary construction, whose stores
+    // are the ordinary `[[Set]]`s.
+    let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(2));
+    let stream = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::object::prototype_chain::object_link_created_prototype(
+            obj as usize,
+            proto.get_nanbox_u64(),
+        );
+        box_pointer(obj.cast())
+    });
+    (stream, None)
 }
 
 /// Does `value`'s prototype chain reach `stream.<name>.prototype`? (node's
@@ -512,6 +538,12 @@ static NS_TRANSFORM_READ_INFO: crate::closure::JsFunctionInfo = crate::closure::
 )
 .with_declared(0)
 .with_flags(crate::closure::FN_BUILTIN);
+static NS_PASSTHROUGH_TRANSFORM_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        ns_passthrough_transform3 as crate::codegen_abi::JsBody3<ClosureHeader>,
+    )
+    .with_declared(3)
+    .with_flags(crate::closure::FN_BUILTIN);
 static NS_TRANSFORM_FINAL_INFO: crate::closure::JsFunctionInfo =
     crate::closure::JsFunctionInfo::of(
         ns_transform_final1 as crate::codegen_abi::JsBody1<ClosureHeader>,
@@ -665,6 +697,18 @@ extern "C" fn ns_transform3(
     _callback: f64,
 ) -> f64 {
     throw_missing_stream_method("The _transform() method is not implemented")
+}
+
+/// `PassThrough.prototype._transform`: node's `cb(null, chunk)`.
+extern "C" fn ns_passthrough_transform3(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+    _encoding: f64,
+    callback: f64,
+) -> f64 {
+    call_callback(callback, &[f64::from_bits(TAG_NULL), chunk]);
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// The `(err, data)` callback node's `Transform.prototype._write` hands

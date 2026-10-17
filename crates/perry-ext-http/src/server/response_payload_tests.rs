@@ -1,3 +1,4 @@
+use super::super::types::TAG_TRUE;
 use super::*;
 use perry_runtime::{gc, object, value};
 use std::sync::Mutex;
@@ -15,6 +16,9 @@ extern "C" fn listener(
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
+}
+fn boolean(v: bool) -> f64 {
+    f64::from_bits(JsValue::from_bool(v).bits())
 }
 fn boxed(root: &gc::RuntimeHandle<'_>) -> f64 {
     root.with_mut_ptr(|p: *mut object::ObjectHeader| value::js_nanbox_pointer(p as i64))
@@ -38,7 +42,8 @@ fn response_cycles_are_collected() {
             let inner = gc::RuntimeHandleScope::new();
             let mut data = ResponseState::new();
             data.standalone = true;
-            let response = inner.root_nanbox_f64(value(unsafe { alloc(data) }));
+            let response =
+                inner.root_nanbox_f64(value(unsafe { alloc(data, f64::from_bits(TAG_UNDEFINED)) }));
             let cb =
                 perry_runtime::closure::js_closure_alloc(perry_runtime::fn_info!(listener, 0), 1);
             let cb = inner.root_raw_mut_ptr(cb);
@@ -46,7 +51,12 @@ fn response_cycles_are_collected() {
                 perry_runtime::closure::js_closure_set_capture_f64(c, 0, response.get_nanbox_f64())
             });
             let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
-            push_event(handle(), "once:close", cb.get_raw_mut_ptr::<u8>() as i64);
+            add_listener(
+                handle(),
+                b"once",
+                "close",
+                cb.get_raw_mut_ptr::<u8>() as i64,
+            );
             // Socket error listener -> response -> socket, plus response listener
             // -> response. Neither cycle has a global root.
             let socket = inner.root_raw_mut_ptr(object::js_object_alloc(0, 0));
@@ -91,13 +101,19 @@ fn explicit_close_releases_the_payload_but_preserves_metadata() {
     data.standalone = true;
     data.status_code = 201;
     data.headers.insert("x-test".into(), "ok".into());
-    let response = scope.root_nanbox_f64(value(unsafe { alloc(data) }));
+    let response =
+        scope.root_nanbox_f64(value(unsafe { alloc(data, f64::from_bits(TAG_UNDEFINED)) }));
     let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
     assert!(unsafe { state(handle()) }.is_some());
     close(handle());
     close(handle());
     assert!(unsafe { state(handle()) }.is_none());
-    assert_eq!(closed_property(handle(), Key::StatusCode), Some(201.0));
+    // node's fields live on the object and stay readable after the release.
+    assert_eq!(field(handle(), b"statusCode"), Some(200.0));
+    assert_eq!(
+        field(handle(), b"finished").map(f64::to_bits),
+        Some(boolean(false).to_bits())
+    );
     assert_eq!(
         closed_headers(handle())
             .unwrap()
@@ -135,7 +151,8 @@ fn every_end_entry_point_releases_the_payload() {
     for kind in 0..3 {
         let mut data = ResponseState::new();
         data.standalone = true;
-        let response = scope.root_nanbox_f64(value(unsafe { alloc(data) }));
+        let response =
+            scope.root_nanbox_f64(value(unsafe { alloc(data, f64::from_bits(TAG_UNDEFINED)) }));
         let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
         let undef = f64::from_bits(TAG_UNDEFINED);
         unsafe {
@@ -147,7 +164,7 @@ fn every_end_entry_point_releases_the_payload() {
         }
         assert!(unsafe { state(handle()) }.is_none());
         assert_eq!(
-            closed_property(handle(), Key::WritableFinished).map(f64::to_bits),
+            field(handle(), b"finished").map(f64::to_bits),
             Some(boolean(true).to_bits())
         );
     }
@@ -196,6 +213,7 @@ fn destroy_releases_native_state_and_keeps_the_destroyed_flag() {
     );
 }
 
+static FINISH_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 extern "C" fn finish_collects(
     c: *const perry_runtime::closure::ClosureHeader,
     _this: perry_runtime::closure::JsThis,
@@ -204,10 +222,21 @@ extern "C" fn finish_collects(
     let owner = scope.root_nanbox(perry_runtime::closure::js_closure_get_capture_f64(c, 0));
     let handle = || (owner.get().to_bits() & PTR_MASK) as i64;
     assert!(unsafe { state(handle()) }.is_none());
-    let count = get(handle(), Key::ListenerCalls);
-    set(handle(), Key::ListenerCalls, count + 1.0);
+    FINISH_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     gc::js_gc_collect();
     f64::from_bits(TAG_UNDEFINED)
+}
+/// A socket's `write(chunk, cb)` that takes every chunk at once.
+extern "C" fn socket_write(
+    _c: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _chunk: f64,
+    cb: f64,
+) -> f64 {
+    if JsValue::from_bits(cb.to_bits()).is_pointer() {
+        unsafe { perry_ffi::call_value(cb, perry_ffi::JsThis::UNDEFINED, &[]) };
+    }
+    f64::from_bits(TAG_TRUE)
 }
 
 #[test]
@@ -216,13 +245,22 @@ fn end_releases_before_reentrant_listeners_collect() {
     let scope = gc::RuntimeHandleScope::new();
     let mut data = ResponseState::new();
     data.standalone = true;
-    let response = scope.root_nanbox_f64(value(unsafe { alloc(data) }));
-    set(
-        (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
-        Key::ListenerCalls,
-        0.0,
+    let response =
+        scope.root_nanbox_f64(value(unsafe { alloc(data, f64::from_bits(TAG_UNDEFINED)) }));
+    let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
+    // node finishes a response once its socket took the last chunk.
+    let socket = scope.root_raw_mut_ptr(object::js_object_alloc(0, 0));
+    let write =
+        perry_runtime::closure::js_closure_alloc(perry_runtime::fn_info!(socket_write, 2), 0);
+    let key = perry_runtime::string::js_string_from_bytes(b"write".as_ptr(), 5);
+    object::js_object_set_field_by_name(
+        socket.get_raw_mut_ptr(),
+        key,
+        value::js_nanbox_pointer(write as i64),
     );
-    for event in ["once:finish", "once:close"] {
+    super::super::response::js_node_http_res_assign_socket(handle(), boxed(&socket));
+    FINISH_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    for method in [b"once" as &'static [u8], b"on"] {
         let cb = perry_runtime::closure::js_closure_alloc(
             perry_runtime::fn_info!(finish_collects, 0),
             1,
@@ -231,24 +269,19 @@ fn end_releases_before_reentrant_listeners_collect() {
         cb.with_mut_ptr(|c| {
             perry_runtime::closure::js_closure_set_capture_f64(c, 0, response.get_nanbox_f64())
         });
-        push_event(
-            (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
-            event,
+        add_listener(
+            handle(),
+            method,
+            "finish",
             cb.get_raw_mut_ptr::<u8>() as i64,
         );
     }
-    super::super::response_end::js_node_http_res_end(
-        (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
-        f64::from_bits(TAG_UNDEFINED),
-    );
-    assert!(unsafe { state((response.get_nanbox_f64().to_bits() & PTR_MASK) as i64) }.is_none());
+    super::super::response_end::js_node_http_res_end(handle(), f64::from_bits(TAG_UNDEFINED));
+    assert!(unsafe { state(handle()) }.is_none());
     assert_eq!(
-        get(
-            (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
-            Key::ListenerCalls
-        ),
-        2.0,
-        "both listeners must run, including the snapshot crossing the first collection"
+        FINISH_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        2,
+        "both listeners must run, including the one after the first collection"
     );
 }
 
@@ -271,7 +304,9 @@ fn by_name_state_sabotage_reddens_fixed_slot_witness() {
 fn response_state_is_reached_by_the_record() {
     unsafe { super::super::native_dispatch::js_ext_http_nm_install() };
     let scope = gc::RuntimeHandleScope::new();
-    let response = scope.root_nanbox_f64(value(unsafe { alloc(ResponseState::new()) }));
+    let response = scope.root_nanbox_f64(value(unsafe {
+        alloc(ResponseState::new(), f64::from_bits(TAG_UNDEFINED))
+    }));
     let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
     set(handle(), Key::Socket, 123.0);
     let record_state = unsafe { js_node_http_response_state_get(response.get_nanbox_f64()) };

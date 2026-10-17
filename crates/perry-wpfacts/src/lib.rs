@@ -182,7 +182,14 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     model::Key::Named(a) => m.accessors.get(&(*h, *a)).map_or(0, |x| x.0.len()),
                     model::Key::Any => m.accessor_keys.get(h).map_or(0, |x| x.len()),
                 };
-                (m.nodes[gr.ar as usize].pts.len(), m.nodes[gr.gt as usize].pts.len(), m.nodes[gr.ar as usize].succ.len(), ng, *h, *k)
+                (
+                    m.nodes[gr.ar as usize].pts.len(),
+                    m.nodes[gr.gt as usize].pts.len(),
+                    m.nodes[gr.ar as usize].succ.len(),
+                    ng,
+                    *h,
+                    *k,
+                )
             })
             .collect();
         gs.sort_unstable_by(|a, b| b.0.cmp(&a.0));

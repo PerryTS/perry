@@ -5,8 +5,8 @@
 //! header constants and their anti-drift tests stay there.
 
 use super::method_override::{
-    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT,
-    POINTER_TAG_HI16, SHAPE_ID_BASE_NEG_I32, SHAPE_ID_RANGE_LEN,
+    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, POINTER_TAG_HI16, SHAPE_ID_BASE_NEG_I32,
+    SHAPE_ID_RANGE_LEN,
 };
 use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8};

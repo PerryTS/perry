@@ -967,11 +967,7 @@ pub(crate) fn lower_split_method_call(
         // A getter or a nullish receiver throws from the lookup.
         crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
         let lookup = crate::expr::method_site::emit_method_site_lookup(
-            ctx,
-            property,
-            &recv,
-            &method_id,
-            lanes,
+            ctx, property, &recv, &method_id, lanes,
         );
         let value = lookup.value.clone();
         let value_root =

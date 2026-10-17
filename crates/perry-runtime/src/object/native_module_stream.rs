@@ -145,15 +145,7 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
             crate::node_stream::build_stream_prototype(constructor.get_nanbox_f64(), kind)
         }
         None if name == "PassThrough" => {
-            let proto = scope.root_raw_mut_ptr(unsafe {
-                super::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-                    super::runtime_layouts::PASSTHROUGH_PROTO
-                ))
-            });
-            proto.with_mut_ptr(|p| {
-                js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
-            });
-            proto.with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64))
+            crate::node_stream::build_passthrough_prototype(constructor.get_nanbox_f64())
         }
         None => return,
     };

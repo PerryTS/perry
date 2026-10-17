@@ -1601,6 +1601,8 @@ mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
 pub(crate) use stream_instances::*;
+mod http_instances;
+pub(crate) use http_instances::*;
 #[used(linker)]
 #[export_name = "perry_image_literal_0_696e646578"]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]

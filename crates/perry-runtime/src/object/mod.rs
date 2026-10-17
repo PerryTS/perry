@@ -66,8 +66,7 @@ pub use alloc::{
 #[cfg(feature = "regex-engine")]
 pub(crate) use alloc_basic::object_alloc_plain_born;
 pub(crate) use alloc_basic::{
-    object_alloc_born, object_alloc_branded, object_alloc_filled_birth, object_alloc_plain,
-    object_alloc_unpublished,
+    object_alloc_born, object_alloc_branded, object_alloc_plain, object_alloc_unpublished,
 };
 pub(crate) use alloc_basic::{object_alloc_prototype_old, object_alloc_prototype_old_null_proto};
 #[allow(unused_imports)]
@@ -159,10 +158,10 @@ pub(crate) use global_this::{
     temporal_kind_prototype as global_this_temporal_kind_prototype,
     temporal_subclass_super as global_this_temporal_subclass_super,
 };
+mod builtin_method;
 pub(crate) mod builtin_namespace;
 pub mod builtin_proto;
 mod builtin_proto_entries;
-mod builtin_method;
 pub mod handle_expando;
 pub(crate) mod owned_state_bag;
 pub(crate) mod prop_plan;
@@ -240,6 +239,7 @@ pub(crate) use native_module_registry::{
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
+pub(crate) mod node_http_prototypes;
 mod object_literal_ops;
 pub(crate) mod object_ops;
 pub(crate) mod own_override;

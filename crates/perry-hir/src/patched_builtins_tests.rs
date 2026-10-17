@@ -304,7 +304,8 @@ fn lower_with_global_reach(src: &str) -> crate::Module {
             let parsed = parse_typescript_with_cache(&src, "test.ts", &mut cache).expect("parse");
             let mut set = PatchedBuiltins::new();
             scan_module(&parsed.module, &mut set);
-            set.dynamic_code_reach.record_global("new Function(...) @ test".to_string());
+            set.dynamic_code_reach
+                .record_global("new Function(...) @ test".to_string());
             set_patched_builtins(Arc::new(set));
             let module = lower_module(&parsed.module, "test", "test.ts").expect("lower");
             clear_patched_builtins();
@@ -336,7 +337,10 @@ fn reachable_namespace_call_is_guarded() {
     let k = init_of(&m, 1);
     assert!(k.contains("NamespacePatched(\"Object\")"), "{k}");
     let t = init_of(&m, 2);
-    assert!(t.contains("NamespacePatched(\"JSON\")") && t.contains("TypeOf"), "{t}");
+    assert!(
+        t.contains("NamespacePatched(\"JSON\")") && t.contains("TypeOf"),
+        "{t}"
+    );
 }
 
 /// A definition in the arguments exists once: such a call is the one

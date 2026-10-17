@@ -41,10 +41,9 @@ use crate::type_analysis::{is_array_expr, is_string_expr, receiver_class_name};
 use crate::types::{LlvmType, DOUBLE, I32, I64, PTR};
 
 use super::{
-    downgrade_buffer_aliases_in_expr, lower_expr,
-    nanbox_pointer_inline, unbox_str_handle, unbox_to_i64, FnCtx,
+    downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline, unbox_str_handle,
+    unbox_to_i64, FnCtx,
 };
-
 
 /// Runtime write-PIC flags that force the miss path. Class-vs-instance kind is
 /// encoded by the authoritative ShapeId and therefore owns no header flag.

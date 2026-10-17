@@ -28,8 +28,7 @@
 //! bytes as pinned bytes, so defragmentation selection skips their pages
 //! instead of selecting a block it then has to decline.
 use super::types::{
-    GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT, OBJ_FLAG_MEMO_NAMED,
-    OBJ_FLAG_NEVER_MOVE,
+    GcHeader, GC_HEADER_SIZE, GC_TYPE_OBJECT, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE,
 };
 
 /// Does this header word say "never moves once old"?

@@ -1872,8 +1872,10 @@ mod destroy_state;
 pub(crate) mod native_hooks;
 mod proto_methods;
 mod state_record;
+pub(crate) use constructors::instance_birth;
 pub(crate) use proto_methods::{
-    build_legacy_stream_prototype, build_stream_prototype, user_hook_value, StreamProto,
+    build_legacy_stream_prototype, build_passthrough_prototype, build_stream_prototype,
+    stream_prototype_value, user_hook_value, StreamProto,
 };
 use state_record::*;
 pub(crate) use state_record::{

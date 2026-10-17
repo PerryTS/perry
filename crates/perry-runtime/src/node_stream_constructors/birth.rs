@@ -23,54 +23,17 @@ impl Kind {
     }
 
     /// The instance layout a direct birth of this class is born on
-    /// (`runtime_layouts::stream_instances`). PassThrough's prototype is not
-    /// a sealed runtime prototype, so it has none.
-    pub(crate) fn layout(self) -> Option<*const crate::object::layout_desc::PerryLayoutDesc> {
+    /// (`runtime_layouts::stream_instances`).
+    pub(crate) fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         use crate::object::runtime_layouts as rl;
         match self {
-            Self::Readable => Some(&raw const rl::READABLE),
-            Self::Writable => Some(&raw const rl::WRITABLE),
-            Self::Duplex => Some(&raw const rl::DUPLEX),
-            Self::Transform => Some(&raw const rl::TRANSFORM),
-            Self::PassThrough => None,
+            Self::Readable => &raw const rl::READABLE,
+            Self::Writable => &raw const rl::WRITABLE,
+            Self::Duplex => &raw const rl::DUPLEX,
+            Self::Transform => &raw const rl::TRANSFORM,
+            Self::PassThrough => &raw const rl::PASSTHROUGH,
         }
     }
-}
-thread_local! {
-    static R_SHELL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    static W_SHELL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    static D_SHELL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    static T_SHELL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    static P_SHELL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-pub(crate) fn alloc_initialized_stream_shell(proto: f64, kind: Kind) -> f64 {
-    let site = match kind {
-        Kind::Readable => &R_SHELL,
-        Kind::Writable => &W_SHELL,
-        Kind::Duplex => &D_SHELL,
-        Kind::Transform => &T_SHELL,
-        Kind::PassThrough => &P_SHELL,
-    };
-    if let Some(obj) = crate::object::object_alloc_recorded_birth(
-        site.with(std::cell::Cell::get),
-        proto.to_bits(),
-        0,
-        2,
-        false,
-    ) {
-        return box_pointer(obj.cast());
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(proto);
-    let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(2));
-    object.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
-        crate::object::prototype_chain::object_link_created_prototype(
-            obj as usize,
-            proto.get_nanbox_u64(),
-        );
-        site.with(|memo| memo.set(unsafe { crate::object::shapes::object_shape_stamp(obj) }));
-        box_pointer(obj.cast())
-    })
 }
 /// A site remembers a transition, never a key list or heap pointer. Every
 /// use validates the receiver and each prototype's current ShapeId, as well
@@ -274,7 +237,7 @@ mod tests {
             };
             assert_eq!(
                 unsafe { (*obj).parent_class_id },
-                unsafe { (*kind.layout().unwrap()).layout_id },
+                unsafe { (*kind.layout()).layout_id },
                 "a direct birth is born on its instance layout"
             );
             let keys = unsafe { crate::object::object_keys(obj) };

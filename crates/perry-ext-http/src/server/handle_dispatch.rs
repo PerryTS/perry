@@ -1032,7 +1032,9 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     sr.destroyed = true;
                     sr.turnloop
                 });
-            if super::response_payload::is_response(response_root.get()) {
+            // A heap response: node's `destroyed` field and the socket's
+            // destroy (whose `close` the response relays).
+            if super::response_payload::destroy(response_root.get()) {
                 super::response_payload::close(response_root.get());
             }
             // The socket closes immediately and an in-flight request gets a
@@ -1304,24 +1306,10 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property_set(
     let value = value_root.get();
     match property.as_str() {
         "statusCode" => {
-            if super::response_payload::set_closed_property(
-                response_root.get(),
-                super::response_payload::Key::StatusCode,
-                value,
-            ) {
-                return 1;
-            }
             js_node_http_res_set_status(response_root.get(), number_arg(Some(value), 200.0));
             1
         }
         "statusMessage" => {
-            if super::response_payload::set_closed_property(
-                response_root.get(),
-                super::response_payload::Key::StatusMessage,
-                value,
-            ) {
-                return 1;
-            }
             let msg = string_value_arg(value);
             if !msg.is_null() {
                 js_node_http_res_set_status_message(response_root.get(), msg);
@@ -1329,35 +1317,14 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property_set(
             1
         }
         "sendDate" => {
-            if super::response_payload::set_closed_property(
-                response_root.get(),
-                super::response_payload::Key::SendDate,
-                value,
-            ) {
-                return 1;
-            }
             js_node_http_res_set_send_date(response_root.get(), value);
             1
         }
         "strictContentLength" => {
-            if super::response_payload::set_closed_property(
-                response_root.get(),
-                super::response_payload::Key::StrictContentLength,
-                value,
-            ) {
-                return 1;
-            }
             js_node_http_res_set_strict_content_length(response_root.get(), value);
             1
         }
         "destroyed" => {
-            if super::response_payload::set_closed_property(
-                response_root.get(),
-                super::response_payload::Key::Destroyed,
-                value,
-            ) {
-                return 1;
-            }
             if let Some(sr) = super::response::response_state_mut(response_root.get()) {
                 sr.destroyed = JsValue::from_bits(value.to_bits()).to_bool();
             }

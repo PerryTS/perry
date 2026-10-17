@@ -149,7 +149,9 @@ pub(super) fn try_patched_builtin_call(
     };
     if namespace_member_patched(&ns, &method) {
         let object = live_namespace(&ns);
-        return Ok(NamespaceCall::Dynamic(dynamic_member_call(call, object, method, args)));
+        return Ok(NamespaceCall::Dynamic(dynamic_member_call(
+            call, object, method, args,
+        )));
     }
     if !namespace_call_guarded() {
         return Ok(NamespaceCall::Plain(args));
@@ -157,7 +159,9 @@ pub(super) fn try_patched_builtin_call(
     if !duplicable(&args) {
         // A definition in the arguments: the one dynamic call.
         let object = live_namespace(&ns);
-        return Ok(NamespaceCall::Dynamic(dynamic_member_call(call, object, method, args)));
+        return Ok(NamespaceCall::Dynamic(dynamic_member_call(
+            call, object, method, args,
+        )));
     }
     let generic = dynamic_member_call(call, live_namespace(&ns), method, args.clone());
     Ok(NamespaceCall::Guarded(args, NamespaceGuard { ns, generic }))

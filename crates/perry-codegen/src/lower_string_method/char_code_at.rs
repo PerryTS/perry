@@ -118,11 +118,9 @@ pub(super) fn lower_char_at_inline_entry(
 
 /// The STRING-tagged canonical one-character string of the ASCII `byte_i64`.
 fn ascii_char_value(ctx: &mut FnCtx<'_>, byte_i64: &str) -> String {
-    let slot = ctx.block().gep_inbounds(
-        crate::types::PTR,
-        "@PERRY_ASCII_CHARS",
-        &[(I64, byte_i64)],
-    );
+    let slot =
+        ctx.block()
+            .gep_inbounds(crate::types::PTR, "@PERRY_ASCII_CHARS", &[(I64, byte_i64)]);
     let string = ctx.block().load(crate::types::PTR, &slot);
     let handle = ctx.block().ptrtoint(&string, I64);
     crate::expr::nanbox_string_inline(ctx.block(), &handle)

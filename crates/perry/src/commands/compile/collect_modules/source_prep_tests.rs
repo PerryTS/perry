@@ -182,9 +182,9 @@ fn collect_twice(root: &Path, workers: usize, reuse: bool) -> (Vec<String>, usiz
     let progress = VerboseProgress::new(OutputFormat::Text, 0);
     let mut prepared = PreparedSources::default();
     let walk = |ctx: &mut CompilationContext,
-                    visited: &mut HashSet<std::path::PathBuf>,
-                    next_class_id: &mut perry_hir::ClassId,
-                    sources: WalkSources| {
+                visited: &mut HashSet<std::path::PathBuf>,
+                next_class_id: &mut perry_hir::ClassId,
+                sources: WalkSources| {
         collect_modules_with_sources(
             &entry,
             ctx,
@@ -335,7 +335,8 @@ fn source_prepared_after_the_rewrite_is_reused_only_for_the_same_rewrite_output(
     let path = dir.path().join("lib/meta.js").canonicalize().unwrap();
     let raw = std::fs::read_to_string(&path).unwrap();
     let inputs = super::source_prep::PrepInputs::of(&ctx, None);
-    let prepared = super::source_prep::prepare_from_raw(raw.clone(), &path, class, &inputs).unwrap();
+    let prepared =
+        super::source_prep::prepare_from_raw(raw.clone(), &path, class, &inputs).unwrap();
     let mut sources = PreparedSources::default();
     WalkSources::Keep(&mut sources).start(&ctx, None);
     sources.keep_after_rewrite(&path, class, raw.clone(), &prepared);

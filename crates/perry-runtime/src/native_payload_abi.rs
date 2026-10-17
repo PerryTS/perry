@@ -648,6 +648,16 @@ pub unsafe extern "C" fn js_perry_payload_get_attached(
     };
     crate::native_handle::native_handle_rust_payload_ptr(cell, (*cell).type_id)
 }
+/// Does `value` carry a cell of `vtable`'s payload type, open or closed?
+/// # Safety
+/// As js_perry_payload_get_attached.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_has_attached(
+    value: f64,
+    vtable: *const crate::native_payload::PayloadVTable,
+) -> i32 {
+    attached_cell(value, vtable).is_some() as i32
+}
 /// # Safety
 /// As js_perry_payload_get_attached. Close never changes the vtable or reopens.
 #[no_mangle]

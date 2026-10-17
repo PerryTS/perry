@@ -10,7 +10,6 @@ pub use super::alloc_basic::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent, js_object_alloc_plain,
     js_object_alloc_with_parent, js_object_coerce,
 };
-pub(crate) use super::alloc_basic::{object_alloc_recorded_birth, object_fill_recorded_birth};
 use super::*;
 
 // Storage: `ObjectHotTables::class_keys_by_id` (this agent's class_id ->

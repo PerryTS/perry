@@ -321,9 +321,9 @@ fn state_data_object(stream: f64, readable: bool) -> Option<*mut ObjectHeader> {
     let object = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
     // A stream born on its instance layout holds the state at a fixed slot.
     // SAFETY: a live ordinary object (checked above).
-    if let Some(slot) = unsafe {
-        super::constructors::instance_birth::state_object_slot(object, readable)
-    } {
+    if let Some(slot) =
+        unsafe { super::constructors::instance_birth::state_object_slot(object, readable) }
+    {
         // SAFETY: the layout's slots are inline storage of the live object.
         let bits = unsafe {
             *((object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)

@@ -158,6 +158,11 @@ pub unsafe extern "C" fn js_ext_http_native_dispatch(
         ("http", "OutgoingMessage") => super::js_node_http_outgoing_message_new(),
         ("http", "IncomingMessage") => super::js_node_http_incoming_message_standalone_new(arg(0)),
         ("http", "ServerResponse") => super::js_node_http_server_response_standalone_new(arg(0)),
+        // `ServerResponse.call(this, req)` / `super(req)` (perry-runtime's
+        // native_this_alias): `this` becomes the response.
+        ("http", "#ServerResponse.call") => {
+            super::response::server_response_construct_this(arg(0), arg(1))
+        }
         ("http" | "https", "get" | "request") => client_overload(module, method, args),
         ("http", "Agent") => crate::js_http_agent_new(arg(0)),
         ("https", "Agent") => crate::js_https_agent_new(arg(0)),

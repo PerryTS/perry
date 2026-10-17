@@ -467,7 +467,10 @@ pub(crate) fn function_prototype_inherited_get(
 /// load; cold bootstrap reads only the constructor's `prototype` property,
 /// which this fallback excludes, so it cannot reenter the fallback.
 pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Option<usize> {
-    if matches!(prop, "prototype" | "name" | "length" | "caller" | "arguments") {
+    if matches!(
+        prop,
+        "prototype" | "name" | "length" | "caller" | "arguments"
+    ) {
         return None;
     }
     // THIS realm's %Function.prototype% (the memoized intrinsic), not whatever

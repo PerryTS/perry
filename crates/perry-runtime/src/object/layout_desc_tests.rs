@@ -190,7 +190,10 @@ fn static_layout_names_a_sealed_runtime_prototype() {
     prototype.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {
         js_object_set_field_by_name(object, key.get_raw_mut_ptr(), 5.0);
         builtin_proto::seal_runtime_prototype(object, serial);
-        assert!(!word_is_shadowed((*object).parent_class_id), "sealing writes nothing");
+        assert!(
+            !word_is_shadowed((*object).parent_class_id),
+            "sealing writes nothing"
+        );
     });
     let proto_bits = || {
         prototype.with_const_ptr::<ObjectHeader, _>(|object| {
@@ -202,7 +205,11 @@ fn static_layout_names_a_sealed_runtime_prototype() {
     obj.with_const_ptr::<ObjectHeader, _>(|object| unsafe {
         let id = (*object).parent_class_id;
         assert_eq!(id, layout_id(descriptor));
-        assert_eq!(shapes::shape_proto_id(id), Some(serial), "the serial is the identity");
+        assert_eq!(
+            shapes::shape_proto_id(id),
+            Some(serial),
+            "the serial is the identity"
+        );
         assert_eq!(
             js_object_get_prototype_of(crate::js_nanbox_pointer(object as i64)).to_bits(),
             proto_bits(),
@@ -214,16 +221,29 @@ fn static_layout_names_a_sealed_runtime_prototype() {
             Some(serial),
             "Object.create(P) names the same identity"
         );
-        assert_eq!(js_object_get_field_by_name_f64(object, key.get_raw_mut_ptr()), 5.0);
+        assert_eq!(
+            js_object_get_field_by_name_f64(object, key.get_raw_mut_ptr()),
+            5.0
+        );
     });
     // The named-store miss's own-slot overwrite (`shape_store::try_own_store`),
     // the path a compiled `proto.tick = 6` takes.
     prototype.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {
-        assert!(shape_store::try_own_store(object, key.get_raw_mut_ptr(), 6.0));
-        assert!(word_is_shadowed((*object).parent_class_id), "a write marks the prototype");
+        assert!(shape_store::try_own_store(
+            object,
+            key.get_raw_mut_ptr(),
+            6.0
+        ));
+        assert!(
+            word_is_shadowed((*object).parent_class_id),
+            "a write marks the prototype"
+        );
     });
     obj.with_const_ptr::<ObjectHeader, _>(|object| {
-        assert_eq!(js_object_get_field_by_name_f64(object, key.get_raw_mut_ptr()), 6.0);
+        assert_eq!(
+            js_object_get_field_by_name_f64(object, key.get_raw_mut_ptr()),
+            6.0
+        );
     });
 }
 
@@ -243,14 +263,20 @@ fn static_layout_family_birth_declines_another_prototype() {
     };
     // `Object.create(other)` gives `other` an identity of its own.
     let _child = scope.root_nanbox_f64(js_object_create(f64::from_bits(other_bits())));
-    let born = scope.root_nanbox_f64(unsafe {
-        perry_create_family(descriptor, f64::from_bits(other_bits()))
-    });
+    let born = scope
+        .root_nanbox_f64(unsafe { perry_create_family(descriptor, f64::from_bits(other_bits())) });
     let obj = crate::js_nanbox_get_pointer(born.get_nanbox_f64()) as *const ObjectHeader;
     unsafe {
-        assert_ne!((*obj).parent_class_id, layout_id(descriptor), "not born on the layout");
+        assert_ne!(
+            (*obj).parent_class_id,
+            layout_id(descriptor),
+            "not born on the layout"
+        );
     }
-    assert_eq!(js_object_get_prototype_of(born.get_nanbox_f64()).to_bits(), other_bits());
+    assert_eq!(
+        js_object_get_prototype_of(born.get_nanbox_f64()).to_bits(),
+        other_bits()
+    );
 }
 
 #[test]
@@ -258,11 +284,26 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
     crate::gc::initialize_runtime_fixture();
     use crate::closure::shape::*;
     for (desc, serial) in [
-        (std::ptr::addr_of!(runtime_layouts::URL_COMPONENTS), INTRINSIC_SERIAL_URL),
-        (std::ptr::addr_of!(runtime_layouts::READABLE_STATE), INTRINSIC_SERIAL_READABLE_STATE),
-        (std::ptr::addr_of!(runtime_layouts::WRITABLE_STATE), INTRINSIC_SERIAL_WRITABLE_STATE),
-        (std::ptr::addr_of!(runtime_layouts::TIMEOUT), INTRINSIC_SERIAL_TIMEOUT),
-        (std::ptr::addr_of!(runtime_layouts::IMMEDIATE), INTRINSIC_SERIAL_IMMEDIATE),
+        (
+            std::ptr::addr_of!(runtime_layouts::URL_COMPONENTS),
+            INTRINSIC_SERIAL_URL,
+        ),
+        (
+            std::ptr::addr_of!(runtime_layouts::READABLE_STATE),
+            INTRINSIC_SERIAL_READABLE_STATE,
+        ),
+        (
+            std::ptr::addr_of!(runtime_layouts::WRITABLE_STATE),
+            INTRINSIC_SERIAL_WRITABLE_STATE,
+        ),
+        (
+            std::ptr::addr_of!(runtime_layouts::TIMEOUT),
+            INTRINSIC_SERIAL_TIMEOUT,
+        ),
+        (
+            std::ptr::addr_of!(runtime_layouts::IMMEDIATE),
+            INTRINSIC_SERIAL_IMMEDIATE,
+        ),
         (
             std::ptr::addr_of!(runtime_layouts::URL_SEARCH_PARAMS),
             INTRINSIC_SERIAL_URL_SEARCH_PARAMS,

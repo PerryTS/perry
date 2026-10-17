@@ -24,6 +24,10 @@ fn prototype_layout(serial: u64) -> Option<*const PerryLayoutDesc> {
         INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => &raw const rl::WRITABLE_PROTOTYPE,
         INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => &raw const rl::DUPLEX_PROTOTYPE,
         INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => &raw const rl::TRANSFORM_PROTOTYPE,
+        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => &raw const rl::PASSTHROUGH_PROTOTYPE,
+        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => &raw const rl::OUTGOING_MESSAGE_PROTOTYPE,
+        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => &raw const rl::SERVER_RESPONSE_PROTOTYPE,
+        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => &raw const rl::INCOMING_MESSAGE_PROTOTYPE,
         _ => return None,
     })
 }
@@ -89,6 +93,22 @@ pub(crate) unsafe fn alloc_on_layout(
 /// `obj` is live and born on a stream instance layout holding `slot`.
 #[inline]
 pub(crate) unsafe fn birth_store(obj: *mut ObjectHeader, slot: u32, value: f64) {
+    // Still exactly on its instance layout (no shadow bit: no overflow, no
+    // attribute variant): the layout's keys name each slot, so one load per
+    // later key decides whether node's order puts the key here.
+    if let Some(layout) = instance_layout(obj) {
+        let keys = std::slice::from_raw_parts((*layout).keys, (*layout).key_count as usize);
+        if let Some(position) = keys.iter().position(|k| k.slot == slot) {
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            if !keys[position + 1..]
+                .iter()
+                .any(|k| *fields.add(k.slot as usize) != crate::value::TAG_HOLE)
+            {
+                crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
+                return;
+            }
+        }
+    }
     crate::object::key_view::fill_hole(obj, slot, value.to_bits());
 }
 
@@ -106,6 +126,8 @@ pub(crate) unsafe fn instance_layout(obj: *const ObjectHeader) -> Option<*const 
         &raw const rl::WRITABLE,
         &raw const rl::DUPLEX,
         &raw const rl::TRANSFORM,
+        &raw const rl::PASSTHROUGH,
+        &raw const rl::SERVER_RESPONSE,
     ]
     .into_iter()
     .find(|&desc| (*desc).layout_id == word)
@@ -156,7 +178,9 @@ pub(crate) unsafe fn layout_birth_store(obj: *mut ObjectHeader, name: &[u8], val
 pub(crate) unsafe fn state_object_slot(obj: *const ObjectHeader, readable: bool) -> Option<u32> {
     use crate::object::runtime_layouts::{self as rl, duplex_slot, readable_slot, writable_slot};
     let word = (*obj).parent_class_id;
-    let duplex = word == rl::DUPLEX.layout_id || word == rl::TRANSFORM.layout_id;
+    let duplex = word == rl::DUPLEX.layout_id
+        || word == rl::TRANSFORM.layout_id
+        || word == rl::PASSTHROUGH.layout_id;
     if readable {
         (duplex || word == rl::READABLE.layout_id).then_some(readable_slot::STATE)
     } else if duplex {

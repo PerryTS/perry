@@ -18,8 +18,8 @@
 
 use super::{next_prototype, ordinary_receiver};
 use crate::object::shapes::{
-    object_shape_descriptor, object_shape_stamp, shape_proto_id, PROTO_ID_CLASS,
-    PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
+    object_shape_descriptor, object_shape_stamp, shape_proto_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT,
+    PROTO_ID_MIXED, PROTO_ID_NULL, PROTO_ID_UNIQUE,
 };
 use crate::object::ObjectHeader;
 

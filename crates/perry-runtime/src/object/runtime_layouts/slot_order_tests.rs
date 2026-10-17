@@ -561,7 +561,10 @@ fn the_probe_serves_a_holey_runtime_layout() {
             let dir = crate::object::shapes::ordinary_dir_addr();
             let atom = |s: *const crate::StringHeader| {
                 let a = crate::string::existing_property_atom(s).expect("program atom");
-                (crate::value::STRING_TAG | a as u64, crate::string::property_atom_hash(a))
+                (
+                    crate::value::STRING_TAG | a as u64,
+                    crate::string::property_atom_hash(a),
+                )
             };
             let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
             let value = crate::js_nanbox_pointer(obj as i64).to_bits();
@@ -578,8 +581,14 @@ fn the_probe_serves_a_holey_runtime_layout() {
                 0,
                 "presence: the hole slot is absent along the whole chain"
             );
-            assert_eq!(crate::object::layout_probe::probe_has(value, second, true), 0);
-            assert_eq!(crate::object::layout_probe::probe_has(value, first, true), 1);
+            assert_eq!(
+                crate::object::layout_probe::probe_has(value, second, true),
+                0
+            );
+            assert_eq!(
+                crate::object::layout_probe::probe_has(value, first, true),
+                1
+            );
             assert_eq!(
                 crate::object::layout_probe::perry_probe_get(dir, biased, first, first_hash),
                 1.0
@@ -611,7 +620,11 @@ fn the_probe_serves_a_holey_runtime_layout() {
         let value = crate::js_nanbox_pointer(obj as i64).to_bits();
         let a = crate::string::existing_property_atom(SECOND.string).expect("program atom");
         assert_eq!(
-            crate::object::layout_probe::probe_has(value, crate::value::STRING_TAG | a as u64, true),
+            crate::object::layout_probe::probe_has(
+                value,
+                crate::value::STRING_TAG | a as u64,
+                true
+            ),
             1
         );
     }
@@ -645,7 +658,10 @@ fn a_probe_store_of_a_pointer_into_an_old_object_keeps_its_write_barrier() {
         let child = crate::object::object_alloc_plain(0);
         let child_value = crate::js_nanbox_pointer(child as i64);
         let a = crate::string::existing_property_atom(FIRST.string).expect("program atom");
-        let (key, hash) = (crate::value::STRING_TAG | a as u64, crate::string::property_atom_hash(a));
+        let (key, hash) = (
+            crate::value::STRING_TAG | a as u64,
+            crate::string::property_atom_hash(a),
+        );
         let slot = (obj as usize) + std::mem::size_of::<ObjectHeader>();
         assert!(!crate::gc::old_slot_page_is_remembered_for_test(slot));
         assert_eq!(

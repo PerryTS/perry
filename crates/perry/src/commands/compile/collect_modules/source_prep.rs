@@ -644,11 +644,9 @@ impl PreparedSources {
     ) -> Option<PreparedSource> {
         let kept = self.modules.remove(canonical)?;
         match kept.read {
-            KeptRead::AfterRewrite { raw_source: kept_raw }
-                if kept.class == class && kept_raw == raw_source =>
-            {
-                Some(kept.prepared)
-            }
+            KeptRead::AfterRewrite {
+                raw_source: kept_raw,
+            } if kept.class == class && kept_raw == raw_source => Some(kept.prepared),
             _ => None,
         }
     }

@@ -882,10 +882,10 @@ pub const NANBOX_OPERANDS: [u64; 26] = [
     (0x7FFD_0000_0000_0000 + RECEIVER_HANDLE_FLOOR as u64).wrapping_neg(), // -(POINTER_TAG + floor)
     0xFFFF_FFFF_0000_0000,                    // the ShapeId half of an object's header word
     !(1 << 60),
-    1 << 62,               // bit 62, the token bit of a static ShapeId operand
-    0xFFFD_0000_0000_0000, // collapses POINTER_TAG and STRING_TAG
-    0x7FFE_0000_0000_0000, // INT32_TAG
-    (1 << 48) - 4096,      // masks a 48-bit address down to its page
+    1 << 62,                     // bit 62, the token bit of a static ShapeId operand
+    0xFFFD_0000_0000_0000,       // collapses POINTER_TAG and STRING_TAG
+    0x7FFE_0000_0000_0000,       // INT32_TAG
+    (1 << 48) - 4096,            // masks a 48-bit address down to its page
     (0xB800_0000_u64 << 32) - 1, // below the exotic ShapeId band
     1 << 61,
     0x7FFA_0000_0000_0000, // BIGINT_TAG

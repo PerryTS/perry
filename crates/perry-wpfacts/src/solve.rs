@@ -674,7 +674,10 @@ impl Model {
             Cons::AnyAccessors { origin, act } => {
                 for &q in toks {
                     if q != TOP {
-                        self.any_walk_holders.entry(q).or_default().push((origin, act));
+                        self.any_walk_holders
+                            .entry(q)
+                            .or_default()
+                            .push((origin, act));
                     }
                     if q != TOP && self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()) {
                         self.accessor_hit(origin, q, Key::Any, act);
@@ -911,7 +914,10 @@ impl Model {
                         self.add(pass, &[TOP], 0);
                     } else if self.stops_at(q, key) {
                         self.add(stop, &[q], 0);
-                        self.stopped_holders.entry(q).or_default().push((key, pass, stop));
+                        self.stopped_holders
+                            .entry(q)
+                            .or_default()
+                            .push((key, pass, stop));
                     } else {
                         let (p2, s2) = self.holders(q, key);
                         self.edge_quiet(p2, pass);
@@ -1030,7 +1036,10 @@ impl Model {
                 let cp = self.cp(t);
                 if self.any_walk_done.insert((cp, origin, act)) {
                     self.any_walks.push((cp, origin, t, act));
-                    self.any_walk_holders.entry(t).or_default().push((origin, act));
+                    self.any_walk_holders
+                        .entry(t)
+                        .or_default()
+                        .push((origin, act));
                     self.cons(cp, Cons::AnyAccessors { origin, act });
                 }
             }
@@ -1097,7 +1106,14 @@ impl Model {
         self.holder_nodes.insert((t, key), (p, s));
         self.add(p, &[t], 0);
         let pn = self.proto_node(t);
-        self.cons(pn, Cons::HolderStep { key, pass: p, stop: s });
+        self.cons(
+            pn,
+            Cons::HolderStep {
+                key,
+                pass: p,
+                stop: s,
+            },
+        );
         (p, s)
     }
 
@@ -1113,7 +1129,14 @@ impl Model {
             self.nodes[s as usize].internal = true;
             let x = self.node_l("holders-start");
             self.add(x, &[t], 0);
-            self.cons(x, Cons::HolderStep { key, pass: p, stop: s });
+            self.cons(
+                x,
+                Cons::HolderStep {
+                    key,
+                    pass: p,
+                    stop: s,
+                },
+            );
             (p, s)
         } else {
             self.holders(t, key)
@@ -1486,7 +1509,11 @@ impl Model {
             }
         }
         if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
-            let walks = self.any_walk_holders.get(&holder).cloned().unwrap_or_default();
+            let walks = self
+                .any_walk_holders
+                .get(&holder)
+                .cloned()
+                .unwrap_or_default();
             if !walks.is_empty() {
                 self.acc_group(holder, Key::Any);
                 for (origin, act) in walks {
@@ -2193,9 +2220,7 @@ impl Model {
         // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
         // null (its [[Prototype]] already): nothing changes (immutable
         // prototype exotic object). A ⊤ target that may be it is no E6 on it.
-        if kind == Hard::E6SetPrototypeOf
-            && matches!(self.toks[t as usize], TokKind::ObjectProto)
-        {
+        if kind == Hard::E6SetPrototypeOf && matches!(self.toks[t as usize], TokKind::ObjectProto) {
             return;
         }
         if self.hard.contains_key(&t) {

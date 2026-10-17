@@ -8,7 +8,6 @@ use crate::native_value::LoweredValue;
 use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
 use crate::types::{DOUBLE, I64, PTR};
 
-
 fn receiver_binding(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
     match object {
         Expr::ExternFuncRef { name, .. } if ctx.imported_object_literals.contains_key(name) => {
@@ -50,7 +49,12 @@ fn emit_own_method_guard(
     let value = ctx.block().call(
         DOUBLE,
         "perry_probe_get_value",
-        &[(PTR, &dir), (I64, recv_bits), (I64, &key_bits), (I64, &hash)],
+        &[
+            (PTR, &dir),
+            (I64, recv_bits),
+            (I64, &key_bits),
+            (I64, &hash),
+        ],
     );
     // The guard compares the value's `JsFunctionInfo` with the body's.
     let expected_info = ctx.block().fn_info_ref(closure_symbol);

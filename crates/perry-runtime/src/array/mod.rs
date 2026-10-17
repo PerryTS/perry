@@ -243,10 +243,9 @@ pub use self::numeric_range::{
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, map_prototype_addr,
-    note_object_prototype_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
-    object_prototype_addr_matches, object_prototype_cell, prime_prototype_addr_cache,
-    primitive_wrapper_prototype_addr,
+    function_prototype_addr, map_prototype_addr, note_object_prototype_intrinsic,
+    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
+    object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -260,23 +259,21 @@ pub(crate) use self::sort::object_prototype_index_get_with_receiver as sort_obje
 #[cfg(test)]
 pub(crate) use self::subclass::js_packed_arraylike_loop_guard;
 pub use self::subclass::{
-    array_subclass_dense_snapshot, array_subclass_has_iterator_override,
-    is_array_subclass_instance,
+    array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };
 #[cfg(test)]
-pub(crate) use indexing_support::test_swap_array_index_fast_path_invalidated;
-#[cfg(test)]
 pub(crate) use indexing_support::perry_array_iteration_init;
+#[cfg(test)]
+pub(crate) use indexing_support::test_swap_array_index_fast_path_invalidated;
 // #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.
 pub(crate) use self::subclass::{
     array_object_set_length, array_subclass_fast_index_get, array_subclass_fast_index_set,
-    array_subclass_fast_length,
-    array_subclass_tail_descriptors_are_plain,
-    clear_packed_subclass_numeric_proof,
-    drop_packed_subclass_numeric_proof_record, is_array_subclass_class_id, is_array_subclass_value,
-    note_array_subclass_index_write, note_packed_subclass_spill_store,
+    array_subclass_fast_length, array_subclass_tail_descriptors_are_plain,
+    clear_packed_subclass_numeric_proof, drop_packed_subclass_numeric_proof_record,
+    is_array_subclass_class_id, is_array_subclass_value, note_array_subclass_index_write,
+    note_packed_subclass_spill_store,
 };
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator

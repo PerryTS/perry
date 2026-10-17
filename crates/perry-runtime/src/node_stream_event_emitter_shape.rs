@@ -512,8 +512,13 @@ mod method_body_tests {
     fn emitter_operations_use_spilled_state_despite_unrelated_attributes() {
         let _global = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
-        // PassThrough: a layout-born stream keeps its state in fixed slots.
-        let target = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
+        // An ordinary emitter whose two inline slots hold other keys, so its
+        // state keys spill (every stream class is born on its layout, in
+        // fixed slots).
+        let target =
+            crate::value::js_nanbox_pointer(crate::object::js_object_alloc_plain(2) as i64);
+        state_set(target, crate::runtime_state_key!(b"a"), 1.0);
+        state_set(target, crate::runtime_state_key!(b"b"), 2.0);
         init_event_emitter_state(target);
         // Node inherits its initial zero count. Give this storage witness an
         // own count before asking the two-own-slot reset helper to accept it.

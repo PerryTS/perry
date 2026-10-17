@@ -35,26 +35,12 @@ struct Birth {
     inline: u32,
 }
 thread_local! {
-    static R_DIRECT: Cell<Option<Birth>> = const { Cell::new(None) };
-    static W_DIRECT: Cell<Option<Birth>> = const { Cell::new(None) };
-    static D_DIRECT: Cell<Option<Birth>> = const { Cell::new(None) };
-    static T_DIRECT: Cell<Option<Birth>> = const { Cell::new(None) };
-    static P_DIRECT: Cell<Option<Birth>> = const { Cell::new(None) };
     static R_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static W_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static D_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static T_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static P_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
     static E_EXISTING: Cell<Option<Birth>> = const { Cell::new(None) };
-}
-fn direct(kind: Kind) -> &'static std::thread::LocalKey<Cell<Option<Birth>>> {
-    match kind {
-        Kind::Readable => &R_DIRECT,
-        Kind::Writable => &W_DIRECT,
-        Kind::Duplex => &D_DIRECT,
-        Kind::Transform => &T_DIRECT,
-        Kind::PassThrough => &P_DIRECT,
-    }
 }
 fn existing(kind: Kind) -> &'static std::thread::LocalKey<Cell<Option<Birth>>> {
     match kind {
@@ -317,42 +303,6 @@ fn remember(site: &'static std::thread::LocalKey<Cell<Option<Birth>>>, input: In
 /// Direct allocation replays the exact final ordinary transition chain. The
 /// body still normalizes options and fills its slots in the original order.
 #[inline(never)]
-pub(crate) fn alloc(proto: f64, opts: f64, kind: Kind) -> (Option<f64>, Option<Input>) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(proto);
-    let opts = scope.root_nanbox_f64(opts);
-    let previous = direct(kind).with(Cell::get);
-    let proof = input(
-        None,
-        proto.get_nanbox_f64(),
-        opts.get_nanbox_f64(),
-        previous,
-    );
-    let Some(proof) = proof else {
-        return (None, None);
-    };
-    let Some(birth) = previous.filter(|b| matches_input(b.input, proof)) else {
-        return (None, Some(proof));
-    };
-    let Some(obj) = crate::object::object_alloc_recorded_birth(
-        birth.shape,
-        proto.get_nanbox_u64(),
-        birth.count,
-        birth.inline,
-        false,
-    ) else {
-        return (None, Some(proof));
-    };
-    let stream = scope.root_nanbox_f64(box_pointer(obj.cast()));
-    seed_new_count(stream.get_nanbox_f64(), proto.get_nanbox_f64(), None);
-    (Some(stream.get_nanbox_f64()), Some(proof))
-}
-pub(super) fn remember_direct(stream: f64, proof: Option<Input>, kind: Kind) {
-    if let Some(proof) = proof {
-        remember(direct(kind), proof, stream);
-    }
-}
-
 fn seed_new_count(stream: f64, proto: f64, source_shape: Option<u32>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
@@ -444,11 +394,10 @@ mod tests {
     extern "C" fn read_hook(_: *const ClosureHeader, _: crate::closure::JsThis, _: f64) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }
-    // PassThrough: the direct births of the sealed stream classes are born
-    // on their instance layouts and take no replay.
+    // A direct birth on a layout replays nothing: an option dropped between
+    // births leaves no own hook behind.
     #[test]
     fn warm_presence_change_does_not_keep_an_own_hook() {
-        P_DIRECT.with(|site| site.set(None));
         let scope = crate::gc::RuntimeHandleScope::new();
         let opts =
             scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc_plain(2).cast()));
@@ -458,12 +407,12 @@ mod tests {
             crate::runtime_state_key!(b"read"),
             box_pointer(hook.get_raw_mut_ptr::<ClosureHeader>().cast()),
         );
-        let first = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(opts.get_nanbox_f64()));
-        let _second = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(opts.get_nanbox_f64()));
-        assert!(
-            P_DIRECT.with(|site| site.get()).is_some(),
-            "must witness a primed birth"
-        );
+        let first = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(
+            opts.get_nanbox_f64(),
+        ));
+        let _second = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(
+            opts.get_nanbox_f64(),
+        ));
         let old_shape = unsafe {
             crate::object::shapes::object_shape_stamp(
                 object_ptr_from_value(opts.get_nanbox_f64()).unwrap(),
@@ -476,7 +425,9 @@ mod tests {
                 object_ptr_from_value(opts.get_nanbox_f64()).unwrap(),
             )
         });
-        let changed = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(opts.get_nanbox_f64()));
+        let changed = scope.root_nanbox_f64(crate::node_stream::js_node_stream_passthrough_new(
+            opts.get_nanbox_f64(),
+        ));
         let key = crate::runtime_state_key!(b"_read");
         assert!(
             unsafe { key.read_own(object_ptr_from_value(first.get_nanbox_f64()).unwrap()) }

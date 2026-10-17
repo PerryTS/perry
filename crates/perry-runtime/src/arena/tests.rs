@@ -30,7 +30,7 @@ pub(super) fn run_with_fresh_arenas(test: impl FnOnce() + Send + 'static) {
         test()
     })
     .join()
-        .expect("arena test panicked");
+    .expect("arena test panicked");
 }
 
 fn reset_old_nursery_block(dead_cycles_before: u32) -> (usize, usize, usize, ArenaResetStats) {

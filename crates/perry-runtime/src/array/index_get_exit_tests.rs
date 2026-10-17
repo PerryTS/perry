@@ -128,8 +128,7 @@ fn the_exit_reads_every_element_kind_the_inline_arm_can_serve() {
         let receiver = nanbox(ta as *const u8);
         for index in 0..3u32 {
             let expected = js_typed_array_get(ta, index as i32);
-            let actual =
-                js_packed_arraylike_index_get(receiver, f64::from(index));
+            let actual = js_packed_arraylike_index_get(receiver, f64::from(index));
             assert_eq!(
                 actual.to_bits(),
                 expected.to_bits(),
@@ -220,8 +219,7 @@ fn a_live_view_changes_the_route_and_not_the_element() {
         2,
         false,
     );
-    let guarded =
-        js_packed_arraylike_index_get(nanbox(view.cast::<u8>()), 1.0);
+    let guarded = js_packed_arraylike_index_get(nanbox(view.cast::<u8>()), 1.0);
     assert_eq!(
         guarded, 2.5,
         "external storage must change the ROUTE, never the element"
@@ -320,19 +318,14 @@ fn the_exit_returns_a_boxed_element_that_a_number_context_must_coerce() {
         "the exit must leave the element boxed"
     );
     assert_eq!(
-        crate::builtins::js_number_coerce(js_packed_arraylike_index_get(
-            receiver,
-            0.0)),
+        crate::builtins::js_number_coerce(js_packed_arraylike_index_get(receiver, 0.0)),
         12.0,
         "the site's number-context `js_number_coerce` must apply ToNumber"
     );
     // `undefined` is the OOB answer, and `ToNumber(undefined)` is NaN — the
     // property the emitted merge phi depends on in a number context.
     assert!(
-        crate::builtins::js_number_coerce(js_packed_arraylike_index_get(
-            receiver,
-            9.0))
-        .is_nan(),
+        crate::builtins::js_number_coerce(js_packed_arraylike_index_get(receiver, 9.0)).is_nan(),
         "a coerced out-of-bounds read must be NaN, not the undefined box"
     );
 }

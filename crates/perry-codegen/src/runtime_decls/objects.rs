@@ -652,16 +652,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, DOUBLE, I64, PTR, I64],
     );
-    module.declare_function(
-        "js_method_call_value",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, PTR, I64],
-    );
-    module.declare_function(
-        "js_method_call_value_apply",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, I64],
-    );
+    module.declare_function("js_method_call_value", DOUBLE, &[DOUBLE, DOUBLE, PTR, I64]);
+    module.declare_function("js_method_call_value_apply", DOUBLE, &[DOUBLE, DOUBLE, I64]);
     module.declare_function(
         "js_object_array_numeric_write_guard",
         I64,

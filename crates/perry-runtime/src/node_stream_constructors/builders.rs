@@ -110,11 +110,6 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
         StreamInit::Direct,
         proof,
     );
-    super::birth_memo::remember_direct(
-        readable.get_nanbox_f64(),
-        proof,
-        super::birth::Kind::Readable,
-    );
     readable.get_nanbox_f64()
 }
 
@@ -454,11 +449,6 @@ pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
         StreamInit::Direct,
         proof,
     );
-    super::birth_memo::remember_direct(
-        writable.get_nanbox_f64(),
-        proof,
-        super::birth::Kind::Writable,
-    );
     writable.get_nanbox_f64()
 }
 
@@ -632,15 +622,6 @@ fn new_duplex_kind(opts: f64, kind: DuplexKind) -> f64 {
             proof,
         ),
     }
-    super::birth_memo::remember_direct(
-        stream.get_nanbox_f64(),
-        proof,
-        match kind {
-            DuplexKind::Duplex => super::birth::Kind::Duplex,
-            DuplexKind::Transform => super::birth::Kind::Transform,
-            DuplexKind::PassThrough => super::birth::Kind::PassThrough,
-        },
-    );
     stream.get_nanbox_f64()
 }
 

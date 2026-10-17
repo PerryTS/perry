@@ -741,11 +741,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Array-subclass IC tower and the lazy-JSON-array probe, each of which was
     // an acceleration of a decision this helper already makes — and it is
     // handed the SAME site cache slot, so the primed words are unchanged.
-    module.declare_function(
-        "js_packed_arraylike_index_get",
-        DOUBLE,
-        &[DOUBLE, DOUBLE],
-    );
+    module.declare_function("js_packed_arraylike_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_packed_arraylike_loop_guard",
         I32,

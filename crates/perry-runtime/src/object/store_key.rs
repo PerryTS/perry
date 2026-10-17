@@ -96,5 +96,4 @@ mod tests {
             assert!(interned_key_for_store(f64::from_bits(crate::value::TAG_UNDEFINED)).is_none());
         }
     }
-
 }

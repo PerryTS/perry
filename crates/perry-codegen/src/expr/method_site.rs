@@ -39,7 +39,6 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, PTR};
 
 const EMPTY_SHAPE_DIR: &str = "@PERRY_EMPTY_SHAPE_DIR";
 
-
 /// Is the One Path method site available for this call?
 /// `PERRY_METHOD_SITE=0` at compile time keeps the old dispatcher (A/B).
 pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) -> bool {
@@ -262,7 +261,8 @@ fn emit_function_value_call(
             ctx.current_block = next_idx;
         }
     }
-    let r = crate::lower_call::emit_closure_handle_call_this(ctx, &handle, &recv_bits, lowered_args);
+    let r =
+        crate::lower_call::emit_closure_handle_call_this(ctx, &handle, &recv_bits, lowered_args);
     let end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(merge_l);
@@ -283,7 +283,9 @@ pub(crate) fn emit_method_site(
     method_id: &str,
     lanes: &[crate::codegen::static_constfn::StaticMethodLane],
 ) -> String {
-    use crate::expr::receiver_range::{emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS};
+    use crate::expr::receiver_range::{
+        emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS,
+    };
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     let probe_idx = ctx.new_block("msite.probe");
     let slow_idx = ctx.new_block("msite.slow");
@@ -409,7 +411,14 @@ pub(crate) fn emit_method_site(
     // slow: a builtin receiver's direct entry when the key names a builtin
     // method (§3.6), else the universal dispatcher.
     ctx.current_block = slow_idx;
-    let slow_value = emit_slow_call(ctx, property, recv_box, lowered_args, feedback_site, method_id);
+    let slow_value = emit_slow_call(
+        ctx,
+        property,
+        recv_box,
+        lowered_args,
+        feedback_site,
+        method_id,
+    );
     let slow_end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_l);

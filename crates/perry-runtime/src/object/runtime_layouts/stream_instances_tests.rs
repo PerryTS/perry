@@ -54,15 +54,25 @@ fn stream_instance_layouts_are_prefix_stable() {
     }
 }
 
-runtime_atom!(PREFIX_STATE, "prefixtest_state", "707265666978746573745f7374617465");
+runtime_atom!(
+    PREFIX_STATE,
+    "prefixtest_state",
+    "707265666978746573745f7374617465"
+);
 // The emitter's keys with a subclass key enumerated between them, stored by
 // position: the base keys move.
-runtime_layout!(PREFIX_MOVED, 0x7f0000b2, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    NP_ATOM_U_EVENTS,
-    PREFIX_STATE,
-    NP_ATOM_U_EVENTS_COUNT,
-    NP_ATOM_U_MAX_LISTENERS,
-]);
+runtime_layout!(
+    PREFIX_MOVED,
+    0x7f0000b2,
+    0,
+    crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    [
+        NP_ATOM_U_EVENTS,
+        PREFIX_STATE,
+        NP_ATOM_U_EVENTS_COUNT,
+        NP_ATOM_U_MAX_LISTENERS,
+    ]
+);
 
 #[test]
 fn prefix_stability_check_rejects_a_moved_base_slot() {
@@ -123,7 +133,13 @@ fn direct_births_are_born_on_their_layouts_in_node_order() {
         (
             crate::node_stream::js_node_stream_duplex_new,
             &raw const DUPLEX,
-            &["_events", "_readableState", "_writableState", "allowHalfOpen", "_maxListeners"],
+            &[
+                "_events",
+                "_readableState",
+                "_writableState",
+                "allowHalfOpen",
+                "_maxListeners",
+            ],
         ),
         (
             crate::node_stream::js_node_stream_transform_new,
@@ -142,7 +158,11 @@ fn direct_births_are_born_on_their_layouts_in_node_order() {
         let value = scope.root_nanbox_f64(new(undefined()));
         unsafe {
             let obj = object(value.get_nanbox_f64());
-            assert_eq!((*obj).parent_class_id, layout_id(desc), "born on its layout");
+            assert_eq!(
+                (*obj).parent_class_id,
+                layout_id(desc),
+                "born on its layout"
+            );
             assert!(!crate::object::overflow::has_overflow(obj));
             assert_eq!(own_names(value.get_nanbox_f64()), names);
         }
@@ -163,14 +183,25 @@ fn filled_optional_members_enumerate_last() {
             own_names(r.get_nanbox_f64()),
             ["_events", "_readableState", "_maxListeners", "_eventsCount"]
         );
-        assert!(!crate::object::overflow::has_overflow(object(r.get_nanbox_f64())));
+        assert!(!crate::object::overflow::has_overflow(object(
+            r.get_nanbox_f64()
+        )));
         let read = crate::string::intern_ascii_literal(b"_read");
         js_object_set_field_by_name(object(r.get_nanbox_f64()), read, 2.0);
         assert_eq!(
             own_names(r.get_nanbox_f64()),
-            ["_events", "_readableState", "_maxListeners", "_eventsCount", "_read"]
+            [
+                "_events",
+                "_readableState",
+                "_maxListeners",
+                "_eventsCount",
+                "_read"
+            ]
         );
-        assert_eq!(js_object_get_field_by_name_f64(object(r.get_nanbox_f64()), read), 2.0);
+        assert_eq!(
+            js_object_get_field_by_name_f64(object(r.get_nanbox_f64()), read),
+            2.0
+        );
     }
 }
 
@@ -199,7 +230,10 @@ fn legacy_stream_takes_the_emitter_birth() {
             (*object(stream.get_nanbox_f64())).parent_class_id,
             layout_id(&raw const LEGACY_STREAM)
         );
-        assert_eq!(js_object_get_prototype_of(stream.get_nanbox_f64()).to_bits(), proto.to_bits());
+        assert_eq!(
+            js_object_get_prototype_of(stream.get_nanbox_f64()).to_bits(),
+            proto.to_bits()
+        );
     }
 }
 
@@ -255,7 +289,10 @@ fn readable_birth_declines_a_written_chain_body() {
         let key = crate::string::intern_ascii_literal(b"layouttest_written");
         js_object_set_field_by_name(object(ee.get_nanbox_f64()), key, 1.0);
         let r = scope.root_nanbox_f64(crate::node_stream::js_node_stream_readable_new(undefined()));
-        assert_ne!((*object(r.get_nanbox_f64())).parent_class_id, layout_id(&raw const READABLE));
+        assert_ne!(
+            (*object(r.get_nanbox_f64())).parent_class_id,
+            layout_id(&raw const READABLE)
+        );
         assert_eq!(
             own_names(r.get_nanbox_f64()),
             ["_events", "_readableState", "_maxListeners"]

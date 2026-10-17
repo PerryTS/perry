@@ -572,36 +572,6 @@ pub(crate) static mut WRITABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
 };
-static PASSTHROUGH_PROTO_KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
-    atom: std::ptr::addr_of!(A23),
-    slot: 0,
-    attrs: 2,
-    _pad: [0; 3],
-}];
-static PASSTHROUGH_PROTO_INDEX: [u32; 2] = [u32::MAX, 0];
-#[used(linker)]
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
-#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_layouts"
-)]
-pub(crate) static mut PASSTHROUGH_PROTO: PerryLayoutDesc = PerryLayoutDesc {
-    family: 0x53500005,
-    variant: 0,
-    kind: 0,
-    integrity: 0,
-    slot_count: 1,
-    layout_id: super::super::layout_desc::LAYOUT_ID_CARRIED,
-    rep: 0,
-    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
-    keys: PASSTHROUGH_PROTO_KEYS.as_ptr(),
-    key_count: 1,
-    index_mask: 1,
-    index: PASSTHROUGH_PROTO_INDEX.as_ptr(),
-    class_id: 0,
-    parent_class_id: 0,
-};
 static EE_ASYNC_RESOURCE_PROTO_KEYS: [PerryLayoutKey; 6] = [
     PerryLayoutKey {
         atom: std::ptr::addr_of!(A23),

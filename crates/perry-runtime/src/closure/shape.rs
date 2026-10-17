@@ -52,7 +52,7 @@ pub(crate) const INTRINSIC_SERIAL_ARRAY_PROTOTYPE: u64 = 11;
 /// `%URLSearchParams.prototype%`, which `runtime_layouts::URL_SEARCH_PARAMS`
 /// names through its prototype family.
 pub(crate) const INTRINSIC_SERIAL_URL_SEARCH_PARAMS: u64 = 12;
-/// The prototypes of node:events and node:stream, born on their
+/// The prototypes of node:events, node:stream and node:http, born on their
 /// static layouts (`runtime_layouts::node_prototypes`): each layout names its
 /// [[Prototype]] through the parent's identity word.
 pub(crate) const INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE: u64 = 13;
@@ -61,6 +61,10 @@ pub(crate) const INTRINSIC_SERIAL_READABLE_PROTOTYPE: u64 = 15;
 pub(crate) const INTRINSIC_SERIAL_WRITABLE_PROTOTYPE: u64 = 16;
 pub(crate) const INTRINSIC_SERIAL_DUPLEX_PROTOTYPE: u64 = 17;
 pub(crate) const INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE: u64 = 18;
+pub(crate) const INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE: u64 = 19;
+pub(crate) const INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE: u64 = 20;
+pub(crate) const INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE: u64 = 21;
+pub(crate) const INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE: u64 = 22;
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

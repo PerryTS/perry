@@ -196,12 +196,23 @@ unsafe fn array_push(recv: f64, values: &[f64]) -> f64 {
 
 /// `recv.add(a0)` (families T, WeakSet).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_add1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_add1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if set_ok(recv) {
         return boxed_ptr(crate::set::js_set_add(raw(recv).cast(), a0).cast());
     }
     if weak_ok(recv, WEAKSET) {
-        return crate::weakref::operations::set(recv, a0, UNDEFINED, crate::weakref::operations::Receiver::Folded(WEAKSET));
+        return crate::weakref::operations::set(
+            recv,
+            a0,
+            UNDEFINED,
+            crate::weakref::operations::Receiver::Folded(WEAKSET),
+        );
     }
     let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -209,7 +220,12 @@ pub unsafe extern "C-unwind" fn js_bm_add1(site: u64, recv: f64, key: u64, metho
 
 /// `recv.apply()` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_apply0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_apply0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if function_ok(recv, b"apply") {
         if let Some(value) = crate::closure::try_native_apply(recv, UNDEFINED, UNDEFINED) {
             return value;
@@ -221,7 +237,13 @@ pub unsafe extern "C-unwind" fn js_bm_apply0(site: u64, recv: f64, key: u64, met
 
 /// `recv.apply(a0)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_apply1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_apply1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if function_ok(recv, b"apply") {
         if let Some(value) = crate::closure::try_native_apply(recv, a0, UNDEFINED) {
             return value;
@@ -233,7 +255,14 @@ pub unsafe extern "C-unwind" fn js_bm_apply1(site: u64, recv: f64, key: u64, met
 
 /// `recv.apply(a0, a1)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_apply2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_apply2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if function_ok(recv, b"apply") {
         if let Some(value) = crate::closure::try_native_apply(recv, a0, a1) {
             return value;
@@ -255,7 +284,13 @@ pub unsafe extern "C-unwind" fn js_bm_at0(site: u64, recv: f64, key: u64, method
 
 /// `recv.at(a0)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_at1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_at1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_at1(recv, a0);
     }
@@ -302,7 +337,13 @@ pub unsafe extern "C-unwind" fn js_bm_bind0(site: u64, recv: f64, key: u64, meth
 
 /// `recv.bind(a0)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_bind1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_bind1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if function_ok(recv, b"bind") {
         let args = [a0];
         return crate::closure::js_function_bind(recv, args.as_ptr(), args.len());
@@ -313,7 +354,14 @@ pub unsafe extern "C-unwind" fn js_bm_bind1(site: u64, recv: f64, key: u64, meth
 
 /// `recv.bind(a0, a1)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_bind2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_bind2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if function_ok(recv, b"bind") {
         let args = [a0, a1];
         return crate::closure::js_function_bind(recv, args.as_ptr(), args.len());
@@ -324,7 +372,15 @@ pub unsafe extern "C-unwind" fn js_bm_bind2(site: u64, recv: f64, key: u64, meth
 
 /// `recv.bind(a0, a1, a2)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_bind3(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64, a2: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_bind3(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+    a2: f64,
+) -> f64 {
     if function_ok(recv, b"bind") {
         let args = [a0, a1, a2];
         return crate::closure::js_function_bind(recv, args.as_ptr(), args.len());
@@ -345,7 +401,13 @@ pub unsafe extern "C-unwind" fn js_bm_call0(site: u64, recv: f64, key: u64, meth
 
 /// `recv.call(a0)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_call1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_call1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if function_ok(recv, b"call") {
         return super::native_call_method::call_function_with_explicit_this(recv, a0, &[]);
     }
@@ -355,7 +417,14 @@ pub unsafe extern "C-unwind" fn js_bm_call1(site: u64, recv: f64, key: u64, meth
 
 /// `recv.call(a0, a1)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_call2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_call2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if function_ok(recv, b"call") {
         return super::native_call_method::call_function_with_explicit_this(recv, a0, &[a1]);
     }
@@ -365,7 +434,15 @@ pub unsafe extern "C-unwind" fn js_bm_call2(site: u64, recv: f64, key: u64, meth
 
 /// `recv.call(a0, a1, a2)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_call3(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64, a2: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_call3(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+    a2: f64,
+) -> f64 {
     if function_ok(recv, b"call") {
         return super::native_call_method::call_function_with_explicit_this(recv, a0, &[a1, a2]);
     }
@@ -375,9 +452,22 @@ pub unsafe extern "C-unwind" fn js_bm_call3(site: u64, recv: f64, key: u64, meth
 
 /// `recv.call(a0, a1, a2, a3)` (families F).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_call4(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64, a2: f64, a3: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_call4(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+    a2: f64,
+    a3: f64,
+) -> f64 {
     if function_ok(recv, b"call") {
-        return super::native_call_method::call_function_with_explicit_this(recv, a0, &[a1, a2, a3]);
+        return super::native_call_method::call_function_with_explicit_this(
+            recv,
+            a0,
+            &[a1, a2, a3],
+        );
     }
     let args: [f64; 4] = [a0, a1, a2, a3];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -385,7 +475,12 @@ pub unsafe extern "C-unwind" fn js_bm_call4(site: u64, recv: f64, key: u64, meth
 
 /// `recv.charAt()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_charAt0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_charAt0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_charAt0(recv);
     }
@@ -395,7 +490,13 @@ pub unsafe extern "C-unwind" fn js_bm_charAt0(site: u64, recv: f64, key: u64, me
 
 /// `recv.charAt(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_charAt1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_charAt1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_charAt1(recv, a0);
     }
@@ -405,7 +506,12 @@ pub unsafe extern "C-unwind" fn js_bm_charAt1(site: u64, recv: f64, key: u64, me
 
 /// `recv.charCodeAt()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_charCodeAt0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_charCodeAt0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_charCodeAt0(recv);
     }
@@ -415,7 +521,13 @@ pub unsafe extern "C-unwind" fn js_bm_charCodeAt0(site: u64, recv: f64, key: u64
 
 /// `recv.charCodeAt(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_charCodeAt1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_charCodeAt1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_charCodeAt1(recv, a0);
     }
@@ -425,7 +537,12 @@ pub unsafe extern "C-unwind" fn js_bm_charCodeAt1(site: u64, recv: f64, key: u64
 
 /// `recv.codePointAt()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_codePointAt0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_codePointAt0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_codePointAt0(recv);
     }
@@ -435,7 +552,13 @@ pub unsafe extern "C-unwind" fn js_bm_codePointAt0(site: u64, recv: f64, key: u6
 
 /// `recv.codePointAt(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_codePointAt1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_codePointAt1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_codePointAt1(recv, a0);
     }
@@ -445,7 +568,12 @@ pub unsafe extern "C-unwind" fn js_bm_codePointAt1(site: u64, recv: f64, key: u6
 
 /// `recv.concat()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_concat0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_concat0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_concat0(recv);
     }
@@ -455,7 +583,13 @@ pub unsafe extern "C-unwind" fn js_bm_concat0(site: u64, recv: f64, key: u64, me
 
 /// `recv.concat(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_concat1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_concat1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_concat1(recv, a0);
     }
@@ -465,7 +599,14 @@ pub unsafe extern "C-unwind" fn js_bm_concat1(site: u64, recv: f64, key: u64, me
 
 /// `recv.concat(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_concat2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_concat2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_concat2(recv, a0, a1);
     }
@@ -475,7 +616,13 @@ pub unsafe extern "C-unwind" fn js_bm_concat2(site: u64, recv: f64, key: u64, me
 
 /// `recv.delete(a0)` (families MT, WeakMap, WeakSet).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_delete1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_delete1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if map_ok(recv) {
         return boolean(crate::map::js_map_delete(raw(recv).cast(), a0) != 0);
     }
@@ -483,10 +630,18 @@ pub unsafe extern "C-unwind" fn js_bm_delete1(site: u64, recv: f64, key: u64, me
         return boolean(crate::set::js_set_delete(raw(recv).cast(), a0) != 0);
     }
     if weak_ok(recv, WEAKMAP) {
-        return crate::weakref::operations::delete(recv, a0, crate::weakref::operations::Receiver::Folded(WEAKMAP));
+        return crate::weakref::operations::delete(
+            recv,
+            a0,
+            crate::weakref::operations::Receiver::Folded(WEAKMAP),
+        );
     }
     if weak_ok(recv, WEAKSET) {
-        return crate::weakref::operations::delete(recv, a0, crate::weakref::operations::Receiver::Folded(WEAKSET));
+        return crate::weakref::operations::delete(
+            recv,
+            a0,
+            crate::weakref::operations::Receiver::Folded(WEAKSET),
+        );
     }
     let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -494,7 +649,12 @@ pub unsafe extern "C-unwind" fn js_bm_delete1(site: u64, recv: f64, key: u64, me
 
 /// `recv.endsWith()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_endsWith0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_endsWith0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_endsWith0(recv);
     }
@@ -504,7 +664,13 @@ pub unsafe extern "C-unwind" fn js_bm_endsWith0(site: u64, recv: f64, key: u64, 
 
 /// `recv.endsWith(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_endsWith1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_endsWith1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_endsWith1(recv, a0);
     }
@@ -514,7 +680,14 @@ pub unsafe extern "C-unwind" fn js_bm_endsWith1(site: u64, recv: f64, key: u64, 
 
 /// `recv.endsWith(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_endsWith2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_endsWith2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_endsWith2(recv, a0, a1);
     }
@@ -524,7 +697,12 @@ pub unsafe extern "C-unwind" fn js_bm_endsWith2(site: u64, recv: f64, key: u64, 
 
 /// `recv.entries()` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_entries0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_entries0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_entries0(recv);
     }
@@ -534,7 +712,13 @@ pub unsafe extern "C-unwind" fn js_bm_entries0(site: u64, recv: f64, key: u64, m
 
 /// `recv.every(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_every1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_every1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_every1(recv, a0);
     }
@@ -544,7 +728,13 @@ pub unsafe extern "C-unwind" fn js_bm_every1(site: u64, recv: f64, key: u64, met
 
 /// `recv.filter(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_filter1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_filter1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_filter1(recv, a0);
     }
@@ -554,7 +744,13 @@ pub unsafe extern "C-unwind" fn js_bm_filter1(site: u64, recv: f64, key: u64, me
 
 /// `recv.find(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_find1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_find1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_find1(recv, a0);
     }
@@ -564,7 +760,13 @@ pub unsafe extern "C-unwind" fn js_bm_find1(site: u64, recv: f64, key: u64, meth
 
 /// `recv.findIndex(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_findIndex1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_findIndex1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_findIndex1(recv, a0);
     }
@@ -574,7 +776,13 @@ pub unsafe extern "C-unwind" fn js_bm_findIndex1(site: u64, recv: f64, key: u64,
 
 /// `recv.findLast(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_findLast1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_findLast1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_findLast1(recv, a0);
     }
@@ -584,7 +792,13 @@ pub unsafe extern "C-unwind" fn js_bm_findLast1(site: u64, recv: f64, key: u64, 
 
 /// `recv.findLastIndex(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_findLastIndex1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_findLastIndex1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_findLastIndex1(recv, a0);
     }
@@ -604,7 +818,13 @@ pub unsafe extern "C-unwind" fn js_bm_flat0(site: u64, recv: f64, key: u64, meth
 
 /// `recv.flatMap(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_flatMap1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_flatMap1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_flatMap1(recv, a0);
     }
@@ -614,7 +834,13 @@ pub unsafe extern "C-unwind" fn js_bm_flatMap1(site: u64, recv: f64, key: u64, m
 
 /// `recv.forEach(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_forEach1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_forEach1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_forEach1(recv, a0);
     }
@@ -624,12 +850,22 @@ pub unsafe extern "C-unwind" fn js_bm_forEach1(site: u64, recv: f64, key: u64, m
 
 /// `recv.get(a0)` (families M, WeakMap).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_get1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_get1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if map_ok(recv) {
         return crate::map::js_map_get(raw(recv).cast(), a0);
     }
     if weak_ok(recv, WEAKMAP) {
-        return crate::weakref::operations::get(recv, a0, crate::weakref::operations::Receiver::Folded(WEAKMAP));
+        return crate::weakref::operations::get(
+            recv,
+            a0,
+            crate::weakref::operations::Receiver::Folded(WEAKMAP),
+        );
     }
     let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -637,7 +873,13 @@ pub unsafe extern "C-unwind" fn js_bm_get1(site: u64, recv: f64, key: u64, metho
 
 /// `recv.has(a0)` (families MT, WeakMap, WeakSet).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_has1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_has1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if map_ok(recv) {
         return boolean(crate::map::js_map_has(raw(recv).cast(), a0) != 0);
     }
@@ -645,10 +887,18 @@ pub unsafe extern "C-unwind" fn js_bm_has1(site: u64, recv: f64, key: u64, metho
         return boolean(crate::set::js_set_has(raw(recv).cast(), a0) != 0);
     }
     if weak_ok(recv, WEAKMAP) {
-        return crate::weakref::operations::has(recv, a0, crate::weakref::operations::Receiver::Folded(WEAKMAP));
+        return crate::weakref::operations::has(
+            recv,
+            a0,
+            crate::weakref::operations::Receiver::Folded(WEAKMAP),
+        );
     }
     if weak_ok(recv, WEAKSET) {
-        return crate::weakref::operations::has(recv, a0, crate::weakref::operations::Receiver::Folded(WEAKSET));
+        return crate::weakref::operations::has(
+            recv,
+            a0,
+            crate::weakref::operations::Receiver::Folded(WEAKSET),
+        );
     }
     let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -656,7 +906,12 @@ pub unsafe extern "C-unwind" fn js_bm_has1(site: u64, recv: f64, key: u64, metho
 
 /// `recv.includes()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_includes0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_includes0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_includes0(recv);
     }
@@ -666,7 +921,13 @@ pub unsafe extern "C-unwind" fn js_bm_includes0(site: u64, recv: f64, key: u64, 
 
 /// `recv.includes(a0)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_includes1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_includes1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_includes1(recv, a0);
     }
@@ -679,7 +940,14 @@ pub unsafe extern "C-unwind" fn js_bm_includes1(site: u64, recv: f64, key: u64, 
 
 /// `recv.includes(a0, a1)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_includes2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_includes2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_includes2(recv, a0, a1);
     }
@@ -692,7 +960,12 @@ pub unsafe extern "C-unwind" fn js_bm_includes2(site: u64, recv: f64, key: u64, 
 
 /// `recv.indexOf()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_indexOf0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_indexOf0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_indexOf0(recv);
     }
@@ -702,7 +975,13 @@ pub unsafe extern "C-unwind" fn js_bm_indexOf0(site: u64, recv: f64, key: u64, m
 
 /// `recv.indexOf(a0)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_indexOf1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_indexOf1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_indexOf1(recv, a0);
     }
@@ -715,7 +994,14 @@ pub unsafe extern "C-unwind" fn js_bm_indexOf1(site: u64, recv: f64, key: u64, m
 
 /// `recv.indexOf(a0, a1)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_indexOf2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_indexOf2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_indexOf2(recv, a0, a1);
     }
@@ -738,7 +1024,13 @@ pub unsafe extern "C-unwind" fn js_bm_join0(site: u64, recv: f64, key: u64, meth
 
 /// `recv.join(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_join1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_join1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_join1(recv, a0);
     }
@@ -758,7 +1050,12 @@ pub unsafe extern "C-unwind" fn js_bm_keys0(site: u64, recv: f64, key: u64, meth
 
 /// `recv.lastIndexOf()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_lastIndexOf0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_lastIndexOf0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_lastIndexOf0(recv);
     }
@@ -768,7 +1065,13 @@ pub unsafe extern "C-unwind" fn js_bm_lastIndexOf0(site: u64, recv: f64, key: u6
 
 /// `recv.lastIndexOf(a0)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_lastIndexOf1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_lastIndexOf1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_lastIndexOf1(recv, a0);
     }
@@ -781,7 +1084,14 @@ pub unsafe extern "C-unwind" fn js_bm_lastIndexOf1(site: u64, recv: f64, key: u6
 
 /// `recv.lastIndexOf(a0, a1)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_lastIndexOf2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_lastIndexOf2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_lastIndexOf2(recv, a0, a1);
     }
@@ -794,7 +1104,12 @@ pub unsafe extern "C-unwind" fn js_bm_lastIndexOf2(site: u64, recv: f64, key: u6
 
 /// `recv.localeCompare()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_localeCompare0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_localeCompare0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_localeCompare0(recv);
     }
@@ -804,7 +1119,13 @@ pub unsafe extern "C-unwind" fn js_bm_localeCompare0(site: u64, recv: f64, key: 
 
 /// `recv.localeCompare(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_localeCompare1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_localeCompare1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_localeCompare1(recv, a0);
     }
@@ -814,7 +1135,13 @@ pub unsafe extern "C-unwind" fn js_bm_localeCompare1(site: u64, recv: f64, key: 
 
 /// `recv.map(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_map1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_map1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_map1(recv, a0);
     }
@@ -824,7 +1151,12 @@ pub unsafe extern "C-unwind" fn js_bm_map1(site: u64, recv: f64, key: u64, metho
 
 /// `recv.match()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_match0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_match0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_match0(recv);
     }
@@ -834,7 +1166,13 @@ pub unsafe extern "C-unwind" fn js_bm_match0(site: u64, recv: f64, key: u64, met
 
 /// `recv.match(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_match1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_match1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_match1(recv, a0);
     }
@@ -844,7 +1182,12 @@ pub unsafe extern "C-unwind" fn js_bm_match1(site: u64, recv: f64, key: u64, met
 
 /// `recv.matchAll()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_matchAll0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_matchAll0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_matchAll0(recv);
     }
@@ -854,7 +1197,13 @@ pub unsafe extern "C-unwind" fn js_bm_matchAll0(site: u64, recv: f64, key: u64, 
 
 /// `recv.matchAll(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_matchAll1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_matchAll1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_matchAll1(recv, a0);
     }
@@ -864,7 +1213,12 @@ pub unsafe extern "C-unwind" fn js_bm_matchAll1(site: u64, recv: f64, key: u64, 
 
 /// `recv.normalize()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_normalize0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_normalize0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_normalize0(recv);
     }
@@ -874,7 +1228,13 @@ pub unsafe extern "C-unwind" fn js_bm_normalize0(site: u64, recv: f64, key: u64,
 
 /// `recv.normalize(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_normalize1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_normalize1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_normalize1(recv, a0);
     }
@@ -884,7 +1244,13 @@ pub unsafe extern "C-unwind" fn js_bm_normalize1(site: u64, recv: f64, key: u64,
 
 /// `recv.padEnd(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_padEnd1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_padEnd1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_padEnd1(recv, a0);
     }
@@ -894,7 +1260,14 @@ pub unsafe extern "C-unwind" fn js_bm_padEnd1(site: u64, recv: f64, key: u64, me
 
 /// `recv.padEnd(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_padEnd2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_padEnd2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_padEnd2(recv, a0, a1);
     }
@@ -904,7 +1277,13 @@ pub unsafe extern "C-unwind" fn js_bm_padEnd2(site: u64, recv: f64, key: u64, me
 
 /// `recv.padStart(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_padStart1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_padStart1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_padStart1(recv, a0);
     }
@@ -914,7 +1293,14 @@ pub unsafe extern "C-unwind" fn js_bm_padStart1(site: u64, recv: f64, key: u64, 
 
 /// `recv.padStart(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_padStart2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_padStart2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_padStart2(recv, a0, a1);
     }
@@ -934,7 +1320,13 @@ pub unsafe extern "C-unwind" fn js_bm_pop0(site: u64, recv: f64, key: u64, metho
 
 /// `recv.push(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_push1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_push1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return array_push(recv, &[a0]);
     }
@@ -944,7 +1336,13 @@ pub unsafe extern "C-unwind" fn js_bm_push1(site: u64, recv: f64, key: u64, meth
 
 /// `recv.reduce(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_reduce1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_reduce1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_reduce1(recv, a0);
     }
@@ -954,7 +1352,14 @@ pub unsafe extern "C-unwind" fn js_bm_reduce1(site: u64, recv: f64, key: u64, me
 
 /// `recv.reduce(a0, a1)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_reduce2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_reduce2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_reduce2(recv, a0, a1);
     }
@@ -964,7 +1369,13 @@ pub unsafe extern "C-unwind" fn js_bm_reduce2(site: u64, recv: f64, key: u64, me
 
 /// `recv.reduceRight(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_reduceRight1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_reduceRight1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_reduceRight1(recv, a0);
     }
@@ -974,7 +1385,14 @@ pub unsafe extern "C-unwind" fn js_bm_reduceRight1(site: u64, recv: f64, key: u6
 
 /// `recv.reduceRight(a0, a1)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_reduceRight2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_reduceRight2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_reduceRight2(recv, a0, a1);
     }
@@ -984,7 +1402,13 @@ pub unsafe extern "C-unwind" fn js_bm_reduceRight2(site: u64, recv: f64, key: u6
 
 /// `recv.repeat(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_repeat1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_repeat1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_repeat1(recv, a0);
     }
@@ -994,7 +1418,12 @@ pub unsafe extern "C-unwind" fn js_bm_repeat1(site: u64, recv: f64, key: u64, me
 
 /// `recv.replace()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_replace0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_replace0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_replace0(recv);
     }
@@ -1004,7 +1433,13 @@ pub unsafe extern "C-unwind" fn js_bm_replace0(site: u64, recv: f64, key: u64, m
 
 /// `recv.replace(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_replace1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_replace1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_replace1(recv, a0);
     }
@@ -1014,7 +1449,14 @@ pub unsafe extern "C-unwind" fn js_bm_replace1(site: u64, recv: f64, key: u64, m
 
 /// `recv.replace(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_replace2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_replace2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_replace2(recv, a0, a1);
     }
@@ -1024,7 +1466,12 @@ pub unsafe extern "C-unwind" fn js_bm_replace2(site: u64, recv: f64, key: u64, m
 
 /// `recv.replaceAll()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_replaceAll0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_replaceAll0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_replaceAll0(recv);
     }
@@ -1034,7 +1481,13 @@ pub unsafe extern "C-unwind" fn js_bm_replaceAll0(site: u64, recv: f64, key: u64
 
 /// `recv.replaceAll(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_replaceAll1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_replaceAll1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_replaceAll1(recv, a0);
     }
@@ -1044,7 +1497,14 @@ pub unsafe extern "C-unwind" fn js_bm_replaceAll1(site: u64, recv: f64, key: u64
 
 /// `recv.replaceAll(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_replaceAll2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_replaceAll2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_replaceAll2(recv, a0, a1);
     }
@@ -1054,7 +1514,12 @@ pub unsafe extern "C-unwind" fn js_bm_replaceAll2(site: u64, recv: f64, key: u64
 
 /// `recv.search()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_search0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_search0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_search0(recv);
     }
@@ -1064,7 +1529,13 @@ pub unsafe extern "C-unwind" fn js_bm_search0(site: u64, recv: f64, key: u64, me
 
 /// `recv.search(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_search1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_search1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_search1(recv, a0);
     }
@@ -1074,12 +1545,24 @@ pub unsafe extern "C-unwind" fn js_bm_search1(site: u64, recv: f64, key: u64, me
 
 /// `recv.set(a0, a1)` (families M, WeakMap).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_set2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_set2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if map_ok(recv) {
         return boxed_ptr(crate::map::js_map_set(raw(recv).cast(), a0, a1).cast());
     }
     if weak_ok(recv, WEAKMAP) {
-        return crate::weakref::operations::set(recv, a0, a1, crate::weakref::operations::Receiver::Folded(WEAKMAP));
+        return crate::weakref::operations::set(
+            recv,
+            a0,
+            a1,
+            crate::weakref::operations::Receiver::Folded(WEAKMAP),
+        );
     }
     let args: [f64; 2] = [a0, a1];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -1087,7 +1570,12 @@ pub unsafe extern "C-unwind" fn js_bm_set2(site: u64, recv: f64, key: u64, metho
 
 /// `recv.shift()` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_shift0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_shift0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_shift0(recv);
     }
@@ -1097,7 +1585,12 @@ pub unsafe extern "C-unwind" fn js_bm_shift0(site: u64, recv: f64, key: u64, met
 
 /// `recv.slice()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_slice0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_slice0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_slice0(recv);
     }
@@ -1107,7 +1600,13 @@ pub unsafe extern "C-unwind" fn js_bm_slice0(site: u64, recv: f64, key: u64, met
 
 /// `recv.slice(a0)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_slice1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_slice1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_slice1(recv, a0);
     }
@@ -1120,7 +1619,14 @@ pub unsafe extern "C-unwind" fn js_bm_slice1(site: u64, recv: f64, key: u64, met
 
 /// `recv.slice(a0, a1)` (families AS).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_slice2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_slice2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_slice2(recv, a0, a1);
     }
@@ -1133,7 +1639,13 @@ pub unsafe extern "C-unwind" fn js_bm_slice2(site: u64, recv: f64, key: u64, met
 
 /// `recv.some(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_some1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_some1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_some1(recv, a0);
     }
@@ -1143,7 +1655,13 @@ pub unsafe extern "C-unwind" fn js_bm_some1(site: u64, recv: f64, key: u64, meth
 
 /// `recv.sort(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_sort1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_sort1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_sort1(recv, a0);
     }
@@ -1153,7 +1671,12 @@ pub unsafe extern "C-unwind" fn js_bm_sort1(site: u64, recv: f64, key: u64, meth
 
 /// `recv.split()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_split0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_split0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_split0(recv);
     }
@@ -1163,7 +1686,13 @@ pub unsafe extern "C-unwind" fn js_bm_split0(site: u64, recv: f64, key: u64, met
 
 /// `recv.split(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_split1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_split1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_split1(recv, a0);
     }
@@ -1173,7 +1702,14 @@ pub unsafe extern "C-unwind" fn js_bm_split1(site: u64, recv: f64, key: u64, met
 
 /// `recv.split(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_split2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_split2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_split2(recv, a0, a1);
     }
@@ -1183,7 +1719,12 @@ pub unsafe extern "C-unwind" fn js_bm_split2(site: u64, recv: f64, key: u64, met
 
 /// `recv.startsWith()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_startsWith0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_startsWith0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_startsWith0(recv);
     }
@@ -1193,7 +1734,13 @@ pub unsafe extern "C-unwind" fn js_bm_startsWith0(site: u64, recv: f64, key: u64
 
 /// `recv.startsWith(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_startsWith1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_startsWith1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_startsWith1(recv, a0);
     }
@@ -1203,7 +1750,14 @@ pub unsafe extern "C-unwind" fn js_bm_startsWith1(site: u64, recv: f64, key: u64
 
 /// `recv.startsWith(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_startsWith2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_startsWith2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_startsWith2(recv, a0, a1);
     }
@@ -1213,7 +1767,13 @@ pub unsafe extern "C-unwind" fn js_bm_startsWith2(site: u64, recv: f64, key: u64
 
 /// `recv.substr(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_substr1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_substr1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_substr1(recv, a0);
     }
@@ -1223,7 +1783,14 @@ pub unsafe extern "C-unwind" fn js_bm_substr1(site: u64, recv: f64, key: u64, me
 
 /// `recv.substr(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_substr2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_substr2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_substr2(recv, a0, a1);
     }
@@ -1233,7 +1800,12 @@ pub unsafe extern "C-unwind" fn js_bm_substr2(site: u64, recv: f64, key: u64, me
 
 /// `recv.substring()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_substring0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_substring0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_substring0(recv);
     }
@@ -1243,7 +1815,13 @@ pub unsafe extern "C-unwind" fn js_bm_substring0(site: u64, recv: f64, key: u64,
 
 /// `recv.substring(a0)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_substring1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_substring1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_substring1(recv, a0);
     }
@@ -1253,7 +1831,14 @@ pub unsafe extern "C-unwind" fn js_bm_substring1(site: u64, recv: f64, key: u64,
 
 /// `recv.substring(a0, a1)` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_substring2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_substring2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_substring2(recv, a0, a1);
     }
@@ -1263,7 +1848,12 @@ pub unsafe extern "C-unwind" fn js_bm_substring2(site: u64, recv: f64, key: u64,
 
 /// `recv.toLowerCase()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_toLowerCase0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_toLowerCase0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_toLowerCase0(recv);
     }
@@ -1273,7 +1863,12 @@ pub unsafe extern "C-unwind" fn js_bm_toLowerCase0(site: u64, recv: f64, key: u6
 
 /// `recv.toReversed()` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_toReversed0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_toReversed0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_toReversed0(recv);
     }
@@ -1283,7 +1878,12 @@ pub unsafe extern "C-unwind" fn js_bm_toReversed0(site: u64, recv: f64, key: u64
 
 /// `recv.toSorted()` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_toSorted0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_toSorted0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_toSorted0(recv);
     }
@@ -1293,7 +1893,13 @@ pub unsafe extern "C-unwind" fn js_bm_toSorted0(site: u64, recv: f64, key: u64, 
 
 /// `recv.toSorted(a0)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_toSorted1(site: u64, recv: f64, key: u64, method_id: i64, a0: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_toSorted1(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_toSorted1(recv, a0);
     }
@@ -1303,7 +1909,12 @@ pub unsafe extern "C-unwind" fn js_bm_toSorted1(site: u64, recv: f64, key: u64, 
 
 /// `recv.toUpperCase()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_toUpperCase0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_toUpperCase0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_toUpperCase0(recv);
     }
@@ -1323,7 +1934,12 @@ pub unsafe extern "C-unwind" fn js_bm_trim0(site: u64, recv: f64, key: u64, meth
 
 /// `recv.trimEnd()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_trimEnd0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_trimEnd0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_trimEnd0(recv);
     }
@@ -1333,7 +1949,12 @@ pub unsafe extern "C-unwind" fn js_bm_trimEnd0(site: u64, recv: f64, key: u64, m
 
 /// `recv.trimStart()` (families S).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_trimStart0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_trimStart0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if is_string(recv) {
         return super::builtin_proto_entries::js_string_m_trimStart0(recv);
     }
@@ -1343,7 +1964,12 @@ pub unsafe extern "C-unwind" fn js_bm_trimStart0(site: u64, recv: f64, key: u64,
 
 /// `recv.values()` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_values0(site: u64, recv: f64, key: u64, method_id: i64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_values0(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_values0(recv);
     }
@@ -1353,7 +1979,14 @@ pub unsafe extern "C-unwind" fn js_bm_values0(site: u64, recv: f64, key: u64, me
 
 /// `recv.with(a0, a1)` (families A).
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_bm_with2(site: u64, recv: f64, key: u64, method_id: i64, a0: f64, a1: f64) -> f64 {
+pub unsafe extern "C-unwind" fn js_bm_with2(
+    site: u64,
+    recv: f64,
+    key: u64,
+    method_id: i64,
+    a0: f64,
+    a1: f64,
+) -> f64 {
     if let Some(recv) = array_recv(recv) {
         return super::builtin_proto_entries::js_array_b_with2(recv, a0, a1);
     }
@@ -1396,9 +2029,7 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
         // One header read picks the family; an ordinary object takes the
         // probe's lookup at once.
         let admitted = match (*h).obj_type {
-            crate::gc::GC_TYPE_ARRAY => {
-                families & FAMILY_ARRAY != 0 && array_recv(recv).is_some()
-            }
+            crate::gc::GC_TYPE_ARRAY => families & FAMILY_ARRAY != 0 && array_recv(recv).is_some(),
             crate::gc::GC_TYPE_MAP => families & FAMILY_MAP != 0 && map_ok(recv),
             crate::gc::GC_TYPE_SET => families & FAMILY_SET != 0 && set_ok(recv),
             // The Map and Set families' entries name only methods a WeakMap

@@ -53,8 +53,7 @@ fn non_element_numeric_keys_do_not_truncate_on_regular_lazy_or_materialized_arra
                 "state={state}, key={key}"
             );
             assert_eq!(
-                js_packed_arraylike_index_get(array.get_nanbox_f64(), key)
-                    .to_bits(),
+                js_packed_arraylike_index_get(array.get_nanbox_f64(), key).to_bits(),
                 TAG_UNDEFINED,
                 "packed state={state}, key={key}"
             );

@@ -173,7 +173,6 @@ pub(crate) unsafe fn first_possible_holder(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::super::*;

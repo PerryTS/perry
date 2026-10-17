@@ -350,8 +350,8 @@ impl ShapeRecord {
     pub(super) fn note_descendant_width(&mut self, width: u32) {
         let width = width.min((RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT) + 1);
         if width > 1 && width > self.descendant_width() {
-            self.flags_and_kind = (self.flags_and_kind & !RECORD_WIDTH_MASK)
-                | ((width - 1) << RECORD_WIDTH_SHIFT);
+            self.flags_and_kind =
+                (self.flags_and_kind & !RECORD_WIDTH_MASK) | ((width - 1) << RECORD_WIDTH_SHIFT);
         }
     }
 

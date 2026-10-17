@@ -65,7 +65,6 @@ pub(crate) fn state_globals(ctx: &mut FnCtx<'_>) -> Sites {
     Sites { word_g, tries_g }
 }
 
-
 /// `PERRY_REGION_DIAG=1`: per module, what each slice formed and how many
 /// statement-level runs the static census found — so "what is still uncovered"
 /// is a measured number rather than an estimate. Slice 1's PR reported 28

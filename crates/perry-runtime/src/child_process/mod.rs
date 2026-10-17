@@ -215,12 +215,21 @@ mod tests {
                 let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                 let key = crate::array::js_array_get(keys, i);
                 names.push(
-                    String::from_utf8(crate::string::js_string_key_bytes(key, &mut sso).unwrap().to_vec())
-                        .unwrap(),
+                    String::from_utf8(
+                        crate::string::js_string_key_bytes(key, &mut sso)
+                            .unwrap()
+                            .to_vec(),
+                    )
+                    .unwrap(),
                 );
             }
-            assert_eq!(names, ["status", "signal", "output", "pid", "stdout", "stderr"]);
-            assert!(crate::object::key_view::own_key_bytes_is_hole(result, b"error"));
+            assert_eq!(
+                names,
+                ["status", "signal", "output", "pid", "stdout", "stderr"]
+            );
+            assert!(crate::object::key_view::own_key_bytes_is_hole(
+                result, b"error"
+            ));
         }
         assert_eq!(get(b"error").to_bits(), crate::value::TAG_UNDEFINED);
     }

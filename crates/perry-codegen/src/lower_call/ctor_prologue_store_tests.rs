@@ -204,7 +204,8 @@ fn an_outlined_pointer_bearing_shape_keeps_its_write_barrier() {
     // The constructor's pointer stores are barriered: inline, or inside the
     // store probe's runtime funnel (`perry_probe_set`, then `[[Set]]`).
     assert!(
-        ir.contains("call void @js_write_barrier_slot") || ir.contains("call i32 @perry_probe_set("),
+        ir.contains("call void @js_write_barrier_slot")
+            || ir.contains("call i32 @perry_probe_set("),
         "{ir}"
     );
 }
@@ -240,7 +241,8 @@ fn a_fresh_wide_prologue_needs_no_store_barrier() {
     // The slow constructor still handles observations and ordinary stores,
     // barriered inline or by the store probe's runtime funnel.
     assert!(
-        ir.contains("call void @js_write_barrier_slot") || ir.contains("call i32 @perry_probe_set("),
+        ir.contains("call void @js_write_barrier_slot")
+            || ir.contains("call i32 @perry_probe_set("),
         "{ir}"
     );
 }

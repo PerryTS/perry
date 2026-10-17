@@ -74,7 +74,9 @@ impl NamedStateKey {
     /// nothing, for every other receiver or add, and for a key text with no
     /// atom yet (no layout names it).
     pub(crate) unsafe fn add_family(self, obj: *mut ObjectHeader, value: f64) -> bool {
-        if crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash)).is_none() {
+        if crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash))
+            .is_none()
+        {
             return false;
         }
         let Some(atom) = crate::string::atom_lookup(self.bytes, self.hash)
@@ -113,7 +115,11 @@ impl NamedStateKey {
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
         // A family object answers from its layout's index (its keys are
         // plain writable data); any other layout from its key list.
-        let slot = match crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash)) {
+        let slot = match crate::object::layout_desc::family_own_key_hashed(
+            obj,
+            self.bytes,
+            Some(self.hash),
+        ) {
             Some(Some((_, slot))) => slot,
             Some(None) => return false,
             None => {
@@ -188,7 +194,11 @@ impl NamedStateKey {
         }
         let shape = crate::object::shapes::object_shape_descriptor(obj)?;
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-        let slot = match crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash)) {
+        let slot = match crate::object::layout_desc::family_own_key_hashed(
+            obj,
+            self.bytes,
+            Some(self.hash),
+        ) {
             Some(found) => found?.1,
             None => {
                 let position = crate::object::keys_find_property_slot_by_bytes(
@@ -234,6 +244,38 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_get(
     let key = crate::string::intern_ascii_literal(bytes);
     let key = crate::value::JSValue::string_ptr(key as *mut _);
     crate::object::js_object_get_property_key(value.get_nanbox_f64(), f64::from_bits(key.bits()))
+}
+
+/// Ordinary fixed-key Set for an extension's call site: an own writable data
+/// slot is overwritten in place, anything else takes the ordinary `[[Set]]`
+/// (a hole of an optional layout key fills, or appends, as node's does).
+/// # Safety
+/// As js_runtime_state_key_get; `value` and `v` are live JavaScript values.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_runtime_state_key_set(
+    value: f64,
+    key: *const u8,
+    len: usize,
+    v: f64,
+) {
+    // SAFETY: the key is only read for the duration of this call.
+    let bytes: &'static [u8] = std::mem::transmute(std::slice::from_raw_parts(key, len));
+    let named = NamedStateKey {
+        bytes,
+        hash: const_key_hash(bytes),
+    };
+    match crate::object::field_get_set::runtime_read_site::object_receiver(value) {
+        // An own writable data slot is overwritten in place; anything else is
+        // the compiled store funnel's `[[Set]]` (an add consults the chain
+        // through the layout records).
+        Some(obj) if !named.write_existing(obj, v) => crate::object::js_object_set_field_by_name(
+            obj,
+            crate::string::intern_ascii_literal(bytes),
+            v,
+        ),
+        Some(_) => {}
+        None => named.write_value(value, v),
+    }
 }
 
 /// Call the method `key` of `value`, with the receiver as `this`. Exotic

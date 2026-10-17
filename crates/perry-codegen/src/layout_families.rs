@@ -423,9 +423,12 @@ fn prologue_store<'a>(s: &'a Stmt, params: &BTreeSet<u32>) -> Option<(&'a str, b
 fn node_event_emitter_heritage(class: &Class) -> bool {
     class.extends_name.as_deref() == Some("EventEmitter")
         && class.extends_expr.is_none()
-        && class.native_extends.as_ref().is_none_or(|(module, export)| {
-            module.trim_start_matches("node:") == "events" && export == "EventEmitter"
-        })
+        && class
+            .native_extends
+            .as_ref()
+            .is_none_or(|(module, export)| {
+                module.trim_start_matches("node:") == "events" && export == "EventEmitter"
+            })
 }
 
 fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {

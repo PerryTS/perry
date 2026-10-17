@@ -2189,4 +2189,3 @@ pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
         super::overflow::ensure(obj);
     }
 }
-

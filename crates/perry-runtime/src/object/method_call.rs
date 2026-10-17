@@ -545,11 +545,7 @@ pub unsafe extern "C-unwind" fn js_method_call_value(
 /// # Safety
 /// `args` is null or a live array.
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_method_call_value_apply(
-    func: f64,
-    recv: f64,
-    args: i64,
-) -> f64 {
+pub unsafe extern "C-unwind" fn js_method_call_value_apply(func: f64, recv: f64, args: i64) -> f64 {
     let arr = args as *const crate::array::ArrayHeader;
     let len = if arr.is_null() {
         0
@@ -687,7 +683,6 @@ unsafe fn function_receiver_inherited_get(
         recv,
     ))
 }
-
 
 /// The compiler's unpatched `slice` site, after its String arm declined.
 /// Arguments must be order-free and `argc <= 2`. The receiver's existing

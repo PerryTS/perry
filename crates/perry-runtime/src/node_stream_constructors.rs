@@ -426,7 +426,6 @@ pub(super) fn init_abort_signal_state(stream: &RuntimeHandle<'_>, opts: &Runtime
 pub(super) mod birth;
 #[path = "node_stream_constructors/birth_memo.rs"]
 pub(super) mod birth_memo;
-pub(crate) use birth::alloc_initialized_stream_shell;
 use birth::stream_birth_field;
 
 #[path = "node_stream_constructors/builders.rs"]

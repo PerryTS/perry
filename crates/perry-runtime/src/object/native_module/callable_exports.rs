@@ -1322,11 +1322,14 @@ pub(crate) unsafe fn nm_attach_tls(
     value
 }
 
-/// #10454: `http.ServerResponse.prototype` carries its methods so
-/// `util.inherits` / `setPrototypeOf` / `extends` subclasses inherit them.
+/// node:http's `OutgoingMessage`, `ServerResponse` and `IncomingMessage`
+/// prototypes, born on their static layouts (`object::node_http_prototypes`),
+/// so `util.inherits` / `setPrototypeOf` / `extends` subclasses inherit node's
+/// surface (#10454).
 pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_addr: usize) -> f64 {
-    if property_name == "ServerResponse" {
-        return crate::object::native_this_alias::attach_http_server_response_prototype(value);
+    let module = bound_native_callable_module_and_method(value).map(|(module, _)| module);
+    if module.as_deref() == Some("http") {
+        return crate::object::node_http_prototypes::attach_http_prototype(value, property_name);
     }
     value
 }

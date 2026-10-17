@@ -152,7 +152,10 @@ fn parse_cpu_list(list: &str) -> Option<Vec<usize>> {
     let mut cpus = Vec::new();
     for part in list.trim().split(',').filter(|p| !p.trim().is_empty()) {
         let (lo, hi) = match part.split_once('-') {
-            Some((lo, hi)) => (lo.trim().parse::<usize>().ok()?, hi.trim().parse::<usize>().ok()?),
+            Some((lo, hi)) => (
+                lo.trim().parse::<usize>().ok()?,
+                hi.trim().parse::<usize>().ok()?,
+            ),
             None => {
                 let n = part.trim().parse::<usize>().ok()?;
                 (n, n)
@@ -275,9 +278,8 @@ impl CodegenBudget {
         let threads = std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(1);
-        let physical_cores = allowed_cpus().and_then(|cpus| {
-            physical_core_count(&cpus, Path::new("/sys/devices/system/cpu"))
-        });
+        let physical_cores = allowed_cpus()
+            .and_then(|cpus| physical_core_count(&cpus, Path::new("/sys/devices/system/cpu")));
         let cpu_slots_override = std::env::var("PERRY_CODEGEN_CPU_SLOTS")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
@@ -512,7 +514,10 @@ mod tests {
 
     #[test]
     fn cpu_lists_parse_ranges_and_singles() {
-        assert_eq!(parse_cpu_list("0-3,8,10-11\n"), Some(vec![0, 1, 2, 3, 8, 10, 11]));
+        assert_eq!(
+            parse_cpu_list("0-3,8,10-11\n"),
+            Some(vec![0, 1, 2, 3, 8, 10, 11])
+        );
         assert_eq!(parse_cpu_list("5"), Some(vec![5]));
         assert_eq!(parse_cpu_list(" 0-1 "), Some(vec![0, 1]));
         assert_eq!(parse_cpu_list(""), None);
@@ -526,9 +531,21 @@ mod tests {
         // cpu2/cpu6 (package 1, core 0 — the same core_id as package 0's).
         let dir = fake_sysfs(
             "smt",
-            &[(0, 0, 0), (1, 0, 1), (2, 1, 0), (3, 1, 1), (4, 0, 0), (5, 0, 1), (6, 1, 0), (7, 1, 1)],
+            &[
+                (0, 0, 0),
+                (1, 0, 1),
+                (2, 1, 0),
+                (3, 1, 1),
+                (4, 0, 0),
+                (5, 0, 1),
+                (6, 1, 0),
+                (7, 1, 1),
+            ],
         );
-        assert_eq!(physical_core_count(&[0, 1, 2, 3, 4, 5, 6, 7], &dir), Some(4));
+        assert_eq!(
+            physical_core_count(&[0, 1, 2, 3, 4, 5, 6, 7], &dir),
+            Some(4)
+        );
         // Only the allowed CPUs count: one thread of each core.
         assert_eq!(physical_core_count(&[0, 1, 2, 3], &dir), Some(4));
         assert_eq!(physical_core_count(&[0, 4], &dir), Some(1));

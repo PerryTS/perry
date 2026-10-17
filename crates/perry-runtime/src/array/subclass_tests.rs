@@ -19,10 +19,9 @@
 
 use super::subclass::{
     array_object_receiver, array_subclass_fast_index_get, array_subclass_fast_index_set,
-    array_subclass_fast_length, array_subclass_fast_pop,
-    array_subclass_fast_push_one, is_array_subclass_class_id,
-    js_packed_arraylike_index_get, js_packed_arraylike_loop_guard, js_packed_ecs_u32_loop_guard,
-    raw_receiver_is_heap_object,
+    array_subclass_fast_length, array_subclass_fast_pop, array_subclass_fast_push_one,
+    is_array_subclass_class_id, js_packed_arraylike_index_get, js_packed_arraylike_loop_guard,
+    js_packed_ecs_u32_loop_guard, raw_receiver_is_heap_object,
 };
 use crate::array::{
     clean_arr_ptr, js_array_alloc, js_array_pop_f64, js_array_push_f64,
@@ -226,10 +225,7 @@ fn dense_array_subclass_reads_slots_until_its_shape_changes() {
     );
     assert_eq!(unsafe { (*obj).shape_word() }, stable_shape);
     assert!(!array_subclass_fast_index_set(receiver, 3, 55.0));
-    assert_eq!(
-        js_packed_arraylike_index_get(receiver, 2.0),
-        33.0
-    );
+    assert_eq!(js_packed_arraylike_index_get(receiver, 2.0), 33.0);
 
     crate::object::js_object_delete_dynamic(obj, 1.0);
     assert_ne!(
@@ -1047,10 +1043,7 @@ fn dense_array_subclass_guard_rejects_other_object_brands() {
 
     assert_eq!(array_subclass_fast_length(receiver), None);
     assert_eq!(array_subclass_fast_index_get(receiver, 0), None);
-    assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0),
-        17.0
-    );
+    assert_eq!(js_packed_arraylike_index_get(receiver, 0.0), 17.0);
 }
 
 /// Retiring a packed-numeric proof is idempotent, and only the call that

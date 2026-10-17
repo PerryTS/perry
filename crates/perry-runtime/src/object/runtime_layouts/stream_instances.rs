@@ -9,9 +9,21 @@
 //! (`key_view::fill_hole`).
 use super::*;
 
-runtime_atom!(SI_ATOM_U_READABLE_STATE, "_readableState", "5f7265616461626c655374617465");
-runtime_atom!(SI_ATOM_U_WRITABLE_STATE, "_writableState", "5f7772697461626c655374617465");
-runtime_atom!(SI_ATOM_ALLOW_HALF_OPEN, "allowHalfOpen", "616c6c6f7748616c664f70656e");
+runtime_atom!(
+    SI_ATOM_U_READABLE_STATE,
+    "_readableState",
+    "5f7265616461626c655374617465"
+);
+runtime_atom!(
+    SI_ATOM_U_WRITABLE_STATE,
+    "_writableState",
+    "5f7772697461626c655374617465"
+);
+runtime_atom!(
+    SI_ATOM_ALLOW_HALF_OPEN,
+    "allowHalfOpen",
+    "616c6c6f7748616c664f70656e"
+);
 runtime_atom!(SI_ATOM_U_CONSTRUCT, "_construct", "5f636f6e737472756374");
 
 runtime_prototype_family!(
@@ -58,18 +70,22 @@ pub(crate) mod duplex_slot {
 }
 
 // `new EventEmitter()`: node's `EventEmitter.init`.
-runtime_layout!(EVENT_EMITTER, 0x53490001, 0, &raw const EVENT_EMITTER_PROTO_FAMILY, [
-    NP_ATOM_U_EVENTS @ emitter_slot::EVENTS,
-    NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT,
-    NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
-]);
+runtime_layout!(
+    EVENT_EMITTER,
+    0x53490001,
+    0,
+    &raw const EVENT_EMITTER_PROTO_FAMILY,
+    [NP_ATOM_U_EVENTS @ emitter_slot::EVENTS, NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT, NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS]
+);
 
 // The legacy `new Stream()`: `EE.call(this, opts)` on `Stream.prototype`.
-runtime_layout!(LEGACY_STREAM, 0x53490002, 0, &raw const STREAM_PROTO_FAMILY, [
-    NP_ATOM_U_EVENTS @ emitter_slot::EVENTS,
-    NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT,
-    NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
-]);
+runtime_layout!(
+    LEGACY_STREAM,
+    0x53490002,
+    0,
+    &raw const STREAM_PROTO_FAMILY,
+    [NP_ATOM_U_EVENTS @ emitter_slot::EVENTS, NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT, NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS]
+);
 
 // `new Readable(opts)`: `_eventsCount` comes with the first listener.
 runtime_layout!(READABLE, 0x53490003, 0, &raw const READABLE_PROTO_FAMILY, [
@@ -114,6 +130,24 @@ runtime_layout!(DUPLEX, 0x53490005, 0, &raw const DUPLEX_PROTO_FAMILY, [
 // `new Transform(opts)`: Duplex's slots, then the transform hooks, which
 // node sets before its `prefinish` listener creates `_eventsCount`.
 runtime_layout!(TRANSFORM, 0x53490006, 0, &raw const TRANSFORM_PROTO_FAMILY, [
+    NP_ATOM_U_EVENTS @ emitter_slot::EVENTS,
+    SI_ATOM_U_READABLE_STATE @ readable_slot::STATE,
+    SI_ATOM_U_WRITABLE_STATE @ duplex_slot::WRITABLE_STATE,
+    SI_ATOM_ALLOW_HALF_OPEN @ duplex_slot::ALLOW_HALF_OPEN,
+    NP_ATOM_U_READ @ readable_slot::READ => OPT,
+    NP_ATOM_U_WRITE @ duplex_slot::WRITE => OPT,
+    NP_ATOM_U_WRITEV @ duplex_slot::WRITEV => OPT,
+    NP_ATOM_U_DESTROY @ readable_slot::DESTROY => OPT,
+    NP_ATOM_U_FINAL @ duplex_slot::FINAL => OPT,
+    SI_ATOM_U_CONSTRUCT @ readable_slot::CONSTRUCT => OPT,
+    NP_ATOM_U_MAX_LISTENERS @ emitter_slot::MAX_LISTENERS,
+    NP_ATOM_U_TRANSFORM @ duplex_slot::TRANSFORM => OPT,
+    NP_ATOM_U_FLUSH @ duplex_slot::FLUSH => OPT,
+    NP_ATOM_U_EVENTS_COUNT @ emitter_slot::EVENTS_COUNT => OPT,
+]);
+
+// `new PassThrough(opts)`: Transform's slots on `PassThrough.prototype`.
+runtime_layout!(PASSTHROUGH, 0x53490008, 0, &raw const PASSTHROUGH_PROTO_FAMILY, [
     NP_ATOM_U_EVENTS @ emitter_slot::EVENTS,
     SI_ATOM_U_READABLE_STATE @ readable_slot::STATE,
     SI_ATOM_U_WRITABLE_STATE @ duplex_slot::WRITABLE_STATE,

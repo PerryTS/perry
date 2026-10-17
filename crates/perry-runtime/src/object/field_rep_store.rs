@@ -142,8 +142,7 @@ fn deprecate_lane(record: super::shapes::ShapeRecordRef, slot: u32) {
     } else {
         record.deprecate_rep_slot(slot)
     };
-    if changed {
-    }
+    if changed {}
 }
 
 /// Key-add convergence (DESIGN §1.5 step 4): a lineage slot that has seen

@@ -288,7 +288,13 @@ fn extension_method_site_preserves_this_and_reads_the_getter_once() {
 
 #[test]
 fn compile_time_key_hash_is_the_runtime_key_hash() {
-    for key in [&b"_events"[..], b"_eventsCount", b"_maxListeners", b"_readableState", b""] {
+    for key in [
+        &b"_events"[..],
+        b"_eventsCount",
+        b"_maxListeners",
+        b"_readableState",
+        b"",
+    ] {
         assert_eq!(
             crate::runtime_state_key::const_key_hash(key),
             crate::object::key_bytes_hash(key.as_ptr(), key.len())

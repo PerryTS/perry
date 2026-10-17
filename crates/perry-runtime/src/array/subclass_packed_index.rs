@@ -13,10 +13,7 @@ use super::*;
 /// from the emitted hot-loop artifact without weakening its semantics.
 ///
 #[no_mangle]
-pub extern "C" fn js_packed_arraylike_index_get(
-    receiver: f64,
-    index: f64,
-) -> f64 {
+pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f64 {
     if let Some(index_u32) = canonical_u32_index(index) {
         let js = JSValue::from_bits(receiver.to_bits());
         if js.is_pointer() {

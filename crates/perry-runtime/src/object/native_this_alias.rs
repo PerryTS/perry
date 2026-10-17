@@ -408,6 +408,25 @@ unsafe fn construct_native_http_class_with_this(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_root = scope.root_nanbox_f64(this_val);
+    if method == "ServerResponse" {
+        // node's `ServerResponse.call(this, req)` initializes `this`: the
+        // native response is attached to `this` itself and node's fields are
+        // stored on it (`node_http_prototypes::js_node_http_server_response_init`),
+        // so there is one object, as in node, and no alias.
+        let mut with_this = Vec::with_capacity(len + 1);
+        with_this.push(this_root.get_nanbox_f64());
+        with_this.extend_from_slice(&args[..len]);
+        let attach = "#ServerResponse.call";
+        dispatch(
+            module.as_ptr(),
+            module.len(),
+            attach.as_ptr(),
+            attach.len(),
+            with_this.as_ptr(),
+            with_this.len(),
+        );
+        return this_root.get_nanbox_f64();
+    }
     let result = dispatch(
         module.as_ptr(),
         module.len(),
@@ -417,11 +436,7 @@ unsafe fn construct_native_http_class_with_this(
         len,
     );
     let result = scope.root_nanbox_f64(result);
-    register_this_to_handle_alias(
-        this_root.get_nanbox_f64(),
-        result.get_nanbox_f64(),
-        method == "ServerResponse",
-    );
+    register_this_to_handle_alias(this_root.get_nanbox_f64(), result.get_nanbox_f64(), false);
     result.get_nanbox_f64()
 }
 
@@ -473,268 +488,6 @@ static KEEP_HTTP_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64)
 #[used(compiler)]
 static KEEP_HTTPS_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64) -> f64 =
     js_https_server_construct_with_this;
-
-/// #10454: `http.ServerResponse.prototype`'s own methods (Node's
-/// `ServerResponse` + `OutgoingMessage` surface, plus the listener methods the
-/// native handle serves). Every name must be one the http handle dispatchers
-/// answer (`server_response_method_bytes` in perry-ext-http).
-const SERVER_RESPONSE_PROTOTYPE_METHODS: &[&str] = &[
-    "setHeader",
-    "getHeader",
-    "removeHeader",
-    "hasHeader",
-    "getHeaders",
-    "getHeaderNames",
-    "appendHeader",
-    "setHeaders",
-    "writeHead",
-    "write",
-    "addTrailers",
-    "end",
-    "flushHeaders",
-    "cork",
-    "uncork",
-    "destroy",
-    "setTimeout",
-    "writeEarlyHints",
-    "writeContinue",
-    "writeProcessing",
-    "assignSocket",
-    "detachSocket",
-    "pipe",
-    "on",
-    "addListener",
-    "once",
-    "prependOnceListener",
-];
-
-/// Body of every `ServerResponse.prototype.<method>`: resolve `this` to its
-/// native handle — the receiver itself (`new ServerResponse(req)`), or the
-/// handle a `ServerResponse.call(this, req)` / `super(req)` aliased it to —
-/// and dispatch the method on it. This is what makes `util.inherits` /
-/// `setPrototypeOf` / `extends` subclasses see the methods through the
-/// prototype chain, and what `ServerResponse.prototype.writeHead.apply(this,
-/// args)` (light-my-request's override shape) calls.
-extern "C" fn server_response_prototype_method_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    arg0: f64,
-    arg1: f64,
-    arg2: f64,
-) -> f64 {
-    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
-    let name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-    let response_scope = crate::gc::RuntimeHandleScope::new();
-    let receiver_root = response_scope.root_nanbox_f64(this.as_f64());
-    let receiver = receiver_root.get_nanbox_f64();
-    let receiver_jv = JSValue::from_bits(receiver.to_bits());
-    let receiver_is_handle = receiver_jv.is_handle();
-    let receiver_is_response = plain_object_addr_of(receiver).is_some_and(|a| unsafe {
-        (*(a as *const super::ObjectHeader)).class_id
-            == crate::native_class_ids::HTTP_SERVER_RESPONSE
-    });
-    let (handle_val, composite) = if receiver_is_handle || receiver_is_response {
-        (receiver, true)
-    } else if let Some(alias) = alias_handle_for_object(receiver) {
-        alias
-    } else {
-        let name = unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len))
-        };
-        let msg = format!(
-            "ServerResponse.prototype.{name} called on an object that is not a ServerResponse"
-        );
-        super::object_ops::throw_object_type_error(msg.as_bytes());
-    };
-    let target_root = response_scope.root_nanbox_f64(handle_val);
-    let dispatch = if composite {
-        super::class_handles::handle_method_dispatch()
-    } else {
-        super::class_handles::handle_method_dispatch_primary()
-    };
-    let args = [arg0, arg1, arg2];
-    let mut len = args.len();
-    while len > 0 && args[len - 1].to_bits() == crate::value::TAG_UNDEFINED {
-        len -= 1;
-    }
-    let result = match dispatch {
-        Some(dispatch) => unsafe {
-            dispatch(
-                (handle_val.to_bits() & crate::value::POINTER_MASK) as i64,
-                name_ptr,
-                name_len,
-                args.as_ptr(),
-                len,
-            )
-        },
-        None => undefined,
-    };
-    // Chainable methods (`setHeader`, `writeHead`, …) return the handle;
-    // hand the aliasing object back instead, as Node returns `this`.
-    if result.to_bits() == target_root.get_nanbox_f64().to_bits() {
-        receiver_root.get_nanbox_f64()
-    } else {
-        result
-    }
-}
-
-extern "C" fn response_property_get(
-    c: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    unsafe { response_property_dispatch(c, this.as_f64(), None) }
-}
-extern "C" fn response_property_set(
-    c: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    value: f64,
-) -> f64 {
-    unsafe { response_property_dispatch(c, this.as_f64(), Some(value)) }
-}
-unsafe fn response_property_dispatch(
-    c: *const crate::closure::ClosureHeader,
-    receiver: f64,
-    value: Option<f64>,
-) -> f64 {
-    let target = alias_handle_for_object(receiver).map_or(receiver, |a| a.0);
-    let name = crate::closure::js_closure_get_capture_ptr(c, 0) as *const u8;
-    let len = crate::closure::js_closure_get_capture_ptr(c, 1) as usize;
-    let h = (target.to_bits() & crate::value::POINTER_MASK) as i64;
-    if let Some(v) = value {
-        if let Some(f) = super::class_handles::handle_property_set_dispatch() {
-            f(h, name, len, v);
-        }
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        super::class_handles::handle_property_dispatch()
-            .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |f| {
-                f(h, name, len)
-            })
-    }
-}
-
-/// #10454: give `http.ServerResponse` a `.prototype` carrying its methods, so
-/// the classic subclass shapes inherit them. Called from the http module's
-/// callable-export attach hook when the bound constructor is minted.
-pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f64 {
-    use super::{
-        define_builtin_data_property, set_bound_native_closure_name, set_builtin_closure_length,
-        set_builtin_property_attrs, PropertyAttrs,
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let constructor = scope.root_nanbox_f64(constructor_value);
-    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
-    if !constructor_js.is_pointer()
-        || !crate::closure::is_closure_ptr(
-            (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
-        )
-    {
-        return constructor_value;
-    }
-    let proto = super::js_object_alloc(0, 0);
-    if proto.is_null() {
-        return constructor.get_nanbox_f64();
-    }
-    let proto = scope.root_raw_mut_ptr(proto);
-    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    proto.with_mut_ptr(|proto_ptr| {
-        define_builtin_data_property(
-            proto_ptr,
-            key,
-            constructor.get_nanbox_f64(),
-            "constructor".to_string(),
-            PropertyAttrs::new(true, false, true),
-        );
-    });
-    let info = crate::fn_info!(server_response_prototype_method_thunk, 3; with_declared(3));
-    for method in SERVER_RESPONSE_PROTOTYPE_METHODS {
-        let method_closure = crate::closure::js_closure_alloc(info, 2);
-        if method_closure.is_null() {
-            continue;
-        }
-        crate::closure::js_closure_set_capture_ptr(method_closure, 0, method.as_ptr() as i64);
-        crate::closure::js_closure_set_capture_ptr(method_closure, 1, method.len() as i64);
-        let method_closure = scope.root_raw_mut_ptr(method_closure);
-        method_closure
-            .with_mut_ptr(|closure_ptr| set_bound_native_closure_name(closure_ptr, method));
-        method_closure.with_mut_ptr(|closure_ptr: *mut u8| {
-            set_builtin_closure_length(closure_ptr as usize, 0)
-        });
-        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-        proto.with_mut_ptr(|proto_ptr| {
-            method_closure.with_mut_ptr(|closure_ptr: *mut u8| {
-                define_builtin_data_property(
-                    proto_ptr,
-                    key,
-                    crate::value::js_nanbox_pointer(closure_ptr as i64),
-                    (*method).to_string(),
-                    PropertyAttrs::new(true, false, true),
-                );
-            });
-        });
-    }
-    for name in [
-        "statusCode",
-        "statusMessage",
-        "headersSent",
-        "writableEnded",
-        "writableFinished",
-        "finished",
-        "destroyed",
-        "sendDate",
-        "strictContentLength",
-        "socket",
-        "connection",
-        "req",
-        "writableLength",
-        "writableHighWaterMark",
-        "writableCorked",
-        "writableObjectMode",
-        "writableNeedDrain",
-    ] {
-        let get = crate::closure::js_closure_alloc(crate::fn_info!(response_property_get, 0), 2);
-        let get = scope.root_raw_mut_ptr(get);
-        let set = crate::closure::js_closure_alloc(crate::fn_info!(response_property_set, 1), 2);
-        let set = scope.root_raw_mut_ptr(set);
-        for c in [&get, &set] {
-            c.with_mut_ptr(|c| {
-                crate::closure::js_closure_set_capture_ptr(c, 0, name.as_ptr() as i64);
-                crate::closure::js_closure_set_capture_ptr(c, 1, name.len() as i64);
-            });
-        }
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        proto.with_mut_ptr(|p| unsafe {
-            super::install_own_builtin_accessor(
-                p,
-                key,
-                name,
-                get.with_mut_ptr(|c: *mut u8| crate::value::js_nanbox_pointer(c as i64))
-                    .to_bits(),
-                set.with_mut_ptr(|c: *mut u8| crate::value::js_nanbox_pointer(c as i64))
-                    .to_bits(),
-                PropertyAttrs::new(true, false, true),
-            );
-        });
-    }
-    let closure_addr =
-        (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
-    proto.with_mut_ptr(|proto_ptr: *mut u8| {
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "prototype",
-            crate::value::js_nanbox_pointer(proto_ptr as i64),
-        );
-    });
-    let closure_addr =
-        (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
-    set_builtin_property_attrs(
-        closure_addr,
-        "prototype".to_string(),
-        PropertyAttrs::new(true, false, false),
-    );
-    constructor.get_nanbox_f64()
-}
 
 #[cfg(test)]
 mod tests;

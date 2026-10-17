@@ -45,7 +45,7 @@
 #![deny(missing_docs)]
 
 mod runtime_state_key;
-pub use runtime_state_key::{runtime_call, runtime_get};
+pub use runtime_state_key::{runtime_call, runtime_get, runtime_set};
 
 mod async_runtime;
 pub use async_runtime::{

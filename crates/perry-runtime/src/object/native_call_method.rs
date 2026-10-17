@@ -1194,13 +1194,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    native_call_method_tower(
-        object,
-        method_name_ptr,
-        method_name_len,
-        args_ptr,
-        args_len,
-    )
+    native_call_method_tower(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
 /// The body of [`js_native_call_method`].

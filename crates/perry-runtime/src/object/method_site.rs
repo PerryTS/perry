@@ -94,7 +94,6 @@ fn name_refused(name: &[u8]) -> bool {
         || name == b"constructor"
 }
 
-
 /// The receiver, if it is an ordinary object a site may learn.
 unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     if !crate::value::addr_class::is_above_handle_band(addr) {
@@ -166,4 +165,3 @@ unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
     }
     super::class_prototype_object(class_id)
 }
-

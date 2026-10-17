@@ -117,7 +117,10 @@ fn alloc_emitter(export: &str) -> f64 {
 /// object, `_eventsCount` 0, and `_maxListeners ||= undefined` reading the
 /// prototype's `undefined`. Any other prototype runs the ordinary `init` on
 /// `Object.create(proto)`. The flag says whether the layout birth ran.
-fn emitter_birth(proto: f64, layout: *const crate::object::layout_desc::PerryLayoutDesc) -> (f64, bool) {
+fn emitter_birth(
+    proto: f64,
+    layout: *const crate::object::layout_desc::PerryLayoutDesc,
+) -> (f64, bool) {
     use crate::object::runtime_layouts::emitter_slot;
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);

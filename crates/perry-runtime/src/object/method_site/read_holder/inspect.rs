@@ -92,9 +92,7 @@ pub(crate) unsafe fn shape_answer(obj: *const ObjectHeader, key: Key<'_>) -> Opt
 /// The object `recv`'s ShapeId pins as its direct prototype, for an accessor
 /// entry: a declared class's prototype ([`class_link`]; `true`), or the object
 /// a serial or default prototype identity names (`false`).
-unsafe fn accessor_holder(
-    recv: *const ObjectHeader,
-) -> Option<(*const ObjectHeader, bool)> {
+unsafe fn accessor_holder(recv: *const ObjectHeader) -> Option<(*const ObjectHeader, bool)> {
     if let Some(holder) = class_link(recv) {
         return Some((holder, true));
     }
@@ -108,4 +106,3 @@ unsafe fn accessor_holder(
     };
     (!holder.is_null() && holder != recv).then_some((holder, false))
 }
-

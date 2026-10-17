@@ -561,7 +561,12 @@ pub(crate) fn builtin_method_families(method: &str) -> u8 {
 pub(crate) fn declare_entries(module: &mut crate::module::LlModule) {
     use crate::types::DOUBLE;
     for (method, argc, _) in BUILTIN_METHODS {
-        let mut params = vec![crate::types::I64, DOUBLE, crate::types::I64, crate::types::I64];
+        let mut params = vec![
+            crate::types::I64,
+            DOUBLE,
+            crate::types::I64,
+            crate::types::I64,
+        ];
         params.extend(std::iter::repeat_n(DOUBLE, *argc));
         module.declare_function(&format!("js_bm_{method}{argc}"), DOUBLE, &params);
     }

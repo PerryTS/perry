@@ -204,6 +204,10 @@ extern "C" {
         value: f64,
         vtable: *const crate::native_stream::PayloadVTable,
     ) -> i32;
+    fn js_perry_payload_has_attached(
+        value: f64,
+        vtable: *const crate::native_stream::PayloadVTable,
+    ) -> i32;
 }
 /// Access the attached payload by its type vtable, including subclasses and
 /// distinct constructor families that share one Rust payload type.
@@ -215,6 +219,11 @@ pub unsafe fn get_attached<'a, T>(
 ) -> Option<&'a mut T> {
     assert!(abi_matches(), "native payload ABI mismatch");
     (js_perry_payload_get_attached(value, vtable) as *mut T).as_mut()
+}
+/// Does `value` carry a payload of the vtable's type, open or closed?
+pub fn has_attached(value: f64, vtable: &'static crate::native_stream::PayloadVTable) -> bool {
+    assert!(abi_matches(), "native payload ABI mismatch");
+    unsafe { js_perry_payload_has_attached(value, vtable) != 0 }
 }
 /// # Safety
 /// vtable names the attached payload's static type.

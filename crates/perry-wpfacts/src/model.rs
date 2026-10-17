@@ -361,9 +361,17 @@ pub enum Cons {
     /// The node is a lookup's pass-holder set: accessors there run for
     /// `origin` (and later ones replay through `visits`); ⊤ there is an
     /// unknown prototype.
-    VisitHolders { origin: Tok, key: Key, act: ChainAct },
+    VisitHolders {
+        origin: Tok,
+        key: Key,
+        act: ChainAct,
+    },
     /// The node is a lookup's stop-holder set: accessors there run.
-    VisitStop { origin: Tok, key: Key, act: ChainAct },
+    VisitStop {
+        origin: Tok,
+        key: Key,
+        act: ChainAct,
+    },
 }
 
 impl Cons {

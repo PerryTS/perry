@@ -134,12 +134,9 @@ fn emit_static_store_ic_site(
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = merge_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[(value_double, &hit_end), (&set, &slow_end)],
-    )
+    ctx.block()
+        .phi(DOUBLE, &[(value_double, &hit_end), (&set, &slow_end)])
 }
-
 
 /// The GC obligations after an object slot store. Plain doubles and scalar
 /// tags need no bookkeeping; pointer-bearing values need string alias demotion
@@ -320,4 +317,3 @@ fn is_plain_double_bits(bits: u64) -> bool {
     let top16 = bits >> 48;
     !(0x7FF9..=0x7FFF).contains(&top16) && !(0x1000..(1u64 << 48)).contains(&bits)
 }
-

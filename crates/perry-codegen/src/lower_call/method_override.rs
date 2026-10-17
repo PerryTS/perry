@@ -13,9 +13,7 @@ use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, I8};
 
-use super::direct_method_guard::{
-    emit_inline_direct_method_shape_guard,
-};
+use super::direct_method_guard::emit_inline_direct_method_shape_guard;
 
 pub(super) const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 pub(super) const GC_TYPE_OBJECT: &str = "2";
@@ -1866,15 +1864,15 @@ pub(super) fn emit_guarded_direct_method_call(
         }
     } else {
         ctx.block().call(
-                DOUBLE,
-                "js_native_call_method_by_id",
-                &[
-                    (DOUBLE, recv_box),
-                    (I64, &method_id),
-                    (crate::types::PTR, &args_ptr),
-                    (I64, &args_len),
-                ],
-            )
+            DOUBLE,
+            "js_native_call_method_by_id",
+            &[
+                (DOUBLE, recv_box),
+                (I64, &method_id),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        )
     };
     let fallback_truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &fallback_value));
     let after_fallback = ctx.block().label.clone();
