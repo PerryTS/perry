@@ -64,6 +64,14 @@ impl AtomTable {
         }
     }
 
+    /// First slot of `hash`. FNV-1a ends in a multiply, so its low bits depend
+    /// only on the low bits of the input bytes and cluster for ASCII keys
+    /// that differ in their last characters; fold the well-mixed high half in.
+    #[inline(always)]
+    fn home(hash: u64, mask: usize) -> usize {
+        ((hash ^ (hash >> 32)) as usize) & mask
+    }
+
     /// The atom for `bytes` (whose FNV-1a hash is `hash`), if any.
     ///
     /// # Safety
@@ -88,7 +96,7 @@ impl AtomTable {
             return None;
         }
         let mask = self.slots.len() - 1;
-        let mut i = (hash as usize) & mask;
+        let mut i = Self::home(hash, mask);
         loop {
             let entry = &self.slots[i];
             if entry.string_ptr == 0 {
@@ -112,7 +120,7 @@ impl AtomTable {
     /// Table `atom` under `hash`. The caller has proved no atom exists for
     /// its text. Rust-heap only: never allocates on the GC heap.
     fn insert(&mut self, hash: u64, atom: *const StringHeader) {
-        if (self.len + 1) * 4 > self.slots.len() * 3 {
+        if (self.len + 1) * 2 > self.slots.len() {
             let cap = (self.slots.len() * 2).max(256);
             let old = std::mem::replace(
                 &mut self.slots,
@@ -137,7 +145,7 @@ impl AtomTable {
 
     fn place(&mut self, entry: InternEntry) {
         let mask = self.slots.len() - 1;
-        let mut i = (entry.hash as usize) & mask;
+        let mut i = Self::home(entry.hash, mask);
         while self.slots[i].string_ptr != 0 {
             i = (i + 1) & mask;
         }
