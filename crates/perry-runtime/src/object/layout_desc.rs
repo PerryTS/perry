@@ -203,6 +203,11 @@ pub struct PerryProtoFamily {
     pub serial: u64,
 }
 
+/// `PerryLayoutDesc.variant` of a carried prototype layout (object model
+/// §3.6): the layout `P` is born on ([`perry_bind_family_prototype`]), a
+/// marked prototype's, registered under a semantic generation of its own.
+pub const PROTOTYPE_IMAGE_VARIANT: u16 = crate::codegen_abi::LAYOUT_VARIANT_PROTOTYPE_IMAGE;
+
 /// The family's prototype serial, drawing it on first use (registration).
 unsafe fn proto_family_serial(fam: *const PerryProtoFamily) -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -538,6 +543,29 @@ pub(crate) unsafe fn well_known_atom_symbol(
     Some(crate::symbol::well_known_symbol(name))
 }
 
+/// The registered symbol a kind-3 atom names: `Symbol.for` of its string,
+/// the one symbol of that key in every agent's registry.
+unsafe fn registered_atom_symbol(
+    atom: *const StaticAtom,
+) -> Option<*mut crate::symbol::SymbolHeader> {
+    if (*atom).kind != crate::codegen_abi::ATOM_KIND_REGISTERED_SYMBOL || (*atom).string.is_null() {
+        return None;
+    }
+    let key = crate::value::JSValue::string_ptr((*atom).string.cast_mut()).bits();
+    let symbol = crate::symbol::js_symbol_for(f64::from_bits(key)).to_bits();
+    Some((symbol & crate::value::POINTER_MASK) as *mut crate::symbol::SymbolHeader)
+}
+
+/// The symbol a symbol atom names (well-known, node's own, or registered),
+/// `None` for a string atom.
+pub(crate) unsafe fn atom_symbol(
+    atom: *const StaticAtom,
+) -> Option<*mut crate::symbol::SymbolHeader> {
+    well_known_atom_symbol(atom)
+        .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
+        .or_else(|| registered_atom_symbol(atom))
+}
+
 /// Pre-seed the agent's atom table, then register every layout. Runs once per
 /// agent from `js_shape_run_static_seed`, after the hash-band literal seeds.
 pub(crate) fn seed_static_atoms() {
@@ -645,6 +673,8 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
             // (`runtime_layouts::runtime_symbol_of_atom`).
             crate::codegen_abi::ATOM_KIND_PROGRAM_SYMBOL
                 if super::runtime_layouts::runtime_symbol_of_atom(key.atom).is_some() => {}
+            // A registered symbol (`Symbol.for(desc)`) the program names.
+            crate::codegen_abi::ATOM_KIND_REGISTERED_SYMBOL if !(*key.atom).string.is_null() => {}
             _ => return 0,
         }
     }
@@ -677,9 +707,7 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         let attributes = super::key_attrs::keys_attrs(list);
         for (i, key) in keys.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): unpublished startup list, under suppression.
-            *values.add(i) = match well_known_atom_symbol(key.atom)
-                .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(key.atom))
-            {
+            *values.add(i) = match atom_symbol(key.atom) {
                 // The key word a symbol data property stores.
                 Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
                 None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),
@@ -701,6 +729,14 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         .arr()
     };
     let summary = super::key_attrs::keys_summary(list, key_count);
+    // A carried prototype layout is a marked prototype's: its own semantic
+    // generation, shared with no other layout.
+    let image = d.variant == PROTOTYPE_IMAGE_VARIANT;
+    let generation = if image {
+        super::shapes::fresh_semantic_generation()
+    } else {
+        0
+    };
     let found = super::shapes::shape_descriptor_find_with_rep(
         list,
         key_count,
@@ -714,7 +750,7 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         &[],
         integrity,
     )
-    .filter(|&id| super::shapes::is_static_shape_id(id) && !class_family);
+    .filter(|&id| super::shapes::is_static_shape_id(id) && !class_family && !image);
     let proposed = if let Some(id) = existing {
         id
     } else if let Some(id) = found {
@@ -741,7 +777,7 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
     };
     if super::shapes::shape_descriptor_by_id(id).is_none() {
         super::shapes::install_declared_layout(
-            id, list, key_count, slot_count, kind, proto_id, summary, rep, integrity,
+            id, list, key_count, slot_count, kind, proto_id, summary, rep, integrity, generation,
         );
     }
     super::shapes::note_external_shape_carrier(super::shapes::shape_descriptor_by_id(id));
@@ -1007,20 +1043,39 @@ pub unsafe extern "C" fn perry_layout_index_probe(
 /// its prototype identity (the mark every `Object.create(P)` makes, with the
 /// serial the family's layouts were registered under), and the identity's
 /// word names it. Codegen calls this once, right after the module-level
-/// `const` binding `P` is initialized, before any code can read `P`.
+/// `const` binding `P` is initialized, before any code can read `P`, and
+/// stores the value it returns into the binding.
+///
+/// `image` is `P`'s carried layout (object model §3.6, decision 147), or
+/// null when the compiler derived none: every own key of the object the
+/// initializer builds, in order, with its attributes, and its
+/// [[Prototype]]. When the object is exactly that ([`prototype_image`]), `P`
+/// is born on the layout and the value returned is the new object; a family
+/// add then proves its chain with one compare of `P`'s layout word. Anything
+/// else (a spread source that changed, a key the compiler did not predict)
+/// leaves `P` as built, on a word no proof names.
 ///
 /// # Safety
-/// `fam` is a `PerryProtoFamily` of this program.
+/// `fam` is a `PerryProtoFamily` of this program; `image` null or one of its
+/// descriptors.
 #[no_mangle]
-pub unsafe extern "C" fn perry_bind_family_prototype(fam: *const PerryProtoFamily, proto: f64) {
+pub unsafe extern "C" fn perry_bind_family_prototype(
+    fam: *const PerryProtoFamily,
+    proto: f64,
+    image: *const PerryLayoutDesc,
+) -> f64 {
     let serial = proto_family_serial_registered(fam);
+    let proto = match image.as_ref() {
+        Some(d) if serial != 0 => prototype_image(d, proto, serial).unwrap_or(proto),
+        _ => proto,
+    };
     let bits = proto.to_bits();
     if serial == 0 || bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return;
+        return proto;
     }
     let p = (bits & crate::value::POINTER_MASK) as usize;
     if !crate::value::addr_class::is_above_handle_band(p) {
-        return;
+        return proto;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
@@ -1028,6 +1083,154 @@ pub unsafe extern "C" fn perry_bind_family_prototype(fam: *const PerryProtoFamil
     let marked = super::proto_validity::mark_object_as_prototype_with_serial(p, serial);
     if marked == Some(serial) {
         super::shapes::write_identity_word(serial, proto.get_nanbox_u64());
+    }
+    f64::from_bits(proto.get_nanbox_u64())
+}
+
+/// `P` on its carried layout `d`: a new object of the layout holding the
+/// values of `built`, when `built`'s own properties are exactly `d`'s (each
+/// key at its position with its attributes, nothing past them: no overflow,
+/// no elements, no boxed primitive or brand) and its [[Prototype]] and
+/// extensibility are the layout's. Nothing else can hold `built`: the
+/// binding is in its dead zone until the caller stores the result, and the
+/// initializer's own code never sees the object it builds (a source's
+/// getter runs with the source as `this`). The copy is a birth, so the new
+/// object's word carries no shadow bit: every key on it is one the compiler
+/// named, with the value the initializer stored. `None` leaves `P` as built.
+///
+/// # Safety
+/// `d` is a descriptor of this program.
+unsafe fn prototype_image(d: &PerryLayoutDesc, built: f64, serial: u64) -> Option<f64> {
+    let id = registered_layout_id(d.layout_id)?;
+    if !image_matches(d, built) {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let built = scope.root_nanbox_f64(built);
+    let image = scope.root_raw_mut_ptr(alloc_layout_object(d, id));
+    // Born a marked prototype (the layout is a marked one's): its meta
+    // record carries the mark and the family's serial, so the binding's mark
+    // finds it done and makes no transition.
+    let meta = image.with_mut_ptr(|p: *mut ObjectHeader| super::object_meta_ensure(p));
+    if meta.is_null() {
+        return None;
+    }
+    // GC_STORE_AUDIT(POINTER_FREE): a scalar classification bit and serial.
+    (*meta).flags |= super::OBJECT_META_FLAG_IS_PROTOTYPE;
+    (*meta).proto_serial = serial;
+    image
+        .with_mut_ptr(|p: *mut ObjectHeader| crate::gc::never_move::request_never_move(p as usize));
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let obj = (built.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    let (keys, live) = super::object_keys_and_live_slot_count(obj);
+    let image = image.with_mut_ptr(|p: *mut ObjectHeader| p);
+    for (pos, key) in std::slice::from_raw_parts(d.keys, d.key_count as usize)
+        .iter()
+        .enumerate()
+    {
+        let pos = pos as u32;
+        // An accessor's slot holds its pair; the image's key is one too.
+        let value = if super::key_attrs::key_is_accessor_at(keys.arr(), pos) {
+            let slot = super::key_attrs::key_storage_slot(keys.arr(), pos);
+            super::field_get_set::object_field_at_with_live(obj, slot, live).bits()
+        } else {
+            super::key_attrs::object_slot_data(obj, pos).bits()
+        };
+        let slot_addr = image as usize
+            + std::mem::size_of::<ObjectHeader>()
+            + key.slot as usize * std::mem::size_of::<u64>();
+        crate::gc::runtime_store_object_jsvalue_slot(
+            image as usize,
+            slot_addr,
+            key.slot as usize,
+            value,
+        );
+    }
+    Some(crate::value::js_nanbox_pointer(image as i64))
+}
+
+// The image's attribute bytes are the key list's entry bits.
+const _: () = {
+    use super::key_attrs as k;
+    use crate::codegen_abi as abi;
+    assert!(k::ENTRY_NON_WRITABLE == abi::LAYOUT_KEY_NON_WRITABLE);
+    assert!(k::ENTRY_NON_ENUMERABLE == abi::LAYOUT_KEY_NON_ENUMERABLE);
+    assert!(k::ENTRY_NON_CONFIGURABLE == abi::LAYOUT_KEY_NON_CONFIGURABLE);
+    assert!(k::ENTRY_ACCESSOR == abi::LAYOUT_KEY_ACCESSOR);
+    assert!(k::ENTRY_HAS_GET == abi::LAYOUT_KEY_HAS_GET);
+    assert!(k::ENTRY_HAS_SET == abi::LAYOUT_KEY_HAS_SET);
+};
+
+/// Are `built`'s own properties and [[Prototype]] exactly `d`'s?
+unsafe fn image_matches(d: &PerryLayoutDesc, built: f64) -> bool {
+    let bits = built.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return false;
+    }
+    let p = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_above_handle_band(p) {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(p) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & super::shapes::INTEGRITY_FLAGS != 0
+    {
+        return false;
+    }
+    let obj = p as *const ObjectHeader;
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && ((*meta).boxed_primitive != 0
+            || (*meta).reflect_metadata != 0
+            || (*meta).private_evaluation_brand != 0)
+    {
+        return false;
+    }
+    if !super::overflow::table(obj).is_null() || super::shapes::object_shape_stamp(obj) == 0 {
+        return false;
+    }
+    let (keys, _) = super::object_keys_and_live_slot_count(obj);
+    if keys.is_null() != (d.key_count == 0) || keys.count() != d.key_count {
+        return false;
+    }
+    const FACTS: u8 = super::key_attrs::ENTRY_ATTR_MASK | super::key_attrs::ENTRY_ACCESSOR_MASK;
+    let words = crate::array::array_elements_ptr(keys.arr());
+    for (pos, key) in std::slice::from_raw_parts(d.keys, d.key_count as usize)
+        .iter()
+        .enumerate()
+    {
+        let want = match atom_symbol(key.atom) {
+            Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
+            None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),
+        };
+        if *words.add(pos) != want
+            || super::key_attrs::keys_entry(keys.arr(), pos as u32) & FACTS != key.attrs & FACTS
+        {
+            return false;
+        }
+    }
+    let proto = super::js_object_get_prototype_of(built).to_bits();
+    match d.proto.addr() {
+        0 => {
+            let object = crate::agent_ptrs::intrinsic_proto(
+                super::builtin_proto::BuiltinProto::Object as usize,
+            );
+            proto & crate::value::POINTER_MASK == object as u64
+                && proto & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        }
+        1 => proto == crate::value::TAG_NULL,
+        _ => {
+            let serial = proto_family_serial_registered(d.proto);
+            let q = (proto & crate::value::POINTER_MASK) as *const ObjectHeader;
+            serial != 0
+                && proto & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+                && crate::value::addr_class::is_above_handle_band(q as usize)
+                && !(*q).meta.is_null()
+                && (*(*q).meta).proto_serial == serial
+        }
     }
 }
 
@@ -1167,8 +1370,11 @@ static KEEP_PERRY_CREATE_FAMILY: unsafe extern "C" fn(*const PerryLayoutDesc, f6
     perry_create_family;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_PERRY_BIND_FAMILY_PROTOTYPE: unsafe extern "C" fn(*const PerryProtoFamily, f64) =
-    perry_bind_family_prototype;
+static KEEP_PERRY_BIND_FAMILY_PROTOTYPE: unsafe extern "C" fn(
+    *const PerryProtoFamily,
+    f64,
+    *const PerryLayoutDesc,
+) -> f64 = perry_bind_family_prototype;
 // ---------------------------------------------------------------------------
 // Case 2c (OBJECT_MODEL_2026-10-13.md §3.7): static class families.
 //

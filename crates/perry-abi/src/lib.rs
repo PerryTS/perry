@@ -30,6 +30,15 @@ pub const ARRAY_HEADER_SIZE: usize = 16;
 /// §3.2). A descriptor emits it only for such keys; the layout then carries
 /// the "may have holes" summary bit and every other layout keeps its cost.
 pub const LAYOUT_KEY_OPTIONAL: u8 = 0x80;
+/// `PerryLayoutKey.attrs` attribute bits (the runtime's `key_attrs` entry
+/// bits, pinned there): `[[Writable]]`, `[[Enumerable]]`, `[[Configurable]]`
+/// false, an accessor, and which halves it has.
+pub const LAYOUT_KEY_NON_WRITABLE: u8 = 0x01;
+pub const LAYOUT_KEY_NON_ENUMERABLE: u8 = 0x02;
+pub const LAYOUT_KEY_NON_CONFIGURABLE: u8 = 0x04;
+pub const LAYOUT_KEY_ACCESSOR: u8 = 0x08;
+pub const LAYOUT_KEY_HAS_GET: u8 = 0x10;
+pub const LAYOUT_KEY_HAS_SET: u8 = 0x20;
 
 /// `StaticAtom.kind` (OBJECT_MODEL_2026-10-13.md §6a): a string key.
 pub const ATOM_KIND_STRING: u8 = 0;
@@ -40,6 +49,13 @@ pub const ATOM_KIND_WELL_KNOWN_SYMBOL: u8 = 1;
 /// Symbol(desc)`); `string` is the description and `hash` the creation
 /// sequence number the runtime assigns when it creates the symbol.
 pub const ATOM_KIND_PROGRAM_SYMBOL: u8 = 2;
+/// `StaticAtom.kind`: a registered symbol (`Symbol.for(desc)`); `string` is
+/// its registry key, `hash` the compiler's hash of it (a key index position
+/// only: the runtime resolves the symbol through the registry).
+pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
+/// `PerryLayoutDesc.variant` of a carried prototype layout (object model
+/// §3.6): a marked prototype's, registered under its own semantic generation.
+pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
 /// The well-known symbols by number (`StaticAtom.index` of a kind-1 atom),
 /// spelled as `Symbol.<name>`.
 pub const WELL_KNOWN_SYMBOLS: [&str; 15] = [

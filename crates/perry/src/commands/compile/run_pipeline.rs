@@ -1231,6 +1231,18 @@ pub fn run_with_parse_cache(
         eprintln!("{}", ctx.proto_census.summary());
     }
     perry_codegen::set_program_proto_census(Some(ctx.proto_census.clone()));
+    // Object model §3.6: the program's export facts (constant keys, literal
+    // keys) that prototype images in importing modules read.
+    {
+        let modules: Vec<(String, &perry_hir::Module)> = ctx
+            .native_modules
+            .iter()
+            .map(|(path, hir)| (path.to_string_lossy().to_string(), hir))
+            .collect();
+        perry_codegen::set_program_proto_exports(Some(perry_codegen::program_proto_exports(
+            &modules,
+        )));
+    }
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     for site in &ctx.patched_builtins.dynamic_code_reach.sites {

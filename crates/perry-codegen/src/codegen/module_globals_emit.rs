@@ -478,6 +478,9 @@ pub(crate) fn emit_module_globals(
                 || (referenced_from_fn.contains(id)
                     && !hir.classic_for_lexical_bindings.contains(id))
                 || exported_var_names.contains(name)
+                // Object model §3.6: a prototype born on its carried layout,
+                // whose word every family add on its chain compares.
+                || crate::layout_desc::create_families::binding_needs_global(*id)
             {
                 // A `var` redeclared at module scope (`var x = …; … var x = …;`)
                 // lowers to multiple `Stmt::Let` sharing the SAME id. The backing

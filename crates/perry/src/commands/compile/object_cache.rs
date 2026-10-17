@@ -412,6 +412,7 @@ fn compute_object_cache_key_with_env(
     // Object model step 3: method calls bind the prototype constants the
     // whole program's write census proves.
     h.field("proto_census", &perry_codegen::program_proto_census_key());
+    h.field("proto_exports", &perry_codegen::program_proto_exports_key());
     // A module's native-module namespaces and wrapper calls lower differently
     // depending on which library the compile routes each module to.
     h.field(

@@ -15,9 +15,10 @@ pub(crate) unsafe fn install_declared_layout(
     summary: u8,
     rep: u64,
     integrity: u16,
+    generation: u64,
 ) {
     let table = &crate::state::state().shapes;
-    let mut record = ShapeRecord::new(keys as u64, key_count, slot_count, 0, kind, 0)
+    let mut record = ShapeRecord::new(keys as u64, key_count, slot_count, generation, kind, 0)
         .with_proto_id(proto_id)
         .with_summary(summary)
         .with_special_facts(rep, &[], &[]);
@@ -28,7 +29,7 @@ pub(crate) unsafe fn install_declared_layout(
             keys as u64,
             key_count,
             slot_count,
-            0,
+            generation,
             kind,
             0,
             proto_id,
@@ -43,4 +44,16 @@ pub(crate) unsafe fn install_declared_layout(
     table.slab_mut().insert(id, record);
     inner.facts_append_fresh(facts, id);
     inner.family_append_fresh(keys as u64, id);
+}
+
+/// A semantic generation no other shape carries: a carried prototype
+/// layout's (`layout_desc::PROTOTYPE_IMAGE_VARIANT`), so that layout is
+/// disjoint from every unmarked object's, as a prototype mark's transition
+/// makes it.
+pub(crate) fn fresh_semantic_generation() -> u64 {
+    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if generation == 0 {
+        shape_id_exhausted_abort();
+    }
+    generation
 }

@@ -128,6 +128,9 @@ pub use collectors::segview::{
     segview_diag_enabled, segview_lowering_enabled, segview_rewrite_module, SegViewDiag,
 };
 // Object model step 3: the program-wide prototype-write census.
+pub use layout_desc::create_families::{
+    program_proto_exports, program_proto_exports_key, set_program_proto_exports,
+};
 pub use proto_constants::{program_proto_census_key, set_program_proto_census};
 // #11394: whole-program set of methods written onto a builtin prototype.
 pub use lower_call::property_get::patched_proto::{

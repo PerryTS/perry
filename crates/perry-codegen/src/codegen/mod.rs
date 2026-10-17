@@ -2650,7 +2650,7 @@ fn compile_module_impl(
                 hir,
                 &module_prefix,
             ));
-            crate::layout_desc::create_families::collect(hir, &module_prefix);
+            crate::layout_desc::create_families::collect(hir, &module_prefix, &triple);
         } else {
             crate::layout_desc::array_families::clear();
             crate::layout_desc::create_families::clear();

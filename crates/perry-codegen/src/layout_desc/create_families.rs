@@ -30,10 +30,25 @@
 //! definition of that name, an integrity operation, a relink or dynamic code
 //! anywhere in the program could change that (`ProtoCensus::
 //! create_add_free`). When the census proves every key free, the add is a
-//! slot store and no chain is read at run time. Otherwise the creation point
-//! keeps the ordinary operation. (A chain that can change takes the checked
-//! proof of decision 150, a compare of each prototype's layout word with its
-//! carried layout's id, once prototypes are born on carried layouts.)
+//! slot store and no chain is read at run time.
+//!
+//! Otherwise the add takes the checked proof (decision 150): each prototype
+//! of the chain is born on its **carried layout** (§3.6, decision 147), the
+//! compile-time [`image`] of its initializer (every own key in order, its
+//! attributes, accessors and symbol keys included, and its [[Prototype]]),
+//! and the add compares each prototype's layout word with that layout's id
+//! (plus `%Object.prototype%`'s shadow bit) before the slot store. Every
+//! change to such a prototype's own keys, attributes, extensibility or
+//! [[Prototype]] moves it off the layout (a new id, or the shadow bit with an
+//! overflow), so a changed chain fails the compare and takes the ordinary
+//! `[[Set]]`. An initializer whose result the compiler cannot predict
+//! exactly gets no image; the runtime births `P` on its image only when the
+//! object built is exactly it (`perry_bind_family_prototype`), so a wrong
+//! prediction (a spread source that changed) costs the proof, never
+//! correctness. Keys of other modules' constants and literals (an imported
+//! computed key, a spread of an imported literal) come from the program's
+//! export facts ([`program_proto_exports`]), derived by the driver from
+//! every module before any is lowered.
 //!
 //! `P` takes the family's prototype serial at its birth
 //! (`perry_bind_family_prototype`, emitted after the binding's
@@ -50,6 +65,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use perry_hir::{Expr, Module, Stmt};
@@ -84,6 +100,12 @@ pub(crate) struct Create {
     /// `P`'s binding.
     pub proto: u32,
     pub proto_global: String,
+    /// The checked proof (empty when the census proves every add free): each
+    /// prototype binding of `P`'s chain with its carried layout's
+    /// descriptor, `P` first.
+    pub chain: Vec<(u32, String)>,
+    /// The chain ends at `%Object.prototype%` (else at null).
+    pub object_root: bool,
 }
 
 /// One add of a [`Create`] family: its key `keys[index]`.
@@ -102,6 +124,122 @@ pub(crate) struct CreateState {
     born: HashMap<u32, Create>,
 }
 
+/// A key of a carried prototype layout, as the runtime names it: a string,
+/// a well-known symbol (its number in `perry_abi::WELL_KNOWN_SYMBOLS`) or a
+/// registered symbol (`Symbol.for` of the string).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ImageKey {
+    Str(String),
+    WellKnown(u32),
+    Registered(String),
+}
+
+impl ImageKey {
+    fn is_symbol(&self) -> bool {
+        !matches!(self, ImageKey::Str(_))
+    }
+}
+
+/// One key of a carried prototype layout: the key and its attribute entry
+/// (`perry_abi::LAYOUT_KEY_*`, the runtime's `key_attrs` entry bits).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageEntry {
+    pub key: ImageKey,
+    pub attrs: u8,
+}
+
+/// Attribute entry bits (`perry_abi`, pinned to the runtime's `key_attrs`).
+const NON_WRITABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_WRITABLE;
+const NON_ENUMERABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_ENUMERABLE;
+const NON_CONFIGURABLE: u8 = crate::runtime_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+const ACCESSOR: u8 = crate::runtime_abi::LAYOUT_KEY_ACCESSOR;
+const HAS_GET: u8 = crate::runtime_abi::LAYOUT_KEY_HAS_GET;
+const HAS_SET: u8 = crate::runtime_abi::LAYOUT_KEY_HAS_SET;
+
+/// Is the entry a writable data property (an add on a child shadows it)?
+fn plain_data(attrs: u8) -> bool {
+    attrs & (ACCESSOR | NON_WRITABLE) == 0
+}
+
+/// What another module's export is at compile time: a property key (a
+/// string constant or `Symbol.for` of one), or a literal's own keys (its
+/// [`image`]). Keyed by (defining module path, export name).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ExportFact {
+    Key(ImageKey),
+    Image(Vec<ImageEntry>),
+}
+
+/// The program's export facts, by (module path, export name).
+pub type ProtoExports = BTreeMap<(String, String), ExportFact>;
+
+static PROGRAM_PROTO_EXPORTS: RwLock<Option<Arc<ProtoExports>>> = RwLock::new(None);
+
+/// Install the program's export facts (driver, before module codegen).
+pub fn set_program_proto_exports(facts: Option<ProtoExports>) {
+    *PROGRAM_PROTO_EXPORTS.write().unwrap() = facts.map(Arc::new);
+}
+
+fn program_exports() -> Arc<ProtoExports> {
+    PROGRAM_PROTO_EXPORTS
+        .read()
+        .unwrap()
+        .clone()
+        .unwrap_or_default()
+}
+
+/// The object-cache key of the installed export facts: every module's
+/// prototype images may read them.
+pub fn program_proto_exports_key() -> String {
+    use std::hash::{Hash, Hasher};
+    let facts = program_exports();
+    if facts.is_empty() {
+        return String::new();
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    facts.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// The export facts of every module (`modules`: path and HIR), to a fixed
+/// point: a module's facts may read another's (a literal spreading an
+/// imported one, a key imported from a third module).
+pub fn program_proto_exports<'a>(modules: &[(String, &'a Module)]) -> ProtoExports {
+    let mut facts = ProtoExports::new();
+    for _ in 0..8 {
+        let mut next = ProtoExports::new();
+        for (path, hir) in modules {
+            let a = analyze(hir, &facts);
+            for export in &hir.exports {
+                let perry_hir::Export::Named { local, exported } = export else {
+                    continue;
+                };
+                let Some(id) = a.top_level.get(local.as_str()) else {
+                    continue;
+                };
+                let fact = match a.consts.get(id) {
+                    Some(KeyConst::Str(s)) => Some(ExportFact::Key(ImageKey::Str(s.clone()))),
+                    Some(KeyConst::Symbol(Some(k))) => Some(ExportFact::Key(k.clone())),
+                    Some(KeyConst::Symbol(None)) => None,
+                    None => a
+                        .borns
+                        .get(id)
+                        .and_then(|b| b.image.clone())
+                        .map(ExportFact::Image),
+                };
+                if let Some(fact) = fact {
+                    next.insert((path.clone(), exported.clone()), fact);
+                }
+            }
+        }
+        if next == facts {
+            break;
+        }
+        facts = next;
+    }
+    facts
+}
+
 /// What a prototype binding's initializer makes (§3.6): which keys of the
 /// object are, or may be, accessors or non-writable, and its [[Prototype]].
 /// Every other key it holds, named or not (a spread, a computed key), is a
@@ -114,6 +252,9 @@ struct Born {
     /// relinked it (an own `__proto__` data key), which the census does not
     /// see: no family stands on its chain.
     dynamic: bool,
+    /// Its carried layout: every own key in order with its attributes, when
+    /// the compiler can name them all (else `None`).
+    image: Option<Vec<ImageEntry>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -130,7 +271,21 @@ enum Link {
 #[derive(Clone, Debug)]
 enum KeyConst {
     Str(String),
-    Symbol,
+    /// A symbol: which one, when the compiler can name it.
+    Symbol(Option<ImageKey>),
+}
+
+/// `Symbol.for(desc)` as a layout key: a well-known symbol (the HIR spells
+/// `Symbol.iterator` as `Symbol.for("@@__perry_wk_iterator")`) or a
+/// registered one.
+fn symbol_key(desc: &str) -> Option<ImageKey> {
+    match desc.strip_prefix("@@__perry_wk_") {
+        Some(name) => crate::runtime_abi::WELL_KNOWN_SYMBOLS
+            .iter()
+            .position(|n| *n == name)
+            .map(|i| ImageKey::WellKnown(i as u32)),
+        None => Some(ImageKey::Registered(desc.to_string())),
+    }
 }
 
 /// `%Object.prototype%`'s own keys: data methods an add of the name would
@@ -165,6 +320,8 @@ struct ModuleCreateFamilies {
     bound: BTreeSet<u32>,
     /// The layouts lowering used, by descriptor name.
     used: BTreeMap<String, Site>,
+    /// Checked proofs are emitted (not on 32-bit targets).
+    checked: bool,
 }
 
 thread_local! {
@@ -225,12 +382,76 @@ fn proto_binding(proto: &Expr) -> Option<u32> {
     }
 }
 
-/// Derive the module's prototype facts (`codegen/mod.rs`, executables with
-/// layouts only): one pass over its top-level bindings, one over its
-/// `Object.create` calls.
-pub(crate) fn collect(hir: &Module, module_prefix: &str) {
-    clear();
-    let classes: Vec<&perry_hir::Class> = hir.classes.iter().collect();
+/// One module's prototype facts (its own, and its imports' through the
+/// program's export facts).
+struct Analysis<'a> {
+    classes: Vec<&'a perry_hir::Class>,
+    consts: HashMap<u32, KeyConst>,
+    borns: HashMap<u32, Born>,
+    literals: BTreeSet<u32>,
+    /// Top-level `const` bindings bound once, by name.
+    top_level: HashMap<&'a str, u32>,
+    /// Import local name → (defining module path, export name), `None` for
+    /// a namespace import.
+    imports: HashMap<&'a str, (&'a str, Option<&'a str>)>,
+    exports: &'a ProtoExports,
+}
+
+impl Analysis<'_> {
+    /// The export fact an imported binding (`ExternFuncRef`) or a
+    /// namespace member (`ns.name`) reads.
+    fn imported(&self, e: &Expr) -> Option<&ExportFact> {
+        let (local, member) = match e {
+            Expr::ExternFuncRef { name, .. } => (name.as_str(), None),
+            Expr::PropertyGet {
+                object, property, ..
+            } => match object.as_ref() {
+                Expr::ExternFuncRef { name, .. } => (name.as_str(), Some(property.as_str())),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let (path, name) = match (self.imports.get(local)?, member) {
+            ((path, Some(name)), None) => (*path, *name),
+            ((path, None), Some(member)) => (*path, member),
+            _ => return None,
+        };
+        self.exports.get(&(path.to_string(), name.to_string()))
+    }
+
+    /// A computed key `e` names.
+    fn key_const(&self, e: &Expr) -> Option<KeyConst> {
+        match e {
+            Expr::String(s) => Some(KeyConst::Str(s.clone())),
+            Expr::SymbolFor(desc) => Some(KeyConst::Symbol(match desc.as_ref() {
+                Expr::String(d) => symbol_key(d),
+                _ => None,
+            })),
+            Expr::LocalGet(x) => self.consts.get(x).cloned(),
+            _ => match self.imported(e)? {
+                ExportFact::Key(ImageKey::Str(s)) => Some(KeyConst::Str(s.clone())),
+                ExportFact::Key(k) => Some(KeyConst::Symbol(Some(k.clone()))),
+                ExportFact::Image(_) => None,
+            },
+        }
+    }
+
+    /// The own keys of a spread or assign source `e`, when known.
+    fn source_image(&self, e: &Expr) -> Option<Vec<ImageEntry>> {
+        match e {
+            Expr::LocalGet(x) => self.borns.get(x)?.image.clone(),
+            _ => match self.imported(e) {
+                Some(ExportFact::Image(image)) => Some(image.clone()),
+                Some(ExportFact::Key(_)) => None,
+                None => literal(self, e).and_then(|l| l.image),
+            },
+        }
+    }
+}
+
+/// Derive one module's prototype facts: one pass over its top-level
+/// bindings, in initialization order (a chain names only earlier ones).
+fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
     let mut bound_once: HashMap<u32, usize> = HashMap::new();
     for stmt in &hir.init {
         if let Stmt::Let {
@@ -243,16 +464,36 @@ pub(crate) fn collect(hir: &Module, module_prefix: &str) {
             *bound_once.entry(*id).or_default() += 1;
         }
     }
-    // Prototype bindings the compiler follows, in initialization order (a
-    // chain names only earlier ones).
-    let mut state = ModuleCreateFamilies {
-        prefix: module_prefix.to_string(),
-        ..ModuleCreateFamilies::default()
+    let mut imports = HashMap::new();
+    for import in &hir.imports {
+        let Some(path) = import.resolved_path.as_deref() else {
+            continue;
+        };
+        for spec in &import.specifiers {
+            match spec {
+                perry_hir::ImportSpecifier::Named { imported, local } => {
+                    imports.insert(local.as_str(), (path, Some(imported.as_str())));
+                }
+                perry_hir::ImportSpecifier::Namespace { local } => {
+                    imports.insert(local.as_str(), (path, None));
+                }
+                perry_hir::ImportSpecifier::Default { .. } => {}
+            }
+        }
+    }
+    let mut a = Analysis {
+        classes: hir.classes.iter().collect(),
+        consts: HashMap::new(),
+        borns: HashMap::new(),
+        literals: BTreeSet::new(),
+        top_level: HashMap::new(),
+        imports,
+        exports,
     };
-    let mut consts: HashMap<u32, KeyConst> = HashMap::new();
     for stmt in &hir.init {
         let Stmt::Let {
             id,
+            name,
             mutable: false,
             init: Some(init),
             ..
@@ -263,23 +504,51 @@ pub(crate) fn collect(hir: &Module, module_prefix: &str) {
         if bound_once.get(id) != Some(&1) {
             continue;
         }
-        match init {
-            Expr::String(s) => {
-                consts.insert(*id, KeyConst::Str(s.clone()));
+        a.top_level.insert(name.as_str(), *id);
+        if matches!(init, Expr::String(_) | Expr::SymbolFor(_)) {
+            if let Some(k) = a.key_const(init) {
+                a.consts.insert(*id, k);
             }
-            Expr::SymbolFor(_) => {
-                consts.insert(*id, KeyConst::Symbol);
+            continue;
+        }
+        if let Some(k @ KeyConst::Symbol(Some(_))) = a.imported(init).and_then(|f| match f {
+            ExportFact::Key(ImageKey::Str(s)) => Some(KeyConst::Str(s.clone())),
+            ExportFact::Key(k) => Some(KeyConst::Symbol(Some(k.clone()))),
+            ExportFact::Image(_) => None,
+        }) {
+            a.consts.insert(*id, k);
+            continue;
+        }
+        if literal_class(&a.classes, init).is_some() {
+            a.literals.insert(*id);
+        }
+        if let Some(mut b) = born(&a, init) {
+            // A carried layout's string keys are atoms its slots carry.
+            if b.image.as_ref().is_some_and(|img| {
+                img.iter()
+                    .any(|e| matches!(&e.key, ImageKey::Str(k) if !layout_key(k)))
+            }) {
+                b.image = None;
             }
-            _ => {
-                if literal_class(&classes, init).is_some() {
-                    state.literals.insert(*id);
-                }
-                if let Some(b) = born(&classes, init, &state.borns, &consts) {
-                    state.borns.insert(*id, b);
-                }
-            }
+            a.borns.insert(*id, b);
         }
     }
+    a
+}
+
+/// Derive the module's prototype facts (`codegen/mod.rs`, executables with
+/// layouts only), and which of them some `Object.create` names.
+pub(crate) fn collect(hir: &Module, module_prefix: &str, target_triple: &str) {
+    clear();
+    let exports = program_exports();
+    let a = analyze(hir, &exports);
+    let mut state = ModuleCreateFamilies {
+        prefix: module_prefix.to_string(),
+        borns: a.borns,
+        literals: a.literals,
+        checked: !crate::target_layout::target_is_ilp32(target_triple),
+        ..ModuleCreateFamilies::default()
+    };
     if !state.borns.is_empty() {
         perry_hir::for_each_module_expr(hir, &mut |e| {
             if let Expr::ObjectCreate(proto, None) = e {
@@ -294,15 +563,47 @@ pub(crate) fn collect(hir: &Module, module_prefix: &str) {
     MODULE_CREATE_FAMILIES.with(|m| *m.borrow_mut() = state);
 }
 
+/// Must the top-level binding `id` be a module global (a prototype born on
+/// its carried layout, whose word a family add compares)?
+pub(crate) fn binding_needs_global(id: u32) -> bool {
+    MODULE_CREATE_FAMILIES.with(|m| {
+        let m = m.borrow();
+        m.checked && m.bound.contains(&id) && m.borns.get(&id).is_some_and(|b| b.image.is_some())
+    })
+}
+
+/// The descriptor of prototype binding `p`'s carried layout.
+fn image_global(prefix: &str, p: u32) -> String {
+    format!("perry_layout_pimg_{prefix}_{p}")
+}
+
+/// May an add of `key` shadow every image of `chain` (absent, or a writable
+/// data property)?
+fn images_admit(m: &ModuleCreateFamilies, chain: &[u32], key: &str) -> bool {
+    chain.iter().all(|h| {
+        m.borns[h].image.as_ref().is_some_and(|img| {
+            img.iter()
+                .all(|e| e.key != ImageKey::Str(key.to_string()) || plain_data(e.attrs))
+        })
+    })
+}
+
 /// The family of `const a = Object.create(P)`, from the statements `rest`
 /// after it: the longest prefix of the keys they store on `a` whose adds
-/// the census proves free on `P`'s chain.
+/// the census proves free on `P`'s chain, or, when every prototype of the
+/// chain is born on its carried layout, whose adds that layout admits (the
+/// checked proof).
 fn binding_family(m: &ModuleCreateFamilies, a: u32, p: u32, rest: &[Stmt]) -> Option<Create> {
     let chain = chain_of(p, &m.borns)?;
-    if chain.iter().any(|h| m.borns[h].dynamic) {
+    let carried = m.checked
+        && chain
+            .iter()
+            .all(|h| m.bound.contains(h) && m.borns[h].image.is_some());
+    if !carried && chain.iter().any(|h| m.borns[h].dynamic) {
         return None;
     }
     let mut keys: Vec<String> = Vec::new();
+    let mut checked = false;
     for stmt in rest {
         let Stmt::Expr(e) = stmt else { continue };
         let Some((target, key)) = static_store(e) else {
@@ -312,11 +613,20 @@ fn binding_family(m: &ModuleCreateFamilies, a: u32, p: u32, rest: &[Stmt]) -> Op
             continue;
         }
         if keys.len() == MAX_CREATE_KEYS
-            || !add_free(key)
+            || !layout_key(key)
+            || crate::proto_constants::is_prototype_name(key)
             || OBJECT_PROTOTYPE_KEYS.contains(&key)
-            || chain.iter().any(|h| m.borns[h].blocks.contains(key))
         {
             break;
+        }
+        let free = !chain.iter().any(|h| m.borns[h].dynamic)
+            && crate::proto_constants::create_add_free(key)
+            && !chain.iter().any(|h| m.borns[h].blocks.contains(key));
+        if !free {
+            if !carried || !images_admit(m, &chain, key) {
+                break;
+            }
+            checked = true;
         }
         keys.push(key.to_string());
     }
@@ -328,6 +638,7 @@ fn binding_family(m: &ModuleCreateFamilies, a: u32, p: u32, rest: &[Stmt]) -> Op
         m.prefix,
         super::fnv1a(keys.join("\u{1}").as_bytes()) as u32
     );
+    let root = m.borns[chain.last()?].proto;
     Some(Create {
         states: (0..=keys.len())
             .map(|i| format!("perry_layout_cf_{family}_{i}"))
@@ -335,6 +646,15 @@ fn binding_family(m: &ModuleCreateFamilies, a: u32, p: u32, rest: &[Stmt]) -> Op
         keys,
         proto: p,
         proto_global: format!("perry_protofam_{}_{p}", m.prefix),
+        chain: if checked {
+            chain
+                .iter()
+                .map(|h| (*h, image_global(&m.prefix, *h)))
+                .collect()
+        } else {
+            Vec::new()
+        },
+        object_root: root == Link::Object,
     })
 }
 
@@ -470,20 +790,20 @@ pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> Option<Site> {
     Some(site)
 }
 
-/// Is the prototype binding `id` some family's `P` (its `let` binds the
-/// family identity)?
-fn bound_proto_global(id: u32) -> Option<String> {
-    MODULE_CREATE_FAMILIES.with(|m| {
-        let m = m.borrow();
-        m.bound
-            .contains(&id)
-            .then(|| format!("perry_protofam_{}_{id}", m.prefix))
-    })
+/// A carried prototype layout to emit: its descriptor, keys and
+/// [[Prototype]] (`None`: `%Object.prototype%`; `Some(None)`: null;
+/// `Some(Some(g))`: the `PerryProtoFamily` `g`).
+pub(crate) struct ImageDesc {
+    pub desc_global: String,
+    pub entries: Vec<ImageEntry>,
+    pub proto: Option<Option<String>>,
 }
 
-/// The prototype records and family descriptors to emit: every followed
-/// prototype an `Object.create` names, and each layout lowered code used.
-pub(crate) fn emission() -> (Vec<String>, Vec<Site>) {
+/// The prototype records, family descriptors and carried prototype layouts
+/// to emit: every followed prototype an `Object.create` names, each layout
+/// lowered code used, and the carried layout of each such prototype the
+/// compiler can name exactly.
+pub(crate) fn emission() -> (Vec<String>, Vec<Site>, Vec<ImageDesc>) {
     MODULE_CREATE_FAMILIES.with(|m| {
         let m = m.borrow();
         let protos = m
@@ -491,7 +811,29 @@ pub(crate) fn emission() -> (Vec<String>, Vec<Site>) {
             .iter()
             .map(|id| format!("perry_protofam_{}_{id}", m.prefix))
             .collect();
-        (protos, m.used.values().cloned().collect())
+        let images = m
+            .bound
+            .iter()
+            .filter(|_| m.checked)
+            .filter_map(|id| {
+                let b = &m.borns[id];
+                let entries = b.image.clone()?;
+                let proto = match b.proto {
+                    Link::Object => None,
+                    Link::Null => Some(None),
+                    Link::Binding(q) if m.bound.contains(&q) => {
+                        Some(Some(format!("perry_protofam_{}_{q}", m.prefix)))
+                    }
+                    Link::Binding(_) => return None,
+                };
+                Some(ImageDesc {
+                    desc_global: image_global(&m.prefix, *id),
+                    entries,
+                    proto,
+                })
+            })
+            .collect();
+        (protos, m.used.values().cloned().collect(), images)
     })
 }
 
@@ -534,13 +876,51 @@ fn layout_id(ctx: &mut FnCtx<'_>, desc_global: &str) -> String {
 /// OBJ_FLAG_NO_EXTEND`).
 const RECEIVER_INTEGRITY_BITS: &str = "7";
 
+/// The checked proof of a family add (decision 150): `i1`, every prototype
+/// of the chain still on its carried layout (its module global's layout
+/// word equals the layout's id, which also refuses a shadowed word) and
+/// `%Object.prototype%` unwritten. Emitted only after the receiver proved
+/// its state, so each binding holds its prototype (the receiver was born of
+/// it, after the chain's bindings were initialized).
+fn emit_chain_proof(ctx: &mut FnCtx<'_>, family: &Create) -> String {
+    let mut ok = "true".to_string();
+    for (h, desc) in &family.chain {
+        let Some(global) = ctx.module_globals.get(h).cloned() else {
+            return "false".to_string();
+        };
+        let id = layout_id(ctx, desc);
+        let blk = ctx.block();
+        let value = blk.load(DOUBLE, &format!("@{global}"));
+        let bits = blk.bitcast_double_to_i64(&value);
+        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        let ptr = blk.inttoptr(I64, &handle);
+        let word_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+        let word = blk.load(I32, &word_ptr);
+        let registered = blk.icmp_ne(I32, &id, "0");
+        let same = blk.icmp_eq(I32, &word, &id);
+        let held = blk.and(crate::types::I1, &registered, &same);
+        ok = blk.and(crate::types::I1, &ok, &held);
+    }
+    if family.object_root {
+        let patched = crate::builtin_proto::emit_patched_test(
+            ctx,
+            crate::builtin_proto::BuiltinProto::Object,
+        );
+        let blk = ctx.block();
+        let unpatched = blk.xor(crate::types::I1, &patched, "true");
+        ok = blk.and(crate::types::I1, &ok, &unpatched);
+    }
+    ok
+}
+
 /// `a.k = v` for a binding family's add of `keys[index]`. A receiver in the
 /// state before it (the add) or in the state holding it (an overwrite of its
 /// own writable data), with no meta record (no overflow, no elements, no
 /// recorded [[Prototype]]: its prototype is the family's) and not frozen,
 /// sealed or made non-extensible, stores the slot and the holding state's
-/// layout word; no prototype is read (the census proved the add free). Any
-/// other receiver takes the ordinary `[[Set]]`. Returns the stored value.
+/// layout word, when the census proved the add free (no prototype is read)
+/// or the chain's checked proof holds. Any other receiver takes the
+/// ordinary `[[Set]]`. Returns the stored value.
 pub(crate) fn lower_add(
     ctx: &mut FnCtx<'_>,
     add: &Add,
@@ -557,6 +937,7 @@ pub(crate) fn lower_add(
         let before = layout_id(ctx, &family.states[slot]);
         let after = layout_id(ctx, &family.states[slot + 1]);
         let check_idx = ctx.new_block("create_add.layout");
+        let chain_idx = (!family.chain.is_empty()).then(|| ctx.new_block("create_add.chain"));
         let fast_idx = ctx.new_block("create_add.slot");
         let slow_idx = ctx.new_block("create_add.generic");
         let merge_idx = ctx.new_block("create_add.merge");
@@ -576,6 +957,7 @@ pub(crate) fn lower_add(
         } else {
             8
         };
+        let receiver_done = chain_idx.map_or(fast_label.clone(), |c| ctx.block_label(c));
         let (obj_handle, obj_ptr) = {
             let blk = ctx.block();
             let obj_handle = crate::expr::receiver_range::emit_handle(blk, &recv.biased);
@@ -600,9 +982,15 @@ pub(crate) fn lower_add(
             let ok = blk.and(crate::types::I1, &registered, &either);
             let ok = blk.and(crate::types::I1, &ok, &no_meta);
             let ok = blk.and(crate::types::I1, &ok, &extensible);
-            blk.cond_br(&ok, &fast_label, &slow_label);
+            blk.cond_br(&ok, &receiver_done, &slow_label);
             (obj_handle, obj_ptr)
         };
+
+        if let Some(chain_idx) = chain_idx {
+            ctx.current_block = chain_idx;
+            let held = emit_chain_proof(ctx, family);
+            ctx.block().cond_br(&held, &fast_label, &slow_label);
+        }
 
         ctx.current_block = fast_idx;
         let (slot_ptr, slot_addr) = {
@@ -661,17 +1049,40 @@ pub(crate) fn lower_add(
 }
 
 /// `P`'s birth: after the top-level binding `id` is initialized, give the
-/// object the family's prototype serial (`stmt/mod.rs`).
+/// object the family's prototype serial, and, when the compiler derived its
+/// carried layout, let the runtime bear it on that layout (the binding then
+/// holds the object born there; `stmt/mod.rs`).
 pub(crate) fn lower_binding(ctx: &mut FnCtx<'_>, id: u32) -> Result<()> {
-    let Some(global) = bound_proto_global(id) else {
+    let Some((family, image)) = MODULE_CREATE_FAMILIES.with(|m| {
+        let m = m.borrow();
+        m.bound.contains(&id).then(|| {
+            let image =
+                (m.checked && m.borns[&id].image.is_some()).then(|| image_global(&m.prefix, id));
+            (format!("perry_protofam_{}_{id}", m.prefix), image)
+        })
+    }) else {
         return Ok(());
     };
+    // Only a module global can take the image (an add reads it there).
+    let global = ctx.module_globals.get(&id).cloned();
+    let image = image.filter(|_| global.is_some());
     let read = Expr::LocalGet(id);
     let value = crate::expr::lower_expr(ctx, &read)?;
-    ctx.block().call_void(
+    let image_arg = image
+        .as_ref()
+        .map_or("null".to_string(), |d| format!("@{d}"));
+    let born = ctx.block().call(
+        DOUBLE,
         "perry_bind_family_prototype",
-        &[(PTR, &format!("@{global}")), (DOUBLE, &value)],
+        &[
+            (PTR, &format!("@{family}")),
+            (DOUBLE, &value),
+            (PTR, &image_arg),
+        ],
     );
+    if let (Some(_), Some(global)) = (image, global) {
+        crate::expr::emit_gated_root_nanbox_store(ctx, &born, &format!("@{global}"));
+    }
     Ok(())
 }
 
@@ -708,44 +1119,90 @@ fn chain_blocks(b: &Born, borns: &HashMap<u32, Born>) -> BTreeSet<String> {
     blocks
 }
 
+/// Add or redefine `key` in `image` (its position is kept on a redefine).
+fn upsert(image: &mut Vec<ImageEntry>, key: ImageKey, attrs: u8) {
+    match image.iter_mut().find(|e| e.key == key) {
+        Some(e) => e.attrs = attrs,
+        None => image.push(ImageEntry { key, attrs }),
+    }
+}
+
+/// Copy `source`'s own enumerable keys onto `target` in their
+/// [[OwnPropertyKeys]] order (strings, then symbols): `Object.assign`'s
+/// `[[Set]]`s (`assign`: an existing key keeps its attributes, and must be
+/// writable data) or a spread's CreateDataProperty (a plain data property).
+/// An accessor of the source yields its value: data on the target.
+fn copy_keys(target: &mut Option<Vec<ImageEntry>>, source: Option<Vec<ImageEntry>>, assign: bool) {
+    let (Some(t), Some(source)) = (target.as_mut(), source) else {
+        *target = None;
+        return;
+    };
+    let enumerable = |e: &&ImageEntry| e.attrs & NON_ENUMERABLE == 0;
+    let ordered = source
+        .iter()
+        .filter(enumerable)
+        .filter(|e| !e.key.is_symbol())
+        .chain(
+            source
+                .iter()
+                .filter(enumerable)
+                .filter(|e| e.key.is_symbol()),
+        );
+    for e in ordered {
+        match t.iter_mut().find(|x| x.key == e.key) {
+            Some(x) if assign => {
+                if !plain_data(x.attrs) {
+                    *target = None;
+                    return;
+                }
+            }
+            Some(x) => x.attrs = 0,
+            None => t.push(ImageEntry {
+                key: e.key.clone(),
+                attrs: 0,
+            }),
+        }
+    }
+}
+
 /// [`Born`] of a prototype binding's initializer `e`, when the compiler can
 /// follow it: a literal, `Object.create(Q)` with `Q` null or an earlier such
 /// binding, `Object.assign(T, literal…)`, `Object.defineProperty(T, "k",
 /// literal)`. No user code that could reach the object runs before the
 /// binding holds it: a literal's keys and values never see it, a source's
 /// getters see the source, and the binding is in its TDZ until then.
-fn born(
-    classes: &[&perry_hir::Class],
-    e: &Expr,
-    borns: &HashMap<u32, Born>,
-    consts: &HashMap<u32, KeyConst>,
-) -> Option<Born> {
+fn born(a: &Analysis<'_>, e: &Expr) -> Option<Born> {
     match e {
         Expr::ObjectCreate(proto, None) => {
             let proto = match proto.as_ref() {
                 Expr::Null => Link::Null,
-                Expr::LocalGet(q) if borns.contains_key(q) => Link::Binding(*q),
+                Expr::LocalGet(q) if a.borns.contains_key(q) => Link::Binding(*q),
                 _ => return None,
             };
             Some(Born {
                 proto,
+                image: Some(Vec::new()),
                 ..Born::default()
             })
         }
         Expr::ObjectAssign { target, sources } => {
-            let mut t = born(classes, target, borns, consts)?;
+            let mut t = born(a, target)?;
             // Each source key is a `[[Set]]` on the target: refused where a
             // setter could run (user code with the object) or a key could
             // relink it. The source's own accessors yield data.
-            let blocks = chain_blocks(&t, borns);
+            let blocks = chain_blocks(&t, &a.borns);
             for src in sources {
-                let (_, names, open) = literal(classes, src, consts)?;
-                if (open && !blocks.is_empty())
-                    || names.iter().any(|k| k == "__proto__" || blocks.contains(k))
+                let lit = literal(a, src)?;
+                if (lit.open && !blocks.is_empty())
+                    || lit
+                        .names
+                        .iter()
+                        .any(|k| k == "__proto__" || blocks.contains(k))
                 {
                     return None;
                 }
-                t.dynamic |= open;
+                t.dynamic |= lit.open;
+                copy_keys(&mut t.image, lit.image, true);
             }
             Some(t)
         }
@@ -753,88 +1210,165 @@ fn born(
             let Expr::String(k) = key.as_ref() else {
                 return None;
             };
-            literal(classes, desc, consts)?;
-            let mut t = born(classes, target, borns, consts)?;
+            literal(a, desc)?;
+            let mut t = born(a, target)?;
             // Defaults make a new key non-writable; an accessor intercepts.
             t.blocks.insert(k.clone());
+            let key = ImageKey::Str(k.clone());
+            match (t.image.as_mut(), descriptor_attrs(a, desc)) {
+                (Some(img), Some(attrs)) if !img.iter().any(|x| x.key == key) => {
+                    img.push(ImageEntry { key, attrs })
+                }
+                _ => t.image = None,
+            }
             Some(t)
         }
-        _ => literal(classes, e, consts).map(|(b, _, _)| b),
+        _ => literal(a, e).map(|l| Born {
+            blocks: l.blocks,
+            image: l.image,
+            ..Born::default()
+        }),
     }
 }
 
-/// A literal's [`Born`] (its [[Prototype]] is `%Object.prototype%`), the
-/// string keys it names, and whether it may hold keys it does not name.
-fn literal(
-    classes: &[&perry_hir::Class],
-    e: &Expr,
-    consts: &HashMap<u32, KeyConst>,
-) -> Option<(Born, BTreeSet<String>, bool)> {
-    let mut names = BTreeSet::new();
-    let mut open = false;
+/// The attribute entry `Object.defineProperty(T, k, desc)` gives a new key
+/// `k`, when `desc` is a literal whose fields the compiler reads: getter and
+/// setter presence, and literal booleans (absent ones default to false).
+fn descriptor_attrs(a: &Analysis<'_>, desc: &Expr) -> Option<u8> {
+    let fields: Vec<(&str, &Expr)> = match desc {
+        Expr::New {
+            class_name, args, ..
+        } => {
+            let c = a
+                .classes
+                .iter()
+                .find(|c| &c.name == class_name)
+                .filter(|c| c.is_literal_shape())?;
+            if c.fields.len() != args.len() || c.fields.iter().any(|f| f.key_expr.is_some()) {
+                return None;
+            }
+            c.fields.iter().map(|f| f.name.as_str()).zip(args).collect()
+        }
+        Expr::Object(props) => props.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+        _ => return None,
+    };
+    let function = |v: &Expr| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_));
+    let mut attrs = NON_WRITABLE | NON_ENUMERABLE | NON_CONFIGURABLE;
+    let mut accessor = 0u8;
+    let mut data = false;
+    for (name, value) in fields {
+        let flag = match value {
+            Expr::Bool(b) => Some(*b),
+            _ => None,
+        };
+        match name {
+            "get" if function(value) => accessor |= ACCESSOR | HAS_GET,
+            "set" if function(value) => accessor |= ACCESSOR | HAS_SET,
+            "value" => data = true,
+            "writable" => {
+                data = true;
+                if flag? {
+                    attrs &= !NON_WRITABLE;
+                }
+            }
+            "enumerable" => {
+                if flag? {
+                    attrs &= !NON_ENUMERABLE;
+                }
+            }
+            "configurable" => {
+                if flag? {
+                    attrs &= !NON_CONFIGURABLE;
+                }
+            }
+            _ => return None,
+        }
+    }
+    if accessor != 0 {
+        if data {
+            return None;
+        }
+        // An accessor has no [[Writable]].
+        return Some(accessor | (attrs & !NON_WRITABLE));
+    }
+    Some(attrs)
+}
+
+/// A literal's facts: the keys that are or may be accessors, the string
+/// keys it names, whether it may hold keys it does not name, and its own
+/// keys in order when the compiler can name every one (its [[Prototype]] is
+/// `%Object.prototype%`).
+struct Lit {
+    blocks: BTreeSet<String>,
+    names: BTreeSet<String>,
+    open: bool,
+    image: Option<Vec<ImageEntry>>,
+}
+
+fn literal(a: &Analysis<'_>, e: &Expr) -> Option<Lit> {
+    let mut lit = Lit {
+        blocks: BTreeSet::new(),
+        names: BTreeSet::new(),
+        open: false,
+        image: Some(Vec::new()),
+    };
+    let name = |lit: &mut Lit, k: &str| {
+        lit.names.insert(k.to_string());
+        if let Some(img) = lit.image.as_mut() {
+            upsert(img, ImageKey::Str(k.to_string()), 0);
+        }
+    };
     match e {
         Expr::New { class_name, .. } => {
-            let c = classes
+            let c = a
+                .classes
                 .iter()
                 .find(|c| &c.name == class_name)
                 .filter(|c| c.is_literal_shape())?;
             for f in &c.fields {
                 if f.key_expr.is_some() {
-                    open = true;
+                    lit.open = true;
+                    lit.image = None;
                 } else {
-                    names.insert(f.name.clone());
+                    name(&mut lit, &f.name);
                 }
             }
         }
         Expr::Object(props) => {
             for (k, _) in props {
-                names.insert(k.clone());
+                name(&mut lit, k);
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (k, _) in parts {
+            for (k, v) in parts {
                 match k {
-                    Some(k) => {
-                        names.insert(k.clone());
+                    Some(k) => name(&mut lit, k),
+                    None => {
+                        lit.open = true;
+                        copy_keys(&mut lit.image, a.source_image(v), false);
                     }
-                    None => open = true,
                 }
             }
         }
         Expr::Call { callee, args, .. } => {
-            let mut blocks = BTreeSet::new();
-            open = literal_iife(callee, args, consts, &mut names, &mut blocks)?;
-            return Some((
-                Born {
-                    blocks,
-                    ..Born::default()
-                },
-                names,
-                open,
-            ));
+            literal_iife(a, callee, args, &mut lit)?;
         }
         _ => return None,
     }
     // `__proto__: v` in a literal sets the [[Prototype]].
-    if names.contains("__proto__") {
+    if lit.names.contains("__proto__") {
         return None;
     }
-    Some((Born::default(), names, open))
+    Some(lit)
 }
 
 /// The object-literal IIFE codegen's lowering of a literal with computed
 /// keys or spreads makes: `(o => { define(o, "k", v); set_computed(o, key,
 /// v); spread(o, src); method(o, key, f); accessor(o, key, get, set); …;
 /// return o })({})`. Every key the compiler can name goes to `names`, an
-/// accessor's to `blocks` too. Returns whether some data key is unnamed, or
-/// `None` for anything else (an unnamed accessor, `o` escaping).
-fn literal_iife(
-    callee: &Expr,
-    args: &[Expr],
-    consts: &HashMap<u32, KeyConst>,
-    names: &mut BTreeSet<String>,
-    blocks: &mut BTreeSet<String>,
-) -> Option<bool> {
+/// accessor's to `blocks` too, and each key in order to the image. `None`
+/// for anything else (an unnamed accessor, `o` escaping).
+fn literal_iife(a: &Analysis<'_>, callee: &Expr, args: &[Expr], lit: &mut Lit) -> Option<()> {
     let Expr::Closure { params, body, .. } = callee else {
         return None;
     };
@@ -856,17 +1390,28 @@ fn literal_iife(
     let mut keys: HashMap<u32, Option<KeyConst>> = HashMap::new();
     let key_of = |e: &Expr, keys: &HashMap<u32, Option<KeyConst>>| -> Option<KeyConst> {
         match e {
-            Expr::String(s) => Some(KeyConst::Str(s.clone())),
-            Expr::SymbolFor(_) => Some(KeyConst::Symbol),
-            Expr::LocalGet(x) => keys
-                .get(x)
-                .cloned()
-                .flatten()
-                .or_else(|| consts.get(x).cloned()),
-            _ => None,
+            Expr::LocalGet(x) if keys.contains_key(x) => keys[x].clone(),
+            other => a.key_const(other),
         }
     };
-    let mut open = false;
+    let data = |lit: &mut Lit, k: Option<KeyConst>| match k {
+        Some(KeyConst::Str(k)) => {
+            lit.names.insert(k.clone());
+            if let Some(img) = lit.image.as_mut() {
+                upsert(img, ImageKey::Str(k), 0);
+            }
+        }
+        Some(KeyConst::Symbol(Some(k))) => {
+            if let Some(img) = lit.image.as_mut() {
+                upsert(img, k, 0);
+            }
+        }
+        Some(KeyConst::Symbol(None)) => lit.image = None,
+        None => {
+            lit.open = true;
+            lit.image = None;
+        }
+    };
     for (i, stmt) in body.iter().enumerate() {
         match stmt {
             Stmt::Let {
@@ -898,7 +1443,7 @@ fn literal_iife(
                 match (name.as_str(), on_o) {
                     ("js_object_literal_define", true) if args.len() == 3 => match &args[1] {
                         Expr::String(k) if k != "__proto__" => {
-                            names.insert(k.clone());
+                            data(lit, Some(KeyConst::Str(k.clone())))
                         }
                         _ => return None,
                     },
@@ -907,29 +1452,43 @@ fn literal_iife(
                         | "js_object_set_method_by_name"
                         | "js_object_set_property_key_method",
                         true,
-                    ) if args.len() == 3 => match key_of(&args[1], &keys) {
-                        Some(KeyConst::Str(k)) => {
-                            names.insert(k);
-                        }
-                        Some(KeyConst::Symbol) => {}
-                        None => open = true,
-                    },
+                    ) if args.len() == 3 => data(lit, key_of(&args[1], &keys)),
                     ("js_object_define_accessor", true) if args.len() == 4 => {
-                        match key_of(&args[1], &keys)? {
+                        let half = |v: &Expr| !matches!(v, Expr::Undefined | Expr::Null);
+                        let bits = ACCESSOR
+                            | if half(&args[2]) { HAS_GET } else { 0 }
+                            | if half(&args[3]) { HAS_SET } else { 0 };
+                        let key = match key_of(&args[1], &keys)? {
                             KeyConst::Str(k) => {
-                                names.insert(k.clone());
-                                blocks.insert(k);
+                                lit.names.insert(k.clone());
+                                lit.blocks.insert(k.clone());
+                                Some(ImageKey::Str(k))
                             }
-                            KeyConst::Symbol => {}
+                            KeyConst::Symbol(k) => k,
+                        };
+                        match (key, lit.image.as_mut()) {
+                            (Some(k), Some(img)) => {
+                                // `get k` and `set k` make one accessor.
+                                let merged = img
+                                    .iter()
+                                    .find(|e| e.key == k && e.attrs & ACCESSOR != 0)
+                                    .map_or(bits, |e| e.attrs | bits);
+                                upsert(img, k, merged);
+                            }
+                            _ => lit.image = None,
                         }
                     }
-                    ("js_object_literal_spread", true) => open = true,
+                    ("js_object_literal_spread", true) if args.len() == 2 => {
+                        lit.open = true;
+                        let source = a.source_image(&args[1]);
+                        copy_keys(&mut lit.image, source, false);
+                    }
                     ("js_object_literal_infer_computed_function_name", false) => {}
                     _ => return None,
                 }
             }
             Stmt::Return(Some(Expr::LocalGet(x))) if *x == o && i + 1 == body.len() => {
-                return Some(open);
+                return Some(());
             }
             _ => return None,
         }

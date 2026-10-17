@@ -250,6 +250,108 @@ fn atom(
     Some(name)
 }
 
+/// The static atom global of a symbol key of a carried prototype layout
+/// (emitting it once per module) and its index hash: a well-known symbol
+/// (`ATOM_KIND_WELL_KNOWN_SYMBOL`, its number) or a registered one
+/// (`ATOM_KIND_REGISTERED_SYMBOL`, its registry key as an image string).
+fn symbol_atom(
+    llmod: &mut LlModule,
+    strings: &mut StringPool,
+    emitted: &mut BTreeMap<String, String>,
+    key: &create_families::ImageKey,
+) -> (String, u64) {
+    let (spelling, kind, image, index) = match key {
+        create_families::ImageKey::WellKnown(i) => (
+            format!("@@wk:{i}"),
+            crate::runtime_abi::ATOM_KIND_WELL_KNOWN_SYMBOL,
+            "null".to_string(),
+            *i,
+        ),
+        create_families::ImageKey::Registered(desc) => {
+            let idx = strings.intern(desc);
+            let image = crate::codegen::string_pool_image_pointer(strings.entry(idx));
+            (
+                format!("@@for:{desc}"),
+                crate::runtime_abi::ATOM_KIND_REGISTERED_SYMBOL,
+                image,
+                0,
+            )
+        }
+        create_families::ImageKey::Str(k) => unreachable!("string key {k} is not a symbol atom"),
+    };
+    let hash = fnv1a(spelling.as_bytes());
+    // Not a string key's spelling: string atoms share `emitted`.
+    let spelling = format!("\u{1}{spelling}");
+    if let Some(name) = emitted.get(&spelling) {
+        return (name.clone(), hash);
+    }
+    let hex: String = spelling.bytes().map(|b| format!("{b:02x}")).collect();
+    let name = format!("perry_atom_sym_{hex}");
+    let sect = section(
+        &llmod.target_triple,
+        "perry_atoms",
+        "__DATA,__perry_atoms",
+        ".perryatm$m",
+    );
+    llmod.add_raw_global(format!(
+        "@{name} = weak_odr global {ATOM_TY} {{ i64 {}, ptr {image}, i8 {kind}, [3 x i8] zeroinitializer, i32 {index} }}, section \"{sect}\", align 8",
+        hash as i64,
+    ));
+    emitted.insert(spelling, name.clone());
+    (name, hash)
+}
+
+/// Emit a carried prototype layout's descriptor: its keys in order (slot =
+/// position) with their attribute entries, its key index, and its
+/// [[Prototype]] word.
+fn emit_image_descriptor(
+    llmod: &mut LlModule,
+    sect: &str,
+    desc_name: &str,
+    keys: &[(String, u64, u8)],
+    family: u32,
+    proto: &str,
+) {
+    let count = keys.len();
+    let cap = (count * 2).next_power_of_two().max(2);
+    let mut index = vec![u32::MAX; cap];
+    for (pos, (_, hash, _)) in keys.iter().enumerate() {
+        let mut at = (*hash as usize) & (cap - 1);
+        while index[at] != u32::MAX {
+            at = (at + 1) & (cap - 1);
+        }
+        index[at] = pos as u32;
+    }
+    let key_items: Vec<String> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, (a, _, attrs))| {
+            format!(
+                "{KEY_TY} {{ ptr @{a}, i32 {i}, i8 {}, [3 x i8] zeroinitializer }}",
+                *attrs as i8
+            )
+        })
+        .collect();
+    let keys_name = format!("perry_layout_keys_{desc_name}");
+    let index_name = format!("perry_layout_index_{desc_name}");
+    llmod.add_raw_global(format!(
+        "@{keys_name} = private unnamed_addr constant [{count} x {KEY_TY}] [{}], align 8",
+        key_items.join(", ")
+    ));
+    let index_items: Vec<String> = index.iter().map(|v| format!("i32 {}", *v as i32)).collect();
+    llmod.add_raw_global(format!(
+        "@{index_name} = private unnamed_addr constant [{cap} x i32] [{}], align 4",
+        index_items.join(", ")
+    ));
+    llmod.add_raw_global(format!(
+        "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {}, i8 0, i8 0, i32 {}, i32 {}, i64 0, i64 {proto}, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0 }}, section \"{sect}\", align 8",
+        crate::runtime_abi::LAYOUT_VARIANT_PROTOTYPE_IMAGE,
+        count.max(1),
+        LAYOUT_ID_CARRIED as i32,
+        cap - 1
+    ));
+}
+
 /// A bounded spelling fingerprint: length and its first six bytes. Full
 /// byte equality resolves every collision; it is not a name's identity.
 fn shadow_name_fingerprint(bytes: &[u8]) -> u64 {
@@ -641,9 +743,38 @@ pub(crate) fn emit_module_layouts(
     // Step 1: `Object.create(P)` families (`create_families`): each
     // prototype binding's identity record, then each creation point's
     // carried layout naming it.
-    let (protos, create_sites) = create_families::emission();
+    let (protos, create_sites, images) = create_families::emission();
     for global in &protos {
         llmod.add_raw_global(format!("@{global} = internal global i64 0, align 8"));
+    }
+    // Object model §3.6: each prototype's carried layout (its birth when
+    // the object its initializer built is exactly this).
+    for image in &images {
+        let mut keys = Vec::with_capacity(image.entries.len());
+        for e in &image.entries {
+            let (name, hash) = match &e.key {
+                create_families::ImageKey::Str(k) => (
+                    atom(llmod, strings, &mut atoms, k)
+                        .expect("an image key is an atom (`create_families::layout_key`)"),
+                    fnv1a(k.as_bytes()),
+                ),
+                key => symbol_atom(llmod, strings, &mut atoms, key),
+            };
+            keys.push((name, hash, e.attrs));
+        }
+        let family = (fnv1a(image.desc_global.as_bytes()) as u32) & 0x7FFF_FFFF;
+        let proto = match &image.proto {
+            None => "0".to_string(),
+            Some(None) => "1".to_string(),
+            Some(Some(fam)) => format!("ptrtoint (ptr @{fam} to i64)"),
+        };
+        emit_image_descriptor(llmod, &sect, &image.desc_global, &keys, family, &proto);
+        llmod.add_raw_global(format!(
+            "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
+            layout_id_global(&image.desc_global),
+            image.desc_global
+        ));
+        n += 1;
     }
     for site in &create_sites {
         let atom_names: Vec<String> = site

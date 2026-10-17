@@ -35,7 +35,9 @@ use crate::array::ArrayHeader;
 use std::cell::RefCell;
 #[path = "shapes_layout_registration.rs"]
 mod layout_registration;
-pub(crate) use layout_registration::{allocate_declared_layout_id, install_declared_layout};
+pub(crate) use layout_registration::{
+    allocate_declared_layout_id, fresh_semantic_generation, install_declared_layout,
+};
 
 #[path = "shapes_spread.rs"]
 mod shapes_spread;
