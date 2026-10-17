@@ -749,6 +749,7 @@ fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]
     // of an unregistered function (a module initializer, a thunk, runtime
     // code placed after the bundle) and is dropped rather than reported
     // under its neighbour's name.
+    #[cfg(not(windows))]
     if let Some(fn_start) = crate::eh_walker::function_start_for(ip as u64) {
         if fn_start != *start as u64 {
             return None;
