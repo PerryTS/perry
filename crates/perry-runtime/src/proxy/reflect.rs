@@ -135,7 +135,7 @@ fn js_reflect_get_impl(target: f64, key: f64, receiver: f64, default_undefined: 
 /// Integer-Indexed exotic targets — test262 internals/Set/*-reflect-set).
 #[no_mangle]
 pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::runtime_write(target, key, value, "Reflect.set");
     // Reflect.set on a non-object target must throw TypeError (spec step 1),
     // matching Reflect.has/get/etc. Pre-fix it silently returned false.

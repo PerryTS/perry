@@ -242,7 +242,7 @@ fn is_symbol_primitive(value: f64) -> bool {
 
 #[no_mangle]
 pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "Object.freeze");
     if is_symbol_primitive(obj_value) {
         return obj_value;
@@ -377,7 +377,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
 /// existing key. Writable is preserved (sealed ≠ frozen). Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "Object.seal");
     if is_symbol_primitive(obj_value) {
         return obj_value;
@@ -490,7 +490,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
 /// Object.preventExtensions(obj) — sets the no-extend flag. Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "Object.preventExtensions");
     if is_symbol_primitive(obj_value) {
         return obj_value;

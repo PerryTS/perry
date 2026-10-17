@@ -621,6 +621,12 @@ pub(super) fn strip_duplicate_objects_from_lib_with_evidence(
     } else {
         ("libperry_stdlib.a", "libperry_runtime.a")
     };
+    // The instrumented variant's wrappers dedupe against its own archives.
+    let (stdlib_name, runtime_name) = (
+        super::optimized_libs::variant_archive_name(stdlib_name),
+        super::optimized_libs::variant_archive_name(runtime_name),
+    );
+    let (stdlib_name, runtime_name) = (stdlib_name.as_str(), runtime_name.as_str());
     // Determine target for find_stdlib_library / find_library search
     let search_target: Option<&str> = if is_win_lib {
         Some("windows")

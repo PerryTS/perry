@@ -74,7 +74,7 @@ pub unsafe fn serialize_message(
     transfer: &[usize],
     uncloneable: Option<&dyn Fn(u64) -> bool>,
 ) -> Result<SerializedValue, String> {
-    #[cfg(feature = "gc-instruments")]
+    #[cfg(perry_gc_instruments)]
     let _timer = super::clone_timing::CloneTimer::new("serialize");
     for (index, &buffer) in transfer.iter().enumerate() {
         if !crate::buffer::is_registered_buffer(buffer)

@@ -84,3 +84,29 @@ build-perry = [
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]
+
+# The instrumented prebuilt variant (`scripts/build_instr_runtime.sh`): the
+# archives of `build-perry` (not the compiler, not the WebAssembly host) built
+# with `PERRY_RUNTIME_INSTRUMENTS=1` into their own target dir, so each one
+# bundles an instrumented runtime from one graph.
+build-perry-instr = [
+    "build",
+    "-p", "perry-runtime-static",
+    "-p", "perry-stdlib-static",
+    "-p", "perry-ext-ads",
+    "-p", "perry-ext-argon2",
+    "-p", "perry-ext-bcrypt",
+    "-p", "perry-ext-better-sqlite3",
+    "-p", "perry-ext-cheerio",
+    "-p", "perry-ext-ethers",
+    "-p", "perry-ext-http",
+    "-p", "perry-ext-net",
+    "-p", "perry-ext-nodemailer",
+    "-p", "perry-ext-parcel-watcher",
+    "-p", "perry-ext-pdf",
+    "-p", "perry-ext-sharp",
+    "-p", "perry-ext-typescript",
+    "-p", "perry-ext-undici",
+    "-p", "perry-ext-ws",
+    "-p", "perry-ext-zlib",
+]

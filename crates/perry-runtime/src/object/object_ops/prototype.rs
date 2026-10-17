@@ -74,7 +74,7 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
 /// Object.create(proto) — create an empty object with an owner-traced prototype.
 #[no_mangle]
 pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::object_create(proto_value);
     let proto_value = unsafe { normalize_descriptor_operand(proto_value) };
     // #2816 prototype validation: only an object or `null` is permitted. A

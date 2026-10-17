@@ -1916,9 +1916,7 @@
         "group": "release-packages-${{ github.event.release.tag_name || inputs.existing_tag || ((inputs.cut_release || inputs.nightly) && inputs.candidate_sha) || github.run_id }}",
         "cancel-in-progress": false
       },
-      "env": {
-        "PERRY_RELEASE_STRIP_INSTRUMENTS": "1"
-      },
+      "env": null,
       "defaults": null,
       "secret_references": [
         "APT_GPG_KEY_ID",

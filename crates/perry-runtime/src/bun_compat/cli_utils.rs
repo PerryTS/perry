@@ -626,22 +626,18 @@ pub extern "C" fn js_bun_generate_heap_snapshot(format: f64, encoding: f64) -> f
     if value_to_string(format) != "v8" {
         throw_type_error("Bun.generateHeapSnapshot format must be 'v8'");
     }
-    #[cfg(perry_diagnostics)]
-    {
-        let json = crate::gc::gc_build_v8_heap_snapshot_json();
-        if !is_undefined_or_null(encoding) && value_to_string(encoding) == "arraybuffer" {
-            return crate::node_submodules::consumers::bytes_to_array_buffer_value(json.as_bytes());
-        }
-        if !is_undefined_or_null(encoding) && value_to_string(encoding) != "string" {
-            throw_type_error("Bun.generateHeapSnapshot encoding must be 'string' or 'arraybuffer'");
-        }
-        boxed_str(json.as_bytes())
-    }
-    #[cfg(not(perry_diagnostics))]
-    {
+    let Some(build) = crate::feature_hooks::HEAP_SNAPSHOT_JSON.get() else {
         let _ = encoding;
         throw_type_error("Heap snapshot diagnostics are not enabled in this Perry runtime")
+    };
+    let json = build();
+    if !is_undefined_or_null(encoding) && value_to_string(encoding) == "arraybuffer" {
+        return crate::node_submodules::consumers::bytes_to_array_buffer_value(json.as_bytes());
     }
+    if !is_undefined_or_null(encoding) && value_to_string(encoding) != "string" {
+        throw_type_error("Bun.generateHeapSnapshot encoding must be 'string' or 'arraybuffer'");
+    }
+    boxed_str(json.as_bytes())
 }
 
 // ---------------------------------------------------------------------------

@@ -323,6 +323,17 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
     0x5045_5252u32 as f64
 }
 
+/// The heap-snapshot document. The builder is filled by
+/// `js_runtime_install_diagnostics`, which perry installs for a program that
+/// uses a heap-snapshot API; an empty slot (an API reached only through
+/// dynamic code) answers an empty document.
+pub(crate) fn heap_snapshot_json() -> String {
+    match crate::feature_hooks::HEAP_SNAPSHOT_JSON.get() {
+        Some(build) => build(),
+        None => String::from("{}"),
+    }
+}
+
 /// `v8.getHeapSnapshot([options])` → Readable stream of heap-snapshot JSON.
 ///
 /// The document is a real object graph from Perry's GC heap walk
@@ -334,12 +345,7 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_v8_get_heap_snapshot(options: f64) -> f64 {
     validate_heap_snapshot_options(options);
-    #[cfg(perry_diagnostics)]
-    let json = crate::gc::gc_build_v8_heap_snapshot_json();
-    // OFF stub: the compiler enables `diagnostics` whenever a program uses the
-    // v8 heap-snapshot APIs, so this branch is unreachable in practice.
-    #[cfg(not(perry_diagnostics))]
-    let json = String::from("{}");
+    let json = heap_snapshot_json();
     snapshot_readable_stream(&json)
 }
 
@@ -357,12 +363,7 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
         }
     };
     validate_heap_snapshot_options(options);
-    #[cfg(perry_diagnostics)]
-    let json = crate::gc::gc_build_v8_heap_snapshot_json();
-    // OFF stub: unreachable in practice (compiler enables `diagnostics` when a
-    // program uses the v8 heap-snapshot APIs).
-    #[cfg(not(perry_diagnostics))]
-    let json = String::from("{}");
+    let json = heap_snapshot_json();
     match std::fs::write(&path, json.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {

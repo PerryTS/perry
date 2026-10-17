@@ -3071,6 +3071,7 @@ js_runtime_describe_received	Reenters	yes
 js_runtime_init	Reenters	yes
 js_runtime_install_bun_cli_utils	Leaf	no
 js_runtime_install_compiled	Leaf	no
+js_runtime_install_diagnostics	Leaf	no
 js_runtime_install_dyn_eval	Leaf	no
 js_runtime_install_intl_datetime	Leaf	no
 js_runtime_install_intl_namespace	Leaf	no
@@ -3746,7 +3747,6 @@ js_typed_array_to_sorted_default	Reenters	yes
 js_typed_array_to_sorted_with_comparator	Reenters	yes
 js_typed_array_view	Reenters	yes
 js_typed_array_with	Reenters	yes
-js_typed_element_contract	Leaf	no
 js_typed_f64_arg_guard	Leaf	no
 js_typed_f64_arg_to_raw	Reenters	yes
 js_typed_feedback_array_get_f64	Reenters	yes

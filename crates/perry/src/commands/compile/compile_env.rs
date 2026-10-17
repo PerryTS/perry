@@ -793,16 +793,16 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Read by the generated program runtime, never consulted by compiler lowering.",
     ),
     (
-        "PERRY_RELEASE_STRIP_INSTRUMENTS",
-        "Read by the generated program runtime, never consulted by compiler lowering.",
-    ),
-    (
         "PERRY_REPSEL_DEBUG",
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
     (
         "PERRY_RUNTIME_BUILD_ID",
         "Read by the generated program runtime, never consulted by compiler lowering.",
+    ),
+    (
+        "PERRY_RUNTIME_INSTRUMENTS",
+        "Read by perry-runtime's build script when the instrumented archives are built, never by the compiler.",
     ),
     (
         "PERRY_RUNTIME_ISOLATED_TEST_NAME",

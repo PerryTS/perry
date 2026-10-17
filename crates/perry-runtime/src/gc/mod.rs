@@ -299,12 +299,10 @@ pub use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
 mod census_field_repr;
-#[cfg(perry_diagnostics)]
 mod heap_snapshot;
 mod heap_stats;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
-#[cfg(perry_diagnostics)]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 pub(crate) use heap_stats::heap_stats;
 

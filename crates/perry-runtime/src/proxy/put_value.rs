@@ -132,7 +132,7 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::put_value(target, key, value, receiver);
     // Short strings and heap strings name the same property. Reuse the
     // existing allocation-free atom resolver before asking the shape, as
@@ -745,7 +745,7 @@ pub extern "C" fn js_put_value_set_dyn_ic(
     value: f64,
     strict: i32,
 ) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::put_value(target, key, value, target);
     // SAFETY: a non-null slot is the emitted pointer global (or a test's
     // stack slot); reading it is the same load the inline hit path performs.

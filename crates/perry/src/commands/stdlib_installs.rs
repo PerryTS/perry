@@ -157,6 +157,12 @@ pub const RUNTIME_INSTALL_COMPILED_SYMBOL: &str = "js_runtime_install_compiled";
 /// (perry-runtime `feature_hooks`).
 const RUNTIME_INSTALLS: &[(&str, &[&str])] = &[
     ("js_runtime_install_dyn_eval", &["default", "dyn-eval"]),
+    // Heap snapshots and `process.report`: user APIs, always compiled, reached
+    // only through the slots this install fills.
+    (
+        "js_runtime_install_diagnostics",
+        &["default", "diagnostics"],
+    ),
     (
         "js_runtime_install_bun_cli_utils",
         &["bun-cli-utils", "default"],

@@ -17,7 +17,8 @@ mod wrapper_libs;
 
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use features::{
-    auto_optimized_cross_features, gc_instruments_requested, gc_trace_requested, hot_diag_requested,
+    auto_optimized_cross_features, gc_instruments_requested, gc_trace_requested,
+    hot_diag_requested, instrumented_variant_requested, variant_archive_name,
 };
 
 pub(crate) use paths::android_global_dynamic_tls_rustflag;
@@ -183,10 +184,10 @@ pub(crate) fn missing_ext_archive_diagnostics(
         let Some(binding) = super::well_known::lookup_well_known(owner) else {
             continue;
         };
-        let filename = super::well_known::ext_staticlib_filename(
+        let filename = variant_archive_name(&super::well_known::ext_staticlib_filename(
             &binding.lib,
             super::rust_target_triple(target),
-        );
+        ));
         if resolved_ext_libs
             .iter()
             .any(|path| path.file_name() == Some(OsStr::new(&filename)))

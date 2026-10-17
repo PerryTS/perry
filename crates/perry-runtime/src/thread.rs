@@ -452,7 +452,7 @@ unsafe impl Sync for SerializedValue {}
 // The writer is `thread/clone_write.rs`, the reader `thread/clone_read.rs`.
 
 mod clone_read;
-#[cfg(feature = "gc-instruments")]
+#[cfg(perry_gc_instruments)]
 mod clone_timing;
 mod clone_write;
 pub use clone_read::deserialize_nanbox_on_current_thread;

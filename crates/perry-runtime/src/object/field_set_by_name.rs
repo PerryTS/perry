@@ -46,7 +46,7 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::generic_store(obj, key, value);
     if !key.is_null() {
         unsafe {

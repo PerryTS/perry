@@ -95,25 +95,29 @@ alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # (`PERRY_GC_VERIFY_MARK`, `PERRY_GC_VERIFY_CLASSIFIER`, #10572). ~210 KB that
 # no shipped program needs. (`PERRY_GC_VERIFY_EVACUATION` is NOT here: CI
 # harnesses set it at run time on binaries compiled without it.) In
-# `default` so `cargo test` and the full prebuilt archives keep them; the
-# auto-optimize rebuild adds it whenever one of those knobs (or
-# `PERRY_GC_INSTRUMENTS=1`) is set at compile time, and the core prebuilt
-# profile leaves it out. A binary built without it ABORTS at startup when one
-# of the knobs is set at run time — an instrument that silently did nothing
-# would turn every gate that relies on it green (CLAUDE.md "gate unable to fail").
+# `default`, but the code only compiles when `build.rs` turns the
+# `perry_gc_instruments` cfg on: in debug-profile builds (`cargo test`) and in
+# the instrumented prebuilt variant (`PERRY_RUNTIME_INSTRUMENTS=1`,
+# `scripts/build_instr_runtime.sh`), which perry links instead of the default
+# archives when one of those knobs (or `PERRY_GC_INSTRUMENTS=1`) is set at
+# compile time. A binary built without it ABORTS at startup when one of the
+# knobs is set at run time — an instrument that silently did nothing would
+# turn every gate that relies on it green (CLAUDE.md "gate unable to fail").
 gc-instruments = []
 # wpfacts contract build (`PERRY_CHECK_CONTRACTS=1` at compile time): check
 # every dynamic operation against the program's `.perry_facts` claims and
 # abort on a contradiction. Never in `default`; release binaries carry none.
+# The instrumented prebuilt variant (`PERRY_RUNTIME_INSTRUMENTS=1`) turns the
+# checks on without this feature (`perry_contract_checks` cfg in `build.rs`).
 contract-checks = []
 
 # Hot-path mutator diagnostics (`hot_diag`, #10572): `PERRY_REGEX_DIAG`,
 # `PERRY_IC_DIAG`, `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`,
-# `PERRY_RECEIVER_REPR_DIAG`. Same contract as `gc-instruments`: in `default`
-# so `cargo test` and the full prebuilt archives keep them; the auto-optimize
-# rebuild adds it when one of those knobs (or `PERRY_GC_INSTRUMENTS=1`) is set
-# at compile time; a binary built without it aborts at startup when one is set
-# at run time. Without it every probe's `*_on()` is a constant `false`, which
+# `PERRY_RECEIVER_REPR_DIAG`. Same contract as `gc-instruments`: in `default`,
+# compiled under the `perry_hot_diag` cfg only in debug-profile builds and the
+# instrumented prebuilt variant; perry links that variant when one of those
+# knobs (or `PERRY_GC_INSTRUMENTS=1`) is set at compile time; a binary built
+# without it aborts at startup when one is set at run time. Without it every probe's `*_on()` is a constant `false`, which
 # also drops the relaxed load `enum_on()` cost every string concat.
 hot-diag = []
 
@@ -196,19 +200,16 @@ bun-cli-utils = [
     "dep:xxhash-rust",
     "dep:zstd",
 ]
-# Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
-# pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
-# (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8
-# heap-snapshot builder (`v8.getHeapSnapshot`/`writeHeapSnapshot`), and
-# `process.report`. None of THOSE are on a hot path. Note this feature does
-# NOT gate `hot_diag`, which is declared unconditionally (`pub mod hot_diag;`
-# in lib.rs, no cfg) and whose `enum_on()` runs per string concat
-# (`string/concat.rs`) and per property enumeration in every build, shipped
-# included. Measured at under 0.4% of a short concat, i.e. below probe
-# resolution -- so this is a scope correction to the comment, not a
-# performance claim. The env-driven dev diagnostics
-# degrade gracefully when off (auto-optimize leaves this off unless the program
-# uses a heap-snapshot / `process.report` API, which the compiler detects).
+# Cold-path diagnostic JSON serializers: GC cycle telemetry (`PERRY_GC_DIAG`)
+# and the typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), compiled under
+# the `perry_diagnostics` cfg, which `build.rs` turns on only in debug-profile
+# builds and in the instrumented prebuilt variant (see `gc-instruments`).
+# perry installs the user-facing diagnostics (the v8 heap-snapshot builder,
+# `Bun.generateHeapSnapshot`, `process.report`) with
+# `js_runtime_install_diagnostics` for a program that references one of them
+# (also named `diagnostics` among the install triggers); those are always
+# compiled, in every archive. This feature does NOT gate `hot_diag`, which is
+# `hot-diag`'s.
 diagnostics = []
 # Perex is the single compiler and matcher for user regular expressions.
 # A program that never evaluates a regex literal, `RegExp`,

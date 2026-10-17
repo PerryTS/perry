@@ -149,6 +149,11 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_regex_engine();
     #[cfg(feature = "url-engine")]
     js_runtime_install_url_engine();
+    // The user-facing diagnostics are always compiled; unit tests that reach
+    // them expect the real builders. A shipped archive's installer does not
+    // name them (the core archive would link the serializers).
+    #[cfg(test)]
+    js_runtime_install_diagnostics();
     // The always-compiled hosts (Node-API, WebAssembly) are not Cargo
     // features: perry installs them by name for the programs that need them,
     // so installing "everything compiled" (the core archive's installer) must
@@ -159,6 +164,13 @@ pub extern "C" fn js_runtime_install_compiled() {
 /// is per thread: `gc_init` registers every filled slot on each thread it
 /// initializes, and the install registers its scanner on the installing
 /// thread (whose `gc_init` already ran).
+/// The user-facing diagnostics (`v8.getHeapSnapshot` / `writeHeapSnapshot`,
+/// `Bun.generateHeapSnapshot`, `process.report`): their JSON builders are
+/// reached only through these slots, which `js_runtime_install_diagnostics`
+/// fills, so a program that uses none of them links none of the serializers.
+pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn() -> String> = Hook::empty();
+pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
+
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static WASM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 
@@ -180,6 +192,17 @@ pub extern "C" fn js_runtime_install_node_api_host() {
 pub extern "C" fn js_runtime_install_wasm_host() {
     perry_install_once!({
         crate::webassembly::install();
+    });
+}
+
+/// The heap-snapshot and `process.report` builders. Always compiled: they
+/// are user APIs, not instruments, so every archive carries them and perry
+/// installs them for a program that references one.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_diagnostics() {
+    perry_install_once!({
+        HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json);
+        PROCESS_REPORT_JSON.set(crate::process::report::process_report_json_string);
     });
 }
 
@@ -238,4 +261,22 @@ pub extern "C" fn js_runtime_install_url_engine() {
     perry_install_once!({
         crate::url::install_engine();
     });
+}
+
+#[cfg(test)]
+mod diagnostics_install_tests {
+    /// The heap-snapshot and `process.report` builders are user APIs, not
+    /// instruments: after the install they answer in every build, with or
+    /// without the `perry_diagnostics` instrument cfg.
+    #[test]
+    fn the_diagnostics_install_fills_the_user_api_builders() {
+        super::js_runtime_install_diagnostics();
+        assert!(super::PROCESS_REPORT_JSON.peek().is_some());
+        let json = crate::node_v8::heap_snapshot_json();
+        assert!(
+            json.starts_with("{\"snapshot\""),
+            "{}",
+            &json[..json.len().min(80)]
+        );
+    }
 }

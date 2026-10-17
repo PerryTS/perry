@@ -1401,7 +1401,7 @@ unsafe fn install_lazy_stack_accessor(target_ptr: *mut crate::object::ObjectHead
 /// preserves the invalid-target TypeError contract.
 #[no_mangle]
 pub extern "C" fn js_error_capture_stack_trace(target: f64, _constructor_opt: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::runtime_write_named(
         target,
         b"stack",

@@ -78,13 +78,51 @@ pub(crate) fn hot_diag_requested() -> bool {
         })
 }
 
-/// Whether this compile links the diagnostic serializers for `PERRY_GC_TRACE`.
+/// Whether this compile asks for `PERRY_GC_TRACE` output (the telemetry and
+/// typed-feedback JSON, which only the instrumented archives carry).
 /// Shared with the build-level no-op cache so the cache uses the same decision
-/// as runtime feature selection.
+/// as runtime selection.
 pub(crate) fn gc_trace_requested() -> bool {
     std::env::var("PERRY_GC_TRACE")
         .ok()
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// Whether this compile links the instrumented prebuilt archives
+/// (`libperry_runtime_instr.a` and its stdlib / wrapper siblings, built by
+/// `scripts/build_instr_runtime.sh`) instead of the default ones. The default
+/// archives carry no GC/diagnostic instruments, so the choice is made here,
+/// before codegen, from the same knobs the instruments answer to: any
+/// instrument or hot-diag knob set while compiling, `PERRY_GC_INSTRUMENTS=1`,
+/// `PERRY_GC_TRACE=1`, or a contract build (`PERRY_CHECK_CONTRACTS=1`, whose
+/// witnesses and checks the instrumented variant also carries).
+pub(crate) fn instrumented_variant_requested() -> bool {
+    gc_instruments_requested()
+        || hot_diag_requested()
+        || gc_trace_requested()
+        || crate::commands::compile::program_facts::contracts_requested()
+}
+
+/// The archive file name the current compile links for `name` (a default
+/// archive name such as `libperry_runtime.a` or `perry_stdlib.lib`): the
+/// instrumented variant inserts `_instr` before the extension.
+pub(crate) fn variant_archive_name(name: &str) -> String {
+    variant_archive_name_for(name, instrumented_variant_requested())
+}
+
+/// [`variant_archive_name`] for an explicit choice of variant.
+pub(crate) fn variant_archive_name_for(name: &str, instrumented: bool) -> String {
+    if !instrumented {
+        return name.to_string();
+    }
+    match name
+        .strip_suffix(".a")
+        .map(|stem| (stem, ".a"))
+        .or_else(|| name.strip_suffix(".lib").map(|stem| (stem, ".lib")))
+    {
+        Some((stem, ext)) => format!("{stem}_instr{ext}"),
+        None => name.to_string(),
+    }
 }
 
 pub(crate) fn auto_optimized_cross_features(
@@ -178,35 +216,13 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_intl_datetime {
         cross_features.push("perry-runtime/intl-datetime".to_string());
     }
-    // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
-    // pulled only by them) — enabled only when the program uses a heap-snapshot
-    // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON
-    // ride this feature, so honor `PERRY_GC_TRACE` too; both stay off in
-    // size-optimized binaries by default.
-    if ctx.uses_diagnostics || gc_trace_requested() {
+    // Heap snapshots and `process.report` (~95 KB of JSON serializers plus the
+    // `serde_json` pulled only by them): user APIs, always compiled into the
+    // archive and installed only for a program that references one. The GC and
+    // typed-feedback instruments are not installs at all: they exist only in
+    // the instrumented archives (`instrumented_variant_requested`).
+    if ctx.uses_diagnostics {
         cross_features.push("perry-runtime/diagnostics".to_string());
-    }
-    // GC diagnostic instruments (census, from-space quarantine/scan, seeded
-    // schedule, alloc-site sampling) are ~180 KB no shipped program needs. A
-    // runtime built without them aborts at startup when one of their knobs is
-    // set, so a stress run can never silently exercise nothing.
-    // A contract build (`PERRY_CHECK_CONTRACTS=1`) emits the witnesses those
-    // instruments define (`js_typed_element_contract`,
-    // `js_builtin_proto_contract_check`): without them it does not link.
-    if gc_instruments_requested() || crate::commands::compile::program_facts::contracts_requested()
-    {
-        cross_features.push("perry-runtime/gc-instruments".to_string());
-    }
-    // `hot_diag`'s mutator probes (#10572): same contract as the GC
-    // instruments — off unless a knob asks, abort at startup if one is set on
-    // a binary built without them.
-    if hot_diag_requested() {
-        cross_features.push("perry-runtime/hot-diag".to_string());
-    }
-    // wpfacts: a contract build (`PERRY_CHECK_CONTRACTS=1`) links the
-    // runtime's `.perry_facts` claim checks; nothing else does.
-    if crate::commands::compile::program_facts::contracts_requested() {
-        cross_features.push("perry-runtime/contract-checks".to_string());
     }
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());

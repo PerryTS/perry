@@ -543,31 +543,44 @@ fn generate_single_byte_encodings(out_dir: &str) {
     .expect("write single_byte_encodings.rs");
 }
 
-/// The GC/diagnostic instruments (`diagnostics`, `gc-instruments`, `hot-diag`)
-/// compile under the `perry_diagnostics` / `perry_gc_instruments` /
-/// `perry_hot_diag` cfgs, set here when the feature is on — unless
-/// `PERRY_RELEASE_STRIP_INSTRUMENTS=1`. The release workflow sets that for
-/// every build in its jobs, so the shipped archives carry no instruments while
-/// every other build (dev, CI, auto-optimize) is unchanged. An env var rather
-/// than a feature: a feature can only be added by Cargo's unification, and the
-/// release co-builds each ext crate with the runtime (#6303/#7358), whose
-/// `default` would switch the instruments back on; the build script sees the
-/// variable in every one of those invocations alike. A shipped runtime asked
-/// for an instrument knob refuses it with the existing
-/// "instruments not compiled in" diagnostic.
-fn emit_instrument_cfgs() {
-    println!("cargo:rerun-if-env-changed=PERRY_RELEASE_STRIP_INSTRUMENTS");
-    let strip = std::env::var("PERRY_RELEASE_STRIP_INSTRUMENTS").is_ok_and(|v| v == "1");
+/// The GC/diagnostic instruments (`diagnostics`, `gc-instruments`, `hot-diag`:
+/// census, from-space quarantine and scan, seeded schedule, verifiers,
+/// telemetry and trace JSON, hot-path mutator probes) compile under the
+/// `perry_diagnostics` / `perry_gc_instruments` / `perry_hot_diag` cfgs.
+/// They are OFF in a release or production build and ON when
+/// `PERRY_RUNTIME_INSTRUMENTS=1` (the instrumented prebuilt variant,
+/// `scripts/build_instr_runtime.sh`) or when the build is a debug-profile one
+/// (`cargo build` / `cargo test`, whose unit tests exercise them).
+///
+/// An env var rather than a feature: a feature can only be added by Cargo's
+/// unification, and the ext crates co-built with the runtime (#6303/#7358)
+/// enable `default`, which would switch the instruments back on; the build
+/// script sees the variable in every one of those invocations alike. The
+/// instrumented variant implies the contract-check cfgs, so its archives also
+/// serve a `PERRY_CHECK_CONTRACTS=1` compile.
+///
+/// A binary built without the instruments and asked for an instrument knob at
+/// run time refuses it at startup ("built without the GC instruments");
+/// perry picks the instrumented archives itself when a knob is set while
+/// compiling.
+///
+/// Returns whether this is the instrumented variant.
+fn emit_instrument_cfgs() -> bool {
+    println!("cargo:rerun-if-env-changed=PERRY_RUNTIME_INSTRUMENTS");
+    let variant = std::env::var("PERRY_RUNTIME_INSTRUMENTS").is_ok_and(|v| v == "1");
+    let debug_profile = std::env::var("PROFILE").is_ok_and(|p| p == "debug");
+    let on = variant || debug_profile;
     for (feature_env, cfg) in [
         ("CARGO_FEATURE_DIAGNOSTICS", "perry_diagnostics"),
         ("CARGO_FEATURE_GC_INSTRUMENTS", "perry_gc_instruments"),
         ("CARGO_FEATURE_HOT_DIAG", "perry_hot_diag"),
     ] {
         println!("cargo:rustc-check-cfg=cfg({cfg})");
-        if std::env::var_os(feature_env).is_some() && !strip {
+        if std::env::var_os(feature_env).is_some() && on {
             println!("cargo:rustc-cfg={cfg}");
         }
     }
+    variant
 }
 
 /// Compile the runtime-catch shim `src/ffi/perry_trap.ll` (ehfree 2b) into
@@ -639,8 +652,13 @@ fn build_trap_shim() {
 fn main() {
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(perry_check_contracts)");
-    if std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1") {
+    println!("cargo:rustc-check-cfg=cfg(perry_contract_checks)");
+    let instrumented_variant = emit_instrument_cfgs();
+    if std::env::var("PERRY_CHECK_CONTRACTS").as_deref() == Ok("1") || instrumented_variant {
         println!("cargo:rustc-cfg=perry_check_contracts");
+    }
+    if std::env::var_os("CARGO_FEATURE_CONTRACT_CHECKS").is_some() || instrumented_variant {
+        println!("cargo:rustc-cfg=perry_contract_checks");
     }
     // Keep page backing outside the Rust CGU. Its unreferenced object is not
     // extracted by ordinary links, preserving their code and literal layout.
@@ -664,7 +682,6 @@ fn main() {
         println!("cargo:rustc-cfg=perry_native_stack_maps");
     }
 
-    emit_instrument_cfgs();
     println!("cargo:rerun-if-changed=src/ffi/perry_memory_profile.c");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
         && std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("64")

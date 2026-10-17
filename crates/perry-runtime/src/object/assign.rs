@@ -645,7 +645,7 @@ unsafe fn object_assign_enumerated_source(
 /// properties (`Object.assign({}, "ab") -> {0:"a",1:"b"}`).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     let _writer = crate::contracts::RuntimeWriter::enter("Object.assign");
     object_assign_one(target_f64, source_f64, false)
 }

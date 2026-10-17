@@ -798,6 +798,25 @@ fn default_members_match_the_build_perry_alias() {
         members, alias,
         "default-members and `cargo build-perry` differ"
     );
+    // The instrumented variant builds the same archives, minus the compiler and
+    // the WebAssembly host (neither bundles the runtime).
+    let instr: BTreeSet<String> = config["alias"]["build-perry-instr"]
+        .as_array()
+        .expect("instr alias")
+        .iter()
+        .map(|a| a.as_str().unwrap().to_string())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|w| w[0] == "-p")
+        .map(|w| w[1].clone())
+        .collect();
+    let mut archives = alias.clone();
+    archives.remove("perry");
+    archives.remove("perry-wasm-host");
+    assert_eq!(
+        archives, instr,
+        "`cargo build-perry-instr` must build the archives of `cargo build-perry`"
+    );
     for required in [
         "perry",
         "perry-runtime-static",
@@ -821,4 +840,24 @@ fn default_members_match_the_build_perry_alias() {
             );
         }
     }
+}
+
+/// The instrumented variant's archives sit beside the default ones as
+/// `<name>_instr.<ext>`, runtime, stdlib and wrappers alike, on every OS; the
+/// default variant keeps the plain names.
+#[test]
+fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
+    use super::features::variant_archive_name_for as name;
+    for (default, instr) in [
+        ("libperry_runtime.a", "libperry_runtime_instr.a"),
+        ("libperry_stdlib.a", "libperry_stdlib_instr.a"),
+        ("libperry_ext_http.a", "libperry_ext_http_instr.a"),
+        ("perry_runtime.lib", "perry_runtime_instr.lib"),
+        ("perry_ext_ws.lib", "perry_ext_ws_instr.lib"),
+    ] {
+        assert_eq!(name(default, false), default);
+        assert_eq!(name(default, true), instr);
+    }
+    // A name that is not an archive is left alone.
+    assert_eq!(name("perry", true), "perry");
 }

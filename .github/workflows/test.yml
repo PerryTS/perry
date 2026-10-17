@@ -1864,6 +1864,9 @@ jobs:
             cargo build --release -p perry-runtime -p perry-stdlib \
               -p perry-runtime-static -p perry-stdlib-static
             scripts/gc_call_effects/sidecars.sh target/release
+            # Fixtures that set a GC/diagnostic instrument knob while compiling
+            # link the instrumented archives (runtime and stdlib only here).
+            PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh
           fi
           export PERRY_RUNTIME_DIR="$PWD/target/release"
           export CARGO_BUILD_JOBS=1
@@ -2475,6 +2478,7 @@ jobs:
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
+          scripts/build_instr_runtime.sh
       - name: Upload shared GC matrix build
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
@@ -2484,6 +2488,9 @@ jobs:
             target/release/libperry_runtime.a
             target/release/libperry_stdlib.a
             target/release/libperry_runtime.a.gc-effects
+            target/release/libperry_runtime_instr.a
+            target/release/libperry_stdlib_instr.a
+            target/release/libperry_runtime_instr.a.gc-effects
             target/release/libperry_wasm_host.a
             target/release/libperry_ext_*.a
           if-no-files-found: error
@@ -3445,6 +3452,7 @@ jobs:
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
+          scripts/build_instr_runtime.sh
 
       # Only the three files the fast-mode harness actually links against
       # (PERRY_BIN / PERRY_RUNTIME_DIR below) -- not the rest of target/release,
@@ -3458,6 +3466,9 @@ jobs:
             target/release/libperry_runtime.a
             target/release/libperry_stdlib.a
             target/release/libperry_runtime.a.gc-effects
+            target/release/libperry_runtime_instr.a
+            target/release/libperry_stdlib_instr.a
+            target/release/libperry_runtime_instr.a.gc-effects
             target/release/libperry_wasm_host.a
             target/release/libperry_ext_*.a
           if-no-files-found: error
@@ -3889,6 +3900,10 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build compiler
         run: cargo build --release
+      # Tests carrying `parity-env: PERRY_GC_SCHEDULE_SEED=...` compile with an
+      # instrument knob set, which links the instrumented archives.
+      - name: Build the instrumented archives
+        run: scripts/build_instr_runtime.sh
       - name: Run parity tests (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }})
         run: ./run_parity_tests.sh --shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).parity.total }}
       # Bidirectional since #7582: red on a failure that is not allowed here,

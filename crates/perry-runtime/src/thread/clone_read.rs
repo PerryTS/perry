@@ -23,7 +23,7 @@ use crate::value::{JSValue, POINTER_TAG};
 /// `sv` must come from the writer in `clone_write.rs` (or keep its rules).
 #[optimize(size)]
 pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
-    #[cfg(feature = "gc-instruments")]
+    #[cfg(perry_gc_instruments)]
     let _timer = super::clone_timing::CloneTimer::new("deserialize");
     let scope = RuntimeHandleScope::new();
     let mut reader = Reader {

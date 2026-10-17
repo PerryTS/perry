@@ -154,7 +154,7 @@ unsafe fn define_property_on_handle(
 /// Object validates and coerces the key before decoding the descriptor once.
 #[no_mangle]
 pub extern "C" fn js_object_define_property(obj: f64, key: f64, bag: f64) -> f64 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj, "Object.defineProperty");
     unsafe {
         if !definition_target_is_object(obj) {

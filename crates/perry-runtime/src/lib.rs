@@ -117,7 +117,7 @@ pub mod collection_iter;
 pub mod collection_iter_object;
 pub mod collection_receiver;
 pub mod color_parse;
-#[cfg(feature = "contract-checks")]
+#[cfg(perry_contract_checks)]
 pub(crate) mod contracts;
 pub mod date;
 #[cfg(feature = "mod-dgram")]

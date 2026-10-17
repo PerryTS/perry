@@ -25,7 +25,7 @@ mod finalization;
 pub(crate) mod ipc;
 mod node_module;
 mod permission;
-mod report;
+pub(crate) mod report;
 pub use credentials::{
     js_process_getegid, js_process_geteuid, js_process_getgid, js_process_getgroups,
     js_process_getuid, js_process_initgroups, js_process_setegid, js_process_seteuid,

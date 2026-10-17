@@ -35,10 +35,11 @@ pub(crate) fn resolve_prebuilt_ext_libs(
         if !seen.insert(binding.lib.clone()) {
             continue;
         }
-        let filename = super::super::well_known::ext_staticlib_filename(
-            &binding.lib,
-            rust_target_triple(target),
-        );
+        let filename =
+            super::variant_archive_name(&super::super::well_known::ext_staticlib_filename(
+                &binding.lib,
+                rust_target_triple(target),
+            ));
         match super::super::library_search::find_library(&filename, target) {
             Some(path) => {
                 if matches!(format, OutputFormat::Text) {
@@ -56,7 +57,8 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                     "error: `{module}` links the prebuilt wrapper archive `{filename}`, which \
                      was not found. Install Perry's bundled libraries next to the perry binary, \
                      set PERRY_LIB_DIR, or build the workspace (`cargo build --release` builds \
-                     `{}` with the runtime).",
+                     `{}` with the runtime; `scripts/build_instr_runtime.sh` builds the \
+                     instrumented `_instr` archives a compile with an instrument knob links).",
                     binding.krate
                 );
                 std::process::exit(1);

@@ -31,7 +31,7 @@ pub extern "C" fn js_object_delete_field(
     mut obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_ptr(obj, "delete");
     if obj.is_null() || key.is_null() {
         return 1;
@@ -861,7 +861,7 @@ pub extern "C" fn js_object_delete_field_value(
     obj_value: f64,
     key: *const crate::StringHeader,
 ) -> i32 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "delete");
     if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
         if key.is_null() {
@@ -895,7 +895,7 @@ pub extern "C" fn js_object_delete_field_value(
 /// `js_object_delete_field_value`, delegating real objects to the dynamic path.
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "delete");
     if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
         if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
@@ -1117,7 +1117,7 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         (obj as u64 & crate::value::POINTER_MASK) as usize,
         "delete",
     );
-    #[cfg(feature = "contract-checks")]
+    #[cfg(perry_contract_checks)]
     crate::contracts::hard_ptr(obj, "delete");
     if let Some(result) = unsafe { super::delete_last_key::try_delete_last_added_dynamic(obj, key) }
     {

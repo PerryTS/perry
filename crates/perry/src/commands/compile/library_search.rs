@@ -1207,10 +1207,22 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
 
 /// Find the runtime library for linking
 pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
-    let lib_name = if is_windows_target(target) {
+    let default_name = if is_windows_target(target) {
         "perry_runtime.lib"
     } else {
         "libperry_runtime.a"
+    };
+    // The instrumented variant (`libperry_runtime_instr.a`) when an instrument
+    // knob is set while compiling; see `instrumented_variant_requested`.
+    let lib_name_owned = super::optimized_libs::variant_archive_name(default_name);
+    let lib_name = lib_name_owned.as_str();
+    let instr_hint = if super::optimized_libs::instrumented_variant_requested() {
+        "\n- This compile sets a GC/diagnostic instrument knob (or PERRY_GC_TRACE / \
+         PERRY_CHECK_CONTRACTS), so it links the instrumented archives. Build them with \
+         scripts/build_instr_runtime.sh <target-triple> from the perry workspace, or unset \
+         the knob to link the default (instrument-free) archives."
+    } else {
+        ""
     };
     find_library_with_candidates(lib_name, target).map_err(|searched| {
         let extra = if target.is_some() {
@@ -1232,7 +1244,8 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
              Fixes:\n\
              - From the perry workspace: cargo build --release -p perry-runtime-static{tf}\n\
              - Out-of-tree install: set PERRY_RUNTIME_DIR to the directory containing {lib}\n\
-               (e.g. export PERRY_RUNTIME_DIR=/path/to/perry/target/release)",
+               (e.g. export PERRY_RUNTIME_DIR=/path/to/perry/target/release){hint}",
+            hint = instr_hint,
             lib = lib_name,
             extra = extra,
             list = searched_list,
@@ -1257,7 +1270,10 @@ pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
     } else {
         "libperry_stdlib.a"
     };
-    find_library(lib_name, target)
+    find_library(
+        &super::optimized_libs::variant_archive_name(lib_name),
+        target,
+    )
 }
 
 /// Find the wasmi-based WebAssembly host library (optional — only needed
