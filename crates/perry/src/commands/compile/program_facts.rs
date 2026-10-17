@@ -171,6 +171,8 @@ pub(crate) fn run(
 
 /// Whether any class is prefix-stable with its facts usable for elision
 /// (step 5b: the only classes a typed body's receiver proof can use).
+/// Object-literal classes (`litclass`, `__AnonShape_*`) count: a literal is
+/// born with its class id in the header like any `new C()`.
 pub(crate) fn has_stable_classes(pf: &Option<Arc<perry_wpfacts::ProgramFacts>>) -> bool {
     pf.as_ref().is_some_and(|pf| {
         elide_enabled()
@@ -178,7 +180,7 @@ pub(crate) fn has_stable_classes(pf: &Option<Arc<perry_wpfacts::ProgramFacts>>) 
             && pf
                 .templates
                 .iter()
-                .any(|t| t.prefix_stable && t.kind == "class" && t.class_id.is_some())
+                .any(|t| t.prefix_stable && t.class_id.is_some())
     })
 }
 
@@ -233,14 +235,14 @@ fn elide_enabled() -> bool {
 /// can act on, and the layout facts of the classes they can hold.
 ///
 /// A binding gets an entry when it can hold an instance of a prefix-stable
-/// class (F3, F4). When it holds nothing else but null/undefined
-/// (`nullable`: the site keeps its receiver test), the proof is unchecked
-/// (§3.7 case 1/2). When it can also hold ⊤ (interpreted code, unmodeled
-/// code), a literal, a builtin, a function, any other primitive or an
-/// instance of a class that is not prefix-stable, it is CHECKED (`checked`):
-/// the site compares the receiver's class id against the prefix-stable
-/// classes and takes its complete generic operation otherwise. An
-/// over-budget solve gives no entry at all.
+/// class, a user class or an object-literal class (F3, F4). When it holds
+/// nothing else but null/undefined (`nullable`: the site keeps its receiver
+/// test), the proof is unchecked (§3.7 case 1/2). When it can also hold ⊤
+/// (interpreted code, unmodeled code), a literal, a builtin, a function, any
+/// other primitive or an instance of a class that is not prefix-stable, it is
+/// CHECKED (`checked`): the site compares the receiver's class id against
+/// the prefix-stable classes and takes its complete generic operation
+/// otherwise. An over-budget solve gives no entry at all.
 fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::ElisionFacts {
     use perry_codegen::{ElisionFacts, FactsClass, FactsField, FactsRecv};
     use perry_wpfacts::model::prim;
@@ -262,7 +264,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     let stable: std::collections::HashMap<u32, &perry_wpfacts::TemplateFacts> = pf
         .templates
         .iter()
-        .filter(|t| t.prefix_stable && t.kind == "class")
+        .filter(|t| t.prefix_stable)
         .filter_map(|t| Some((t.class_id?, t)))
         .collect();
     let recv = |b: &perry_wpfacts::BindingFacts| -> Option<FactsRecv> {

@@ -52,6 +52,8 @@ def compile_one(args, src, exe, dump, extra_env):
     env.update(extra_env)
     env["PERRY_FACTS_DUMP"] = str(dump)
     env["PERRY_FACTS_RELATIONS"] = "1"
+    # Codegen appends one line per elided site; a stale file would mix runs.
+    Path(str(dump) + ".elisions").unlink(missing_ok=True)
     cache = Path(args.out) / "cache"
     rc, out, err = sh([args.perry, "compile", "--cache-dir", str(cache), str(src), "-o", str(exe)],
                       env=env, cwd=src.parent, timeout=1800)
@@ -79,13 +81,22 @@ def entry_module_index(lines, src):
     return None
 
 
+def elision_lines(dump):
+    path = Path(str(dump) + ".elisions")
+    return path.read_text().splitlines() if path.exists() else []
+
+
 def check_assertions(src, dump):
     lines = facts_lines(dump)
     entry = entry_module_index(lines, src)
+    elided = elision_lines(dump)
     failures = []
     for a in re.findall(r"//\s*WPFACTS:\s*(.*)", src.read_text()):
         a = a.strip()
-        ok, why = check_one(a, lines, entry)
+        if a.startswith("elide "):
+            ok, why = check_elide(a, elided)
+        else:
+            ok, why = check_one(a, lines, entry)
         if not ok:
             failures.append(f"{a}  [{why}]")
     return failures
@@ -93,6 +104,17 @@ def check_assertions(src, dump):
 
 def name_matches(display, name):
     return display == name or display.endswith(":" + name)
+
+
+def check_elide(a, elided):
+    # `elide .key unchecked|checked|guarded`: codegen elided at least one
+    # access of `.key` with that proof (the consumer of the facts, read off
+    # `<dump>.elisions`).
+    p = a.split()
+    key, want = p[1], p[2]
+    proofs = [l.rsplit(" proof=", 1)[1].split(" ", 1)[0]
+              for l in elided if f" {key} " in l and " proof=" in l]
+    return (want in proofs, f"proofs {sorted(set(proofs))}")
 
 
 def check_one(a, lines, entry):
