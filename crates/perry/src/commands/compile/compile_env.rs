@@ -335,6 +335,18 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Used by standalone CLI/update/publish commands, outside the compile pipeline.",
     ),
     (
+        "PERRY_CODEGEN_CPU_SLOTS",
+        "Controls scheduling or progress telemetry, not codegen partitioning or emitted bytes.",
+    ),
+    (
+        "PERRY_CODEGEN_MEMORY_MB",
+        "Controls scheduling or progress telemetry, not codegen partitioning or emitted bytes.",
+    ),
+    (
+        "PERRY_CODEGEN_MEMORY_TRACE",
+        "Controls scheduling or progress telemetry, not codegen partitioning or emitted bytes.",
+    ),
+    (
         "PERRY_CODEGEN_PROGRESS",
         "Controls scheduling or progress telemetry, not codegen partitioning or emitted bytes.",
     ),

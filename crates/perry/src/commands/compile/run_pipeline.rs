@@ -21,7 +21,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use crate::OutputFormat;
@@ -32,39 +31,17 @@ use crate::OutputFormat;
 /// stop so a pathological (or cyclic) re-export graph can never spin forever.
 const MAX_REEXPORT_HOPS: usize = 16;
 
-/// Keep outer module parallelism and each module's inner LLVM workers inside a
-/// single conservative CPU/memory budget. Large generated modules retain a
-/// substantial HIR/LLVM graph while their units compile, so letting Rayon's
-/// host-sized global pool start one such graph per logical CPU can exhaust RAM.
-fn default_module_codegen_jobs(
-    total_modules: usize,
-    logical_cpus: usize,
-    llvm_unit_jobs: usize,
-) -> usize {
-    let worker_budget = logical_cpus.max(1).min(4);
-    (worker_budget / llvm_unit_jobs.max(1))
-        .max(1)
-        .min(3)
-        .min(total_modules.max(1))
-}
-
-fn configured_module_codegen_jobs(total_modules: usize) -> (usize, usize) {
-    let llvm_unit_jobs = std::env::var("PERRY_CODEGEN_UNIT_JOBS")
+/// How many module codegen jobs may run at once: `PERRY_MODULE_JOBS` when set
+/// to a positive count, else one per CPU slot of the compile's budget. Memory,
+/// not this count, is what keeps large graphs in bounds (see
+/// `module_schedule`).
+fn configured_module_codegen_threads(total_modules: usize, budget_cpus: usize) -> usize {
+    std::env::var("PERRY_MODULE_JOBS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|&value| value > 0)
-        .unwrap_or(2);
-    let logical_cpus = std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1);
-    let default_jobs = default_module_codegen_jobs(total_modules, logical_cpus, llvm_unit_jobs);
-    let module_jobs = std::env::var("PERRY_MODULE_JOBS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-        .unwrap_or(default_jobs)
-        .min(total_modules.max(1));
-    (module_jobs, llvm_unit_jobs)
+        .unwrap_or(budget_cpus)
+        .clamp(1, total_modules.max(1))
 }
 
 /// Whether `name` is metadata for an erased TypeScript declaration rather
@@ -212,13 +189,8 @@ mod native_symbol_admission_tests {
     }
 }
 
-// OpenCode's 0.5--1.0 MiB generated chunks routinely lower to 20--45 MiB of
-// LLVM input even with fewer than 1,000 HIR callables. Treat that observed
-// range as memory-heavy too: ordinary modules still use outer parallelism,
-// while one generated chunk at a time gets the full inner-unit budget.
-const EXCLUSIVE_MODULE_CALLABLES: usize = 500;
-const EXCLUSIVE_MODULE_SOURCE_BYTES: u64 = 512 * 1024;
-
+/// Callables codegen emits for `module`: functions plus every class member
+/// body.
 fn module_codegen_callable_count(module: &perry_hir::Module) -> usize {
     let class_callables: usize = module
         .classes
@@ -235,57 +207,16 @@ fn module_codegen_callable_count(module: &perry_hir::Module) -> usize {
     module.functions.len() + class_callables
 }
 
-fn module_codegen_is_exclusive(path: &Path, module: &perry_hir::Module) -> bool {
-    module_codegen_callable_count(module) >= EXCLUSIVE_MODULE_CALLABLES
-        || fs::metadata(path)
-            .map(|metadata| metadata.len() >= EXCLUSIVE_MODULE_SOURCE_BYTES)
-            .unwrap_or(false)
-}
-
-struct ModuleCodegenLimiter {
-    available: Mutex<usize>,
-    ready: Condvar,
-    capacity: usize,
-}
-
-struct ModuleCodegenPermit<'a> {
-    limiter: &'a ModuleCodegenLimiter,
-    weight: usize,
-}
-
-impl ModuleCodegenLimiter {
-    fn new(capacity: usize) -> Self {
-        Self {
-            available: Mutex::new(capacity.max(1)),
-            ready: Condvar::new(),
-            capacity: capacity.max(1),
-        }
-    }
-
-    fn acquire(&self, exclusive: bool) -> ModuleCodegenPermit<'_> {
-        let weight = if exclusive { self.capacity } else { 1 };
-        let mut available = self.available.lock().expect("module limiter poisoned");
-        while *available < weight {
-            available = self.ready.wait(available).expect("module limiter poisoned");
-        }
-        *available -= weight;
-        ModuleCodegenPermit {
-            limiter: self,
-            weight,
-        }
-    }
-}
-
-impl Drop for ModuleCodegenPermit<'_> {
-    fn drop(&mut self) {
-        let mut available = self
-            .limiter
-            .available
-            .lock()
-            .expect("module limiter poisoned");
-        *available += self.weight;
-        self.limiter.ready.notify_all();
-    }
+/// Peak memory a module's codegen job is charged before it starts (see
+/// `perry_codegen::workers::module_memory_estimate`).
+fn module_codegen_memory_estimate(path: &Path, module: &perry_hir::Module) -> u64 {
+    let source_bytes = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    perry_codegen::workers::module_memory_estimate(
+        source_bytes,
+        module_codegen_callable_count(module),
+    )
 }
 
 struct ModuleCodegenCompletion<'a> {
@@ -323,35 +254,17 @@ impl Drop for ModuleCodegenCompletion<'_> {
 
 #[cfg(test)]
 mod module_codegen_job_tests {
-    use super::{default_module_codegen_jobs, ModuleCodegenLimiter};
+    use super::configured_module_codegen_threads;
 
     #[test]
-    fn coordinates_outer_and_inner_parallelism() {
-        assert_eq!(default_module_codegen_jobs(308, 12, 2), 2);
-        assert_eq!(default_module_codegen_jobs(308, 12, 4), 1);
-        assert_eq!(default_module_codegen_jobs(308, 2, 1), 2);
-    }
-
-    #[test]
-    fn never_starts_more_jobs_than_modules() {
-        assert_eq!(default_module_codegen_jobs(1, 64, 1), 1);
-        assert_eq!(default_module_codegen_jobs(2, 64, 1), 2);
-        assert_eq!(default_module_codegen_jobs(0, 64, 1), 1);
-    }
-
-    #[test]
-    fn oversized_module_reserves_the_entire_outer_pool() {
-        let limiter = ModuleCodegenLimiter::new(2);
-        {
-            let _ordinary = limiter.acquire(false);
-            assert_eq!(*limiter.available.lock().unwrap(), 1);
+    fn one_job_per_cpu_slot_but_never_more_than_modules() {
+        if std::env::var("PERRY_MODULE_JOBS").is_ok() {
+            return;
         }
-        assert_eq!(*limiter.available.lock().unwrap(), 2);
-        {
-            let _oversized = limiter.acquire(true);
-            assert_eq!(*limiter.available.lock().unwrap(), 0);
-        }
-        assert_eq!(*limiter.available.lock().unwrap(), 2);
+        assert_eq!(configured_module_codegen_threads(764, 48), 48);
+        assert_eq!(configured_module_codegen_threads(3, 48), 3);
+        assert_eq!(configured_module_codegen_threads(0, 48), 1);
+        assert_eq!(configured_module_codegen_threads(10, 0), 1);
     }
 }
 
@@ -3385,22 +3298,57 @@ pub fn run_with_parse_cache(
     let codegen_started = Instant::now();
     let codegen_progress_enabled = matches!(format, OutputFormat::Text)
         && std::env::var("PERRY_CODEGEN_PROGRESS").as_deref() != Ok("0");
-    let (module_jobs, llvm_unit_jobs) = configured_module_codegen_jobs(total_codegen_modules);
-    let exclusive_modules = ctx
-        .native_modules
+    // One budget of CPU slots and memory for every module job and LLVM unit
+    // worker of this compile (`perry_codegen::workers`, `module_schedule`).
+    let (codegen_budget, budget_probe) = perry_codegen::workers::CodegenBudget::for_this_machine();
+    let codegen_budget = std::sync::Arc::new(codegen_budget);
+    let codegen_modules: Vec<(&PathBuf, &perry_hir::Module)> = ctx.native_modules.iter().collect();
+    let module_memory_estimates: Vec<u64> = codegen_modules
         .iter()
-        .filter(|(path, module)| module_codegen_is_exclusive(path, module))
-        .count();
+        .map(|(path, module)| module_codegen_memory_estimate(path, module))
+        .collect();
+    let module_start_order = super::module_schedule::start_order(&module_memory_estimates);
+    let module_jobs = configured_module_codegen_threads(
+        total_codegen_modules,
+        codegen_budget.admissible_jobs(module_memory_estimates.iter().copied().min().unwrap_or(0)),
+    );
     if matches!(format, OutputFormat::Text) && total_codegen_modules > 1 {
+        let gib = |bytes: u64| bytes as f64 / (1u64 << 30) as f64;
+        let probed =
+            |bytes: Option<u64>| bytes.map_or("n/a".to_string(), |b| format!("{:.1} GiB", gib(b)));
         eprintln!(
-            "[perry] codegen: module parallelism: {module_jobs} module jobs x \
-             {llvm_unit_jobs} LLVM unit workers (override with PERRY_MODULE_JOBS / \
-             PERRY_CODEGEN_UNIT_JOBS)"
+            "[perry] codegen: budget: {} CPU slots ({}), {:.1} GiB memory \
+             (MemAvailable {}, cgroup headroom {}{}); up to {module_jobs} module jobs, \
+             largest first (override with PERRY_MODULE_JOBS / PERRY_CODEGEN_UNIT_JOBS / \
+             PERRY_CODEGEN_CPU_SLOTS / PERRY_CODEGEN_MEMORY_MB)",
+            codegen_budget.cpus(),
+            match (budget_probe.cpu_slots_override, budget_probe.physical_cores) {
+                (Some(_), _) => format!(
+                    "PERRY_CODEGEN_CPU_SLOTS set; {} hardware threads available",
+                    budget_probe.threads
+                ),
+                (None, Some(_)) => format!(
+                    "physical cores; {} hardware threads available",
+                    budget_probe.threads
+                ),
+                (None, None) => "hardware threads; core topology unreadable".to_string(),
+            },
+            gib(codegen_budget.memory()),
+            probed(budget_probe.mem_available),
+            probed(budget_probe.cgroup_headroom),
+            if budget_probe.memory_override.is_some() {
+                ", PERRY_CODEGEN_MEMORY_MB set"
+            } else {
+                ""
+            },
         );
-        if module_jobs > 1 && exclusive_modules > 0 {
+        if let Some(&largest) = module_start_order.first() {
             eprintln!(
-                "[perry] codegen: {exclusive_modules} oversized module(s) will run exclusively \
-                 to cap peak memory"
+                "[perry] codegen: largest module estimate {:.2} GiB ({}); total {:.1} GiB over {} modules",
+                gib(module_memory_estimates[largest]),
+                codegen_modules[largest].1.name,
+                gib(module_memory_estimates.iter().sum()),
+                total_codegen_modules
             );
         }
     }
@@ -3623,7 +3571,6 @@ pub fn run_with_parse_cache(
         .thread_name(|index| format!("perry-module-{index}"))
         .build()
         .map_err(|error| anyhow!("failed to create module codegen pool: {error}"))?;
-    let module_limiter = ModuleCodegenLimiter::new(module_jobs);
     // Reuse the exact import-route preparation in both passes. The contract
     // pass releases each module's metadata before visiting the next module;
     // codegen builds complete options only while holding a worker permit.
@@ -6124,189 +6071,193 @@ pub fn run_with_parse_cache(
     // codegen (or its cache sidecar on a hit) and linked as one seed unit.
     let program_static_seeds: std::sync::Mutex<BTreeMap<u32, perry_codegen::BirthShape>> =
         std::sync::Mutex::new(BTreeMap::new());
-    let compile_results: Vec<Result<NativeObjectArtifact, String>> = module_pool.install(|| {
-        ctx.native_modules.par_iter().map(|(path, hir_module)| {
-            let _permit =
-                module_limiter.acquire(module_codegen_is_exclusive(path, hir_module));
-            let _completion = ModuleCodegenCompletion {
-                completed: &codegen_modules_completed,
-                total: total_codegen_modules,
-                started: codegen_started,
-                enabled: codegen_progress_enabled,
+    let compile_module_job = |path: &PathBuf,
+                              hir_module: &perry_hir::Module|
+     -> Result<NativeObjectArtifact, String> {
+        let _completion = ModuleCodegenCompletion {
+            completed: &codegen_modules_completed,
+            total: total_codegen_modules,
+            started: codegen_started,
+            enabled: codegen_progress_enabled,
+        };
+        // Compile this module to LLVM IR (or .ll text in bitcode-link mode).
+        // Linking builds return an artifact for the linker. `--no-link`
+        // writes each cold object in this worker as soon as it is ready so
+        // a large graph does not retain every object byte until all module
+        // jobs finish.
+        let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
+        progress.record(ProgressSnapshot {
+            stage: "codegen",
+            module_path: Some(path),
+            module_name: Some(&hir_module.name),
+            visited: Some(codegen_index),
+            total: Some(total_codegen_modules),
+            collected: Some(total_codegen_modules),
+            ..Default::default()
+        });
+        let mut opts = prepare_module(path, hir_module, false)?;
+        constructor_contracts.apply(
+            &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+            hir_module,
+            &mut opts,
+        );
+        if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
+            opts.static_shape_ids = ids.clone();
+            let foreign: BTreeSet<u32> = opts
+                .short_spread_method_candidates
+                .values()
+                .flatten()
+                .map(|c| c.class_id)
+                .collect();
+            for cid in class_ids.iter().chain(foreign.iter()) {
+                if let Some(finals) = class_final_shapes.get(cid) {
+                    opts.static_shape_ids.extend(finals.iter().cloned());
+                }
+            }
+            opts.static_shape_ids.sort();
+            opts.static_shape_ids.dedup();
+            opts.program_class_shape_ids =
+                program_class_shape_ids.restricted_to(class_ids.iter().copied().chain(foreign));
+        }
+        opts.program_facts =
+            super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
+        opts.program_facts.dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
+        std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
+            ctx.patched_builtins.dynamic_code_reach.clone();
+        opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+        // V2.2 + #686 object cache lookup. The key hashes every
+        // codegen-affecting field of `opts` together with this
+        // module's post-transform HIR fingerprint and the perry
+        // version. A hit returns the exact `.o` bytes we emitted
+        // the last time opts + HIR were identical — cross-run bit
+        // identity, not just semantic equivalence.
+        //
+        // The HIR fingerprint is computed inside this rayon job
+        // (paralelizes the cost across modules and avoids an extra
+        // serial O(modules) pass). Crucially, every HIR-mutating
+        // pass (inline_functions, unroll_static_loops, prop_cse,
+        // inline_finally_into_returns, transform_async_to_generator,
+        // transform_generators per-module; transform_js_imports,
+        // fix_local_native_instances, fix_cross_module_native_instances,
+        // monomorphize_module, perry_codegen_arkts::emit_index_ets,
+        // perry_transform::i18n::apply_i18n, fix_imported_enums
+        // cross-module) has already run by the time we get here, so
+        // the hash captures the exact tree that `compile_module`
+        // will consume. `compile_module` takes `&Module` (shared
+        // reference) — see crates/perry-codegen/src/codegen.rs:388 —
+        // so it cannot mutate the HIR after the hash is taken.
+        let (cache_key, hir_hash_for_diag) = if object_cache.is_enabled() {
+            let hir_hash = perry_hir::stable_hash::hash_module(hir_module);
+            (
+                Some(compute_object_cache_key(
+                    &opts,
+                    super::defines::object_hash(hir_hash, &ctx.expression_defines),
+                    perry_version,
+                )),
+                Some(hir_hash),
+            )
+        } else {
+            (None, None)
+        };
+        let obj_name = native_object_file_stem(&hir_module.name);
+        let ext = "o";
+        // #7167: on `--no-link` the emitted object is the product, so it
+        // is written where `-o` points (verbatim, for the single-module
+        // case) rather than into a temp directory nobody deletes. When
+        // linking, `object_output_dir` is the staging dir and the two
+        // agree.
+        let obj_path = if args.no_link {
+            no_link_destination.artifact_path(&obj_name, ext)
+        } else {
+            object_output_dir.join(format!("{}.{}", obj_name, ext))
+        };
+
+        if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
+            object_cache
+                .lookup_path_with_ffi(k)
+                .map(|(p, s, seeds)| (k, p, s, seeds))
+        }) {
+            let cached_symbols: Vec<&str> = ffi_symbols.iter().map(String::as_str).collect();
+            validate_module_ffi_symbols(
+                &ctx.native_routing,
+                &hir_module.name,
+                "cached",
+                &cached_symbols,
+            )?;
+            // Design step 4: a hit replays the module's static shape
+            // seeds exactly as the skipped codegen reported them, so the
+            // seed unit is the same cold and warm. A malformed line makes
+            // the entry unusable rather than silently dropping a seed.
+            let seeds = seed_lines
+                .iter()
+                .map(|line| perry_codegen::decode_static_seed(line))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    format!("corrupt static shape seed sidecar for cache key {key:016x}")
+                })?;
+            program_static_seeds
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(seeds);
+            // #6439: a hit skips `compile_module`, so the manifest stored
+            // beside the `.o` stands in for its emissions and is checked
+            // against the providers computed from HIR, exactly as a fresh
+            // compile is: the same source links (or is refused) the same
+            // way cold and warm.
+            check_module_providers(&program_providers, &hir_module.name, &cached_symbols)?;
+            // #7167: `-o` must name the same file whether the object cache
+            // was warm or cold. A linking compile can hand the linker the
+            // cache path directly — the bytes are the bytes and nothing
+            // else looks at them — but `--no-link` promised the user a file
+            // at `-o`, so a hit has to materialise one there too. Copy
+            // rather than hand back the cache path: the cache entry is
+            // shared with every other build and must not become an output
+            // the user may overwrite or delete.
+            let hit_path = if args.no_link {
+                fs::copy(&cached_path, &obj_path).map_err(|e| {
+                    format!(
+                        "failed to write cached object to {}: {}",
+                        obj_path.display(),
+                        e
+                    )
+                })?;
+                obj_path
+            } else {
+                cached_path
             };
-            // Compile this module to LLVM IR (or .ll text in bitcode-link mode).
-            // Linking builds return an artifact for the linker. `--no-link`
-            // writes each cold object in this worker as soon as it is ready so
-            // a large graph does not retain every object byte until all module
-            // jobs finish.
-            let codegen_index = codegen_modules_started.fetch_add(1, Ordering::Relaxed) + 1;
-            progress.record(ProgressSnapshot {
-                stage: "codegen",
-                module_path: Some(path),
-                module_name: Some(&hir_module.name),
-                visited: Some(codegen_index),
-                total: Some(total_codegen_modules),
-                collected: Some(total_codegen_modules),
-                ..Default::default()
+            return Ok(NativeObjectArtifact {
+                path: hit_path,
+                bytes: None,
+                fingerprint: format!("cache:{:016x}", key),
+                cleanup_after_link: false,
+                // The *cache* was reused either way — that is what the
+                // hit/miss stats and the `--keep-intermediates` exemption
+                // are about. The label printed below keys on whether the
+                // path we are reporting is the cache's or the user's.
+                reused_cache_path: true,
+                stored_cache_path: false,
             });
-            let mut opts = prepare_module(path, hir_module, false)?;
-            constructor_contracts.apply(
-                &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
-                hir_module,
-                &mut opts,
-            );
-            if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
-                opts.static_shape_ids = ids.clone();
-                let foreign: BTreeSet<u32> = opts
-                    .short_spread_method_candidates
-                    .values()
-                    .flatten()
-                    .map(|c| c.class_id)
-                    .collect();
-                for cid in class_ids.iter().chain(foreign.iter()) {
-                    if let Some(finals) = class_final_shapes.get(cid) {
-                        opts.static_shape_ids.extend(finals.iter().cloned());
-                    }
-                }
-                opts.static_shape_ids.sort();
-                opts.static_shape_ids.dedup();
-                opts.program_class_shape_ids = program_class_shape_ids
-                    .restricted_to(class_ids.iter().copied().chain(foreign));
-            }
-            opts.program_facts =
-                super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
-            opts.program_facts.dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
-            std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
-            opts.program_layouts = std::sync::Arc::clone(&program_layouts);
-            // V2.2 + #686 object cache lookup. The key hashes every
-            // codegen-affecting field of `opts` together with this
-            // module's post-transform HIR fingerprint and the perry
-            // version. A hit returns the exact `.o` bytes we emitted
-            // the last time opts + HIR were identical — cross-run bit
-            // identity, not just semantic equivalence.
-            //
-            // The HIR fingerprint is computed inside this rayon job
-            // (paralelizes the cost across modules and avoids an extra
-            // serial O(modules) pass). Crucially, every HIR-mutating
-            // pass (inline_functions, unroll_static_loops, prop_cse,
-            // inline_finally_into_returns, transform_async_to_generator,
-            // transform_generators per-module; transform_js_imports,
-            // fix_local_native_instances, fix_cross_module_native_instances,
-            // monomorphize_module, perry_codegen_arkts::emit_index_ets,
-            // perry_transform::i18n::apply_i18n, fix_imported_enums
-            // cross-module) has already run by the time we get here, so
-            // the hash captures the exact tree that `compile_module`
-            // will consume. `compile_module` takes `&Module` (shared
-            // reference) — see crates/perry-codegen/src/codegen.rs:388 —
-            // so it cannot mutate the HIR after the hash is taken.
-            let (cache_key, hir_hash_for_diag) = if object_cache.is_enabled() {
-                let hir_hash = perry_hir::stable_hash::hash_module(hir_module);
-                (
-                    Some(compute_object_cache_key(&opts, super::defines::object_hash(hir_hash, &ctx.expression_defines), perry_version)),
-                    Some(hir_hash),
-                )
-            } else {
-                (None, None)
-            };
-            let obj_name = native_object_file_stem(&hir_module.name);
-            let ext = "o";
-            // #7167: on `--no-link` the emitted object is the product, so it
-            // is written where `-o` points (verbatim, for the single-module
-            // case) rather than into a temp directory nobody deletes. When
-            // linking, `object_output_dir` is the staging dir and the two
-            // agree.
-            let obj_path = if args.no_link {
-                no_link_destination.artifact_path(&obj_name, ext)
-            } else {
-                object_output_dir.join(format!("{}.{}", obj_name, ext))
-            };
+        }
 
-            if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
-                object_cache
-                    .lookup_path_with_ffi(k)
-                    .map(|(p, s, seeds)| (k, p, s, seeds))
-            }) {
-                let cached_symbols: Vec<&str> = ffi_symbols.iter().map(String::as_str).collect();
-                validate_module_ffi_symbols(
-                    &ctx.native_routing,
-                    &hir_module.name,
-                    "cached",
-                    &cached_symbols,
-                )?;
-                // Design step 4: a hit replays the module's static shape
-                // seeds exactly as the skipped codegen reported them, so the
-                // seed unit is the same cold and warm. A malformed line makes
-                // the entry unusable rather than silently dropping a seed.
-                let seeds = seed_lines
-                    .iter()
-                    .map(|line| perry_codegen::decode_static_seed(line))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| {
-                        format!("corrupt static shape seed sidecar for cache key {key:016x}")
-                    })?;
-                program_static_seeds
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .extend(seeds);
-                // #6439: a hit skips `compile_module`, so the manifest stored
-                // beside the `.o` stands in for its emissions and is checked
-                // against the providers computed from HIR, exactly as a fresh
-                // compile is: the same source links (or is refused) the same
-                // way cold and warm.
-                check_module_providers(&program_providers, &hir_module.name, &cached_symbols)?;
-                // #7167: `-o` must name the same file whether the object cache
-                // was warm or cold. A linking compile can hand the linker the
-                // cache path directly — the bytes are the bytes and nothing
-                // else looks at them — but `--no-link` promised the user a file
-                // at `-o`, so a hit has to materialise one there too. Copy
-                // rather than hand back the cache path: the cache entry is
-                // shared with every other build and must not become an output
-                // the user may overwrite or delete.
-                let hit_path = if args.no_link {
-                    fs::copy(&cached_path, &obj_path).map_err(|e| {
-                        format!(
-                            "failed to write cached object to {}: {}",
-                            obj_path.display(),
-                            e
-                        )
-                    })?;
-                    obj_path
-                } else {
-                    cached_path
-                };
-                return Ok(NativeObjectArtifact {
-                    path: hit_path,
-                    bytes: None,
-                    fingerprint: format!("cache:{:016x}", key),
-                    cleanup_after_link: false,
-                    // The *cache* was reused either way — that is what the
-                    // hit/miss stats and the `--keep-intermediates` exemption
-                    // are about. The label printed below keys on whether the
-                    // path we are reporting is the cache's or the user's.
-                    reused_cache_path: true,
-                    stored_cache_path: false,
-                });
+        // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache key on
+        // every miss, so a user can diff hashes between builds and answer
+        // "why didn't my cosmetic edit hit?" (#686 acceptance criterion).
+        if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
+            if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
+                eprintln!(
+                    "  • cache miss: {} hir={:016x} key={:016x}",
+                    hir_module.name, hh, k
+                );
             }
-
-            // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache key on
-            // every miss, so a user can diff hashes between builds and answer
-            // "why didn't my cosmetic edit hit?" (#686 acceptance criterion).
-            if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
-                if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
-                    eprintln!(
-                        "  • cache miss: {} hir={:016x} key={:016x}",
-                        hir_module.name, hh, k
-                    );
-                }
-                // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform HIR of
-                // misses to <cache_dir>/debug/<key>.txt so a user can diff two
-                // miss-dumps and see exactly what differed. Best-effort — IO
-                // errors never fail the build.
-                if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
-                    let dump_dir = ctx.cache_dir.join("debug");
-                    if std::fs::create_dir_all(&dump_dir).is_ok() {
-                        let dump_path = dump_dir.join(format!("{:016x}.txt", k));
-                        let _ = std::fs::write(
+            // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform HIR of
+            // misses to <cache_dir>/debug/<key>.txt so a user can diff two
+            // miss-dumps and see exactly what differed. Best-effort — IO
+            // errors never fail the build.
+            if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
+                let dump_dir = ctx.cache_dir.join("debug");
+                if std::fs::create_dir_all(&dump_dir).is_ok() {
+                    let dump_path = dump_dir.join(format!("{:016x}.txt", k));
+                    let _ = std::fs::write(
                             &dump_path,
                             format!(
                                 "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
@@ -6317,132 +6268,170 @@ pub fn run_with_parse_cache(
                                 hir_module,
                             ),
                         );
-                    }
                 }
             }
-            progress.heartbeat(ProgressSnapshot {
-                stage: "codegen",
-                module_path: Some(path),
-                module_name: Some(&hir_module.name),
-                visited: Some(codegen_index),
-                total: Some(total_codegen_modules),
-                collected: Some(total_codegen_modules),
-                ..Default::default()
+        }
+        progress.heartbeat(ProgressSnapshot {
+            stage: "codegen",
+            module_path: Some(path),
+            module_name: Some(&hir_module.name),
+            visited: Some(codegen_index),
+            total: Some(total_codegen_modules),
+            collected: Some(total_codegen_modules),
+            ..Default::default()
+        });
+        // #6439: capture which ext_registry FFI symbols this module's
+        // codegen emits, so the manifest stored beside the `.o` can
+        // replay them on a later cache hit. Scoped tightly around
+        // `compile_module` — `perry-codegen` uses no rayon, so
+        // everything recorded on this worker thread between these two
+        // calls belongs to this module and nothing else.
+        perry_codegen::ext_registry::begin_module_capture();
+        let compiled = if let Some(session) = &typed_feedback {
+            super::typed_feedback_profile::compile(session, hir_module, opts, path, perry_version)
+        } else {
+            let unit_cache_dir = cache_key.map(|key| {
+                ctx.cache_dir
+                    .join("codegen-units-v1")
+                    .join(cache_target_dir)
+                    .join(format!("{key:016x}"))
             });
-            // #6439: capture which ext_registry FFI symbols this module's
-            // codegen emits, so the manifest stored beside the `.o` can
-            // replay them on a later cache hit. Scoped tightly around
-            // `compile_module` — `perry-codegen` uses no rayon, so
-            // everything recorded on this worker thread between these two
-            // calls belongs to this module and nothing else.
-            perry_codegen::ext_registry::begin_module_capture();
-            let compiled = if let Some(session) = &typed_feedback {
-                super::typed_feedback_profile::compile(session, hir_module, opts, path, perry_version)
-            } else {
-                let unit_cache_dir = cache_key.map(|key| {
-                    ctx.cache_dir
-                        .join("codegen-units-v1")
-                        .join(cache_target_dir)
-                        .join(format!("{key:016x}"))
-                });
-                perry_codegen::unit_cache::with_module_cache(unit_cache_dir, || {
-                    perry_codegen::compile_module(hir_module, opts)
-                })
-            };
-            let module_static_seeds = perry_codegen::take_module_static_seeds();
-            let object_code = compiled.map_err(|e| {
-                perry_codegen::ext_registry::take_module_capture();
-                format!(
-                    "Error compiling module '{}' ({}) with --backend llvm: {:#}",
-                    hir_module.name,
-                    path.display(),
-                    e
-                )
-            })?;
-            let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
-            check_module_providers(&program_providers, &hir_module.name, &emitted_ffi_symbols)?;
-            validate_module_ffi_symbols(
-                &ctx.native_routing,
-                &hir_module.name,
-                "compiled",
-                &emitted_ffi_symbols,
-            )?;
-            program_static_seeds
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .extend(module_static_seeds.iter().cloned());
-            let object_fingerprint = cache_key
-                .map(|k| format!("cache:{:016x}", k))
-                .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
-            if let Some(cached_path) = cache_key.and_then(|k| {
-                // Manifest first: a `.o` visible without its manifest reads
-                // as a miss to a concurrent build (correct, just a wasted
-                // recompile), whereas the reverse ordering can never mislead.
-                object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
-                let seed_lines: Vec<String> = module_static_seeds
-                    .iter()
-                    .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
-                    .collect();
-                object_cache.store_static_seeds(
-                    k,
-                    &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
-                );
-                object_cache.store_and_get_path(k, &object_code)
-            }) {
-                // #7167: handing back the cache path saves a copy for a
-                // compile that is going to *link* — the linker is the only
-                // reader and the bytes are the bytes. `--no-link` promised the
-                // user a file at `-o`, so it keeps the store (a later build
-                // still hits) but falls through to write the object it just
-                // produced to the destination. Otherwise `-o` would be honoured
-                // only with the cache disabled, which is the cache-warmth
-                // dependence this destination rule exists to avoid.
-                if !args.no_link {
-                    return Ok(NativeObjectArtifact {
-                        path: cached_path,
-                        bytes: None,
-                        fingerprint: object_fingerprint,
-                        cleanup_after_link: false,
-                        reused_cache_path: false,
-                        stored_cache_path: true,
-                    });
-                }
-            }
-            // A no-link build's object is the final product. Flush it from the
-            // module worker instead of collecting its bytes in
-            // `compile_results`: multi-thousand-module graphs otherwise hold
-            // gigabytes of completed objects at once and can exhaust host
-            // commit before the deferred parallel-write phase begins. Module
-            // destinations are unique, so the existing codegen pool already
-            // provides safe parallel I/O here.
-            if args.no_link {
-                fs::write(&obj_path, &object_code).map_err(|e| {
-                    format!(
-                        "failed to write object file {}: {}",
-                        obj_path.display(),
-                        e
-                    )
-                })?;
+            perry_codegen::unit_cache::with_module_cache(unit_cache_dir, || {
+                perry_codegen::compile_module(hir_module, opts)
+            })
+        };
+        let module_static_seeds = perry_codegen::take_module_static_seeds();
+        let object_code = compiled.map_err(|e| {
+            perry_codegen::ext_registry::take_module_capture();
+            format!(
+                "Error compiling module '{}' ({}) with --backend llvm: {:#}",
+                hir_module.name,
+                path.display(),
+                e
+            )
+        })?;
+        let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
+        check_module_providers(&program_providers, &hir_module.name, &emitted_ffi_symbols)?;
+        validate_module_ffi_symbols(
+            &ctx.native_routing,
+            &hir_module.name,
+            "compiled",
+            &emitted_ffi_symbols,
+        )?;
+        program_static_seeds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(module_static_seeds.iter().cloned());
+        let object_fingerprint = cache_key
+            .map(|k| format!("cache:{:016x}", k))
+            .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
+        if let Some(cached_path) = cache_key.and_then(|k| {
+            // Manifest first: a `.o` visible without its manifest reads
+            // as a miss to a concurrent build (correct, just a wasted
+            // recompile), whereas the reverse ordering can never mislead.
+            object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
+            let seed_lines: Vec<String> = module_static_seeds
+                .iter()
+                .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
+                .collect();
+            object_cache.store_static_seeds(
+                k,
+                &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            );
+            object_cache.store_and_get_path(k, &object_code)
+        }) {
+            // #7167: handing back the cache path saves a copy for a
+            // compile that is going to *link* — the linker is the only
+            // reader and the bytes are the bytes. `--no-link` promised the
+            // user a file at `-o`, so it keeps the store (a later build
+            // still hits) but falls through to write the object it just
+            // produced to the destination. Otherwise `-o` would be honoured
+            // only with the cache disabled, which is the cache-warmth
+            // dependence this destination rule exists to avoid.
+            if !args.no_link {
                 return Ok(NativeObjectArtifact {
-                    path: obj_path,
+                    path: cached_path,
                     bytes: None,
                     fingerprint: object_fingerprint,
                     cleanup_after_link: false,
                     reused_cache_path: false,
-                    stored_cache_path: false,
+                    stored_cache_path: true,
                 });
             }
-            Ok(NativeObjectArtifact {
+        }
+        // A no-link build's object is the final product. Flush it from the
+        // module worker instead of collecting its bytes in
+        // `compile_results`: multi-thousand-module graphs otherwise hold
+        // gigabytes of completed objects at once and can exhaust host
+        // commit before the deferred parallel-write phase begins. Module
+        // destinations are unique, so the existing codegen pool already
+        // provides safe parallel I/O here.
+        if args.no_link {
+            fs::write(&obj_path, &object_code).map_err(|e| {
+                format!("failed to write object file {}: {}", obj_path.display(), e)
+            })?;
+            return Ok(NativeObjectArtifact {
                 path: obj_path,
-                bytes: Some(object_code),
+                bytes: None,
                 fingerprint: object_fingerprint,
-                cleanup_after_link: true,
+                cleanup_after_link: false,
                 reused_cache_path: false,
                 stored_cache_path: false,
-            })
+            });
+        }
+        Ok(NativeObjectArtifact {
+            path: obj_path,
+            bytes: Some(object_code),
+            fingerprint: object_fingerprint,
+            cleanup_after_link: true,
+            reused_cache_path: false,
+            stored_cache_path: false,
         })
-        .collect()
-    });
+    };
+    let compile_results: Vec<Result<NativeObjectArtifact, String>> =
+        super::module_schedule::run_module_jobs(
+            &module_pool,
+            module_jobs,
+            &codegen_budget,
+            &module_start_order,
+            &module_memory_estimates,
+            |index| {
+                let (path, hir_module) = codegen_modules[index];
+                let memory_trace = perry_codegen::workers::memory_trace_enabled();
+                let resident_before = if memory_trace {
+                    perry_codegen::workers::reset_peak_resident();
+                    perry_codegen::workers::resident_bytes()
+                } else {
+                    None
+                };
+                let started = Instant::now();
+                let result = perry_codegen::workers::with_budget(&codegen_budget, || {
+                    compile_module_job(path, hir_module)
+                });
+                if std::env::var("PERRY_CODEGEN_UNIT_TIMINGS").is_ok() || memory_trace {
+                    let mib = |bytes: u64| bytes as f64 / 1_048_576.0;
+                    let peak = resident_before
+                        .zip(perry_codegen::workers::resident_bytes())
+                        .map(|((rss, _), (_, hwm))| {
+                            format!(
+                                "; resident {:.0} MiB before, peak +{:.0} MiB",
+                                mib(rss),
+                                mib(hwm.saturating_sub(rss))
+                            )
+                        })
+                        .unwrap_or_default();
+                    eprintln!(
+                        "[perry] codegen: module job {} finished in {:.2}s (source {} bytes, {} callables, estimate {:.0} MiB{peak})",
+                        hir_module.name,
+                        started.elapsed().as_secs_f64(),
+                        fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+                        module_codegen_callable_count(hir_module),
+                        mib(module_memory_estimates[index]),
+                    );
+                }
+                result
+            },
+        );
 
     // Tier 4.4 (v0.5.336): partition compile results, then write any retained
     // object files in parallel via rayon. No-link workers have already flushed

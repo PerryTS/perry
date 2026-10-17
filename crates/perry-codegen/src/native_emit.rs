@@ -587,6 +587,29 @@ fn compile_module_units_native_with_workers(
             "[perry] codegen: {module_prefix}: freeze/LLVM pipeline started: {unit_total} units, {jobs} workers, ~{estimated_mib:.1} MiB estimated IR"
         );
     }
+    // Under a compile budget (`crate::workers`), the first worker runs on the
+    // module job's own CPU slot; every other worker holds a slot and the
+    // largest unit's memory estimate while it compiles a unit, and stops
+    // waiting for one once every unit is claimed.
+    let budget = crate::workers::current_budget();
+    let extra_worker_memory = crate::workers::unit_memory_estimate(
+        parts
+            .iter()
+            .flatten()
+            .map(|part| {
+                (part.pre.len()
+                    + part.post.len()
+                    + part
+                        .funcs
+                        .iter()
+                        .map(|f| f.estimated_ir_bytes)
+                        .sum::<usize>()) as u64
+            })
+            .max()
+            .unwrap_or(0),
+    );
+    let unclaimed_units = std::sync::atomic::AtomicUsize::new(parts.len());
+    let memory_trace = crate::workers::memory_trace_enabled();
     let frozen = std::sync::atomic::AtomicUsize::new(0);
     let mut slots: Vec<Option<Result<Vec<u8>>>> = (0..parts.len()).map(|_| None).collect();
     // The producer assembles each unit's skeleton as a worker frees up, so
@@ -602,6 +625,8 @@ fn compile_module_units_native_with_workers(
             let result_sender = result_sender.clone();
             let receiver = &receiver;
             let compile_one = &compile_one;
+            let budget = budget.as_deref();
+            let unclaimed_units = &unclaimed_units;
             // LLVM recursion depth scales with function size, and a post-RS4GC
             // relocation-fan-out function reaches millions of instructions
             // (#8082) — Rust's default 2 MiB worker stack SIGBUSes on the
@@ -611,15 +636,46 @@ fn compile_module_units_native_with_workers(
                 .name(format!("perry-llvm-unit-{worker_index}"))
                 .stack_size(64 * 1024 * 1024)
                 .spawn_scoped(scope, move || loop {
-                    let received = receiver
-                        .lock()
-                        .expect("native freeze queue poisoned")
-                        .recv();
+                    let units_left =
+                        || unclaimed_units.load(std::sync::atomic::Ordering::SeqCst) > 0;
+                    let _grant = match budget {
+                        Some(budget) if worker_index > 0 => {
+                            match budget.acquire_while(extra_worker_memory, units_left) {
+                                Some(grant) => Some(grant),
+                                None => break,
+                            }
+                        }
+                        _ => None,
+                    };
+                    let received = {
+                        let queue = receiver.lock().expect("native freeze queue poisoned");
+                        if !units_left() {
+                            break;
+                        }
+                        unclaimed_units.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        queue.recv()
+                    };
                     let Ok((i, frozen_unit)) = received else {
                         break;
                     };
                     let unit_started = std::time::Instant::now();
+                    let resident_before = if memory_trace {
+                        crate::workers::reset_peak_resident();
+                        crate::workers::resident_bytes()
+                    } else {
+                        None
+                    };
                     let out = frozen_unit.and_then(|unit| compile_one(i, &unit));
+                    if let Some(((rss, _), (_, hwm))) =
+                        resident_before.zip(crate::workers::resident_bytes())
+                    {
+                        eprintln!(
+                            "[perry] memtrace: {module_prefix}: unit {}/{unit_total}: resident {:.0} MiB before, peak +{:.0} MiB",
+                            i + 1,
+                            rss as f64 / 1_048_576.0,
+                            hwm.saturating_sub(rss) as f64 / 1_048_576.0
+                        );
+                    }
                     if result_sender
                         .send((i, unit_started.elapsed(), out))
                         .is_err()
