@@ -12,12 +12,7 @@
         "Cargo stabilized min-publish-age in Rust 1.100 (https://github.com/rust-lang/cargo/pull/17335); the registry age policy remains in .cargo/config.toml without the former unstable opt-in.",
         "Already carries the algebraic_* float methods used in crates/perry-runtime/src/perf_histogram.rs — stable since 1.98.0, unrelated to the nightly pin above.",
         "Adopted 1 day after this nightly's cut, via soakBypass below."
-      ],
-      "soakBypass": {
-        "version": "nightly-2026-10-04",
-        "published": "2026-10-04",
-        "removable": "2026-10-11"
-      }
+      ]
     },
     "node": {
       "description": "Node.js — the pinned oracle for the builtin-module compatibility matrix (scripts/node_compat_matrix.mjs).",
@@ -146,11 +141,6 @@
           "asset": "sfw-free-windows-x86_64.exe",
           "integrity": "sha512-JDpo1DAN+YUYSQ8VlVNPWxbOLoxPjnKSFfyAX+BsnHh3UdURWhCj+vy/aPuA3qg46CZQMpWIlzxBw+l86y/zRw=="
         }
-      },
-      "soakBypass": {
-        "version": "1.14.0",
-        "published": "2026-07-23",
-        "removable": "2026-07-30"
       }
     },
     "sfw-enterprise": {
@@ -185,11 +175,6 @@
           "asset": "sfw-windows-x86_64.exe",
           "integrity": "sha512-1SnvHJ04sQrRgMAVtGYri5rBysXFXc8PFPXT1kWBF79X6Xa+4uaJb3epJ6HW9HdRvnquDDgP/ZVj7wb6rglADQ=="
         }
-      },
-      "soakBypass": {
-        "version": "1.14.0",
-        "published": "2026-07-23",
-        "removable": "2026-07-30"
       }
     },
     "zizmor": {
