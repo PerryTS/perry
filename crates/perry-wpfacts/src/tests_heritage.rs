@@ -11,7 +11,10 @@ fn facts(src: &str) -> ProgramFacts {
 fn child<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
     pf.templates
         .iter()
-        .find(|t| t.display.ends_with(&format!(":{name}")))
+        .find(|t| {
+            t.display.ends_with(&format!(":{name}"))
+                || t.display.contains(&format!(":{name}__class_expr_"))
+        })
         .unwrap_or_else(|| panic!("missing {name}: {}", pf.dump_text()))
 }
 
@@ -182,9 +185,10 @@ fn evaluated_super_method_binds_the_child_receiver() {
     let c = child(&pf, "Child");
     assert!(c.escape.is_none() && c.hard.is_none(), "{}", pf.dump_text());
     assert!(
-        pf.sites
-            .iter()
-            .any(|s| s.key == "value" && s.receivers.iter().any(|r| r.ends_with(":Child"))),
+        pf.sites.iter().any(|s| s.key == "value"
+            && s.receivers
+                .iter()
+                .any(|r| r.contains(":Child__class_expr_"))),
         "{}",
         pf.dump_text()
     );
@@ -258,7 +262,7 @@ fn a_late_unknown_parent_revokes_the_known_parent_result() {
     let tm =
         g.m.tmpls
             .iter()
-            .position(|t| t.display.ends_with(":Child"))
+            .position(|t| t.display.contains(":Child__class_expr_"))
             .unwrap() as u32;
     let inst = g.m.tok(TokKind::Obj(tm));
     let parent = g.m.tmpls[tm as usize].evaluated_parent.unwrap();
@@ -294,7 +298,11 @@ fn specialized_class_site_keeps_heritage_after_metadata_resolution() {
     )
     .unwrap();
     let mut hir = perry_hir::lower_module(&ast, "heritage", "heritage.ts").unwrap();
-    let c = hir.classes.iter_mut().find(|c| c.name == "Child").unwrap();
+    let c = hir
+        .classes
+        .iter_mut()
+        .find(|c| c.name.starts_with("Child__class_expr_"))
+        .unwrap();
     c.extends_expr = None;
     c.extends_name = Some("Base".into());
     let pf = compute(&[("heritage.ts".into(), &hir)], &FactsConfig::default());
