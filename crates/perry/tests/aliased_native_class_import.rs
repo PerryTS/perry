@@ -118,8 +118,8 @@ console.log(typeof q.addSubnet, typeof q.check);
          class name; HIR:\n{aliased}"
     );
     assert!(
-        aliased.contains("class_name: Some(\"BlockList\")"),
-        "aliased BlockList method dispatch was not tagged ( net , BlockList ); \
+        aliased.contains("TypeOf(PropertyGet") && aliased.contains("property: \"addSubnet\""),
+        "aliased BlockList method values must retain ordinary live property lookup; \
          HIR:\n{aliased}"
     );
     // It must NOT carry the local alias name anywhere a native class is named.

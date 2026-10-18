@@ -4,9 +4,9 @@
 //! classless-module path through frontend shape discovery, which used to skip
 //! such modules unless the knob was `1`.
 //!
-//! The observable is the runtime's own method-site report: a site primed from
-//! a ConstFn lane counts in `primes_constfn`. Every mode must print the same
-//! result.
+//! Inspect the immutable ConstFn layout entries emitted by codegen. The old
+//! method-site cache and its primes_constfn report have been removed. Every
+//! setting must also preserve the result.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -43,16 +43,19 @@ console.log(drive(counter, 1000), drive(make(5), 1000));
 "#;
 
 /// Compile `PROGRAM` with the knob as given (`None` = unset), run it with
-/// the method-site report on, and return (stdout, primes_constfn).
+/// the saved IR, and return (stdout, ConstFn layout count).
 fn compile_and_run(setting: Option<&str>) -> (String, u64) {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("main.ts");
     std::fs::write(&src, PROGRAM).unwrap();
     let exe = dir.path().join("main_bin");
+    let ll_dir = dir.path().join("ll");
+    std::fs::create_dir(&ll_dir).unwrap();
     let mut compile = Command::new(perry_bin());
     clean(&mut compile)
         .current_dir(dir.path())
-        .env("PERRY_NO_CACHE", "1");
+        .env("PERRY_NO_CACHE", "1")
+        .env("PERRY_SAVE_LL", &ll_dir);
     if let Some(value) = setting {
         compile.env("PERRY_CONSTFN_SHAPE", value);
     }
@@ -72,7 +75,6 @@ fn compile_and_run(setting: Option<&str>) -> (String, u64) {
     let mut run = Command::new(&exe);
     let ran = clean(&mut run)
         .current_dir(dir.path())
-        .env("PERRY_METHOD_SITE_STATS", "1")
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&ran.stderr).into_owned();
@@ -81,28 +83,31 @@ fn compile_and_run(setting: Option<&str>) -> (String, u64) {
         "run failed (PERRY_CONSTFN_SHAPE={setting:?}): {:?}\n{stderr}",
         ran.status
     );
-    let report = stderr
-        .lines()
-        .find(|line| line.starts_with("[method-site]"))
-        .unwrap_or_else(|| panic!("no method-site report ({setting:?}):\n{stderr}"));
-    let primes = report
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("primes_constfn="))
-        .unwrap_or_else(|| panic!("no primes_constfn in {report:?}"))
-        .parse()
-        .expect("primes_constfn is a count");
-    (String::from_utf8(ran.stdout).unwrap(), primes)
+    let layouts = std::fs::read_dir(ll_dir)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .flat_map(|ir| {
+            ir.lines()
+                .filter(|line| {
+                    line.starts_with("@perry_constfn_final_")
+                        && line.contains(" = private constant [")
+                })
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .count() as u64;
+    (String::from_utf8(ran.stdout).unwrap(), layouts)
 }
 
 #[test]
 fn constfn_lane_is_on_unless_explicitly_disabled() {
-    let (unset_out, unset_primes) = compile_and_run(None);
-    let (on_out, on_primes) = compile_and_run(Some("1"));
-    let (off_out, off_primes) = compile_and_run(Some("0"));
+    let (unset_out, unset_layouts) = compile_and_run(None);
+    let (on_out, on_layouts) = compile_and_run(Some("1"));
+    let (off_out, off_layouts) = compile_and_run(Some("0"));
     assert_eq!(unset_out, "3000 5000\n");
     assert_eq!(on_out, unset_out);
     assert_eq!(off_out, unset_out);
-    assert!(unset_primes > 0, "unset must build the ConstFn lane");
-    assert!(on_primes > 0, "=1 must build the ConstFn lane");
-    assert_eq!(off_primes, 0, "=0 must not build the ConstFn lane");
+    assert!(unset_layouts > 0, "unset must build the ConstFn lane");
+    assert!(on_layouts > 0, "=1 must build the ConstFn lane");
+    assert_eq!(off_layouts, 0, "=0 must not build the ConstFn lane");
 }

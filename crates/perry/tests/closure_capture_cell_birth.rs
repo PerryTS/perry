@@ -275,6 +275,7 @@ fn compile(dir: &Path) -> (PathBuf, String) {
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_LLVM_KEEP_IR", "1")
         .env("PERRY_ASSERT_CAPTURE_CELLS", "1")
+        .env("PERRY_GC_INSTRUMENTS", "1")
         .output()
         .expect("run perry compile");
     assert_success("perry compile", &compile);
@@ -297,99 +298,29 @@ fn call_count(ir: &str, name: &str) -> usize {
         .count()
 }
 
-/// The bodies of every emitted function whose symbol contains `name`
-/// (specialised clones included).
-fn function_bodies<'a>(ir: &'a str, name: &str) -> Vec<Vec<&'a str>> {
-    let mut out = Vec::new();
-    let mut cur: Option<Vec<&str>> = None;
-    for line in ir.lines() {
-        if line.starts_with("define") {
-            cur = line.contains(name).then(Vec::new);
-        }
-        if let Some(body) = cur.as_mut() {
-            body.push(line);
-            if line == "}" {
-                out.push(cur.take().unwrap());
-            }
-        }
-    }
-    out
-}
-
-/// The register an IR line defines (`%r12 = ...`).
-fn defined_reg(line: &str) -> Option<&str> {
-    let reg = line.trim_start().strip_prefix('%')?.split_once(" = ")?.0;
-    Some(reg)
-}
-
-/// A mint allocates, so it can collect: every word a minting birth hands the
-/// closure allocation must be produced (re-read from its root) at or below
-/// the last mint. A word still in a register from above a mint names a cell or value
-/// that collection may have moved or reclaimed, and no statepoint names it.
-fn assert_minting_birth_words_are_rooted(body: &[&str]) {
-    let text = body.join("\n");
-    let mints: Vec<usize> = body
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l.contains("@js_box_alloc_bits(") || l.contains("@js_scope_alloc("))
-        .map(|(i, _)| i)
-        .collect();
-    let shared_pair = body.iter().any(|l| l.contains("@js_scope_alloc(i32 2,"));
-    assert!(
-        mints.len() >= 2 || (mints.len() == 1 && shared_pair),
-        "premise: the birth mints two cells, separately or in one scope:\n{text}"
-    );
-    let last_mint = *mints.last().unwrap();
-    let alloc = body[last_mint..]
-        .iter()
-        .position(|l| {
-            l.contains("@js_closure_alloc_small(") || l.contains("@js_closure_alloc_fixed(")
-        })
-        .map(|i| i + last_mint)
-        .unwrap_or_else(|| panic!("premise: a bulk boxed birth below the mints:\n{text}"));
-    let words: Vec<&str> = if let Some(args) = body[alloc].split("@js_closure_alloc_small(").nth(1)
-    {
-        // The header is scalar metadata; the remaining registers are the
-        // actual capture words handed to the birth helper.
-        args.split(',')
-            .skip(2)
-            .filter_map(|arg| arg.trim().strip_prefix("i64 %"))
-            .map(|reg| reg.trim_end_matches(')').trim())
-            .collect()
-    } else {
-        body[last_mint..alloc]
-            .iter()
-            .filter_map(|l| l.trim_start().strip_prefix("store i64 %"))
-            .map(|rest| rest.split(',').next().unwrap().trim())
-            .collect()
-    };
-    // `o`, both cells, and the inner closures' own capture names.
-    assert!(
-        words.len() >= 3,
-        "the capture words reach the birth helper:\n{text}"
-    );
-    for w in words {
-        let def = body
-            .iter()
-            .position(|l| defined_reg(l) == Some(w))
-            .unwrap_or_else(|| panic!("no definition of %{w}:\n{text}"));
-        // The last mint's own cell is the one word that needs no root.
-        assert!(
-            def >= last_mint,
-            "capture word %{w} is produced above the last mint and reaches the \
-             closure from a register:\n{text}"
-        );
-    }
-}
-
 fn run(bin: &Path, dir: &Path, env: &[(&str, &str)]) -> String {
     let mut cmd = Command::new(bin);
     cmd.current_dir(dir);
     for (k, v) in env {
         cmd.env(k, v);
     }
+    let evacuating = env.iter().any(|(key, _)| *key == "PERRY_GC_FORCE_EVACUATE");
+    if evacuating {
+        cmd.env("PERRY_GC_DIAG", "1");
+    }
     let out = cmd.output().expect("run compiled fixture");
     assert_success(&format!("compiled fixture {env:?}"), &out);
+    if evacuating {
+        let diagnostics = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            diagnostics.split_whitespace().any(|word| {
+                word.strip_prefix("copied_objects=")
+                    .and_then(|count| count.parse::<u64>().ok())
+                    .is_some_and(|count| count > 0)
+            }),
+            "forced evacuation must move live cells: {diagnostics}"
+        );
+    }
     String::from_utf8(out.stdout).expect("utf-8")
 }
 
@@ -405,16 +336,9 @@ fn every_closure_birth_fills_every_cell_capture_slot() {
         asserts >= 12,
         "expected a birth check per installed cell, found {asserts}"
     );
-    // A birth that mints holds its words rooted across every mint.
-    // (Its ABI wrapper only forwards the call; the bodies are the births.)
-    let minting: Vec<_> = function_bodies(&ir, "__mintTwo")
-        .into_iter()
-        .filter(|body| body.iter().any(|l| l.contains("@js_closure_alloc")))
-        .collect();
-    assert!(!minting.is_empty(), "premise: mintTwo's births are emitted");
-    for body in &minting {
-        assert_minting_birth_words_are_rooted(body);
-    }
+    // Inner cells are minted when inner runs; mintTwo's outer closure now
+    // captures only o. Do not require the retired bulk-mint handoff here.
+    // The birth assertions and evacuation runs below cover live cell slots.
     // Closure entry no longer asks the runtime whether a capture is a cell.
     for gone in ["js_scope_capture_base", "js_box_capture_cell_ptr"] {
         assert!(

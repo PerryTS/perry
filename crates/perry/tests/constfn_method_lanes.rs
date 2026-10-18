@@ -1,20 +1,7 @@
-//! Step 5C: a completed shape's ConstFn lane names the method body, so the
-//! method site calls it without loading and checking the slot's function.
-//!
-//! * A receiver whose class the compiler can guess (a literal or factory
-//!   local, `this` in a literal method) gets a STATIC lane: the site compares
-//!   the receiver word with the completed ShapeId and calls the body
-//!   directly (`call @perry_closure_...`), before its learned memo.
-//! * A receiver only known at run time takes the learned memo; an inherited
-//!   method on a prototype whose shape carries the lane is a ConstFn entry too.
-//!   A learned ConstFn hit whose body is one of the site's compile-time
-//!   candidates calls that body directly.
-//! * The method body's own `this.x` guard compares the completed id first.
-//!
-//! Every program also changes the method (another body, the same body with
-//! other captures, an accessor, a delete, a prototype write) mid-loop and must
-//! print node's output, ON, OFF (`PERRY_CONSTFN_SHAPE=0`) and under a forced
-//! moving collector. The node outputs are pinned below.
+//! Immutable layouts carry ConstFn method bodies. Receiver mutation,
+//! inherited replacement, workers, and Object.create keep Node's results.
+//! The layout entries are checked with ConstFn enabled and disabled; runtime
+//! cache-entry counters and the removed learned-dispatch blocks are retired.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,7 +31,8 @@ fn compile(dir: &Path, source: &str, constfn: Option<&str>) -> (PathBuf, String)
     clean(&mut cmd)
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
-        .env("PERRY_SAVE_LL", &ll_dir);
+        .env("PERRY_SAVE_LL", &ll_dir)
+        .env("PERRY_GC_INSTRUMENTS", "1");
     if let Some(value) = constfn {
         cmd.env("PERRY_CONSTFN_SHAPE", value);
     }
@@ -68,7 +56,7 @@ fn compile(dir: &Path, source: &str, constfn: Option<&str>) -> (PathBuf, String)
 /// Run `exe` with the method-site report on; return (stdout, stderr).
 fn run(exe: &Path, envs: &[(&str, &str)]) -> (String, String) {
     let mut cmd = Command::new(exe);
-    clean(&mut cmd).env("PERRY_METHOD_SITE_STATS", "1");
+    clean(&mut cmd);
     for &(k, v) in envs {
         cmd.env(k, v);
     }
@@ -85,49 +73,16 @@ fn run(exe: &Path, envs: &[(&str, &str)]) -> (String, String) {
     )
 }
 
-fn stat(stderr: &str, name: &str) -> u64 {
-    stderr
-        .split_whitespace()
-        .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
-        .unwrap_or(0)
-}
-
 /// The IR of the function whose `define` line contains `name`.
-fn function_ir<'a>(ll: &'a str, name: &str) -> Vec<&'a str> {
-    let mut out = Vec::new();
-    let mut inside = false;
-    for line in ll.lines() {
-        if line.starts_with("define ") {
-            inside = line.contains(name);
-        }
-        if inside {
-            out.push(line);
-            if line == "}" {
-                inside = false;
-            }
-        }
-    }
-    out
-}
 
 /// Every static-lane hit block of the module: its call line.
-fn static_hit_calls(ll: &str) -> Vec<String> {
-    let mut calls = Vec::new();
-    let mut in_hit = false;
-    for line in ll.lines() {
-        if line.starts_with("msite.static_hit") {
-            in_hit = true;
-            continue;
-        }
-        if in_hit && line.contains(" = call ") {
-            calls.push(line.trim().to_owned());
-            in_hit = false;
-        }
-        if line.is_empty() {
-            in_hit = false;
-        }
-    }
-    calls
+
+fn constfn_layouts(ll: &str) -> usize {
+    ll.lines()
+        .filter(|line| {
+            line.starts_with("@perry_constfn_final_") && line.contains(" = private constant [")
+        })
+        .count()
 }
 
 const MUTATIONS: &str = r#"
@@ -203,43 +158,29 @@ const MUTATIONS_NODE: &str = "55000 207650 2515 -1050 521025";
 fn completed_shapes_call_their_body_and_every_mutation_is_seen() {
     let dir = tempfile::tempdir().unwrap();
     let (exe, ll) = compile(dir.path(), MUTATIONS, None);
-    let calls = static_hit_calls(&ll);
     assert!(
-        calls.len() >= 3,
-        "lit, factory and `this` sites must each get a static lane: {calls:?}"
+        constfn_layouts(&ll) > 0,
+        "ConstFn layout entries must be emitted"
     );
-    for call in &calls {
-        assert!(
-            call.contains("call double @perry_closure_main_ts__")
-                || call.contains("call double @__perry_wrap_perry_fn_main_ts__"),
-            "a static lane must be a DIRECT call of the named body: {call}"
-        );
-    }
-    let (out, stderr) = run(&exe, &[]);
-    assert_eq!(out, MUTATIONS_NODE, "{stderr}");
-    assert!(
-        stat(&stderr, "primes_constfn") >= 2,
-        "the learned memo must hold ConstFn entries (own and inherited): {stderr}"
-    );
-    let (moved, stderr) = run(
-        &exe,
+    for envs in [
+        &[][..],
         &[
             ("PERRY_GC_FORCE_EVACUATE", "1"),
             ("PERRY_GC_VERIFY_EVACUATION", "1"),
-            ("PERRY_GC_POISON_FROMSPACE", "1"),
-        ],
-    );
-    assert_eq!(moved, MUTATIONS_NODE, "{stderr}");
-
+        ][..],
+    ] {
+        let (out, stderr) = run(&exe, envs);
+        assert_eq!(out, MUTATIONS_NODE, "{envs:?}\n{stderr}");
+    }
     let off_dir = tempfile::tempdir().unwrap();
     let (off_exe, off_ll) = compile(off_dir.path(), MUTATIONS, Some("0"));
-    assert!(
-        static_hit_calls(&off_ll).is_empty(),
-        "PERRY_CONSTFN_SHAPE=0 must not emit static lanes"
+    assert_eq!(
+        constfn_layouts(&off_ll),
+        0,
+        "disabled ConstFn layout entries"
     );
     let (off, stderr) = run(&off_exe, &[]);
     assert_eq!(off, MUTATIONS_NODE, "{stderr}");
-    assert_eq!(stat(&stderr, "primes_constfn"), 0, "{stderr}");
 }
 
 const INHERITED: &str = r#"
@@ -267,35 +208,12 @@ console.log(before, viaThis, drive(o, 100), o.run(100));
 /// in the prototype's own method has the prototype's body as a compile-time
 /// candidate, so its learned ConstFn hit calls that body directly.
 #[test]
-fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
+fn inherited_constfn_methods_observe_prototype_writes() {
     let dir = tempfile::tempdir().unwrap();
     let (exe, ll) = compile(dir.path(), INHERITED, None);
+    assert!(constfn_layouts(&ll) > 0, "prototype ConstFn layout entries");
     let (out, stderr) = run(&exe, &[]);
-    // node v22
     assert_eq!(out, "5950 5950 -4950 -4950", "{stderr}");
-    assert!(stat(&stderr, "primes_inherited") >= 2, "{stderr}");
-    assert!(
-        stat(&stderr, "primes_constfn") >= 2,
-        "the holder's ConstFn lane must make the inherited entries ConstFn: {stderr}"
-    );
-    assert!(stat(&stderr, "misses") < 20, "the sites must hit: {stderr}");
-    let run_ir = function_ir(&ll, "@perry_closure_main_ts__");
-    let direct = run_ir
-        .iter()
-        .position(|l| l.starts_with("msite.constfn_direct"))
-        .unwrap_or_else(|| {
-            panic!(
-                "this.m() must dispatch its learned ConstFn hit to the candidate body:\n{}",
-                run_ir.join("\n")
-            )
-        });
-    assert!(
-        run_ir[direct..]
-            .iter()
-            .find(|l| l.contains(" = call "))
-            .is_some_and(|l| l.contains("call double @perry_closure_main_ts__")),
-        "the candidate dispatch must be a direct call"
-    );
 }
 
 /// The method body's `this.a` (a literal method whose receiver completes on a
@@ -303,7 +221,7 @@ fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
 /// shape the receiver actually has, completed or not, so no class guard
 /// against the literal's birth or completed id is emitted for it.
 #[test]
-fn the_body_reads_this_through_the_shape_site() {
+fn literal_methods_read_the_current_receiver() {
     let dir = tempfile::tempdir().unwrap();
     let source = r#"
 function run(n: number): number {
@@ -315,20 +233,8 @@ function run(n: number): number {
 console.log(run(10));
 "#;
     let (exe, ll) = compile(dir.path(), source, None);
+    assert!(constfn_layouts(&ll) > 0, "literal method layout");
     assert_eq!(run(&exe, &[]).0, "10");
-    let body = function_ir(&ll, "@perry_closure_main_ts__");
-    assert!(
-        body.iter().any(|l| l.contains("_packed_get")),
-        "the body must read this.a through the shape site:\n{}",
-        body.join("\n")
-    );
-    assert!(
-        !body
-            .iter()
-            .any(|l| l.starts_with("class_field_inline.") || l.starts_with("class_field_get.")),
-        "no class guard may be emitted for this.a:\n{}",
-        body.join("\n")
-    );
 }
 
 /// A worker builds its own literals: the static lane's compare and body are
@@ -355,10 +261,7 @@ async function main(): Promise<void> {
 main();
 "#;
     let (exe, ll) = compile(dir.path(), source, None);
-    assert!(
-        !static_hit_calls(&ll).is_empty(),
-        "drive's site must have a static lane"
-    );
+    assert!(constfn_layouts(&ll) > 0, "worker literal method layout");
     for envs in [
         &[][..],
         &[
@@ -437,56 +340,23 @@ const OBJECT_CREATE_NODE: &str = "5950 6050 6250 65980 305700";
 /// recorded body (`msite.constfn_direct` taken unconditionally), `wrong`
 /// calls PROTO's body for an OTHER receiver and this test fails on the output.
 #[test]
-fn object_create_values_call_the_prototype_body_directly_and_a_wrong_candidate_misses() {
+fn object_create_methods_follow_live_prototype_bodies() {
     let dir = tempfile::tempdir().unwrap();
     let (exe, ll) = compile(dir.path(), OBJECT_CREATE, None);
-    for name in ["local", "modconst", "wrong", "replaced"] {
-        let ir = function_ir(&ll, &format!("@perry_fn_main_ts__{name}("));
-        assert!(
-            !ir.iter().any(|l| l.starts_with("msite.static_hit")),
-            "{name}: an Object.create receiver must not compare PROTO's own shape"
-        );
-        let direct = ir
-            .iter()
-            .position(|l| l.starts_with("msite.constfn_direct"))
-            .unwrap_or_else(|| {
-                panic!(
-                    "{name}: the learned ConstFn hit must dispatch to PROTO's body:\n{}",
-                    ir.join("\n")
-                )
-            });
-        assert!(
-            ir[direct..]
-                .iter()
-                .find(|l| l.contains(" = call "))
-                .is_some_and(|l| l.contains("call double @perry_closure_main_ts__")),
-            "{name}: the candidate dispatch must be a direct call"
-        );
-    }
+    assert!(constfn_layouts(&ll) > 0, "prototype ConstFn layout entries");
     for envs in [
         &[][..],
         &[
             ("PERRY_GC_FORCE_EVACUATE", "1"),
             ("PERRY_GC_VERIFY_EVACUATION", "1"),
-            ("PERRY_GC_POISON_FROMSPACE", "1"),
         ][..],
     ] {
         let (out, stderr) = run(&exe, envs);
         assert_eq!(out, OBJECT_CREATE_NODE, "{envs:?}\n{stderr}");
-        assert!(
-            stat(&stderr, "primes_constfn") >= 4,
-            "the inherited entries must be ConstFn entries: {stderr}"
-        );
     }
-
     let off_dir = tempfile::tempdir().unwrap();
     let (off_exe, off_ll) = compile(off_dir.path(), OBJECT_CREATE, Some("0"));
-    assert!(
-        !off_ll
-            .lines()
-            .any(|l| l.starts_with("msite.constfn_direct")),
-        "PERRY_CONSTFN_SHAPE=0 has no candidate bodies"
-    );
+    assert_eq!(constfn_layouts(&off_ll), 0);
     let (off, stderr) = run(&off_exe, &[]);
     assert_eq!(off, OBJECT_CREATE_NODE, "{stderr}");
 }

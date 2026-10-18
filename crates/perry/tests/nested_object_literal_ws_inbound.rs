@@ -108,7 +108,7 @@ fn nested_object_literal_does_not_break_ws_inbound() {
         dir.path(),
         r#"
 import { createServer } from "node:http";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
 // The nested literal that regressed. Defined at module scope and merely read —
 // the corruption hit a neighbouring native allocation, not the literal itself.
@@ -118,9 +118,12 @@ const X: any = {
 };
 
 const server = createServer((req: any, res: any) => res.end("n=" + X.b.length));
-server.on("upgrade", (req: any, wsId: any) => {
-  wsId.on("message", (data: any) => {
-    wsId.send("echo:" + String(data));
+const wss = new WebSocketServer({ noServer: true });
+server.on("upgrade", (req: any, socket: any, head: any) => {
+  wss.handleUpgrade(req, socket, head, (wsId: any) => {
+    wsId.on("message", (data: any) => {
+      wsId.send("echo:" + String(data));
+    });
   });
 });
 // fail fast (rather than hang) if inbound never round-trips
