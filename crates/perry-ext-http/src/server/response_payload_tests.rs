@@ -25,6 +25,7 @@ fn boxed(root: &gc::RuntimeHandle<'_>) -> f64 {
 }
 #[test]
 fn response_cycles_are_collected() {
+    perry_ffi::initialize_runtime_fixture();
     unsafe {
         super::super::native_dispatch::js_ext_http_nm_install();
     }
@@ -93,6 +94,7 @@ fn response_cycles_are_collected() {
 }
 #[test]
 fn explicit_close_releases_the_payload_but_preserves_metadata() {
+    perry_ffi::initialize_runtime_fixture();
     unsafe {
         super::super::native_dispatch::js_ext_http_nm_install();
     }
@@ -124,6 +126,7 @@ fn explicit_close_releases_the_payload_but_preserves_metadata() {
 }
 #[test]
 fn global_root_sabotage_makes_the_churn_witness_red() {
+    perry_ffi::initialize_runtime_fixture();
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -144,6 +147,7 @@ fn global_root_sabotage_makes_the_churn_witness_red() {
 
 #[test]
 fn every_end_entry_point_releases_the_payload() {
+    perry_ffi::initialize_runtime_fixture();
     unsafe {
         super::super::native_dispatch::js_ext_http_nm_install();
     }
@@ -172,6 +176,7 @@ fn every_end_entry_point_releases_the_payload() {
 
 #[test]
 fn destroy_releases_native_state_and_keeps_the_destroyed_flag() {
+    perry_ffi::initialize_runtime_fixture();
     unsafe {
         super::super::native_dispatch::js_ext_http_nm_install();
     }
@@ -241,6 +246,7 @@ extern "C" fn socket_write(
 
 #[test]
 fn end_releases_before_reentrant_listeners_collect() {
+    perry_ffi::initialize_runtime_fixture();
     unsafe { super::super::native_dispatch::js_ext_http_nm_install() };
     let scope = gc::RuntimeHandleScope::new();
     let mut data = ResponseState::new();
@@ -287,6 +293,7 @@ fn end_releases_before_reentrant_listeners_collect() {
 
 #[test]
 fn by_name_state_sabotage_reddens_fixed_slot_witness() {
+    perry_ffi::initialize_runtime_fixture();
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -302,6 +309,7 @@ fn by_name_state_sabotage_reddens_fixed_slot_witness() {
 
 #[test]
 fn response_state_is_reached_by_the_record() {
+    perry_ffi::initialize_runtime_fixture();
     unsafe { super::super::native_dispatch::js_ext_http_nm_install() };
     let scope = gc::RuntimeHandleScope::new();
     let response = scope.root_nanbox_f64(value(unsafe {
