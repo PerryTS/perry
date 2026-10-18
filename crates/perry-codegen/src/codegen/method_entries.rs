@@ -41,7 +41,7 @@ pub(super) fn emit_static_method_entry(
         "static method entry",
         "static method entry requires selecting/restoring its lexical class and this binding",
         "class identity, lexical home and static this binding",
-        &[e.cid],
+        &[],
     );
     {
         let n = e.param_count as usize;
@@ -143,7 +143,7 @@ pub(super) fn emit_class_method_entry(
         "method entry",
         "per-evaluation method entry requires selecting/restoring its lexical home and private brand",
         "per-evaluation class identity and private lexical brand",
-        &[e.cid],
+        &[],
     );
     {
         let n = e.param_count as usize;
