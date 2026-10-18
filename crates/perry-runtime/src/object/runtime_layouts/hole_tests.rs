@@ -433,3 +433,26 @@ fn solid_layout_has_no_hole_bit() {
     }
     finish();
 }
+
+/// A constructor may retire allocator placeholders before evaluating super.
+/// Their absence must not create overflow or revoke the birth layout proof.
+#[test]
+fn deleting_absent_layout_keys_preserves_birth_word() {
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY));
+        let word = (*obj).parent_class_id;
+        for name in ["holes_a", "awb2_not_a_layout_key"] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            assert_eq!(crate::object::delete_rest::js_object_delete_field(obj, key), 1);
+            assert_eq!((*obj).parent_class_id, word);
+            assert!(!crate::object::overflow::has_overflow(obj));
+        }
+        let name = "holes_b";
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::js_object_set_field_by_name(obj, key, 7.0);
+        assert_eq!(crate::object::delete_rest::js_object_delete_field(obj, key), 1);
+        assert!(crate::object::overflow::has_overflow(obj));
+        assert_ne!((*obj).parent_class_id, word);
+    }
+}

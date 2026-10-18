@@ -403,3 +403,27 @@ fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
         "a seed must agree with the family's candidate parent"
     );
 }
+
+#[test]
+fn static_root_parent_uses_the_realm_intrinsic_identity() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    use crate::object::shapes;
+    let cid = 0x6e90;
+    register(cid, b"CheckedRoot");
+    let requested = shapes::SHAPE_ID_BASE + 1995;
+    shapes::shape_descriptor_ensure_with_holes(
+        std::ptr::null(), 0, 3, (1u64 << 63) | u64::from(cid),
+        shapes::ShapeObjectKind::Ordinary, 0, shapes::PROTO_ID_DEFAULT,
+        shapes::ReceiverFacts::NONE, Some(requested),
+    ).unwrap();
+    let canonical = super::global_object_prototype_bits().unwrap();
+    assert!(super::decl_prototype_birth::static_parent_matches(cid, requested, canonical));
+    assert!(!super::decl_prototype_birth::static_parent_matches(
+        cid, requested, crate::value::TAG_NULL,
+    ));
+    let other = crate::object::object_alloc_prototype_old(cid, 0);
+    assert!(!super::decl_prototype_birth::static_parent_matches(
+        cid, requested, crate::value::js_nanbox_pointer(other as i64).to_bits(),
+    ));
+}

@@ -67,7 +67,12 @@ pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: 
     // This indexed identity word is the canonical declaration holder (or
     // this realm's Object.prototype). A fresh evaluation of the same class
     // template, a replaced .prototype, and extends null cannot pass it.
-    let canonical = super::prototype_objects::class_holder_word_selected(candidate);
+    let canonical = if candidate == 0 {
+        // DEFAULT has no identity-word cell: this realm's intrinsic owns it.
+        super::global_object_prototype_bits().unwrap_or(0)
+    } else {
+        super::prototype_objects::class_holder_word_selected(candidate)
+    };
     canonical == parent_bits && crate::value::JSValue::from_bits(canonical).is_pointer()
 }
 
