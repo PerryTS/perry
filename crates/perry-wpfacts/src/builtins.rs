@@ -7,6 +7,42 @@
 
 use crate::model::*;
 
+/// Enumerate own values without following prototype methods. A callable can
+/// have toJSON and be passed to the replacer, but its properties are not visited.
+pub fn own_values(m: &mut Model, t: Tok, dst: NodeId, json: bool) {
+    if t == TOP {
+        m.add_tok(dst, TOP);
+        m.add_prim(dst, prim::ALL);
+        return;
+    }
+    if json
+        && matches!(
+            m.toks[t as usize],
+            TokKind::Func(_)
+                | TokKind::Bound(_)
+                | TokKind::ClassObj(_)
+                | TokKind::BuiltinFn
+                | TokKind::BuiltinMethod(_, _)
+                | TokKind::Builtin(
+                    BuiltinNs::Object
+                        | BuiltinNs::Array
+                        | BuiltinNs::Promise
+                        | BuiltinNs::Error
+                        | BuiltinNs::Symbol
+                        | BuiltinNs::Number
+                        | BuiltinNs::String
+                        | BuiltinNs::Boolean
+                        | BuiltinNs::Function
+                        | BuiltinNs::Map
+                        | BuiltinNs::Set
+                )
+        )
+    {
+        return;
+    }
+    m.own_values(t, dst);
+}
+
 /// Global names the `GlobalGet(0)` sentinel resolves to.
 fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     Some(match name {
@@ -77,6 +113,29 @@ fn unknown_method(m: &mut Model, call: CallId, why: &str) {
     }
     m.add_top(c.ret, |_| format!("result: {why}"));
     m.add_prim(c.ret, prim::ALL);
+}
+
+/// Stores on the collapsed builtin prototype already escape their values.
+/// Depend on those same fields, including computed writes, to revoke the
+/// argument-role summary when a method is replaced (even after the call was
+/// first processed). No runtime state is introduced.
+pub fn overwritten(m: &mut Model, call: CallId) {
+    let prev = m.cur_this.take();
+    unknown_method(m, call, "argument of overwritten builtin method");
+    m.cur_this = prev;
+}
+
+fn watch_override(m: &mut Model, holder: Tok, key: Key, call: CallId) {
+    let f = match key {
+        Key::Named(a) => m.field(holder, a),
+        Key::Any => m.all_fields(holder),
+    };
+    m.cons(f, Cons::BuiltinOverride { call });
+    let opaque = match key {
+        Key::Named(a) => m.field(TOP, a),
+        Key::Any => m.field_any(TOP),
+    };
+    m.cons(opaque, Cons::BuiltinOverride { call });
 }
 
 fn implicit_args(m: &mut Model, call: CallId, why: &str) {
@@ -298,10 +357,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             });
             m.add_prim(dst, prim::ALL);
         }
-        TokKind::Builtin(_) => match name.as_deref() {
+        TokKind::Builtin(ns) => match name.as_deref() {
             Some("prototype") => {
                 let op = m.tok(TokKind::ObjectProto);
                 m.add_tok(dst, op);
+            }
+            Some(n) if summarized_static(ns, n) => {
+                let key = m.atom(n);
+                let bf = m.tok(TokKind::BuiltinMethod(ns, key));
+                m.add_tok(dst, bf);
             }
             _ => {
                 let bf = m.tok(TokKind::BuiltinFn);
@@ -392,7 +456,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ModNs(_) | TokKind::ObjectProto | TokKind::Proto(_) => {
             m.add_prim(dst, prim::UNDEF)
         }
-        TokKind::NativeProto(_) | TokKind::BuiltinFn | TokKind::Bound(_) => {
+        TokKind::NativeProto(_)
+        | TokKind::BuiltinFn
+        | TokKind::BuiltinMethod(..)
+        | TokKind::Bound(_) => {
             let bf = m.tok(TokKind::BuiltinFn);
             m.add_tok(dst, bf);
             m.add_prim(dst, prim::ALL);
@@ -412,6 +479,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         TokKind::ObjectProto
         | TokKind::Builtin(_)
         | TokKind::BuiltinFn
+        | TokKind::BuiltinMethod(..)
         | TokKind::ModNs(_)
         | TokKind::NativeProto(_) => {
             // E20: stored where the runtime / unmodeled code reads it.
@@ -424,20 +492,34 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
 
 // ------------------------------------------------------------- methods
 
-pub fn prim_method(m: &mut Model, prim: u16, _key: Key, call: CallId) {
-    if prim & (prim::NULL | prim::UNDEF) == prim {
-        return;
-    }
-    // String/number/boolean methods: callbacks are called by the runtime
-    // with primitives (replace), object arguments are coerced.
-    implicit_args(m, call, "argument of a primitive method");
-    ret_prim(m, call, prim::ALL);
-    let pb = m.tok(TokKind::PrimBox);
-    ret_tok(m, call, pb);
-}
+mod primitives;
+use primitives::coerce_args;
+pub use primitives::{coerce, prim_method};
 
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
+    // Array element storage shares its wildcard field with indexed values;
+    // prototype writes are tracked on the actual builtin prototype instead.
+    if matches!(m.toks[t as usize], TokKind::Builtin(_)) {
+        watch_override(m, t, key, call);
+    }
+    let summarized = match m.toks[t as usize] {
+        TokKind::Builtin(_)
+        | TokKind::BuiltinMethod(..)
+        | TokKind::BuiltinFn
+        | TokKind::Func(_)
+        | TokKind::Bound(_)
+        | TokKind::PrimBox => true,
+        TokKind::Obj(tm) => matches!(
+            m.tmpls[tm as usize].kind,
+            TmplKind::Arr { .. } | TmplKind::BObj { .. }
+        ),
+        _ => false,
+    };
+    if summarized && matches!(key, Key::Named(_)) {
+        let proto = m.tok(TokKind::ObjectProto);
+        watch_override(m, proto, key, call);
+    }
     let prev = m.cur_this.replace(t);
     own_method_inner(m, t, key, call);
     m.cur_this = prev;
@@ -468,7 +550,9 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     };
     match m.toks[t as usize].clone() {
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
-        TokKind::Func(_) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
+        TokKind::Func(_) | TokKind::Bound(_) | TokKind::BuiltinMethod(..) => {
+            function_method(m, t, name.as_deref(), call)
+        }
         TokKind::BuiltinFn => match name.as_deref() {
             None => {}
             Some(n) => unknown_method(
@@ -531,7 +615,88 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
     }
 }
 
+/// Keep callable identity for static methods with argument-role summaries.
+fn summarized_static(ns: BuiltinNs, name: &str) -> bool {
+    match (ns, name) {
+        (
+            BuiltinNs::Object,
+            "keys"
+            | "values"
+            | "entries"
+            | "getOwnPropertyNames"
+            | "getOwnPropertySymbols"
+            | "freeze"
+            | "seal"
+            | "preventExtensions"
+            | "isFrozen"
+            | "isSealed"
+            | "isExtensible"
+            | "is"
+            | "hasOwn"
+            | "getPrototypeOf"
+            | "assign",
+        )
+        | (BuiltinNs::Array, "from" | "of" | "isArray")
+        | (BuiltinNs::Json, "parse" | "stringify")
+        | (
+            BuiltinNs::Number,
+            "isFinite" | "isNaN" | "isInteger" | "isSafeInteger" | "parseInt" | "parseFloat",
+        )
+        | (BuiltinNs::String, "fromCharCode" | "fromCodePoint" | "raw") => true,
+        (BuiltinNs::Math, n) => matches!(
+            n,
+            "random"
+                | "max"
+                | "min"
+                | "hypot"
+                | "atan2"
+                | "pow"
+                | "imul"
+                | "abs"
+                | "acos"
+                | "acosh"
+                | "asin"
+                | "asinh"
+                | "atan"
+                | "atanh"
+                | "cbrt"
+                | "ceil"
+                | "clz32"
+                | "cos"
+                | "cosh"
+                | "exp"
+                | "expm1"
+                | "floor"
+                | "fround"
+                | "f16round"
+                | "log"
+                | "log10"
+                | "log1p"
+                | "log2"
+                | "round"
+                | "sign"
+                | "sin"
+                | "sinh"
+                | "sqrt"
+                | "tan"
+                | "tanh"
+                | "trunc"
+        ),
+        _ => false,
+    }
+}
+
+pub fn call_static(m: &mut Model, ns: BuiltinNs, key: Atom, call: CallId) {
+    let t = m.tok(TokKind::Builtin(ns));
+    watch_override(m, t, Key::Named(key), call);
+    let name = m.atoms[key as usize].clone();
+    ns_method(m, ns, Some(&name), call);
+}
+
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    if !m.calls[call as usize].spread.is_empty() {
+        return unknown_method(m, call, "spread arguments of builtin method");
+    }
     let Some(name) = name else {
         return;
     };
@@ -586,9 +751,9 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             if let Some(o) = arg(m, call, 0) {
                 m.cons(
                     o,
-                    Cons::Load {
-                        key: Key::Any,
+                    Cons::OwnValues {
                         dst: fa,
+                        json: false,
                     },
                 );
             }
@@ -613,6 +778,9 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             }
         }
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
+            if name == "hasOwn" {
+                coerce_args(m, call, &[1]);
+            }
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Object, "getPrototypeOf") | (BuiltinNs::Reflect, "getPrototypeOf") => {
@@ -667,41 +835,73 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Array, "from" | "of") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
-            let vals = all_arg_values(m, call);
-            m.cons(
-                vals,
-                Cons::Load {
-                    key: Key::Any,
-                    dst: fa,
-                },
-            );
             if name == "of" {
+                let vals = all_arg_values(m, call);
                 m.edge(vals, fa);
-            }
-            // A map function is called with each element.
-            if let Some(f) = arg(m, call, 1) {
-                let ret = m.node_l("from-map");
-                let call2 = m.calls.len() as CallId;
-                let num = m.node_l("num");
-                m.add_prim(num, prim::NUM);
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: vec![fa, num],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
-                m.cons(f, Cons::Call { call: call2 });
-                m.edge(ret, fa);
+            } else if let Some(src) = arg(m, call, 0) {
+                let vals = iterate(m, call, src);
+                if let Some(cb) = arg(m, call, 1) {
+                    let num = m.node_l("from-index");
+                    m.add_prim(num, prim::NUM);
+                    let this = arg(m, call, 2).map(ThisArg::Node).unwrap_or(ThisArg::Undef);
+                    let r = cb_call(m, cb, this, vec![vals, num]);
+                    m.edge(r, fa);
+                    // An optional mapper may also be undefined.
+                    m.edge(vals, fa);
+                } else {
+                    m.edge(vals, fa);
+                }
             }
             ret_tok(m, call, arr);
         }
         (BuiltinNs::Json, "stringify") => {
-            implicit_args(m, call, "JSON.stringify value");
+            // Traverse values (not array methods), including property getters.
+            let values = m.node_l("json-values");
+            if let Some(root) = arg(m, call, 0) {
+                m.edge(root, values);
+            }
+            m.cons(
+                values,
+                Cons::OwnValues {
+                    dst: values,
+                    json: true,
+                },
+            );
+            let key = m.node_l("json-key");
+            m.add_prim(key, prim::STR);
+            let converted = m.node_l("json-toJSON");
+            let call2 = m.calls.len() as CallId;
+            m.calls.push(CallSite {
+                this: ThisArg::Node(values),
+                args: vec![key],
+                spread: vec![],
+                ret: converted,
+                site: m.calls[call as usize].site,
+            });
+            let to_json = Key::Named(m.atom("toJSON"));
+            m.cons(
+                values,
+                Cons::MCall {
+                    key: to_json,
+                    call: call2,
+                },
+            );
+            m.edge(converted, values);
+            if let Some(cb) = arg(m, call, 1) {
+                let holder = site_tmpl(m, call, "json-holder");
+                let hf = m.field_any(holder);
+                m.edge(values, hf);
+                let holders = m.node_l("json-holders");
+                m.edge(values, holders);
+                m.add_tok(holders, holder);
+                let ret = cb_call(m, cb, ThisArg::Node(holders), vec![key, values]);
+                m.edge(ret, values);
+            }
+            coerce_args(m, call, &[2]);
             ret_prim(m, call, prim::STR | prim::UNDEF);
         }
         (BuiltinNs::Json, "parse") => {
-            implicit_args(m, call, "JSON.parse text");
+            coerce_args(m, call, &[0]);
             let j = site_tmpl(m, call, "json");
             let fa = m.field_any(j);
             m.add_prim(fa, prim::ALL);
@@ -714,9 +914,15 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 let call2 = m.calls.len() as CallId;
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
+                let context = site_tmpl(m, call, "reviver-context");
+                let source_key = m.atom("source");
+                let source = m.field(context, source_key);
+                m.add_prim(source, prim::STR | prim::UNDEF);
+                let context_node = m.node_l("reviver-context");
+                m.add_tok(context_node, context);
                 m.calls.push(CallSite {
                     this: ThisArg::Tok(j),
-                    args: vec![s, fa],
+                    args: vec![s, fa, context_node],
                     spread: vec![],
                     ret,
                     site: call2,
@@ -725,12 +931,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 m.edge(ret, fa);
             }
         }
+        (BuiltinNs::Number, "isFinite" | "isInteger" | "isNaN" | "isSafeInteger") => {
+            ret_prim(m, call, prim::BOOL);
+        }
         (BuiltinNs::Math, _) | (BuiltinNs::Number, _) | (BuiltinNs::String, _) => {
-            implicit_args(m, call, "ToPrimitive");
-            ret_prim(m, call, prim::ALL);
-            if name == "raw" || name == "split" {
-                let pb = m.tok(TokKind::PrimBox);
-                ret_tok(m, call, pb);
+            if !primitives::static_method(m, ns, name, call) {
+                unknown_method(
+                    m,
+                    call,
+                    &format!("argument of unmodeled builtin {ns:?}.{name}"),
+                );
             }
         }
         (BuiltinNs::Symbol, _) => {
@@ -844,9 +1054,18 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let e = error_tok(m, call);
             ret_tok(m, call, e);
         }
-        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
-            implicit_args(m, call, "ToPrimitive");
-            ret_prim(m, call, prim::ALL);
+        BuiltinNs::Boolean => ret_prim(m, call, prim::BOOL),
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Symbol => {
+            coerce_args(m, call, &[0]);
+            ret_prim(
+                m,
+                call,
+                match ns {
+                    BuiltinNs::String => prim::STR,
+                    BuiltinNs::Symbol => prim::SYMBOL,
+                    _ => prim::NUM | prim::BIGINT,
+                },
+            );
         }
         BuiltinNs::Object => {
             let c = m.calls[call as usize].clone();
@@ -1116,7 +1335,7 @@ fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let out = m.node_l("b-iterated");
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
-    let mut sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
+    let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
         let ret = m.node_l("b-iter-ret");
         let c2 = m.calls.len() as CallId;
         m.calls.push(CallSite {
@@ -1266,6 +1485,11 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
 }
 
 fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    if !m.calls[call as usize].spread.is_empty()
+        && !matches!(name, Some("push" | "unshift" | "concat"))
+    {
+        return unknown_method(m, call, "spread arguments of array method");
+    }
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     let num = m.node_l("num");
@@ -1287,7 +1511,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
         // Arrays and strings are iterables, not iterators: no `next`,
         // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
         // on every iterable).
-        Some("next" | "return" | "throw") => {}
+        Some("next" | "return" | "throw" | "toJSON") => {}
         Some("push" | "unshift") => {
             for &a in &c.args {
                 m.edge(a, elems);
@@ -1304,54 +1528,83 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             ret_prim(m, call, prim::NUM);
         }
         Some("pop" | "shift" | "at") => {
+            if name == Some("at") {
+                coerce_args(m, call, &[0]);
+            }
             m.edge(elems, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
-        Some("splice") => {
+        Some("splice" | "toSpliced") => {
+            coerce_args(m, call, &[0, 1]);
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            let target = if name == Some("splice") { elems } else { ofa };
             for &a in c.args.iter().skip(2) {
-                m.edge(a, elems);
+                m.edge(a, target);
             }
-            ret_tok(m, call, t);
+            // Spread may contribute both index arguments and inserted values.
+            for &sp in &c.spread {
+                let key = m.elem_key();
+                m.cons(sp, Cons::Load { key, dst: target });
+            }
+            ret_tok(m, call, out);
         }
         Some("fill") => {
+            coerce_args(m, call, &[1, 2]);
             if let Some(&a) = c.args.first() {
                 m.edge(a, elems);
             }
             ret_tok(m, call, t);
         }
-        Some(
-            "slice" | "concat" | "reverse" | "toReversed" | "flat" | "copyWithin" | "with"
-            | "toSpliced",
-        ) => {
-            for &a in &c.args {
-                // concat: array arguments contribute their elements.
-                m.edge(a, elems);
-                m.cons(
-                    a,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
-            }
-            if name == Some("flat") {
-                m.cons(
-                    elems,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
+        Some("reverse" | "copyWithin") => {
+            if name == Some("copyWithin") {
+                coerce_args(m, call, &[0, 1, 2]);
             }
             ret_tok(m, call, t);
+        }
+        Some("slice" | "concat" | "toReversed" | "flat" | "with") => {
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            match name {
+                Some("slice") => coerce_args(m, call, &[0, 1]),
+                Some("flat") => {
+                    coerce_args(m, call, &[0]);
+                    let key = m.elem_key();
+                    // A dynamic depth can flatten arbitrarily many levels.
+                    m.cons(ofa, Cons::Load { key, dst: ofa });
+                }
+                Some("with") => {
+                    coerce_args(m, call, &[0]);
+                    if let Some(&a) = c.args.get(1) {
+                        m.edge(a, ofa);
+                    }
+                }
+                Some("concat") => {
+                    let vals = all_arg_values(m, call);
+                    m.edge(vals, ofa);
+                    let key = m.elem_key();
+                    m.cons(vals, Cons::Load { key, dst: ofa });
+                }
+                _ => {}
+            }
+            ret_tok(m, call, out);
         }
         Some("sort" | "toSorted") => {
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
-                m.cons(r, Cons::Implicit { reason: why });
+                m.cons(r, Cons::Coerce { reason: why });
             }
-            ret_tok(m, call, t);
+            if name == Some("toSorted") {
+                let out = site_tmpl(m, call, "Array");
+                let ofa = m.field_any(out);
+                m.edge(elems, ofa);
+                ret_tok(m, call, out);
+            } else {
+                ret_tok(m, call, t);
+            }
         }
         Some(
             "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex" | "findLast"
@@ -1401,12 +1654,23 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             m.edge(acc, c.ret);
         }
         Some("indexOf" | "lastIndexOf" | "includes" | "findIndexOf") => {
-            ret_prim(m, call, prim::NUM | prim::BOOL);
+            coerce_args(m, call, &[1]);
+            ret_prim(
+                m,
+                call,
+                if name == Some("includes") {
+                    prim::BOOL
+                } else {
+                    prim::NUM
+                },
+            );
         }
         Some("join" | "toString" | "toLocaleString") => {
-            let why = m.reason("array join (element ToString)");
-            m.cons(elems, Cons::Implicit { reason: why });
-            implicit_args(m, call, "join separator");
+            let reason = m.reason("array join element conversion");
+            m.cons(elems, Cons::Coerce { reason });
+            if name == Some("join") {
+                coerce_args(m, call, &[0]);
+            }
             ret_prim(m, call, prim::STR);
         }
         Some("keys") => {
@@ -1423,7 +1687,26 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
-        Some(n) => unknown_method(m, call, &format!("argument of unmodeled array method {n}")),
+        Some(n) => {
+            // A missing intrinsic on an actual array throws. Source-defined
+            // own/prototype members and opaque writes are followed separately.
+            let actual_array = matches!(m.toks[t as usize], TokKind::Obj(tm)
+                if matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. }));
+            let inherited = matches!(
+                n,
+                "constructor"
+                    | "propertyIsEnumerable"
+                    | "isPrototypeOf"
+                    | "__defineGetter__"
+                    | "__defineSetter__"
+                    | "__lookupGetter__"
+                    | "__lookupSetter__"
+                    | "__proto__"
+            );
+            if !actual_array || inherited {
+                unknown_method(m, call, &format!("argument of unmodeled array method {n}"));
+            }
+        }
     }
 }
 
@@ -1516,6 +1799,10 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
             ret_tok(m, call, out);
         }
         ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
+        ("builtin" | "RegExp", Some("@@__perry_wk_replace")) => {
+            primitives::string_method(m, "replace", call);
+        }
+
         (
             "Date" | "RegExp" | "URL" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
             Some(n),

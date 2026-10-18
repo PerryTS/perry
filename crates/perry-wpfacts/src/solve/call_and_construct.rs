@@ -35,6 +35,9 @@ impl Model {
                 }
                 self.bind_args(call, t);
             }
+            TokKind::BuiltinMethod(ns, key) => {
+                self.with_b(|m| builtins::call_static(m, ns, key, call))
+            }
             TokKind::Bound(_) => self.call_bound(call, t),
             TokKind::ClassObj(_) => {
                 // Calling a class without `new` throws; nothing flows.
@@ -468,8 +471,7 @@ impl Model {
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
         // writes `store_into` records.
-        if self.fnproto_write.is_none()
-            && matches!(self.toks[t as usize], TokKind::ObjectProto)
+        if matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -484,6 +486,7 @@ impl Model {
             self.toks[t as usize],
             TokKind::ObjectProto
                 | TokKind::BuiltinFn
+                | TokKind::BuiltinMethod(..)
                 | TokKind::Builtin(_)
                 | TokKind::NativeProto(_)
         ) {
@@ -624,6 +627,14 @@ impl Model {
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         if kind == Hard::E6SetPrototypeOf {
             self.super_relink.insert(t);
+            if t == TOP
+                || matches!(
+                    self.toks[t as usize],
+                    TokKind::ObjectProto | TokKind::Builtin(_)
+                )
+            {
+                self.note_fnproto_write(t, None, kind.code());
+            }
         }
         if matches!(
             kind,

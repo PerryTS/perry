@@ -11,6 +11,7 @@ impl Model {
                 TokKind::Top
                 | TokKind::Builtin(_)
                 | TokKind::BuiltinFn
+                | TokKind::BuiltinMethod(..)
                 | TokKind::NativeProto(_)
                 | TokKind::PrimBox => {}
                 TokKind::Obj(_) if self.is_array_like(t) => {}
@@ -674,6 +675,7 @@ impl Model {
                     self.unknown_callee_args(call, t, false);
                 }
             }
+            TokKind::BuiltinMethod(..) => self.call_tok(call, t, None),
             TokKind::Func(_) => self.bind_args(call, t),
             TokKind::Bound(_) => {
                 if self.bind_done.insert((call, t, u32::MAX)) {
