@@ -37,7 +37,8 @@ pub(super) fn read_stream_default_size(stream: f64) -> f64 {
     // `_read` is user code and can collect.
     let scope = RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
-    invoke_read_once(stream.get_nanbox_f64());
+    let taking = super::read_more::head_units(stream.get_nanbox_f64());
+    super::read_ahead(stream.get_nanbox_f64(), taking);
     read_stream_available_default(stream.get_nanbox_f64())
 }
 
@@ -192,7 +193,13 @@ pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let s = || stream.get_nanbox_f64();
-    invoke_read_once(s());
+    let available = get_hidden_value(s(), hidden_buffered_key()).unwrap_or(0.0);
+    let taking = if size <= available {
+        size.max(0.0)
+    } else {
+        0.0
+    };
+    super::read_ahead(s(), taking);
     if size <= 0.0 {
         return f64::from_bits(TAG_NULL);
     }

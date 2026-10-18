@@ -361,10 +361,18 @@ extern "C" fn ns_readable_resume_microtask(
         f64::from_bits(TAG_FALSE),
     );
     if readable_is_flowing(s()) && !stream_destroyed(s()) {
+        // node's `resume_`: `read(0)` unless a `_read` is in flight, then
+        // 'resume', the flow, and `read(0)` again while flowing.
+        let hook = has_read_hook(s());
+        if hook && !read_in_flight(s()) {
+            invoke_read_once(s());
+        }
         let _ = emit_stream_event(s(), literal_string_value(b"resume"), &[]);
         flush_pending_readable_chunks(s());
         schedule_readable_from_drain(s());
-        invoke_read_once(s());
+        if !hook || (readable_is_flowing(s()) && !read_in_flight(s())) {
+            invoke_read_once(s());
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -660,6 +668,7 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     if stream_destroyed(stream) {
         return f64::from_bits(TAG_FALSE);
     }
+    let answered = note_push(stream);
     let jsval = JSValue::from_bits(chunk.to_bits());
     if jsval.is_null() || jsval.is_undefined() {
         flush_readable_decoder(stream);
@@ -672,6 +681,7 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
     let Some(chunk) = decode_readable_chunk_for_encoding(stream, chunk) else {
+        maybe_read_more(stream, answered);
         return f64::from_bits(TAG_TRUE);
     };
     let chunk = if !readable_object_mode(stream)
@@ -684,7 +694,11 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     } else {
         chunk
     };
-    push_chunk_backpressure_result(stream, append_readable_output_chunk(stream, chunk))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let total = append_readable_output_chunk(stream.get_nanbox_f64(), chunk);
+    maybe_read_more(stream.get_nanbox_f64(), answered);
+    push_chunk_backpressure_result(stream.get_nanbox_f64(), total)
 }
 
 fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
@@ -701,11 +715,18 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
         push_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
         schedule_readable_event(stream);
-        if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
+        if readable_is_flowing(stream)
+            && !should_defer_initial_data_emit(stream)
+            && !read_is_sync(stream)
+            && pending_readable_chunk_count(stream) == 0
+        {
             consume_readable_buffered_front_on_live_emit(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             buffer_pending_readable_chunk(stream, chunk);
+            if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
+                read_more::schedule_flow(stream);
+            }
         }
     }
     total
@@ -1843,8 +1864,10 @@ use pipeline::*;
 mod readwrite;
 pub use readwrite::*;
 
+mod read_more;
 #[path = "node_stream_readable_read.rs"]
 mod readable_read;
+use read_more::{maybe_read_more, note_push, read_ahead, read_in_flight, read_is_sync};
 use readable_read::*;
 
 #[path = "node_stream_compose_live.rs"]

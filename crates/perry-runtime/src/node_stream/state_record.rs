@@ -71,6 +71,12 @@ stream_slots! {
     ReadableSignal,
     ReadableRead,
     ReadableReadInvoked,
+    /// node's `kSync`: the stream's `_read` is running.
+    ReadableSync,
+    /// node's `kReadingMore`: a `maybeReadMore` tick is queued.
+    ReadableReadingMore,
+    /// A flow tick for chunks a synchronous `_read` buffered is queued.
+    ReadableFlowScheduled,
     ReadableDefaultReadError,
     ReadableObjectMode,
     /// HTTP response JS state, traced with the payload and native alias.

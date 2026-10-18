@@ -489,23 +489,37 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
     if !readable_is_flowing(s()) || stream_destroyed(s()) {
         return;
     }
-    let pending = scope.root_nanbox_f64(ensure_hidden_array(s(), hidden_readable_pending_key()));
-    let arr = || raw_ptr_from_value(pending.get_nanbox_f64()) as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr());
-    if len == 0 {
-        return;
-    }
-    // The old queue is ours from here; a fresh one takes chunks pushed meanwhile.
-    let fresh = box_pointer(crate::array::js_array_alloc(0) as *const u8);
-    set_hidden_value(s(), hidden_readable_pending_key(), fresh);
-    for i in 0..len {
-        let chunk = crate::array::js_array_get_f64(arr(), i);
-        if !readable_is_flowing(s()) {
-            buffer_pending_readable_chunk(s(), chunk);
+    // node's `flow()`: each `read()` first lets a `_read` hook read ahead
+    // (a chunk it pushes synchronously queues behind the head), then hands
+    // out the head chunk. Chunks pushed by listeners queue behind too.
+    let mut hook = None;
+    let mut has_hook = |stream: f64| *hook.get_or_insert_with(|| has_read_hook(stream));
+    let pending = || {
+        raw_ptr_from_value(ensure_hidden_array(s(), hidden_readable_pending_key()))
+            as *mut crate::array::ArrayHeader
+    };
+    let chunk = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
+    while readable_is_flowing(s()) && !stream_destroyed(s()) {
+        if crate::array::js_array_length(pending()) == 0 {
+            if super::read_in_flight(s()) || !has_hook(s()) {
+                break;
+            }
+            super::read_ahead(s(), 0.0);
+            if crate::array::js_array_length(pending()) == 0 {
+                break;
+            }
             continue;
         }
-        super::readable_from_promises::consume_readable_buffered_front(s(), chunk);
-        emit_readable_data_unchecked(s(), crate::array::js_array_get_f64(arr(), i));
+        if !super::read_in_flight(s()) && has_hook(s()) {
+            let head = crate::array::js_array_get_f64(pending(), 0);
+            super::read_ahead(s(), super::read_more::chunk_units(s(), head));
+            if !readable_is_flowing(s()) || stream_destroyed(s()) {
+                break;
+            }
+        }
+        chunk.set_nanbox_f64(crate::array::js_array_shift_f64(pending()));
+        super::readable_from_promises::consume_readable_buffered_front(s(), chunk.get_nanbox_f64());
+        emit_readable_data_unchecked(s(), chunk.get_nanbox_f64());
     }
     if stream_hidden_ended(s())
         && pending_readable_chunk_count(s()) == 0
@@ -532,8 +546,11 @@ pub(super) fn readable_listener_added(stream: f64) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
         return;
     }
-    if get_hidden_value(stream, hidden_read_key()).is_some() {
-        invoke_read_once(stream);
+    if has_read_hook(stream)
+        && get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0
+        && !super::read_in_flight(stream)
+    {
+        super::read_more::schedule_read_zero(stream);
     }
     schedule_readable_event(stream);
 }
@@ -802,9 +819,11 @@ pub(super) fn queue_readable_event(stream: f64) {
         hidden_readable_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
+    // node's `emitReadable`: the event fires from the next-tick queue, ahead
+    // of promise jobs and in order with the stream's other ticks.
     let closure = js_closure_alloc(crate::fn_info!(ns_readable_event_microtask, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
-    crate::builtins::js_queue_microtask(closure as i64);
+    crate::builtins::js_queue_next_tick(closure as i64);
 }
 
 pub(super) fn cancel_readable_event(stream: f64) {
@@ -1500,6 +1519,10 @@ pub(super) fn probe_read_once(stream: f64) {
 /// an own `_read` assigned after the constructor ran (`this._read = fn` in a
 /// `Readable.call(this)` subclass, as light-my-request's `Request` does),
 /// then `options.read`, then a `_read` on the prototype chain.
+pub(super) fn has_read_hook(stream: f64) -> bool {
+    resolve_read_callback(stream).is_some()
+}
+
 fn resolve_read_callback(stream: f64) -> Option<f64> {
     let own = crate::object::js_object_get_own_field_or_undef(stream, b"_read".as_ptr(), 5);
     if is_callable_value(own) {
@@ -1528,19 +1551,30 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
         }
         return;
     };
-    if get_hidden_value(stream, hidden_read_invoked_key()).is_some() {
+    // node's `read()`: no `_read` while one is in flight (cleared by its
+    // `push()`), after EOF, or once destroyed.
+    if get_hidden_value(stream, hidden_read_invoked_key()).is_some()
+        || stream_hidden_ended(stream)
+        || stream_destroyed(stream)
+    {
         return;
     }
-    set_hidden_value(stream, hidden_read_invoked_key(), f64::from_bits(TAG_TRUE));
-    let size = get_hidden_value(stream, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let read = scope.root_nanbox_f64(read);
+    let s = || stream.get_nanbox_f64();
+    set_hidden_value(s(), hidden_read_invoked_key(), f64::from_bits(TAG_TRUE));
+    let size = get_hidden_value(s(), hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
+    set_hidden_value(s(), Slot::ReadableSync, f64::from_bits(TAG_TRUE));
     unsafe {
         let _ = crate::closure::native_call_value_this(
-            read,
-            crate::closure::JsThis::from_f64(stream),
+            read.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(s()),
             [size].as_ptr(),
             1,
         );
     }
+    set_hidden_value(s(), Slot::ReadableSync, f64::from_bits(TAG_FALSE));
 }
 
 pub(super) fn maybe_emit_default_read_error(stream: f64) {
