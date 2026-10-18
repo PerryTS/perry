@@ -1,0 +1,1 @@
+Restore test-fixture compilation after HIR and FFI API updates. Construct codegen regression modules with Module::new and retain their fixture-specific payloads; scope the native-library example byte borrow with bytes::no_gc and copy its length before allocating the result string. Use the current NetCompletion flags field for regular-socket test events.

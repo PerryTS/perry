@@ -2,7 +2,7 @@
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
+use perry_hir::{Expr, Function, Module, Stmt};
 
 fn options(target: Option<&str>) -> CompileOptions {
     CompileOptions {
@@ -83,58 +83,24 @@ fn call(method: &str, args: Vec<Expr>) -> Stmt {
 }
 
 fn module(body: Vec<Stmt>) -> Module {
-    Module {
-        name: "ios_platform_api_probe".to_string(),
-        imports: Vec::new(),
-        exports: Vec::new(),
-        classes: Vec::new(),
-        interfaces: Vec::new(),
-        type_aliases: Vec::new(),
-        enums: Vec::new(),
-        globals: Vec::new(),
-        functions: vec![Function {
-            id: 1,
-            name: "probe".to_string(),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Number,
-            body,
-            is_async: false,
-            is_generator: false,
-            is_strict: false,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        }],
-        init_is_strict: false,
-        init: Vec::new(),
-        classic_for_lexical_bindings: std::collections::HashSet::new(),
-        exported_native_instances: Vec::new(),
-        exported_func_return_native_instances: Vec::new(),
-        exported_objects: Vec::new(),
-        exported_functions: Vec::new(),
-        script_global_functions: Vec::new(),
-        references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
-        widgets: Vec::new(),
-        uses_fetch: false,
-        uses_webassembly: false,
-        extern_funcs: Vec::new(),
-        init_was_unrolled: false,
-        has_top_level_await: false,
-        init_kind: ModuleInitKind::Eager,
-        async_step_closures: Default::default(),
-        closure_display_names: Default::default(),
-        class_display_names: Default::default(),
-        closure_source_text: Default::default(),
-        class_source_text: Default::default(),
-        async_generator_funcs: Default::default(),
-        local_source_spans: Default::default(),
-        gen_param_prologue_len: Default::default(),
-        class_family_syntax: None,
-    }
+    let mut module = Module::new("ios_platform_api_probe");
+    module.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    module
 }
 
 #[test]

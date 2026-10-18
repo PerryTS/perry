@@ -6,7 +6,7 @@
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
+use perry_hir::{Expr, Module, Stmt};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -77,43 +77,9 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn module_with_init(init: Vec<Stmt>) -> Module {
-    Module {
-        name: "argless_extra_args.ts".to_string(),
-        imports: Vec::new(),
-        exports: Vec::new(),
-        classes: Vec::new(),
-        interfaces: Vec::new(),
-        type_aliases: Vec::new(),
-        enums: Vec::new(),
-        globals: Vec::new(),
-        functions: Vec::new(),
-        script_global_functions: Vec::new(),
-        references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
-        init_is_strict: false,
-        init,
-        classic_for_lexical_bindings: std::collections::HashSet::new(),
-        exported_native_instances: Vec::new(),
-        exported_func_return_native_instances: Vec::new(),
-        exported_objects: Vec::new(),
-        exported_functions: Vec::new(),
-        widgets: Vec::new(),
-        uses_fetch: false,
-        uses_webassembly: false,
-        extern_funcs: Vec::new(),
-        init_was_unrolled: false,
-        has_top_level_await: false,
-        init_kind: ModuleInitKind::Eager,
-        async_step_closures: std::collections::HashSet::new(),
-        closure_display_names: std::collections::HashMap::new(),
-        class_display_names: std::collections::HashMap::new(),
-        closure_source_text: std::collections::HashMap::new(),
-        class_source_text: std::collections::HashMap::new(),
-        async_generator_funcs: std::collections::HashSet::new(),
-        local_source_spans: std::collections::HashMap::new(),
-        gen_param_prologue_len: std::collections::HashMap::new(),
-        class_family_syntax: None,
-    }
+    let mut module = Module::new("argless_extra_args.ts");
+    module.init = init;
+    module
 }
 
 /// `"  x  ".trim(1)` — String.trim is argless but JS ignores the extra arg.
