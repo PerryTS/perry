@@ -153,7 +153,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             Expr::Call { .. }
             | Expr::PropertyGet { .. }
             | Expr::Closure { .. }
-            | Expr::FuncRef(_)
             | Expr::ExternFuncRef { .. } => value,
             _ => Expr::CompilerOwned(Box::new(value)),
         });

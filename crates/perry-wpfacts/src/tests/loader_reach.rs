@@ -99,3 +99,13 @@ fn a_top_receiver_can_name_a_global_evaluator() {
     );
     assert!(p.module_reentry.is_some(), "{}", p.dump_text());
 }
+
+#[test]
+fn sloppy_this_and_returned_aliases_do_not_hide_global_loaders() {
+    for s in [
+        "function load(){return this.Function(process.argv[2]);} load();",
+        "function root(){return this;} root().Function(process.argv[2]);",
+        "function load(){return this.Function(process.argv[2]);} load.call({Function:()=>0}); load();",
+        "function root(){return this;} root().process.getBuiltinModule('module');",
+    ] {let p=facts(s);assert!(p.module_reentry.is_some(),"{s}: {}",p.dump_text());}
+}

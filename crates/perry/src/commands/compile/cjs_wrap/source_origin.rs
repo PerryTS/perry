@@ -67,6 +67,31 @@ pub(in crate::commands::compile) fn stamp(
         }
     }
     impl VisitMut for Stamp<'_> {
+        fn visit_mut_ident(&mut self, node: &mut swc_ecma_ast::Ident) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.span);
+        }
+        fn visit_mut_bin_expr(&mut self, node: &mut swc_ecma_ast::BinExpr) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.span);
+        }
+        fn visit_mut_unary_expr(&mut self, node: &mut swc_ecma_ast::UnaryExpr) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.span);
+        }
+        fn visit_mut_cond_expr(&mut self, node: &mut swc_ecma_ast::CondExpr) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.span);
+        }
+        fn visit_mut_seq_expr(&mut self, node: &mut swc_ecma_ast::SeqExpr) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.span);
+        }
+        fn visit_mut_paren_expr(&mut self, node: &mut swc_ecma_ast::ParenExpr) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.span);
+        }
+
         fn visit_mut_import_named_specifier(
             &mut self,
             node: &mut swc_ecma_ast::ImportNamedSpecifier,
@@ -195,5 +220,33 @@ mod tests {
             .module_reentry
             .is_none());
         assert!(facts(&format!("{body} make();")).module_reentry.is_some());
+    }
+    #[test]
+    fn generated_factory_forwarding_is_not_a_user_loader_read() {
+        for (body, refused) in [
+            ("console.log(1);", false),
+            (
+                "const exposed=__perry_cjs_factory; console.log(typeof exposed);",
+                true,
+            ),
+        ] {
+            let marks = markers(body);
+            let text=format!("import {{createRequire as __perry_cjs_create_require}} from 'node:module'; function __perry_cjs_factory() {{ const forwarded=__perry_cjs_factory; if (forwarded !== undefined) {{}} {} }} __perry_cjs_factory();",mark(body,&marks));
+            let syntax = perry_hir::ir::ClassFamilySyntax {
+                original_source_ranges: ranges(&text, &marks),
+                ..Default::default()
+            };
+            let ast = perry_parser::parse_typescript(&text, "forward.cjs").unwrap();
+            let ast = stamp(&ast, &Some(syntax.clone())).unwrap();
+            let mut hir = perry_hir::lower_module(&ast, "forward", "forward.cjs").unwrap();
+            hir.set_class_family_syntax(Some(syntax));
+            let p = perry_wpfacts::compute(&[("forward.cjs".into(), &hir)], &Default::default());
+            assert_eq!(
+                p.module_reentry.is_some(),
+                refused,
+                "{body}: {:?}",
+                p.module_reentry
+            );
+        }
     }
 }

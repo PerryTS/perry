@@ -219,6 +219,33 @@ struct Reach<'a> {
     protocols: FxHashMap<Tok, Vec<CallId>>,
     top_reached: bool,
 }
+fn possible_loader_member(name: Option<&str>) -> bool {
+    name.is_none_or(|n| {
+        matches!(
+            n,
+            "Function"
+                | "eval"
+                | "module"
+                | "require"
+                | "Bun"
+                | "Deno"
+                | "cache"
+                | "_cache"
+                | "mainModule"
+                | "getBuiltinModule"
+                | "createRequire"
+                | "binding"
+                | "_linkedBinding"
+                | "dlopen"
+                | "constructor"
+                | "extensions"
+                | "_extensions"
+                | "_compile"
+                | "_load"
+        ) || n.starts_with("__perry_cjs_")
+            || n.starts_with("__cjs_")
+    })
+}
 impl<'a> Reach<'a> {
     fn function(&mut self, f: FnIdx) {
         if self.live.insert(f) {
@@ -514,6 +541,25 @@ impl<'a> Reach<'a> {
             Key::Named(a) => Some(m.atoms[a as usize].as_str()),
             Key::Any => None,
         };
+        // The invariance model binds an unbound ordinary function receiver
+        // to undefined; the runtime supplies globalThis for sloppy calls.
+        // Its aliases/returns retain that primitive bit. A missing receiver
+        // cannot prove a loader-name access absent, even alongside known objects.
+        let receiver = &m.nodes[n as usize];
+        if loader_names
+            && possible_loader_member(name)
+            && (receiver.prim & (prim::NULL | prim::UNDEF) != 0
+                || (receiver.prim == 0 && receiver.pts.is_empty()))
+        {
+            self.reason(
+                f,
+                format!(
+                    "unresolved receiver may reach {} [node {n}]",
+                    name.unwrap_or("[computed]")
+                ),
+            );
+            return;
+        }
         let mut todo = m.nodes[n as usize].pts.to_sorted();
         let mut seen = FxHashSet::default();
         while let Some(t) = todo.pop() {
@@ -616,7 +662,7 @@ impl<'a> Reach<'a> {
                 self.reason(
                     f,
                     format!(
-                        "reachable {}.{}{}",
+                        "reachable {}.{}{} [node {n}]",
                         m.tok_name(t),
                         name.unwrap_or("[computed]"),
                         if store { " write" } else { " read" }
