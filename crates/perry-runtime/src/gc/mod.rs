@@ -309,6 +309,7 @@ mod heap_stats;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
+pub(crate) use heap_snapshot::{gc_build_v8_heap_snapshot_json_with_format, HeapSnapshotFormat};
 pub(crate) use heap_stats::heap_stats;
 
 pub fn gc_collect_minor() -> u64 {

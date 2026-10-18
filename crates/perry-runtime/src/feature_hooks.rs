@@ -184,7 +184,8 @@ pub extern "C" fn js_runtime_install_compiled() {
 /// `Bun.generateHeapSnapshot`, `process.report`): their JSON builders are
 /// reached only through these slots, which `js_runtime_install_diagnostics`
 /// fills, so a program that uses none of them links none of the serializers.
-pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn() -> String> = Hook::empty();
+pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn(crate::gc::HeapSnapshotFormat) -> String> =
+    Hook::empty();
 pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
 
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
@@ -219,7 +220,7 @@ pub extern "C" fn js_runtime_install_wasm_host() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_diagnostics() {
     perry_install_once!({
-        HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json);
+        HEAP_SNAPSHOT_JSON.set(crate::gc::gc_build_v8_heap_snapshot_json_with_format);
         PROCESS_REPORT_JSON.set(crate::process::report::process_report_json_string);
     });
 }

@@ -343,7 +343,7 @@ pub extern "C" fn js_v8_cached_data_version_tag() -> f64 {
 /// dynamic code) answers an empty document.
 pub(crate) fn heap_snapshot_json() -> String {
     match crate::feature_hooks::HEAP_SNAPSHOT_JSON.get() {
-        Some(build) => build(),
+        Some(build) => build(crate::gc::HeapSnapshotFormat::NodeCompatible),
         None => String::from("{}"),
     }
 }

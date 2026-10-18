@@ -228,9 +228,17 @@ unsafe fn object_field_name(
     read_heap_string(*elements.add(field_index), 256)
 }
 
-/// Build the complete V8-format heap snapshot JSON document for the
-/// calling thread's heap. Public entry used by `node_v8.rs`.
+pub(crate) enum HeapSnapshotFormat {
+    NodeCompatible,
+    PerryDiagnostic,
+}
+
+/// Build the calling thread's V8-format snapshot with Perry diagnostic metadata.
 pub fn gc_build_v8_heap_snapshot_json() -> String {
+    gc_build_v8_heap_snapshot_json_with_format(HeapSnapshotFormat::PerryDiagnostic)
+}
+
+pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFormat) -> String {
     // Approximate the live set: collect first so unreachable malloc
     // objects are freed and fully-dead nursery blocks are reset before
     // the walk picks the population (Node's writeHeapSnapshot also
@@ -460,9 +468,18 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
         r#""location_fields":["object_index","script_id","line","column"]},"#,
     ));
     out.push_str(&format!(
-        r#""node_count":{},"edge_count":{},"trace_function_count":0,"extra_native_bytes":0,"pid":{},"thread_id":{},"agent_id":{}}},"#,
-        node_count, edge_count, std::process::id(), thread_id, crate::agent::current_agent()
+        r#""node_count":{},"edge_count":{},"trace_function_count":0,"extra_native_bytes":0"#,
+        node_count, edge_count
     ));
+    if matches!(format, HeapSnapshotFormat::PerryDiagnostic) {
+        out.push_str(&format!(
+            r#","pid":{},"thread_id":{},"agent_id":{}"#,
+            std::process::id(),
+            thread_id,
+            crate::agent::current_agent()
+        ));
+    }
+    out.push_str("},");
 
     out.push_str(r#""nodes":["#);
     // Synthetic root: type synthetic, name "(GC roots)", id 1, size 0.

@@ -1,4 +1,7 @@
-import { getHeapSnapshot } from "node:v8";
+import { getHeapSnapshot, writeHeapSnapshot } from "node:v8";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const chunks: Buffer[] = [];
 const stream = getHeapSnapshot();
@@ -35,3 +38,18 @@ console.log(
   snapshot.strings.length > 0,
 );
 console.log("stream ended:", stream.readableEnded);
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perry-v8-schema-"));
+try {
+  const file = writeHeapSnapshot(path.join(dir, "schema.heapsnapshot"));
+  const fileSnapshot: any = JSON.parse(fs.readFileSync(file, "utf8"));
+  const fileKeys = Object.keys(fileSnapshot.snapshot).sort().join(",");
+  console.log("file snapshot keys:", fileKeys);
+  console.log(
+    "file header matches:",
+    fileKeys === Object.keys(snapshot.snapshot).sort().join(","),
+    fileKeys === "edge_count,extra_native_bytes,meta,node_count,trace_function_count",
+  );
+} finally {
+  fs.rmSync(dir, { recursive: true, force: true });
+}

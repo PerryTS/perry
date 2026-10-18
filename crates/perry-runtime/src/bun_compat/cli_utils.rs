@@ -630,7 +630,7 @@ pub extern "C" fn js_bun_generate_heap_snapshot(format: f64, encoding: f64) -> f
         let _ = encoding;
         throw_type_error("Heap snapshot diagnostics are not enabled in this Perry runtime")
     };
-    let json = build();
+    let json = build(crate::gc::HeapSnapshotFormat::PerryDiagnostic);
     if !is_undefined_or_null(encoding) && value_to_string(encoding) == "arraybuffer" {
         return crate::node_submodules::consumers::bytes_to_array_buffer_value(json.as_bytes());
     }
