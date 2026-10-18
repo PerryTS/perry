@@ -36,6 +36,7 @@ cjs_default_namespace_modules!(
     "child_process",
     "cluster",
     "constants",
+    "dgram",
     "dns",
     "dns/promises",
     "ffi",

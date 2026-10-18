@@ -59,6 +59,7 @@ pub(super) fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "cluster"
             | "cluster.default"
             | "dgram"
+            | "dgram.default"
             | "events"
             | "fs.constants"
             | "inspector"

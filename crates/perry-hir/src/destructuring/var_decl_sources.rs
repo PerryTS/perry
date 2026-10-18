@@ -103,25 +103,24 @@ pub(crate) fn resolvable_native_module_for_spec(raw: &str) -> Option<String> {
     }
 }
 
-/// #5216: register a `const <local> = require("<spec>")` binding exactly as the
-/// equivalent `import * as <local> from "<spec>"` namespace import would, so the
-/// require result behaves like a module-namespace value (member dispatch,
-/// `typeof`, etc.) and reuses the existing native-module machinery. `spec` must
-/// already be a resolved native module name (see
-/// `require_resolvable_native_specifier`); the caller emits NO runtime `let`,
-/// matching how namespace imports of native modules bind nothing observable.
+/// Register a constant native require through the canonical CommonJS export
+/// view, retaining namespace dispatch and omitting the runtime local binding.
 pub(crate) fn register_require_namespace_binding(
     ctx: &mut LoweringContext,
     local: &str,
     spec: &str,
 ) {
-    // Mirror `module_decl.rs`'s `ImportSpecifier::Namespace` native branch.
     let native_source = if spec == "process" {
         "process.namespace".to_string()
     } else {
         spec.to_string()
     };
-    ctx.register_native_module(local.to_string(), native_source, None);
+    let native_method = if spec != "process" && perry_dispatch::has_cjs_default_namespace(spec) {
+        Some("default".to_string())
+    } else {
+        None
+    };
+    ctx.register_native_module(local.to_string(), native_source, native_method);
     ctx.register_builtin_module_alias(local.to_string(), spec.to_string());
     // The top-level pre-scan may have already registered `local` as a module
     // var (it can't know the initializer is a require yet). Drop that local so

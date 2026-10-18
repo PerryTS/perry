@@ -687,10 +687,30 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_diagnostics = true;
         }
-        // `node:dgram` (UDP) → gates `perry-runtime/mod-dgram` (~43 KB; dgram
-        // lowers to `NativeMethodCall { module: "dgram" }`, runtime-only so not
-        // in `native_module_imports`).
-        if hir_debug.contains("module: \"dgram\"") {
+        // Default/require bindings need the same UDP hooks as direct calls.
+        // A createRequire import can resolve dgram without a static reference.
+        let imports_dgram_or_create_require = hir_module.imports.iter().any(|import| {
+            if import.type_only || import.runtime_erased {
+                return false;
+            }
+            let bare = import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source);
+            bare == "dgram"
+                || (bare == "module"
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named { imported, .. }
+                                if imported == "createRequire"
+                        )
+                    }))
+        });
+        if imports_dgram_or_create_require
+            || hir_debug.contains("module: \"dgram\"")
+            || hir_debug.contains("NativeModuleRef(\"dgram\")")
+        {
             ctx.uses_dgram = true;
         }
         // `node:test` → gates `perry-runtime/mod-node-test` (the runner, and

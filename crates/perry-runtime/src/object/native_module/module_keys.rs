@@ -1249,6 +1249,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
     let module_name = normalize_native_module_alias(module_name);
     match module_name {
         "fs" => Some(FS_NAMESPACE_EXPORT_KEYS),
+        "dgram" => Some(&[b"Socket", b"createSocket", b"default"]),
+        "dgram.default" => Some(&[b"Socket", b"createSocket"]),
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
