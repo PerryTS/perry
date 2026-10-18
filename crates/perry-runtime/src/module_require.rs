@@ -1273,9 +1273,9 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
 }
 
 /// Execute one compiled module evaluation using the existing module registry.
-/// Its code address identifies this program's evaluation record independently
-/// of CommonJS partial-export publication (an ESM or parse-error stub may
-/// throw before publishing anything). Successful reentries retain the emitted
+/// Its per-module guard address identifies the evaluation record independently
+/// of a possibly folded initializer body or CommonJS partial-export publication.
+/// An ESM or parse-error stub may throw before publishing anything. Successful reentries retain the emitted
 /// one-byte guard; a failure clears that guard and remains in the registry.
 ///
 /// # Safety
@@ -1283,7 +1283,7 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
 /// its stable generated i8 global, thread-local for worker programs.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: i64) {
-    let key = format!("\0module-init:{init_addr:x}");
+    let key = format!("\0module-init:{guard_addr:x}");
     let outcome = MODULE_PATH_REGISTRY.with(|registry| {
         assert!(registry.register_init(key.clone(), init_addr as usize));
         registry.require_with(&key, &run_path_initializer)
@@ -1787,3 +1787,7 @@ mod builtin_allowlist_parity_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "module_require/init_guard_tests.rs"]
+mod init_guard_tests;
