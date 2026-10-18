@@ -45,6 +45,11 @@ pub unsafe extern "C" fn perry_probe_family_method(
     argc: u32,
 ) -> i64 {
     let obj = (recv as usize + perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
+    // The range test also rejects shadowed words, before touching a record
+    // or a GC header. Most ordinary method receivers carry a runtime shape.
+    if (*obj).parent_class_id.wrapping_sub(LAYOUT_BASE) >= LAYOUT_INDEX_LIMIT {
+        return 0;
+    }
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
     if (*h).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -133,6 +138,14 @@ pub(crate) unsafe fn call_by_id(
         .to_bits()
         .wrapping_sub(crate::value::POINTER_TAG | perry_abi::RECEIVER_HANDLE_FLOOR as u64);
     if biased >= (1u64 << 48) - perry_abi::RECEIVER_HANDLE_FLOOR as u64 {
+        return None;
+    }
+    let obj = (biased as usize + perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
+    if (*obj).parent_class_id.wrapping_sub(LAYOUT_BASE) >= LAYOUT_INDEX_LIMIT {
+        return None;
+    }
+    let d = family_desc_of(obj)?;
+    if d.methods.is_null() {
         return None;
     }
     let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];

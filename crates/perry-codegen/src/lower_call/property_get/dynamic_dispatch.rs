@@ -848,15 +848,20 @@ pub(crate) fn try_lower_instance_method_call(
                 *ctx.class_ids.get(&class_name).unwrap_or(&0),
                 fallback_fn.clone(),
             )];
+            let selectable_arms = if shape_only_guard {
+                subclass_arms.as_slice()
+            } else {
+                &[]
+            };
             constant_candidates.extend(
-                subclass_arms
+                selectable_arms
                     .iter()
                     .map(|a| (a.class_id, a.target_fn.clone())),
             );
             // Match the dynamic consumer and the holder proof being replaced:
             // an incomplete prototype never acquired a compiled fast arm.
             let constant_cased: Vec<bool> = std::iter::once(Some(class_name.as_str()))
-                .chain(subclass_arms.iter().map(|arm| {
+                .chain(selectable_arms.iter().map(|arm| {
                     ctx.class_ids
                         .iter()
                         .find(|(_, id)| **id == arm.class_id)
@@ -871,8 +876,12 @@ pub(crate) fn try_lower_instance_method_call(
                     })
                 })
                 .collect();
-            let constant_static = shape_only_guard
-                && !subclass_arms.is_empty()
+            let observes_lookup = crate::expr::method_site::args_may_observe_lookup(ctx, args);
+            // An observable argument needs a selection before it runs even
+            // for a single/typed arm. The later layout guard still licenses
+            // that arm's representation clone independently.
+            let constant_static = (shape_only_guard || observes_lookup)
+                && (!selectable_arms.is_empty() || observes_lookup)
                 && constant_cased.contains(&true)
                 && !fallback_fn.starts_with("perry_static_")
                 && !fallback_has_rest
