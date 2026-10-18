@@ -383,6 +383,18 @@ pub unsafe extern "C" fn js_domain_add(receiver: i64, member: f64) -> f64 {
             == member.get_nanbox_f64().to_bits()
     });
     if !exists {
+        let previous = scope.root_nanbox_f64(member_domain(member.get_nanbox_f64()));
+        if previous.get_nanbox_f64().to_bits() != domain.get_nanbox_f64().to_bits()
+            && native_payload::is_instance(previous.get_nanbox_f64(), &DOMAIN_FAMILY)
+        {
+            js_domain_remove(
+                js_nanbox_get_pointer(previous.get_nanbox_f64()),
+                member.get_nanbox_f64(),
+            );
+        }
+        let Some(members) = members_array(domain.get_nanbox_f64()) else {
+            return undefined();
+        };
         let members = js_array_push_f64(members, member.get_nanbox_f64());
         object_set(
             domain.get_nanbox_f64(),
