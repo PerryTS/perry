@@ -681,9 +681,15 @@ fn inprocess_statepoint_compile_leaves_no_empty_scratch_dir() {
     };
     for nth in 0..3 {
         let retention = FailureRetention::new();
-        let bytes =
-            compile_ll_inprocess_in(&root, &test_ir(100 + nth), None, CLEAN, true, &retention)
-                .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
+        let bytes = compile_ll_inprocess_in(
+            &root,
+            std::borrow::Cow::Owned(test_ir(100 + nth)),
+            None,
+            CLEAN,
+            true,
+            &retention,
+        )
+        .unwrap_or_else(|e| panic!("in-process compile {nth} failed: {e:#}"));
         assert!(!bytes.is_empty(), "compile {nth} produced no object bytes");
         assert_eq!(
             entries(&root),
@@ -692,4 +698,33 @@ fn inprocess_statepoint_compile_leaves_no_empty_scratch_dir() {
         );
     }
     let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(feature = "llvm-inprocess")]
+#[test]
+fn owned_inprocess_ir_retains_original_source_only_on_first_failure() {
+    let Some(root) = temp_root_if_clang_available("owned-inprocess-failure") else {
+        return;
+    };
+    let retention = FailureRetention::new();
+    let input = "; original owned source\nthis is invalid LLVM IR\n";
+    for _ in 0..3 {
+        compile_ll_inprocess_in(
+            &root,
+            std::borrow::Cow::Owned(input.to_string()),
+            None,
+            CLEAN,
+            true,
+            &retention,
+        )
+        .expect_err("the parser must reject this input");
+    }
+    let files = ll_files_under(&root);
+    assert_eq!(files.len(), 1, "retain only the first failed input");
+    assert_eq!(
+        fs::read_to_string(&files[0]).unwrap(),
+        input,
+        "freeing owned text must preserve the exact diagnostic source"
+    );
+    fs::remove_dir_all(root).unwrap();
 }

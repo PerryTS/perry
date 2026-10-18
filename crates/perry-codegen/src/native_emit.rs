@@ -331,7 +331,7 @@ fn freeze_unit(
 fn stream_frozen_functions<'ctx>(
     context: &'ctx Context,
     module: &Module<'ctx>,
-    funcs: &[FrozenFunction],
+    funcs: Vec<FrozenFunction>,
 ) -> Result<(usize, usize)> {
     let (mut typed, mut raw) = (0usize, 0usize);
     for f in funcs {
@@ -345,9 +345,9 @@ fn stream_frozen_functions<'ctx>(
                 FrozenItem::Text(s) => stream.item(&FI::Text(s)),
                 FrozenItem::Inst(i) => stream.item(&FI::Inst(i)),
             };
-            res.map_err(|e| dump_dialect_failure(f, e))?;
+            res.map_err(|e| dump_dialect_failure(&f, e))?;
         }
-        let (t, r) = stream.finish().map_err(|e| dump_dialect_failure(f, e))?;
+        let (t, r) = stream.finish().map_err(|e| dump_dialect_failure(&f, e))?;
         typed += t;
         raw += r;
     }
@@ -486,7 +486,7 @@ fn compile_module_units_native_with_workers(
     let unit_cache = crate::unit_cache::UnitCache::current();
     #[cfg(test)]
     let test_budget = crate::inprocess::test_rs4gc_budget_cap();
-    let compile_one = |i: usize, unit: &FrozenUnit| -> Result<Vec<u8>> {
+    let compile_one = |i: usize, unit: FrozenUnit| -> Result<Vec<u8>> {
         let started = std::time::Instant::now();
         let (effective_target, args) = crate::linker::native_plan_args(target, native_roots);
         let checkpoint = unit_cache.as_ref().map(|cache| {
@@ -507,11 +507,17 @@ fn compile_module_units_native_with_workers(
                 return Ok(bytes);
             }
         }
+        let FrozenUnit {
+            skeleton,
+            functions,
+            function_count,
+        } = unit;
         let context = Context::create();
-        let module =
-            crate::inprocess::parse_ir_text(&context, &unit.skeleton, "perry_native_module")
-                .with_context(|| format!("unit {i} skeleton"))?;
-        let (t, r) = stream_frozen_functions(&context, &module, &unit.functions)
+        let module = crate::inprocess::parse_ir_text(&context, &skeleton, "perry_native_module")
+            .with_context(|| format!("unit {i} skeleton"))?;
+        // The parser owns its LLVM values. No input text is needed by LLVM.
+        drop(skeleton);
+        let (t, r) = stream_frozen_functions(&context, &module, functions)
             .with_context(|| format!("unit {i}"))?;
         debug_dump(&module, &format!("{module_prefix}.unit{i}"));
         let mut stats = crate::inprocess::UnitCodegenStats::default();
@@ -530,6 +536,9 @@ fn compile_module_units_native_with_workers(
         #[cfg(not(test))]
         let optimized = optimize();
         let unit_bytes = optimized.with_context(|| format!("unit {i}"))?;
+        // Assembly finishing and partial linking need only the emitted bytes.
+        drop(module);
+        drop(context);
         if unit_timings {
             let widest = |w: &Option<(String, usize)>| {
                 w.as_ref()
@@ -561,7 +570,7 @@ fn compile_module_units_native_with_workers(
         }
         log::debug!(
             "perry-codegen: native unit {i}: {} fns, {t} typed + {r} raw insts, {:.3}s",
-            unit.function_count,
+            function_count,
             started.elapsed().as_secs_f64()
         );
         Ok(obj)
@@ -665,7 +674,7 @@ fn compile_module_units_native_with_workers(
                     } else {
                         None
                     };
-                    let out = frozen_unit.and_then(|unit| compile_one(i, &unit));
+                    let out = frozen_unit.and_then(|unit| compile_one(i, unit));
                     if let Some(((rss, _), (_, hwm))) =
                         resident_before.zip(crate::workers::resident_bytes())
                     {
@@ -862,11 +871,30 @@ pub fn compile_module_native(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Result<Vec<u8>> {
+    compile_module_native_input(&*llmod, target, module_prefix)
+}
+
+pub fn compile_module_native_owned(
+    llmod: LlModule,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Result<Vec<u8>> {
+    compile_module_native_input(llmod, target, module_prefix)
+}
+
+fn compile_module_native_input(
+    input: impl std::borrow::Borrow<LlModule>,
+    target: Option<&str>,
+    module_prefix: &str,
+) -> Result<Vec<u8>> {
     let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
     let (effective_target, args) = plan_for(target, native_roots);
     {
         let context = Context::create();
-        let module = build_native_module(&context, llmod)?;
+        let module = build_native_module(&context, input.borrow())?;
+        // An owned production input dies here; a borrowed diagnostic/retry
+        // input remains available to its caller, including on LLVM refusal.
+        drop(input);
         debug_dump(&module, module_prefix);
         // #7982: under the statepoint backends the plan asks for `-S`, so this
         // returns assembler TEXT. It must go through the compact-map rewrite
@@ -878,6 +906,8 @@ pub fn compile_module_native(
             native_roots,
         ) {
             Ok(pieces) => {
+                drop(module);
+                drop(context);
                 return crate::linker::finish_native_pieces(pieces, &effective_target, &args);
             }
             Err(error) => {
@@ -1292,6 +1322,21 @@ mod tests {
             })
             .collect::<Vec<_>>();
         crate::linker::merge_unit_objects(&objects).expect("trusted text units partial-link")
+    }
+
+    #[test]
+    fn owned_native_construction_matches_borrowed_object() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let mut borrowed = precise_root_fixture(false);
+        let expected = compile_module_native(&mut borrowed, None, "owned_native_fixture")
+            .expect("borrowed input emits");
+        let actual =
+            compile_module_native_owned(precise_root_fixture(false), None, "owned_native_fixture")
+                .expect("owned input emits");
+        assert_eq!(
+            actual, expected,
+            "releasing the input must preserve object bytes"
+        );
     }
 
     #[test]

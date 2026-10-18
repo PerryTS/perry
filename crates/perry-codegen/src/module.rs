@@ -1024,6 +1024,34 @@ impl LlModule {
         }
     }
 
+    /// Render on demand from owned parts, releasing each function graph as
+    /// its text enters the bounded LLVM work queue.
+    pub(crate) fn into_codegen_unit_texts(
+        self,
+        n: usize,
+    ) -> Box<dyn ExactSizeIterator<Item = String>> {
+        if n <= 1 || self.functions.len() <= 1 {
+            return Box::new(std::iter::once(self.to_ir()));
+        }
+        let parts = self.into_codegen_unit_parts_with(
+            n,
+            crate::workers::unit_workers(),
+            |function, _, _| function,
+        );
+        Box::new(parts.into_iter().map(|part| {
+            let mut ir = part.pre;
+            for function in part.funcs {
+                ir.push_str(&render_fn_external_with_gc_leaf_callees(
+                    &function,
+                    &part.gc_leaf_callees,
+                ));
+                ir.push('\n');
+            }
+            ir.push_str(&part.post);
+            ir
+        }))
+    }
+
     /// Render this module as `n` independent codegen-unit `.ll` texts (#5391).
     ///
     /// Each unit is independently compilable by `clang -c`, so peak compiler
@@ -1610,3 +1638,6 @@ fn is_js_body(f: &LlFunction) -> bool {
         && f.params[0].1 == crate::expr::body_call::JS_BODY_CALLEE
         && f.params[1].1 == crate::expr::body_call::JS_BODY_THIS
 }
+
+#[cfg(test)]
+mod text_stream_tests;
