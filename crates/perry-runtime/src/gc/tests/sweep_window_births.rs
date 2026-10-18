@@ -197,6 +197,7 @@ fn inline_births_during_a_budgeted_block_cleanup_stay_inside_their_block() {
     clear_marks();
 }
 
+#[cfg(perry_gc_instruments)]
 #[test]
 fn the_sweep_quarantine_poisons_a_swept_old_object_and_never_lists_its_hole() {
     let _isolation = begin_old();

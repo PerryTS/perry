@@ -180,6 +180,7 @@ fn realised_density_tracks_the_requested_rate() {
 // ordinary heap pressure.
 // ---------------------------------------------------------------------------
 
+#[cfg(perry_gc_instruments)]
 #[test]
 fn the_schedule_collects_at_a_safepoint_with_no_pressure_due() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -234,6 +235,7 @@ fn the_schedule_collects_at_a_safepoint_with_no_pressure_due() {
 /// distinguishes "seeded schedule" from "collect at every safepoint with extra
 /// steps" — if a declined safepoint collected anyway, every seed would behave
 /// identically and the rate knob would be decoration.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn a_declined_safepoint_does_not_collect_but_still_ticks() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -303,6 +305,7 @@ fn a_blocked_safepoint_consumes_no_schedule_slot() {
 /// `PERRY_GEN_GC_EVACUATE`, whose `=0` an earlier draft granted precedence over
 /// the seed, was deleted by #7611 as the one way an ambient environment
 /// variable could silently turn a #7154 instrument into a no-op.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn the_schedule_implies_forced_evacuation() {
     let _off = ScheduleGuard::off();

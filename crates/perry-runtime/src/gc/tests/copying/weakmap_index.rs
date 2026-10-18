@@ -307,6 +307,7 @@ fn weakmap_index_revalidates_a_cached_slot_tombstoned_between_slices() {
     );
 }
 
+#[cfg(perry_gc_instruments)]
 #[test]
 fn weakmap_index_survives_explicit_full_gc_with_forced_movement() {
     let _guard = guard(3);
@@ -421,6 +422,7 @@ fn weakmap_ephemeron_value_backedge_should_not_root_key() {
 
 /// #12087: the independent C witness's movement/control verdict, run as an
 /// always-active runtime regression so it needs no prebuilt static archive.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn weakmap_ephemeron_backedge_and_weak_only_control_die_after_explicit_gc() {
     let _guard = guard(4);

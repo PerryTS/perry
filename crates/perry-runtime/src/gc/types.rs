@@ -1416,7 +1416,7 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
     }
 }
 
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 #[inline]
 pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
     gc_type_info(obj_type).map_or("unknown", |info| info.name)

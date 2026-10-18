@@ -2564,16 +2564,18 @@ fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
     reset_typed_feedback_for_tests();
     register(7382, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
 
-    assert!(
-        !crate::object::prototype_chain::array_static_proto_recorded(),
-        "precondition: some earlier test latched ARRAY_TARGET_PROTO_RECORDED and \
-         did not restore it — see ArrayPrototypeLatchGuard in dyn_eval/tests.rs"
-    );
-    assert_eq!(
-        crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
-            .load(std::sync::atomic::Ordering::Relaxed),
-        0,
-        "precondition: the array-index fast path was already invalidated"
+    // Other tests deliberately install custom Array prototypes. Establish
+    // this witness's pristine-agent premise, and restore the surrounding state.
+    struct RestoreArrayProofs(bool, u8);
+    impl Drop for RestoreArrayProofs {
+        fn drop(&mut self) {
+            crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.0);
+            crate::array::test_swap_array_index_fast_path_invalidated(self.1);
+        }
+    }
+    let _proofs = RestoreArrayProofs(
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(false),
+        crate::array::test_swap_array_index_fast_path_invalidated(0),
     );
 
     // A `new Function` body whose literals are all base-realm: one array
