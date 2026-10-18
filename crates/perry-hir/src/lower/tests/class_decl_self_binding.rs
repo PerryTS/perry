@@ -145,3 +145,68 @@ fn repeatable_class_decl_shares_its_first_evaluation() {
         "`new Plain()` is static for the first evaluation, by value after: {make}"
     );
 }
+
+#[test]
+fn renamed_repeatable_class_constructs_its_lexical_evaluation() {
+    let hir = lower(
+        r#"
+            class C {}
+            for (let i = 0; i < 3; i++) {
+                class C {}
+                new C();
+            }
+        "#,
+    );
+    let init = format!("{:?}", hir.init);
+    assert!(
+        init.contains("ClassExprFresh") && init.contains("shared_first_evaluation: Some("),
+        "the loop class must have multiple evaluations: {init}"
+    );
+    assert!(
+        init.contains("ClassIsFirstEvaluation") && init.contains("NewDynamic"),
+        "a renamed class constructs through its lexical binding after its first evaluation: {init}"
+    );
+}
+
+#[test]
+fn renamed_fresh_class_constructs_its_lexical_evaluation() {
+    let hir = lower(
+        r#"
+            class C {}
+            export function factory(tag: string) {
+                class C { #tag = tag; }
+                return new C();
+            }
+        "#,
+    );
+    let body = factory_body(&hir);
+    assert!(
+        body.contains("ClassExprFresh"),
+        "class must be fresh: {body}"
+    );
+    assert!(
+        body.contains("Return(Some(NewDynamic") && !body.contains("Return(Some(New {"),
+        "a renamed private class constructs through its lexical value: {body}"
+    );
+}
+
+#[test]
+fn fresh_class_expression_constructs_its_lexical_evaluation() {
+    let hir = lower(
+        r#"
+            export function factory(tag: string) {
+                const C = class { field = tag; static tag = tag; };
+                return new C();
+            }
+        "#,
+    );
+    let body = factory_body(&hir);
+    assert!(
+        body.contains("ClassExprFresh"),
+        "class must be fresh: {body}"
+    );
+    assert!(
+        body.contains("Return(Some(NewDynamic"),
+        "a public class expression constructs through its lexical value: {body}"
+    );
+}

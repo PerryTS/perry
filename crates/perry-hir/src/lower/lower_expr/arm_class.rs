@@ -287,16 +287,12 @@ pub(crate) fn lower_class_expr(
     let identity_only =
         !at_module_top && !per_evaluation_state && parent_expr.is_none() && !native_parent;
     let fresh_evaluation = per_evaluation_state || identity_only;
-    if (!at_module_top && has_private_elements) || identity_only {
-        // `const C = class { #x }` normally records C as an inferred static
-        // class alias, which makes `new C()` bypass the local class VALUE.
-        // A private class evaluated in a function must construct through its
-        // fresh heap class object so the instance receives this evaluation's
-        // brand token; an identity-only class (#11298) must do the same so
-        // `Object.getPrototypeOf(new C()) === C.prototype` holds for this
-        // evaluation's prototype. Keep the static alias optimization for all
-        // other class expressions and for module-top expressions (which
-        // evaluate once).
+    if fresh_evaluation {
+        // The alias names this evaluated class object, not just its shared
+        // template. Static construction forwards field captures but loses
+        // the evaluation's prototype, including public data and accessors.
+        // Construct through the binding for every fresh class expression;
+        // module-top expressions keep their ordinary static alias.
         ctx.inferred_class_bindings.remove(&synthetic_name);
         if let Some(name) = assignment_name.as_ref() {
             ctx.inferred_class_bindings.remove(name);

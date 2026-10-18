@@ -455,7 +455,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             } else if class_shadows_callee_local {
                 None
             } else {
-                ctx.lookup_local(&class_name)
+                // Per-evaluation declarations bind C under its source name,
+                // even when the template key is C$0. A template-key lookup
+                // loses that evaluation and constructs the first prototype.
+                // Run-once block declarations retain their template-keyed
+                // local, which must keep shadowing an outer source-name local.
+                let binding_name = if ctx.per_evaluation_class_decls.contains(&class_name) {
+                    source_class_name
+                } else {
+                    &class_name
+                };
+                ctx.lookup_local(binding_name)
             };
             // #11160: class-expression metadata survives its block. Match the
             // identifier-read precedence: a visible function wins over that

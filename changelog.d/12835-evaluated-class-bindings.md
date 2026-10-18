@@ -1,0 +1,3 @@
+Fix construction of classes declared in loops and repeated factories retaining the first evaluation’s prototype and instance-field captures. Per-evaluation declarations resolve their lexical source binding, while run-once renamed block classes retain their template binding.
+
+Fresh class expressions now construct through the evaluated class value, including inherited captures, rather than a static alias that drops prototype identity. Regression coverage checks loops, repeated factories, closure factories, static and instance fields, methods, accessors, prototype mutations, and cross-evaluation `instanceof`.
