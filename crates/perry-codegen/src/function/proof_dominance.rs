@@ -181,6 +181,12 @@ mod tests {
             !opts.program_layouts.families.is_empty(),
             "fixture must exercise family stores"
         );
+        // Match the driver's birth-content prepass so the static prototype
+        // shapes are installed and this fixture exercises the crun phi.
+        let births = crate::module_birth_shapes(&hir, opts.clone()).unwrap();
+        opts.static_shape_ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape))
+            .into_iter()
+            .collect();
         let ir = String::from_utf8(crate::compile_module(&hir, opts).unwrap()).unwrap();
         assert!(
             ir.contains("crun.join"),
