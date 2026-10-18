@@ -237,3 +237,57 @@ fn dynamic_array_guard_reads_the_element_kind_word_without_a_helper() {
     #[cfg(feature = "llvm-inprocess")]
     crate::testing::verify_ir(&ll, "computed_element_kind").unwrap();
 }
+
+#[test]
+fn computed_index_store_preserves_its_original_complete_miss() {
+    let mut m = Module::new("computed_store_miss");
+    m.functions.push(Function {
+        id: 1,
+        name: "store".into(),
+        type_params: vec![],
+        params: (1..=3)
+            .map(|id| Param {
+                id,
+                name: format!("p{id}"),
+                ty: Type::Any,
+                default: None,
+                decorators: vec![],
+                is_rest: false,
+                arguments_object: None,
+            })
+            .collect(),
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+            value: Box::new(Expr::LocalGet(3)),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let ll = String::from_utf8(
+        compile_module(
+            &m,
+            CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(ll.contains("call i32 @perry_probe_set_keyed("));
+    assert!(ll.contains("call double @js_dyn_index_set_strict("));
+    assert!(
+        !ll.contains("call double @js_put_value_set_dynamic("),
+        "an indexed miss must not change the receiver's key-add representation"
+    );
+    #[cfg(feature = "llvm-inprocess")]
+    crate::testing::verify_ir(&ll, "computed_store_original_miss").unwrap();
+}

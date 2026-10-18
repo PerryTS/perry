@@ -84,6 +84,13 @@ pub unsafe extern "C" fn perry_probe_set_keyed(
     key_bits: u64,
     value: f64,
 ) -> i32 {
+    // Overflow is the key-order/descriptor authority once it shadows the
+    // immutable prefix. Its descriptor can replace a prefix entry without
+    // changing that entry's attributes, so only the complete setter owns it.
+    let obj = payload as *const ObjectHeader;
+    if (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0 {
+        return 0;
+    }
     let Some((key, hash)) = computed_key(key_bits) else {
         return 0;
     };
