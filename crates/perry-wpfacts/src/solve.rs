@@ -557,6 +557,10 @@ impl Model {
             return n;
         }
         let n = self.node_named("allfields", || format!("allfields({t})"));
+        // This aggregate is not a program value. Creating fields eagerly
+        // populates it even when no computed read ever consumes it. Bound
+        // the actual read result instead of escaping otherwise-unused values.
+        self.nodes[n as usize].internal = true;
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
         n

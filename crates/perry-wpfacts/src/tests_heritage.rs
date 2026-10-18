@@ -662,3 +662,48 @@ fn mixed_symbol_and_string_index_retains_full_lookup() {
         pf.dump_text()
     );
 }
+
+#[test]
+fn unread_field_aggregate_never_widens_or_escapes_its_members() {
+    use crate::{gen::Gen, model::*};
+    let mut g = Gen::new(vec![], false, false);
+    let m = &mut g.m;
+    m.widen_k = 4;
+    let holder = m.tok(TokKind::ModNs(0));
+    let mut values = Vec::new();
+    for i in 1..=8 {
+        let key = m.atom(&format!("key{i}"));
+        let value = m.tok(TokKind::ModNs(i));
+        values.push(value);
+        let field = m.field(holder, key);
+        m.add_tok(field, value);
+    }
+    let all = m.all_fields(holder);
+    m.solve();
+    assert!(!m.nodes[all as usize].widened);
+    assert!(values.iter().all(|&v| !m.is_escaped(v)));
+}
+
+#[test]
+fn consumed_field_aggregate_still_widens_at_the_program_read() {
+    use crate::{gen::Gen, model::*};
+    let mut g = Gen::new(vec![], false, false);
+    let m = &mut g.m;
+    m.widen_k = 4;
+    let holder = m.tok(TokKind::ModNs(0));
+    let mut values = Vec::new();
+    for i in 1..=8 {
+        let key = m.atom(&format!("key{i}"));
+        let value = m.tok(TokKind::ModNs(i));
+        values.push(value);
+        let field = m.field(holder, key);
+        m.add_tok(field, value);
+    }
+    let all = m.all_fields(holder);
+    let result = m.node_l("program-read");
+    m.edge(all, result);
+    m.solve();
+    assert!(!m.nodes[all as usize].widened);
+    assert!(m.nodes[result as usize].widened);
+    assert!(values.iter().all(|&v| m.is_escaped(v)));
+}
