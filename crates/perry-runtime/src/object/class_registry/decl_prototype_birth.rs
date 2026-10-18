@@ -68,8 +68,15 @@ pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: 
     // this realm's Object.prototype). A fresh evaluation of the same class
     // template, a replaced .prototype, and extends null cannot pass it.
     let canonical = if candidate == 0 {
-        // DEFAULT has no identity-word cell: this realm's intrinsic owns it.
-        super::global_object_prototype_bits().unwrap_or(0)
+        // DEFAULT has no identity-word cell. Read the existing intrinsic
+        // roots directly: the parent resolver already materialized them.
+        // A shape-only sentinel (no constructor) cannot prove this edge.
+        let ctor = crate::object::OBJECT_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Acquire);
+        let proto = crate::object::OBJECT_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Acquire);
+        if ctor == 0 || proto == 0 {
+            return false;
+        }
+        crate::value::POINTER_TAG | (proto as u64 & crate::value::POINTER_MASK)
     } else {
         super::prototype_objects::class_holder_word_selected(candidate)
     };
