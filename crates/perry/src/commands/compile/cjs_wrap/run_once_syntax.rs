@@ -6,12 +6,10 @@ use swc_ecma_visit::{Visit, VisitWith};
 fn name(m: &ast::MemberExpr) -> Option<String> {
     perry_hir::patched_builtins::static_member_name(&m.prop)
 }
-#[derive(Default)]
-struct Uses(u32);
-impl Visit for Uses {
-    fn visit_import_decl(&mut self, i: &ast::ImportDecl) {
-        if matches!(
-            i.src.value.to_string_lossy().as_ref(),
+fn native_capability(source: &str) -> bool {
+    source.ends_with(".node")
+        || matches!(
+            source,
             "module"
                 | "node:module"
                 | "vm"
@@ -20,12 +18,24 @@ impl Visit for Uses {
                 | "node:process"
                 | "inspector"
                 | "node:inspector"
-        ) {
+                | "bun:ffi"
+        )
+}
+#[derive(Default)]
+struct Uses(u32);
+impl Visit for Uses {
+    fn visit_import_decl(&mut self, i: &ast::ImportDecl) {
+        if native_capability(i.src.value.to_string_lossy().as_ref()) {
             self.0 += 1;
         }
         i.visit_children_with(self);
     }
     fn visit_call_expr(&mut self, c: &ast::CallExpr) {
+        // A dynamic import or native addon can expose code/capabilities
+        // outside the compiled module bodies. Keep evaluations fresh.
+        if matches!(c.callee, ast::Callee::Import(_)) {
+            self.0 += 1;
+        }
         // The only unescaped require value: an ordinary literal call. Its
         // module result cannot expose the loader except the module/vm APIs.
         if matches!(&c.callee, ast::Callee::Expr(e) if matches!(e.as_ref(), ast::Expr::Ident(i) if i.sym == *"require"))
@@ -33,17 +43,7 @@ impl Visit for Uses {
             if let [arg] = c.args.as_slice() {
                 if arg.spread.is_none() {
                     if let ast::Expr::Lit(ast::Lit::Str(s)) = arg.expr.as_ref() {
-                        if matches!(
-                            s.value.to_string_lossy().as_ref(),
-                            "module"
-                                | "node:module"
-                                | "vm"
-                                | "node:vm"
-                                | "process"
-                                | "node:process"
-                                | "inspector"
-                                | "node:inspector"
-                        ) {
+                        if native_capability(s.value.to_string_lossy().as_ref()) {
                             self.0 += 1;
                         }
                         return;
@@ -104,6 +104,8 @@ impl Visit for Uses {
                 | "eval"
                 | "Function"
                 | "Reflect"
+                | "Bun"
+                | "Deno"
         ) {
             self.0 += 1;
         }
@@ -135,6 +137,10 @@ mod tests {
             "globalThis.process;",
             "Object.getPrototypeOf(function(){});",
             "({}).__proto__;",
+            "require('./addon.node');",
+            "import native from './addon.node';",
+            "import('./plugin.js');",
+            "Bun.dlopen('x');",
         ] {
             assert!(uses(source) > 0, "{source}");
         }
