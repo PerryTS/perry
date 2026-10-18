@@ -8,6 +8,7 @@ fn name(m: &ast::MemberExpr) -> Option<String> {
 }
 fn native_capability(source: &str) -> bool {
     source.ends_with(".node")
+        || source.starts_with("data:")
         || matches!(
             source,
             "module"
@@ -18,6 +19,10 @@ fn native_capability(source: &str) -> bool {
                 | "node:process"
                 | "inspector"
                 | "node:inspector"
+                | "inspector/promises"
+                | "node:inspector/promises"
+                | "repl"
+                | "node:repl"
                 | "bun:ffi"
         )
 }
@@ -78,6 +83,7 @@ impl Visit for Uses {
                     | "require"
                     | "mainModule"
                     | "getBuiltinModule"
+                    | "createRequire"
                     | "binding"
                     | "_linkedBinding"
                     | "constructor"
@@ -104,6 +110,9 @@ impl Visit for Uses {
                 | "eval"
                 | "Function"
                 | "Reflect"
+                | "createRequire"
+                | "getBuiltinModule"
+                | "mainModule"
                 | "Bun"
                 | "Deno"
         ) {
@@ -141,6 +150,12 @@ mod tests {
             "import native from './addon.node';",
             "import('./plugin.js');",
             "Bun.dlopen('x');",
+            "const key = 'get' + 'BuiltinModule'; process[key]('module');",
+            "const key = process.argv[2]; process[key]('module');",
+            "const {createRequire: cr} = host; cr('x');",
+            "host.createRequire('x');",
+            "import x from 'data:text/javascript,export default 1';",
+            "require('node:repl');",
         ] {
             assert!(uses(source) > 0, "{source}");
         }
