@@ -38,6 +38,9 @@ const SYNC_NAMES: &[&str] = &[
     "Function",
     "Class",
     "ClassField",
+    // Original class/export binding names are metadata only; the executable
+    // imports, class bodies and expressions are still checked below.
+    "ClassFamilySyntax",
     // Field origins are metadata. Initializers, computed keys, decorators
     // and constructor bodies remain in the Debug walk below.
     "Definition",
@@ -593,6 +596,40 @@ mod tests {
     fn plain_sync_constructs_pass() {
         let hir = r#"Module { init: [Expr(Call { callee: PropertyGet { object: GlobalGet(0), property: "log", byte_offset: 1 }, args: [ArrayMap { array: LocalGet(0), callback: Closure { func_id: 0, is_async: false } }] })] }"#;
         assert_eq!(why_module_not_synchronous(hir), None);
+    }
+
+    #[test]
+    fn class_family_syntax_preserves_executable_scheduling_checks() {
+        use perry_hir::ir::ClassFamilySyntax;
+        use perry_hir::{Expr, Module, Stmt};
+
+        let mut module = Module::new("family-syntax");
+        assert_eq!(why_module_not_synchronous(&format!("{module:?}")), None);
+        // Source preparation attaches this even to a program with no classes.
+        module.class_family_syntax = Some(ClassFamilySyntax::default());
+        assert_eq!(why_module_not_synchronous(&format!("{module:?}")), None);
+        let syntax = module.class_family_syntax.as_mut().unwrap();
+        syntax
+            .parents
+            .insert("Child".into(), ("./base.cjs".into(), "Base".into()));
+        syntax.exports.insert("Base".into(), "Local".into());
+        syntax.writes.push((None, "Base".into()));
+        syntax
+            .writes
+            .push((Some("./other.cjs".into()), String::new()));
+        assert_eq!(why_module_not_synchronous(&format!("{module:?}")), None);
+
+        for expression in [
+            Expr::Await(Box::new(Expr::LocalGet(0))),
+            Expr::QueueMicrotask(Box::new(Expr::LocalGet(0))),
+            Expr::ProcessNextTick {
+                callback: Box::new(Expr::LocalGet(0)),
+                args: Vec::new(),
+            },
+        ] {
+            module.init = vec![Stmt::Expr(expression)];
+            assert!(why_module_not_synchronous(&format!("{module:?}")).is_some());
+        }
     }
 
     #[test]
