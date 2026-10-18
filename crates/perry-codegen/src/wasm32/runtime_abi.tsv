@@ -3288,8 +3288,6 @@ js_regexp_literal	ptr	i64
 js_regexp_new	ptr	ptr,ptr
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
-js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
-js_region_guard_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64
 js_region_holder_read	i32u	ptr,f64,ptr,i32u,ptr,i32u
 js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
 js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u,i32u
