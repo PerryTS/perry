@@ -193,7 +193,7 @@ fn sibling_same_named_class_bindings_construct_their_own_class() {
         one_key, two_key,
         "sibling functions must construct distinct classes, both built {one_key}"
     );
-    for (key, body) in [(&one_key, &one), (&two_key, &two)] {
+    for (key, body, name) in [(&one_key, &one, "twinOne"), (&two_key, &two, "twinTwo")] {
         let class = module
             .classes
             .iter()
@@ -204,9 +204,14 @@ fn sibling_same_named_class_bindings_construct_their_own_class() {
             ctor.contains("IndexUpdate{") || ctor.contains("IndexSet{object:LocalGet"),
             "{key}'s constructor must write its own function's cell: {ctor}"
         );
+        let declares_counter_cell = function(&module, name).body.iter().any(|stmt| {
+            matches!(stmt,
+                Stmt::Let { init: Some(Expr::Array(values, _)), .. }
+                    if matches!(values.as_slice(), [Expr::Undefined])
+            )
+        });
         assert!(
-            body.contains("init:Some(Array([Undefined]))")
-                && body.contains("IndexSet{object:LocalGet"),
+            declares_counter_cell && body.contains("IndexSet{object:LocalGet"),
             "each function declares its own counter cell and initializes it: {body}"
         );
     }
