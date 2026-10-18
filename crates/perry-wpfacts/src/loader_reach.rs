@@ -674,7 +674,7 @@ impl<'a> Reach<'a> {
         let mut todo = self.values(n);
         let mut seen = FxHashSet::default();
         while let Some(t) = todo.pop() {
-            if !seen.insert(t) {
+            if self.private_token(t, &mut FxHashSet::default()) || !seen.insert(t) {
                 continue;
             }
             let private_loader = name.is_some_and(|n| {
