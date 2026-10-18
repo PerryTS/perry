@@ -44,6 +44,21 @@ impl Model {
         }
     }
 
+    /// `call_args` has no rule for non-callable tokens or primitives.
+    /// Project them out once at the shared source, before fanout to calls.
+    /// Builtin namespaces retain their per-receiver `BuiltinCallee` route.
+    pub(crate) fn call_targets(&mut self, value: NodeId) -> NodeId {
+        if let Some(&targets) = self.method_targets.get(&value) {
+            return targets;
+        }
+        let targets = self.node_l("method-targets");
+        // Preserve the call relay's domain: this projection adds no widening.
+        self.nodes[targets as usize].internal = true;
+        self.method_targets.insert(value, targets);
+        self.cons(value, Cons::CallTargets { dst: targets });
+        targets
+    }
+
     /// Transpose receivers × functions into two ordinary inclusion edges:
     /// collect receivers once, then link that set to each function's `this`.
     pub(crate) fn add_receiver_group(&mut self, callee: NodeId, origin: Tok) {
@@ -54,7 +69,8 @@ impl Model {
             // A solver relay, not a new program value or widening boundary.
             self.nodes[recv as usize].internal = true;
             self.this_groups.insert(callee, recv);
-            self.cons(callee, Cons::ThisGroup { recv });
+            let targets = self.call_targets(callee);
+            self.cons(targets, Cons::ThisGroup { recv });
             recv
         };
         self.add_tok(recv, origin);

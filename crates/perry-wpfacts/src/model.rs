@@ -293,6 +293,7 @@ pub enum Cons {
     ChainUnion { key: Key, dst: NodeId },
     ProtoCall { origin: Tok, key: Key, call: CallId },
     ThisGroup { recv: NodeId },
+    CallTargets { dst: NodeId },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -406,6 +407,7 @@ impl Cons {
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoCall { .. } => "protocall",
             Cons::ThisGroup { .. } => "thisgroup",
+            Cons::CallTargets { .. } => "calltargets",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -545,6 +547,8 @@ pub struct Model {
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.
     pub this_groups: FxHashMap<NodeId, NodeId>,
+    /// Callable projections of values, shared by all calls using the value.
+    pub method_targets: FxHashMap<NodeId, NodeId>,
     pub relays: FxHashMap<CallId, NodeId>,
     pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
     pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,

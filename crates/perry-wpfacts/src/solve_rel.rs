@@ -38,6 +38,7 @@ impl Model {
                 format!("protocall {n} {origin} {} {call}", self.key_name(*key))
             }
             Cons::ThisGroup { recv } => format!("thisgroup {n} {recv}"),
+            Cons::CallTargets { dst } => format!("calltargets {n} {dst}"),
             Cons::ClassParent { class, reason } => format!("classparent {n} {class} {reason}"),
             Cons::ParentCtor { call, this } => format!("parentctor {n} {call} {this}"),
             Cons::SuperFrom { recv, key, act } => {

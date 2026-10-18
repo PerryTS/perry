@@ -365,6 +365,9 @@ class Solver:
             _, start, key, act = c
             for t in toks:
                 self.chain_step(t, start, key, act)
+        elif op == "calltargets":
+            self.add(c[1], [t for t in toks if self.toks[t][0] in
+                           ("top", "builtinfn", "func", "bound")])
         elif op == "protocall":
             _, origin, key, call = c
             for q in toks:
@@ -1111,6 +1114,8 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("createproto",)))
         elif rel == "super":
             deferred.append((int(a[0]), ("super", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
+        elif rel == "calltargets":
+            deferred.append((int(a[0]), ("calltargets", int(a[1]))))
         elif rel == "protocall":
             deferred.append((int(a[0]), ("protocall", int(a[1]), key_of(s, a[2]), int(a[3]))))
         elif rel == "classparent":

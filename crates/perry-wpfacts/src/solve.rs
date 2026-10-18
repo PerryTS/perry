@@ -707,6 +707,15 @@ impl Model {
                 self.prototype_call_values(origin, key, call, toks);
             }
             Cons::ThisGroup { recv } => self.bind_receiver_group(recv, toks),
+            Cons::CallTargets { dst } => {
+                for &t in toks {
+                    if matches!(self.toks[t as usize],
+                        TokKind::Top | TokKind::BuiltinFn | TokKind::Func(_) | TokKind::Bound(_))
+                    {
+                        self.add_tok(dst, t);
+                    }
+                }
+            }
             Cons::ClassParent { class, reason } => {
                 self.apply_class_parent(class, reason, toks, prim);
             }
@@ -1543,7 +1552,8 @@ impl Model {
             }
         };
         if self.relay_done.insert((call, callee)) {
-            self.edge_quiet(callee, relay);
+            let targets = self.call_targets(callee);
+            self.edge_quiet(targets, relay);
         }
         let sites = self.callee_sites.entry(callee).or_default();
         let first = sites.is_empty();
