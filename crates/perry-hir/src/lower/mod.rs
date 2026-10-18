@@ -42,7 +42,6 @@ pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod class_capture_scope;
 pub(crate) mod expr_assign;
 mod expr_call;
-pub(crate) use expr_call::intrinsics::as_builtin_proto_method_ref;
 pub(crate) mod expr_function;
 pub(crate) mod native_factory;
 pub(crate) use expr_function::capture_function_source;

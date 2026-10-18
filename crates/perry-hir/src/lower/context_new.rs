@@ -186,7 +186,6 @@ impl LoweringContext {
             iterator_func_for_class: std::collections::HashMap::new(),
             proxy_locals: HashSet::new(),
             proxy_local_ids: HashSet::new(),
-            builtin_proto_method_local_ids: HashMap::new(),
             plain_object_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
             class_expr_aliases: HashMap::new(),
