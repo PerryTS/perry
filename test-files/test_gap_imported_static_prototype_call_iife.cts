@@ -15,3 +15,6 @@ fnProto.call = original;
 console.log('identity', pair[0] !== pair[1], pair[0].prototype !== pair[1].prototype);
 pair[0].prototype.own = () => 71;
 console.log('values', new pair[0]().run(), new pair[1]().run());
+let thisEvaluations = 0;
+const answer = (function(value) { return value + 1; }).call(++thisEvaluations, 7);
+console.log('thisArg', thisEvaluations, answer);

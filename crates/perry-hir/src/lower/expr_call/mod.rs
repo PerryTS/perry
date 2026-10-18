@@ -164,12 +164,11 @@ use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
     check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_dynamic_require, try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
-    try_import_meta_require, try_iterator_from, try_namespace_static_method_apply_call_bind,
-    try_native_arena_intrinsics, try_native_arena_public_api, try_native_memory_public_api,
-    try_native_module_method_apply_call, try_pod_layout_constants, try_precompile,
-    try_require_literal, try_strict_eval_arguments_assignment,
-    validate_native_scalar_conversion_call,
+    try_dynamic_require, try_embed_wasm, try_function_return_this, try_import_meta_require,
+    try_iterator_from, try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
+    try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
+    try_pod_layout_constants, try_precompile, try_require_literal,
+    try_strict_eval_arguments_assignment, validate_native_scalar_conversion_call,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -902,9 +901,7 @@ fn borrowed_call_folds(
     call: &ast::CallExpr,
     has_spread: bool,
 ) -> Result<Option<Expr>> {
-    if let Some(expr) = try_iife_call_rewrite(ctx, call, has_spread)? {
-        return Ok(Some(expr));
-    }
+    // Literal IIFEs keep the ordinary guarded `.call` lookup and thisArg.
     // #1722: `path.join.apply(null, [a, b])` / `.call(null, a, b)` and the
     // same shape on any stdlib namespace — rewrite to the direct call so
     // the dedicated per-method lowering runs (indirect invocation
