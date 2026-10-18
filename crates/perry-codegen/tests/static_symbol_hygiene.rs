@@ -141,6 +141,7 @@ fn duplicate_static_module() -> Module {
     Module {
         name: "marked_symbol_hygiene.ts".to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: vec![class_with_static(11, 1.0), class_with_static(12, 2.0)],
         interfaces: Vec::new(),
@@ -184,6 +185,7 @@ fn class_with_instance_and_static_method() -> Module {
     Module {
         name: "static_instance_symbol_hygiene.ts".to_string(),
         imports: Vec::new(),
+        requested_modules: Vec::new(),
         exports: Vec::new(),
         classes: vec![class],
         interfaces: Vec::new(),
