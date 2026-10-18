@@ -1288,6 +1288,12 @@ pub fn compute<'a>(
                 .as_ref()
                 .expect("closed original syntax");
             let mut candidates: BTreeSet<String> = syntax.run_once_classes.clone();
+            let local_definitions: BTreeSet<u32> = module
+                .classes
+                .iter()
+                .filter(|c| !c.is_imported_stub())
+                .map(|c| c.id)
+                .collect();
             perry_hir::for_each_module_expr(module, &mut |e| {
                 if let Expr::ClassExprFresh {
                     template,
@@ -1327,7 +1333,10 @@ pub fn compute<'a>(
                     && c.decorators.is_empty()
                     && c.computed_members.is_empty()
                     && candidates.contains(&c.name)
-                    && layouts.families.contains_key(&c.id)
+                    && layouts.families.get(&c.id).is_some_and(|family| {
+                        family.parent_class_id != 0
+                            && !local_definitions.contains(&family.parent_class_id)
+                    })
                 {
                     layouts.run_once_evaluated.insert(c.id);
                 }

@@ -100,3 +100,21 @@ fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
         .clear();
     assert!(!proof(&base, &leaf).run_once_evaluated.contains(&cid));
 }
+
+#[test]
+fn local_evaluated_heritage_keeps_its_ordinary_birth_path() {
+    let mut hir = module("/same", "class Base { constructor() { this.base = 1; } } class Leaf extends Base { constructor() { super(); this.leaf = 2; } own() { return this.leaf; } }", 300);
+    let leaf = hir.classes.iter_mut().find(|c| c.name == "Leaf").unwrap();
+    let cid = leaf.id;
+    leaf.extends_expr = Some(Box::new(perry_hir::Expr::ClassRef("Base".into())));
+    hir.class_family_syntax = Some(perry_hir::ir::ClassFamilySyntax {
+        run_once_classes: ["Leaf".to_string()].into(),
+        ..Default::default()
+    });
+    let layouts = compute([("/same", &hir)], true, &BTreeMap::new());
+    assert!(layouts.families.contains_key(&cid));
+    assert!(!layouts.run_once_evaluated.contains(&cid));
+    assert!(!births(&hir, &layouts)
+        .iter()
+        .any(|b| matches!(b.shape.proto, BirthProto::Prototype(id, _) if id == cid)));
+}

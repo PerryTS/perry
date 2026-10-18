@@ -9,6 +9,15 @@ pub(crate) fn collect(
     layouts: &crate::layout_families::ProgramLayouts,
 ) -> Vec<ModuleBirth> {
     let fresh = super::fresh_class_templates::fresh_class_templates(module);
+    // An admitted family's nonzero parent names a declaration in this
+    // program. The complete module lists all of its own definitions, so
+    // absence here proves that the parent belongs to another module.
+    let local_definitions: HashSet<u32> = module
+        .classes
+        .iter()
+        .filter(|c| !c.is_imported_stub())
+        .filter_map(|c| ids.get(&c.name).copied())
+        .collect();
     let mut refused = std::collections::BTreeMap::<&str, u32>::new();
     let mut evaluated = 0;
     let births = module
@@ -56,11 +65,15 @@ pub(crate) fn collect(
                 // prove the actual parent and its prototype identity before it
                 // can request this static shape.
                 let parent = if c.extends_expr.is_some() {
-                    layouts
+                    let parent = layouts
                         .families
                         .get(&cid)
                         .ok_or("evaluated-no-family")?
-                        .parent_class_id
+                        .parent_class_id;
+                    if parent == 0 || local_definitions.contains(&parent) {
+                        return Err("evaluated-local-parent");
+                    }
+                    parent
                 } else {
                     match &c.extends_name {
                         Some(n) => *ids.get(n).ok_or("unresolved-parent")?,
