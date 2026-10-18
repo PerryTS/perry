@@ -6,8 +6,8 @@ use crate::types::{I1, I32, I64, I8, PTR};
 
 /// Keep the existing allocator on ILP32 and for cells outside the nursery's
 /// small-object contract. The emitted fast path uses the LP64 header ABI.
-fn eligible(ctx: &FnCtx<'_>, size: u64) -> bool {
-    !crate::target_layout::target_is_ilp32(ctx.target_triple) && size <= 16 * 1024
+pub(super) fn eligible(target: &str, size: u64) -> bool {
+    !crate::target_layout::target_is_ilp32(target) && size <= 16 * 1024
 }
 
 fn allocate(
@@ -70,7 +70,7 @@ pub(crate) fn closure(
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> String {
     let size = 8 + crate::runtime_abi::CLOSURE_HEADER_SIZE as u64 + words.len() as u64 * 8;
-    if !eligible(ctx, size) {
+    if !eligible(ctx.target_triple, size) {
         return slow(ctx);
     }
     allocate(
@@ -131,7 +131,7 @@ pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) ->
         let raw = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, desc)]);
         ctx.block().ptrtoint(&raw, I64)
     };
-    if !eligible(ctx, size) {
+    if !eligible(ctx.target_triple, size) {
         return slow(ctx);
     }
     // Registration gives a carried descriptor exactly three possible states:

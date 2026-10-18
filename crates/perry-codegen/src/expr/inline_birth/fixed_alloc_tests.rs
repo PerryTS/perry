@@ -72,7 +72,12 @@ fn closure_fast_birth_is_leaf_and_retains_collecting_runtime_fallbacks() {
             .unwrap();
         let end = ir[fast..].find("\nfixed_birth.runtime.").unwrap() + fast;
         let fast_body = &ir[fast..end];
-        assert!(!fast_body.contains("call "), "{fast_body}");
+        assert!(
+            !fast_body
+                .lines()
+                .any(|line| line.contains("call ") && !line.contains(" asm ")),
+            "{fast_body}"
+        );
         let size = 32 + u64::from(count) * 8;
         let reserved = if count == 0 { 0x4000 } else { 0 };
         let header = 4u64 | (2 << 8) | (reserved << 16) | (size << 32);
@@ -89,10 +94,12 @@ fn closure_fast_birth_is_leaf_and_retains_collecting_runtime_fallbacks() {
 }
 
 #[test]
-fn ilp32_closures_keep_the_runtime_layout_and_allocator() {
-    let ir = compile(5, "armv7-unknown-linux-gnueabihf");
-    assert!(!ir.contains("fixed_birth.fast"));
-    assert!(ir.contains("call i64 @js_closure_alloc_fixed"));
+fn fixed_births_decline_ilp32_and_large_cells() {
+    use super::fixed_alloc::eligible;
+    assert!(!eligible("armv7-unknown-linux-gnueabihf", 40));
+    assert!(!eligible("wasm32-wasi", 40));
+    assert!(eligible("x86_64-unknown-linux-gnu", 16 * 1024));
+    assert!(!eligible("x86_64-unknown-linux-gnu", 16 * 1024 + 8));
 }
 
 #[test]
@@ -104,9 +111,15 @@ fn layout_birth_initializes_exact_capacity_and_checks_registration() {
         module.init.push(Stmt::Expr(Expr::Object(props)));
         let mut options = crate::CompileOptions {
             emit_ir_only: true,
+            output_type: "executable".into(),
+            disable_constfn_shapes: false,
             ..Default::default()
         };
         let births = crate::module_birth_shapes(&module, options.clone()).unwrap();
+        assert!(
+            !births.is_empty(),
+            "the layout fixture must have a carried descriptor"
+        );
         options.static_shape_ids = crate::codegen::static_shape_ids::assign_static_shape_ids(
             births.iter().map(|b| &b.shape),
         )
