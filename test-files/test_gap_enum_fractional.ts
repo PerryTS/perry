@@ -17,10 +17,13 @@ var Image = ((P: any) => { P[P["A"] = 1.5] = "A"; P[P["Z"] = -0] = "Z"; P[P["L"]
 console.log(Image.A, Object.is(Image.Z, -0), Image["1.5"], Image["1e+21"], Image["1e-7"], Object.keys(Image).join(","));
 
 let zero = 0;
-enum Computed { Z = -zero, A = zero + 1.5, Inf = 1 / zero, Nan = zero / zero, Next = Computed.A + 1 }
+enum Computed { Z = -zero, A = zero + 1.5, Inf = 1 / zero, Nan = zero / zero, Next = A + 1 }
 console.log(Object.is(Computed.Z, -0), Object.is(Computed["Z"], -0), Computed.A, Computed.Inf, Number.isNaN(Computed.Nan), Computed.Next);
 zero = 10;
 console.log(Object.is(Computed.Z, -0), Computed.A, Computed.Next, Computed["0"], Computed["1.5"], Computed["Infinity"], Computed["NaN"], Object.keys(Computed).join(","));
 
 enum ConstantZero { Z = -0, Reciprocal = 1 / Z }
 console.log(Object.is(ConstantZero.Z, -0), ConstantZero.Reciprocal);
+
+enum Globals { Z = -1 / Infinity, I = Infinity, N = NaN }
+console.log(Object.is(Globals.Z, -0), Globals.I, Number.isNaN(Globals.N), Globals["0"], Globals["Infinity"], Globals["NaN"]);

@@ -32,6 +32,30 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     let expr_ident = ast::Expr::Ident(ident.clone());
     let expr = &expr_ident;
     let name = ident.sym.to_string();
+    if let Some((enum_name, local_mark)) = &ctx.enum_initializer_scope {
+        // A nested parameter/local shadows this implicit member scope. Outer
+        // bindings do not: `enum E { A = x, B = A + 1 }` reads the stored E.A.
+        if ctx
+            .locals
+            .lookup_index(&name)
+            .is_none_or(|index| index < *local_mark)
+        {
+            if let Some(value) = ctx.lookup_enum_member(enum_name, &name) {
+                return Ok(match value {
+                    EnumValue::Number(_) | EnumValue::String(_) => Expr::EnumMember {
+                        enum_name: enum_name.clone(),
+                        member_name: name,
+                    },
+                    EnumValue::Computed => Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(
+                            ctx.lookup_local(enum_name).expect("enum binding"),
+                        )),
+                        index: Box::new(Expr::String(name)),
+                    },
+                });
+            }
+        }
+    }
     // A named import from a node-core module that is not a value export of that
     // module was deferred (neither bound nor rejected) at import lowering — see
     // `LoweringContext::deferred_unknown_native_imports`. Type annotations are

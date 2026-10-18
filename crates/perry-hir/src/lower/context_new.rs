@@ -206,6 +206,7 @@ impl LoweringContext {
             run_once_class_spans: HashSet::new(),
             enum_image_sites: HashMap::new(),
             enum_object_locals: HashMap::new(),
+            enum_initializer_scope: None,
             class_env_classes: HashSet::new(),
             class_env_guarded: HashSet::new(),
             pending_fresh_class_expr: false,

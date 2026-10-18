@@ -133,13 +133,21 @@ pub(crate) fn enum_value_binding(
             let value = match &member.value {
                 EnumValue::Number(n) => Expr::Number(if *n == 0.0 { 0.0 } else { *n }),
                 EnumValue::String(s) => Expr::String(s.clone()),
-                EnumValue::Computed => crate::lower::lower_expr(
-                    ctx,
-                    ast_member
-                        .init
-                        .as_deref()
-                        .expect("computed member has initializer"),
-                )?,
+                EnumValue::Computed => {
+                    // Enum members form an implicit lexical scope for an initializer.
+                    let enclosing = ctx
+                        .enum_initializer_scope
+                        .replace((name.to_string(), ctx.locals.len()));
+                    let value = crate::lower::lower_expr(
+                        ctx,
+                        ast_member
+                            .init
+                            .as_deref()
+                            .expect("computed member has initializer"),
+                    );
+                    ctx.enum_initializer_scope = enclosing;
+                    value?
+                }
             };
             stores.push(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(id)),
@@ -262,22 +270,10 @@ fn eval_enum_init(
             Some(EnumValue::String(cooked.as_str()?.to_string()))
         }
         ast::Expr::Paren(paren) => eval_enum_init(&paren.expr, enum_name, members, ctx),
-        ast::Expr::Ident(ident) => own(ident.sym.as_ref())
-            .or_else(|| {
-                ctx.lookup_enum_member(enum_name, ident.sym.as_ref())
-                    .cloned()
-            })
-            .or_else(|| {
-                // A member or lexical binding shadows these global numbers.
-                if ctx.lookup_local(ident.sym.as_ref()).is_some() {
-                    return None;
-                }
-                match ident.sym.as_ref() {
-                    "NaN" => num(f64::NAN),
-                    "Infinity" => num(f64::INFINITY),
-                    _ => None,
-                }
-            }),
+        ast::Expr::Ident(ident) => own(ident.sym.as_ref()).or_else(|| {
+            ctx.lookup_enum_member(enum_name, ident.sym.as_ref())
+                .cloned()
+        }),
         ast::Expr::Member(member) => {
             let ast::Expr::Ident(object) = member.obj.as_ref() else {
                 return None;

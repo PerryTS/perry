@@ -520,6 +520,8 @@ pub struct LoweringContext {
     /// Module-level enums bound to their runtime object (`enum_value_binding`):
     /// a later declaration of the same name merges into that local.
     pub(crate) enum_object_locals: HashMap<String, LocalId>,
+    /// Implicit enum-member lexical scope and the start of nested local bindings.
+    pub(crate) enum_initializer_scope: Option<(String, usize)>,
     /// Subset of `pre_registered_module_vars` that came from syntactic `var`
     /// declarations. Sloppy assignments before a later `var` need an early
     /// backing slot; `let`/`const` should not use that path.
