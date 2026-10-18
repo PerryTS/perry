@@ -25,6 +25,13 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn to_sink(&mut self, v: NodeId, why: &str) {
+        if self.m.reach_user {
+            if let Some(f) = self.m.reach_owner {
+                self.m
+                    .reach_ops
+                    .push((f, crate::loader_reach::Op::Escape(v)));
+            }
+        }
         let r = self.m.reason(why);
         self.m.sink_node(v, r);
     }
@@ -37,6 +44,12 @@ impl<'a> Gen<'a> {
     ) -> (CallId, NodeId) {
         let ret = self.tmp("callret");
         let id = self.m.calls.len() as CallId;
+        if let Some(f) = self.m.reach_owner {
+            self.m.reach_ops.push((
+                f,
+                crate::loader_reach::Op::Call(id, self.m.reach_user, self.m.reach_loader_literal),
+            ));
+        }
         self.m.calls.push(CallSite {
             this,
             args,
@@ -345,8 +358,27 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let saved = self.m.reach_owner.replace(fx.f);
+        let saved_index = self.m.reach_index.take();
+        let saved_literal = self.m.reach_loader_literal;
+        self.m.reach_loader_literal = matches!(e,Expr::Call {callee,args,..} if matches!(callee.as_ref(),Expr::LocalGet(_)|Expr::FuncRef(_)|Expr::ExternFuncRef {..}) && matches!(args.as_slice(),[Expr::String(s)] if !crate::loader_reach::native_capability(s)));
+        let saved_user = self.m.reach_user;
+        if let Some(user) = self.loader_source_origin(fx.module, e) {
+            self.m.reach_user = user;
+        }
+        self.note_loader_expr(fx, e);
+        let result = self.expr_inner(fx, e);
+        self.m.reach_owner = saved;
+        self.m.reach_user = saved_user;
+        self.m.reach_index = saved_index;
+        self.m.reach_loader_literal = saved_literal;
+        result
+    }
+
+    fn expr_inner(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
+            Expr::CompilerOwned(value) => self.expr(fx, value),
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
             Expr::Bool(_) => self.prim_node(prim::BOOL),
@@ -688,7 +720,9 @@ impl<'a> Gen<'a> {
                 self.m.cons(i, Cons::Implicit { reason: r });
                 let v = self.expr(fx, value);
                 let key = self.key_of(index);
+                let saved = self.m.reach_index.replace(i);
                 self.store(fx, o, key, v, "[]=".into(), None, false);
+                self.m.reach_index = saved;
                 v
             }
             Expr::IndexUpdate { object, index, .. } => {

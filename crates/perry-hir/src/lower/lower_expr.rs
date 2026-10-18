@@ -96,10 +96,46 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             max_depth
         );
     }
-    let result = stacker::maybe_grow(EXPR_LOWER_STACK_RED_ZONE, EXPR_LOWER_STACK_SEGMENT, || {
-        lower_expr_impl(ctx, expr)
-    });
+    let mut result =
+        stacker::maybe_grow(EXPR_LOWER_STACK_RED_ZONE, EXPR_LOWER_STACK_SEGMENT, || {
+            lower_expr_impl(ctx, expr)
+        });
     ctx.expr_lower_depth -= 1;
+    // The driver marks only compiler-owned AST call/member sites, before
+    // specialization can parse new source. A folded eval/Function body has
+    // ordinary spans even if its offsets overlap the CommonJS preamble.
+    if expr.span().lo.0 & crate::SOURCE_COMPILER_OWNED != 0 {
+        if let Ok(Expr::NativeMethodCall {
+            module,
+            method,
+            class_name: None,
+            object: None,
+            args,
+        }) = &mut result
+        {
+            if module.strip_prefix("node:").unwrap_or(module) == "module"
+                && method == "createRequire"
+                && args.len() == 1
+            {
+                result = Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_module_create_require_devirt".into(),
+                        param_types: vec![crate::types::Type::Any],
+                        return_type: crate::types::Type::Any,
+                    }),
+                    args: std::mem::take(args),
+                    type_args: Vec::new(),
+                    byte_offset: expr.span().lo.0,
+                });
+            }
+        }
+    }
+    if expr.span().lo.0 & crate::SOURCE_COMPILER_OWNED != 0 {
+        result = result.map(|value| match value {
+            Expr::Call { .. } | Expr::PropertyGet { .. } => value,
+            _ => Expr::CompilerOwned(Box::new(value)),
+        });
+    }
     result
 }
 

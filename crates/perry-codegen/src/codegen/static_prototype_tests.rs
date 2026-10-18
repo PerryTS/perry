@@ -79,26 +79,32 @@ fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
         run_once_classes: ["Leaf".into()].into(),
         ..Default::default()
     });
-    let proof = |base: &Module, leaf: &Module| {
-        compute([("/base", base), ("/leaf", leaf)], true, &BTreeMap::new())
+    let proof = |base: &Module, leaf: &Module, closed: bool| {
+        crate::layout_families::compute_with_loader_reach(
+            [("/base", base), ("/leaf", leaf)],
+            true,
+            &BTreeMap::new(),
+            Some(if closed {
+                Ok(())
+            } else {
+                Err("reachable loader access")
+            }),
+        )
     };
     let cid = leaf.classes[0].id;
-    assert!(proof(&base, &leaf).run_once_evaluated.contains(&cid));
-    base.class_family_syntax
-        .as_mut()
-        .unwrap()
-        .module_capability_uses = 1;
-    assert!(!proof(&base, &leaf).run_once_evaluated.contains(&cid));
-    base.class_family_syntax
-        .as_mut()
-        .unwrap()
-        .module_capability_uses = 0;
+    assert!(proof(&base, &leaf, true).run_once_evaluated.contains(&cid));
+    assert!(!proof(&base, &leaf, false).run_once_evaluated.contains(&cid));
+    assert!(
+        !compute([("/base", &base), ("/leaf", &leaf)], true, &BTreeMap::new())
+            .run_once_evaluated
+            .contains(&cid)
+    );
     leaf.class_family_syntax
         .as_mut()
         .unwrap()
         .run_once_classes
         .clear();
-    assert!(!proof(&base, &leaf).run_once_evaluated.contains(&cid));
+    assert!(!proof(&base, &leaf, true).run_once_evaluated.contains(&cid));
 }
 
 #[test]

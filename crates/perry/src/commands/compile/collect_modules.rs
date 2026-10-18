@@ -578,6 +578,8 @@ fn collect_module_one(
     let forwarding_module =
         reexport_prune::normalize_forwarding_barrel(ast_module, entry_path, ctx);
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
+    let origin_module = super::cjs_wrap::source_origin::stamp(ast_module, &class_family_syntax);
+    let ast_module = origin_module.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
     // JavaScript class fields are always [[Define]]; a TypeScript module

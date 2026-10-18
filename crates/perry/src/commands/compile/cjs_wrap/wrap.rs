@@ -1185,6 +1185,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         s
     };
 
+    let origin_markers = source_origin::markers(source);
+    let body_for_iife = source_origin::mark(&body_for_iife, &origin_markers);
+    let hoisted_class_block = source_origin::mark(&hoisted_class_block, &origin_markers);
+
     let default_export_decl = match &default_export_identifier {
         Some(name) => format!("export default {};", name),
         None => "export default _cjs;".to_string(),

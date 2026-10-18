@@ -111,6 +111,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
     ));
+    out.push_str(&format!(
+        "# module_reentry {}\n",
+        pf.module_reentry.as_deref().unwrap_or("none")
+    ));
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
@@ -220,7 +224,11 @@ pub fn module_digests(pf: &ProgramFacts) -> Vec<u64> {
             h
         })
         .collect();
-    let global = pf.interp_guard.clone().unwrap_or_default();
+    let global = format!(
+        "{}|reentry={}",
+        pf.interp_guard.clone().unwrap_or_default(),
+        pf.module_reentry.is_some()
+    );
     let sab = pf.sabotage.clone().unwrap_or_default();
     seen.into_iter()
         .map(|ids| {

@@ -70,7 +70,7 @@ impl SH for Module {
                 for class in &syntax.run_once_classes {
                     class.hash(h);
                 }
-                syntax.module_capability_uses.hash(h);
+                syntax.original_source_ranges.hash(h);
             }
         }
         imports.hash(h);
@@ -321,7 +321,7 @@ mod family_syntax_tests {
             .class_family_syntax
             .as_mut()
             .unwrap()
-            .module_capability_uses += 1;
+            .original_source_ranges = Some(vec![(1, 2)]);
         assert_ne!(once, crate::stable_hash::hash_module(&module));
         assert_eq!(
             crate::stable_hash::hash_module(&module),

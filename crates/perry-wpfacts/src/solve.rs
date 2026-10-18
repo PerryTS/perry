@@ -310,6 +310,15 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        if self.rel_phase == b'G' {
+            if let Some(f) = self.reach_owner {
+                if let Some(op) =
+                    crate::loader_reach::Op::constraint(n, c, self.reach_user, self.reach_index)
+                {
+                    self.reach_ops.push((f, op));
+                }
+            }
+        }
         self.stats_cons += 1;
         if self.relations.is_some()
             && !matches!(

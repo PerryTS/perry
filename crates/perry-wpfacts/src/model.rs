@@ -489,6 +489,12 @@ pub struct FieldWriters {
 
 #[derive(Default)]
 pub struct Model {
+    /// Current generation body; never participates in the points-to solve.
+    pub(crate) reach_owner: Option<FnIdx>,
+    pub(crate) reach_user: bool,
+    pub(crate) reach_index: Option<NodeId>,
+    pub(crate) reach_loader_literal: bool,
+    pub(crate) reach_ops: Vec<(FnIdx, crate::loader_reach::Op)>,
     pub toks: Vec<TokKind>,
     pub tok_index: FxHashMap<TokKind, Tok>,
     pub tmpls: Vec<Template>,

@@ -277,7 +277,8 @@ pub(super) fn prepare_from_raw(
     // path. A file that already has top-level `import`/`export` is not
     // CommonJS (`is_commonjs` returns false) and is left untouched.
     let was_cjs_wrapped = class.wrap_eligible && is_commonjs(&raw_source);
-    let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
+    let origin_markers = super::super::cjs_wrap::source_origin::markers(&raw_source);
+    let mut class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();
     let mut wrap_dump = None;
@@ -345,6 +346,12 @@ pub(super) fn prepare_from_raw(
             stdlib_modules.push(spec.strip_prefix("node:").unwrap_or(&spec).to_string());
         }
     }
+    if source.len() >= perry_hir::SOURCE_COMPILER_OWNED as usize {
+        return Err(anyhow!(
+            "source exceeds supported byte-offset range: {}",
+            canonical.display()
+        ));
+    }
     // #11616: the same for `process.getBuiltinModule(id)` — a module asked for
     // by name was never imported, so auto-optimize stripped it and its methods
     // returned `undefined`. The id is a runtime string; take every quoted
@@ -364,6 +371,12 @@ pub(super) fn prepare_from_raw(
         }
         _ => None,
     };
+    if was_cjs_wrapped {
+        class_family_syntax.as_mut().unwrap().original_source_ranges = Some(
+            super::super::cjs_wrap::source_origin::ranges(&source, &origin_markers)
+                .unwrap_or_default(),
+        );
+    }
     Ok(PreparedSource {
         class_family_syntax,
         source,

@@ -1219,6 +1219,17 @@ pub fn compute<'a>(
     families: bool,
     reexports: &BTreeMap<(String, String), String>,
 ) -> ProgramLayouts {
+    compute_with_loader_reach(modules, families, reexports, None)
+}
+
+/// Use the completed whole-program loader reachability proof. Missing facts
+/// keep nested evaluations fresh, including analysis-only callers.
+pub fn compute_with_loader_reach<'a>(
+    modules: impl IntoIterator<Item = (&'a str, &'a HirModule)>,
+    families: bool,
+    reexports: &BTreeMap<(String, String), String>,
+    loader_reach: Option<Result<(), &str>>,
+) -> ProgramLayouts {
     let program: Vec<(&str, &HirModule)> = modules.into_iter().collect();
     let modules: Vec<&HirModule> = program.iter().map(|(_, m)| *m).collect();
     let colours = colouring(&modules);
@@ -1264,23 +1275,17 @@ pub fn compute<'a>(
     layouts.refused = refused;
     // A module body is once per record; exposing the CommonJS loader/cache
     // can create another record. Refuse globally under any such capability.
-    let closed = !perry_hir::has_deferred_dynamic_code_sites()
-        && modules.iter().all(|m| {
-            m.class_family_syntax
-                .as_ref()
-                .is_some_and(|s| s.module_capability_uses == 0)
-        });
+    let closed = loader_reach.is_some_and(|r| r.is_ok())
+        && modules.iter().all(|m| m.class_family_syntax.is_some());
     if std::env::var("PERRY_LAYOUT_REPORT").as_deref() == Ok("2") {
-        for module in &modules {
-            if let Some(s) = &module.class_family_syntax {
-                if s.module_capability_uses != 0 {
-                    eprintln!(
-                        "perry: run-once refused by module capabilities: {}: {}",
-                        module.name, s.module_capability_uses
-                    );
-                }
-            }
-        }
+        let result = loader_reach.unwrap_or(Err("whole-program loader facts unavailable"));
+        eprintln!(
+            "perry: run-once {}",
+            result.err().map_or_else(
+                || "admitted: no reachable loader capability".to_string(),
+                |why| format!("refused: {why}")
+            )
+        );
     }
     if closed {
         for module in &modules {

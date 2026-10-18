@@ -250,7 +250,6 @@ pub(crate) fn analyze(source: &str) -> ClassFamilySyntax {
     let Ok(module) = perry_parser::parse_typescript(source, "family.cjs") else {
         return ClassFamilySyntax {
             writes: vec![(Some(String::new()), String::new())],
-            module_capability_uses: 1,
             ..Default::default()
         };
     };
@@ -338,7 +337,7 @@ pub(crate) fn analyze(source: &str) -> ClassFamilySyntax {
     }
     let mut result = ClassFamilySyntax {
         run_once_classes: perry_hir::lower::run_once_class_names(&module),
-        module_capability_uses: super::run_once_syntax::module_capability_uses(&module),
+        original_source_ranges: None,
         ..Default::default()
     };
     for item in &module.body {

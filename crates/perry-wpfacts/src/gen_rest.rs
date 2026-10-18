@@ -611,7 +611,9 @@ impl<'a> Gen<'a> {
                     Expr::String(s) => Some(s.clone()),
                     _ => None,
                 };
+                let saved = self.m.reach_index.replace(kn);
                 self.define_property(fx, on, key, dn, r);
+                self.m.reach_index = saved;
                 on
             }
             Expr::ObjectDefineProperties(o, props) => {
@@ -1480,8 +1482,10 @@ impl<'a> Gen<'a> {
                     Expr::String(s) => Key::Named(self.m.atom(s)),
                     _ => Key::Any,
                 };
+                let saved = self.m.reach_index.replace(k);
                 self.store(fx, t, key, v, "Reflect.set".into(), None, false);
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);
+                self.m.reach_index = saved;
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectDelete { target, key } => {
@@ -1549,7 +1553,8 @@ impl<'a> Gen<'a> {
             }
 
             // Variants modeled in `gen_expr::expr` (never routed here).
-            Expr::Undefined
+            Expr::CompilerOwned(..)
+            | Expr::Undefined
             | Expr::Null
             | Expr::Bool(..)
             | Expr::Number(..)

@@ -82,6 +82,7 @@ impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
         let mut m = Model::default();
         m.explain = explain;
+        m.reach_user = true;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';
@@ -834,6 +835,9 @@ impl<'a> Gen<'a> {
             }
             let mi = mi as u32;
             let init_fn = self.synthetic_fn(mi, "<init>");
+            self.m
+                .reach_ops
+                .push((init_fn, crate::loader_reach::Op::Root));
             let this = self.m.funcs[init_fn as usize].this;
             // Module top-level `this`: CJS `module.exports`-like object or
             // undefined in ESM; ⊤-free: a fresh literal-ish object.
@@ -944,6 +948,7 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor,
         };
+        let saved_user = std::mem::replace(&mut self.m.reach_user, true);
         self.params(&fx, &f.params);
         if f.is_async || f.is_generator {
             // Not transformed (rare at this point): results are runtime
@@ -953,6 +958,7 @@ impl<'a> Gen<'a> {
             });
         }
         self.stmts(&fx, &f.body);
+        self.m.reach_user = saved_user;
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
@@ -1033,6 +1039,11 @@ impl<'a> Gen<'a> {
         }
         // Static fields and static blocks: `this` is the class object.
         let si = self.static_init_fn[&tm];
+        if !c.is_nested {
+            self.m
+                .reach_ops
+                .push((outer.f, crate::loader_reach::Op::Function(si)));
+        }
         let sfx = Fx {
             module: mi,
             f: si,
@@ -1147,6 +1158,12 @@ impl<'a> Gen<'a> {
     }
 
     fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+        let saved = self.m.reach_owner.replace(fx.f);
+        self.stmt_inner(fx, s);
+        self.m.reach_owner = saved;
+    }
+
+    fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
             Stmt::Let { id, init, .. } => {
                 let n = self.local(fx.module, *id);

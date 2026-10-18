@@ -46,6 +46,7 @@ pub(crate) fn contracts_requested() -> bool {
 }
 
 pub(crate) fn run(
+    entry: &Path,
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     dynamic_code: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
@@ -59,6 +60,7 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        entry_module: Some(entry.to_string_lossy().into_owned()),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
@@ -137,6 +139,13 @@ pub(crate) fn run(
         }
     }
     if std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "perry: run-once {}",
+            pf.module_reentry.as_deref().map_or_else(
+                || "admitted: no reachable loader capability".to_string(),
+                |why| format!("refused: {why}")
+            )
+        );
         let s = &pf.stats;
         eprintln!(
             "perry: wpfacts: Function.prototype.bind {}",

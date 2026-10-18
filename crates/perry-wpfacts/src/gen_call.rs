@@ -99,7 +99,10 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(i, Cons::Implicit { reason: r });
                 let key = self.read_key(index);
-                self.mcall(o, key, args, spread)
+                let saved = self.m.reach_index.replace(i);
+                let out = self.mcall(o, key, args, spread);
+                self.m.reach_index = saved;
+                out
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.runtime_extern(fx, name, args, spread, vec![])
@@ -175,12 +178,14 @@ impl<'a> Gen<'a> {
                 let ph = crate::ctor_phase::analyze_closure(params, body);
                 self.note_fn_phase(f, ph);
             }
+            let saved_user = std::mem::replace(&mut self.m.reach_user, true);
             self.params(&cfx, params);
             if *is_async || *is_generator {
                 self.m
                     .add_top(info.ret, |_| "async/generator closure result".into());
             }
             self.stmts(&cfx, body);
+            self.m.reach_user = saved_user;
             let _: &Vec<Stmt> = body;
         }
         self.tok_node(info.token)
@@ -289,6 +294,9 @@ impl<'a> Gen<'a> {
             if let Some(f) = find(self, name) {
                 let ft = self.m.funcs[f as usize].token;
                 self.m.escape(ft, r);
+                self.m
+                    .reach_ops
+                    .push((f, crate::loader_reach::Op::Accessor(holder, f)));
             }
         }
         let fa = self.m.field_any(holder);

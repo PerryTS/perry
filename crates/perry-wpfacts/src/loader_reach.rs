@@ -1,0 +1,688 @@
+//! Reachability of loader capabilities over the completed inclusion graph.
+//! This reads solved points-to/call relations; it adds no solve constraints.
+use crate::gen::{Fx, Gen};
+use crate::model::*;
+use crate::pts::{FxHashMap, FxHashSet};
+use perry_hir::Expr;
+
+#[derive(Clone, Debug)]
+pub(crate) enum Op {
+    Root,
+    Accessor(Tok, FnIdx),
+    Module(u32),
+    LoaderCall(NodeId, Option<String>),
+    Function(FnIdx),
+    Call(CallId, bool, bool),
+    Access(NodeId, Key, bool, bool),
+    Index(NodeId, NodeId, bool, bool),
+    Touch(NodeId),
+    Escape(NodeId),
+    Capability(String),
+}
+impl Op {
+    pub(crate) fn constraint(
+        n: NodeId,
+        c: Cons,
+        user: bool,
+        index: Option<NodeId>,
+    ) -> Option<Self> {
+        Some(match c {
+            Cons::Load { key: Key::Any, .. } | Cons::MCall { key: Key::Any, .. }
+                if index.is_some() =>
+            {
+                Self::Index(n, index.unwrap(), user, false)
+            }
+            Cons::Store { key: Key::Any, .. } if index.is_some() => {
+                Self::Index(n, index.unwrap(), user, true)
+            }
+            Cons::Load { key, .. } | Cons::MCall { key, .. } => Self::Access(n, key, false, user),
+            Cons::Store { key, .. } => Self::Access(n, key, true, user),
+            Cons::IdxLoad { idx, .. } => Self::Index(n, idx, user, false),
+            Cons::Implicit { .. } if user => Self::Touch(n),
+            Cons::TopSink { .. } if user => Self::Escape(n),
+            _ => return None,
+        })
+    }
+}
+pub(crate) fn native_capability(s: &str) -> bool {
+    matches!(
+        s.strip_prefix("node:").unwrap_or(s),
+        "module" | "vm" | "repl" | "inspector" | "inspector/promises" | "bun:ffi"
+    ) || s.ends_with(".node")
+        || s.starts_with("data:")
+}
+impl Gen<'_> {
+    pub(crate) fn loader_source_origin(&self, _mi: u32, e: &Expr) -> Option<bool> {
+        match e {
+            Expr::CompilerOwned(_) => Some(false),
+            Expr::Call { byte_offset, .. }
+            | Expr::PropertyGet { byte_offset, .. }
+            | Expr::DynamicImport { byte_offset, .. }
+                if *byte_offset != 0 =>
+            {
+                Some(byte_offset & perry_hir::SOURCE_COMPILER_OWNED == 0)
+            }
+            Expr::IndexGet { object, .. }
+            | Expr::IndexSet { object, .. }
+            | Expr::PropertySet { object, .. } => self.loader_source_origin(_mi, object),
+            _ => None,
+        }
+    }
+    pub(crate) fn note_loader_expr(&mut self, fx: &Fx, e: &Expr) {
+        if !self.m.reach_user {
+            return;
+        }
+        match e {
+            Expr::ClassExprFresh { template, .. } | Expr::ClassRef(template) => {
+                if let Some(tm) = self.mods[fx.module as usize].classes.get(template) {
+                    if let Some(&f) = self.static_init_fn.get(tm) {
+                        self.m.reach_ops.push((fx.f, Op::Function(f)));
+                    }
+                }
+            }
+            _ => {}
+        }
+        let imports = &self.modules[fx.module as usize].1.imports;
+        let read_name = match e {
+            Expr::ExternFuncRef { name, .. } | Expr::ClassRef(name) => Some(name),
+            _ => None,
+        };
+        if let Some(name) = read_name {
+            for import in imports {
+                if import.specifiers.iter().any(|sp| match sp {
+                    perry_hir::ImportSpecifier::Named { local, .. }
+                    | perry_hir::ImportSpecifier::Default { local }
+                    | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                }) {
+                    if let Some(path) = &import.resolved_path {
+                        if let Some(&mi) = self.path_index.get(path) {
+                            self.m.reach_ops.push((fx.f, Op::Module(mi)));
+                        }
+                    }
+                    if native_capability(&import.source) {
+                        self.m.reach_ops.push((
+                            fx.f,
+                            Op::Capability(format!("loader import {}", import.source)),
+                        ));
+                    }
+                }
+            }
+        }
+        if let Expr::DynamicImport { paths, .. } = e {
+            for path in paths {
+                if let Some(&mi) = self.path_index.get(path) {
+                    self.m.reach_ops.push((fx.f, Op::Module(mi)));
+                }
+            }
+        }
+        if let Expr::Call { callee, args, .. } = e {
+            if let Expr::LocalGet(id) = callee.as_ref() {
+                let literal = match args.as_slice() {
+                    [Expr::String(s)] => Some(s.clone()),
+                    _ => None,
+                };
+                if literal.as_deref().is_none_or(native_capability) {
+                    let n = self.local(fx.module, *id);
+                    self.m.reach_ops.push((fx.f, Op::LoaderCall(n, literal)));
+                }
+            }
+        }
+        let evaluator = match e {
+            Expr::ExternFuncRef { name, .. } | Expr::ClassRef(name) => Some(name.as_str()),
+            _ => None,
+        };
+        if let Some(name @ ("Function" | "eval")) = evaluator {
+            let mi = &self.mods[fx.module as usize];
+            if !mi.scope.contains_key(name)
+                && !mi.imports.contains_key(name)
+                && !mi.classes.contains_key(name)
+            {
+                self.m
+                    .reach_ops
+                    .push((fx.f, Op::Capability(format!("global evaluator {name}"))));
+            }
+        }
+        let why = match e {
+            Expr::NativeModuleRef(s) if native_capability(s) => {
+                Some(format!("native loader module {s}"))
+            }
+            Expr::NativeMethodCall {
+                module,
+                method,
+                args,
+                ..
+            } if module.strip_prefix("node:").unwrap_or(module) == "process"
+                && method == "getBuiltinModule"
+                && !matches!(args.as_slice(), [Expr::String(s)] if !native_capability(s)) =>
+            {
+                Some("process.getBuiltinModule may return a loader".into())
+            }
+            Expr::NativeMethodCall { module, method, .. } if native_capability(module) => {
+                Some(format!("native loader operation {module}.{method}"))
+            }
+            Expr::New { class_name, .. } if class_name == "Function" => {
+                Some("deferred Function constructor".into())
+            }
+            Expr::DynamicImport { arg, .. } if !matches!(arg.as_ref(), Expr::String(s) if !native_capability(s)) => {
+                Some("non-constant dynamic import".into())
+            }
+            Expr::ExternFuncRef { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "js_eval_in_scope"
+                        | "js_eval"
+                        | "js_function_ctor_from_strings"
+                        | "js_module_create_require_devirt"
+                        | "js_vm_module_call"
+                ) =>
+            {
+                Some(format!("dynamic/loader entry {name}"))
+            }
+            _ => None,
+        };
+        if let Some(why) = why {
+            self.m.reach_ops.push((fx.f, Op::Capability(why)));
+        }
+    }
+}
+
+struct Reach<'a> {
+    g: &'a Gen<'a>,
+    ops: Vec<Vec<&'a Op>>,
+    calls: Vec<Vec<Tok>>,
+    live: FxHashSet<FnIdx>,
+    queue: std::collections::VecDeque<FnIdx>,
+    touched: FxHashSet<Tok>,
+    modules: FxHashSet<u32>,
+    init: Vec<Option<FnIdx>>,
+    extra_accessors: FxHashMap<Tok, Vec<FnIdx>>,
+    refusal: Option<String>,
+    context: FnIdx,
+}
+impl<'a> Reach<'a> {
+    fn function(&mut self, f: FnIdx) {
+        if self.live.insert(f) {
+            self.queue.push_back(f);
+        }
+    }
+    fn module(&mut self, mi: u32) {
+        if !self.modules.insert(mi) {
+            return;
+        }
+        if let Some(f) = self.init[mi as usize] {
+            self.function(f);
+        }
+        let module = self.g.modules[mi as usize].1;
+        for import in &module.imports {
+            if import.type_only
+                || import.runtime_erased
+                || import.is_dynamic
+                || import.is_deferred_require
+            {
+                continue;
+            }
+            if let Some(path) = &import.resolved_path {
+                if let Some(&m) = self.g.path_index.get(path) {
+                    self.module(m);
+                }
+            }
+            if native_capability(&import.source) {
+                let internal=module.class_family_syntax.as_ref().is_some_and(|s|s.original_source_ranges.is_some()) && module.is_commonjs_wrap() && import.specifiers.iter().all(|sp| matches!(sp,perry_hir::ImportSpecifier::Named {local, ..} if local.starts_with("__perry_cjs_")));
+                if !internal {
+                    if let Some(f) = self.init[mi as usize] {
+                        self.reason(f, format!("loader import {}", import.source));
+                    }
+                }
+            }
+        }
+    }
+    fn reason(&mut self, f: FnIdx, why: String) {
+        if self.refusal.is_none() {
+            let info = &self.g.m.funcs[f as usize];
+            self.refusal = Some(format!(
+                "{} in {} ({})",
+                why, info.name, self.g.modules[info.module as usize].0
+            ));
+        }
+    }
+    fn node(&mut self, n: NodeId) {
+        for t in self.g.m.nodes[n as usize].pts.to_sorted() {
+            self.touch(t);
+        }
+    }
+    fn touch(&mut self, t: Tok) {
+        if t == TOP || !self.touched.insert(t) {
+            return;
+        }
+        if self.require_token(t, &mut FxHashSet::default())
+            || self.module_record(t)
+            || matches!(
+                self.g.m.toks[t as usize],
+                TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Process)
+            )
+        {
+            self.reason(
+                self.context,
+                format!("{} reached by unknown/protocol code", self.g.m.tok_name(t)),
+            );
+            return;
+        }
+        let m = &self.g.m;
+        match m.toks[t as usize] {
+            TokKind::Func(f) => {
+                self.function(f);
+                self.node(m.funcs[f as usize].ret);
+            }
+            TokKind::Bound(b) => {
+                let (target, _, args) = &m.bound[b as usize];
+                self.node(*target);
+                for &n in args {
+                    self.node(n);
+                }
+            }
+            TokKind::ClassObj(tm) => self.class(tm),
+            _ => {}
+        }
+        if let Some(&n) = m.field_any.get(&t) {
+            self.node(n);
+        }
+        if let Some(keys) = m.field_keys.get(&t) {
+            for &k in keys {
+                if let Some(&n) = m.fields.get(&(t, k)) {
+                    self.node(n);
+                }
+            }
+        }
+        if let Some(&n) = m.proto_node.get(&t) {
+            self.node(n);
+        }
+        if let Some(keys) = m.accessor_keys.get(&t) {
+            for &k in keys {
+                if let Some((gs, ss)) = m.accessors.get(&(t, k)) {
+                    for &f in gs.iter().chain(ss) {
+                        self.function(f);
+                    }
+                }
+            }
+        }
+        if let Some(fs) = self.extra_accessors.get(&t).cloned() {
+            for f in fs {
+                self.function(f);
+            }
+        }
+    }
+    fn class(&mut self, mut tm: TmplId) {
+        let mut seen = FxHashSet::default();
+        while seen.insert(tm) {
+            if let Some(f) = self.g.m.tmpls[tm as usize].ctor {
+                self.function(f);
+            }
+            if let Some(&f) = self.g.field_init_fn.get(&tm) {
+                self.function(f);
+            }
+            let Some(p) = self.g.m.tmpls[tm as usize].parent else {
+                break;
+            };
+            tm = p;
+        }
+    }
+    fn call_target(&mut self, t: Tok, seen: &mut FxHashSet<Tok>) {
+        if !seen.insert(t) {
+            return;
+        }
+        match self.g.m.toks[t as usize] {
+            TokKind::Func(f) => self.function(f),
+            TokKind::ClassObj(tm) => self.class(tm),
+            TokKind::Bound(b) => {
+                let n = self.g.m.bound[b as usize].0;
+                for t in self.g.m.nodes[n as usize].pts.to_sorted() {
+                    self.call_target(t, seen);
+                }
+            }
+            // Invariance facts deliberately inject the Function namespace
+            // into arbitrary global/computed lookups. That summary token is
+            // not a loader access path. Actual capability reads below (and
+            // native/deferred operations) establish the loader boundary.
+            _ => {}
+        }
+    }
+    fn call(&mut self, f: FnIdx, c: CallId, user: bool, literal: bool) {
+        let mut seen = FxHashSet::default();
+        for t in self.calls[c as usize].clone() {
+            if user && !literal && self.require_token(t, &mut FxHashSet::default()) {
+                self.reason(
+                    f,
+                    "require called without a closed non-loader literal".into(),
+                );
+            }
+            self.call_target(t, &mut seen);
+        }
+        // Runtime and unknown calls may call their callbacks, including a
+        // returned callback or one nested in an argument's object graph.
+        if seen.is_empty()
+            || seen.iter().any(|&t| {
+                matches!(
+                    self.g.m.toks[t as usize],
+                    TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
+                )
+            })
+        {
+            let opaque = user
+                && seen.iter().any(|&t| {
+                    matches!(self.g.m.toks[t as usize], TokKind::Top | TokKind::BuiltinFn)
+                });
+            let call = &self.g.m.calls[c as usize];
+            for &a in call.args.iter().chain(&call.spread) {
+                if opaque {
+                    self.escape(f, a);
+                } else {
+                    self.node(a);
+                }
+            }
+            match call.this {
+                ThisArg::Node(n) if opaque => self.escape(f, n),
+                ThisArg::Node(n) => self.node(n),
+                ThisArg::Tok(t) => self.touch(t),
+                _ => {}
+            }
+        }
+    }
+    fn escape(&mut self, f: FnIdx, n: NodeId) {
+        let mut todo = self.g.m.nodes[n as usize].pts.to_sorted();
+        let mut seen = FxHashSet::default();
+        while let Some(t) = todo.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
+            let m = &self.g.m;
+            if self.require_token(t, &mut FxHashSet::default())
+                || self.module_record(t)
+                || matches!(
+                    m.toks[t as usize],
+                    TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Other)
+                )
+            {
+                self.reason(f, format!("{} exposed to unknown code", m.tok_name(t)));
+                return;
+            }
+            self.touch(t);
+            if let Some(&n) = m.field_any.get(&t) {
+                todo.extend(m.nodes[n as usize].pts.to_sorted());
+            }
+            if let Some(keys) = m.field_keys.get(&t) {
+                for &k in keys {
+                    if let Some(&n) = m.fields.get(&(t, k)) {
+                        todo.extend(m.nodes[n as usize].pts.to_sorted());
+                    }
+                }
+            }
+            if let TokKind::Func(target) = m.toks[t as usize] {
+                todo.extend(
+                    m.nodes[m.funcs[target as usize].ret as usize]
+                        .pts
+                        .to_sorted(),
+                );
+            }
+        }
+    }
+    fn require_token(&self, t: Tok, seen: &mut FxHashSet<Tok>) -> bool {
+        if !seen.insert(t) {
+            return false;
+        }
+        match self.g.m.toks[t as usize] {
+            TokKind::Func(f) => self.g.m.funcs[f as usize].name == "require",
+            TokKind::Bound(b) => self.g.m.nodes[self.g.m.bound[b as usize].0 as usize]
+                .pts
+                .to_sorted()
+                .into_iter()
+                .any(|t| self.require_token(t, seen)),
+            _ => false,
+        }
+    }
+    fn module_record(&self, t: Tok) -> bool {
+        self.g
+            .m
+            .atom_index
+            .get("__perry_cjs_record")
+            .is_some_and(|&k| self.g.m.fields.contains_key(&(t, k)))
+    }
+    fn access(&mut self, f: FnIdx, n: NodeId, key: Key, store: bool, loader_names: bool) {
+        let m = &self.g.m;
+        let name = match key {
+            Key::Named(a) => Some(m.atoms[a as usize].as_str()),
+            Key::Any => None,
+        };
+        let mut todo = m.nodes[n as usize].pts.to_sorted();
+        let mut seen = FxHashSet::default();
+        while let Some(t) = todo.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
+            let private_loader = name.is_some_and(|n| n.starts_with("__perry_cjs_"));
+            let require = self.require_token(t, &mut FxHashSet::default())
+                && name.is_none_or(|n| {
+                    matches!(
+                        n,
+                        "cache" | "extensions" | "main" | "constructor" | "call" | "apply" | "bind"
+                    )
+                });
+            let record = self.module_record(t)
+                && name.is_none_or(|n| {
+                    !matches!(
+                        n,
+                        "exports" | "id" | "path" | "filename" | "loaded" | "paths"
+                    ) || (store && n != "exports")
+                });
+            let cap = loader_names
+                && (private_loader
+                    || require
+                    || record
+                    || match m.toks[t as usize] {
+                        TokKind::Top => {
+                            name.is_none()
+                                || name.is_some_and(|n| {
+                                    matches!(
+                                        n,
+                                        "cache"
+                                            | "_cache"
+                                            | "require"
+                                            | "mainModule"
+                                            | "getBuiltinModule"
+                                            | "createRequire"
+                                            | "binding"
+                                            | "_linkedBinding"
+                                            | "constructor"
+                                            | "extensions"
+                                            | "_extensions"
+                                            | "_compile"
+                                            | "_load"
+                                    )
+                                })
+                        }
+                        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other) => {
+                            name.is_none()
+                                || name.is_some_and(|n| {
+                                    matches!(
+                                        n,
+                                        "require" | "module" | "Function" | "eval" | "Bun" | "Deno"
+                                    )
+                                })
+                        }
+                        TokKind::Builtin(BuiltinNs::Process) => {
+                            name.is_none()
+                                || name.is_some_and(|n| {
+                                    matches!(
+                                        n,
+                                        "mainModule"
+                                            | "getBuiltinModule"
+                                            | "binding"
+                                            | "_linkedBinding"
+                                            | "dlopen"
+                                    )
+                                })
+                        }
+                        TokKind::Func(_)
+                        | TokKind::Bound(_)
+                        | TokKind::ClassObj(_)
+                        | TokKind::BuiltinFn => name.is_none() || name == Some("constructor"),
+                        TokKind::Builtin(_) => name == Some("constructor"),
+                        TokKind::ObjectProto if m.nodes[n as usize].pts.contains_tok(t) => {
+                            name.is_none() || name == Some("constructor")
+                        }
+                        _ => false,
+                    });
+            if cap {
+                self.reason(
+                    f,
+                    format!(
+                        "reachable {}.{}{}",
+                        m.tok_name(t),
+                        name.unwrap_or("[computed]"),
+                        if store { " write" } else { " read" }
+                    ),
+                );
+                return;
+            }
+            if let Some(fs) = self.extra_accessors.get(&t).cloned() {
+                for f in fs {
+                    self.function(f);
+                    self.node(m.funcs[f as usize].ret);
+                }
+            }
+            if t == TOP {
+                for (gs, ss) in m.accessors.values() {
+                    for &f in gs.iter().chain(ss) {
+                        self.function(f);
+                    }
+                }
+                for fs in self.extra_accessors.values().cloned().collect::<Vec<_>>() {
+                    for f in fs {
+                        self.function(f);
+                    }
+                }
+            }
+            if let Some(&p) = m.proto_node.get(&t) {
+                todo.extend(m.nodes[p as usize].pts.to_sorted());
+            }
+            let keys: Vec<_> = match key {
+                Key::Named(a) => vec![a],
+                Key::Any => m.accessor_keys.get(&t).cloned().unwrap_or_default(),
+            };
+            for k in keys {
+                if let Some((get, set)) = m.accessors.get(&(t, k)) {
+                    for &f in if store { set } else { get } {
+                        self.function(f);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String> {
+    if g.m.aborted {
+        return Some("whole-program solve aborted".into());
+    }
+    let mut r = Reach {
+        g,
+        ops: vec![Vec::new(); g.m.funcs.len()],
+        calls: vec![Vec::new(); g.m.calls.len()],
+        live: Default::default(),
+        queue: Default::default(),
+        touched: Default::default(),
+        modules: Default::default(),
+        init: vec![None; g.modules.len()],
+        extra_accessors: Default::default(),
+        refusal: None,
+        context: 0,
+    };
+    // Computed object accessors use the solver's STAR-key rule, which
+    // escapes their function rather than installing a named accessor. Its
+    // retained constraint still identifies both the holder and the body.
+    let star = g.m.atom_index.get(crate::STAR_KEY).copied();
+    for node in &g.m.nodes {
+        for cons in &node.cons {
+            if let Cons::AccessorInstall { key, f, .. } = *cons {
+                if Some(key) == star {
+                    for t in node.pts.to_sorted() {
+                        r.extra_accessors.entry(t).or_default().push(f);
+                    }
+                }
+            }
+        }
+    }
+    for &(c, t, _) in &g.m.bind_done {
+        r.calls[c as usize].push(t);
+    }
+    for &(c, t) in &g.m.construct_done {
+        r.calls[c as usize].push(t);
+    }
+    for (f, op) in &g.m.reach_ops {
+        r.ops[*f as usize].push(op);
+        if let Op::Accessor(t, target) = op {
+            r.extra_accessors.entry(*t).or_default().push(*target);
+        }
+        if matches!(op, Op::Root) {
+            r.init[g.m.funcs[*f as usize].module as usize] = Some(*f);
+        }
+    }
+    match entry {
+        Some(path) => match g.path_index.get(path) {
+            Some(&mi) => r.module(mi),
+            None => return Some(format!("entry module missing from solved graph: {path}")),
+        },
+        None => {
+            for mi in 0..g.modules.len() {
+                r.module(mi as u32);
+            }
+        }
+    }
+    // The driver already computes eager static dependencies, including
+    // re-exports, cycles and package identity. Deferred modules are seeded
+    // only when a reachable import/require operation reaches them.
+    if entry.is_some() {
+        for (mi, (_, module)) in g.modules.iter().enumerate() {
+            if module.init_kind == perry_hir::ModuleInitKind::Eager {
+                r.module(mi as u32);
+            }
+        }
+    }
+    while let Some(f) = r.queue.pop_front() {
+        r.context = f;
+        for op in r.ops[f as usize].clone() {
+            match *op {
+                Op::Root | Op::Accessor(..) => {}
+                Op::Module(mi) => r.module(mi),
+                Op::Function(target) => r.function(target),
+                Op::LoaderCall(n, ref literal) => {
+                    for t in g.m.nodes[n as usize].pts.to_sorted() {
+                        if r.require_token(t, &mut FxHashSet::default()) {
+                            r.reason(
+                                f,
+                                format!(
+                                    "require may reach {}",
+                                    literal.as_deref().unwrap_or("a non-constant module")
+                                ),
+                            );
+                        }
+                    }
+                }
+                Op::Call(c, user, literal) => r.call(f, c, user, literal),
+                Op::Touch(n) => r.node(n),
+                Op::Escape(n) => r.escape(f, n),
+                Op::Access(n, k, store, user) => r.access(f, n, k, store, user),
+                Op::Index(n, idx, user, store) => {
+                    let key = &g.m.nodes[idx as usize];
+                    let names = user
+                        && (key.prim & !(prim::NUM | prim::SYMBOL) != 0 || !key.pts.is_empty());
+                    r.access(f, n, Key::Any, store, names);
+                }
+                Op::Capability(ref s) => r.reason(f, s.clone()),
+            }
+            if r.refusal.is_some() {
+                return r.refusal;
+            }
+        }
+    }
+    None
+}

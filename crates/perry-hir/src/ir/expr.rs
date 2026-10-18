@@ -55,6 +55,10 @@ pub enum ClassFreshStaticInit {
 /// Expression
 #[derive(Debug, Clone)]
 pub enum Expr {
+    /// Compiler bookkeeping. Transparent at runtime; the loader-reach proof
+    /// still follows callbacks/getters but does not treat the operation as a
+    /// source-level loader exposure. Only the driver can stamp this origin.
+    CompilerOwned(Box<Expr>),
     // Literals
     Undefined,
     Null,

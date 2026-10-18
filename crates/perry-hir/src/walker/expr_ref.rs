@@ -9,6 +9,7 @@ where
     F: FnMut(&'a Expr),
 {
     match expr {
+        Expr::CompilerOwned(value) => f(value),
         Expr::ScopedTemp { value, body, .. } => {
             f(value);
             f(body);

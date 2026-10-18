@@ -3,6 +3,11 @@
 use super::*;
 use crate::types::{FuncId, Type};
 
+/// Marks a compiler-owned source site. Stamped before HIR transforms, so a
+/// copied/inlined site keeps its origin independently of its new module.
+/// Zero remains unknown and never grants an exemption.
+pub const SOURCE_COMPILER_OWNED: u32 = 1 << 31;
+
 /// Original CommonJS syntax, retained before wrapping erases binding kinds
 /// and export assignments. Only a closed export with one top-level class
 /// assignment can identify a layout parent. This is compile-time input;
@@ -12,9 +17,10 @@ pub struct ClassFamilySyntax {
     /// Class declarations at original-source run-once positions. A CommonJS
     /// module's body additionally needs whole-program factory non-reentry.
     pub run_once_classes: std::collections::BTreeSet<String>,
-    /// Original-source uses that can expose a loader/cache or global code.
-    /// Generated CommonJS scaffolding is deliberately outside this census.
-    pub module_capability_uses: u32,
+    /// User-source regions in the final wrapped parse input (SWC byte offsets).
+    /// None means an unwrapped module. Generated bookkeeping cannot expose
+    /// capabilities unless user code first reaches the loader.
+    pub original_source_ranges: Option<Vec<(u32, u32)>>,
 
     /// Child class name -> (literal require specifier, named export).
     pub parents: std::collections::BTreeMap<String, (String, String)>,

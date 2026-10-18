@@ -6096,13 +6096,32 @@ pub fn run_with_parse_cache(
             }
         }
     }
-    let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
-        ctx.native_modules
-            .iter()
-            .map(|(path, m)| (path.to_str().expect("module path"), m)),
-        args.output_type == "executable",
-        &layout_reexports,
-    ));
+    let program_facts = super::program_facts::run(
+        &entry_path,
+        &ctx.native_modules,
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+    );
+    let program_layouts =
+        std::sync::Arc::new(perry_codegen::layout_families::compute_with_loader_reach(
+            ctx.native_modules
+                .iter()
+                .map(|(path, m)| (path.to_str().expect("module path"), m)),
+            args.output_type == "executable",
+            &layout_reexports,
+            Some(
+                program_facts
+                    .as_ref()
+                    .map_or(Err("whole-program facts disabled"), |pf| {
+                        pf.module_reentry.as_deref().map_or(Ok(()), Err)
+                    }),
+            ),
+        ));
     // Design step 4 (DESIGN 7.2): link-time ShapeIds. Collect the content of
     // every class birth each module's string pool will mint — from codegen's
     // own derivation, run on the options the module's codegen gets — and
@@ -6180,16 +6199,6 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-    );
     // Step 5b: closure class parameters as typed-body receiver proofs, once
     // the facts say some class's layout is stable.
     let receiver_params = super::fn_infer::receiver_params(

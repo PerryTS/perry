@@ -44,7 +44,7 @@ mod extract_exports;
 mod extract_requires;
 pub(super) mod family_syntax;
 mod hoist_classes;
-mod run_once_syntax;
+pub(super) mod source_origin;
 mod wrap;
 
 #[cfg(test)]

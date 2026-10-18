@@ -25,6 +25,7 @@ mod gen;
 mod gen_call;
 mod gen_expr;
 mod gen_rest;
+mod loader_reach;
 pub mod model;
 pub mod pts;
 mod solve;
@@ -40,6 +41,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
+    /// Entry module for loader reachability; absent for stand-alone analysis APIs.
+    pub entry_module: Option<String>,
     /// Record the constraint relations for the independent recomputation.
     pub relations: bool,
     /// Test-only negative control: plant a wrong fact
@@ -97,6 +100,8 @@ pub struct Stats {
 
 #[derive(Clone, Debug, Default)]
 pub struct ProgramFacts {
+    /// A reachable operation can re-enter a module factory; None proves run-once.
+    pub module_reentry: Option<String>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     pub sites: Vec<SiteFacts>,
@@ -320,7 +325,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
             })
             .collect()
     };
+    let module_reentry = loader_reach::refusal(&g, cfg.entry_module.as_deref());
     let mut pf = ProgramFacts {
+        module_reentry,
         super_unrelinked,
         fnproto_bind_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),

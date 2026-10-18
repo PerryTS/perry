@@ -82,6 +82,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         ));
     }
     match expr {
+        Expr::CompilerOwned(value) => lower_expr(ctx, value),
         Expr::Integer(..)
         | Expr::Number(..)
         | Expr::Bool(..)
