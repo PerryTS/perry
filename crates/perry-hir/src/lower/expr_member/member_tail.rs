@@ -486,8 +486,10 @@ pub(crate) fn lower_member_tail(
                     // `process`, `Buffer`) are not constructors and keep
                     // their intrinsic lowering. `.name` / `.length` keep
                     // their dedicated folds below, which key on the collapse.
+                    // SubtleCrypto is a real constructor even without a length fold.
                     let receiver_is_plain_builtin_object =
-                        crate::analysis::builtin_constructor_length(property).is_some()
+                        (crate::analysis::builtin_constructor_length(property).is_some()
+                            || property == "SubtleCrypto")
                             && !crate::analysis::has_intrinsic_static_surface(property)
                             && !matches!(outer_static_member, Some("name" | "length"));
                     if member_is_call_callee
