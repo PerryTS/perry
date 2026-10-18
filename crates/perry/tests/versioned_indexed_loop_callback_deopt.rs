@@ -3,9 +3,11 @@
 //! must mark the current loop for an exact once-only resume before any
 //! observable fallback.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 /// Normalize every collector input that can make a nominal evacuation arm
 /// non-moving. Several of these are compile-time Perry inputs, so apply the
@@ -45,63 +47,10 @@ fn workspace_root() -> PathBuf {
 /// abort-on-unwind guards in `extern "C"` helpers, so the raw JS exceptions in
 /// this fixture cannot reach their generated catch landing pads on Linux.
 /// Relative Cargo target overrides are rooted at the nested build's workspace.
-fn target_runtime_dir() -> PathBuf {
-    let target = match std::env::var_os("CARGO_TARGET_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-    {
-        Some(path) if path.is_absolute() => path,
-        Some(path) => workspace_root().join(path),
-        None => workspace_root().join("target"),
-    };
-    if cfg!(windows) {
-        target.join("x86_64-pc-windows-msvc").join("release")
-    } else {
-        target.join("release")
-    }
-}
 
 fn runtime_dir() -> PathBuf {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command
-            .current_dir(workspace_root())
-            .arg("build")
-            // `panic` is profile-level; this must match `target_runtime_dir()`
-            // and the runtime Perry actually ships.
-            .arg("--release");
-        remove_gc_env_overrides(&mut command);
-        if cfg!(windows) {
-            command.arg("--target").arg("x86_64-pc-windows-msvc");
-        }
-        let build = command
-            .args(["-p", "perry-runtime-static"])
-            .output()
-            .expect("build static runtime archive");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "release"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-
-    target_runtime_dir()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 fn run_fixture(binary: &Path, force_evacuation: bool) -> Output {

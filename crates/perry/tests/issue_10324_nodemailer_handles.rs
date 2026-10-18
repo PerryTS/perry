@@ -2,9 +2,11 @@
 //! gives a bounded refusal, proving `verify` and `sendMail` reached the
 //! registered transporter without sending any external mail.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Once;
 use std::time::{Duration, Instant};
 
 fn perry_bin() -> PathBuf {
@@ -19,86 +21,11 @@ fn workspace_root() -> PathBuf {
 }
 
 fn target_debug_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_perry"))
-        .parent()
-        .expect("perry binary directory")
-        .to_path_buf()
+    runtime_archives::dir()
 }
 
 fn ensure_runtime_archives() {
-    static BUILD: Once = Once::new();
-    BUILD.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command.current_dir(workspace_root()).args([
-            "build",
-            "-p",
-            "perry",
-            "-p",
-            "perry-runtime-static",
-            "-p",
-            "perry-stdlib-static",
-            "-p",
-            "perry-ext-nodemailer",
-            "-p",
-            "perry-ext-net",
-        ]);
-        let binary_path = PathBuf::from(env!("CARGO_BIN_EXE_perry"));
-        let binary_profile_dir = binary_path
-            .parent()
-            .expect("Cargo binary profile directory");
-        let profile = binary_profile_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("Cargo profile name");
-        if profile == "release" {
-            command.arg("--release");
-        } else if profile != "debug" {
-            command.args(["--profile", profile]);
-        }
-        if let Some(target) = std::env::var_os("CARGO_BUILD_TARGET") {
-            command.arg("--target").arg(target);
-        } else {
-            let configured_target_dir = std::env::var_os("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .map(|path| {
-                    if path.is_absolute() {
-                        path
-                    } else {
-                        workspace_root().join(path)
-                    }
-                })
-                .unwrap_or_else(|| workspace_root().join("target"));
-            let actual_target_dir = binary_profile_dir.parent().expect("Cargo target directory");
-            if let Ok(relative_target) = actual_target_dir.strip_prefix(configured_target_dir) {
-                if relative_target.components().count() == 1 {
-                    command.arg("--target").arg(relative_target);
-                }
-            }
-        }
-        let build = command
-            .output()
-            .expect("build the matching runtime/provider archives");
-        assert!(
-            build.status.success(),
-            "archive build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .arg(binary_profile_dir)
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
+    runtime_archives::ensure();
 }
 
 const SOURCE: &str = r#"

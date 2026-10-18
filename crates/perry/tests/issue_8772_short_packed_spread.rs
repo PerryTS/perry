@@ -1,9 +1,11 @@
 //! End-to-end coverage for #8772: guarded direct method calls with a final
 //! short packed-array spread tail.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
@@ -42,36 +44,11 @@ fn perry_bin() -> PathBuf {
 }
 
 fn target_debug_dir() -> PathBuf {
-    if let Some(runtime) = std::env::var_os("PERRY_TEST_RUNTIME_DIR") {
-        return PathBuf::from(runtime);
-    }
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
-    target.join("debug")
+    runtime_archives::dir()
 }
 
 fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let runtime_dir = target_debug_dir();
-        if runtime_dir.join("libperry_runtime.a").is_file()
-            && runtime_dir.join("libperry_stdlib.a").is_file()
-        {
-            return;
-        }
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static");
-        let output = command.output().expect("build static runtime archives");
-        assert_success("static runtime build", &output);
-    });
+    runtime_archives::ensure();
 }
 
 fn assert_success(label: &str, output: &Output) {
@@ -81,19 +58,6 @@ fn assert_success(label: &str, output: &Output) {
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-    // The GC effects sidecar beside the archives just built: perry reads it
-    // before codegen and refuses archives without one in the workspace.
-    assert!(
-        std::process::Command::new("bash")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/gc_call_effects/sidecars.sh"
-            ))
-            .args(["--cargo-profile", "debug"])
-            .status()
-            .is_ok_and(|status| status.success()),
-        "scripts/gc_call_effects/sidecars.sh failed"
     );
 }
 

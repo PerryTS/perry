@@ -1,49 +1,16 @@
 //! #10105: minimized OpenCode PluginLoader.load/report/startup contract.
 //! This exercises compiled TypeScript recovery, not the full OpenTUI renderer.
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
 fn configured_runtime_plugin_reports_once_and_startup_continues() {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let perry = PathBuf::from(env!("CARGO_BIN_EXE_perry"));
-    let runtime_dir = perry.parent().expect("compiler directory");
-    let mut build = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
-    build.current_dir(&workspace).args([
-        "build",
-        "--locked",
-        "-p",
-        "perry",
-        "-p",
-        "perry-runtime-static",
-        "-p",
-        "perry-stdlib-static",
-    ]);
-    // Match the outer cargo invocation's profile, including --release and
-    // --profile perry-dev; never silently link archives from another build.
-    let profile = runtime_dir.file_name().unwrap().to_str().unwrap();
-    if profile != "debug" {
-        build.args(["--profile", profile]);
-    }
-    let build = build.output().expect("build compiler and static archives");
-    assert!(
-        build.status.success(),
-        "static archive build failed: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    // The GC effects sidecar beside the archives just built: perry reads it
-    // before codegen and refuses archives without one in the workspace.
-    assert!(
-        std::process::Command::new("bash")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/gc_call_effects/sidecars.sh"
-            ))
-            .args(["--cargo-profile", "debug"])
-            .status()
-            .is_ok_and(|status| status.success()),
-        "scripts/gc_call_effects/sidecars.sh failed"
-    );
+    runtime_archives::ensure();
+    let runtime_dir = runtime_archives::dir();
 
     let dir = tempfile::tempdir().expect("fixture directory");
     let entry = dir.path().join("main.ts");

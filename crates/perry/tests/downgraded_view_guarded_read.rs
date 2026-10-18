@@ -1,19 +1,7 @@
-//! A typed array whose tracked buffer view was demoted (it escaped, so the
-//! view lost its `noalias` proof and alias scope) reads its elements through
-//! the per-site guarded inline load, as an untracked receiver does.
-//!
-//! No view tier serves a demoted view: `lower_typed_array_load` and the proven
-//! checked and guarded tiers all require the proof. The guarded load used to
-//! refuse any receiver with a tracked view, so a demoted view fell to the
-//! unconditional `js_typed_array_get` call plus a `js_number_coerce`: worse
-//! than having no view at all. One exception stays on that call: a view whose
-//! `.buffer` was exposed. Its elements move out of line, every guarded read
-//! would miss the kind cache, and the helper behind the miss costs more than
-//! the plain call.
-//!
-//! The behavioural half (in-bounds, out-of-bounds, callee writes, `.buffer`,
-//! detach and reassignment, against node) is
-//! `test-files/test_gap_downgraded_view_guarded_read.ts`.
+//! Tracked typed-array views retain their proof-aware fallback after escape
+//! or backing-buffer exposure. They must not enter the untracked managed-storage
+//! guard, which cannot establish a tracked native arena's storage proof.
+//! Semantic coverage remains in test_gap_downgraded_view_guarded_read.ts.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -91,7 +79,7 @@ fn compile_ir() -> String {
 }
 
 #[test]
-fn a_demoted_view_reads_through_the_guarded_inline_load() {
+fn a_demoted_view_keeps_its_proof_aware_fallback() {
     let ir = compile_ir();
     let escaped = function_body(&ir, "dvread_ts__escaped")
         .unwrap_or_else(|| panic!("no escaped() in:\n{ir}"));
@@ -102,12 +90,12 @@ fn a_demoted_view_reads_through_the_guarded_inline_load() {
         "escaped(): the typed array is no longer allocated here:\n{escaped}"
     );
     assert!(
-        escaped.contains("ctaf.get.load"),
-        "escaped(): the demoted view's reads did not take the guarded load:\n{escaped}"
+        !escaped.contains("ctaf.get.load"),
+        "escaped(): a demoted view entered the untracked guarded load:\n{escaped}"
     );
     assert!(
-        !escaped.contains("@js_typed_array_get("),
-        "escaped(): a read still fell to js_typed_array_get:\n{escaped}"
+        escaped.contains("@js_typed_array_get("),
+        "escaped(): the demoted view lost its proof-aware fallback:\n{escaped}"
     );
 }
 

@@ -17,57 +17,18 @@
 //! function". Keep both halves in one test so that trade cannot be made again
 //! without going red here.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
 
 /// The fix lives in `perry-runtime`, so this fixture is only meaningful when it
 /// links an archive built from the tree under test. `perry-runtime` is
 /// rlib-only; `libperry_{runtime,stdlib}.a` come from the `-static` wrappers.
 fn runtime_dir() -> PathBuf {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static")
-            .output()
-            .expect("build static runtime archives");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
-    target.join("debug")
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 const SOURCE: &str = r#"

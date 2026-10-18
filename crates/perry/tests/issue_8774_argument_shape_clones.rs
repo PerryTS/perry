@@ -4,9 +4,11 @@
 //! fixture drives every guard-failure family against Node, both normally and
 //! while the copying collector relocates live objects.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
@@ -41,51 +43,11 @@ fn workspace_root() -> PathBuf {
 }
 
 fn target_debug_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("PERRY_TEST_RUNTIME_DIR") {
-        return PathBuf::from(dir);
-    }
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
-    if cfg!(windows) {
-        target.join("x86_64-pc-windows-msvc").join("debug")
-    } else {
-        target.join("debug")
-    }
+    runtime_archives::dir()
 }
 
 fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let runtime_dir = target_debug_dir();
-        let runtime_name = if cfg!(windows) {
-            "perry_runtime.lib"
-        } else {
-            "libperry_runtime.a"
-        };
-        let stdlib_name = if cfg!(windows) {
-            "perry_stdlib.lib"
-        } else {
-            "libperry_stdlib.a"
-        };
-        if runtime_dir.join(runtime_name).is_file() && runtime_dir.join(stdlib_name).is_file() {
-            return;
-        }
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static");
-        if cfg!(windows) {
-            command.arg("--target").arg("x86_64-pc-windows-msvc");
-        }
-        let build = command.output().expect("build static runtime archives");
-        assert_success("static runtime build", &build);
-    });
+    runtime_archives::ensure();
 }
 
 fn assert_success(label: &str, output: &Output) {
@@ -94,19 +56,6 @@ fn assert_success(label: &str, output: &Output) {
         "{label} failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-    // The GC effects sidecar beside the archives just built: perry reads it
-    // before codegen and refuses archives without one in the workspace.
-    assert!(
-        std::process::Command::new("bash")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/gc_call_effects/sidecars.sh"
-            ))
-            .args(["--cargo-profile", "debug"])
-            .status()
-            .is_ok_and(|status| status.success()),
-        "scripts/gc_call_effects/sidecars.sh failed"
     );
 }
 

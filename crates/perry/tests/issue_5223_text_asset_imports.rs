@@ -9,55 +9,24 @@
 //! parsed and tolerated but is not (yet) itself the trigger. `.wasm` is out of
 //! scope.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
-fn target_debug_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("debug")
 }
 
 /// Build `libperry_runtime.a` once so the compiled binaries can link. The CI
 /// `cargo-test` job doesn't pre-build the runtime staticlib, and these tests
 /// link real executables, so they'd otherwise fail with "Could not find
 /// libperry_runtime.a" (mirrors module_import_forms.rs).
-fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime")
-            .output()
-            .expect("run cargo build -p perry-runtime");
-        assert!(
-            build.status.success(),
-            "cargo build -p perry-runtime failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-    });
-}
 
 fn runtime_dir() -> PathBuf {
-    ensure_runtime_archive();
-    target_debug_dir()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 /// Compile `main.ts` in `dir` and return its stdout. Asset files must already

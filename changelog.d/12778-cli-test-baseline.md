@@ -11,3 +11,5 @@ Refresh runtime-setup protocol fixtures for canonical build-perry and sidecars. 
 Retain Node prototype-relink semantics while removing assertions about deleted method-site cache counters. Run their existing GC variant against instrumented archives, and update repeated class declarations to the current guarded environment storage while retaining per-evaluation value checks.
 
 Migrate the remaining method/holder regressions from deleted cache counters to semantic receiver/prototype/worker/collection checks. Keep the moving-collection positive witness. ConstFn fixtures inspect immutable layout entries with the existing on/off control and retain every original output scenario; the three main programs still match pinned Node. Select coherent instrumented archives for existing GC variants.
+
+Compiled integration fixtures share the canonical release archive graph and sidecar setup; prepared mode validates explicit archives. Remove obsolete IC-split and demoted-view guard expectations while preserving semantic and moving-GC assertions.

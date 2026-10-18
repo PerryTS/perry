@@ -5,9 +5,11 @@
 //! runtime-dispatch fallback remains present for every mutation-sensitive
 //! semantic case.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
@@ -44,55 +46,11 @@ fn workspace_root() -> PathBuf {
 /// abort-on-unwind guards in `extern "C"` helpers, so the raw JS exception in
 /// the extracted-method case cannot reach the generated catch landing pad.
 fn target_runtime_dir() -> PathBuf {
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
-    if cfg!(windows) {
-        target.join("x86_64-pc-windows-msvc").join("release")
-    } else {
-        target.join("release")
-    }
+    runtime_archives::dir()
 }
 
 fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command
-            .current_dir(workspace_root())
-            .arg("build")
-            // `panic` is profile-level; this must match `target_runtime_dir()`
-            // and the runtime Perry actually ships.
-            .arg("--release")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static");
-        if cfg!(windows) {
-            command.arg("--target").arg("x86_64-pc-windows-msvc");
-        }
-        let build = command.output().expect("build static runtime archives");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "release"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
+    runtime_archives::ensure();
 }
 
 fn fixture_dir() -> PathBuf {

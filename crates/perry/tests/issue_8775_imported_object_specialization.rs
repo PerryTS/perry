@@ -1,8 +1,10 @@
 //! Guarded specialization of stable imported object-literal methods (#8775).
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_GEN_GC",
@@ -36,14 +38,7 @@ fn fixture_dir() -> PathBuf {
 }
 
 fn target_debug_dir() -> PathBuf {
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
-    if cfg!(windows) {
-        target.join("x86_64-pc-windows-msvc").join("debug")
-    } else {
-        target.join("debug")
-    }
+    runtime_archives::dir()
 }
 
 fn assert_success(label: &str, output: &Output) {
@@ -56,34 +51,7 @@ fn assert_success(label: &str, output: &Output) {
 }
 
 fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static");
-        if cfg!(windows) {
-            command.arg("--target").arg("x86_64-pc-windows-msvc");
-        }
-        let output = command.output().expect("build static runtime archive");
-        assert_success("static runtime build", &output);
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
+    runtime_archives::ensure();
 }
 
 fn copy_fixture(dir: &Path) {

@@ -17,71 +17,24 @@
 //!   * a cross-chunk re-export (`export { … } from "./chunk-runtime.js"`).
 //! The compiled binary's output must match Node's byte-for-byte.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
-fn target_debug_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("debug")
 }
 
 /// Build `libperry_runtime.a` / `libperry_stdlib.a` once so the compiled binary
 /// can link. Since #5422 runtime/stdlib are rlib-only; the staticlibs come from
 /// the `perry-{runtime,stdlib}-static` wrapper crates. The CI `cargo-test` job
 /// doesn't pre-build them.
-fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static")
-            .output()
-            .expect("run cargo build for static wrapper crates");
-        assert!(
-            build.status.success(),
-            "cargo build -p perry-runtime-static -p perry-stdlib-static failed\n\
-             stdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-}
 
 fn runtime_dir() -> PathBuf {
-    ensure_runtime_archive();
-    target_debug_dir()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 // --- the chunk-set, shaped like a `bun build --splitting` output ---

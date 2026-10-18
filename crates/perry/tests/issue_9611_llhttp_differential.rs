@@ -27,9 +27,11 @@
 //! truncated HTTP response reported as a clean parse. The 300 KiB-body case
 //! allocates enough inside `wasm_on_body` to trigger that collection.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
@@ -48,52 +50,10 @@ fn fixtures() -> PathBuf {
 
 /// Dedicated target dir for this suite's runtime and wasm host archives, as
 /// in `issue_5234_wasm_esm_import`.
-fn wasm_host_target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("perry-wasm-host-test")
-}
-
-fn ensure_runtime_archives() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(&cargo)
-            .current_dir(workspace_root())
-            .env("CARGO_TARGET_DIR", wasm_host_target_dir())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-wasm-host")
-            .output()
-            .expect("build the static runtime and wasm host archives");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-}
 
 fn runtime_dir() -> PathBuf {
-    ensure_runtime_archives();
-    wasm_host_target_dir().join("debug")
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 /// Report the FIRST differing line rather than dumping two 1,200-line traces:

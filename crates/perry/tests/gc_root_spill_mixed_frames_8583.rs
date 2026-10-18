@@ -74,6 +74,7 @@ fn compile(dir: &std::path::Path, spill_threshold: &str) -> (PathBuf, String) {
         .arg("--no-cache")
         .arg("--no-auto-optimize")
         .env("PERRY_SAVE_LL", &ir)
+        .env("PERRY_GC_INSTRUMENTS", "1")
         .env("PERRY_ROOT_SPILL_RELOCATIONS", spill_threshold)
         .output()
         .expect("run perry compile");

@@ -26,19 +26,14 @@
 //! `tier1_every_ffi_type_against_test_dylib`. Those conversions were undone;
 //! keep this file in the diff of any change to that path so `e2e-scoped`
 //! actually runs the suite (it skips silently, and reports green, otherwise).
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
 }
 
 /// #8479: `release`, not `debug`. `panic` is a PROFILE-level setting and only
@@ -49,58 +44,15 @@ fn workspace_root() -> PathBuf {
 /// Perry never ships such a runtime, so linking one here tested unwind
 /// semantics that do not exist in production and made this test and
 /// `bun_ffi_stage1`'s use-after-close case mutually unsatisfiable.
-fn target_runtime_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("release")
-}
 
 /// Build `libperry_{runtime,stdlib}.a` once so the compiled binaries can link.
 /// `perry-runtime` / `perry-stdlib` are rlib-only (#5422) — the archives come from the
 /// `-static` wrapper crates, so building the plain crates leaves no `.a` in
 /// `target/debug` and the link silently falls back to whatever stale archive is around.
-fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            // #8479: must match `target_runtime_dir()` — a debug archive has
-            // the wrong panic strategy (see that function's comment).
-            .arg("--release")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-stdlib-static")
-            .output()
-            .expect("run cargo build -p perry-runtime-static -p perry-stdlib-static");
-        assert!(
-            build.status.success(),
-            "cargo build of the static runtime wrappers failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "release"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-}
 
 fn runtime_dir() -> PathBuf {
-    ensure_runtime_archive();
-    target_runtime_dir()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 /// Literal-source `Function` / `Function.apply` / `Function.call` are const-folded and

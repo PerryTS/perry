@@ -2,9 +2,11 @@
 //! embedded and instantiated during module initialization, and its exports are
 //! available through namespace, named, and default import forms.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
@@ -21,56 +23,10 @@ fn workspace_root() -> PathBuf {
 /// (`libperry_wasm_host.a` is linked for every WebAssembly program, and perry
 /// does not build it while compiling one), kept apart from the shared
 /// `target/debug` other suites link (#8547).
-fn wasm_host_target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("perry-wasm-host-test")
-}
-
-fn target_debug_dir() -> PathBuf {
-    wasm_host_target_dir().join("debug")
-}
-
-fn ensure_runtime_archives() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let runtime_build = Command::new(&cargo)
-            .current_dir(workspace_root())
-            .env("CARGO_TARGET_DIR", wasm_host_target_dir())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .arg("-p")
-            .arg("perry-wasm-host")
-            .output()
-            .expect("build the static runtime and wasm host archives");
-        assert!(
-            runtime_build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&runtime_build.stdout),
-            String::from_utf8_lossy(&runtime_build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-}
 
 fn runtime_dir() -> PathBuf {
-    ensure_runtime_archives();
-    target_debug_dir()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 const ADD_WASM_BASE64: &str = "AGFzbQEAAAABBwFgAn9/AX8DAgEABwcBA2FkZAAACgkBBwAgACABags=";

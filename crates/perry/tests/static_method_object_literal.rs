@@ -4,9 +4,11 @@
 //! ordinary final-shape object path instead of a synthetic builder IIFE. The
 //! controls below cover the source-ordered forms that must retain the IIFE.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 /// Keep the forced-moving arm independent of ambient developer/CI settings.
 /// Some inputs affect code generation, so normalize the runtime build,
@@ -35,59 +37,9 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
 fn runtime_dir() -> PathBuf {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command.current_dir(workspace_root()).arg("build");
-        remove_gc_env_overrides(&mut command);
-        if !cfg!(debug_assertions) {
-            command.arg("--release");
-        }
-        let build = command
-            .args(["-p", "perry-runtime-static"])
-            .output()
-            .expect("build static runtime archive");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args([
-                    "--cargo-profile",
-                    if cfg!(debug_assertions) {
-                        "debug"
-                    } else {
-                        "release"
-                    },
-                ])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-
-    perry_bin()
-        .parent()
-        .expect("Perry binary directory")
-        .to_path_buf()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 fn run_fixture(binary: &Path, force_evacuation: bool) -> Output {

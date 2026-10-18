@@ -16,66 +16,19 @@
 //! cannot make a broken index look right, and repeated across allocation churn
 //! because the collector rewrites the very addresses the index is keyed by.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
 fn runtime_dir() -> PathBuf {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command.current_dir(workspace_root()).arg("build");
-        if !cfg!(debug_assertions) {
-            command.arg("--release");
-        }
-        let build = command
-            .args(["-p", "perry-runtime-static"])
-            .output()
-            .expect("build static runtime archive");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args([
-                    "--cargo-profile",
-                    if cfg!(debug_assertions) {
-                        "debug"
-                    } else {
-                        "release"
-                    },
-                ])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-
-    perry_bin()
-        .parent()
-        .expect("Perry binary directory")
-        .to_path_buf()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 fn compile_and_run(dir: &std::path::Path, source: &str) -> String {

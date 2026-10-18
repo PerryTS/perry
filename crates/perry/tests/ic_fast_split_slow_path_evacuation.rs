@@ -1,22 +1,7 @@
-//! S2 of the deferred-collection RFC: a fast/slow split may leave only the
-//! FAST call without a statepoint. Its slow arm runs user code — a getter, a
-//! Proxy trap, a setter, a `toString`, a not-callable throw — and that code
-//! allocates enough to move the caller's live heap values. If the slow call
-//! were a GC leaf as well, RS4GC would record no stack map at it, the walker
-//! would skip the caller's frame, and the caller's values would still name
-//! from-space when it reads them afterwards.
-//!
-//! The fixture is `test-files/test_gap_ic_fast_split_slow_path.ts` (also a gap
-//! test, against node). Here it is compiled with `PERRY_FULL_OUTLINE_IC=1`,
-//! where the IC splits apply (a class-field read or store takes the property
-//! read and static-key store splits, #12483), and run under a seeded evacuating schedule
-//! with the from-space quarantine and the evacuation verifier on. The run must
-//! print node's output AND report copying minors that moved objects — a green
-//! run with zero moves would say nothing.
-//!
-//! Sabotage (run for the PR, 2026-09-27): classifying the slow
-//! continuations `CannotCollect` makes the evacuating run fault in retired
-//! from-space (`[gc-fromspace-protect] FAULT`, obj_type=1).
+//! Property slow paths may invoke user code and collect. Their callers must
+//! retain relocated roots across getters, Proxy traps, setters, coercion and
+//! not-callable throws. Immutable layout guards replaced the former IC split.
+//! Preserve Node output and require actual copied objects under evacuation.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -61,7 +46,6 @@ fn compile(dir: &Path) -> (PathBuf, String) {
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
         .env("PERRY_GC_INSTRUMENTS", "1")
-        .env("PERRY_FULL_OUTLINE_IC", "1")
         .env("PERRY_LLVM_KEEP_IR", "1");
     for key in GC_ENV {
         cmd.env_remove(key);
@@ -123,13 +107,12 @@ fn slow_arms_that_run_allocating_user_code_keep_the_callers_values_relocated() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (bin, compile_stderr) = compile(dir.path());
 
-    // The subject must be in the artifact: every split, both halves.
+    // The current collecting continuations must be present in the artifact.
     let ir = kept_ir(&compile_stderr);
     for symbol in [
-        "@js_object_get_field_ic_fast(",
-        "@js_object_get_field_ic_fast_miss(",
-        "@js_put_value_set_packed_fast(",
-        "@js_put_value_set_packed_miss(",
+        "@js_object_get_field_slow(",
+        "@js_object_get_field_value(",
+        "@js_put_value_set(",
         "@js_template_string_coerce_box(",
         "@js_closure_unbox_callee_checked(",
     ] {

@@ -13,26 +13,14 @@
 //! pins the re-throw contract — `throw e` inside a `catch` must NOT recapture,
 //! so the innermost frame stays the one that first constructed the error.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
-fn target_debug_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"))
-        .join("debug")
 }
 
 /// `perry-runtime` is an rlib; the archive the compiled fixture links against
@@ -42,45 +30,10 @@ fn target_debug_dir() -> PathBuf {
 /// fixture fails to link) or a stale one (reused target dir: the fixture
 /// links a runtime older than the compiler that emitted its object code, and
 /// perry's own source-hash check rejects the pair).
-fn ensure_runtime_archive() {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let build = Command::new(cargo)
-            .current_dir(workspace_root())
-            .arg("build")
-            .arg("-p")
-            .arg("perry-runtime-static")
-            .output()
-            .expect("run cargo build -p perry-runtime-static");
-        assert!(
-            build.status.success(),
-            "cargo build -p perry-runtime-static failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-}
 
 fn runtime_dir() -> PathBuf {
-    if let Some(runtime_dir) = std::env::var_os("PERRY_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir);
-    }
-    ensure_runtime_archive();
-    target_debug_dir()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 /// Prints one `<label> <frame name>` line per frame so the assertions read

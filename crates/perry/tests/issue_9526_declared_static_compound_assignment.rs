@@ -1,9 +1,11 @@
 //! Regression for #9526: runtime member writes to a declared class static must
 //! update the LLVM global used by direct `C.field` reads.
 
+#[path = "support/runtime_archives.rs"]
+mod runtime_archives;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Once;
 
 const EXPECTED: &str = "5\n6\n7\n8\n9\n10\n11\nab\n";
 
@@ -31,51 +33,9 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonicalize workspace root")
-}
-
 fn runtime_dir() -> PathBuf {
-    static BUILD_RUNTIME: Once = Once::new();
-    BUILD_RUNTIME.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command.current_dir(workspace_root()).args([
-            "build",
-            "-p",
-            "perry-runtime-static",
-            "-p",
-            "perry-stdlib-static",
-        ]);
-        remove_gc_env_overrides(&mut command);
-        let build = command.output().expect("build static runtime archives");
-        assert!(
-            build.status.success(),
-            "static runtime build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-        // The GC effects sidecar beside the archives just built: perry reads it
-        // before codegen and refuses archives without one in the workspace.
-        assert!(
-            std::process::Command::new("bash")
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/gc_call_effects/sidecars.sh"
-                ))
-                .args(["--cargo-profile", "debug"])
-                .status()
-                .is_ok_and(|status| status.success()),
-            "scripts/gc_call_effects/sidecars.sh failed"
-        );
-    });
-    perry_bin()
-        .parent()
-        .expect("Perry binary directory")
-        .to_path_buf()
+    runtime_archives::ensure();
+    runtime_archives::dir()
 }
 
 fn write_fixture(path: &Path, strict: bool) {
