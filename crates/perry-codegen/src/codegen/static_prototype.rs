@@ -16,19 +16,48 @@ pub(crate) fn collect(
         .iter()
         .filter_map(|c| {
             let candidate = (|| {
-                if c.is_imported_stub()
-                    || c.is_literal_shape()
-                    || c.is_nested
-                    || fresh.contains(&c.name)
-                    || c.specialized_from.is_some()
-                    || c.native_extends.is_some()
-                    || !c.computed_members.is_empty()
-                    || !c.decorators.is_empty()
-                    || c.methods
-                        .iter()
-                        .any(|m| !m.decorators.is_empty() || m.name.starts_with('#'))
+                // CommonJS's wrapper makes an original top-level declaration
+                // HIR-nested. The original-syntax parent proof and an admitted
+                // family identify this case; genuinely fresh evaluations still
+                // refuse below.
+                let closed_cjs = module.is_commonjs_wrap()
+                    && module
+                        .class_family_syntax
+                        .as_ref()
+                        .is_some_and(|syntax| syntax.parents.contains_key(&c.name))
+                    && ids
+                        .get(&c.name)
+                        .is_some_and(|cid| layouts.families.contains_key(cid));
+                let refused = if c.is_imported_stub() {
+                    Some("imported-stub")
+                } else if c.is_literal_shape() {
+                    Some("literal")
+                } else if c.is_nested && !closed_cjs {
+                    Some("nested")
+                } else if fresh.contains(&c.name) {
+                    Some("fresh-evaluation")
+                } else if c.specialized_from.is_some() {
+                    Some("specialized")
+                } else if c.native_extends.is_some() {
+                    Some("native-parent")
+                } else if !c.computed_members.is_empty() {
+                    Some("computed-members")
+                } else if !c.decorators.is_empty() {
+                    Some("decorated-class")
+                } else if c
+                    .methods
+                    .iter()
+                    .any(|m| !m.decorators.is_empty() || m.name.starts_with('#'))
                 {
-                    return Err("declaration-surface");
+                    Some("decorated-or-private-method")
+                } else {
+                    None
+                };
+                if let Some(reason) = refused {
+                    if std::env::var("PERRY_LAYOUT_REPORT").as_deref() == Ok("2") {
+                        eprintln!("perry: static prototype refused: {}: {reason}", c.name);
+                    }
+                    return Err(reason);
                 }
                 let cid = *ids.get(&c.name).ok_or("class-id")?;
                 // Evaluated heritage keeps its runtime semantics. The admitted
