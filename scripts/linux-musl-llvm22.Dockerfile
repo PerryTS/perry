@@ -96,13 +96,16 @@ RUN printf '%s\n' \
       > /etc/apt/sources.list.d/llvm22.list \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      clang-22 \
+      clang-22 llvm-22-dev libxml2-dev libzstd-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # perry-runtime's build script compiles its LLVM IR shim (perry_trap.ll) with
 # clang. The Alpine LLVM tree below ships no clang, so name a glibc clang 22
-# from apt.llvm.org, the release glibc image's source.
+# from apt.llvm.org, the release glibc image's source. The GC effects
+# analyzer (a host program) links this glibc LLVM 22 too: the Alpine tree is
+# musl-built (build_linux_musl.sh points the sidecars step at it).
 ENV PERRY_TRAP_CLANG=/usr/lib/llvm-22/bin/clang
+ENV PERRY_HOST_LLVM_PREFIX=/usr/lib/llvm-22
 
 # llvm-config itself is an Alpine/musl executable. Copy its tiny runtime to a
 # private directory so the glibc host can query it without treating target
