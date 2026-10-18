@@ -1,0 +1,1 @@
+Decode WebSocket clients with the canonical native-handle decoder. Client factories emit HANDLE_TAG; the previous POINTER_TAG-only decoder produced id zero and skipped callbacks for already-upgraded clients. Keep numeric embedding ids supported, reject forged heap carriers, and retain the existing callback-once and registry-identity regressions.

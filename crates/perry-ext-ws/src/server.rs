@@ -313,11 +313,7 @@ pub(super) fn undefined() -> f64 {
 }
 
 pub(super) fn decode_client_id(value: f64) -> usize {
-    if value.to_bits() & TAG_MASK == POINTER_TAG {
-        (value.to_bits() & POINTER_MASK) as usize
-    } else {
-        value as usize
-    }
+    super::js_ws_handle_to_i64(value) as usize
 }
 
 /// Snapshot and root listeners and arguments before invoking user code.
