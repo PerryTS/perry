@@ -371,7 +371,13 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
         let at = ir.find(start).unwrap();
         &ir[at..at + ir[at..].find("\n}\n").unwrap()]
     };
-    let wrapper = body("literal_method_this_test__init");
+    let guard = body("literal_method_this_test__init");
+    assert!(guard.contains("@js_run_module_init_guarded("), "{guard}");
+    assert!(
+        guard.contains("@literal_method_this_test__init_evaluate"),
+        "{guard}"
+    );
+    let wrapper = body("literal_method_this_test__init_evaluate");
     let prepare = wrapper
         .find("@__perry_prepare_literals_literal_method_this_test")
         .unwrap();
