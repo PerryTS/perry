@@ -510,6 +510,21 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         }
     }
 
+    fn freeze(&mut self, dst: &str, av: BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>> {
+        let name = std::ffi::CString::new(dst.trim_start_matches('%'))?;
+        // SAFETY: the builder is positioned in this function's block and `av`
+        // is a value of the same context.
+        let raw = unsafe {
+            llvm_sys::core::LLVMBuildFreeze(
+                self.builder.as_mut_ptr(),
+                inkwell::values::AsValueRef::as_value_ref(&av),
+                name.as_ptr(),
+            )
+        };
+        // SAFETY: freeze returns a first-class value of `av`'s type.
+        Ok(unsafe { BasicValueEnum::new(raw) })
+    }
+
     fn value_inst(&mut self, dst: &str, op: &str, rest: &str) -> Result<()> {
         let v: BasicValueEnum = match op {
             "alloca" => {
@@ -547,6 +562,13 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     .build_float_neg(v.into_float_value(), dst.trim_start_matches('%'))
                     .map_err(be)?
                     .into()
+            }
+            // `freeze T V`: a rendered (text) line reaches here too, so it
+            // must not fall through to the binary-op arm.
+            "freeze" => {
+                let (ty_tok, vtok) = ty_and_val(rest)?;
+                let v = self.val(basic_type(self.ctx, ty_tok)?, vtok)?;
+                self.freeze(dst, v)?
             }
             "phi" => return self.phi(dst, rest),
             "call" | "tail call" => self
@@ -1445,18 +1467,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             I::Freeze { dst, ty, a } => {
                 let t = basic_type(self.ctx, ty)?;
                 let av = self.val(t, a)?;
-                let name = std::ffi::CString::new(dst.trim_start_matches('%'))?;
-                // SAFETY: the builder is positioned in this function's block
-                // and `av` is a value of the same context.
-                let raw = unsafe {
-                    llvm_sys::core::LLVMBuildFreeze(
-                        self.builder.as_mut_ptr(),
-                        inkwell::values::AsValueRef::as_value_ref(&av),
-                        name.as_ptr(),
-                    )
-                };
-                // SAFETY: freeze returns a first-class value of `av`'s type.
-                let out = unsafe { BasicValueEnum::new(raw) };
+                let out = self.freeze(dst, av)?;
                 self.def(dst, out)
             }
             // #10779: `ty` was hardcoded `"double"` here and in `inst.rs`.
