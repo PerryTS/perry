@@ -31,6 +31,7 @@ pub mod pts;
 mod solve;
 mod solve_calls;
 mod solve_rel;
+mod solve_proto;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

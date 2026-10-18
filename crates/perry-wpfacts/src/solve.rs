@@ -646,18 +646,11 @@ impl Model {
                         }
                         continue;
                     }
-                    let f = match key {
-                        Key::Named(a) => self.field(q, a),
-                        Key::Any => self.all_fields(q),
-                    };
-                    self.edge(f, dst);
-                    self.with_b(|m| builtins::tok_load(m, q, key, dst));
-                    if self.stops_at(q, key) {
-                        self.stopped_shared.entry(q).or_default().push((key, dst));
-                    } else {
-                        let up = self.cv(q, key);
-                        self.edge(up, dst);
-                    }
+                    // Summarize the holder once, then let each receiver use
+                    // that value. In particular, widen a broad shared result
+                    // once instead of distributing its whole set per receiver.
+                    let value = self.prototype_value(q, key);
+                    self.edge(value, dst);
                 }
             }
             Cons::ProtoClosure { dst } => {
@@ -1200,7 +1193,7 @@ impl Model {
     }
 
     /// Does a lookup of `key` stop at prototype `q` (a declared member)?
-    fn stops_at(&self, q: Tok, key: Key) -> bool {
+    pub(crate) fn stops_at(&self, q: Tok, key: Key) -> bool {
         match (key, &self.toks[q as usize]) {
             (Key::Named(a), TokKind::Proto(tm)) => {
                 self.tmpls[*tm as usize].proto_members.contains(&a)

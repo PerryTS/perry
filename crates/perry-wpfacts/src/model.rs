@@ -574,6 +574,8 @@ pub struct Model {
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.
     pub cv_nodes: FxHashMap<(Tok, Key), NodeId>,
+    /// Own plus inherited values at a prototype, shared by its receivers.
+    pub prototype_values: FxHashMap<(Tok, Key), NodeId>,
     /// Prototype closure nodes: token → node.
     pub cp_nodes: FxHashMap<Tok, NodeId>,
     /// Shared chain unions that stopped at a declared member: resumed when
