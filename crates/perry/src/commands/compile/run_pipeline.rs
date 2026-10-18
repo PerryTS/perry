@@ -461,6 +461,7 @@ fn imported_object_literal_from_capability(
             source_prefix,
             receiver_class_name,
             source_global_id: capability.global_id,
+            final_shape: capability.final_shape.clone(),
             methods: capability.methods.clone(),
         }),
     }
@@ -1336,11 +1337,13 @@ pub fn run_with_parse_cache(
         (String, String),
         perry_codegen::ExportedObjectLiteralCapability,
     > = BTreeMap::new();
+    let mut object_literal_writes = BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        for (export_name, capability) in
-            perry_codegen::exported_object_literal_method_capabilities(hir_module)
-        {
+        let (capabilities, writes) =
+            perry_codegen::exported_object_literal_method_facts(hir_module);
+        object_literal_writes.insert(path.clone(), writes);
+        for (export_name, capability) in capabilities {
             exported_object_literals.insert((path_str.clone(), export_name), capability);
         }
     }
@@ -2318,6 +2321,70 @@ pub fn run_with_parse_cache(
                     .insert(name, origin_name);
             } else if let Some(names) = all_module_export_origin_names.get_mut(&module_path) {
                 names.remove(&name);
+            }
+        }
+    }
+
+    // A spilled builder can gain a source-named key in an importing module
+    // (a declared-but-uninitialized export is absent until its first write).
+    // Nominate that post-initialization content through the SAME layout seed
+    // path. This is a prediction, not an execution/order proof: exact layout
+    // equality at every call rejects an untaken or differently ordered add.
+    for (path, writes) in &object_literal_writes {
+        let Some(module) = ctx.native_modules.get(path) else {
+            continue;
+        };
+        for (binding, key) in writes {
+            for import in &module.imports {
+                if import.type_only || import.runtime_erased {
+                    continue;
+                }
+                let Some(resolved) = &import.resolved_path else {
+                    continue;
+                };
+                let imported = import
+                    .specifiers
+                    .iter()
+                    .find_map(|specifier| match specifier {
+                        perry_hir::ImportSpecifier::Named { imported, local }
+                            if local == binding =>
+                        {
+                            Some(imported.as_str())
+                        }
+                        perry_hir::ImportSpecifier::Default { local } if local == binding => {
+                            Some("default")
+                        }
+                        _ => None,
+                    });
+                let Some(imported) = imported else {
+                    continue;
+                };
+                let origin = all_module_exports
+                    .get(resolved)
+                    .and_then(|m| m.get(imported))
+                    .unwrap_or(resolved);
+                let name = all_module_export_origin_names
+                    .get(resolved)
+                    .and_then(|m| m.get(imported))
+                    .map(String::as_str)
+                    .unwrap_or(imported);
+                let Some(capability) =
+                    exported_object_literals.get_mut(&(origin.clone(), name.to_string()))
+                else {
+                    continue;
+                };
+                let Some(shape) = capability.final_shape.as_mut() else {
+                    continue;
+                };
+                // The physical inline bound is already full; appended keys
+                // are boxed spill lanes and cannot alter its representation.
+                if shape.live >= shape.key_count || capability.field_names.contains(key) {
+                    continue;
+                }
+                shape.keys.extend_from_slice(key.as_bytes());
+                shape.keys.push(0);
+                shape.key_count += 1;
+                capability.field_names.push(key.clone());
             }
         }
     }
@@ -3459,6 +3526,11 @@ pub fn run_with_parse_cache(
         Vec<perry_codegen::ObjectLiteralMethodCandidate>,
     > = std::collections::HashMap::new();
     for ((source_path, source_export_name), capability) in &exported_object_literals {
+        // Structural construction facts use the layout/slot/callee route,
+        // not the older global-identity + key-probe candidate route.
+        if capability.final_shape.is_some() {
+            continue;
+        }
         let source_prefix = compute_module_prefix(source_path, &ctx.project_root);
         for method in &capability.methods {
             object_literal_method_candidates
@@ -6019,7 +6091,12 @@ pub fn run_with_parse_cache(
     let static_shape_ids = perry_codegen::assign_static_shape_ids(
         module_births
             .iter()
-            .flat_map(|(_, b)| b.iter().map(|m| &m.shape)),
+            .flat_map(|(_, b)| b.iter().map(|m| &m.shape))
+            .chain(
+                exported_object_literals
+                    .values()
+                    .filter_map(|c| c.final_shape.as_ref()),
+            ),
     );
     // Completed guard facts stay separate from class allocation suppliers.
     // Include a foreign class's final content in an importer's cache inputs,
@@ -6180,6 +6257,17 @@ pub fn run_with_parse_cache(
             for cid in class_ids.iter().chain(foreign.iter()) {
                 if let Some(finals) = class_final_shapes.get(cid) {
                     opts.static_shape_ids.extend(finals.iter().cloned());
+                }
+            }
+            for object in opts
+                .imported_classes
+                .iter()
+                .filter_map(|c| c.object_literal.as_ref())
+            {
+                if let Some(shape) = &object.final_shape {
+                    if let Some(id) = static_shape_ids.get(shape) {
+                        opts.static_shape_ids.push((shape.clone(), *id));
+                    }
                 }
             }
             opts.static_shape_ids.sort();

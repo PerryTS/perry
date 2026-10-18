@@ -159,6 +159,16 @@ pub fn exported_object_literal_method_capabilities(
     collectors::exported_object_literal_capabilities(hir)
 }
 
+/// Producer contents and static-key writes, harvested by the same final-literal visitor.
+pub fn exported_object_literal_method_facts(
+    hir: &perry_hir::Module,
+) -> (
+    std::collections::HashMap<String, ExportedObjectLiteralCapability>,
+    Vec<(String, String)>,
+) {
+    collectors::object_literal_facts(hir)
+}
+
 /// Return whether an instance method may publish the additive direct-call ABI
 /// whose synthetic `arguments` slot carries only the actual argument count.
 /// The compile driver uses the same producer-side proof when building import

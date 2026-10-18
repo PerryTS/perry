@@ -16,7 +16,7 @@ pub(crate) fn literal_final(
     props: &[(String, Expr)],
     base_rep: u64,
 ) -> Option<BirthShape> {
-    if props.is_empty() || props.len() > 32 {
+    if props.is_empty() {
         return None;
     }
     let mut seen = BTreeSet::new();
@@ -25,7 +25,10 @@ pub(crate) fn literal_final(
     // for a numeric literal; all other values retain their NaN-boxed bits.
     let mut rep = base_rep;
     for (slot, (_, value)) in props.iter().enumerate() {
-        if (rep >> (slot * 2)) & 3 == 1 && !matches!(value, Expr::Number(_) | Expr::Integer(_)) {
+        if slot < 32
+            && (rep >> (slot * 2)) & 3 == 1
+            && !matches!(value, Expr::Number(_) | Expr::Integer(_))
+        {
             rep &= !(3 << (slot * 2));
         }
     }
@@ -36,6 +39,9 @@ pub(crate) fn literal_final(
         }
         keys.extend_from_slice(key.as_bytes());
         keys.push(0);
+        if slot >= 32 {
+            continue;
+        }
         if let Expr::Closure {
             func_id,
             params,
@@ -115,19 +121,19 @@ pub(crate) fn anon_props(class: &Class, args: &[Expr]) -> Option<Vec<(String, Ex
     )
 }
 
-pub(crate) fn module_literal_finals(
+pub(crate) fn collect_literal_finals(
     module: &Module,
     prefix: &str,
     class_reps: &HashMap<String, u64>,
     class_widths: &HashMap<String, u32>,
-) -> Vec<ModuleBirth> {
+) -> LiteralFinals {
     fn expr(
         e: &Expr,
         module: &Module,
         prefix: &str,
         reps: &HashMap<String, u64>,
         widths: &HashMap<String, u32>,
-        out: &mut BTreeSet<BirthShape>,
+        out: &mut LiteralFinals,
     ) {
         let shape = match e {
             Expr::Object(props) => literal_final(prefix, props, 0),
@@ -149,10 +155,27 @@ pub(crate) fn module_literal_finals(
             _ => None,
         };
         if let Some(shape) = shape {
-            out.insert(shape);
+            out.shapes.insert(shape);
         }
         if let Expr::Closure { body, .. } = e {
             stmts(body, module, prefix, reps, widths, out);
+        }
+        if let Expr::Call { callee, args, .. } = e {
+            if let Expr::Closure { params, body, .. } = callee.as_ref() {
+                let mut seeded: Vec<Stmt> = params
+                    .iter()
+                    .zip(args)
+                    .map(|(param, arg)| Stmt::Let {
+                        id: param.id,
+                        name: param.name.clone(),
+                        ty: param.ty.clone(),
+                        mutable: false,
+                        init: Some(arg.clone()),
+                    })
+                    .collect();
+                seeded.extend(body.iter().cloned());
+                stmts(&seeded, module, prefix, reps, widths, out);
+            }
         }
         perry_hir::walker::walk_expr_children(e, &mut |child| {
             expr(child, module, prefix, reps, widths, out)
@@ -164,9 +187,125 @@ pub(crate) fn module_literal_finals(
         p: &str,
         r: &HashMap<String, u64>,
         w: &HashMap<String, u32>,
-        out: &mut BTreeSet<BirthShape>,
+        out: &mut LiteralFinals,
     ) {
+        // Follow the very same source-ordered construction as literal births.
+        // These are candidate contents, not a proof that no code adds a key.
+        // The call's full layout comparison is the authority.
+        let mut builders: HashMap<u32, (Vec<(String, Expr)>, u32, u32, bool)> = HashMap::new();
         for stmt in body {
+            if let Stmt::Let {
+                id,
+                init: Some(seed),
+                ..
+            } = stmt
+            {
+                let props = match seed {
+                    Expr::Object(props) => Some(props.clone()),
+                    Expr::New {
+                        class_name, args, ..
+                    } => m
+                        .classes
+                        .iter()
+                        .find(|c| c.name == *class_name)
+                        .and_then(|c| anon_props(c, args)),
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => match object.as_ref() {
+                        Expr::LocalGet(owner) => builders
+                            .get(owner)
+                            .and_then(|(props, _, _, _)| {
+                                props.iter().find(|(key, _)| key == property)
+                            })
+                            .and_then(|(_, value)| match value {
+                                Expr::Object(props) => Some(props.clone()),
+                                Expr::New {
+                                    class_name, args, ..
+                                } => m
+                                    .classes
+                                    .iter()
+                                    .find(|c| c.name == *class_name)
+                                    .and_then(|c| anon_props(c, args)),
+                                _ => None,
+                            }),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(source) = ObjectSource::of(seed) {
+                    out.sources.insert(*id, source);
+                }
+                let returned = match seed {
+                    Expr::Closure { body, .. } => ObjectSource::returned(body),
+                    Expr::FuncRef(fid) => m
+                        .functions
+                        .iter()
+                        .find(|f| f.id == *fid)
+                        .and_then(|f| ObjectSource::returned(&f.body)),
+                    _ => None,
+                };
+                if let Some(source) = returned {
+                    out.callables.insert(*id, source);
+                }
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = seed
+                {
+                    if let Expr::LocalGet(owner) = object.as_ref() {
+                        out.properties.insert((*owner, property.clone()), *id);
+                    }
+                }
+                if let Some(props) = props {
+                    let capacity =
+                        (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
+                    let birth_keys = props.len() as u32;
+                    builders.insert(*id, (props, capacity, birth_keys, false));
+                }
+            }
+            if let Stmt::Expr(e) = stmt {
+                let store = match e {
+                    Expr::PropertySet {
+                        object,
+                        property,
+                        value,
+                    } => Some((object.as_ref(), property.as_str(), value.as_ref())),
+                    Expr::IndexSet {
+                        object,
+                        index,
+                        value,
+                    } => match index.as_ref() {
+                        Expr::String(key) => Some((object.as_ref(), key.as_str(), value.as_ref())),
+                        _ => None,
+                    },
+                    Expr::PutValueSet {
+                        target, key, value, ..
+                    } => match key.as_ref() {
+                        Expr::String(key) => Some((target.as_ref(), key.as_str(), value.as_ref())),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((Expr::ExternFuncRef { name, .. }, key, _)) = store {
+                    if !key.is_empty() && !key.contains('\0') && key != "__proto__" {
+                        out.imported_writes.push((name.clone(), key.to_string()));
+                    }
+                }
+                if let Some((Expr::LocalGet(id), key, value)) = store {
+                    if let Some((props, _, _, changed)) = builders.get_mut(id) {
+                        *changed = true;
+                        if let Some((_, old)) = props.iter_mut().find(|(name, _)| name == key) {
+                            // A declared candidate survives reassignment. The
+                            // runtime compares the selected value with this
+                            // body; later unknown/different values miss safely.
+                            if !matches!(old, Expr::FuncRef(_) | Expr::Closure { .. }) {
+                                *old = value.clone();
+                            }
+                        } else {
+                            props.push((key.into(), value.clone()));
+                        }
+                    }
+                }
+            }
             match stmt {
                 Stmt::Let { init, .. } | Stmt::Return(init) => {
                     if let Some(e) = init {
@@ -238,8 +377,17 @@ pub(crate) fn module_literal_finals(
                 | Stmt::ReleaseBoxes(_) => {}
             }
         }
+        for (id, (props, capacity, birth_keys, changed)) in builders {
+            if !changed || props.len() as u32 == birth_keys {
+                continue;
+            }
+            if let Some(object) = construction_final(m, p, &props, capacity, birth_keys) {
+                out.shapes.insert(object.shape.clone());
+                out.objects.insert(id, object);
+            }
+        }
     }
-    let mut out = BTreeSet::new();
+    let mut out = LiteralFinals::default();
     stmts(
         &module.init,
         module,
@@ -273,14 +421,280 @@ pub(crate) fn module_literal_finals(
             }
         }
     }
-    out.into_iter()
-        .map(|shape| ModuleBirth {
-            keys_global: format!("perry_constfn_final_{}", shape.constfn[0].symbol),
+    // Outlined module init and CJS/IIFE return bindings share the same
+    // source object. Resolve their compile-time provenance after visiting
+    // every body; the eventual call still proves the current value/layout.
+    let bindings: Vec<u32> = out.sources.keys().copied().collect();
+    for binding in bindings {
+        if let Some(object) =
+            resolve_object_source(&ObjectSource::Binding(binding), &out, module, 0)
+        {
+            out.objects.insert(binding, object);
+        }
+    }
+    out
+}
+
+#[derive(Default)]
+pub(crate) struct LiteralFinals {
+    pub shapes: BTreeSet<BirthShape>,
+    pub objects: HashMap<u32, ConstructedObject>,
+    pub imported_writes: Vec<(String, String)>,
+    sources: HashMap<u32, ObjectSource>,
+    callables: HashMap<u32, ObjectSource>,
+    properties: HashMap<(u32, String), u32>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConstructedObject {
+    pub shape: BirthShape,
+    pub methods: Vec<super::ImportedObjectLiteralMethod>,
+}
+
+/// Scalar construction provenance collected by the same literal visitor.
+/// This nominates a layout/callee, never grants a proof to emitted code.
+#[derive(Clone, Debug)]
+enum ObjectSource {
+    Binding(u32),
+    Property(u32, String),
+    CallLocal(u32),
+    CallFunction(u32),
+}
+impl ObjectSource {
+    fn of(expr: &Expr) -> Option<Self> {
+        match expr {
+            Expr::LocalGet(id) => Some(Self::Binding(*id)),
+            Expr::PropertyGet {
+                object, property, ..
+            } => match object.as_ref() {
+                Expr::LocalGet(id) => Some(Self::Property(*id, property.clone())),
+                _ => None,
+            },
+            Expr::Call { callee, .. } => match callee.as_ref() {
+                Expr::LocalGet(id) => Some(Self::CallLocal(*id)),
+                Expr::FuncRef(id) => Some(Self::CallFunction(*id)),
+                Expr::Closure { body, .. } => Self::returned(body),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    fn returned(body: &[Stmt]) -> Option<Self> {
+        match body.last()? {
+            Stmt::Return(Some(value)) => Self::of(value),
+            _ => None,
+        }
+    }
+}
+fn resolve_object_source(
+    source: &ObjectSource,
+    finals: &LiteralFinals,
+    module: &Module,
+    depth: u32,
+) -> Option<ConstructedObject> {
+    if depth >= 32 {
+        return None;
+    }
+    match source {
+        ObjectSource::Binding(id) => {
+            finals.objects.get(id).cloned().or_else(|| {
+                resolve_object_source(finals.sources.get(id)?, finals, module, depth + 1)
+            })
+        }
+        ObjectSource::Property(id, key) => resolve_object_source(
+            &ObjectSource::Binding(*finals.properties.get(&(*id, key.clone()))?),
+            finals,
+            module,
+            depth + 1,
+        ),
+        ObjectSource::CallLocal(id) => {
+            resolve_object_source(finals.callables.get(id)?, finals, module, depth + 1)
+        }
+        ObjectSource::CallFunction(id) => {
+            let function = module.functions.iter().find(|f| f.id == *id)?;
+            resolve_object_source(
+                &ObjectSource::returned(&function.body)?,
+                finals,
+                module,
+                depth + 1,
+            )
+        }
+    }
+}
+
+/// Nominate a completed literal-builder content. Only representation in the
+/// physical inline prefix is described; the remaining values are ordinary
+/// boxed spill slots. A subsequent unknown write simply makes the guard miss.
+fn construction_final(
+    module: &Module,
+    prefix: &str,
+    props: &[(String, Expr)],
+    capacity: u32,
+    birth_keys: u32,
+) -> Option<ConstructedObject> {
+    if props.is_empty()
+        || !props
+            .iter()
+            .any(|(_, v)| matches!(v, Expr::FuncRef(_) | Expr::Closure { .. }))
+    {
+        return None;
+    }
+    let names = super::func_registry::build_func_registry(module, prefix).func_names;
+    let mut seen = BTreeSet::new();
+    let mut keys = Vec::new();
+    let mut rep = 0;
+    let mut methods = Vec::new();
+    for (slot, (key, value)) in props.iter().enumerate() {
+        if key.is_empty() || key.contains('\0') || key == "__proto__" || !seen.insert(key) {
+            return None;
+        }
+        keys.extend_from_slice(key.as_bytes());
+        keys.push(0);
+        if slot >= birth_keys as usize
+            && slot < capacity as usize
+            && slot < 32
+            && matches!(
+                value,
+                Expr::Number(_) | Expr::Integer(_) | Expr::EnumMember { .. }
+            )
+        {
+            rep |= 1u64 << (2 * slot);
+        }
+        // Module function references have one canonical, capture-free value.
+        // This is the same wrapper eligibility as literal ConstFn births.
+        if let Expr::FuncRef(id) = value {
+            let Some(function) = module.functions.iter().find(|f| f.id == *id) else {
+                continue;
+            };
+            if function.is_async
+                || function.is_generator
+                || function
+                    .params
+                    .iter()
+                    .any(|p| p.is_rest || p.arguments_object.is_some())
+            {
+                continue;
+            }
+            let Some(name) = names.get(id) else {
+                continue;
+            };
+            methods.push(super::ImportedObjectLiteralMethod {
+                name: key.clone(),
+                func_id: *id,
+                target: format!("__perry_wrap_{name}"),
+                param_count: function.params.len(),
+                field_index: slot as u32,
+            });
+        } else if let Expr::Closure {
+            func_id,
+            params,
+            captures_this,
+            is_arrow,
+            is_async: false,
+            is_generator: false,
+            ..
+        } = value
+        {
+            if (*captures_this && !*is_arrow)
+                || params
+                    .iter()
+                    .any(|p| p.is_rest || p.arguments_object.is_some())
+            {
+                continue;
+            }
+            methods.push(super::ImportedObjectLiteralMethod {
+                name: key.clone(),
+                func_id: *func_id,
+                target: crate::fn_info::closure_body_symbol(prefix, *func_id),
+                param_count: params.len(),
+                field_index: slot as u32,
+            });
+        }
+    }
+    if methods.is_empty() {
+        return None;
+    }
+    let live = capacity.min(props.len() as u32);
+    // Key adds normalize prior SPECIAL lanes. Only a final inline function
+    // add can leave a ConstFn lane; spilled function values remain Any and
+    // require the call site's independent callee identity comparison.
+    let mut constfn = Vec::new();
+    if let Some(last) = methods.iter().find(|m| {
+        m.field_index as usize + 1 == props.len() && m.field_index < live && m.field_index < 32
+    }) {
+        rep |= 3u64 << (2 * last.field_index);
+        constfn.push(ConstFnBirth {
+            slot: last.field_index as u8,
+            symbol: crate::fn_info::info_symbol(&last.target),
+        });
+    }
+    let shape = BirthShape {
+        keys,
+        key_count: props.len() as u32,
+        live,
+        proto: BirthProto::Literal,
+        typed: None,
+        rep,
+        constfn,
+        private: Vec::new(),
+        brands: Vec::new(),
+        attrs: Vec::new(),
+    };
+    Some(ConstructedObject { shape, methods })
+}
+
+pub(crate) fn module_literal_finals(
+    module: &Module,
+    prefix: &str,
+    reps: &HashMap<String, u64>,
+    widths: &HashMap<String, u32>,
+) -> Vec<ModuleBirth> {
+    collect_literal_finals(module, prefix, reps, widths)
+        .shapes
+        .into_iter()
+        .enumerate()
+        .map(|(i, shape)| ModuleBirth {
+            keys_global: format!("perry_literal_final_{prefix}_{i}"),
             class_id: 0,
             defined: false,
             shape,
         })
         .collect()
+}
+
+thread_local! {
+    static MODULE_CONSTRUCTIONS: std::cell::RefCell<HashMap<u32, ConstructedObject>> = Default::default();
+}
+
+pub(crate) fn set_module_constructions(module: &Module, prefix: &str) {
+    let objects = collect_literal_finals(module, prefix, &HashMap::new(), &HashMap::new()).objects;
+    MODULE_CONSTRUCTIONS.with(|m| *m.borrow_mut() = objects);
+}
+
+pub(crate) fn constructed_object(
+    ctx: &crate::expr::FnCtx<'_>,
+    object: &Expr,
+) -> Option<ConstructedObject> {
+    match object {
+        Expr::LocalGet(id) => MODULE_CONSTRUCTIONS
+            .with(|m| m.borrow().get(id).cloned())
+            .or_else(|| {
+                let binding = ctx.local_imported_object_aliases.get(id)?;
+                let imported = ctx.imported_object_literals.get(binding)?;
+                Some(ConstructedObject {
+                    shape: imported.final_shape.clone()?,
+                    methods: imported.methods.clone(),
+                })
+            }),
+        Expr::ExternFuncRef { name, .. } => {
+            let imported = ctx.imported_object_literals.get(name)?;
+            Some(ConstructedObject {
+                shape: imported.final_shape.clone()?,
+                methods: imported.methods.clone(),
+            })
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn literal_seed_descriptors() -> Vec<(BirthShape, u32)> {
@@ -585,7 +999,7 @@ pub(crate) fn birth_literal(
             let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
             let fields = ctx.block().gep(I8, &raw, &[(I64, &header.to_string())]);
             for (slot, value) in values.iter().enumerate() {
-                let bits = if (shape.rep >> (slot * 2)) & 3 == 1 {
+                let bits = if slot < 32 && (shape.rep >> (slot * 2)) & 3 == 1 {
                     // Numeric literal births may lower to the int32 NaN-box.
                     // The compiler owns this conversion; no runtime admission.
                     let number = match &props[slot].1 {
@@ -600,7 +1014,7 @@ pub(crate) fn birth_literal(
                 let ptr = ctx.block().gep(I64, &fields, &[(I64, &slot.to_string())]);
                 // GC_STORE_AUDIT(INIT): fixed slot of an unpublished layout birth.
                 ctx.block().store(I64, &bits, &ptr);
-                if (shape.rep >> (slot * 2)) & 3 != 1 {
+                if slot >= 32 || (shape.rep >> (slot * 2)) & 3 != 1 {
                     let address = ctx.block().ptrtoint(&ptr, I64);
                     crate::expr::emit_write_barrier_slot_value_and_generation_tested(
                         ctx,

@@ -655,6 +655,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         source_prefix: "adapter_js".into(),
         receiver_class_name: "__ImportedObject_adapter".into(),
         source_global_id: 17,
+        final_shape: None,
         methods: vec![perry_codegen::ImportedObjectLiteralMethod {
             name: "run".into(),
             func_id: 9,

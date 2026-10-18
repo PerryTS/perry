@@ -58,19 +58,17 @@ pub extern "C" fn js_object_shape_id_for_class_keys_static(
     id
 }
 
-/// Seed a literal (plain, `proto_id = 0`) shape under the static id
-/// `requested`, from `count` NUL-separated key names in `packed`, with the
-/// birth live bound `live` (`>= count` for a literal born wide, else
-/// `count`) and the birth rep `rep` (charter step 5, T1: the literal's `F64`
-/// lanes, part of the facts the static id names). Returns the id a birth of
-/// this key list now resolves to in this agent.
+/// Seed compiler-owned plain-object contents under the static id `requested`.
+/// `packed` names `count` keys in slot order; `live` is the exact inline bound
+/// and `rep` describes those inline lanes. Literal births have `live >= count`.
+/// Source-ordered builders can finish with `live < count`: their remaining
+/// keys occupy the owner's traced spill buffer at the same absolute indices.
 ///
-/// The seed IS the literal's own birth mint run early: the same
-/// [`shapes::class_birth_shape_ensure`] its module init runs through
-/// [`js_object_shape_id_for_class_keys_static`] (an anonymous literal class
-/// has no vtable class, so class id 0 names the same plain prototype), with
-/// the same rep. A seed and a lazy mint of equal (keys, live, rep) are
-/// therefore one lookup by facts and one ShapeId.
+/// This publishes immutable layout facts before user code, never stamps an
+/// object or learns a call-site observation. Ordinary birth/key-add mints of
+/// equal (keys, live, rep, prototype, attributes) adopt this same ShapeId.
+/// Preserving `live` is essential: widening it to the key count would describe
+/// different storage and the builder's exact layout guard could never match.
 #[no_mangle]
 pub extern "C" fn js_shape_seed_plain(
     requested: u32,
@@ -90,11 +88,15 @@ pub extern "C" fn js_shape_seed_plain(
         return 0;
     }
     let keys = unsafe { canonical_keys_for_names(&names) };
-    let id = shapes::publish_shape_result(shapes::class_birth_shape_ensure(
+    let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_rep(
         keys.arr(),
         keys.count(),
         live,
         0,
+        shapes::ShapeObjectKind::Ordinary,
+        0,
+        shapes::PROTO_ID_DEFAULT,
+        shapes::ReceiverFacts::NONE,
         rep,
         Some(requested),
     ));

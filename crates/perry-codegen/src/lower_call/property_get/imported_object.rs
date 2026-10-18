@@ -84,6 +84,9 @@ pub(super) fn try_lower_imported_object_method_call(
     let Some(capability) = ctx.imported_object_literals.get(&binding).cloned() else {
         return Ok(None);
     };
+    if capability.final_shape.is_some() {
+        return Ok(None);
+    }
     let Some(method) = capability
         .methods
         .iter()

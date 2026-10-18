@@ -553,10 +553,10 @@ pub(crate) struct SiteLookup {
     /// `double`: the method value the read produced, or a by-name answer. A
     /// GC value: the caller roots it across the arguments.
     pub(crate) value: String,
-    lanes: Vec<crate::codegen::static_constfn::StaticMethodLane>,
+    pub(crate) lanes: Vec<crate::codegen::static_constfn::StaticMethodLane>,
     /// The site's key: a by-name answer for a builtin receiver calls its
     /// direct entry (`builtin_proto::builtin_method`).
-    property: String,
+    pub(crate) property: String,
 }
 
 /// The site's lookup half, emitted BEFORE a call's arguments when they can

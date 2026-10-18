@@ -1090,3 +1090,76 @@ fn constfn_finalizer_refuses_equal_names_in_a_different_keys_array() {
     assert_eq!(after, before, "refusal must leave the receiver untouched");
     println!("alias-keys refusal checked");
 }
+
+#[test]
+fn nscall_structural_seed_keeps_the_inline_bound_of_a_spill_builder() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let names: Vec<String> = (0..40).map(|i| format!("nscall_seed_slot_{i}")).collect();
+    let packed: Vec<u8> = names
+        .iter()
+        .flat_map(|key| key.bytes().chain(std::iter::once(0)))
+        .collect();
+    let requested = SHAPE_ID_BASE + 0x79e1;
+    let id = js_shape_seed_plain(
+        requested,
+        packed.as_ptr(),
+        packed.len() as u32,
+        names.len() as u32,
+        2,
+        5,
+    );
+    assert_eq!(id, requested);
+    let descriptor = shapes::shape_descriptor_by_id(id).unwrap();
+    assert_eq!(descriptor.logical_key_count, 40);
+    assert_eq!(descriptor.live_inline_slot_count, 2);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(0));
+    for (index, key) in names.iter().enumerate() {
+        let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(owner.get_raw_mut_ptr(), key, index as f64);
+    }
+    let object = owner.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+    assert_eq!(
+        unsafe { (*object).parent_class_id },
+        id,
+        "ordinary construction must reach the compiler-nominated content"
+    );
+    assert_eq!(
+        crate::object::spill::spill_get_present(object as usize, 39),
+        Some(39.0f64.to_bits())
+    );
+    let key = crate::string::js_string_from_bytes(names[39].as_ptr(), names[39].len() as u32);
+    crate::object::js_object_set_field_by_name(owner.get_raw_mut_ptr(), key, 99.0);
+    assert_eq!(
+        unsafe { (*owner.get_raw_mut_ptr::<crate::object::ObjectHeader>()).parent_class_id },
+        id,
+        "ordinary export overwrites preserve layout"
+    );
+}
+
+#[test]
+fn nscall_plain_record_lookup_preserves_missing_and_noncallable_values() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(0));
+    let key = crate::string::js_string_from_bytes(b"nscall_missing".as_ptr(), 14);
+    let key_value = crate::value::js_nanbox_string(key as i64).to_bits() as i64;
+    let recv = crate::value::js_nanbox_pointer(
+        owner.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+    );
+    let looked = unsafe { crate::object::method_call::js_method_prepare(recv, key_value) };
+    assert_eq!(
+        looked.to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "missing value must reach the value-call TypeError path"
+    );
+    crate::object::js_object_set_field_by_name(owner.get_raw_mut_ptr(), key, 42.0);
+    let recv = crate::value::js_nanbox_pointer(
+        owner.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+    );
+    let looked = unsafe { crate::object::method_call::js_method_prepare(recv, key_value) };
+    assert_eq!(
+        looked, 42.0,
+        "an own primitive must be selected before arguments can replace it"
+    );
+}
