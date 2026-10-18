@@ -1,0 +1,1 @@
+Refresh the native-library documentation fixture for perry-ffi buffer borrowing. Read the length inside the required NoGc scope and allocate the result string after that scope ends. Tests use canonical pointer boxing and the shared runtime fixture startup; a dev-only runtime-link feature makes the crate independently testable.
