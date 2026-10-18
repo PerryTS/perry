@@ -348,17 +348,23 @@ mod tests {
         );
         let ast = perry_parser::parse_typescript(&source, "spx_shared.ts").unwrap();
         let module = perry_hir::lower_module(&ast, "spx_shared", "spx_shared.ts").unwrap();
-        String::from_utf8(
-            compile_module(
-                &module,
-                CompileOptions {
-                    emit_ir_only: true,
-                    ..Default::default()
-                },
+        let census = perry_hir::ProtoCensus {
+            relink: true,
+            ..Default::default()
+        };
+        crate::proto_constants::with_test_census(census, || {
+            String::from_utf8(
+                compile_module(
+                    &module,
+                    CompileOptions {
+                        emit_ir_only: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap()
+            .unwrap()
+        })
     }
 
     fn body<'a>(ir: &'a str, class: &str) -> &'a str {
