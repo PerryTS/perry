@@ -105,8 +105,16 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
             c.visit_children_with(self);
         }
     }
+    // This proof deliberately excludes named function bodies. Their call
+    // graph/fixpoint is unnecessary: one structural walk admits module
+    // positions and direct IIFEs, with the existing escape checks.
+    let mut counts = IdentCounts::default();
+    module.visit_with(&mut counts);
+    let none = HashSet::new();
+    let mut walk = Walk::new(&none, &none, &counts.counts);
+    module.visit_with(&mut walk);
     let mut names = Names {
-        spans: run_once_class_spans(module),
+        spans: walk.spans(),
         counts: HashMap::new(),
         once: HashSet::new(),
         named_function_depth: 0,
