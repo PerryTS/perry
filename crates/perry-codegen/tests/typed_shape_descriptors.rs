@@ -98,7 +98,6 @@ fn object_type(fields: &[(&str, Type)]) -> Type {
 
 fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -501,7 +500,7 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
     // dispatch for every receiver its memo cannot describe.
     assert!(
         ir.contains("call double @js_typed_feedback_native_call_method")
-            || ir.contains("call double @js_method_site_miss"),
+            || ir.contains("call double @js_method_call_slow("),
         "array hasOwnProperty should dispatch through Object.prototype semantics"
     );
 }

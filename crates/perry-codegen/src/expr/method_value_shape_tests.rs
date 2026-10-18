@@ -86,19 +86,16 @@ fn assert_shape_read(constructor: bool) {
         "a public declared method read must not resolve by class/name: {ir}"
     );
     assert!(
-        ir.contains("call double @js_object_get_field_ic_slow("),
-        "a shape miss must retain the ordinary Get, which can run a getter: {ir}"
+        ir.contains("call double @js_object_get_field_slow("),
+        "a declined layout probe must retain ordinary Get: {ir}"
     );
     assert!(
-        ir.contains("_packed_get") && ir.contains("icmp eq i32"),
-        "the site must compare the live receiver ShapeId to its memo: {ir}"
+        ir.contains("call double @perry_probe_get("),
+        "method values must be read from the current receiver layout: {ir}"
     );
-    let start = ir.find("\npic.hit.").expect("inline hit block is emitted");
-    let body = &ir[start + 1..];
-    let body = &body[..body.find("\n\n").expect("end of hit block")];
     assert!(
-        body.contains("load double") && !body.contains("call "),
-        "the hit must load the current function slot without a helper: {body}"
+        !ir.contains("@perry_ic_") && !ir.contains("pic.hit."),
+        "no retired property cache may be emitted: {ir}"
     );
 }
 

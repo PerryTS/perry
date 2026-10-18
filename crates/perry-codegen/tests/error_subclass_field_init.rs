@@ -102,7 +102,6 @@ fn class(
 
 fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "error_subclass_field_init.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

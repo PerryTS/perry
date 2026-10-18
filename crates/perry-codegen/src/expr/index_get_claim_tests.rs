@@ -784,7 +784,10 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ],
     );
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
-    assert!(ir.contains("fptosi double") && ir.contains("fcmp oeq"));
+    assert!(
+        ir.contains("call i32 @perry_array_index_normalize_i32(double"),
+        "dynamic keys must use the shared exact normalizer: {ir}"
+    );
     assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
     assert!(ir.contains("call double @perry_array_read_cold_"));
     assert!(

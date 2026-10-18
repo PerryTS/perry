@@ -138,7 +138,6 @@ fn ternary_recursive_fn(id: u32, name: &str, base: Expr) -> Function {
 
 fn module_with(functions: Vec<Function>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "i64_spec_ternary.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

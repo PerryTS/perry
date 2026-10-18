@@ -115,7 +115,6 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
 fn module_with_new(class: Class) -> Module {
     let class_name = class.name.clone();
     Module {
-        requested_modules: Vec::new(),
         name: "typed_shape_descriptor.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

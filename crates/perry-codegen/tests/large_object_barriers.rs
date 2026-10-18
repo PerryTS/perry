@@ -100,7 +100,6 @@ fn assert_runtime_barrier_metadata_emitted(ir: &str) {
 
 fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "large_object_barriers.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -169,7 +168,6 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
 
 fn module_with_large_local_array_push(element_count: usize) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "large_object_push_barriers.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

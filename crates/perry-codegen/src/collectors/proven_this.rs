@@ -885,15 +885,16 @@ mod tests {
         // Naming + emission + the two proven call sites. `string_pool.rs`
         // and `class_declarations.rs` are deliberately ABSENT: a class's
         // declaration must only ever hold the public symbol.
-        let allowed: [&str; 9] = [
-            "collectors/proven_this.rs",                         // this test
-            "collectors/proven_this_routing_tests.rs",           // routing IR ratchet
-            "codegen/guarded_undefined_method_tests.rs",         // wrapper IR assertions
-            "codegen/typed_abi.rs",                              // name helper
-            "codegen/method.rs",                                 // clone emission
-            "codegen/artifacts.rs",                              // emission driver
-            "lower_call/method_override.rs",                     // guarded fast-arm routing
-            "lower_call/property_get/dynamic_dispatch.rs",       // guard-free routing
+        let allowed: [&str; 10] = [
+            "codegen/artifact_display_names.rs", // documents excluded clones; never dispatch
+            "collectors/proven_this.rs",         // this test
+            "collectors/proven_this_routing_tests.rs", // routing IR ratchet
+            "codegen/guarded_undefined_method_tests.rs", // wrapper IR assertions
+            "codegen/typed_abi.rs",              // name helper
+            "codegen/method.rs",                 // clone emission
+            "codegen/artifacts.rs",              // emission driver
+            "lower_call/method_override.rs",     // guarded fast-arm routing
+            "lower_call/property_get/dynamic_dispatch.rs", // guard-free routing
             "lower_call/property_get/dynamic_dispatch_tower.rs", // its tower-of-pshape helpers
         ];
         let mut offenders: Vec<String> = Vec::new();

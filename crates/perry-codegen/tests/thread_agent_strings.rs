@@ -65,10 +65,10 @@ fn callback<'a>(ir: &'a str, prefix: &str) -> &'a str {
         .unwrap()
 }
 
-fn assert_tls_pool(ir: &str, prefix: &str) {
+fn assert_agent_literal_preparation(ir: &str, prefix: &str) {
     assert!(ir
         .lines()
-        .any(|line| line.contains(".handle = internal thread_local global double")));
+        .any(|line| line.contains(".handle = internal externally_initialized constant double")));
     assert!(ir.contains(&format!(
         "@__perry_agent_strings_ready_{prefix} = internal thread_local global i8 0"
     )));
@@ -118,7 +118,7 @@ fn standalone_launches_prepare_local_tls_literals_without_cli_flags() {
             assert!(ir.contains(
                 "ptrtoint (ptr @__perry_prepare_thread_strings_thread_direct_ts to i64)"
             ));
-            assert_tls_pool(&ir, "thread_direct_ts");
+            assert_agent_literal_preparation(&ir, "thread_direct_ts");
             assert_eq!(
                 ir.matches("define void @__perry_prepare_thread_strings_")
                     .count(),
@@ -150,7 +150,7 @@ fn graph_emits_one_callback_in_actual_entry_and_all_launches_reference_it() {
     let mut definitions = 0;
     for ((name, method, entry, deferred), prefix) in modules.into_iter().zip(graph) {
         let ir = literal_ir(name, method, options(&graph, entry), deferred);
-        assert_tls_pool(&ir, prefix);
+        assert_agent_literal_preparation(&ir, prefix);
         definitions += ir
             .matches("define void @__perry_prepare_thread_strings_")
             .count();
@@ -183,16 +183,16 @@ fn explicit_first_prefix_owns_callback_and_owner_normalizes_duplicates() {
     let owner = literal_ir("z_owner.ts", None, options(&graph, false), false);
     assert_string_only_callback(&owner, "z_owner_ts", &["z_owner_ts", "helper_ts"]);
     let helper = literal_ir("helper.ts", Some("spawn"), options(&graph, true), false);
-    assert_tls_pool(&helper, "helper_ts");
+    assert_agent_literal_preparation(&helper, "helper_ts");
     assert!(!helper.contains("define void @__perry_prepare_thread_strings_"));
     assert!(helper.contains("ptrtoint (ptr @__perry_prepare_thread_strings_z_owner_ts to i64)"));
 }
 
 #[test]
-fn thread_free_direct_module_keeps_process_wide_string_handles() {
+fn thread_free_direct_module_uses_image_string_constants() {
     let ir = literal_ir("thread_direct.ts", None, options(&[], false), false);
     assert!(ir
         .lines()
-        .any(|line| line.contains(".handle = internal global double")));
+        .any(|line| line.contains(".handle = internal externally_initialized constant double")));
     assert!(!ir.contains("define void @__perry_prepare_thread_strings_"));
 }

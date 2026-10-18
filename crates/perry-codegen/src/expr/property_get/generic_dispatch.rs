@@ -1,9 +1,4 @@
-//! Generic monomorphic-IC property-get dispatch extracted from
-//! `property_get.rs`.
-//!
-//! Pure mechanical move — body is the verbatim tail of the general catch-all
-//! arm (the receiver-tag guard + SSO/class-ref/PIC/invalid diamond), lifted
-//! into its own function.
+//! Generic property reads use the receiver layout and the complete Get fallback.
 
 use super::*;
 
@@ -12,33 +7,6 @@ use perry_hir::Expr;
 
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
-
-/// A SPILL-located key publishes its ShapeId into the compact word with this
-/// bit flipped. **Must equal `PACKED_SPILL_FLIP` in the runtime.**
-///
-/// ShapeIds live in [`0x8000_0000`, `0xC000_0000`), so flipping the top two
-/// bits maps them into [`0x4000_0000`, `0x8000_0000`) — the one u32 band that
-/// is neither a ShapeId nor any class id. (Flipping bit 30 alone would land
-/// them in [`0xC000_0000`, `2^32`), which #10824 turns into the synthetic
-/// class-id range.)
-/// The hit path's compare therefore REFUSES a spill entry without asking a
-/// question of its own, which is what lets the overflow-bit test (a 10-byte
-/// `movabs`, a `test` and a branch, on every read of every site) leave the hit
-/// path entirely. The spill entry is still served: the site's one miss call
-/// (`js_object_get_field_ic_slow`) un-flips the bit first thing. Codegen no
-/// longer reads the word's encoding; the mirror is kept for the pairing tests.
-#[cfg(test)]
-pub(crate) const PACKED_SPILL_FLIP: i64 = 0xC000_0000;
-
-/// Way-state word: `> 0` means at least one way is populated and the compares
-/// are worth running; `0` (fresh) and a negative megamorphic countdown
-/// both skip them. Mirrors the runtime's `PIC_WAY_STATE` (read there only,
-/// by the miss entry; kept here for the pairing tests).
-#[cfg(test)]
-pub(crate) const PIC_WAY_STATE: usize = 3;
-// Word 2 is unused: it held the Array-subclass named-prefix token, site state
-// not derived from one shape, retired by S6. A site holds `(ShapeId, slot)`
-// pairs only.
 
 /// Materialise the pooled property-key `StringHeader*` in the CURRENT block.
 ///

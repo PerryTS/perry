@@ -78,7 +78,6 @@ fn empty_opts() -> CompileOptions {
 
 fn module_with_init(init: Vec<Stmt>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "argless_extra_args.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -181,7 +180,7 @@ fn any_call_result_trim_emits_string_tag_dispatch() {
     // non-object receiver straight to the universal dispatch.
     assert!(
         (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss")),
+            || ir.contains("call double @js_method_call_slow(")),
         "the non-string arm must use runtime method dispatch:\n{ir}"
     );
     assert!(
@@ -245,7 +244,7 @@ fn any_call_result_invalid_string_arity_uses_generic_dispatch() {
 
     assert!(
         (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss")),
+            || ir.contains("call double @js_method_call_slow(")),
         "the call must use generic runtime method dispatch:\n{ir}"
     );
     assert!(

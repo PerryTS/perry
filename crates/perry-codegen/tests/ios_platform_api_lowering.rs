@@ -84,7 +84,6 @@ fn call(method: &str, args: Vec<Expr>) -> Stmt {
 
 fn module(body: Vec<Stmt>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "ios_platform_api_probe".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

@@ -1962,7 +1962,9 @@ fn tower_selects_by_prototype_constant() {
 #[test]
 fn a_written_method_name_is_not_a_prototype_constant() {
     let mut census = perry_hir::ProtoCensus::default();
-    census.dynamic_write = true;
+    census
+        .written
+        .extend(["rescore".to_string(), "tag".to_string()]);
     let ir = crate::proto_constants::with_test_census(census, || {
         emit_static(&tower_site_module(), false)
     });
