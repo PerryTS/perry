@@ -255,44 +255,17 @@ pub(super) fn state_set_object(
     if unsafe { key.write_existing(obj, value) || key.add_family(obj, value) } {
         return;
     }
-    // An add the receiver's chain does not intercept (the store vet: no
-    // inherited setter or read-only data for the key, e.g. node's data
-    // defaults on a prototype) is own-property creation: the store funnel's
-    // add. Anything else is the full ordinary [[Set]].
+    // The shared by-name store proves a plain add from the live shape and
+    // performs ordinary interception on a miss; no constructor pre-vet.
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let value = scope.root_nanbox_f64(value);
     let interned = crate::string::intern_ascii_literal(key.bytes);
-    let key_value = f64::from_bits(JSValue::string_ptr(interned as *mut _).bits());
     if let Some(obj) =
         crate::object::field_get_set::runtime_read_site::object_receiver(target.get_nanbox_f64())
     {
-        if !unsafe {
-            crate::object::plain_data_write_may_intercept(obj as usize, (*obj).class_id, key_value)
-        } {
-            // The chain is proven: the transition edge's add, else the
-            // store funnel's.
-            let mut refresh = None;
-            if crate::object::object_set_field_by_name_transition_chain_proven_value(
-                obj,
-                interned,
-                value.get_nanbox_f64(),
-                &mut refresh,
-            )
-            .is_none()
-            {
-                if let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(
-                    target.get_nanbox_f64(),
-                ) {
-                    crate::object::js_object_set_field_by_name(
-                        obj,
-                        interned,
-                        value.get_nanbox_f64(),
-                    );
-                }
-            }
-            return;
-        }
+        crate::object::js_object_set_field_by_name(obj, interned, value.get_nanbox_f64());
+        return;
     }
     super::super::constructors::birth::ordinary_birth_set(
         target.get_nanbox_f64(),

@@ -455,6 +455,34 @@ pub(crate) fn set_field_by_name_object_tail(
             }
         }
 
+        // A failed layout proof must perform [[Set]], not merely disable the
+        // transition fast path. Share OrdinarySet's interception walk; its
+        // data-write answer falls through without recursively calling us.
+        let chain_clear = plan_fast
+            || key.is_null()
+            || !super::plain_data_write_may_intercept(
+                obj as usize,
+                (*obj).class_id,
+                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+            );
+        if !chain_clear {
+            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+            let property_key = f64::from_bits(JSValue::string_ptr(key as *mut _).bits());
+            if let Some(done) =
+                crate::proxy::set_interceptor(receiver, property_key, value, receiver)
+            {
+                if !done {
+                    crate::error::throw_immutable_write(0, &key_to_str_for_diag(key));
+                }
+                return;
+            }
+            obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            value = value_handle.get_nanbox_f64();
+            interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        }
+        let gc_header = crate::gc::header_from_trusted_user_ptr(obj.cast());
+
         // Check Object.freeze/seal/preventExtensions flags
         let obj_flags = (*gc_header)._reserved;
         let is_frozen = obj_flags & crate::gc::OBJ_FLAG_FROZEN != 0;
@@ -530,12 +558,7 @@ pub(crate) fn set_field_by_name_object_tail(
             && !crate::object::overflow::has_overflow(obj)
             // #10287: per-KEY, not per receiver — see `own_descriptors_skip_key`.
             && desc_gate_ok
-            && (plan_fast
-                || !super::plain_data_write_may_intercept(
-                    obj as usize,
-                    (*obj).class_id,
-                    f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
-                ))
+            && chain_clear
         {
             // The full interception vet just returned negative for this
             // (shape, key) — the vtable setter walk above found nothing, the

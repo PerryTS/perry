@@ -305,3 +305,112 @@ fn compile_time_key_hash_is_the_runtime_key_hash() {
         crate::object::key_bytes_hash(b"_writableState".as_ptr(), 14)
     );
 }
+
+extern "C" fn named_store_setter(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    assert_eq!(
+        this.as_f64().to_bits(),
+        crate::closure::js_closure_get_capture_f64(closure, 0).to_bits()
+    );
+    crate::closure::js_closure_set_capture_f64(closure as *mut _, 1, value);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[test]
+fn by_name_and_runtime_state_stores_honor_plain_prototype_setters() {
+    fresh_gate!("by_name_and_runtime_state_stores_honor_plain_prototype_setters");
+    let scope = RuntimeHandleScope::new();
+    let proto = object(&scope);
+    for overflow in [false, true] {
+        let obj = inherit(&scope, &proto);
+        let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(named_store_setter, 1),
+            2,
+        ));
+        setter.with_mut_ptr(|c| {
+            crate::closure::js_closure_set_capture_f64(c, 0, obj.with_mut_ptr(boxed));
+            crate::closure::js_closure_set_capture_f64(c, 1, -1.0);
+        });
+        if overflow {
+            for n in 0..30 {
+                set(&proto, format!("overflow{n}").as_bytes(), n as f64);
+            }
+        }
+        proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+            crate::object::set_accessor_descriptor(
+                p as usize,
+                String::from_utf8(NAME.to_vec()).unwrap(),
+                crate::object::AccessorDescriptor {
+                    set: setter.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+                        js_nanbox_pointer(c as i64).to_bits()
+                    }),
+                    ..Default::default()
+                },
+            )
+        });
+        for frozen in [false, true] {
+            if frozen {
+                crate::object::js_object_freeze(obj.with_mut_ptr(boxed));
+            }
+            set(&obj, NAME, 41.0);
+            assert_eq!(
+                setter.with_mut_ptr(|c| crate::closure::js_closure_get_capture_f64(c, 1)),
+                41.0
+            );
+            unsafe {
+                js_runtime_state_key_set(obj.with_mut_ptr(boxed), NAME.as_ptr(), NAME.len(), 42.0);
+            }
+            assert_eq!(
+                setter.with_mut_ptr(|c| crate::closure::js_closure_get_capture_f64(c, 1)),
+                42.0
+            );
+            assert_eq!(
+                obj.with_mut_ptr(|p| unsafe { crate::runtime_state_key!(NAME).read_own(p) }),
+                None
+            );
+        }
+    }
+}
+
+#[test]
+fn by_name_stores_refuse_inherited_readonly_and_preserve_own_shadowing() {
+    fresh_gate!("by_name_stores_refuse_inherited_readonly_and_preserve_own_shadowing");
+    let scope = RuntimeHandleScope::new();
+    let proto = object(&scope);
+    let obj = inherit(&scope, &proto);
+    // Warm the store proof before changing the holder's descriptor.
+    set(&obj, NAME, 1.0);
+    let key = scope.root_string_ptr(crate::string::intern_ascii_literal(NAME));
+    obj.with_mut_ptr(|p| key.with_const_ptr(|k| crate::object::js_object_delete_field(p, k)));
+    set(&proto, NAME, 7.0);
+    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+        crate::object::set_property_attrs(
+            p as usize,
+            String::from_utf8(NAME.to_vec()).unwrap(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        )
+    });
+    assert!(crate::exception::catch_js_throw(|| set(&obj, NAME, 99.0)).is_err());
+    assert_eq!(read(crate::runtime_state_key!(NAME), &obj), 7.0);
+    let shadow = object(&scope);
+    set(&shadow, NAME, 3.0);
+    crate::object::js_object_set_prototype_of(
+        shadow.with_mut_ptr(boxed),
+        proto.with_mut_ptr(boxed),
+    );
+    set(&shadow, NAME, 4.0);
+    assert_eq!(read(crate::runtime_state_key!(NAME), &shadow), 4.0);
+    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+        crate::object::set_accessor_descriptor(
+            p as usize,
+            String::from_utf8(NAME.to_vec()).unwrap(),
+            crate::object::AccessorDescriptor::default(),
+        )
+    });
+    assert!(crate::exception::catch_js_throw(|| set(&obj, NAME, 99.0)).is_err());
+    set(&shadow, NAME, 5.0);
+    assert_eq!(read(crate::runtime_state_key!(NAME), &shadow), 5.0);
+}

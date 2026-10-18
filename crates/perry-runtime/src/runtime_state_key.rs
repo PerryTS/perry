@@ -291,10 +291,8 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_get(
 
 /// Fixed-key Set for an extension's call site: node's `this.<key> = value`
 /// in a native constructor or method. An own writable data slot is
-/// overwritten in place; an add the receiver's chain does not intercept (the
-/// store vet) is the store funnel's; anything else is the ordinary `[[Set]]`
-/// (`node_stream::constructor_field_set`), so an inherited setter runs and
-/// inherited read-only data throws, as node's strict internals do.
+/// overwritten in place; adds use the by-name store, whose layout proof and
+/// ordinary interception walk honor inherited setters and read-only data.
 /// # Safety
 /// As js_runtime_state_key_get; `value` and `v` are live JavaScript values.
 #[no_mangle]
@@ -324,22 +322,12 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_set(
     let target = scope.root_nanbox_f64(value);
     let v = scope.root_nanbox_f64(v);
     let interned = crate::string::intern_ascii_literal(bytes);
-    let key = f64::from_bits(crate::value::JSValue::string_ptr(interned as *mut _).bits());
     let Some(obj) =
         crate::object::field_get_set::runtime_read_site::object_receiver(target.get_nanbox_f64())
     else {
         return;
     };
-    if crate::object::plain_data_write_may_intercept(obj as usize, (*obj).class_id, key) {
-        crate::node_stream::constructor_field_set(
-            target.get_nanbox_f64(),
-            obj,
-            named,
-            v.get_nanbox_f64(),
-        );
-    } else {
-        crate::object::js_object_set_field_by_name(obj, interned, v.get_nanbox_f64());
-    }
+    crate::object::js_object_set_field_by_name(obj, interned, v.get_nanbox_f64());
 }
 
 /// Call the method `key` of `value`, with the receiver as `this`. Exotic
