@@ -7,7 +7,14 @@ use crate::types::{I1, I32, I64, I8, PTR};
 /// Keep the existing allocator on ILP32 and for cells outside the nursery's
 /// small-object contract. The emitted fast path uses the LP64 header ABI.
 pub(super) fn eligible(target: &str, size: u64) -> bool {
-    !crate::target_layout::target_is_ilp32(target) && size <= 16 * 1024
+    let arch = target.split('-').next().unwrap_or_default();
+    // Packed header words use the shipped little-endian LP64 ABIs. Other
+    // targets keep the runtime's field-wise initialization.
+    matches!(
+        arch,
+        "x86_64" | "x86_64h" | "amd64" | "aarch64" | "arm64" | "arm64e"
+    ) && !crate::target_layout::target_is_ilp32(target)
+        && size <= 16 * 1024
 }
 
 fn allocate(

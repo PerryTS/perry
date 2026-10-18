@@ -98,6 +98,9 @@ fn fixed_births_decline_ilp32_and_large_cells() {
     use super::fixed_alloc::eligible;
     assert!(!eligible("armv7-unknown-linux-gnueabihf", 40));
     assert!(!eligible("wasm32-wasi", 40));
+    assert!(!eligible("aarch64_be-unknown-linux-gnu", 40));
+    assert!(!eligible("powerpc64-unknown-linux-gnu", 40));
+    assert!(!eligible("x86_64-unknown-linux-gnux32", 40));
     assert!(eligible("x86_64-unknown-linux-gnu", 16 * 1024));
     assert!(!eligible("x86_64-unknown-linux-gnu", 16 * 1024 + 8));
 }
