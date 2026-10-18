@@ -596,6 +596,14 @@ pub(crate) fn record(block: &str, helper: &str) -> Option<(u64, u64)> {
             }
             c.guard = "own-layout presence or inherited property lookup".into();
         }
+        if helper.starts_with("js_closure_call") || helper.starts_with("js_bm_call") {
+            if c.reason.is_empty() {
+                c.reason = "callee value is not resolved to a direct entry on this path".into();
+            }
+            if c.guard.is_empty() {
+                c.guard = "callable tag and entry/receiver identity".into();
+            }
+        }
         if c.operation.is_empty() {
             c.operation = if helper.contains("construct")
                 || helper.contains("alloc")
@@ -605,8 +613,10 @@ pub(crate) fn record(block: &str, helper: &str) -> Option<(u64, u64)> {
                 "birth"
             } else if helper.contains("set") {
                 "store"
-            } else if helper.contains("call") || helper.contains("method") {
+            } else if helper.contains("method") || helper.starts_with("js_bm_call") {
                 "method call"
+            } else if helper.contains("call") {
+                "call"
             } else {
                 "get"
             }

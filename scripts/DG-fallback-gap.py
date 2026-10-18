@@ -182,6 +182,7 @@ def main():
         assert any(r['operation'] == 'store' and r['approximate'] for r in records)
         assert any(r['key'] == 'computed' and r['operation']=='computed store' for r in records)
         assert any(r['operation']=='has' for r in records)
+        assert any(r['helper'].startswith('js_closure_call') and 'direct entry' in r['reason'] for r in records)
         assert any(r['operation']=='birth' and r['receiver']['classes'] for r in records)
         assert any(r['line'] and not r['approximate'] for r in records)
         assert any(r['receiver']['cause'] for r in records)

@@ -13,3 +13,8 @@ const parentKey = process.argv[2] || "base";
 class Born extends parents[parentKey] { marker = 7; }
 const born = new Born();
 console.log(born.marker);
+
+const entries: any = { left: (n: number) => n + 1, right: (n: number) => n + 2 };
+const pick = process.argv[3] || 'left';
+const invoke: any = entries[pick];
+console.log(invoke(8));

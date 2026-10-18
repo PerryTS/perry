@@ -46,7 +46,13 @@ pub(crate) fn emit_hole_declining_split(
     ctx.block().cond_br(&served, &merge_label, &slow_label);
 
     ctx.current_block = slow_idx;
-    let slow_val = ctx.block().call(DOUBLE, slow, slow_args);
+    let slow_val = {
+        let _decision = crate::fallback_diag::decision(
+            &format!("non-collecting helper {fast} returned TAG_HOLE; general operation required"),
+            &format!("TAG_HOLE decline from {fast}"),
+        );
+        ctx.block().call(DOUBLE, slow, slow_args)
+    };
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
