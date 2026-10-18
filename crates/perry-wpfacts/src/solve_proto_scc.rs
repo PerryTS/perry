@@ -23,7 +23,7 @@ impl Model {
 
     pub(crate) fn drain_prototype_work(&mut self) {
         self.drain_widened();
-        if (self.pops & 1023 == 0 && self.prototype_edges_since_scc >= 1024)
+        if (self.pops & 1023 == 0 && self.prototype_edges_since_scc >= self.prototype_scc_interval.max(1024))
             || (self.wl.is_empty() && self.prototype_edges_since_scc != 0) {
             self.collapse_prototype_cycles();
         }
@@ -34,6 +34,7 @@ impl Model {
     pub(crate) fn collapse_prototype_cycles(&mut self) {
         if self.prototype_merging || self.prototype_edges_since_scc == 0 { return; }
         self.prototype_merging = true;
+        let before = self.work;
         self.prototype_edges_since_scc = 0;
         let mut roots: Vec<_> = self.prototype_values.values()
             .map(|&n| self.prototype_root(n)).collect();
@@ -53,6 +54,9 @@ impl Model {
                 }
             }
         }
+        // Amortize scans against new graph arcs. Repeated global passes
+        // must not dominate the ordinary propagation they are optimizing.
+        self.prototype_scc_interval = roots.len() + graph.iter().map(Vec::len).sum::<usize>();
         let mut seen = vec![false; roots.len()];
         let mut order = Vec::new();
         for i in 0..roots.len() {
@@ -84,6 +88,12 @@ impl Model {
         }
         for members in components { self.merge_prototype_members(members); }
         self.prototype_merging = false;
+        if self.profile.is_some() {
+            let cost = self.work - before;
+            let stats = self.label_work.entry("prototype-scc").or_default();
+            stats.0 += cost;
+            stats.2 += 1;
+        }
     }
 
     /// Redirect all incoming prototype arcs after merging representatives.
