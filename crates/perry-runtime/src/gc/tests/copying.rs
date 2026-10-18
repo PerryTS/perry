@@ -4,6 +4,7 @@ mod constructor_identity;
 mod deferred_finalize_7635;
 mod fabricated_map_rejection;
 mod latch;
+mod old_parent_phase;
 mod pointer_publish_7154;
 mod probe_index_moves;
 mod promise_side_tables;

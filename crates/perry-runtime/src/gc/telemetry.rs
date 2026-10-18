@@ -310,6 +310,23 @@ pub(super) struct CopyingNurseryTraceStats {
     /// with the threshold; this rates one aging round of one fresh cohort,
     /// which is what the lock's conclusion is about.
     pub(super) survivor_first_round_live_bytes: usize,
+    /// Root-first ordering (`copying/old_parent_phase.rs`): young objects first
+    /// reached in the remembered-set phase, i.e. only through old parents.
+    pub(super) old_parent_only_objects: usize,
+    pub(super) old_parent_only_bytes: usize,
+    /// Of those, the ones the adaptive threshold would have promoted and the
+    /// cycle kept young instead.
+    pub(super) old_parent_kept_young_objects: usize,
+    pub(super) old_parent_kept_young_bytes: usize,
+    /// Old-parent-only bytes this cycle left in survivor space.
+    pub(super) old_parent_young_bytes: usize,
+    /// Σ old-parent-only bytes left young × copies left before the maximum
+    /// age: the copy work the cohort is owed if its old parents are live
+    /// (stage 2's price input).
+    pub(super) old_parent_owed_copy_bytes: usize,
+    /// ...and the ones promoted anyway because survivor space hit its budget.
+    pub(super) old_parent_overflow_promoted_objects: usize,
+    pub(super) old_parent_overflow_promoted_bytes: usize,
     pub(super) large_excluded_objects: usize,
     pub(super) large_excluded_bytes: usize,
     pub(super) reset_blocks: usize,
@@ -1204,6 +1221,12 @@ impl GcCycleTrace {
             "survivor_live_bytes": self.copying_nursery.survivor_live_bytes,
             "eden_copied_bytes": self.copying_nursery.eden_copied_bytes,
             "survivor_first_round_live_bytes": self.copying_nursery.survivor_first_round_live_bytes,
+            "old_parent_only_objects": self.copying_nursery.old_parent_only_objects,
+            "old_parent_only_bytes": self.copying_nursery.old_parent_only_bytes,
+            "old_parent_kept_young_objects": self.copying_nursery.old_parent_kept_young_objects,
+            "old_parent_kept_young_bytes": self.copying_nursery.old_parent_kept_young_bytes,
+            "old_parent_overflow_promoted_objects": self.copying_nursery.old_parent_overflow_promoted_objects,
+            "old_parent_overflow_promoted_bytes": self.copying_nursery.old_parent_overflow_promoted_bytes,
             "large_excluded_objects": self.copying_nursery.large_excluded_objects,
             "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
             "reset_blocks": self.copying_nursery.reset_blocks,

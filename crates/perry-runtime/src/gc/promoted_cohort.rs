@@ -79,6 +79,41 @@ crate::perry_thread_local! {
     static BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
     /// Cohort fulls run on this thread (live-subject counter).
     static COHORT_FULLS: Cell<u64> = const { Cell::new(0) };
+    /// GC2 stage 2: the last copying minor's old-parent-only cohort — bytes it
+    /// kept young on unverified liveness, and the copy work they are owed.
+    /// Replaced by every copying minor, cleared by every full.
+    static OLD_PARENT_KEPT_YOUNG: Cell<usize> = const { Cell::new(0) };
+    static OLD_PARENT_OWED_COPY: Cell<usize> = const { Cell::new(0) };
+}
+
+/// A copying minor left `kept_young` bytes in survivor space that only old
+/// parents reached (`copying/old_parent_phase.rs`); `owed_copy` is the copying
+/// they still cost if those parents are live.
+pub(super) fn note_old_parent_cohort(kept_young: usize, owed_copy: usize) {
+    OLD_PARENT_KEPT_YOUNG.with(|c| c.set(kept_young));
+    OLD_PARENT_OWED_COPY.with(|c| c.set(owed_copy));
+}
+
+pub(super) fn old_parent_kept_young() -> usize {
+    OLD_PARENT_KEPT_YOUNG.with(Cell::get)
+}
+
+/// The price of the full that would settle the old-parent cohort: its mark
+/// visits the verified old live set (`<< backoff`, as for the promoted
+/// cohort), its sweep walks every committed old byte including swept holes,
+/// and it never costs less than one base nursery.
+pub(super) fn old_parent_bound_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(forced) = sabotage::old_parent_bound() {
+        return forced;
+    }
+    bound_bytes().max(crate::arena::old_gen_in_use_bytes())
+}
+
+/// Stage 2: the copy work the old-parent cohort is owed outprices one full, so
+/// the full runs now, before that cohort is copied again or promoted.
+pub(super) fn old_parent_full_due() -> bool {
+    OLD_PARENT_OWED_COPY.with(Cell::get) >= old_parent_bound_bytes()
 }
 
 /// A minor moved `bytes` into old-gen by promoting its blocks in place.
@@ -104,6 +139,7 @@ pub(super) fn note_minor_promotion(promoted: usize, in_place: usize) {
 pub(super) fn note_full_finished(old_live: usize) {
     OLD_LIVE_AT_LAST_FULL.with(|c| c.set(old_live));
     PROMOTED_SINCE_FULL.with(|c| c.set(0));
+    note_old_parent_cohort(0, 0);
 }
 
 pub(super) fn promoted_since_full() -> usize {
@@ -135,7 +171,7 @@ pub(super) fn promotion_may_reach_bound(young_bytes: usize) -> bool {
 }
 
 pub(super) fn full_due() -> bool {
-    promoted_since_full() >= bound_bytes()
+    promoted_since_full() >= bound_bytes() || old_parent_full_due()
 }
 
 /// Price a finished cohort full: `reclaimed` old-gen bytes against the
@@ -173,6 +209,26 @@ pub(super) mod sabotage {
     thread_local! {
         static NEVER_BACK_OFF: Cell<bool> = const { Cell::new(false) };
         static COUNT_TENURED: Cell<bool> = const { Cell::new(false) };
+        static OLD_PARENT_BOUND: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    /// Pinned old-parent full price, so a one-object cohort can reach it.
+    pub(super) fn old_parent_bound() -> Option<usize> {
+        OLD_PARENT_BOUND.with(Cell::get)
+    }
+
+    pub(crate) struct OldParentBoundGuard(Option<usize>);
+
+    impl OldParentBoundGuard {
+        pub(crate) fn pin(bytes: usize) -> Self {
+            Self(OLD_PARENT_BOUND.with(|s| s.replace(Some(bytes))))
+        }
+    }
+
+    impl Drop for OldParentBoundGuard {
+        fn drop(&mut self) {
+            OLD_PARENT_BOUND.with(|s| s.set(self.0));
+        }
     }
 
     pub(super) fn never_back_off() -> bool {

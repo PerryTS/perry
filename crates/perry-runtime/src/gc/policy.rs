@@ -3999,9 +3999,18 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
         return false;
     }
     let _reentry = OldReclaimReentryGuard::enter();
-    let cohort = super::promoted_cohort::promoted_since_full();
+    // GC2 stage 2: a cohort kept young on old-parent reachability alone is
+    // priced and yielded with the promoted one; it dies in survivor space, so
+    // the survivor bytes are on both sides of the yield.
+    let old_parent = super::promoted_cohort::old_parent_kept_young();
+    let cohort = super::promoted_cohort::promoted_since_full().saturating_add(old_parent);
     let bound = super::promoted_cohort::bound_bytes();
-    let before = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let occupancy = || {
+        old_gen_reclaimable_pressure_bytes()
+            .saturating_add(external_side_live_bytes())
+            .saturating_add(crate::arena::copying_active_survivor_in_use_bytes())
+    };
+    let before = occupancy();
     super::diag_sites::trigger_decision("safepoint", "PromotedCohort");
     super::diag_sites::set_full_site("safepoint_promoted_cohort");
     let adopted_before = super::trace::adopt_census::adopted_blocks();
@@ -4026,7 +4035,7 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
         }
     });
     let adopted = super::trace::adopt_census::adopted_blocks() - adopted_before;
-    let after = old_gen_reclaimable_pressure_bytes().saturating_add(external_side_live_bytes());
+    let after = occupancy();
     let reclaimed = before.saturating_sub(after);
     let productive = super::promoted_cohort::record_full_yield(cohort, reclaimed);
     if super::gc_diag_enabled() {
@@ -4040,7 +4049,7 @@ pub(super) fn run_promoted_cohort_full_if_due() -> bool {
                 )
             });
         eprintln!(
-            "[gc-promoted-cohort] full cohort={cohort} bound={bound} reclaimed={reclaimed} \
+            "[gc-promoted-cohort] full cohort={cohort} old_parent={old_parent} bound={bound} reclaimed={reclaimed} \
              productive={productive} adopted_census_blocks={adopted} backoff_shift={} \
              promoted_blocks={blocks} promoted_by_minor={promoted_by_minor} \
              live_of_promoted={live_of_promoted} survival_permille={} minor_view={minor_view} \

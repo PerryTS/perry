@@ -227,6 +227,14 @@ pub(super) struct CopyingNurseryCollector {
     /// `GC_HEADER_SIZE`, so it can never be a memoized key.
     memo_addr: usize,
     memo_result: usize,
+    /// The root phase has drained; every young object moved from here on was
+    /// first reached through an old parent (see `copying/old_parent_phase.rs`).
+    pub(super) old_parent_phase: bool,
+    /// Frozen at creation: survivor space this cycle may fill before a
+    /// kept-young old-parent object falls back to promotion.
+    pub(super) survivor_budget_bytes: usize,
+    /// Worklist entries already scanned by an earlier `drain` this cycle.
+    drained: usize,
 }
 
 /// Survivor count of the previous copying minor, used only to pre-size this
@@ -280,6 +288,9 @@ impl CopyingNurseryCollector {
             ephemerons: super::ephemeron::Ephemerons::default(),
             memo_addr: 0,
             memo_result: 0,
+            old_parent_phase: false,
+            survivor_budget_bytes: old_parent_phase::old_parent_survivor_budget_bytes(),
+            drained: 0,
         }
     }
 
@@ -566,13 +577,17 @@ impl CopyingNurseryCollector {
         let next_age = prior_age.saturating_add(1);
         // Adaptive tenuring (gc/tenuring.rs): the survivals threshold is
         // re-derived from survivor influx after every cycle. The decision is
-        // purely per-object (flags + age) so the copied/promoted split stays
-        // deterministic regardless of root traversal order.
+        // per-object (flags + age) plus the phase that first reached it.
         // I1: a never-move object is promoted at its first survival, so the
         // memos that ask for it are admitted after this minor.
         let promote = flags & GC_FLAG_TENURED != 0
-            || next_age >= self.tenuring_survivals
-            || super::never_move::promotes_now((*header).obj_type, (*header)._reserved);
+            || next_age >= GC_COPY_PROMOTION_SURVIVALS
+            || super::never_move::promotes_now((*header).obj_type, (*header)._reserved)
+            || (next_age >= self.tenuring_survivals
+                && (!self.old_parent_phase || self.old_parent_threshold_promotes(total)));
+        if self.old_parent_phase {
+            self.note_old_parent_only(total, next_age, promote);
+        }
         let new_user = if promote {
             // The promotion's live page accounting rides on the allocation's
             // deferred page registration (one page lookup per run, applied
@@ -667,7 +682,9 @@ impl CopyingNurseryCollector {
                 // are a population selected for longevity; including them is
                 // what made the ratio drift above the lock's bar as the
                 // threshold rose.
-                if prior_age == 1 {
+                // An old-parent-only survivor's liveness is unverified (its
+                // parent may be dead), so it is no evidence for the lock.
+                if prior_age == 1 && !self.old_parent_phase {
                     self.stats.survivor_first_round_live_bytes += total;
                 }
             }
@@ -676,7 +693,10 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn drain(&mut self) {
-        let mut i = 0usize;
+        // Resume where the previous drain stopped: the root phase drains
+        // first, and its entries must not be scanned again by the
+        // remembered-set phase's drain.
+        let mut i = self.drained;
         loop {
             while i < self.worklist.len() {
                 if let Some(&ahead) = self.worklist.get(i + super::prefetch::PREFETCH_DISTANCE) {
@@ -700,6 +720,7 @@ impl CopyingNurseryCollector {
                 break;
             }
         }
+        self.drained = i;
         if let Some(d) = self.survival.as_mut() {
             d.end_drain();
         }
@@ -834,6 +855,9 @@ pub(super) fn last_untraced_decline_reason() -> &'static str {
     UNTRACED_DECLINE_REASON.with(std::cell::Cell::get)
 }
 
+mod old_parent_phase;
+#[cfg(test)]
+pub(super) use old_parent_phase::set_survivor_budget_for_test;
 mod remembered_scan;
 mod root_preflight;
 pub(super) use remembered_scan::*;
@@ -1305,6 +1329,20 @@ pub(super) fn run_copied_minor_attempt(
     // read path for the remembered set, which is where #7187's lazy barrier
     // arming happens. Skipping it would leave the barrier unarmed for the next
     // cycle — a missing-edge bug one collection later.
+    // Root-first: drain everything the precise roots reach before any dirty
+    // old parent seeds the worklist, so what the remembered-set phase first
+    // discovers is exactly the old-parent-only cohort
+    // (`copying/old_parent_phase.rs`). The ephemeron fixed point runs inside
+    // each drain, so it holds after both phases.
+    let root_drain_start = PhaseDiag::start(&phase_diag);
+    unsafe {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
+        collector.drain();
+    }
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::CopyEvacuation, root_drain_start);
+    }
+    collector.begin_old_parent_phase();
     let remembered_phase_start = PhaseDiag::start(&phase_diag);
     let snapshot = remembered_dirty_snapshot();
     // #10241: a cohort full at this safepoint asks whether a dead parent in
@@ -1775,6 +1813,12 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.promoted_bytes,
         collector.stats.in_place_promoted_bytes,
     );
+    // GC2 stage 2: what this minor kept young on unverified liveness, and the
+    // copy work it is owed if its old parents stay live (`promoted_cohort`).
+    super::promoted_cohort::note_old_parent_cohort(
+        collector.stats.old_parent_young_bytes,
+        collector.stats.old_parent_owed_copy_bytes,
+    );
     // Everything outside from-space retains its pre-minor accounting. Remove
     // the from-space share of that accounting, then add back exactly the
     // objects that survived by copy or promotion. This also preserves objects
@@ -1872,7 +1916,7 @@ pub(super) fn run_copied_minor_attempt(
                 &finalization,
             );
         eprintln!(
-            "[gc-copy-minor] ran pause_us={} scan_us={} phases: {} in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran pause_us={} scan_us={} phases: {} in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} old_parent_only={}/{} old_parent_kept_young={}/{} old_parent_overflow_promoted={}/{} trigger={:?} declared_safepoint={}",
             pause_us,
             scan_us,
             phases,
@@ -1894,6 +1938,12 @@ pub(super) fn run_copied_minor_attempt(
             collector.stats.eden_copied_bytes,
             collector.stats.survivor_live_bytes,
             collector.stats.survivor_first_round_live_bytes,
+            collector.stats.old_parent_only_objects,
+            collector.stats.old_parent_only_bytes,
+            collector.stats.old_parent_kept_young_objects,
+            collector.stats.old_parent_kept_young_bytes,
+            collector.stats.old_parent_overflow_promoted_objects,
+            collector.stats.old_parent_overflow_promoted_bytes,
             _trigger_kind,
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
