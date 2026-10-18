@@ -467,9 +467,9 @@ mod tests {
                 crate::object::js_object_get_field_by_name(child as *const ObjectHeader, key).bits()
             })
         };
-        let original = read();
+        let original = scope.root_nanbox_u64(read());
         assert!(crate::closure::is_closure_ptr(
-            (original & crate::value::POINTER_MASK) as usize,
+            (original.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
         ));
         for bits in [
             crate::value::TAG_UNDEFINED,
@@ -487,7 +487,11 @@ mod tests {
             child,
             "getMaxListeners"
         ));
-        assert_eq!(read(), original, "delete exposes the native ancestor");
+        assert_eq!(
+            read(),
+            original.get_nanbox_u64(),
+            "delete exposes the native ancestor"
+        );
         let replacement = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
         let replacement_value = replacement
             .with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
@@ -513,7 +517,7 @@ mod tests {
             crate::value::js_nanbox_pointer(child as i64),
             parent.get_nanbox_f64(),
         );
-        assert_eq!(read(), original);
+        assert_eq!(read(), original.get_nanbox_u64());
     }
     #[test]
     fn constructor_statics2_deprecated_wrappers_share_parent_prototypes() {
