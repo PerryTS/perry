@@ -157,3 +157,73 @@ fn annotations_nullable_receivers_and_large_key_sets_keep_the_checked_route() {
         assert!(!ir(count, proven, nullable).contains("finitekey.slot"));
     }
 }
+
+#[test]
+fn dynamic_array_guard_reads_the_element_kind_word_without_a_helper() {
+    struct Restore(Vec<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::set_program_patched_proto_methods(self.0.clone());
+        }
+    }
+    let _restore = Restore(crate::program_patched_proto_methods());
+    crate::set_program_patched_proto_methods(vec![
+        perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS.into(),
+    ]);
+    let mut m = Module::new("computed_numeric");
+    m.functions.push(Function {
+        id: 1,
+        name: "read".into(),
+        type_params: vec![],
+        params: (1..=2)
+            .map(|id| Param {
+                id,
+                name: format!("p{id}"),
+                ty: Type::Any,
+                default: None,
+                decorators: vec![],
+                is_rest: false,
+                arguments_object: None,
+            })
+            .collect(),
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let ll = String::from_utf8(
+        compile_module(
+            &m,
+            CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        ll.contains("array.elements.kind"),
+        "the named-layout proof must be reached"
+    );
+    assert!(ll.contains("i64 72"), "read ShapeRecord.element_kind");
+    assert!(
+        !ll.contains("call i32 @perry_array_element_kind("),
+        "the dynamic array proof must not walk descriptors or classify the receiver again"
+    );
+    assert!(
+        ll.contains("array.elements.unknown"),
+        "unknown layouts keep the generic path"
+    );
+    #[cfg(feature = "llvm-inprocess")]
+    crate::testing::verify_ir(&ll, "computed_element_kind").unwrap();
+}

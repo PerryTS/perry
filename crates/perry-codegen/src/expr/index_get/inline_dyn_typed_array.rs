@@ -302,8 +302,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let array_reserved_ptr = ctx.block().inttoptr(I64, &array_reserved_addr);
     let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
     // Element descriptors live in the array's named layout.
-    let array_has_named =
-        crate::expr::array_proto_guard::emit_array_element_descriptors(ctx.block(), &object_raw);
+    let array_has_named = super::array_element_kind::has_descriptors(ctx, &object_raw);
     let array_no_descriptors = ctx.block().xor(I1, &array_has_named, "true");
     // #10593: the process-wide byte AND this array's own custom-proto bit.
     let array_default_prototypes =

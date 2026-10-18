@@ -164,6 +164,10 @@ pub const RECEIVER_HANDLE_FLOOR: usize = 0x20_0000;
 /// `SHAPE_DIR_FLAT_BASE + 8` of the agent's shape directory
 /// (`AGENT_PTR_SHAPE_DIR`).
 pub const SHAPE_RECORD_SIZE: usize = 120;
+/// Packed presence and object kind in an immutable shape record.
+pub const SHAPE_RECORD_FLAGS_KIND: usize = 36;
+/// Element descriptor kind derived from the immutable named-key prefix.
+pub const SHAPE_RECORD_ELEMENT_KIND: usize = 72;
 /// Offset of a record's two-word coloured-key mask (read: the key is inline
 /// data at its colour slot).
 pub const SHAPE_RECORD_COLOUR_MASK: usize = 88;

@@ -32,3 +32,12 @@ impl ShapeRecord {
             && self.live_inline_slot_count == field_count
     }
 }
+
+const _: () = assert!(
+    std::mem::offset_of!(ShapeRecord, flags_and_kind)
+        == crate::codegen_abi::SHAPE_RECORD_FLAGS_KIND
+);
+const _: () = assert!(
+    std::mem::offset_of!(ShapeRecord, element_kind)
+        == crate::codegen_abi::SHAPE_RECORD_ELEMENT_KIND
+);

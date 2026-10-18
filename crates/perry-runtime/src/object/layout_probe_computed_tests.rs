@@ -80,3 +80,37 @@ fn uninterned_heap_key_proves_absence_without_allocating_an_atom() {
         );
     }
 }
+
+#[test]
+fn computed_store_uses_the_wide_immutable_key_index() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::initialize_runtime_fixture();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let names: Vec<_> = (0..24).map(|i| format!("key{i}")).collect();
+        let refs: Vec<_> = names.iter().map(|s| s.as_bytes()).collect();
+        let keys = crate::object::static_shapes::canonical_keys_for_names(&refs);
+        let obj = crate::object::alloc_plain::alloc_plain_record_with_keys(24, keys);
+        for slot in 0..24 {
+            crate::object::js_object_set_field(obj, slot, crate::JSValue::number(slot as f64));
+        }
+        let value = crate::js_nanbox_pointer(obj as i64).to_bits();
+        let key = crate::JSValue::try_short_string(b"key17").unwrap().bits();
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        assert_eq!(perry_probe_get_keyed(dir, value, key), 17.0);
+        let allocated = crate::arena::arena_live_allocated_bytes();
+        for i in 0..128 {
+            assert_eq!(perry_probe_set_keyed(dir, value, key, i as f64), 1);
+            assert_eq!(perry_probe_get_keyed(dir, value, key), i as f64);
+        }
+        assert_eq!(crate::arena::arena_live_allocated_bytes(), allocated);
+        assert_eq!(
+            crate::object::js_object_get_field(obj, 16).as_number(),
+            16.0
+        );
+        assert_eq!(
+            crate::object::js_object_get_field(obj, 18).as_number(),
+            18.0
+        );
+    }
+}

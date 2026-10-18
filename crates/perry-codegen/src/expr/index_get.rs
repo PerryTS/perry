@@ -40,6 +40,7 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
+mod array_element_kind;
 mod computed_keys;
 mod foreign_counter;
 pub(super) mod guarded_array;
