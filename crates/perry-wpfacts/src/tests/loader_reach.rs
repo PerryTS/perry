@@ -82,3 +82,12 @@ fn widened_calls_reach_escaped_user_bodies() {
     let p=facts_with("const fs=[()=>1,()=>2,()=>3,()=>4,()=>process.getBuiltinModule('module')]; function choose(i:number){return fs[i];} choose(4)();",FactsConfig {widen_k:Some(2),..Default::default()});
     assert!(p.module_reentry.is_some(), "{}", p.dump_text());
 }
+
+#[test]
+fn reflection_and_aliased_builtins_keep_capability_edges() {
+    for s in [
+        "const get=Object.getOwnPropertyDescriptor; const d=get(globalThis,'Function'); d.value(process.argv[2]);",
+        "Reflect.get(globalThis,'Function')(process.argv[2]);",
+        "const own={get x(){return process.getBuiltinModule('module');}}; const get=Object.getOwnPropertyDescriptor; get(own,'x').get();",
+    ] {let p=facts(s);assert!(p.module_reentry.is_some(),"{s}: {}",p.dump_text());}
+}

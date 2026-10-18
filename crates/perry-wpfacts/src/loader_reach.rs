@@ -18,6 +18,7 @@ pub(crate) enum Op {
     Access(NodeId, Key, bool, bool),
     Index(NodeId, NodeId, bool, bool),
     Touch(NodeId),
+    Token(Tok),
     Escape(NodeId),
     Capability(String),
 }
@@ -208,6 +209,7 @@ struct Reach<'a> {
     context: FnIdx,
     children: Vec<Vec<CallId>>,
     active_calls: FxHashSet<CallId>,
+    call_ops: Vec<Vec<&'a Op>>,
     protocols: FxHashMap<Tok, Vec<CallId>>,
     top_reached: bool,
 }
@@ -407,6 +409,16 @@ impl<'a> Reach<'a> {
                 );
             }
             self.call_target(t, &mut seen);
+        }
+        for op in self.call_ops[c as usize].clone() {
+            match *op {
+                Op::Access(n, k, store, user) => self.access(f, n, k, store, user),
+                Op::Index(n, _, user, store) => self.access(f, n, Key::Any, store, user),
+                Op::Touch(n) => self.node(n),
+                Op::Escape(n) => self.escape(f, n),
+                Op::Token(t) => self.touch(t),
+                _ => {}
+            }
         }
         for child in self.children[c as usize].clone() {
             self.call(f, child, user, false);
@@ -641,9 +653,13 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
         context: 0,
         children: vec![Vec::new(); g.m.calls.len()],
         active_calls: Default::default(),
+        call_ops: vec![Vec::new(); g.m.calls.len()],
         protocols: Default::default(),
         top_reached: false,
     };
+    for (c, op) in &g.m.reach_call_ops {
+        r.call_ops[*c as usize].push(op);
+    }
     for (c, site) in g.m.calls.iter().enumerate() {
         if let Some(parent) = site.reach_parent {
             if parent != c as u32 {
@@ -758,6 +774,7 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
                 }
                 Op::Call(c, user, literal) => r.call(f, c, user, literal),
                 Op::Touch(n) => r.node(n),
+                Op::Token(t) => r.touch(t),
                 Op::Escape(n) => r.escape(f, n),
                 Op::Access(n, k, store, user) => r.access(f, n, k, store, user),
                 Op::Index(n, idx, user, store) => {

@@ -499,6 +499,7 @@ pub struct Model {
     /// Current generation body; never participates in the points-to solve.
     pub(crate) reach_owner: Option<FnIdx>,
     pub(crate) reach_call: Option<CallId>,
+    pub(crate) reach_call_ops: Vec<(CallId, crate::loader_reach::Op)>,
     pub(crate) reach_allow_require: bool,
     pub(crate) reach_allow_record: bool,
     pub(crate) reach_user: bool,

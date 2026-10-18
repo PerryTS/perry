@@ -310,7 +310,16 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
-        if self.rel_phase == b'G' {
+        if let Some(call) = self.reach_call {
+            if let Some(op) = crate::loader_reach::Op::constraint(
+                n,
+                c,
+                self.calls[call as usize].reach_user,
+                None,
+            ) {
+                self.reach_call_ops.push((call, op));
+            }
+        } else if self.rel_phase == b'G' {
             if let Some(f) = self.reach_owner {
                 if let Some(op) =
                     crate::loader_reach::Op::constraint(n, c, self.reach_user, self.reach_index)
@@ -1781,6 +1790,12 @@ impl Model {
 
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
+        if let Some(call) = self.reach_call {
+            if self.calls[call as usize].reach_user {
+                self.reach_call_ops
+                    .push((call, crate::loader_reach::Op::Escape(n)));
+            }
+        }
         if self.sunk_nodes.insert(n) {
             self.cons(n, Cons::TopSink { reason });
         }

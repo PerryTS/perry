@@ -486,6 +486,12 @@ impl Model {
     // --------------------------------------------------------------- escape
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if let Some(call) = self.reach_call {
+            if self.calls[call as usize].reach_user {
+                self.reach_call_ops
+                    .push((call, crate::loader_reach::Op::Token(t)));
+            }
+        }
         if t == TOP || self.is_escaped(t) {
             return;
         }
