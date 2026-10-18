@@ -269,10 +269,11 @@ impl Model {
     pub fn is_array_like(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::PrimBox => true,
-            TokKind::Obj(tm) => matches!(
-                self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::BObj { .. }
-            ),
+            TokKind::Obj(tm) => match self.tmpls[tm as usize].kind {
+                TmplKind::Arr { .. } => true,
+                TmplKind::BObj { what, .. } => what != "CjsMain",
+                _ => false,
+            },
             _ => false,
         }
     }

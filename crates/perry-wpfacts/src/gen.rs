@@ -43,7 +43,13 @@ pub struct Gen<'a> {
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
     pub thrown: NodeId,
+    /// Registry summary: only dynamic lookups read every publication.
     pub cjs_registry: NodeId,
+    /// Canonical module path -> the publications for that path.
+    pub cjs_paths: FxHashMap<String, NodeId>,
+    /// Nonliteral publications may replace any named path.
+    pub cjs_unknown_path: NodeId,
+    pub cjs_main: Option<NodeId>,
     pub read_sites: Vec<ReadSite>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
@@ -121,6 +127,11 @@ impl<'a> Gen<'a> {
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
         let cjs_registry = m.node_l("CJSREG");
+        // This is a union relation, not a runtime value. Its cardinality
+        // must not itself expose every registered module to unknown code.
+        m.nodes[cjs_registry as usize].internal = true;
+        let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
+        m.nodes[cjs_unknown_path as usize].internal = true;
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -135,6 +146,9 @@ impl<'a> Gen<'a> {
             export_resolving: Default::default(),
             thrown,
             cjs_registry,
+            cjs_paths: Default::default(),
+            cjs_unknown_path,
+            cjs_main: None,
             read_sites: Vec::new(),
             ctor_phase: FxHashMap::default(),
             fn_inst_of: FxHashMap::default(),

@@ -24,6 +24,7 @@ pub mod derive;
 mod dump;
 mod gen;
 mod gen_call;
+mod gen_cjs;
 mod gen_expr;
 mod gen_rest;
 pub mod model;

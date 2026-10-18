@@ -1067,3 +1067,173 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
         }
     }
 }
+
+#[test]
+fn cjs_literal_registry_paths_do_not_merge_unrelated_exports() {
+    let pf = facts(
+        r#"
+        class Left { x = 1; }
+        class Right { x = "right"; }
+        __perry_register_path_module("/cjsr-left.js", new Left());
+        __perry_register_path_module("/cjsr-right.js", new Right());
+        const left = __perry_require_path_module("/cjsr-left.js");
+        const right = __perry_require_path_module("/cjsr-right.js");
+        console.log(left.x, right.x);
+    "#,
+    );
+    let sites: Vec<_> = pf.sites.iter().filter(|s| s.key == "x").collect();
+    assert_eq!(sites.len(), 2, "{}", pf.dump_text());
+    assert!(
+        sites.iter().all(|s| s.verdict == Verdict::T0Mono),
+        "{}",
+        pf.dump_text()
+    );
+    assert_ne!(sites[0].receivers, sites[1].receivers);
+}
+
+#[test]
+fn cjs_nonliteral_publication_can_replace_literal_path() {
+    let pf = facts(
+        r#"
+        class Left { x = 1; }
+        class Right { x = "right"; }
+        __perry_register_path_module("/cjsr-left.js", new Left());
+        function publish(path) { __perry_register_path_module(path, new Right()); }
+        publish("/cjsr-left.js");
+        console.log(__perry_require_path_module("/cjsr-left.js").x);
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert_ne!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}
+
+#[test]
+fn cjs_dynamic_lookup_keeps_all_publications() {
+    let pf = facts(
+        r#"
+        class Left { x = 1; }
+        class Right { x = "right"; }
+        __perry_register_path_module("/cjsr-left.js", new Left());
+        __perry_register_path_module("/cjsr-right.js", new Right());
+        function read(path) { return __perry_require_path_module(path).x; }
+        console.log(read("/cjsr-left.js"), read("/cjsr-right.js"));
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert_eq!(site.receivers.len(), 2, "{}", pf.dump_text());
+}
+
+#[test]
+fn cjs_registry_summary_is_not_a_value_that_widens_every_module() {
+    let mut source = String::new();
+    for i in 0..20 {
+        source.push_str(&format!("class C{i} {{ x = {i}; }} __perry_register_path_module(\"/cjsr-{i}.js\", new C{i}());\n"));
+    }
+    source.push_str("console.log(__perry_require_path_module(\"/cjsr-0.js\").x);");
+    let pf = facts_with(
+        &source,
+        FactsConfig {
+            widen_k: Some(8),
+            ..Default::default()
+        },
+    );
+    for i in 0..20 {
+        assert!(
+            tmpl(&pf, &format!("C{i}")).prefix_stable,
+            "{}",
+            pf.dump_text()
+        );
+    }
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}
+
+#[test]
+fn cjs_main_is_one_record_and_does_not_alias_every_export() {
+    let pf = facts(
+        r#"
+        class Value { x = 1; }
+        const first = __perry_get_cjs_main_module();
+        const second = __perry_get_cjs_main_module();
+        first.exports = new Value();
+        Object.defineProperties(first, { tag: { value: 1 } });
+        console.log(second.exports.x);
+    "#,
+    );
+    assert!(tmpl(&pf, "Value").prefix_stable, "{}", pf.dump_text());
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+}
+
+#[test]
+fn cjs_explicit_main_publication_exposes_the_record() {
+    let pf = facts(
+        r#"
+        class Value { x = 1; }
+        __perry_set_cjs_main_module(new Value());
+    "#,
+    );
+    assert!(!tmpl(&pf, "Value").prefix_stable, "{}", pf.dump_text());
+}
+
+#[test]
+fn define_properties_invokes_own_descriptor_getters() {
+    let pf = facts(
+        r#"
+        class Value { x = 1; }
+        const target = {};
+        const descriptors = { get a() { return { value: new Value() }; } };
+        Object.defineProperties(target, descriptors);
+        console.log(target.a.x);
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert!(
+        site.receivers.iter().any(|r| r.ends_with(":Value")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn cjs_main_can_carry_a_user_iterator_protocol() {
+    let pf = facts(
+        r#"
+        class Value { x = 1; }
+        const main = __perry_get_cjs_main_module();
+        main[Symbol.iterator] = () => main;
+        main.next = () => ({ value: new Value(), done: false });
+        for (const value of main) { console.log(value.x); break; }
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert!(
+        site.receivers.iter().any(|r| r.ends_with(":Value")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn own_descriptor_enumeration_observes_late_accessor_constraints() {
+    // Solver constraints activate in points-to order, independently of the
+    // source order: a previously enumerated holder must retain its getter
+    // subscription when a later constraint supplies an own accessor.
+    let pf = facts(
+        r#"
+        class Target {}
+        class Value { x = 1; }
+        const target = new Target();
+        const descriptors = {};
+        Object.defineProperties(target, descriptors);
+        Object.defineProperty(descriptors, "a", { get() { return { value: new Value() }; } });
+        console.log(target.a.x);
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert!(
+        site.receivers.iter().any(|r| r.ends_with(":Value")),
+        "{}",
+        pf.dump_text()
+    );
+}
