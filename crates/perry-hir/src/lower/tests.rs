@@ -754,18 +754,6 @@ fn test_lower_fresh_ids_increment() {
     assert_eq!(ctx.fresh_class(), 2);
 }
 
-#[test]
-fn test_lower_namespace_var_lookup() {
-    let mut ctx = make_ctx();
-    let local_id = ctx.define_local("Utils_helper".to_string(), Type::Number);
-    ctx.namespace_vars
-        .push(("Utils".to_string(), "helper".to_string(), local_id));
-
-    assert_eq!(ctx.lookup_namespace_var("Utils", "helper"), Some(local_id));
-    assert_eq!(ctx.lookup_namespace_var("Utils", "missing"), None);
-    assert_eq!(ctx.lookup_namespace_var("Other", "helper"), None);
-}
-
 /// Run `f` on a thread with the same large (128 MB) stack the real compiler
 /// uses for its collect/lower walk (`perry-main`, see `crates/perry/src/
 /// main.rs`). The default cargo-test harness thread is only ~2 MB, which is

@@ -21,7 +21,7 @@ mod typescript;
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
 use default_export_binding::default_export_function_binding;
 pub(super) use default_export_binding::mark_exported_function_bodies;
-pub(crate) use namespace::{lower_namespace_as_class, pre_register_module_namespaces};
+pub(crate) use namespace::{lower_namespace, pre_register_module_namespaces};
 use native_default_import::{
     canonicalize_native_import_source, is_cjs_style_native_default_import,
     node_submodule_default_export_key,
@@ -1415,26 +1415,8 @@ pub(crate) fn lower_module_decl(
                         exported: alias_name,
                     });
                 }
-                ast::Decl::TsModule(ts_module)
-                    // export namespace X { ... } — lower as a synthetic class with static members
-                    if !ts_module.declare => {
-                        if let Some(ref body) = ts_module.body {
-                            let ns_name = match &ts_module.id {
-                                ast::TsModuleName::Ident(ident) => ident.sym.to_string(),
-                                ast::TsModuleName::Str(s) => {
-                                    s.value.as_str().unwrap_or("").to_string()
-                                }
-                            };
-                            let class =
-                                lower_namespace_as_class(ctx, module, &ns_name, body, true)?;
-                            let class_name = class.name.clone();
-                            push_class_dedup(module, class);
-                            module.exports.push(Export::Named {
-                                local: class_name.clone(),
-                                exported: class_name,
-                            });
-                        }
-                    }
+                // export namespace X { ... } — a plain object, as tsc emits it
+                ast::Decl::TsModule(ts_module) => lower_namespace(ctx, module, ts_module, true)?,
                 _ => {}
             }
         }

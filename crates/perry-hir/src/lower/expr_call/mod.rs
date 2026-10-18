@@ -839,23 +839,6 @@ fn lower_call_inner(
                 }
             }
 
-            // If inside a namespace, convert calls to namespace functions into StaticMethodCall
-            if let Expr::FuncRef(func_id) = &callee_expr {
-                if let Some(ref ns_name) = ctx.current_namespace {
-                    if let Some(func_name) = ctx.lookup_func_name(*func_id) {
-                        if ctx.has_static_method(ns_name, func_name) {
-                            let method_name = func_name.to_string();
-                            let class_name = ns_name.clone();
-                            return Ok(Expr::StaticMethodCall {
-                                class_name,
-                                method_name,
-                                args,
-                            });
-                        }
-                    }
-                }
-            }
-
             let callee = Box::new(callee_expr);
             // Extract explicit type arguments if present (e.g., identity<number>(x))
             let type_args = call

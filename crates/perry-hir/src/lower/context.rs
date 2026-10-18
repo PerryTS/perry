@@ -623,13 +623,6 @@ impl LoweringContext {
             .unwrap_or(false)
     }
 
-    pub(crate) fn lookup_namespace_var(&self, ns_name: &str, member_name: &str) -> Option<LocalId> {
-        self.namespace_vars
-            .iter()
-            .find(|(ns, member, _)| ns == ns_name && member == member_name)
-            .map(|(_, _, id)| *id)
-    }
-
     pub(crate) fn define_enum(
         &mut self,
         name: String,
@@ -784,7 +777,7 @@ impl LoweringContext {
             .map(|(_, id, _)| *id)
     }
 
-    fn lookup_local_index(&self, name: &str) -> Option<usize> {
+    pub(crate) fn lookup_local_index(&self, name: &str) -> Option<usize> {
         self.locals.lookup_index(name)
     }
 

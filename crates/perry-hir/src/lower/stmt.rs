@@ -1169,21 +1169,10 @@ fn lower_stmt_inner(
                         }
                     }
                 }
-                ast::Decl::TsModule(ts_module)
-                    // namespace X { ... } — lower as a synthetic class with static members
-                    if !ts_module.declare => {
-                        if let Some(ref body) = ts_module.body {
-                            let ns_name = match &ts_module.id {
-                                ast::TsModuleName::Ident(ident) => ident.sym.to_string(),
-                                ast::TsModuleName::Str(s) => {
-                                    s.value.as_str().unwrap_or("").to_string()
-                                }
-                            };
-                            let class =
-                                lower_namespace_as_class(ctx, module, &ns_name, body, false)?;
-                            push_class_dedup(module, class);
-                        }
-                    }
+                // namespace X { ... } — a plain object, as tsc emits it
+                ast::Decl::TsModule(ts_module) => {
+                    crate::lower::module_decl::lower_namespace(ctx, module, ts_module, false)?
+                }
                 // #853: `ast::Decl` is `#[non_exhaustive]` upstream — keep
                 // this catch-all so a future SWC variant is dropped silently
                 // (the supported variants above each have explicit handling).

@@ -933,14 +933,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // Check if this is an enum member access (e.g., Color.Red)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
-        if ctx.lookup_enum(&obj_name).is_some() {
-            // This is an enum access
+        if let Some((_, members)) = ctx.lookup_enum(&obj_name) {
+            // This is an enum access. Any other name is a property of the
+            // enum object, such as one a merged namespace stores.
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let member_name = prop_ident.sym.to_string();
-                return Ok(Expr::EnumMember {
-                    enum_name: obj_name,
-                    member_name,
-                });
+                if members.iter().any(|(name, _)| *name == member_name) {
+                    return Ok(Expr::EnumMember {
+                        enum_name: obj_name,
+                        member_name,
+                    });
+                }
             }
         }
     }
@@ -1011,17 +1014,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         field_name,
                     });
                 }
-            }
-        }
-    }
-
-    // Check if this is a namespace variable access (e.g., Flag.OPENCODE_AUTO_SHARE)
-    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        let obj_name = obj_ident.sym.to_string();
-        if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-            let member_name = prop_ident.sym.to_string();
-            if let Some(local_id) = ctx.lookup_namespace_var(&obj_name, &member_name) {
-                return Ok(Expr::LocalGet(local_id));
             }
         }
     }
