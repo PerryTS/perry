@@ -194,6 +194,11 @@ mod tests {
         let a = m.tok(TokKind::ModNs(1));
         let b = m.tok(TokKind::ModNs(2));
         m.add_receiver_group(callee, a);
+        // Non-callable alternatives throw; they must not trigger the unknown
+        // callback escape boundary or interfere with callable alternatives.
+        let non_callable = m.tok(TokKind::ModNs(99));
+        m.add_tok(callee, non_callable);
+        m.add_prim(callee, prim::STR);
         m.add_tok(callee, functions[0].0);
         m.add_tok(callee, functions[2].0);
         m.solve();
@@ -205,6 +210,7 @@ mod tests {
             assert!(m.nodes[this as usize].pts.contains_tok(b));
         }
         assert!(m.nodes[functions[2].1 as usize].pts.is_empty());
+        assert!(!m.is_escaped(a) && !m.is_escaped(b));
         m.add_tok(callee, TOP);
         m.solve();
         assert!(m.is_escaped(a) && m.is_escaped(b));
