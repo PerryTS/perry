@@ -3,3 +3,5 @@ Namespace, literal-builder, and CJS-export method calls can use a compile-time n
 Startup publishes the image atoms for every seeded key, including structural layouts with spill storage. Plain records preserve missing and non-callable method values through argument evaluation so deleted methods raise TypeError without another lookup.
 
 Adds namespace mutation, getter-order, pointer-export, wide-literal, structural-seed, and call-guard coverage.
+
+Namespace scanner assertions count API namespace entries independently of synthetic array-iteration facts.

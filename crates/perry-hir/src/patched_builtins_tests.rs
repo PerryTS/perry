@@ -35,7 +35,11 @@ fn scans_member_writes_on_namespaces() {
     assert!(s.contains(&pair("JSON", "stringify")));
     assert!(s.contains(&pair("Reflect", "ownKeys")));
     assert!(s.contains(&pair("Number", "isNaN")));
-    assert_eq!(s.len(), 5, "{s:?}");
+    assert_eq!(
+        s.iter().filter(|(ns, _)| ns != ARRAY_ITERATION).count(),
+        5,
+        "{s:?}"
+    );
 }
 
 #[test]
@@ -270,7 +274,11 @@ fn scans_member_writes_through_a_namespace_alias() {
     );
     assert!(s.contains(&pair("Math", "min")), "{s:?}");
     assert!(s.contains(&pair("console", "info")), "{s:?}");
-    assert_eq!(s.len(), 2, "{s:?}");
+    assert_eq!(
+        s.iter().filter(|(ns, _)| ns != ARRAY_ITERATION).count(),
+        2,
+        "{s:?}"
+    );
 }
 
 /// #11772: patching `Symbol.iterator` is not patching `push`/"any member".
