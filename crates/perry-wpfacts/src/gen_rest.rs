@@ -103,7 +103,9 @@ impl<'a> Gen<'a> {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
-                if module == "__perry_runtime" {
+                if module == "__perry_borrowed_proof" {
+                    self.prim_node(prim::BOOL)
+                } else if module == "__perry_runtime" {
                     self.runtime_glue(fx, method, o, a, args)
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));

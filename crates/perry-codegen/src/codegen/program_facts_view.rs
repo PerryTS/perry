@@ -231,6 +231,8 @@ pub struct ElisionFacts {
     pub array_iterator_close_unwritten: bool,
     /// Whole-program constructor heritage proofs, keyed by class identity.
     pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// Compiled code cannot replace Function.prototype.call/apply.
+    pub fnproto_borrow_unwritten: bool,
 }
 
 impl ElisionFacts {

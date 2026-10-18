@@ -149,7 +149,8 @@ const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
 mod function_receiver;
-use function_receiver::{function_call, function_ok};
+use function_receiver::function_call;
+pub(super) use function_receiver::function_ok;
 
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
 /// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,

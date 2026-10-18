@@ -17,6 +17,9 @@ impl<'a> FuncEmitCtx<'a> {
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
+                    "__perry_borrowed_proof" => {
+                        func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
+                    }
                     "console" => match method.as_str() {
                         "log" => {
                             for arg in args {
