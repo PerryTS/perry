@@ -2687,7 +2687,12 @@ fn compile_module_impl(
                 &class_ids,
             );
             births.extend(class_finals);
-            births.extend(static_prototype::collect(hir, &module_prefix, &class_ids));
+            births.extend(static_prototype::collect(
+                hir,
+                &module_prefix,
+                &class_ids,
+                &opts.program_layouts,
+            ));
             let widths = hir
                 .classes
                 .iter()

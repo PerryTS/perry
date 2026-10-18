@@ -291,3 +291,115 @@ fn static_declaration_holders_state_their_real_parent_identity() {
         );
     }
 }
+
+// The linker descriptor is the compiler's immutable candidate, not the
+// runtime parent edge. A changed edge and another evaluation of a template
+// must each independently revoke the requested prototype shape.
+const CHECKED_CHILD: u32 = 60_281;
+const CHECKED_PARENT: u32 = 60_282;
+static EMPTY_KEYS: [crate::object::layout_desc::PerryLayoutKey; 0] = [];
+static EMPTY_INDEX: [u32; 1] = [u32::MAX];
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
+#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_layouts"
+)]
+static mut CHECKED_LAYOUT: crate::object::layout_desc::PerryLayoutDesc =
+    crate::object::layout_desc::PerryLayoutDesc {
+        family: 0x41574202,
+        variant: 0,
+        kind: 0,
+        integrity: 0,
+        slot_count: 0,
+        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        rep: 0,
+        proto: std::ptr::null(),
+        keys: EMPTY_KEYS.as_ptr(),
+        key_count: 0,
+        index_mask: 0,
+        index: EMPTY_INDEX.as_ptr(),
+        class_id: CHECKED_CHILD,
+        parent_class_id: CHECKED_PARENT,
+    };
+static CHECKED_DECLARATION: super::declarations::ClassDeclaration =
+    super::declarations::ClassDeclaration {
+        instance_layout: std::ptr::addr_of!(CHECKED_LAYOUT),
+        ..super::declarations::ClassDeclaration::native(&[])
+    };
+
+#[test]
+fn static_prototype_requires_the_candidate_parent_and_its_canonical_holder() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    register(CHECKED_PARENT, b"CheckedParent");
+    register(CHECKED_CHILD, b"CheckedChild");
+    unsafe {
+        super::declarations::js_register_class_declaration(CHECKED_CHILD, &CHECKED_DECLARATION)
+    };
+    crate::object::js_register_class_parent(CHECKED_CHILD, CHECKED_PARENT);
+    let canonical = scope.root_nanbox_f64(class_decl_prototype_value(CHECKED_PARENT));
+    // No guard needed a seed: the family still supplies the exact candidate.
+    let requested = crate::object::shapes::SHAPE_ID_BASE + 1991;
+    assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
+    let matches =
+        |bits| super::decl_prototype_birth::static_parent_matches(CHECKED_CHILD, requested, bits);
+    assert!(
+        matches(canonical.get_nanbox_f64().to_bits()),
+        "the admitted case is live"
+    );
+    let other =
+        scope.root_raw_mut_ptr(crate::object::object_alloc_prototype_old(CHECKED_PARENT, 0));
+    let other_bits = other
+        .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64).to_bits());
+    assert!(
+        !matches(other_bits),
+        "same template id, different parent prototype"
+    );
+    assert!(
+        !matches(crate::value::TAG_NULL),
+        "extends null is a different edge"
+    );
+    crate::object::class_registry::register_class(CHECKED_CHILD, CHECKED_PARENT + 1);
+    assert!(
+        !matches(canonical.get_nanbox_f64().to_bits()),
+        "changed actual parent, original canonical holder"
+    );
+    crate::object::class_registry::register_class(CHECKED_CHILD, CHECKED_PARENT);
+    assert!(
+        matches(canonical.get_nanbox_f64().to_bits()),
+        "restoring the edge restores the proof"
+    );
+    use crate::object::shapes;
+    let seed = |id, parent| {
+        shapes::shape_descriptor_ensure_with_holes(
+            std::ptr::null(),
+            0,
+            3,
+            (1u64 << 63) | u64::from(CHECKED_CHILD),
+            shapes::ShapeObjectKind::Ordinary,
+            0,
+            shapes::PROTO_ID_CLASS | u64::from(parent),
+            shapes::ReceiverFacts::NONE,
+            Some(id),
+        )
+        .unwrap()
+    };
+    assert_eq!(seed(requested, CHECKED_PARENT), requested);
+    assert!(
+        matches(canonical.get_nanbox_f64().to_bits()),
+        "a seeded candidate also admits"
+    );
+    let wrong = requested + 1;
+    assert_eq!(seed(wrong, CHECKED_PARENT + 1), wrong);
+    assert!(
+        !super::decl_prototype_birth::static_parent_matches(
+            CHECKED_CHILD,
+            wrong,
+            canonical.get_nanbox_f64().to_bits()
+        ),
+        "a seed must agree with the family's candidate parent"
+    );
+}

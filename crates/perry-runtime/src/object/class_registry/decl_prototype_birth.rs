@@ -29,6 +29,48 @@ use super::*;
 /// `{ writable: true, enumerable: false, configurable: true }`.
 const METHOD_ENTRY: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 
+/// A static request describes a particular parent edge. Read its candidate
+/// from the shape when seeded, or from the class's immutable family when no
+/// guard needed a seed. Both are existing semantic data, not learned facts.
+/// Missing proof takes ordinary prototype birth. This check cannot allocate.
+pub(super) fn static_parent_matches(class_id: u32, requested: u32, parent_bits: u64) -> bool {
+    use crate::object::shapes::{
+        shape_record_by_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED,
+    };
+    let declaration = super::declarations::class_declaration(class_id);
+    let family_parent = if declaration.is_some_and(|d| !d.instance_layout.is_null()) {
+        let Some((_, family)) = crate::object::layout_desc::family_of_class(class_id) else {
+            return false;
+        };
+        // SAFETY: family_of_class validated this program's descriptor and
+        // compared its candidate parent with the actual runtime parent.
+        Some(unsafe { (*family).parent_class_id })
+    } else {
+        None
+    };
+    let candidate = if let Some(shape) = shape_record_by_id(requested) {
+        match shape.proto_id() {
+            PROTO_ID_DEFAULT => 0,
+            pid if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) => pid as u32,
+            _ => return false,
+        }
+    } else if let Some(parent) = family_parent {
+        parent
+    } else {
+        return false;
+    };
+    if family_parent.is_some_and(|parent| parent != candidate)
+        || get_parent_class_id(class_id).unwrap_or(0) != candidate
+    {
+        return false;
+    }
+    // This indexed identity word is the canonical declaration holder (or
+    // this realm's Object.prototype). A fresh evaluation of the same class
+    // template, a replaced .prototype, and extends null cannot pass it.
+    let canonical = super::prototype_objects::class_holder_word_selected(candidate);
+    canonical == parent_bits && crate::value::JSValue::from_bits(canonical).is_pointer()
+}
+
 /// Build class `class_id`'s prototype object in its final shape, linked to
 /// `parent_bits` (the parent prototype, NaN-boxed, or `TAG_NULL`), and make it
 /// the class's prototype link. `None` (nothing allocated, nothing linked) when
@@ -43,6 +85,9 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         return None;
     }
     let requested = Some(super::declarations::class_birth_shape(class_id)).filter(|&id| id != 0);
+    if requested.is_some_and(|id| !static_parent_matches(class_id, id, parent_bits)) {
+        return None;
+    }
     let members = class_prototype_member_names(class_id);
     if members.iter().any(|(name, accessor)| {
         name == b"constructor" || (!*accessor && class_method_entry_bytes(class_id, name).is_none())

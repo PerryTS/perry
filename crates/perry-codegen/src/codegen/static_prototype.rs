@@ -6,110 +6,146 @@ pub(crate) fn collect(
     module: &perry_hir::Module,
     prefix: &str,
     ids: &HashMap<String, u32>,
+    layouts: &crate::layout_families::ProgramLayouts,
 ) -> Vec<ModuleBirth> {
     let fresh = super::fresh_class_templates::fresh_class_templates(module);
-    module
+    let mut refused = std::collections::BTreeMap::<&str, u32>::new();
+    let mut evaluated = 0;
+    let births = module
         .classes
         .iter()
         .filter_map(|c| {
-            if c.is_imported_stub()
-                || c.is_literal_shape()
-                || c.is_nested
-                || fresh.contains(&c.name)
-                || c.specialized_from.is_some()
-                || c.extends_expr.is_some()
-                || c.native_extends.is_some()
-                || !c.computed_members.is_empty()
-                || !c.decorators.is_empty()
-                || c.methods
-                    .iter()
-                    .any(|m| !m.decorators.is_empty() || m.name.starts_with('#'))
-            {
-                return None;
-            }
-            let cid = *ids.get(&c.name)?;
-            let parent = match &c.extends_name {
-                Some(n) => *ids.get(n)?,
-                None => 0,
-            };
-            let mut members = std::collections::BTreeMap::new();
-            for m in &c.methods {
-                if members
-                    .insert(m.name.clone(), (m.id, Some(m), 2u8))
-                    .is_some()
+            let candidate = (|| {
+                if c.is_imported_stub()
+                    || c.is_literal_shape()
+                    || c.is_nested
+                    || fresh.contains(&c.name)
+                    || c.specialized_from.is_some()
+                    || c.native_extends.is_some()
+                    || !c.computed_members.is_empty()
+                    || !c.decorators.is_empty()
+                    || c.methods
+                        .iter()
+                        .any(|m| !m.decorators.is_empty() || m.name.starts_with('#'))
                 {
-                    return None;
+                    return Err("declaration-surface");
+                }
+                let cid = *ids.get(&c.name).ok_or("class-id")?;
+                // Evaluated heritage keeps its runtime semantics. The admitted
+                // family supplies only a candidate parent; prototype birth must
+                // prove the actual parent and its prototype identity before it
+                // can request this static shape.
+                let parent = if c.extends_expr.is_some() {
+                    layouts
+                        .families
+                        .get(&cid)
+                        .ok_or("evaluated-no-family")?
+                        .parent_class_id
+                } else {
+                    match &c.extends_name {
+                        Some(n) => *ids.get(n).ok_or("unresolved-parent")?,
+                        None => 0,
+                    }
+                };
+                let mut members = std::collections::BTreeMap::new();
+                for m in &c.methods {
+                    if members
+                        .insert(m.name.clone(), (m.id, Some(m), 2u8))
+                        .is_some()
+                    {
+                        return Err("member-content");
+                    }
+                }
+                for (setter, accessors) in [(false, &c.getters), (true, &c.setters)] {
+                    for (name, function) in accessors {
+                        if c.static_accessor_fn_ids.contains(&function.id) || name.starts_with('#')
+                        {
+                            continue;
+                        }
+                        if !function.decorators.is_empty() {
+                            return Err("member-content");
+                        }
+                        let entry = members
+                            .entry(name.clone())
+                            .or_insert((function.id, None, 10));
+                        if entry.1.is_some() {
+                            return Err("member-content");
+                        }
+                        entry.0 = entry.0.min(function.id);
+                        let half = if setter { 32 } else { 16 };
+                        if entry.2 & half != 0 {
+                            return Err("member-content");
+                        }
+                        entry.2 |= half;
+                    }
+                }
+                let mut members: Vec<_> = members.into_iter().collect();
+                members.sort_by_key(|(_, (order, _, _))| *order);
+                let mut keys = b"constructor\0".to_vec();
+                let mut attrs = vec![2];
+                let mut constfn = Vec::new();
+                let mut rep = 0;
+                for (i, (name, (_, method, attr))) in members.iter().enumerate() {
+                    if name.is_empty() || name.contains('\0') || name == "constructor" {
+                        return Err("member-content");
+                    }
+                    keys.extend_from_slice(name.as_bytes());
+                    keys.push(0);
+                    attrs.push(*attr);
+                    let slot = i + 1;
+                    if let Some(m) = method.filter(|_| slot < 32) {
+                        rep |= 3u64 << (2 * slot);
+                        let body = format!(
+                            "perry_method_{}__{}__{}__eclo",
+                            prefix,
+                            super::helpers::sanitize_member(&c.name),
+                            super::helpers::sanitize_member(&m.name)
+                        );
+                        constfn.push(ConstFnBirth {
+                            slot: slot as u8,
+                            symbol: crate::fn_info::info_symbol(&body),
+                        });
+                    }
+                }
+                Ok(ModuleBirth {
+                    keys_global: format!("perry_decl_proto_{prefix}__{cid}"),
+                    class_id: 0,
+                    defined: false,
+                    shape: BirthShape {
+                        keys,
+                        key_count: members.len() as u32 + 1,
+                        live: members.len() as u32 + 1,
+                        proto: BirthProto::Prototype(cid, parent),
+                        typed: None,
+                        rep,
+                        constfn,
+                        private: Vec::new(),
+                        brands: Vec::new(),
+                        attrs,
+                    },
+                })
+            })();
+            match candidate {
+                Ok(birth) => {
+                    evaluated += usize::from(c.extends_expr.is_some());
+                    Some(birth)
+                }
+                Err(reason) => {
+                    *refused.entry(reason).or_default() += 1;
+                    None
                 }
             }
-            for (setter, accessors) in [(false, &c.getters), (true, &c.setters)] {
-                for (name, function) in accessors {
-                    if c.static_accessor_fn_ids.contains(&function.id) || name.starts_with('#') {
-                        continue;
-                    }
-                    if !function.decorators.is_empty() {
-                        return None;
-                    }
-                    let entry = members
-                        .entry(name.clone())
-                        .or_insert((function.id, None, 10));
-                    if entry.1.is_some() {
-                        return None;
-                    }
-                    entry.0 = entry.0.min(function.id);
-                    let half = if setter { 32 } else { 16 };
-                    if entry.2 & half != 0 {
-                        return None;
-                    }
-                    entry.2 |= half;
-                }
-            }
-            let mut members: Vec<_> = members.into_iter().collect();
-            members.sort_by_key(|(_, (order, _, _))| *order);
-            let mut keys = b"constructor\0".to_vec();
-            let mut attrs = vec![2];
-            let mut constfn = Vec::new();
-            let mut rep = 0;
-            for (i, (name, (_, method, attr))) in members.iter().enumerate() {
-                if name.is_empty() || name.contains('\0') || name == "constructor" {
-                    return None;
-                }
-                keys.extend_from_slice(name.as_bytes());
-                keys.push(0);
-                attrs.push(*attr);
-                let slot = i + 1;
-                if let Some(m) = method.filter(|_| slot < 32) {
-                    rep |= 3u64 << (2 * slot);
-                    let body = format!(
-                        "perry_method_{}__{}__{}__eclo",
-                        prefix,
-                        super::helpers::sanitize_member(&c.name),
-                        super::helpers::sanitize_member(&m.name)
-                    );
-                    constfn.push(ConstFnBirth {
-                        slot: slot as u8,
-                        symbol: crate::fn_info::info_symbol(&body),
-                    });
-                }
-            }
-            Some(ModuleBirth {
-                keys_global: format!("perry_decl_proto_{prefix}__{cid}"),
-                class_id: 0,
-                defined: false,
-                shape: BirthShape {
-                    keys,
-                    key_count: members.len() as u32 + 1,
-                    live: members.len() as u32 + 1,
-                    proto: BirthProto::Prototype(cid, parent),
-                    typed: None,
-                    rep,
-                    constfn,
-                    private: Vec::new(),
-                    brands: Vec::new(),
-                    attrs,
-                },
-            })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
+        eprintln!(
+            "perry: static prototypes {prefix}: admitted {} ({} evaluated); refused {:?}",
+            births.len(),
+            evaluated,
+            refused
+        );
+    }
+    births
 }
 
 /// Every intermediate shape proves absence and the next prototype link.
