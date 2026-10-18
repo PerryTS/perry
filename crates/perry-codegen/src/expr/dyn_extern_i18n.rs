@@ -10,7 +10,7 @@ use perry_hir::Expr;
 
 use crate::nanbox::double_literal;
 use crate::rooting::{with_rooted_accumulator, with_rooted_group, Arg, Repr};
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     emit_string_literal_global, import_origin_suffix, is_global_this_builtin_name, lower_expr,
@@ -65,6 +65,31 @@ pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> S
     }
 }
 
+/// What `require` returns for a compiled target: its `module.exports` when the
+/// namespace carries that alias (CommonJS and JSON targets), else the
+/// namespace itself, which is what `require` of an ES module returns.
+fn require_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
+    let ns = namespace_value_for_prefix(ctx, prefix);
+    if prefix.starts_with("__node_submod__") || prefix.starts_with("__native_mod__") {
+        return ns;
+    }
+    let key_idx = ctx.strings.intern("module.exports");
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let ns_bits = blk.bitcast_double_to_i64(&ns);
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+    let exports = blk.call(
+        DOUBLE,
+        "js_object_get_field_by_name_f64",
+        &[(I64, &ns_bits), (I64, &key_raw)],
+    );
+    let exports_bits = blk.bitcast_double_to_i64(&exports);
+    let absent = blk.icmp_eq(I64, &exports_bits, crate::nanbox::TAG_UNDEFINED_I64);
+    blk.select(I1, &absent, DOUBLE, &ns, &exports)
+}
+
 /// #5389 Tier 2: lower a synchronous CommonJS `require(expr)` in a compiled
 /// external module. Mirrors the dynamic-`import()` dispatch in `lower`, but
 /// returns the target **namespace value directly** (no Promise wrap) and uses the
@@ -93,7 +118,7 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
         let spec_val = lower_expr(ctx, arg)?;
         let target_prefix = ctx.dynamic_import_path_to_prefix.get(&paths[0]).cloned();
         return Ok(match target_prefix {
-            Some(prefix) => namespace_value_for_prefix(ctx, &prefix),
+            Some(prefix) => require_value_for_prefix(ctx, &prefix),
             None => ctx.block().call(
                 DOUBLE,
                 "js_module_ambient_require_apply",
@@ -152,7 +177,7 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
 
         ctx.current_block = match_block_idx;
         let join_label = ctx.block_label(join_block_idx);
-        let ns_val = namespace_value_for_prefix(ctx, target_prefix);
+        let ns_val = require_value_for_prefix(ctx, target_prefix);
         let blk = ctx.block();
         blk.store(DOUBLE, &ns_val, &result_slot);
         blk.br(&join_label);

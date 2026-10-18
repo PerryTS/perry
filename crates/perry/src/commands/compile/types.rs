@@ -1080,6 +1080,11 @@ pub struct CompilationContext {
     /// `--strict-dynamic-import` CLI flag. `PERRY_ALLOW_EVAL=1` forces it off
     /// (shared AOT escape hatch).
     pub strict_dynamic_import: bool,
+    /// Files a dynamic-import/require glob enumerated from a directory. Such a
+    /// file that does not parse compiles to a module that throws the
+    /// `SyntaxError` when required (node fails only when a `require` actually
+    /// loads it); a directly named file that does not parse stays an error.
+    pub glob_candidate_files: HashSet<PathBuf>,
     /// #5245: strict mode for recognized-but-unimplemented node/stdlib APIs.
     /// When true, a reference to such an API is a hard compile-time `#463`
     /// refusal (the historical behavior). When false (the default), it is
@@ -1396,6 +1401,7 @@ impl CompilationContext {
             refuse_dynamic_stdlib_dispatch: false,
             strict_eval: false,
             strict_dynamic_import: false,
+            glob_candidate_files: HashSet::new(),
             strict_unimplemented: false,
             allow_dynamic_stdlib_packages: HashSet::new(),
             js_runtime_importers: Vec::new(),

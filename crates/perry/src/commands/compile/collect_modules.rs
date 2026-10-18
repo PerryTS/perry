@@ -56,7 +56,7 @@ pub(crate) mod worker_url;
 use binding_faithfulness::audit_native_binding_choice;
 pub(super) use discovery::is_nextjs_runtime_module;
 use discovery::{aot_promotion_is_authorized, collect_js_files_recursive};
-use dynamic_glob::expand_dynamic_import_glob;
+use dynamic_glob::{expand_dynamic_import_glob, unparsable_candidate_stub};
 use eval_worker::materialize_eval_worker_source;
 pub(super) use import_helpers::known_node_submodule_key;
 use import_helpers::{
@@ -535,6 +535,12 @@ fn collect_module_one(
         collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
         ..Default::default()
     });
+    let source = unparsable_candidate_stub(
+        ctx.glob_candidate_files.contains(&canonical),
+        &source,
+        parse_filename,
+    )
+    .unwrap_or(source);
     let ast_module_owned: swc_ecma_ast::Module;
     let ast_module: &swc_ecma_ast::Module = match parse_cache {
         Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
@@ -980,8 +986,9 @@ fn collect_module_one(
                             &prefix,
                             &suffix,
                             perry_hir::DYNAMIC_IMPORT_PATH_CAP,
+                            synchronous,
                         );
-                        if matches.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
+                        if matches.entries > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                             dyn_errors.push(format!(
                                 "dynamic import() in module {} ({}): glob '{}*{}' matched {} files \
                                  (limit: {})",
@@ -989,18 +996,21 @@ fn collect_module_one(
                                 canonical.display(),
                                 prefix,
                                 suffix,
-                                matches.len(),
+                                matches.entries,
                                 perry_hir::DYNAMIC_IMPORT_PATH_CAP
                             ));
                             return;
                         }
-                        if !matches.is_empty() {
-                            for p in &matches {
+                        if !matches.specifiers.is_empty() {
+                            for p in &matches.specifiers {
                                 if !new_dyn_imports.contains(p) {
                                     new_dyn_imports.push(p.clone());
                                 }
                             }
-                            dynamic_path_sets.push(DynImportOutcome::Resolved(matches));
+                            ctx.glob_candidate_files.extend(
+                                matches.files.iter().filter_map(|f| f.canonicalize().ok()),
+                            );
+                            dynamic_path_sets.push(DynImportOutcome::Resolved(matches.specifiers));
                             return;
                         }
                     }

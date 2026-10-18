@@ -645,8 +645,20 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
         }
     }
 
-    // Try index files in directory
+    // A directory is its `package.json` "main", else its index file (node's
+    // LOAD_AS_DIRECTORY).
     if base.is_dir() {
+        let main = fs::read_to_string(base.join("package.json"))
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .and_then(|pkg| pkg.get("main")?.as_str().map(PathBuf::from));
+        if let Some(entry) = main.map(|main| base.join(main)) {
+            if !entry.components().eq(base.components()) {
+                if let Some(resolved) = resolve_with_extensions(&entry) {
+                    return Some(resolved);
+                }
+            }
+        }
         for ext in all_extensions {
             let index = base.join(format!("index{}", ext));
             if index.exists() {

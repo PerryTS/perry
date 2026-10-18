@@ -3166,7 +3166,11 @@ pub fn run_with_parse_cache(
                 kind,
             });
         }
-        if is_wrapped_cjs(target_hir) {
+        // A JSON module is `module.exports` too: `require("./x.json")` is the
+        // parsed value.
+        if is_wrapped_cjs(target_hir)
+            || target_path.extension().is_some_and(|ext| ext == "json")
+        {
             // Node's CJS namespace has two aliases for the exact evaluated
             // `module.exports` object. Do not clone/project it: identity with
             // require(), the default import, and shared nested values matters.
