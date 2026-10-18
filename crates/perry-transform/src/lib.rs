@@ -22,6 +22,8 @@ mod local_copies;
 pub mod module_const_fold;
 pub mod prop_cse;
 mod prototype_birth;
+mod prototype_factories;
+pub use prototype_factories::{specialize_prototype_factories, PrototypeFactoryReport};
 mod source_spans;
 pub mod state_desugar;
 mod suspending_iife;

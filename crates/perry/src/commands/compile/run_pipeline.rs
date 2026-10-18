@@ -1092,7 +1092,16 @@ pub fn run_with_parse_cache(
     // comparing against an `export const` earns its typed clone). This runs
     // before the HIR trace and before the object-cache fingerprint, so both
     // describe exactly what codegen consumes.
+    // Use the same loader-capability boundary as canonical run-once class
+    // evaluations (AWB2): a fresh module record would repeat singleton births.
+    let prototype_factories_closed = !perry_hir::has_deferred_dynamic_code_sites()
+        && ctx.native_modules.values().all(|m| {
+            m.class_family_syntax
+                .as_ref()
+                .is_some_and(|s| s.module_capability_uses == 0)
+        });
     for hir_module in ctx.native_modules.values_mut() {
+        perry_transform::specialize_prototype_factories(hir_module, prototype_factories_closed);
         perry_transform::module_const_fold::run(hir_module);
     }
 

@@ -415,6 +415,7 @@ fn proto_binding(proto: &Expr) -> Option<u32> {
 
 /// One module's prototype facts (its own, and its imports' through the
 /// program's export facts).
+#[derive(Clone)]
 struct Analysis<'a> {
     classes: Vec<&'a perry_hir::Class>,
     consts: HashMap<u32, KeyConst>,
@@ -426,6 +427,12 @@ struct Analysis<'a> {
     /// a namespace import.
     imports: HashMap<&'a str, (&'a str, Option<&'a str>)>,
     exports: &'a ProtoExports,
+    // Predictions only: prototype_image validates the complete result before
+    // adopting its image, so a mutated argument/source merely misses proof.
+    values: HashMap<u32, Expr>,
+    functions: HashMap<u32, (&'a [perry_hir::Param], &'a [Stmt])>,
+    closures: HashMap<u32, (&'a [perry_hir::Param], &'a [Stmt])>,
+    factory_depth: usize,
 }
 
 impl Analysis<'_> {
@@ -452,13 +459,51 @@ impl Analysis<'_> {
 
     /// A computed key `e` names.
     fn key_const(&self, e: &Expr) -> Option<KeyConst> {
+        self.key_const_depth(e, 0)
+    }
+
+    fn key_const_depth(&self, e: &Expr, depth: usize) -> Option<KeyConst> {
+        if depth == 8 {
+            return None;
+        }
         match e {
             Expr::String(s) => Some(KeyConst::Str(s.clone())),
             Expr::SymbolFor(desc) => Some(KeyConst::Symbol(match desc.as_ref() {
                 Expr::String(d) => symbol_key(d),
                 _ => None,
             })),
-            Expr::LocalGet(x) => self.consts.get(x).cloned(),
+            Expr::LocalGet(x) => self.consts.get(x).cloned().or_else(|| {
+                self.values
+                    .get(x)
+                    .and_then(|v| self.key_const_depth(v, depth + 1))
+            }),
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let mut source = object.as_ref();
+                for _ in 0..8 {
+                    let Expr::LocalGet(id) = source else { break };
+                    source = self.values.get(id)?;
+                }
+                let value = match source {
+                    Expr::New {
+                        class_name, args, ..
+                    } => {
+                        let class = self
+                            .classes
+                            .iter()
+                            .find(|c| &c.name == class_name && c.is_literal_shape())?;
+                        let slot = class
+                            .fields
+                            .iter()
+                            .position(|f| f.key_expr.is_none() && &f.name == property)?;
+                        args.get(slot)?
+                    }
+                    Expr::Object(entries) => &entries.iter().find(|(k, _)| k == property)?.1,
+                    _ => return None,
+                };
+                self.key_const_depth(value, depth + 1)
+            }
             _ => match self.imported(e)? {
                 ExportFact::Key(ImageKey::Str(s)) => Some(KeyConst::Str(s.clone())),
                 ExportFact::Key(k) => Some(KeyConst::Symbol(Some(k.clone()))),
@@ -474,7 +519,9 @@ impl Analysis<'_> {
             _ => match self.imported(e) {
                 Some(ExportFact::Image(image)) => Some(image.clone()),
                 Some(ExportFact::Key(_)) => None,
-                None => literal(self, e).and_then(|l| l.image),
+                None => literal(self, e)
+                    .and_then(|l| l.image)
+                    .or_else(|| factory_born(self, e).and_then(|b| b.image)),
             },
         }
     }
@@ -520,6 +567,15 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
         top_level: HashMap::new(),
         imports,
         exports,
+        values: HashMap::new(),
+        functions: hir
+            .functions
+            .iter()
+            .filter(|f| !f.is_async && !f.is_generator)
+            .map(|f| (f.id, (f.params.as_slice(), f.body.as_slice())))
+            .collect(),
+        closures: HashMap::new(),
+        factory_depth: 0,
     };
     for stmt in &hir.init {
         let Stmt::Let {
@@ -536,6 +592,17 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
             continue;
         }
         a.top_level.insert(name.as_str(), *id);
+        a.values.insert(*id, init.clone());
+        if let Expr::Closure {
+            params,
+            body,
+            is_async: false,
+            is_generator: false,
+            ..
+        } = init
+        {
+            a.closures.insert(*id, (params.as_slice(), body.as_slice()));
+        }
         // `const k = Symbol(…)`: one symbol, the binding's for its lifetime.
         if matches!(init, Expr::SymbolNew(_)) {
             a.consts
@@ -1389,7 +1456,39 @@ fn copy_keys(target: &mut Option<Vec<ImageEntry>>, source: Option<Vec<ImageEntry
 /// literal)`. No user code that could reach the object runs before the
 /// binding holds it: a literal's keys and values never see it, a source's
 /// getters see the source, and the binding is in its TDZ until then.
+fn factory_born(a: &Analysis<'_>, e: &Expr) -> Option<Born> {
+    if a.factory_depth == 8 {
+        return None;
+    }
+    let Expr::Call { callee, args, .. } = e else {
+        return None;
+    };
+    let (params, body) = match callee.as_ref() {
+        Expr::FuncRef(id) => a.functions.get(id)?,
+        Expr::LocalGet(id) => a.closures.get(id)?,
+        _ => return None,
+    };
+    let [Stmt::Return(Some(result))] = *body else {
+        return None;
+    };
+    if params.len() != args.len() || params.iter().any(|p| p.is_rest || p.default.is_some()) {
+        return None;
+    }
+    let mut call = a.clone();
+    call.factory_depth += 1;
+    for (param, arg) in params.iter().zip(args) {
+        call.values.insert(param.id, arg.clone());
+        call.consts.remove(&param.id);
+    }
+    born(&call, result)
+}
+
 fn born(a: &Analysis<'_>, e: &Expr) -> Option<Born> {
+    if matches!(e, Expr::Call { .. }) {
+        if let Some(born) = factory_born(a, e) {
+            return Some(born);
+        }
+    }
     match e {
         Expr::ObjectCreate(proto, None) => {
             let proto = match proto.as_ref() {
