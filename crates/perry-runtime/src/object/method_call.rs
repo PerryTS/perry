@@ -377,6 +377,13 @@ unsafe fn prepare_ordinary(recv: f64, addr: usize, name: &[u8]) -> f64 {
     // as read, anything else by name.
     let recv = recv_h.get_nanbox_f64();
     let obj = addr_of(recv) as *const ObjectHeader;
+    // A classless ordinary record has no virtual class methods. Its [[Get]]
+    // above is the selected value, including undefined after a delete and a
+    // non-callable own primitive. Preserve it through the arguments so the
+    // value-call path raises TypeError instead of trying name dispatch again.
+    if (*obj).class_id == 0 {
+        return value;
+    }
     if own_data_key(obj, name) {
         return if vb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
             value

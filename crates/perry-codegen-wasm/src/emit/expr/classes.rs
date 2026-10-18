@@ -217,7 +217,7 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emit_store_arg(func, 0, &args[0]);
                             self.emit_memcall(func, "array_constructor_single", 1);
                         } else {
-                            self.emit_expr(func, &Expr::Array(args.clone()));
+                            self.emit_expr(func, &Expr::Array(args.clone(), None));
                         }
                         return true;
                     }

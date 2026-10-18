@@ -35,7 +35,7 @@ fn push_ir(ty: Type, value: Expr) -> String {
                 name: "a".to_string(),
                 ty,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 0,
@@ -162,7 +162,7 @@ fn the_spec_ordered_arm_takes_the_own_exit() {
     let ir = push_ir(
         Type::Any,
         Expr::Sequence(vec![
-            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)]))),
+            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)], None))),
             Expr::Number(2.0),
         ]),
     );

@@ -535,7 +535,7 @@ fn expr_rebinds_local(arg: &Expr, array_id: u32) -> bool {
 /// collection point at all (`any_operand_may_collect`, the same window
 /// predicate every rooting decision in this crate consults). `g.push(1)` on a
 /// module global cannot rebind anything: there is no call to do it in.
-fn push_receiver_is_rebindable(ctx: &FnCtx<'_>, array_id: u32, arg: &Expr) -> bool {
+pub(super) fn push_receiver_is_rebindable(ctx: &FnCtx<'_>, array_id: u32, arg: &Expr) -> bool {
     if expr_rebinds_local(arg, array_id) {
         return true;
     }
@@ -1550,7 +1550,7 @@ mod receiver_order_tests {
                     name: "a".to_string(),
                     ty: Type::Any,
                     mutable: true,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 },
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 0,
@@ -1613,7 +1613,7 @@ mod receiver_order_tests {
     #[test]
     fn an_argument_that_rebinds_the_receiver_takes_the_spec_ordered_arm() {
         let ir = push_ir(Expr::Sequence(vec![
-            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)]))),
+            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)], None))),
             Expr::Number(2.0),
         ]));
         assert!(
@@ -1699,7 +1699,7 @@ mod parent_gate_tests {
                     name: "a".to_string(),
                     ty: Type::Any,
                     mutable: true,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 },
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 0,

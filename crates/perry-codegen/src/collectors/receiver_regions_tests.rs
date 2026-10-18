@@ -678,7 +678,7 @@ fn expression_enders_follow_execution_order() {
 #[test]
 fn loop_enders_follow_body_then_update_order() {
     let body_call = Stmt::Expr(call(vec![]));
-    let update_alloc = Expr::Array(vec![]);
+    let update_alloc = Expr::Array(vec![], None);
     let for_loop = vec![Stmt::For {
         init: None,
         condition: None,
@@ -798,7 +798,7 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
                 Expr::Number(1.0),
             )]))],
         ),
-        ("array literal", vec![Stmt::Expr(Expr::Array(vec![]))]),
+        ("array literal", vec![Stmt::Expr(Expr::Array(vec![], None))]),
         ("closure allocation", vec![Stmt::Expr(closure(vec![]))]),
         (
             "generic property read",

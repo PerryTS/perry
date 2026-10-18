@@ -443,7 +443,7 @@ fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
         mutable: true,
-        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+        init: Some(Expr::Array(values.into_iter().map(int).collect(), None)),
     }
 }
 
@@ -1468,7 +1468,7 @@ fn native_owned_unknown_call_escape_inside_aggregate_invalidates_views() {
             ),
             Stmt::Expr(extern_call(
                 "unknown_nested_escape",
-                vec![Expr::Array(vec![local(2)])],
+                vec![Expr::Array(vec![local(2)], None)],
                 Type::Number,
             )),
             Stmt::Return(Some(index_get(2, int(0)))),
@@ -1498,7 +1498,10 @@ fn native_owned_call_spread_escape_invalidates_views() {
                     param_types: Vec::new(),
                     return_type: Type::Number,
                 }),
-                args: vec![perry_hir::CallArg::Spread(Expr::Array(vec![local(2)]))],
+                args: vec![perry_hir::CallArg::Spread(Expr::Array(
+                    vec![local(2)],
+                    None,
+                ))],
                 type_args: Vec::new(),
             }),
             Stmt::Return(Some(index_get(2, int(0)))),
@@ -1524,7 +1527,7 @@ fn native_owned_proxy_apply_escape_invalidates_views() {
             ),
             Stmt::Expr(Expr::ProxyApply {
                 proxy: Box::new(extern_func_ref("unknown_proxy_apply_escape", Type::Any)),
-                args: vec![Expr::Array(vec![local(2)])],
+                args: vec![Expr::Array(vec![local(2)], None)],
             }),
             Stmt::Return(Some(index_get(2, int(0)))),
         ],
@@ -1549,7 +1552,7 @@ fn native_owned_proxy_construct_escape_invalidates_views() {
             ),
             Stmt::Expr(Expr::ProxyConstruct {
                 proxy: Box::new(extern_func_ref("unknown_proxy_construct_escape", Type::Any)),
-                args: vec![Expr::Array(vec![local(2)])],
+                args: vec![Expr::Array(vec![local(2)], None)],
             }),
             Stmt::Return(Some(index_get(2, int(0)))),
         ],
@@ -1575,7 +1578,7 @@ fn native_owned_reflect_apply_escape_invalidates_views() {
             Stmt::Expr(Expr::ReflectApply {
                 func: Box::new(extern_func_ref("unknown_reflect_apply_escape", Type::Any)),
                 this_arg: Box::new(Expr::Undefined),
-                args: Box::new(Expr::Array(vec![local(2)])),
+                args: Box::new(Expr::Array(vec![local(2)], None)),
             }),
             Stmt::Return(Some(index_get(2, int(0)))),
         ],
@@ -1603,7 +1606,7 @@ fn native_owned_reflect_construct_escape_invalidates_views() {
                     "unknown_reflect_construct_escape",
                     Type::Any,
                 )),
-                args: Box::new(Expr::Array(vec![local(2)])),
+                args: Box::new(Expr::Array(vec![local(2)], None)),
                 new_target: Box::new(Expr::Undefined),
             }),
             Stmt::Return(Some(index_get(2, int(0)))),
@@ -1629,7 +1632,7 @@ fn native_owned_js_call_value_escape_invalidates_views() {
             ),
             Stmt::Expr(Expr::JsCallValue {
                 callee: Box::new(extern_func_ref("unknown_js_call_value_escape", Type::Any)),
-                args: vec![Expr::Array(vec![local(2)])],
+                args: vec![Expr::Array(vec![local(2)], None)],
             }),
             Stmt::Return(Some(index_get(2, int(0)))),
         ],
@@ -1660,7 +1663,7 @@ fn native_owned_static_method_v8_escape_invalidates_views() {
                 Stmt::Expr(Expr::StaticMethodCall {
                     class_name: "RemoteNs".to_string(),
                     method_name: "invoke".to_string(),
-                    args: vec![Expr::Array(vec![local(2)])],
+                    args: vec![Expr::Array(vec![local(2)], None)],
                 }),
                 Stmt::Return(Some(index_get(2, int(0)))),
             ],

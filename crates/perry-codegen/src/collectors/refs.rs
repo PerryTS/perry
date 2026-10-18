@@ -272,7 +272,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::ReflectPreventExtensions(operand)
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
-        | Expr::ArrayFrom(operand)
+        | Expr::ArrayFrom(operand, _)
         | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
@@ -415,7 +415,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(it, out);
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 walk(el, out);
             }
@@ -465,7 +465,9 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(sep, out);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             walk(array, out);
             walk(start, out);
             if let Some(e) = end {

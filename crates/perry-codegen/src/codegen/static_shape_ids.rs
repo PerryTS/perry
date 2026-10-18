@@ -475,6 +475,7 @@ thread_local! {
     /// content (the facts the id names: a resolved definer id names the same
     /// structure). Set by `compile_module` for every module (empty when the
     /// driver assigned none).
+    static MODULE_CONTENT_IDS: RefCell<HashMap<BirthShape, u32>> = RefCell::new(HashMap::new());
     static MODULE_FINAL_IDS: RefCell<HashMap<BirthShape, u32>> = RefCell::new(HashMap::new());
     /// Final records named by this module's finalizers or class-registration
     /// mints, including class prototypes that cannot use startup literal seeds.
@@ -523,6 +524,7 @@ pub(crate) fn set_module_static_ids(
             })
             .collect()
     };
+    MODULE_CONTENT_IDS.with(|m| *m.borrow_mut() = assigned.iter().cloned().collect());
     MODULE_FINAL_IDS.with(|m| {
         *m.borrow_mut() = assigned
             .iter()
@@ -561,6 +563,12 @@ pub(crate) fn static_birth_content(keys_global: &str) -> Option<BirthShape> {
 }
 
 /// Final ids are requested only after construction, never by allocation guards.
+pub(crate) fn static_content_id(shape: &BirthShape) -> Option<u32> {
+    let id = MODULE_CONTENT_IDS.with(|m| m.borrow().get(shape).copied())?;
+    note_guard_id(id, Some(shape));
+    Some(id)
+}
+
 pub(crate) fn static_final_shape_id(shape: &BirthShape) -> Option<u32> {
     let id = MODULE_FINAL_IDS.with(|m| m.borrow().get(shape).copied())?;
     note_guard_id(id, Some(shape));
@@ -577,6 +585,27 @@ pub(crate) fn module_final_seeds() -> Vec<(BirthShape, u32)> {
             .iter()
             .filter(|(_, shape)| !shape.constfn.is_empty())
             .map(|(id, shape)| (shape.clone(), *id))
+            .collect()
+    })
+}
+
+/// Publish all seeded key atoms before startup constructs their canonical lists.
+/// Structural call guards may seed a spilled layout without a literal allocator
+/// descriptor. Its keys still need the same image atoms as later property sites.
+pub(crate) fn module_seed_keys() -> Vec<String> {
+    MODULE_SEEDS.with(|seeds| {
+        seeds
+            .borrow()
+            .values()
+            .flat_map(|shape| {
+                shape
+                    .keys
+                    .split(|byte| *byte == 0)
+                    .take(shape.key_count as usize)
+                    .map(|key| String::from_utf8(key.to_vec()).expect("source key UTF-8"))
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect()
     })
 }

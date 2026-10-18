@@ -719,7 +719,7 @@ mod iterator_close_tests {
                 ) || matches!(
                     s,
                     Stmt::Let {
-                        init: Some(Expr::Array(_)),
+                        init: Some(Expr::Array(_, _)),
                         ..
                     }
                 )
@@ -732,7 +732,7 @@ mod iterator_close_tests {
         if matches!(
             &body[rest],
             Stmt::Let {
-                init: Some(Expr::Array(_)),
+                init: Some(Expr::Array(_, _)),
                 ..
             }
         ) {

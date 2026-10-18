@@ -615,7 +615,7 @@ pub fn fix_class_field_expr(
             fix_class_field_expr(index, class_field_natives, user_classes, current_class);
             fix_class_field_expr(value, class_field_natives, user_classes, current_class);
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for item in items {
                 fix_class_field_expr(item, class_field_natives, user_classes, current_class);
             }
@@ -1201,7 +1201,7 @@ pub fn fix_native_instance_expr_with_locals(
             fix_native_instance_expr_with_locals(then_expr, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(else_expr, native_instances, local_id_instances);
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for elem in elements {
                 fix_native_instance_expr_with_locals(elem, native_instances, local_id_instances);
             }

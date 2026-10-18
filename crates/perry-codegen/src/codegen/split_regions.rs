@@ -1379,6 +1379,7 @@ fn try_extract(
         1 => body.push(Stmt::Return(Some(Expr::LocalGet(remap[&outs[0]])))),
         _ => body.push(Stmt::Return(Some(Expr::Array(
             outs.iter().map(|id| Expr::LocalGet(remap[id])).collect(),
+            None,
         )))),
     }
     let func_id = sh.next_func + 1;

@@ -101,80 +101,6 @@ impl Model {
         }
     }
 
-    /// Sizes of the solver's structures (progress diagnostics).
-    pub fn size_line(&self) -> String {
-        let visits: usize = self.visits.values().map(|v| v.len()).sum();
-        let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
-        let succ: usize = self.nodes.iter().map(|n| n.succ.len()).sum();
-        let pts: usize = self.nodes.iter().map(|n| n.pts.len()).sum();
-        let delta: usize = self.nodes.iter().map(|n| n.delta.len()).sum();
-        let rss_mb = std::fs::read_to_string("/proc/self/statm")
-            .ok()
-            .and_then(|t| t.split_whitespace().nth(1)?.parse::<u64>().ok())
-            .map(|p| p * 4096 / (1 << 20))
-            .unwrap_or(0);
-        let succ_cap: usize = self.nodes.iter().map(|n| n.succ.capacity()).sum();
-        let delta_cap: usize = self.nodes.iter().map(|n| n.delta.capacity()).sum();
-        let big: usize = self
-            .nodes
-            .iter()
-            .filter(|n| matches!(n.pts, crate::pts::Pts::Big(_)))
-            .count();
-        let mut hubs: Vec<(usize, usize)> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.succ.len(), i))
-            .filter(|x| x.0 > 100_000)
-            .collect();
-        hubs.sort_unstable_by(|a, b| b.cmp(a));
-        let max_succ: Vec<String> = hubs
-            .iter()
-            .take(6)
-            .map(|&(l, i)| {
-                let n = &self.nodes[i];
-                format!(
-                    "{}#{i}:{l}:w{}:p{}:n{}:top{}",
-                    self.labels[i],
-                    n.widened as u8,
-                    n.prim,
-                    n.pts.len(),
-                    n.pts.contains_tok(TOP) as u8
-                )
-            })
-            .collect();
-        let max_succ = max_succ.join(",");
-        let stopped: usize = self.stopped.values().map(|v| v.len()).sum();
-        let csites: usize = self.callee_sites.values().map(|v| v.len()).sum();
-        format!(
-            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} pv={} cp={} widenq={} widened={} escaped={} entries={}",
-            self.walk_nodes.len(),
-            self.relays.len(),
-            self.pops,
-            self.wl.len(),
-            self.nodes.len(),
-            cons,
-            succ,
-            pts,
-            delta,
-            self.calls.len(),
-            self.stores.len(),
-            self.toks.len(),
-            self.tmpls.len(),
-            self.bind_done.len(),
-            self.chain_done.len(),
-            self.callthis_done.len(),
-            visits,
-            self.any_walks.len(),
-            self.prototype_values.len(),
-            self.cp_nodes.len(),
-            self.widen_queue.len(),
-            self.widened_nodes,
-            self.escaped.len(),
-            self.pts_entries
-        )
-    }
-
     /// Escape the tokens that reached widened sets.
     pub fn drain_widened(&mut self) {
         if self.widen_queue.is_empty() {
@@ -1048,6 +974,30 @@ impl Model {
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
+        if self.is_iter_key(key) {
+            match self.toks[t as usize] {
+                TokKind::Top
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn
+                | TokKind::NativeProto(_)
+                | TokKind::PrimBox => {}
+                TokKind::Obj(_) if self.is_array_like(t) => {}
+                // A program object/function iterates only through its
+                // protocol, which `Gen::iterate` follows separately.
+                _ => return,
+            }
+            let ek = self.elem_key();
+            return self.load_from(origin, t, ek, dst);
+        }
+        if self.is_elem_key(key) {
+            if t != TOP && self.is_array_like(t) {
+                let all = self.all_fields(t);
+                self.edge(all, dst);
+                self.add_prim(dst, prim::UNDEF);
+                return;
+            }
+            return self.load_from(origin, t, Key::Any, dst);
+        }
         if t == TOP {
             self.add_tok(dst, TOP);
             // Any function's `.constructor` is the Function constructor (E14).

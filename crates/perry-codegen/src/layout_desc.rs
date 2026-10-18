@@ -76,6 +76,8 @@ struct ModuleFamilies {
     /// addresses of this module's HIR): present on an exact family object,
     /// and every store of the key on that local writes a Number.
     numeric_reads: std::collections::HashSet<usize>,
+    /// The module prefix of its array layout descriptors, when it emits them.
+    array_prefix: Option<String>,
 }
 
 thread_local! {
@@ -92,8 +94,30 @@ pub(crate) fn set_module_families(adds: HashMap<String, FamilyAdd>, layouts: Vec
             adds,
             layouts,
             numeric_reads: Default::default(),
+            array_prefix: None,
         }
     });
+}
+
+/// The module emits array layouts, named with `prefix`.
+pub(crate) fn set_array_layout_prefix(prefix: &str) {
+    MODULE_FAMILIES.with(|m| m.borrow_mut().array_prefix = Some(prefix.to_owned()));
+}
+
+/// The descriptor symbol of a module's array layout `ordinal`.
+pub(crate) fn array_layout_symbol(prefix: &str, ordinal: u32) -> String {
+    format!("perry_array_layout_{prefix}_{ordinal}")
+}
+
+/// The descriptor of array layout `ordinal` when this module emits array
+/// layouts.
+pub(crate) fn array_layout_desc(ordinal: u32) -> Option<String> {
+    MODULE_FAMILIES.with(|m| {
+        m.borrow()
+            .array_prefix
+            .as_deref()
+            .map(|prefix| array_layout_symbol(prefix, ordinal))
+    })
 }
 
 /// Record reads of a family key proven Numbers (`collectors/ptr_shape.rs`).
@@ -996,6 +1020,12 @@ pub(crate) fn emit_module_layouts(
             ));
         }
     }
+    // Append missing seeded atoms after existing layout atoms. This retains
+    // the startup ordering of unrelated keys while covering spilled contents.
+    for key in crate::codegen::static_shape_ids::module_seed_keys() {
+        atom(llmod, strings, &mut atoms, &key);
+    }
+
     n
 }
 

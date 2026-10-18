@@ -671,7 +671,7 @@ pub(crate) fn guarded_path_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<perry_hi
                 _ => None,
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             if elements.is_empty() {
                 return Some(Type::Array(Box::new(Type::Never)));
             }

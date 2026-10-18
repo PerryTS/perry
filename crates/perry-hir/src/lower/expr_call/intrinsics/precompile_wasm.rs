@@ -182,7 +182,7 @@ pub(crate) fn try_embed_wasm(ctx: &LoweringContext, call: &ast::CallExpr) -> Res
                     })?;
                     let elems: Vec<Expr> = bytes.iter().map(|b| Expr::Number(*b as f64)).collect();
                     return Ok(Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Array(
-                        elems,
+                        elems, None,
                     ))))));
                 }
                 crate::lower_bail!(

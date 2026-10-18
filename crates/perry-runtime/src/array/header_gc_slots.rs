@@ -107,7 +107,7 @@ pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);
     let slot = array_elements_ptr(arr).add(index) as usize;
-    crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+    crate::gc::runtime_write_barrier_resolved_slot(arr as usize, slot, value_bits);
 }
 
 /// [`note_array_slot`] for a live plain Array whose flag word was already
@@ -137,7 +137,7 @@ pub(crate) unsafe fn note_array_slot_resolved_flags(
     value_bits = note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot_aware(arr as usize, index, value_bits, old_bits);
     let slot = slot_ptr as usize;
-    crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+    crate::gc::runtime_write_barrier_resolved_slot(arr as usize, slot, value_bits);
 }
 
 /// Store and record one element on an array whose live head and header flags

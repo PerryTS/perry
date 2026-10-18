@@ -25,10 +25,13 @@ fn vstack_with_text_children() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "VStack",
-        vec![Expr::Array(vec![
-            nmc("Text", vec![Expr::String("a".into())]),
-            nmc("Text", vec![Expr::String("b".into())]),
-        ])],
+        vec![Expr::Array(
+            vec![
+                nmc("Text", vec![Expr::String("a".into())]),
+                nmc("Text", vec![Expr::String("b".into())]),
+            ],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("Column({ space: 8 })"));
@@ -43,7 +46,7 @@ fn vstack_with_explicit_spacing() {
         "VStack",
         vec![
             Expr::Number(16.0),
-            Expr::Array(vec![nmc("Text", vec![Expr::String("a".into())])]),
+            Expr::Array(vec![nmc("Text", vec![Expr::String("a".into())])], None),
         ],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
@@ -55,7 +58,7 @@ fn hstack_emits_row() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "HStack",
-        vec![Expr::Array(vec![nmc("Spacer", vec![])])],
+        vec![Expr::Array(vec![nmc("Spacer", vec![])], None)],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("Row({ space: 8 })"));
@@ -114,13 +117,16 @@ fn multi_button_assigns_sequential_callback_slots() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "VStack",
-        vec![Expr::Array(vec![
-            nmc("Button", vec![Expr::String("First".into()), closure_stub()]),
-            nmc(
-                "Button",
-                vec![Expr::String("Second".into()), closure_stub()],
-            ),
-        ])],
+        vec![Expr::Array(
+            vec![
+                nmc("Button", vec![Expr::String("First".into()), closure_stub()]),
+                nmc(
+                    "Button",
+                    vec![Expr::String("Second".into()), closure_stub()],
+                ),
+            ],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("perryEntry.invokeCallback(0)"));
@@ -185,13 +191,19 @@ fn nested_vstack_in_hstack() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "VStack",
-        vec![Expr::Array(vec![nmc(
-            "HStack",
-            vec![Expr::Array(vec![
-                nmc("Text", vec![Expr::String("L".into())]),
-                nmc("Text", vec![Expr::String("R".into())]),
-            ])],
-        )])],
+        vec![Expr::Array(
+            vec![nmc(
+                "HStack",
+                vec![Expr::Array(
+                    vec![
+                        nmc("Text", vec![Expr::String("L".into())]),
+                        nmc("Text", vec![Expr::String("R".into())]),
+                    ],
+                    None,
+                )],
+            )],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("Column({ space: 8 })"));
@@ -553,11 +565,14 @@ fn for_each_lowers_array_map_in_vstack() {
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(42)]);
     let map_expr = Expr::ArrayMap {
-        array: Box::new(Expr::Array(vec![
-            Expr::String("a".into()),
-            Expr::String("b".into()),
-            Expr::String("c".into()),
-        ])),
+        array: Box::new(Expr::Array(
+            vec![
+                Expr::String("a".into()),
+                Expr::String("b".into()),
+                Expr::String("c".into()),
+            ],
+            None,
+        )),
         callback: Box::new(Expr::Closure {
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
@@ -576,7 +591,7 @@ fn for_each_lowers_array_map_in_vstack() {
     };
     m.init.push(app_with_body(nmc(
         "VStack",
-        vec![Expr::Array(vec![map_expr])],
+        vec![Expr::Array(vec![map_expr], None)],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r

@@ -60,7 +60,7 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
                 || expr_contains_local_get(value, target_id)
         }
         Expr::LocalSet(_, value) => expr_contains_local_get(value, target_id),
-        Expr::Array(elements) => elements
+        Expr::Array(elements, _) => elements
             .iter()
             .any(|e| expr_contains_local_get(e, target_id)),
         Expr::Object(props) => props

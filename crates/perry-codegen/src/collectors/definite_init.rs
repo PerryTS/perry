@@ -753,7 +753,7 @@ fn taint_of(v: u32, body: Option<u32>, r: &Reverse) -> Taint {
 // Initializer kinds.
 
 fn is_array_literal(e: &Expr) -> bool {
-    matches!(e, Expr::Array(_) | Expr::ArraySpread(_))
+    matches!(e, Expr::Array(_, _) | Expr::ArraySpread(_))
 }
 
 /// The single top-level declarator of `id` in `stmts` with an initializer,
@@ -896,7 +896,7 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     if total != receiver {
         return false;
     }
-    if matches!(init, Expr::Array(_)) {
+    if matches!(init, Expr::Array(_, _)) {
         return true;
     }
     let Expr::Call { callee, .. } = init else {
@@ -918,7 +918,7 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     if !matches!(
         stmts[k],
         Stmt::Let {
-            init: Some(Expr::Array(_)),
+            init: Some(Expr::Array(_, _)),
             ..
         }
     ) {

@@ -157,6 +157,106 @@ fn module_hir_debug(hir_module: &perry_hir::Module) -> String {
     )
 }
 
+fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::{stmt_any_expr, walk_expr_children};
+    use perry_hir::{Expr, Function, Stmt};
+
+    fn is_global_object_value(expr: &Expr) -> bool {
+        matches!(expr, Expr::GlobalThisExpr)
+            || matches!(expr, Expr::PropertyGet { object, property, .. }
+                if matches!(object.as_ref(), Expr::GlobalGet(0)) && property == "globalThis")
+    }
+
+    fn is_global_receiver(expr: &Expr) -> bool {
+        matches!(expr, Expr::GlobalGet(0)) || is_global_object_value(expr)
+    }
+
+    fn expr_uses_namespace(expr: &Expr) -> bool {
+        // A materialized global object can escape through aliases or calls.
+        // The caller's WebAssembly token guard bounds this conservative fallback.
+        if is_global_object_value(expr) {
+            return true;
+        }
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = expr
+        {
+            if property == "WebAssembly" && is_global_receiver(object) {
+                return true;
+            }
+        }
+        // Computed keys can still be locals here, before constant propagation.
+        // The caller retains the WebAssembly token guard for these reads.
+        if let Expr::IndexGet { object, .. } = expr {
+            if is_global_receiver(object) {
+                return true;
+            }
+        }
+        // Expression descent visits closure defaults, but not closure bodies.
+        if let Expr::Closure { body, .. } = expr {
+            if stmts_use_namespace(body) {
+                return true;
+            }
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            found = found || expr_uses_namespace(child);
+        });
+        found
+    }
+
+    fn stmts_use_namespace(stmts: &[Stmt]) -> bool {
+        stmts
+            .iter()
+            .any(|stmt| stmt_any_expr(stmt, &mut expr_uses_namespace))
+    }
+
+    fn decorators_use_namespace(decorators: &[perry_hir::Decorator]) -> bool {
+        decorators
+            .iter()
+            .any(|decorator| decorator.args.iter().any(expr_uses_namespace))
+    }
+
+    fn function_uses_namespace(function: &Function) -> bool {
+        function.params.iter().any(|param| {
+            param.default.as_ref().is_some_and(expr_uses_namespace)
+                || decorators_use_namespace(&param.decorators)
+        }) || stmts_use_namespace(&function.body)
+            || decorators_use_namespace(&function.decorators)
+    }
+
+    stmts_use_namespace(&module.init)
+        || module.functions.iter().any(function_uses_namespace)
+        || module.classes.iter().any(|class| {
+            class
+                .extends_expr
+                .as_deref()
+                .is_some_and(expr_uses_namespace)
+                || class
+                    .constructor
+                    .iter()
+                    .chain(&class.methods)
+                    .chain(&class.static_methods)
+                    .chain(class.getters.iter().map(|(_, function)| function))
+                    .chain(class.setters.iter().map(|(_, function)| function))
+                    .any(function_uses_namespace)
+                || class
+                    .fields
+                    .iter()
+                    .chain(&class.static_fields)
+                    .any(|field| {
+                        field.init.as_ref().is_some_and(expr_uses_namespace)
+                            || field.key_expr.as_ref().is_some_and(expr_uses_namespace)
+                            || decorators_use_namespace(&field.decorators)
+                    })
+                || class.computed_members.iter().any(|member| {
+                    expr_uses_namespace(&member.key_expr)
+                        || function_uses_namespace(&member.function)
+                })
+                || decorators_use_namespace(&class.decorators)
+        })
+}
+
 /// Inspect a lowered module and set the optional-feature gates it needs.
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
@@ -242,26 +342,13 @@ pub(super) fn detect_optional_feature_usage(
         ctx.needs_wasm_runtime = true;
     }
 
-    // Robust fallback for WebAssembly detection. The static lowering in
-    // `module_static.rs` sets `hir_module.uses_webassembly` for direct
-    // `WebAssembly.Module`/`instantiate`/etc. call sites, but a minified
-    // bundle can reach the `WebAssembly` global via dynamic property access
-    // (`const WA = WebAssembly; WA.Module(bytes)`, `globalThis.WebAssembly`,
-    // `globalThis["WebAssembly"]`) that lowers to an ordinary `PropertyGet`
-    // or `Ident` without hitting any set-site. The codegen still emits
-    // `js_webassembly_*` FFI calls for those paths, so without this fallback
-    // the `wasm-host` feature stays off and the link dies with
-    // `_js_webassembly_module_new` undefined. Mirror the fetch/crypto
-    // fallbacks above: scan the final HIR for the `WebAssembly` token.
-    // Over-matching only over-links the wasm host (a size cost); the rule
-    // is zero false negatives.
-    if !ctx.needs_wasm_runtime {
-        if hir_debug.contains("property: \"WebAssembly\"")
-            || hir_debug.contains("class_name: \"WebAssembly\"")
-            || hir_debug.contains("\"WebAssembly\"")
-        {
-            ctx.needs_wasm_runtime = true;
-        }
+    // Namespace values and aliases need the host too, but an unrelated field
+    // such as vm.measureMemory().WebAssembly must not require that archive.
+    if !ctx.needs_wasm_runtime
+        && hir_debug.contains("\"WebAssembly\"")
+        && module_uses_webassembly_namespace(hir_module)
+    {
+        ctx.needs_wasm_runtime = true;
     }
 
     // Detect crypto.* builtin usage (randomBytes/randomUUID/sha256/md5 used

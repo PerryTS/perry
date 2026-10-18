@@ -1326,7 +1326,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.slice(start, end?) -- new array slice --------
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             let mut operands: Vec<&Expr> = vec![array, start];
             if let Some(end_expr) = end {
                 operands.push(end_expr);

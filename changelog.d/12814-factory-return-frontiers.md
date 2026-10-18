@@ -1,0 +1,1 @@
+Bound factory-return class analysis by graph distance instead of recursively expanding every call path. Ambiguous method names in large applications such as Next.js no longer multiply repeated factory-return work, while the existing class-set unions and instance/constructor depth limits are preserved.

@@ -212,11 +212,12 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .map(|(k, v)| (k.clone(), substitute_expr(v, substitutions)))
                 .collect(),
         },
-        Expr::Array(elems) => Expr::Array(
+        Expr::Array(elems, _) => Expr::Array(
             elems
                 .iter()
                 .map(|e| substitute_expr(e, substitutions))
                 .collect(),
+            None,
         ),
         Expr::ArraySpread(elems) => Expr::ArraySpread(
             elems
@@ -551,7 +552,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|fi| Box::new(substitute_expr(fi, substitutions))),
         },
-        Expr::ArraySlice { array, start, end } => Expr::ArraySlice {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => Expr::ArraySlice {
+            layout: None,
             array: Box::new(substitute_expr(array, substitutions)),
             start: Box::new(substitute_expr(start, substitutions)),
             end: end
@@ -948,7 +952,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ArrayIsArray(value) => {
             Expr::ArrayIsArray(Box::new(substitute_expr(value, substitutions)))
         }
-        Expr::ArrayFrom(value) => Expr::ArrayFrom(Box::new(substitute_expr(value, substitutions))),
+        Expr::ArrayFrom(value, _) => {
+            Expr::ArrayFrom(Box::new(substitute_expr(value, substitutions)), None)
+        }
         Expr::ArrayFromArrayLikeHoley(value) => {
             Expr::ArrayFromArrayLikeHoley(Box::new(substitute_expr(value, substitutions)))
         }

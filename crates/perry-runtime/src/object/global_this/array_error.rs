@@ -740,7 +740,7 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
     // entire receiver and narrow a length above u32::MAX. Real arrays,
     // arguments objects, and typed arrays retain the species-aware dense path
     // below.
-    if let Some(recv) = crate::array::plain_object_value(arr_ptr) {
+    if let Some(recv) = crate::array::non_array_object_receiver(arr_ptr) {
         return crate::array::js_arraylike_slice(recv, start_val, 1, end_val, 1);
     }
     let result = unsafe {

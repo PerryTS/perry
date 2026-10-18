@@ -377,7 +377,7 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
         Expr::Unary { operand, .. } => {
             rewrite_view_builder_calls_in_expr(operand, lookup);
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items.iter_mut() {
                 rewrite_view_builder_calls_in_expr(i, lookup);
             }

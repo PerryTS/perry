@@ -405,7 +405,7 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(v, ctx, module, idx);
             }
         }
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             for e in elems {
                 collect_instantiations_in_expr(e, ctx, module, idx);
             }
@@ -577,7 +577,9 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(fi, ctx, module, idx);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             collect_instantiations_in_expr(array, ctx, module, idx);
             collect_instantiations_in_expr(start, ctx, module, idx);
             if let Some(e) = end {

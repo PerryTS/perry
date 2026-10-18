@@ -129,7 +129,7 @@ pub(super) fn try_reflect_statics(
                     }
                     let mut it = args.into_iter();
                     let target = it.next().unwrap_or(Expr::Undefined);
-                    let args_arr = it.next().unwrap_or(Expr::Array(vec![]));
+                    let args_arr = it.next().unwrap_or(Expr::Array(vec![], None));
                     // 3rd arg = newTarget; defaults to `undefined` so the
                     // runtime falls back to the target/proxy itself.
                     let new_target = it.next().unwrap_or(Expr::Undefined);

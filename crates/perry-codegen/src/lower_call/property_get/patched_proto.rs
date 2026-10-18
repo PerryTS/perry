@@ -78,7 +78,7 @@ pub(crate) fn guards(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
                 | Expr::IndexGet { .. }
                 | Expr::Call { .. }
                 | Expr::CallSpread { .. }
-                | Expr::Array(_)
+                | Expr::Array(_, _)
                 | Expr::ArraySpread(_)
                 | Expr::MapNew
                 | Expr::MapNewFromArray(_)

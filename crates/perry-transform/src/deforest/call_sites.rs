@@ -456,7 +456,7 @@ fn try_rewrite_single_stmt(
                     // is unobservable because the second write stores the same
                     // array's current address.
                     mutable: true,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 };
                 let _ = mutable;
                 let _ = out_param_ids; // already validated producer

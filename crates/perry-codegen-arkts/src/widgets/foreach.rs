@@ -91,7 +91,7 @@ pub(crate) fn emit_for_each(
 /// an empty `[]` with a note comment.
 pub(crate) fn arkts_array_source(e: &Expr, bindings: &HashMap<LocalId, Expr>) -> String {
     match e {
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             let parts: Vec<String> = items.iter().map(arkts_value_literal).collect();
             format!("[{}]", parts.join(", "))
         }
@@ -99,7 +99,7 @@ pub(crate) fn arkts_array_source(e: &Expr, bindings: &HashMap<LocalId, Expr>) ->
             // Look up the binding's init expr; if it's an Array literal,
             // serialize. Otherwise fall through to empty.
             if let Expr::LocalGet(id) = e {
-                if let Some(Expr::Array(items)) = bindings.get(id) {
+                if let Some(Expr::Array(items, _)) = bindings.get(id) {
                     let parts: Vec<String> = items.iter().map(arkts_value_literal).collect();
                     return format!("[{}]", parts.join(", "));
                 }

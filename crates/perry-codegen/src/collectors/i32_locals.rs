@@ -1309,7 +1309,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::ReflectPreventExtensions(operand)
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
-        | Expr::ArrayFrom(operand)
+        | Expr::ArrayFrom(operand, _)
         | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
@@ -1443,7 +1443,7 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(it, out);
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 walk(el, out);
             }
@@ -1493,7 +1493,9 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(sep, out);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             walk(array, out);
             walk(start, out);
             if let Some(e) = end {

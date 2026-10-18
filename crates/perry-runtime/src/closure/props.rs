@@ -56,7 +56,7 @@ pub(crate) unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
 }
 
 /// Give the closure at `ptr` its bag `bag` with the store barrier.
-unsafe fn install_bag(ptr: usize, bag: *mut ObjectHeader) {
+pub(crate) unsafe fn install_bag(ptr: usize, bag: *mut ObjectHeader) {
     let closure = ptr as *mut ClosureHeader;
     // A closure is born `GC_LAYOUT_POINTER_FREE` when its captures hold no
     // pointer; some collector paths treat that state as "no child edge at

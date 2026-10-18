@@ -22,6 +22,7 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I64};
 
 mod builtin_kind_guard;
+pub(crate) mod completed_object;
 mod dynamic_dispatch;
 mod fetch_chain;
 mod helpers;
@@ -350,6 +351,10 @@ fn lower_method_call_chain(
     // Producer-proven immutable ESM object literals must run before the
     // builtin-name routes below: an adapter is allowed to own a method named
     // `set`, `toString`, `trim`, etc.
+    if let Some(value) = completed_object::try_lower(ctx, object, property, args, call_byte_offset)?
+    {
+        return Ok(Some(value));
+    }
     if let Some(value) = imported_object::try_lower_imported_object_method_call(
         ctx,
         object,

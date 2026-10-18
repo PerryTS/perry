@@ -30,6 +30,7 @@ pub mod model;
 pub mod pts;
 mod solve;
 mod solve_calls;
+mod solve_diagnostics;
 mod solve_rel;
 mod solve_proto;
 mod solve_proto_scc;

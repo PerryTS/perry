@@ -18,9 +18,10 @@ fn bigint_array_element_negation_uses_dynamic_numeric_dispatch() {
                 name: "values".to_string(),
                 ty: Type::Array(Box::new(Type::BigInt)),
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::BigInt(
-                    "18446744073709551616".to_string(),
-                )])),
+                init: Some(Expr::Array(
+                    vec![Expr::BigInt("18446744073709551616".to_string())],
+                    None,
+                )),
             },
             Stmt::Let {
                 id: RESULT,

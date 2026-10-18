@@ -49,6 +49,7 @@ const DFA_MAX_WORDS: usize = 64 * 1024;
 /// minimum plus [`DFA_STATE_WORDS`]. A property of the program alone.
 fn dfa_cache_words(program: perex::program::Program<'_>) -> usize {
     match perex::dfa::minimum_words(program) {
+        Some(0) => 0, // Exact literal prefixes need no automaton storage.
         Some(minimum) if minimum <= DFA_MAX_WORDS => minimum + DFA_STATE_WORDS,
         _ => 0,
     }

@@ -327,6 +327,7 @@ crate::perry_thread_local! {
     /// Test-only: how many searches the lazy automaton decided (a match's
     /// bounds or no match), so a test can assert the automaton answered.
     pub(crate) static DFA_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static LITERAL_PREFIX_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -495,7 +496,7 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
 /// the start of its last attempt (#10164), or `None` when the lazy automaton
 /// answered without the evaluator. On non-ASCII storage a search from an end
 /// costs up to half the subject, so a loop of them is quadratic; such a loop
-/// is the evaluator's, which reports positions (see [`dfa_bounds`]).
+/// is the evaluator's, which reports positions (see [`program_bounds`]).
 ///
 /// `near` must come from a search or reader over this same binding. Another
 /// string with an identical layout cannot be detected and would give wrong
@@ -897,7 +898,8 @@ fn tries_one_start(words: &[u32]) -> bool {
             .is_some_and(|w| w & PROGRAM_START_ANCHORED != 0)
 }
 
-/// Ask the program cell's lazy automaton (`perex::dfa`) for the bounds of the
+/// Ask Perex's exact literal-prefix executor first, then the program cell's
+/// lazy automaton (`perex::dfa`), for the bounds of the
 /// match at or after `start`. The automaton and the evaluator are two exact
 /// readings of the same program; this only chooses which one answers.
 ///
@@ -910,7 +912,7 @@ fn tries_one_start(words: &[u32]) -> bool {
 /// that tries a single start (the evaluator then runs one attempt either way,
 /// so bounds first would only add work). Neither allocates nor collects.
 #[inline(always)]
-fn dfa_bounds<P, S>(
+fn program_bounds<P, S>(
     resources: &BoundResources<'_, P, S>,
     start: usize,
     follows: bool,
@@ -924,6 +926,14 @@ where
     S::Error: HostResourceError,
 {
     let answered = resources.with_views(|program, input| {
+        if let Some(prefix) = program.literal_prefix() {
+            #[cfg(test)]
+            LITERAL_PREFIX_ANSWERS.with(|n| n.set(n.get() + 1));
+            return prefix
+                .find(input, start, budget)
+                .map(|span| span.map_or(Bounds::NoMatch, |span| Bounds::Match(span, false)))
+                .map_err(EngineError::Execution);
+        }
         // SAFETY: `P: CellProgram`, so these are a program cell's words; the
         // cache is used only inside this view, by this one call.
         let Some(cache) = (unsafe { super::perex_owner::cell_dfa_cache(program.words()) }) else {
@@ -936,7 +946,12 @@ where
         if matches!(mode, CaptureMode::All) && groups && tries_one_start(program.words()) {
             return Ok(Bounds::Declined);
         }
-        match dfa::find(program, input, start, cache, budget) {
+        let found = dfa::find(program, input, start, cache, budget);
+        #[cfg(test)]
+        if matches!(found, Ok(dfa::Found::Match(_) | dfa::Found::NoMatch)) {
+            DFA_ANSWERS.with(|n| n.set(n.get() + 1));
+        }
+        match found {
             Ok(dfa::Found::Match(span)) => Ok(Bounds::Match(span, groups)),
             Ok(dfa::Found::NoMatch) => Ok(Bounds::NoMatch),
             Ok(dfa::Found::Declined(_)) => Ok(Bounds::Declined),
@@ -979,11 +994,7 @@ where
     S::Error: HostResourceError,
     H: PollRoots,
 {
-    let answer = dfa_bounds(resources, start, follows, mode, budget)?;
-    #[cfg(test)]
-    if !matches!(answer, Bounds::Declined) {
-        DFA_ANSWERS.with(|n| n.set(n.get() + 1));
-    }
+    let answer = program_bounds(resources, start, follows, mode, budget)?;
     let (start, bounds) = match answer {
         Bounds::NoMatch => return Ok((None, None)),
         Bounds::Match(span, groups) => match mode {

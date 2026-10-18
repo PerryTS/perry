@@ -874,6 +874,7 @@ pub struct ImportedObjectLiteral {
     pub receiver_class_name: String,
     /// LocalId of the defining module's immutable global binding.
     pub source_global_id: u32,
+    pub final_shape: Option<super::BirthShape>,
     pub methods: Vec<ImportedObjectLiteralMethod>,
 }
 
@@ -887,6 +888,7 @@ pub struct ExportedObjectLiteralCapability {
     pub global_id: u32,
     pub shape_id_global: String,
     pub field_names: Vec<String>,
+    pub final_shape: Option<super::BirthShape>,
     pub methods: Vec<ImportedObjectLiteralMethod>,
 }
 

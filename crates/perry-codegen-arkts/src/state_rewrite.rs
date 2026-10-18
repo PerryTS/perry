@@ -114,7 +114,7 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
                 rewrite_state_in_expr(v, reg);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for v in items.iter_mut() {
                 rewrite_state_in_expr(v, reg);
             }

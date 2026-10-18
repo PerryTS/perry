@@ -98,10 +98,7 @@ impl<'a> Gen<'a> {
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(i, Cons::Implicit { reason: r });
-                let key = match index.as_ref() {
-                    Expr::String(s) => Key::Named(self.m.atom(s)),
-                    _ => Key::Any,
-                };
+                let key = self.read_key(index);
                 self.mcall(o, key, args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {

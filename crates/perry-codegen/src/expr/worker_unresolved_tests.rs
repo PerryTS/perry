@@ -32,7 +32,7 @@ fn assert_valid_ir(case: &str, body: Vec<Stmt>) {
         1,
         "globals",
         Type::Array(Box::new(Type::Any)),
-        Expr::Array(vec![]),
+        Expr::Array(vec![], None),
     )];
     module.functions.push(perry_hir::Function {
         id: 2,
@@ -74,7 +74,7 @@ fn unresolved_worker_consumers_emit_valid_ir() {
         (
             "array_push",
             vec![
-                local(3, "ws", arr.clone(), Expr::Array(vec![])),
+                local(3, "ws", arr.clone(), Expr::Array(vec![], None)),
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 3,
                     value: Box::new(unresolved_worker()),
@@ -118,7 +118,7 @@ fn unresolved_worker_consumers_emit_valid_ir() {
         (
             "local_index_set",
             vec![
-                local(3, "ws", arr, Expr::Array(vec![])),
+                local(3, "ws", arr, Expr::Array(vec![], None)),
                 Stmt::Expr(Expr::IndexSet {
                     object: Box::new(Expr::LocalGet(3)),
                     index: Box::new(Expr::Integer(0)),

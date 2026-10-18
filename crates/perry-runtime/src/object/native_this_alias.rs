@@ -334,12 +334,43 @@ pub(crate) unsafe fn maybe_run_stream_subclass_init_via_this(
         return None;
     }
     plain_object_addr_of(this_arg)?;
-    let opts = if rest_len >= 1 && !rest_ptr.is_null() {
-        *rest_ptr
+    if !matches!(
+        method.as_str(),
+        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream"
+    ) {
+        return None;
+    }
+    let args = if rest_len == 0 || rest_ptr.is_null() {
+        &[]
     } else {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
+        std::slice::from_raw_parts(rest_ptr, rest_len)
     };
-    run_node_stream_subclass_init(&method, this_arg, opts)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(callee);
+    let receiver = scope.root_nanbox_f64(this_arg);
+    let arguments = scope.root_nanbox_f64_slice(args);
+    // Node's stream constructors allocate a fresh instance when called on
+    // an object outside their prototype chain. Stream itself is the legacy
+    // EventEmitter initializer, which initializes any object in place.
+    // @@hasInstance can run code, so retain and refresh all call operands.
+    let fresh = method != "Stream"
+        && super::js_instanceof_dynamic(receiver.get_nanbox_f64(), callee.get_nanbox_f64())
+            .to_bits()
+            != crate::value::TAG_TRUE;
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arguments);
+    if fresh {
+        return Some(crate::closure::native_call_value_this(
+            callee.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            args.as_ptr(),
+            args.len(),
+        ));
+    }
+    let opts = args
+        .first()
+        .copied()
+        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    run_node_stream_subclass_init(&method, receiver.get_nanbox_f64(), opts)
         .then(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 

@@ -278,11 +278,11 @@ mod tests {
     #[test]
     fn descends_through_string_coerce_into_array() {
         let got = fixed(Expr::StringCoerce(Box::new(Expr::IndexGet {
-            object: Box::new(Expr::Array(vec![ident_member()])),
+            object: Box::new(Expr::Array(vec![ident_member()], None)),
             index: Box::new(Expr::Integer(0)),
         })));
         let want = Expr::StringCoerce(Box::new(Expr::IndexGet {
-            object: Box::new(Expr::Array(vec![Expr::String("IDENT".to_string())])),
+            object: Box::new(Expr::Array(vec![Expr::String("IDENT".to_string())], None)),
             index: Box::new(Expr::Integer(0)),
         }));
         assert_eq!(shape(&got), shape(&want));

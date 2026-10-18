@@ -1,0 +1,1 @@
+Start-anchored literal regular expressions use Perex 0.1.14's exact prefix executor over immutable program data, avoiding DFA state and evaluator scratch. Prefix programs no longer carry an unused DFA cache. Literal sites continue to share matcher data while each evaluation has its own RegExp object and lastIndex.

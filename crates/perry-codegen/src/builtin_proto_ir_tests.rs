@@ -24,7 +24,7 @@ fn let_local(id: u32, name: &str, ty: Type, init: Expr) -> Stmt {
 }
 
 fn array_literal() -> Expr {
-    Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)])
+    Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None)
 }
 
 #[test]

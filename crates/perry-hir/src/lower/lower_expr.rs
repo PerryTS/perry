@@ -167,7 +167,7 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     .iter()
                     .map(|elem| lower_expr(ctx, &elem.as_ref().unwrap().expr))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Expr::Array(elements))
+                Ok(Expr::Array(elements, None))
             }
         }
         ast::Expr::Object(obj) => expr_object::lower_object(ctx, obj),

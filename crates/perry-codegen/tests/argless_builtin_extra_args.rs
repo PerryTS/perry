@@ -260,7 +260,7 @@ fn array_pop_with_extra_arg_compiles() {
     let stmt = Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::PropertyGet {
             byte_offset: 0,
-            object: Box::new(Expr::Array(vec![Expr::Number(1.0)])),
+            object: Box::new(Expr::Array(vec![Expr::Number(1.0)], None)),
             property: "pop".to_string(),
         }),
         args: vec![Expr::Number(99.0)],

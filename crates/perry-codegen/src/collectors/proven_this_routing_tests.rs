@@ -123,7 +123,7 @@ fn array_field(name: &str) -> ClassField {
         name: name.to_string(),
         key_expr: None,
         ty: Type::Array(Box::new(Type::Number)),
-        init: Some(Expr::Array(Vec::new())),
+        init: Some(Expr::Array(Vec::new(), None)),
         is_private: false,
         is_readonly: false,
         decorators: Vec::new(),
@@ -1261,7 +1261,7 @@ fn array_field_cache_declines_direct_and_super_slot_rebinding() {
     direct.body.push(Stmt::Expr(Expr::PropertySet {
         object: Box::new(Expr::This),
         property: "keys".to_string(),
-        value: Box::new(Expr::Array(Vec::new())),
+        value: Box::new(Expr::Array(Vec::new(), None)),
     }));
     assert!(
         crate::collectors::ptr_array_cache_fields(&class, &direct).is_empty(),
@@ -1273,7 +1273,7 @@ fn array_field_cache_declines_direct_and_super_slot_rebinding() {
         parent_class_id: 1,
         parent_class_name: Some("Parent".to_string()),
         key: Box::new(Expr::String("keys".to_string())),
-        value: Box::new(Expr::Array(Vec::new())),
+        value: Box::new(Expr::Array(Vec::new(), None)),
     }));
     assert!(
         crate::collectors::ptr_array_cache_fields(&class, &through_super).is_empty(),

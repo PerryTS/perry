@@ -1269,7 +1269,7 @@ pub(super) fn try_module_static_methods(
                         }
                         "of" => {
                             return Ok(Ok(Expr::BufferFrom {
-                                data: Box::new(Expr::Array(args)),
+                                data: Box::new(Expr::Array(args, None)),
                                 encoding: None,
                             }));
                         }
@@ -1366,7 +1366,7 @@ pub(super) fn try_module_static_methods(
                             "of" => {
                                 return Ok(Ok(Expr::TypedArrayNew {
                                     kind,
-                                    arg: Some(Box::new(Expr::Array(args))),
+                                    arg: Some(Box::new(Expr::Array(args, None))),
                                 }));
                             }
                             _ => {}

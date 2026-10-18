@@ -94,7 +94,7 @@ fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String 
                 },
             ));
             vec![
-                Expr::Array(vec![Expr::Integer(0), Expr::Integer(65535)]),
+                Expr::Array(vec![Expr::Integer(0), Expr::Integer(65535)], None),
                 Expr::LocalGet(100),
                 Expr::LocalGet(101),
             ]

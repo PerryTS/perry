@@ -796,3 +796,114 @@ fn completed_class_mints_unbox_the_registered_keys_word() {
         assert!(bits.contains("bitcast double"), "{bits}");
     }
 }
+
+#[test]
+fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
+    let mut module = Module::new("nscall_builder");
+    let mut function = constructor(vec![Stmt::Return(Some(Expr::Number(1.0)))]);
+    function.id = 50;
+    function.name = "f".into();
+    function.return_type = Type::Number;
+    module.functions.push(function);
+    module.init.push(Stmt::Let {
+        id: 1,
+        name: "N".into(),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(Expr::Object(Vec::new())),
+    });
+    for index in 0..35 {
+        module.init.push(Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: format!("k{index}"),
+            value: Box::new(Expr::Number(index as f64)),
+        }));
+    }
+    module.init.push(Stmt::Expr(Expr::PropertySet {
+        object: Box::new(Expr::LocalGet(1)),
+        property: "f".into(),
+        value: Box::new(Expr::FuncRef(50)),
+    }));
+    module.init.push(Stmt::Let {
+        id: 51,
+        name: "original".into(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::FuncRef(50)),
+    });
+    module.init.push(Stmt::Expr(Expr::PropertySet {
+        object: Box::new(Expr::LocalGet(1)),
+        property: "f".into(),
+        value: Box::new(Expr::LocalGet(51)),
+    }));
+    module.exported_objects.push("N".into());
+    module.exports.push(perry_hir::Export::Named {
+        local: "N".into(),
+        exported: "N".into(),
+    });
+    let births = crate::module_birth_shapes(&module, opts("executable")).unwrap();
+    let shape = &births
+        .iter()
+        .find(|birth| birth.shape.key_count == 36)
+        .unwrap()
+        .shape;
+    assert_eq!(shape.live, 2);
+    assert_eq!(shape.rep, 5, "only the first two numeric lanes are inline");
+    let capabilities = crate::collectors::exported_object_literal_capabilities(&module);
+    let capability = &capabilities["N"];
+    assert_eq!(capability.final_shape.as_ref(), Some(shape));
+    assert_eq!(capability.methods[0].field_index, 35);
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "f".into(),
+            byte_offset: 0,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }));
+    let mut options = opts("executable");
+    options.static_shape_ids =
+        super::super::static_shape_ids::assign_static_shape_ids(births.iter().map(|b| &b.shape))
+            .into_iter()
+            .collect();
+    let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+    assert!(ir.contains("completed.layout"));
+    assert!(ir.contains("completed.slot"));
+    assert!(ir.contains("completed.identity"));
+    assert!(ir.contains("completed.direct"));
+    assert!(ir.contains("completed.callee_info"));
+}
+
+#[test]
+fn final_literal_keys_are_not_limited_by_representation_word_width() {
+    let mut props = vec![("method".into(), closure(1, false))];
+    for index in 1..80 {
+        props.push((format!("k{index}"), Expr::Number(index as f64)));
+    }
+    let shape = literal_final("wide", &props, 0).unwrap();
+    assert_eq!(shape.key_count, 80);
+    assert_eq!(shape.live, 80);
+    assert_eq!(shape.constfn.len(), 1);
+    assert_eq!(shape.rep, 3);
+}
+
+#[test]
+fn final_literal_visitor_harvests_static_import_member_writes() {
+    let mut module = Module::new("nscall_late_write");
+    let object = Expr::ExternFuncRef {
+        name: "Debug".into(),
+        param_types: Vec::new(),
+        return_type: Type::Any,
+    };
+    module.init.push(Stmt::Expr(Expr::PutValueSet {
+        target: Box::new(object.clone()),
+        receiver: Box::new(object),
+        key: Box::new(Expr::String("loggingHost".into())),
+        value: Box::new(Expr::Object(Vec::new())),
+        strict: true,
+    }));
+    let (_, writes) = crate::exported_object_literal_method_facts(&module);
+    assert_eq!(writes, vec![("Debug".into(), "loggingHost".into())]);
+}

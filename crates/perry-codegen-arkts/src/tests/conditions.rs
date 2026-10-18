@@ -185,7 +185,7 @@ fn issue_410_conditional_addchild_emits_valid_arkts_if_block() {
     m.init.push(let_widget(
         parent_id,
         "parent",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         phone_id,
@@ -277,7 +277,7 @@ fn issue_410_conditional_modifier_chain_has_no_nested_block_comments() {
     m.init.push(let_widget(
         card_id,
         "card",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "widgetSetBackgroundColor",
@@ -452,7 +452,7 @@ fn issue_413_literal_only_if_block_drops_dead_branch_emits_only_then() {
     m.init.push(let_widget(
         parent_id,
         "parent",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         btn_a_id,
@@ -499,7 +499,7 @@ fn issue_413_literal_only_if_block_keeps_then_inlines_no_if_wrapper() {
     m.init.push(let_widget(
         parent_id,
         "parent",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         btn_a_id,
@@ -550,7 +550,7 @@ fn issue_413_platform_const_eq_drops_dead_branch_in_addchild() {
     m.init.push(let_widget(
         parent_id,
         "parent",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         phone_id,
@@ -623,7 +623,7 @@ fn issue_413_local_get_resolves_through_binding_to_platform_compare() {
     m.init.push(let_widget(
         parent_id,
         "parent",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         phone_id,
@@ -670,7 +670,7 @@ fn issue_413_hstack_set_alignment_emits_vertical_align_enum() {
     m.init.push(let_widget(
         id,
         "row",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "stackSetAlignment",
@@ -705,7 +705,7 @@ fn issue_413_vstack_set_alignment_emits_horizontal_align_enum() {
     m.init.push(let_widget(
         id,
         "col",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "stackSetAlignment",
@@ -854,7 +854,7 @@ fn issue_490_unfoldable_unresolvable_condition_walks_only_then_branch() {
     m.init.push(let_widget(
         parent_id,
         "parent",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         a_id,

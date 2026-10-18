@@ -203,10 +203,10 @@ fn closure_module() -> Module {
                 Box::new(bin(BinaryOp::BitOr, Expr::LocalGet(21), call0(20))),
             )),
             Stmt::Expr(Expr::LocalSet(22, Box::new(call0(20)))),
-            Stmt::Return(Some(Expr::Array(vec![
-                Expr::LocalGet(21),
-                Expr::LocalGet(22),
-            ]))),
+            Stmt::Return(Some(Expr::Array(
+                vec![Expr::LocalGet(21), Expr::LocalGet(22)],
+                None,
+            ))),
         ],
         captures: vec![],
         mutable_captures: vec![],

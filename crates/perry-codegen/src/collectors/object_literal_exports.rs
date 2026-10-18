@@ -211,6 +211,7 @@ fn capability_from_init(
         global_id,
         shape_id_global,
         field_names,
+        final_shape: None,
         methods,
     })
 }
@@ -218,6 +219,15 @@ fn capability_from_init(
 pub(crate) fn exported_object_literal_capabilities(
     hir: &Module,
 ) -> HashMap<String, ExportedObjectLiteralCapability> {
+    object_literal_facts(hir).0
+}
+
+pub(crate) fn object_literal_facts(
+    hir: &Module,
+) -> (
+    HashMap<String, ExportedObjectLiteralCapability>,
+    Vec<(String, String)>,
+) {
     let source_prefix = crate::codegen::helpers::sanitize(&hir.name);
     let func_names =
         crate::codegen::func_registry::build_func_registry(hir, &source_prefix).func_names;
@@ -225,9 +235,8 @@ pub(crate) fn exported_object_literal_capabilities(
     let mut exported_locals: HashSet<&str> = exported_objects.clone();
     for export in &hir.exports {
         if let Export::Named { local, exported } = export {
-            if exported_objects.contains(exported.as_str()) {
-                exported_locals.insert(local.as_str());
-            }
+            let _ = exported;
+            exported_locals.insert(local.as_str());
         }
     }
     // #11826: an importer must not read a binding that can still hold the
@@ -253,6 +262,40 @@ pub(crate) fn exported_object_literal_capabilities(
         }
     }
 
+    let finals = crate::codegen::static_constfn::collect_literal_finals(
+        hir,
+        &source_prefix,
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    for stmt in crate::codegen::entry_outline::logical_entry_stmts(hir) {
+        let Stmt::Let { id, name, .. } = stmt else {
+            continue;
+        };
+        if !exported_locals.contains(name.as_str()) || tdz_seeded.contains(id) {
+            continue;
+        }
+        let Some(object) = finals.objects.get(id) else {
+            continue;
+        };
+        by_local
+            .entry(name.clone())
+            .or_insert_with(|| ExportedObjectLiteralCapability {
+                class_name: format!("__AnonShape_Completed_{id}"),
+                class_id: 0,
+                global_id: *id,
+                shape_id_global: String::new(),
+                field_names: object
+                    .shape
+                    .keys
+                    .split(|b| *b == 0)
+                    .take(object.shape.key_count as usize)
+                    .map(|key| String::from_utf8(key.to_vec()).expect("source key UTF-8"))
+                    .collect(),
+                final_shape: Some(object.shape.clone()),
+                methods: object.methods.clone(),
+            });
+    }
     let mut published = HashMap::new();
     for (local, capability) in &by_local {
         // `export default { ... }` and direct named exports both use their
@@ -267,5 +310,5 @@ pub(crate) fn exported_object_literal_capabilities(
             }
         }
     }
-    published
+    (published, finals.imported_writes)
 }

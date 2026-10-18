@@ -349,7 +349,7 @@ pub(crate) fn collect_element_shape_facts(
         *let_counts.entry(*id).or_insert(0) += 1;
         elem_let_ty.insert(*id, ty.clone());
         match init.as_ref() {
-            Some(Expr::Array(items)) if !*mutable && items.is_empty() => {
+            Some(Expr::Array(items, _)) if !*mutable && items.is_empty() => {
                 if !boxed_vars.contains(id) && !module_globals.contains_key(id) {
                     array_seeds.insert(*id, ty.clone());
                 }

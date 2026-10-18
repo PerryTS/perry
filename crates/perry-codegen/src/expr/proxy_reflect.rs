@@ -1038,10 +1038,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             downgrade_unknown_call_expr(ctx, receiver);
             let strict_i32 = if *strict { "1" } else { "0" };
             // #6812 (w12) inline path: evaluation order k → v → t. The
-            // target is a pure local read, so hoisting key/value evaluation
-            // above its REGISTER materialization is unobservable, and that
-            // ordering is what keeps the TARGET safe — the pointer is
-            // materialized below everything that can collect.
+            // target's late materialization is valid only when key/value
+            // evaluation cannot rebind it. Otherwise the outlined rooted
+            // group below snapshots the source reference before either runs.
             //
             // #7201: the KEY is not covered by that argument, and the comment
             // that used to sit here claimed it was — "a moved key merely misses
@@ -1058,14 +1057,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //
             // An identity-compare-only use is not the only use. Re-derive the
             // key below the value, exactly as every other store operand does.
-            let dyn_inline = same_put_value_receiver_expr(target, receiver)
-                && matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This);
+            let stable_base = match target.as_ref() {
+                Expr::This => true,
+                Expr::LocalGet(id) => {
+                    !super::array_push::push_receiver_is_rebindable(ctx, *id, key)
+                        && !super::array_push::push_receiver_is_rebindable(ctx, *id, value)
+                }
+                _ => false,
+            };
+            let dyn_inline = same_put_value_receiver_expr(target, receiver) && stable_base;
             if dyn_inline {
                 // Migrated onto `RootedGroup` without moving an emission: the
                 // key's window is still derived from `value` alone, and the
                 // re-read still sits above `target`'s lowering, which the
-                // comment above argues is safe because `target` is a
-                // `LocalGet` / `This`.
+                // stable-base proof above permits the late target load.
                 return with_rooted_group(ctx, 1, |ctx, g| {
                     let collects = any_operand_may_collect(ctx, std::iter::once(value.as_ref()));
                     let key_slot = g.lower(ctx, key, collects)?;

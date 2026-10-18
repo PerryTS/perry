@@ -461,6 +461,7 @@ fn imported_object_literal_from_capability(
             source_prefix,
             receiver_class_name,
             source_global_id: capability.global_id,
+            final_shape: capability.final_shape.clone(),
             methods: capability.methods.clone(),
         }),
     }
@@ -1336,11 +1337,13 @@ pub fn run_with_parse_cache(
         (String, String),
         perry_codegen::ExportedObjectLiteralCapability,
     > = BTreeMap::new();
+    let mut object_literal_writes = BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        for (export_name, capability) in
-            perry_codegen::exported_object_literal_method_capabilities(hir_module)
-        {
+        let (capabilities, writes) =
+            perry_codegen::exported_object_literal_method_facts(hir_module);
+        object_literal_writes.insert(path.clone(), writes);
+        for (export_name, capability) in capabilities {
             exported_object_literals.insert((path_str.clone(), export_name), capability);
         }
     }
@@ -1662,6 +1665,11 @@ pub fn run_with_parse_cache(
     // fninfer (decision 140): inferred parameter types as guarded
     // annotations (`PERRY_FNINFER_APPLY`; off by default).
     super::fn_infer::apply(&mut ctx.native_modules);
+    // Array births carry the layout of their named properties; codegen, and
+    // every clone of the HIR it makes, reads it from the birth.
+    for hir_module in ctx.native_modules.values_mut() {
+        perry_codegen::assign_birth_layouts(hir_module);
+    }
     // Collect all non-generic type aliases from all modules.
     // These are passed to each module's compiler so type_to_abi can resolve
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.
@@ -2318,6 +2326,70 @@ pub fn run_with_parse_cache(
                     .insert(name, origin_name);
             } else if let Some(names) = all_module_export_origin_names.get_mut(&module_path) {
                 names.remove(&name);
+            }
+        }
+    }
+
+    // A spilled builder can gain a source-named key in an importing module
+    // (a declared-but-uninitialized export is absent until its first write).
+    // Nominate that post-initialization content through the SAME layout seed
+    // path. This is a prediction, not an execution/order proof: exact layout
+    // equality at every call rejects an untaken or differently ordered add.
+    for (path, writes) in &object_literal_writes {
+        let Some(module) = ctx.native_modules.get(path) else {
+            continue;
+        };
+        for (binding, key) in writes {
+            for import in &module.imports {
+                if import.type_only || import.runtime_erased {
+                    continue;
+                }
+                let Some(resolved) = &import.resolved_path else {
+                    continue;
+                };
+                let imported = import
+                    .specifiers
+                    .iter()
+                    .find_map(|specifier| match specifier {
+                        perry_hir::ImportSpecifier::Named { imported, local }
+                            if local == binding =>
+                        {
+                            Some(imported.as_str())
+                        }
+                        perry_hir::ImportSpecifier::Default { local } if local == binding => {
+                            Some("default")
+                        }
+                        _ => None,
+                    });
+                let Some(imported) = imported else {
+                    continue;
+                };
+                let origin = all_module_exports
+                    .get(resolved)
+                    .and_then(|m| m.get(imported))
+                    .unwrap_or(resolved);
+                let name = all_module_export_origin_names
+                    .get(resolved)
+                    .and_then(|m| m.get(imported))
+                    .map(String::as_str)
+                    .unwrap_or(imported);
+                let Some(capability) =
+                    exported_object_literals.get_mut(&(origin.clone(), name.to_string()))
+                else {
+                    continue;
+                };
+                let Some(shape) = capability.final_shape.as_mut() else {
+                    continue;
+                };
+                // The physical inline bound is already full; appended keys
+                // are boxed spill lanes and cannot alter its representation.
+                if shape.live >= shape.key_count || capability.field_names.contains(key) {
+                    continue;
+                }
+                shape.keys.extend_from_slice(key.as_bytes());
+                shape.keys.push(0);
+                shape.key_count += 1;
+                capability.field_names.push(key.clone());
             }
         }
     }
@@ -3195,6 +3267,9 @@ pub fn run_with_parse_cache(
         }
         per_module_namespace_entries.insert(target_path.clone(), entries);
     }
+    // The rewritten export-analysis graph duplicates the full HIR. Namespace
+    // entries own the result; no later phase needs that analysis input.
+    drop(module_name_to_module);
     // For each consumer module, map every `Expr::DynamicImport` arg-path
     // string (as resolved in `collect_modules`) to the target's
     // sanitized prefix. Built by scanning the consumer's imports for
@@ -3322,10 +3397,10 @@ pub fn run_with_parse_cache(
     // worker of this compile (`perry_codegen::workers`, `module_schedule`).
     let (codegen_budget, budget_probe) = perry_codegen::workers::CodegenBudget::for_this_machine();
     let codegen_budget = std::sync::Arc::new(codegen_budget);
-    let codegen_modules: Vec<(&PathBuf, &perry_hir::Module)> = ctx.native_modules.iter().collect();
+    let codegen_modules: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
     let module_memory_estimates: Vec<u64> = codegen_modules
         .iter()
-        .map(|(path, module)| module_codegen_memory_estimate(path, module))
+        .map(|path| module_codegen_memory_estimate(path, &ctx.native_modules[path]))
         .collect();
     let module_start_order = super::module_schedule::start_order(&module_memory_estimates);
     let module_jobs = configured_module_codegen_threads(
@@ -3366,7 +3441,7 @@ pub fn run_with_parse_cache(
             eprintln!(
                 "[perry] codegen: largest module estimate {:.2} GiB ({}); total {:.1} GiB over {} modules",
                 gib(module_memory_estimates[largest]),
-                codegen_modules[largest].1.name,
+                ctx.native_modules[&codegen_modules[largest]].name,
                 gib(module_memory_estimates.iter().sum()),
                 total_codegen_modules
             );
@@ -3459,6 +3534,11 @@ pub fn run_with_parse_cache(
         Vec<perry_codegen::ObjectLiteralMethodCandidate>,
     > = std::collections::HashMap::new();
     for ((source_path, source_export_name), capability) in &exported_object_literals {
+        // Structural construction facts use the layout/slot/callee route,
+        // not the older global-identity + key-probe candidate route.
+        if capability.final_shape.is_some() {
+            continue;
+        }
         let source_prefix = compute_module_prefix(source_path, &ctx.project_root);
         for method in &capability.methods {
             object_literal_method_candidates
@@ -3619,7 +3699,7 @@ pub fn run_with_parse_cache(
         .map_err(|error| anyhow!("failed to create module codegen pool: {error}"))?;
     // Reuse the exact import-route preparation in both passes. The contract
     // pass releases each module's metadata before visiting the next module;
-    // codegen builds complete options only while holding a worker permit.
+    // the second pass prepares owned options before releasing the HIR graph.
     let prepare_module = |path: &PathBuf,
                           hir_module: &perry_hir::Module,
                           contracts_only: bool|
@@ -6019,7 +6099,12 @@ pub fn run_with_parse_cache(
     let static_shape_ids = perry_codegen::assign_static_shape_ids(
         module_births
             .iter()
-            .flat_map(|(_, b)| b.iter().map(|m| &m.shape)),
+            .flat_map(|(_, b)| b.iter().map(|m| &m.shape))
+            .chain(
+                exported_object_literals
+                    .values()
+                    .filter_map(|c| c.final_shape.as_ref()),
+            ),
     );
     // Completed guard facts stay separate from class allocation suppliers.
     // Include a foreign class's final content in an importer's cache inputs,
@@ -6102,7 +6187,7 @@ pub fn run_with_parse_cache(
     ));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
-        &PathBuf,
+        PathBuf,
         (Vec<(perry_codegen::BirthShape, u32)>, BTreeSet<u32>),
     > = module_births
         .into_iter()
@@ -6114,9 +6199,31 @@ pub fn run_with_parse_cache(
                 .collect();
             ids.sort();
             ids.dedup();
-            (path, (ids, class_ids))
+            (path.clone(), (ids, class_ids))
         })
         .collect();
+    let static_shape_ids_by_module = {
+        let mut module_seeds = static_shape_ids_by_module;
+        // Complete seed inputs before options are frozen and import inputs released.
+        for (path, (ids, _)) in &mut module_seeds {
+            let module = ctx.native_modules.get(path).expect("birth module");
+            let imports = prepare_module(path, module, true).map_err(|error| anyhow!(error))?;
+            for object in imports
+                .imported_classes
+                .iter()
+                .filter_map(|class| class.object_literal.as_ref())
+            {
+                if let Some(shape) = &object.final_shape {
+                    if let Some(id) = static_shape_ids.get(shape) {
+                        ids.push((shape.clone(), *id));
+                    }
+                }
+            }
+            ids.sort();
+            ids.dedup();
+        }
+        module_seeds
+    };
     if std::env::var_os("PERRY_STATIC_SHAPE_IDS_REPORT").is_some() {
         let literal = static_shape_ids
             .keys()
@@ -6140,9 +6247,94 @@ pub fn run_with_parse_cache(
     // codegen (or its cache sidecar on a hit) and linked as one seed unit.
     let program_static_seeds: std::sync::Mutex<BTreeMap<u32, perry_codegen::BirthShape>> =
         std::sync::Mutex::new(BTreeMap::new());
+    // Finish cross-module option preparation while the complete HIR graph is
+    // available. Jobs then own their input, so lowering can release each HIR
+    // before LLVM starts. The link phase needs only names and export metadata.
+    let prepared_options: Vec<_> = module_pool.install(|| {
+        codegen_modules
+            .par_iter()
+            .map(|path| {
+                let hir_module = &ctx.native_modules[path];
+                let mut opts = prepare_module(path, hir_module, false)?;
+                constructor_contracts.apply(
+                    &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                    hir_module,
+                    &mut opts,
+                );
+                if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
+                    opts.static_shape_ids = ids.clone();
+                    let foreign: BTreeSet<u32> = opts
+                        .short_spread_method_candidates
+                        .values()
+                        .flatten()
+                        .map(|c| c.class_id)
+                        .collect();
+                    for cid in class_ids.iter().chain(foreign.iter()) {
+                        if let Some(finals) = class_final_shapes.get(cid) {
+                            opts.static_shape_ids.extend(finals.iter().cloned());
+                        }
+                    }
+                    opts.static_shape_ids.sort();
+                    opts.static_shape_ids.dedup();
+                    opts.program_class_shape_ids = program_class_shape_ids
+                        .restricted_to(class_ids.iter().copied().chain(foreign));
+                }
+                opts.program_facts =
+                    super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
+                opts.program_facts.dynamic_code_reach =
+                    ctx.patched_builtins.dynamic_code_reach.clone();
+                std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
+                    ctx.patched_builtins.dynamic_code_reach.clone();
+                opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+                Ok::<_, String>(opts)
+            })
+            .collect::<Vec<_>>()
+    });
+    // Per-module options now own the facts needed by lowering. Release the
+    // program's preparation inputs before any LLVM worker starts.
+    drop((
+        exported_classes,
+        exported_return_shapes,
+        class_canonical_path,
+        exported_object_literals,
+        program_facts,
+        receiver_params,
+        program_layouts,
+        constructor_contracts,
+        static_shape_ids_by_module,
+        class_final_shapes,
+        program_class_shape_ids,
+        static_shape_ids,
+        short_spread_method_candidates,
+        program_class_accessor_names,
+        object_literal_method_candidates,
+    ));
+    let mut owned_modules = std::mem::take(&mut ctx.native_modules);
+    for (path, module) in &owned_modules {
+        let mut link_module = perry_hir::Module::new(module.name.clone());
+        link_module.exports = module.exports.clone();
+        link_module.exported_functions = module.exported_functions.clone();
+        ctx.native_modules.insert(path.clone(), link_module);
+    }
+    let module_inputs: Vec<_> = codegen_modules
+        .iter()
+        .zip(prepared_options)
+        .map(|(path, opts)| {
+            std::sync::Mutex::new(Some((
+                owned_modules
+                    .remove(path)
+                    .expect("scheduled module owns its HIR"),
+                opts,
+            )))
+        })
+        .collect();
+    drop(owned_modules);
     let compile_module_job = |path: &PathBuf,
-                              hir_module: &perry_hir::Module|
+                              owned_hir: perry_hir::Module,
+                              opts: Result<perry_codegen::CompileOptions, String>|
      -> Result<NativeObjectArtifact, String> {
+        let hir_module = &owned_hir;
+        let module_name = hir_module.name.clone();
         let _completion = ModuleCodegenCompletion {
             completed: &codegen_modules_completed,
             total: total_codegen_modules,
@@ -6164,36 +6356,7 @@ pub fn run_with_parse_cache(
             collected: Some(total_codegen_modules),
             ..Default::default()
         });
-        let mut opts = prepare_module(path, hir_module, false)?;
-        constructor_contracts.apply(
-            &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
-            hir_module,
-            &mut opts,
-        );
-        if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
-            opts.static_shape_ids = ids.clone();
-            let foreign: BTreeSet<u32> = opts
-                .short_spread_method_candidates
-                .values()
-                .flatten()
-                .map(|c| c.class_id)
-                .collect();
-            for cid in class_ids.iter().chain(foreign.iter()) {
-                if let Some(finals) = class_final_shapes.get(cid) {
-                    opts.static_shape_ids.extend(finals.iter().cloned());
-                }
-            }
-            opts.static_shape_ids.sort();
-            opts.static_shape_ids.dedup();
-            opts.program_class_shape_ids =
-                program_class_shape_ids.restricted_to(class_ids.iter().copied().chain(foreign));
-        }
-        opts.program_facts =
-            super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
-        opts.program_facts.dynamic_code_reach = ctx.patched_builtins.dynamic_code_reach.clone();
-        std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
-            ctx.patched_builtins.dynamic_code_reach.clone();
-        opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+        let opts = opts?;
         // V2.2 + #686 object cache lookup. The key hashes every
         // codegen-affecting field of `opts` together with this
         // module's post-transform HIR fingerprint and the perry
@@ -6357,7 +6520,15 @@ pub fn run_with_parse_cache(
         // calls belongs to this module and nothing else.
         perry_codegen::ext_registry::begin_module_capture();
         let compiled = if let Some(session) = &typed_feedback {
-            super::typed_feedback_profile::compile(session, hir_module, opts, path, perry_version)
+            let result = super::typed_feedback_profile::compile(
+                session,
+                hir_module,
+                opts,
+                path,
+                perry_version,
+            );
+            drop(owned_hir);
+            result
         } else {
             let unit_cache_dir = cache_key.map(|key| {
                 ctx.cache_dir
@@ -6366,7 +6537,7 @@ pub fn run_with_parse_cache(
                     .join(format!("{key:016x}"))
             });
             perry_codegen::unit_cache::with_module_cache(unit_cache_dir, || {
-                perry_codegen::compile_module(hir_module, opts)
+                perry_codegen::compile_module_owned(owned_hir, opts)
             })
         };
         let module_static_seeds = perry_codegen::take_module_static_seeds();
@@ -6374,16 +6545,16 @@ pub fn run_with_parse_cache(
             perry_codegen::ext_registry::take_module_capture();
             format!(
                 "Error compiling module '{}' ({}) with --backend llvm: {:#}",
-                hir_module.name,
+                module_name,
                 path.display(),
                 e
             )
         })?;
         let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
-        check_module_providers(&program_providers, &hir_module.name, &emitted_ffi_symbols)?;
+        check_module_providers(&program_providers, &module_name, &emitted_ffi_symbols)?;
         validate_module_ffi_symbols(
             &ctx.native_routing,
-            &hir_module.name,
+            &module_name,
             "compiled",
             &emitted_ffi_symbols,
         )?;
@@ -6465,7 +6636,14 @@ pub fn run_with_parse_cache(
             &module_start_order,
             &module_memory_estimates,
             |index| {
-                let (path, hir_module) = codegen_modules[index];
+                let path = &codegen_modules[index];
+                let (hir_module, opts) = module_inputs[index]
+                    .lock()
+                    .expect("module input poisoned")
+                    .take()
+                    .expect("module job runs exactly once");
+                let module_name = hir_module.name.clone();
+                let callable_count = module_codegen_callable_count(&hir_module);
                 let memory_trace = perry_codegen::workers::memory_trace_enabled();
                 let resident_before = if memory_trace {
                     perry_codegen::workers::reset_peak_resident();
@@ -6475,7 +6653,7 @@ pub fn run_with_parse_cache(
                 };
                 let started = Instant::now();
                 let result = perry_codegen::workers::with_budget(&codegen_budget, || {
-                    compile_module_job(path, hir_module)
+                    compile_module_job(path, hir_module, opts)
                 });
                 if std::env::var("PERRY_CODEGEN_UNIT_TIMINGS").is_ok() || memory_trace {
                     let mib = |bytes: u64| bytes as f64 / 1_048_576.0;
@@ -6491,10 +6669,10 @@ pub fn run_with_parse_cache(
                         .unwrap_or_default();
                     eprintln!(
                         "[perry] codegen: module job {} finished in {:.2}s (source {} bytes, {} callables, estimate {:.0} MiB{peak})",
-                        hir_module.name,
+                        module_name,
                         started.elapsed().as_secs_f64(),
                         fs::metadata(path).map(|m| m.len()).unwrap_or(0),
-                        module_codegen_callable_count(hir_module),
+                        callable_count,
                         mib(module_memory_estimates[index]),
                     );
                 }

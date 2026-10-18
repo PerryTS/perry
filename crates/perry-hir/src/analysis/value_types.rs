@@ -736,7 +736,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             index_signature: Some(Box::new(Type::Any)),
             ..ObjectType::default()
         }),
-        Expr::Array(items) => Type::Array(Box::new(unify_expr_types(items.iter(), env))),
+        Expr::Array(items, _) => Type::Array(Box::new(unify_expr_types(items.iter(), env))),
         Expr::ArraySpread(items) => {
             let mut elem_tys = Vec::new();
             for item in items {
@@ -760,7 +760,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             array_element_type_from_expr(array, env),
             infer_expr_type(value, env),
         ]))),
-        Expr::ArrayFrom(iterable) | Expr::ArrayFromArrayLikeHoley(iterable) => {
+        Expr::ArrayFrom(iterable, _) | Expr::ArrayFromArrayLikeHoley(iterable) => {
             array_type_from_iterable_expr(iterable, env)
         }
         Expr::ArrayMap { callback, .. }
@@ -1552,11 +1552,11 @@ fn array_type_from_iterable_expr<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F)
 }
 
 fn map_type_from_entries_expr<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
-    if let Expr::Array(entries) = expr {
+    if let Expr::Array(entries, _) = expr {
         let mut key_types = Vec::new();
         let mut value_types = Vec::new();
         for entry in entries {
-            let Expr::Array(items) = entry else {
+            let Expr::Array(items, _) = entry else {
                 return generic_type("Map");
             };
             let [key, value, ..] = items.as_slice() else {

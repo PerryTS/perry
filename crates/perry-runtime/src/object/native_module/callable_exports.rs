@@ -210,9 +210,12 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         };
     }
 
-    let value = value.get_nanbox_f64();
-
-    value
+    crate::closure::native_constructor::seal(
+        export_module_name,
+        property_name,
+        value.get_nanbox_f64(),
+    );
+    value.get_nanbox_f64()
 }
 
 /// #6692: install `stream.pipeline[util.promisify.custom]` (or `.finished`'s)

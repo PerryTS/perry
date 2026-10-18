@@ -409,10 +409,10 @@ fn a_number_local_is_a_canonical_raw_double_at_its_reads() {
     // raw-f64 predicate refused them and the array literal re-tested each
     // element against the lowest NaN-box tag (`0x7FF9 << 48`).
     let mut body = mandelbrot_shaped_body(Expr::Number(0.5), Expr::Number(0.25));
-    *body.last_mut().expect("return") = Stmt::Return(Some(Expr::Array(vec![
-        Expr::LocalGet(10),
-        Expr::LocalGet(11),
-    ])));
+    *body.last_mut().expect("return") = Stmt::Return(Some(Expr::Array(
+        vec![Expr::LocalGet(10), Expr::LocalGet(11)],
+        None,
+    )));
     let ir = emitted_ir(probe_module(
         "number_local_raw_f64_unit.ts",
         Vec::new(),
@@ -877,7 +877,7 @@ mod symbol_keyed_element_reads {
             name: "a".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
             mutable: false,
-            init: Some(Expr::Array(vec![Expr::Integer(1)])),
+            init: Some(Expr::Array(vec![Expr::Integer(1)], None)),
         }
     }
 

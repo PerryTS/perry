@@ -96,7 +96,7 @@ fn module_with_boxed_local() -> Module {
                 name: "acc".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Let {
                 id: BUMP,
@@ -109,7 +109,7 @@ fn module_with_boxed_local() -> Module {
                     return_type: Type::Any,
                     body: vec![Stmt::Expr(Expr::LocalSet(
                         ACC,
-                        Box::new(Expr::Array(vec![Expr::Integer(1)])),
+                        Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
                     ))],
                     captures: vec![ACC],
                     mutable_captures: vec![ACC],
@@ -127,7 +127,7 @@ fn module_with_boxed_local() -> Module {
                 name: "plain".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Expr(Expr::Call {
                 callee: Box::new(Expr::LocalGet(BUMP)),

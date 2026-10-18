@@ -640,15 +640,7 @@ unsafe fn note_element_store_with_bit(
     }
 }
 
-#[inline]
-pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
-    let Some(header) = array_gc_header(arr) else {
-        return;
-    };
-    note_element_store_with_bit(arr, index, value_bits, header_has_bit(header));
-}
-
-/// [`note_element_store`] for an already-resolved plain Array whose current
+/// Maintain the element-shape proof of an already-resolved plain Array whose current
 /// `_reserved` word was read by the caller's receiver guard. This avoids a
 /// second parent-header classification on existing-slot pointer overwrites;
 /// all record matching, retirement, and exact-shape adaptation is identical.

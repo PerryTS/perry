@@ -1205,7 +1205,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                 replace_this_in_expr(a, this_id);
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for e in elements {
                 replace_this_in_expr(e, this_id);
             }

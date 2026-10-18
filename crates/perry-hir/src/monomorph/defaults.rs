@@ -293,7 +293,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 }
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for elem in elements {
                 fill_defaults_in_expr(elem, cx);
             }

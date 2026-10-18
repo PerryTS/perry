@@ -190,3 +190,48 @@ fn dfa_decisions_do_not_acquire_evaluator_metadata() {
     assert_eq!(automaton, evaluator);
     assert!(EVALUATOR_METADATA_READS.with(std::cell::Cell::get) > before);
 }
+
+/// Prefix programs are answered with no automaton storage or evaluator setup.
+#[test]
+fn literal_prefixes_need_neither_dfa_cache_nor_evaluator_scratch() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let prefix_before = LITERAL_PREFIX_ANSWERS.with(std::cell::Cell::get);
+    let dfa_before = DFA_ANSWERS.with(std::cell::Cell::get);
+    let metadata_before = EVALUATOR_METADATA_READS.with(std::cell::Cell::get);
+    for (pattern, flags, subject) in [
+        ("^--", "", "--option"),
+        ("^--", "g", "x--option"),
+        ("^no-", "y", "no-color"),
+        ("^é", "u", "éclair"),
+        ("^😀", "gu", "😀tail"),
+    ] {
+        let scope = RuntimeHandleScope::new();
+        let re = scope.root_raw_mut_ptr(regexp(&scope, pattern, flags));
+        let owner = re
+            .with_const_ptr::<RegExpHeader, _>(|re| unsafe { GcProgram::from_regexp(&scope, re) })
+            .unwrap();
+        let program = super::super::perex_api::bind_program(owner, &mut Budget::new(WORK)).unwrap();
+        program
+            .with_view(|p| {
+                assert!(p.literal_prefix().is_some());
+                assert_eq!(dfa::minimum_words(p), Some(0));
+                assert!(unsafe { super::super::perex_owner::cell_dfa_cache(p.words()) }.is_none());
+            })
+            .unwrap();
+        for start in 0..=subject.encode_utf16().count() + 1 {
+            for mode in [CaptureMode::Full, CaptureMode::All] {
+                let (prefix, evaluator) = both(pattern, flags, subject, start, mode);
+                assert_eq!(
+                    prefix, evaluator,
+                    "/{pattern}/{flags} {subject:?} start={start}"
+                );
+            }
+        }
+    }
+    assert!(LITERAL_PREFIX_ANSWERS.with(std::cell::Cell::get) > prefix_before);
+    assert_eq!(DFA_ANSWERS.with(std::cell::Cell::get), dfa_before);
+    assert_eq!(
+        EVALUATOR_METADATA_READS.with(std::cell::Cell::get),
+        metadata_before
+    );
+}

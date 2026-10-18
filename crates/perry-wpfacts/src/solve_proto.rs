@@ -216,7 +216,7 @@ mod tests {
             let this = m.node_l("test-this");
             let ret = m.node_l("test-return");
             let args_all = m.node_l("test-args");
-            m.funcs.push(FuncInfo {
+            m.funcs.push(FuncInfo { has_arguments: true,
                 module: 0,
                 func_id: f,
                 name: format!("method-{f}"),

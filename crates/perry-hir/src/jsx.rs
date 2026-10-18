@@ -57,7 +57,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
             props_parts.push((Some("children".to_string()), children.remove(0)));
         }
         _ => {
-            props_parts.push((Some("children".to_string()), Expr::Array(children)));
+            props_parts.push((Some("children".to_string()), Expr::Array(children, None)));
         }
     }
 
@@ -156,7 +156,7 @@ pub(crate) fn lower_jsx_fragment(
             props_fields.push(("children".to_string(), children.remove(0)));
         }
         _ => {
-            props_fields.push(("children".to_string(), Expr::Array(children)));
+            props_fields.push(("children".to_string(), Expr::Array(children, None)));
         }
     }
 

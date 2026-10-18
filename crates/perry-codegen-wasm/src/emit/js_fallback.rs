@@ -447,7 +447,7 @@ impl WasmModuleEmitter {
                 }
                 format!("fromJsValue({{{}}})", parts.join(", "))
             }
-            Expr::Array(elements) => {
+            Expr::Array(elements, _) => {
                 let elems: Vec<String> = elements
                     .iter()
                     .map(|e| format!("toJsValue({})", self.emit_js_expr(e, locals)))

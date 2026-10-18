@@ -94,7 +94,7 @@ fn module_ir(body: Vec<Stmt>) -> String {
     let mut module = Module::new("dense_rmw");
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
-        args: vec![Expr::Array(vec![Expr::Number(0.5)]), Expr::Integer(1)],
+        args: vec![Expr::Array(vec![Expr::Number(0.5)], None), Expr::Integer(1)],
         type_args: Vec::new(),
         byte_offset: 0,
     }));

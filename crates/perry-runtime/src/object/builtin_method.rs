@@ -162,28 +162,8 @@ unsafe fn weak_ok(v: f64, brand: u32) -> bool {
 const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
-/// A function object whose shape inherits `name` from `Function.prototype`
-/// (no own key of that name, no recorded `[[Prototype]]`) while
-/// `Function.prototype` and `%Object.prototype%` are pristine.
-#[inline(always)]
-unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
-    heap_cell(v).is_some_and(|h| {
-        (*h).obj_type == crate::gc::GC_TYPE_CLOSURE && {
-            let id = (*(raw(v) as *const crate::closure::ClosureHeader)).shape_id;
-            crate::closure::shape::function_shape_inherits_from_function_prototype(id, name)
-                || kind_function_ok(id, name)
-        }
-    }) && pristine(BuiltinProto::Function)
-}
-
-/// An async, generator or async-generator function without an own `name`:
-/// its kind's intrinsic prototype, while unwritten, defines none of
-/// `Function.prototype`'s methods and inherits them from it.
-#[inline(never)]
-fn kind_function_ok(id: u32, name: &[u8]) -> bool {
-    crate::closure::shape::function_shape_kind_lacking(id, name)
-        .is_some_and(super::global_this::function_kind_prototype_unwritten)
-}
+mod function_receiver;
+use function_receiver::{function_call, function_ok};
 
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
 /// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,
@@ -210,24 +190,6 @@ pub(crate) unsafe fn by_name_function_apply(target: f64, args: &[f64]) -> Option
         return function_apply(target, args);
     }
     None
-}
-
-/// `recv.call(args…)` on a function `function_ok` admitted: a compiled body
-/// is entered directly, anything else takes the intrinsic's explicit-`this`
-/// call.
-#[inline(never)]
-unsafe fn function_call(recv: f64, args: &[f64]) -> f64 {
-    if let Some(value) =
-        super::native_call_method::compiled_target_call(false, recv, args.as_ptr(), args.len())
-    {
-        return value;
-    }
-    let this = args.first().copied().unwrap_or(UNDEFINED);
-    super::native_call_method::call_function_with_explicit_this(
-        recv,
-        this,
-        args.get(1..).unwrap_or(&[]),
-    )
 }
 
 #[inline(never)]
@@ -2002,13 +1964,14 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
                     && key_bits & !POINTER_MASK == crate::value::STRING_TAG
                     && {
                         let key = (key_bits & POINTER_MASK) as *const crate::StringHeader;
-                        function_ok(
-                            recv,
-                            std::slice::from_raw_parts(
-                                crate::string::string_data(key),
-                                (*key).byte_len as usize,
-                            ),
-                        )
+                        let name = std::slice::from_raw_parts(
+                            crate::string::string_data(key),
+                            (*key).byte_len as usize,
+                        );
+                        if let Some(value) = function_receiver::lookup_value(recv, name, direct) {
+                            return value;
+                        }
+                        false
                     }
             }
             _ => false,
@@ -2019,3 +1982,6 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
     }
     super::method_call::js_method_lookup(dir, recv, key_bits, hash, method_id)
 }
+
+#[cfg(test)]
+mod native_constructor_tests;

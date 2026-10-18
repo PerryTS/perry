@@ -1083,7 +1083,7 @@ fn expr_region_ender_with_trusted_operation(
         Expr::Object(_)
         | Expr::ObjectSpread { .. }
         | Expr::ObjectAssign { .. }
-        | Expr::Array(_)
+        | Expr::Array(_, _)
         | Expr::ArraySpread(_)
         | Expr::Closure { .. }
         | Expr::PropertySet { .. }

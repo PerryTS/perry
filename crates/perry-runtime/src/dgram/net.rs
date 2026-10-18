@@ -270,10 +270,11 @@ pub(crate) fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64
     {
         Some(address) => address,
         None => {
-            return Err(socket_error_value(
+            return Err(bind_error_value(
                 &format!("bind EADDRNOTAVAIL {address}:{port}"),
                 "EADDRNOTAVAIL",
-                "bind",
+                &address,
+                port,
             ));
         }
     };
@@ -284,10 +285,11 @@ pub(crate) fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64
     ) {
         Ok(udp) => udp,
         Err(err) => {
-            return Err(socket_error_value(
+            return Err(bind_error_value(
                 &format!("bind {} {address}:{port}", io_error_code(&err)),
                 io_error_code(&err),
-                "bind",
+                &address,
+                port,
             ));
         }
     };
@@ -306,6 +308,23 @@ pub(crate) fn real_bind(socket: f64, port: u16, address: &str) -> Result<(), f64
     set_hidden_value(socket, KEY_PORT, actual_port as f64);
     set_hidden_value(socket, KEY_BOUND, bool_value(true));
     Ok(())
+}
+
+fn bind_error_value(message: &str, code: &'static str, address: &str, port: u16) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error = scope.root_nanbox_f64(socket_error_value(message, code, "bind"));
+    let address = scope.root_nanbox_f64(str_value(address));
+    crate::node_submodules::set_error_user_prop(
+        crate::value::js_nanbox_get_pointer(error.get_nanbox_f64()) as usize,
+        "address",
+        address.get_nanbox_f64(),
+    );
+    crate::node_submodules::set_error_user_prop(
+        crate::value::js_nanbox_get_pointer(error.get_nanbox_f64()) as usize,
+        "port",
+        port as f64,
+    );
+    error.get_nanbox_f64()
 }
 
 fn open_udp_socket(
@@ -470,10 +489,9 @@ extern "C" fn deferred_send_callback(
     _this: crate::closure::JsThis,
 ) -> f64 {
     let callback = crate::closure::js_closure_get_capture_f64(closure, 0);
-    let socket = crate::closure::js_closure_get_capture_f64(closure, 1);
     let error = crate::closure::js_closure_get_capture_f64(closure, 2);
     let bytes = crate::closure::js_closure_get_capture_f64(closure, 3);
-    call_function(callback, socket, &[error, bytes]);
+    call_function(callback, undefined_value(), &[error, bytes]);
     undefined_value()
 }
 

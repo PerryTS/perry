@@ -54,57 +54,32 @@ pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, c
     write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, false);
 }
 
-/// Slot barrier when the caller already owns a live, forwarding-resolved GC
-/// parent. The allocator's generation proof excludes raw old-arena births,
-/// whose headers need not yet carry TENURED. The global mark gate still
-/// requires shading during a full cycle.
-/// Keep this continuation shared rather than repeating its gate at each store.
+/// Slot barrier for a live, forwarding-resolved GC parent. The live header
+/// carries the same generation proof generated stores use: an arena parent
+/// without TENURED owes no remembered-set entry. An active incremental mark
+/// still takes the ordinary barrier so the child is shaded even for a young
+/// parent. Old and malloc parents keep the shared outlined continuation.
 ///
 /// # Safety
-/// `parent_addr` must be a live, non-forwarded GC user pointer. No safepoint
-/// may intervene between the caller's admission and this call.
-#[inline(never)]
+/// `parent_addr` must be a live, non-forwarded GC user pointer whose header
+/// obeys Old => TENURED (including born-old allocations). No safepoint may
+/// intervene between the caller's admission and this call.
+#[inline(always)]
 pub(crate) unsafe fn runtime_write_barrier_resolved_slot(
     parent_addr: usize,
     slot_addr: usize,
     child_bits: u64,
 ) {
-    if barrier_scalar_child_skips(child_bits) {
-        return;
-    }
-    if super::barrier::incremental_mark_barrier_globally_idle()
-        && matches!(
-            crate::arena::classify_heap_generation(parent_addr),
-            crate::arena::HeapGeneration::Nursery
-        )
-    {
+    if barrier_scalar_child_skips(child_bits) || !newborn_parent_needs_barrier(parent_addr) {
         return;
     }
     runtime_write_barrier_slot(parent_addr, slot_addr, child_bits);
 }
 
-/// Canonicalize an **INT32-boxed** numeric store into a raw-f64-masked slot of
-/// an intact typed-shape descriptor (`0x7FFE…` → the plain IEEE bits of the same
-/// number). The object twin of `canonicalize_array_numeric_store_bits`
-/// (`array/header.rs`), and needed for the same reason.
-///
-/// `layout_note_slot` treats any non-raw-f64 bit pattern landing in a raw-f64
-/// slot as a representation change and calls `layout_set_typed_unknown`, which
-/// evicts the object's `TypedLayoutDescriptor` **permanently and one-way**.
-/// INT32 boxes genuinely reach object fields from FFI / native modules (sqlite
-/// row columns, `v8` deserialization, …), and unlike codegen's guarded class-
-/// field store — which canonicalizes inline behind a plain-finite check — this
-/// runtime choke point wrote the bits verbatim. One FFI integer therefore cost
-/// the object its typed fast path forever.
-///
-/// There is no observable behavior change: an INT32 box and its f64 are `===`
-/// and print identically. `value_bits_to_number` supplies the class-ref
-/// exclusion (a `ClassRef` shares INT32_TAG and must keep its tag), so a class
-/// value still downgrades the descriptor rather than being stripped to a bare
-/// number.
-///
-/// Ordered tag-first so the (hot) non-INT32 store never pays the thread-local
-/// descriptor probe.
+/// Canonicalize an INT32-boxed Number into the raw-f64 representation its
+/// shape lane requires. FFI/native stores can supply boxed integers; storing
+/// the equal raw double preserves the shape's tracing proof. ClassRef shares
+/// INT32_TAG but is not a Number, so it keeps its tag.
 #[inline]
 fn canonicalize_typed_slot_store_bits(
     parent_user: usize,
@@ -165,7 +140,9 @@ pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     if value_bits & TAG_MASK == STRING_TAG {
         crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
     }
-    runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
+    // The slot write above already requires a live parent; consume its
+    // header proof inline before entering the ordinary barrier.
+    unsafe { runtime_write_barrier_resolved_slot(parent_user, slot_addr, value_bits) };
     super::layout::layout_pointer_bearing_bits(value_bits)
 }
 
@@ -217,7 +194,7 @@ pub(crate) fn runtime_store_jsvalue_slot(
         crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
     }
     layout_note_slot(parent_user, slot_index, value_bits);
-    runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
+    unsafe { runtime_write_barrier_resolved_slot(parent_user, slot_addr, value_bits) };
 }
 
 /// Shade `value_bits` for an in-progress incremental mark: an edge that now

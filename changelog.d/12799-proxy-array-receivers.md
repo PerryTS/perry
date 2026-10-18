@@ -1,0 +1,3 @@
+Fix Proxy-backed array mutations, including Immer drafts. The shared layout probe reads an array's intrinsic own length from its live header instead of proving it absent from named properties and prototypes. Typed builtin admissions reject Proxy layouts and use the shared Get-then-Call path. Borrowed mutators use the same trap engine, variadic push remains one call, allocating generic methods consult ArraySpeciesCreate, and the shared Proxy write entry canonicalizes dynamic numeric indices before invoking set traps.
+
+Add Node parity coverage for push/pop/shift/unshift/splice/sort/reverse trap ordering on typed and untyped receivers, borrowed calls, holes, overrides, rejected writes/deletes, and spread/field push calls.

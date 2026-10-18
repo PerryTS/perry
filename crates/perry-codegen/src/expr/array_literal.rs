@@ -113,7 +113,7 @@ mod empty_birth_tests {
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Array(Vec::new())))],
+            body: vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))],
             is_async: false,
             is_generator: false,
             is_strict: true,
@@ -531,7 +531,7 @@ fn const_array_descriptor_enabled() -> bool {
 fn is_const_materializable(e: &Expr) -> bool {
     match e {
         Expr::Number(_) | Expr::Integer(_) | Expr::Bool(_) | Expr::Null | Expr::Undefined => true,
-        Expr::Array(elems) => elems.iter().all(is_const_materializable),
+        Expr::Array(elems, _) => elems.iter().all(is_const_materializable),
         _ => false,
     }
 }
@@ -539,7 +539,7 @@ fn is_const_materializable(e: &Expr) -> bool {
 /// Total materializable nodes (every scalar + every array), the size gate below.
 fn count_const_nodes(e: &Expr) -> usize {
     match e {
-        Expr::Array(elems) => 1 + elems.iter().map(count_const_nodes).sum::<usize>(),
+        Expr::Array(elems, _) => 1 + elems.iter().map(count_const_nodes).sum::<usize>(),
         _ => 1,
     }
 }
@@ -560,7 +560,7 @@ fn serialize_const_value(e: &Expr, out: &mut Vec<u8>) {
         Expr::Bool(false) => out.push(3),
         Expr::Null => out.push(4),
         Expr::Undefined => out.push(5),
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             out.push(1);
             out.extend_from_slice(&(elems.len() as u32).to_le_bytes());
             for el in elems {
@@ -589,7 +589,7 @@ fn try_lower_const_array_descriptor(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> O
     // A flat constant scalar array is already a single `js_array_alloc_literal`
     // + inline stores, so keep that path — it also preserves the precise
     // per-slot write barriers a later push/store relies on.
-    if !elements.iter().any(|e| matches!(e, Expr::Array(_))) {
+    if !elements.iter().any(|e| matches!(e, Expr::Array(_, _))) {
         return None;
     }
     let total_nodes: usize = 1 + elements.iter().map(count_const_nodes).sum::<usize>();

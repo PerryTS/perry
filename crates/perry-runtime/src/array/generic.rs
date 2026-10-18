@@ -1164,7 +1164,10 @@ pub extern "C" fn js_arraylike_slice(
         crate::array::array_length_range_error();
     }
 
-    let result_h = scope.root_raw_mut_ptr(js_array_alloc_with_length(count.max(0) as u32));
+    let result = unsafe {
+        super::species::array_species_create(recv_h.get_nanbox_f64(), count.max(0) as usize)
+    };
+    let result_h = scope.root_nanbox_f64(result);
     let value_h = scope.root_nanbox_f64(undef());
     for n in 0..count {
         let k = s + n;
@@ -1172,17 +1175,15 @@ pub extern "C" fn js_arraylike_slice(
             continue; // preserve holes
         }
         value_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
-        let value = value_h.get_nanbox_f64();
-        result_h.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
-            let elems = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
-            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this
-            // slot with the write barrier after the direct dense write.
-            ptr::write(elems.add(n as usize), value);
-            note_array_slot(result, n as usize, value.to_bits());
-        });
+        unsafe {
+            super::species::species_result_set(
+                result_h.get_nanbox_f64(),
+                n as usize,
+                value_h.get_nanbox_f64(),
+            );
+        }
     }
-    // Scoped argument to a non-allocating operation; see js_arraylike_map.
-    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+    result_h.get_nanbox_f64()
 }
 
 /// ECMA-262 relative-index clamp used by `slice` (negative counts from the end,
@@ -1406,24 +1407,6 @@ pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_l
     let bits = recv.to_bits();
     if bits == TAG_UNDEFINED || bits == TAG_NULL {
         crate::collection_iter::throw_type_error("Cannot convert undefined or null to object");
-    }
-    // A Proxy receiver reaches this generic path whenever the eager HIR array
-    // fold bails (untyped receiver — #6397) and the dispatcher resolves the
-    // method through `Get(proxy, name)` → prototype thunk → here. Neither
-    // normalization below can represent it: `as_real_array` rightly rejects
-    // handle-band ids (deref = the #6279 segfault class) and
-    // `run_object_mutator` only accepts plain objects — so the mutation was
-    // silently DROPPED (immer's `draft.list.push(x)` returned undefined and
-    // mutated nothing). Route the traps instead.
-    if crate::proxy::js_proxy_is_proxy(recv) == 1 {
-        if let Some(r) = super::push_pop::proxy_array_mutator(recv, method, args_ptr, args_len) {
-            return r;
-        }
-        // `sort` (routed to `object_sort` over the proxy-aware `al_*`
-        // primitives by its thunk), `fill` (`proxy_array_fill` via
-        // `js_array_fill_generic`) and `copyWithin`
-        // (`js_array_copy_within_value`) never arrive here; anything else
-        // keeps the pre-existing fall-through.
     }
     let arr = as_real_array(recv);
     if !arr.is_null() {
@@ -1661,8 +1644,8 @@ pub fn try_object_arraylike_mutator(
 }
 
 /// Run a borrowed `Array.prototype` mutator over an ordinary object,
-/// including class instances and functions. Returns `None` for other receiver
-/// kinds. Unlike [`try_object_arraylike_mutator`], this applies no class or own
+/// including class instances, functions and Proxies. Proxy receivers share
+/// the trap-routed algorithms with the prototype thunks. Unlike [`try_object_arraylike_mutator`], this applies no class or own
 /// property gate: callers have established that the array algorithm must run.
 pub fn run_object_mutator(
     recv: f64,
@@ -1670,8 +1653,16 @@ pub fn run_object_mutator(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    if !matches!(classify_pointer(recv), Some(PtrKind::Object)) {
-        return None;
+    match classify_pointer(recv) {
+        Some(PtrKind::Proxy) => {
+            if let Some(result) =
+                super::push_pop::proxy_array_mutator(recv, method, args_ptr, args_len)
+            {
+                return Some(result);
+            }
+        }
+        Some(PtrKind::Object) => {}
+        _ => return None,
     }
     let result = match method {
         "pop" => object_pop(recv),

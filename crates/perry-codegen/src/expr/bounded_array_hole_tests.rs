@@ -31,7 +31,7 @@ fn module_ir() -> String {
     let mut module = Module::new("bounded_array_index");
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
-        args: vec![Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)])],
+        args: vec![Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None)],
         type_args: Vec::new(),
         byte_offset: 0,
     }));

@@ -590,7 +590,7 @@ mod tests {
             init: Some(if unknown_receiver {
                 Expr::Undefined
             } else {
-                Expr::Array(vec![])
+                Expr::Array(vec![], None)
             }),
         }];
         module.classes.push(abrupt_derived_class());

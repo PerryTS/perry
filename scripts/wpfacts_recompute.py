@@ -588,6 +588,21 @@ class Solver:
         return self.is_fact_unit(tm) and key in self.tmpls[tm]["definite"]
 
     def load_from(self, origin, t, key, dst):
+        # The iteration key: an array-like's elements, a runtime object's
+        # computed read, nothing from a program object/function.
+        if key != "*" and self.atoms.get(key) == "#iter":
+            k = self.toks[t]
+            runtime = t == TOP or k[0] in ("builtin", "builtinfn", "nativeproto", "primbox")
+            if not runtime and not (k[0] == "obj" and self.is_array_like(t)):
+                return
+            key = self.atom("#elem")
+        # The element key: an array-like's elements, else a computed read.
+        if key != "*" and self.atoms.get(key) == "#elem":
+            if t != TOP and self.is_array_like(t):
+                self.edge(self.fall(t), dst)
+                self.add(dst, [], UNDEF)
+                return
+            key = "*"
         if t == TOP:
             self.add(dst, [TOP])
             if key == "*" or self.atoms.get(key) == "constructor":
@@ -773,7 +788,8 @@ class Solver:
                     self.edge(a, fi["params"][i])
                 elif fi["rest"] is not None:
                     self.edge(a, self.elems_into(fi["rest"]))
-                self.edge(a, fi["args"])
+                if fi["arguments"]:
+                    self.edge(a, fi["args"])
             for p in fi["params"][len(c["args"]):]:
                 self.add(p, [], UNDEF)
             for s in c["spread"]:
@@ -783,7 +799,8 @@ class Solver:
                     self.edge(el, p)
                 if fi["rest"] is not None:
                     self.edge(el, self.elems_into(fi["rest"]))
-                self.edge(el, fi["args"])
+                if fi["arguments"]:
+                    self.edge(el, fi["args"])
             if not fi["lexical"]:
                 if this_tok is not None:
                     self.add(fi["this"], [this_tok])
@@ -1060,6 +1077,7 @@ def load(path):
                     ints = lambda v: [] if v == "-" else [int(x) for x in v.split(",")]
                     s.funcs[f] = dict(tok=int(kv["tok"]), this=int(kv["this"]), ret=int(kv["ret"]),
                                       args=int(kv["args"]),
+                                      arguments=kv.get("arguments", "1") == "1",
                                       rest=None if kv["rest"] == "-" else int(kv["rest"]),
                                       lexical=kv["lexical"] == "1", params=ints(kv["params"]))
                     s.func_by_tok[int(kv["tok"])] = f

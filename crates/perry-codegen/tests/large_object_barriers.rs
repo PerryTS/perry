@@ -121,9 +121,12 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
                     name: "child".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 },
-                Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1); element_count]))),
+                Stmt::Return(Some(Expr::Array(
+                    vec![Expr::LocalGet(1); element_count],
+                    None,
+                ))),
             ],
             is_async: false,
             is_generator: false,
@@ -194,7 +197,7 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),
                     mutable: true,
-                    init: Some(Expr::Array(vec![Expr::Number(0.0); element_count])),
+                    init: Some(Expr::Array(vec![Expr::Number(0.0); element_count], None)),
                 },
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 2,

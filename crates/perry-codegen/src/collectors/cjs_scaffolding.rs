@@ -519,7 +519,7 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
             Expr::String(_path),
             Expr::String(filename),
             Expr::Bool(false),
-            Expr::Array(children),
+            Expr::Array(children, _),
         ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
             && id_value == filename
             && children.is_empty()
@@ -533,9 +533,9 @@ fn record_binding(stmt: &Stmt) -> Option<u32> {
             Expr::String(_path),
             Expr::String(filename),
             Expr::Bool(false),
-            Expr::Array(children),
+            Expr::Array(children, _),
             _parent,
-            Expr::Array(paths),
+            Expr::Array(paths, _),
             Expr::Undefined,
         ] if matches!(factory, Expr::LocalGet(_) | Expr::Undefined)
             && id_value == filename

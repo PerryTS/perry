@@ -83,3 +83,63 @@ fn merge_keeps_one_sorted_copy() {
     merge_into(&mut empty, &[2, 3]);
     assert_eq!(empty, [2, 3]);
 }
+
+fn binding(id: u32, init: perry_hir::Expr) -> perry_hir::Stmt {
+    perry_hir::Stmt::Let {
+        id,
+        name: format!("v{id}"),
+        ty: perry_hir::types::Type::Any,
+        mutable: false,
+        init: Some(init),
+    }
+}
+
+fn property(object: perry_hir::Expr, key: &str) -> perry_hir::Expr {
+    perry_hir::Expr::PropertyGet {
+        object: Box::new(object),
+        property: key.into(),
+        byte_offset: 0,
+    }
+}
+
+fn store(object: perry_hir::Expr, key: &str, value: perry_hir::Expr) -> perry_hir::Stmt {
+    perry_hir::Stmt::Expr(perry_hir::Expr::PropertySet {
+        object: Box::new(object),
+        property: key.into(),
+        value: Box::new(value),
+    })
+}
+
+#[test]
+fn equal_field_names_on_distinct_receivers_do_not_union_birth_slots() {
+    use perry_hir::{Expr, Module, Stmt};
+    let mut hir = Module::new("distinct_field_holders");
+    hir.init = vec![
+        binding(1, Expr::Array(vec![], None)),
+        binding(2, Expr::Array(vec![], None)),
+        binding(3, Expr::Object(vec![("items".into(), Expr::LocalGet(1))])),
+        binding(4, Expr::Object(vec![])),
+        store(Expr::LocalGet(4), "items", Expr::LocalGet(2)),
+        store(
+            property(Expr::LocalGet(3), "items"),
+            "left",
+            Expr::Integer(1),
+        ),
+        store(
+            property(Expr::LocalGet(4), "items"),
+            "right",
+            Expr::Integer(2),
+        ),
+    ];
+    super::assign_birth_layouts(&mut hir);
+    for (stmt, expected) in hir.init[..2].iter().zip(["left", "right"]) {
+        let Stmt::Let {
+            init: Some(Expr::Array(_, Some(layout))),
+            ..
+        } = stmt
+        else {
+            panic!("the directly identified holder lost its array layout: {stmt:?}");
+        };
+        assert_eq!(layout.keys, [expected]);
+    }
+}

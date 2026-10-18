@@ -72,7 +72,7 @@ fn var_mutated_from_a_constructor_becomes_one_shared_cell() {
         "the `var` re-declaration must write the cell, not re-declare it: {decls:#?}"
     );
     assert!(
-        matches!(decls[0], Stmt::Let { init: Some(Expr::Array(items)), .. } if items.len() == 1),
+        matches!(decls[0], Stmt::Let { init: Some(Expr::Array(items, _)), .. } if items.len() == 1),
         "the captured `var` must lower to a one-element cell: {:#?}",
         decls[0]
     );

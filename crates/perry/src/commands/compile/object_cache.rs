@@ -906,6 +906,7 @@ fn compute_object_cache_key_with_env(
                     object.receiver_class_name,
                     object.source_global_id,
                 ));
+                buf.push_str(&format!("layout={:?}:", object.final_shape));
                 let mut methods = object.methods.clone();
                 methods.sort_by(|left, right| left.name.cmp(&right.name));
                 for method in methods {

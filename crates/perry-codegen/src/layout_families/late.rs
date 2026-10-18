@@ -192,69 +192,127 @@ impl Factories {
         depth: u32,
         out: &mut BTreeSet<String>,
     ) {
-        if depth > 6 {
-            return;
-        }
-        match e {
-            Expr::New { class_name, .. } => {
-                out.insert(class_name.clone());
-            }
-            Expr::NewDynamic { callee, .. } => self.ctor_classes(callee, cx, depth + 1, out),
-            Expr::Call { callee, .. } => {
-                for f in self.callee_fns(callee, cx.fn_of_local) {
-                    for r in self.returns.get(&f).into_iter().flatten() {
-                        self.instance_classes(r, cx, depth + 1, out);
-                    }
-                }
-            }
-            // A factory returning its own local (`createBaseDeclaration`):
-            // that local's initialising call.
-            Expr::LocalGet(l) => {
-                if let Some(init) = cx.init_expr.get(l) {
-                    self.instance_classes(init, cx, depth + 1, out);
-                }
-            }
-            _ => {}
-        }
+        self.walk_classes(e, cx, FactoryMode::Instance, depth, out);
     }
 
-    /// The class names a constructor value `e` evaluates to can be.
-    fn ctor_classes(&self, e: &Expr, cx: &FactoryCx<'_>, depth: u32, out: &mut BTreeSet<String>) {
-        if depth > 8 {
-            return;
+    /// Expand the bounded factory graph by distance, rather than by path.
+    /// A common method name can resolve to many functions whose returns name
+    /// that same method again. Recursive expansion visits every path through
+    /// those diamonds, even though the result is a union of class names.
+    /// Coalesce function/local vertices within each depth and query mode.
+    /// Keep depths separate: a vertex reached by a longer path has less
+    /// remaining reach, and constructor values have a different depth limit.
+    /// Nothing survives this query and no class answer is memoized.
+    /// Returns the number of expression visits for the work-bound regression.
+    fn walk_classes<'a>(
+        &'a self,
+        e: &'a Expr,
+        cx: &FactoryCx<'a>,
+        mode: FactoryMode,
+        depth: u32,
+        out: &mut BTreeSet<String>,
+    ) -> usize {
+        let mut frontier = vec![(mode, e)];
+        let mut work = 0;
+        for depth in depth..=8 {
+            let mut next = Vec::new();
+            let mut functions = BTreeSet::new();
+            let mut locals = BTreeSet::new();
+            for (mode, e) in frontier {
+                if depth > mode.depth_limit() {
+                    continue;
+                }
+                work += 1;
+                match (mode, e) {
+                    (FactoryMode::Instance, Expr::New { class_name, .. }) => {
+                        out.insert(class_name.clone());
+                    }
+                    (FactoryMode::Instance, Expr::NewDynamic { callee, .. }) => {
+                        next.push((FactoryMode::Constructor, callee.as_ref()));
+                    }
+                    (_, Expr::Call { callee, .. }) => {
+                        functions.extend(
+                            self.callee_fns(callee, cx.fn_of_local)
+                                .into_iter()
+                                .map(|f| (mode, f)),
+                        );
+                    }
+                    (FactoryMode::Constructor, Expr::ClassRef(name)) => {
+                        out.insert(name.clone());
+                    }
+                    (FactoryMode::Constructor, Expr::ClassExprFresh { template, .. }) => {
+                        out.insert(template.clone());
+                    }
+                    (FactoryMode::Constructor, Expr::LocalGet(local))
+                        if cx.class_of_local.contains_key(local) =>
+                    {
+                        out.insert(cx.class_of_local[local].clone());
+                    }
+                    (_, Expr::LocalGet(local)) => {
+                        locals.insert((mode, *local));
+                    }
+                    (FactoryMode::Constructor, Expr::LocalSet(_, value)) => {
+                        next.push((mode, value.as_ref()));
+                    }
+                    (FactoryMode::Constructor, Expr::Logical { left, right, .. }) => {
+                        next.push((mode, left.as_ref()));
+                        next.push((mode, right.as_ref()));
+                    }
+                    _ => {}
+                }
+            }
+            for (mode, function) in functions {
+                next.extend(
+                    self.returns
+                        .get(&function)
+                        .into_iter()
+                        .flatten()
+                        .map(|value| (mode, value)),
+                );
+            }
+            for (mode, local) in locals {
+                match mode {
+                    FactoryMode::Instance => {
+                        if let Some(init) = cx.init_expr.get(&local) {
+                            next.push((mode, init));
+                        }
+                    }
+                    FactoryMode::Constructor => next.extend(
+                        self.assigns
+                            .get(&local)
+                            .into_iter()
+                            .flatten()
+                            .map(|value| (mode, value)),
+                    ),
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
         }
-        match e {
-            Expr::ClassRef(n) => {
-                out.insert(n.clone());
-            }
-            Expr::ClassExprFresh { template, .. } => {
-                out.insert(template.clone());
-            }
-            Expr::LocalGet(l) => {
-                if let Some(n) = cx.class_of_local.get(l) {
-                    out.insert(n.clone());
-                } else {
-                    for v in self.assigns.get(l).into_iter().flatten() {
-                        self.ctor_classes(v, cx, depth + 1, out);
-                    }
-                }
-            }
-            Expr::LocalSet(_, v) => self.ctor_classes(v, cx, depth + 1, out),
-            Expr::Logical { left, right, .. } => {
-                self.ctor_classes(left, cx, depth + 1, out);
-                self.ctor_classes(right, cx, depth + 1, out);
-            }
-            Expr::Call { callee, .. } => {
-                for f in self.callee_fns(callee, cx.fn_of_local) {
-                    for r in self.returns.get(&f).into_iter().flatten() {
-                        self.ctor_classes(r, cx, depth + 1, out);
-                    }
-                }
-            }
-            _ => {}
+        work
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FactoryMode {
+    Instance,
+    Constructor,
+}
+
+impl FactoryMode {
+    fn depth_limit(self) -> u32 {
+        match self {
+            Self::Instance => 6,
+            Self::Constructor => 8,
         }
     }
 }
+
+#[cfg(test)]
+#[path = "factory_return_tests.rs"]
+mod factory_return_tests;
 
 struct FactoryCx<'a> {
     fn_of_local: &'a FxHashMap<u32, u32>,

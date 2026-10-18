@@ -947,6 +947,19 @@ unsafe fn exotic_get<const ABSENT: bool>(
     }
     let (named, proto, function) = match (*header).obj_type {
         crate::gc::GC_TYPE_ARRAY => {
+            // Array length is an intrinsic own property, stored in the array
+            // header rather than its named bag. Never prove it absent by
+            // walking the bag and prototypes (including for computed keys
+            // read by a Proxy's get trap).
+            if hash == crate::object::runtime_layouts::atom_hash(b"length") && {
+                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                crate::string::js_string_key_bytes(
+                    crate::JSValue::from_bits(key_bits),
+                    &mut scratch,
+                ) == Some(b"length".as_slice())
+            } {
+                return (*(obj as *const crate::array::ArrayHeader)).length as f64;
+            }
             let named = (*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader;
             if (*header)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
                 (named, None, false)

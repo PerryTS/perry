@@ -498,6 +498,12 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
     match header.obj_type {
         crate::gc::GC_TYPE_OBJECT => unsafe { note_write(addr as *const ObjectHeader, site) },
         crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
+        crate::gc::GC_TYPE_CLOSURE => unsafe {
+            note_write(
+                (*(addr as *const crate::closure::ClosureHeader)).props,
+                site,
+            );
+        },
         _ => {}
     }
 }
@@ -597,21 +603,26 @@ fn trace_withdrawal(family: usize, site: &'static str) {
 
 /// The builtin family and receiver-owned custom-link fact, obtained from
 /// one classification of the value and (for a heap receiver) its header.
+enum ReceiverFact {
+    Builtin(BuiltinProto, bool),
+    Proxy,
+}
+
 #[inline]
-fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
+fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     let bits = recv.to_bits();
     let v = crate::value::JSValue::from_bits(bits);
     if v.is_any_string() {
-        return Some((BuiltinProto::String, false));
+        return Some(ReceiverFact::Builtin(BuiltinProto::String, false));
     }
     if v.is_number() || v.is_int32() {
-        return Some((BuiltinProto::Number, false));
+        return Some(ReceiverFact::Builtin(BuiltinProto::Number, false));
     }
     if v.is_bool() {
-        return Some((BuiltinProto::Boolean, false));
+        return Some(ReceiverFact::Builtin(BuiltinProto::Boolean, false));
     }
     if v.is_bigint() {
-        return Some((BuiltinProto::BigInt, false));
+        return Some(ReceiverFact::Builtin(BuiltinProto::BigInt, false));
     }
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
     if matches!(
@@ -628,6 +639,7 @@ fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
         header = unsafe { crate::value::addr_class::honest_header(array as usize) };
     }
     let family = match header.obj_type {
+        crate::gc::GC_TYPE_PROXY => return Some(ReceiverFact::Proxy),
         crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
         crate::gc::GC_TYPE_MAP => BuiltinProto::Map,
         crate::gc::GC_TYPE_SET => BuiltinProto::Set,
@@ -635,7 +647,7 @@ fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
         crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
         _ => return None,
     };
-    Some((
+    Some(ReceiverFact::Builtin(
         family,
         family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0,
     ))
@@ -643,7 +655,10 @@ fn receiver_fact(recv: f64) -> Option<(BuiltinProto, bool)> {
 
 /// The family whose prototype a by-name builtin dispatch on `recv` reads.
 pub(crate) fn receiver_family(recv: f64) -> Option<BuiltinProto> {
-    receiver_fact(recv).map(|(family, _)| family)
+    match receiver_fact(recv) {
+        Some(ReceiverFact::Builtin(family, _)) => Some(family),
+        _ => None,
+    }
 }
 
 /// The intrinsic's shadow bit and the receiver's own prototype link are
@@ -651,8 +666,8 @@ pub(crate) fn receiver_family(recv: f64) -> Option<BuiltinProto> {
 #[inline]
 pub(crate) fn receiver_pristine(recv: f64) -> bool {
     match receiver_fact(recv) {
-        Some((_, true)) => false,
-        Some((family, false)) => pristine(family),
+        Some(ReceiverFact::Proxy | ReceiverFact::Builtin(_, true)) => false,
+        Some(ReceiverFact::Builtin(family, false)) => pristine(family),
         None => true,
     }
 }
@@ -720,7 +735,12 @@ unsafe fn select_and_call(
     };
     let arg_handles = scope.root_nanbox_f64_slice(original);
     let selected = super::method_call::spec_get_value(holder, name);
-    if !call_builtin && is_builtin_method(selected) {
+    // A Proxy cannot run a dense builtin body: even the original builtin
+    // must keep the receiver intact and perform its operations through traps.
+    if !call_builtin
+        && is_builtin_method(selected)
+        && crate::proxy::js_proxy_is_proxy(this_h.get_nanbox_f64()) == 0
+    {
         if let Some((recv, out)) = refresh {
             *recv = this_h.get_nanbox_f64();
             out.copy_from_slice(&crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(
@@ -960,17 +980,17 @@ pub extern "C-unwind" fn js_borrowed_object_lookup_setter(this: f64, key: f64) -
 /// called from a wrapper over it cannot re-enter this lookup.
 #[no_mangle]
 pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> f64 {
-    if !pristine(BuiltinProto::Array) {
-        let live = crate::array::clean_arr_ptr_mut(arr);
-        if !live.is_null() {
-            let recv = crate::value::js_nanbox_pointer(live as i64);
-            // SAFETY: no arguments.
-            if let Some(value) = unsafe { redirect_call(recv, b"pop", std::ptr::null(), 0) } {
-                return value;
-            }
+    let mut recv = crate::value::js_nanbox_pointer(arr as i64);
+    if !receiver_pristine(recv) {
+        // The same receiver proof and generic call as every checked entry;
+        // a Proxy is never a plain ArrayHeader, even in a pristine realm.
+        if let Some(value) = unsafe { redirect_or_refresh(&mut recv, b"pop", &mut []) } {
+            return value;
         }
     }
-    crate::array::js_array_pop_f64(arr)
+    crate::array::js_array_pop_f64(
+        (recv.to_bits() & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader,
+    )
 }
 
 /// A Map/Set method name the by-name natives do not implement (#11915): the

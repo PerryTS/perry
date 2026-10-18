@@ -266,11 +266,14 @@ fn full_phase2_app_emits_canonical_arkui() {
     // --- Phase 2 v5: ForEach via array.map(item => Text(item)) ---
     let item_id: LocalId = 300;
     let foreach_block = Expr::ArrayMap {
-        array: Box::new(Expr::Array(vec![
-            Expr::String("alpha".into()),
-            Expr::String("beta".into()),
-            Expr::String("gamma".into()),
-        ])),
+        array: Box::new(Expr::Array(
+            vec![
+                Expr::String("alpha".into()),
+                Expr::String("beta".into()),
+                Expr::String("gamma".into()),
+            ],
+            None,
+        )),
         callback: Box::new(closure(
             vec![param(item_id, "item")],
             vec![Stmt::Return(Some(nmc(
@@ -285,11 +288,14 @@ fn full_phase2_app_emits_canonical_arkui() {
     let lazy_block = nmc(
         "LazyVStack",
         vec![Expr::ArrayMap {
-            array: Box::new(Expr::Array(vec![
-                Expr::String("row1".into()),
-                Expr::String("row2".into()),
-                Expr::String("row3".into()),
-            ])),
+            array: Box::new(Expr::Array(
+                vec![
+                    Expr::String("row1".into()),
+                    Expr::String("row2".into()),
+                    Expr::String("row3".into()),
+                ],
+                None,
+            )),
             callback: Box::new(closure(
                 vec![param(lazy_item_id, "row")],
                 vec![Stmt::Return(Some(nmc(
@@ -303,37 +309,43 @@ fn full_phase2_app_emits_canonical_arkui() {
     // --- Phase 2 v12: Tabs ---
     let tabs = nmc(
         "Tabs",
-        vec![Expr::Array(vec![
-            Expr::Object(vec![
-                ("label".into(), Expr::String("Home".into())),
-                (
-                    "body".into(),
-                    nmc("Text", vec![Expr::String("home content".into())]),
-                ),
-            ]),
-            Expr::Object(vec![
-                ("label".into(), Expr::String("About".into())),
-                (
-                    "body".into(),
-                    nmc("Text", vec![Expr::String("about content".into())]),
-                ),
-            ]),
-        ])],
+        vec![Expr::Array(
+            vec![
+                Expr::Object(vec![
+                    ("label".into(), Expr::String("Home".into())),
+                    (
+                        "body".into(),
+                        nmc("Text", vec![Expr::String("home content".into())]),
+                    ),
+                ]),
+                Expr::Object(vec![
+                    ("label".into(), Expr::String("About".into())),
+                    (
+                        "body".into(),
+                        nmc("Text", vec![Expr::String("about content".into())]),
+                    ),
+                ]),
+            ],
+            None,
+        )],
     );
 
     // --- Phase 2 v12: Menu (Column of Buttons) ---
     let menu = nmc(
         "Menu",
-        vec![Expr::Array(vec![
-            nmc(
-                "Button",
-                vec![Expr::String("Save".into()), closure(vec![], vec![])],
-            ),
-            nmc(
-                "Button",
-                vec![Expr::String("Cancel".into()), closure(vec![], vec![])],
-            ),
-        ])],
+        vec![Expr::Array(
+            vec![
+                nmc(
+                    "Button",
+                    vec![Expr::String("Save".into()), closure(vec![], vec![])],
+                ),
+                nmc(
+                    "Button",
+                    vec![Expr::String("Cancel".into()), closure(vec![], vec![])],
+                ),
+            ],
+            None,
+        )],
     );
 
     // --- Phase 2 v12: Grid ---
@@ -341,35 +353,41 @@ fn full_phase2_app_emits_canonical_arkui() {
         "Grid",
         vec![
             Expr::Number(2.0),
-            Expr::Array(vec![
-                nmc("Text", vec![Expr::String("cell1".into())]),
-                nmc("Text", vec![Expr::String("cell2".into())]),
-                nmc("Text", vec![Expr::String("cell3".into())]),
-                nmc("Text", vec![Expr::String("cell4".into())]),
-            ]),
+            Expr::Array(
+                vec![
+                    nmc("Text", vec![Expr::String("cell1".into())]),
+                    nmc("Text", vec![Expr::String("cell2".into())]),
+                    nmc("Text", vec![Expr::String("cell3".into())]),
+                    nmc("Text", vec![Expr::String("cell4".into())]),
+                ],
+                None,
+            ),
         ],
     );
 
     // Compose into a top-level VStack.
     let body = nmc(
         "VStack",
-        vec![Expr::Array(vec![
-            counter_label,
-            counter_state_text,
-            inc_button,
-            animated_text,
-            shadowed_button,
-            icon,
-            underlined_text,
-            toggle,
-            textfield,
-            slider,
-            foreach_block,
-            lazy_block,
-            tabs,
-            menu,
-            grid,
-        ])],
+        vec![Expr::Array(
+            vec![
+                counter_label,
+                counter_state_text,
+                inc_button,
+                animated_text,
+                shadowed_button,
+                icon,
+                underlined_text,
+                toggle,
+                textfield,
+                slider,
+                foreach_block,
+                lazy_block,
+                tabs,
+                menu,
+                grid,
+            ],
+            None,
+        )],
     );
 
     m.init.push(app_with_body(body));
@@ -528,23 +546,26 @@ fn minimal_counter_app_emits_clean_page() {
 
     let body = nmc(
         "VStack",
-        vec![Expr::Array(vec![
-            // c.text() → reactive Text bound to the synth id.
-            Expr::Call {
-                callee: Box::new(Expr::PropertyGet {
+        vec![Expr::Array(
+            vec![
+                // c.text() → reactive Text bound to the synth id.
+                Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::LocalGet(counter_id)),
+                        property: "text".to_string(),
+                    }),
+                    args: vec![],
+                    type_args: vec![],
                     byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(counter_id)),
-                    property: "text".to_string(),
-                }),
-                args: vec![],
-                type_args: vec![],
-                byte_offset: 0,
-            },
-            nmc(
-                "Button",
-                vec![Expr::String("+".into()), closure(vec![], vec![])],
-            ),
-        ])],
+                },
+                nmc(
+                    "Button",
+                    vec![Expr::String("+".into()), closure(vec![], vec![])],
+                ),
+            ],
+            None,
+        )],
     );
     m.init.push(app_with_body(body));
 

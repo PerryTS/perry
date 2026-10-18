@@ -1333,8 +1333,9 @@ mod tests {
         let allocation_heavy_stmt = || {
             Stmt::Expr(Expr::Array(
                 (0..DEFAULT_CHUNK_SAFEPOINTS)
-                    .map(|_| Expr::Array(vec![]))
+                    .map(|_| Expr::Array(vec![], None))
                     .collect(),
+                None,
             ))
         };
         let mut m = module_with_init(vec![allocation_heavy_stmt(), allocation_heavy_stmt()]);

@@ -302,7 +302,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             name: "lr".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)])),
+            init: Some(Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None)),
         },
         Stmt::Let {
             id: 21,

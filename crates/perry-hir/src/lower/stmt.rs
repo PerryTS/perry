@@ -276,6 +276,7 @@ pub(crate) fn emit_for_of_pattern_binding(
                 let Some(elem_pat) = elem else { continue };
                 if let ast::Pat::Rest(rest) = elem_pat {
                     let slice = Expr::ArraySlice {
+                        layout: None,
                         array: Box::new(Expr::LocalGet(tmp_id)),
                         start: Box::new(Expr::Number(idx as f64)),
                         end: None,

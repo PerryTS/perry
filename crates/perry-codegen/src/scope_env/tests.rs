@@ -328,7 +328,7 @@ fn a_reassigned_scoped_array_keeps_only_a_guarded_read_claim() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             }),
-            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![])))),
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![], None)))),
         ];
     }
     let mut module = module_with(vec![
@@ -337,7 +337,7 @@ fn a_reassigned_scoped_array_keeps_only_a_guarded_read_claim() {
             name: "items".into(),
             ty: Type::Array(Box::new(Type::Any)),
             mutable: true,
-            init: Some(Expr::Array(vec![])),
+            init: Some(Expr::Array(vec![], None)),
         },
         Stmt::Expr(read),
     ]);

@@ -290,7 +290,7 @@ mod tests {
             let this = m.node_l("test-this");
             let ret = m.node_l("test-ret");
             let args_all = m.node_l("test-args");
-            m.funcs.push(FuncInfo { module: 0, func_id: f, name: format!("f{f}"),
+            m.funcs.push(FuncInfo { has_arguments: true, module: 0, func_id: f, name: format!("f{f}"),
                 params: vec![], rest: None, this, ret, args_all, token,
                 ctor_of: None, lexical_this: false });
             m.add_prim(ret, primitive);

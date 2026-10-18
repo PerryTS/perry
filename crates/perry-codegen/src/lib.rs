@@ -30,6 +30,7 @@ pub mod inst;
 pub(crate) mod layout_desc;
 pub mod layout_families;
 pub(crate) mod proto_constants;
+pub use layout_desc::array_families::assign_birth_layouts;
 pub use layout_families::ProgramLayouts;
 pub mod linker;
 pub(crate) mod loop_purity;
@@ -101,12 +102,12 @@ mod wasm32;
 pub mod workers;
 
 pub use codegen::{
-    assign_static_shape_ids, compile_module, context_free_ctor_abi, context_free_ctor_param_count,
-    decode_static_seed, encode_static_seed, module_birth_shapes, namespace_member_class_key,
-    namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
-    short_spread_method_capabilities, take_module_static_seeds, target_os_of, user_function_symbol,
-    AppMetadata, BirthProto, BirthShape, ClassAccessorNames, CompileOptions, ConstFnBirth,
-    ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
+    assign_static_shape_ids, compile_module, compile_module_owned, context_free_ctor_abi,
+    context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
+    namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
+    resolve_target_triple, short_spread_method_capabilities, take_module_static_seeds,
+    target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, ClassAccessorNames,
+    CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
     ExportedObjectLiteralCapability, FactsClass, FactsField, FactsRecv, FpContractMode,
     ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
@@ -157,6 +158,16 @@ pub fn exported_object_literal_method_capabilities(
     hir: &perry_hir::Module,
 ) -> std::collections::HashMap<String, ExportedObjectLiteralCapability> {
     collectors::exported_object_literal_capabilities(hir)
+}
+
+/// Producer contents and static-key writes, harvested by the same final-literal visitor.
+pub fn exported_object_literal_method_facts(
+    hir: &perry_hir::Module,
+) -> (
+    std::collections::HashMap<String, ExportedObjectLiteralCapability>,
+    Vec<(String, String)>,
+) {
+    collectors::object_literal_facts(hir)
 }
 
 /// Return whether an instance method may publish the additive direct-call ABI

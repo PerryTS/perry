@@ -30,6 +30,7 @@ fn fixture(mask: i64) -> Module {
                     cap_args_appended: 0,
                 })
                 .collect(),
+            None,
         )),
     };
     let get = |property: &str| Expr::PropertyGet {
@@ -179,6 +180,7 @@ fn declared_numeric_row_hint_still_requires_its_live_shape() {
                 cap_args_appended: 0,
             })
             .collect(),
+        None,
     ));
     // The row declaration still nominates Counter's numeric lanes. Its
     // array actually carries BoxedRow's Any lanes. The numeric arm must

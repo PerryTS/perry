@@ -25,7 +25,7 @@ fn tabs_emits_tabcontent_per_spec() {
     ]);
     m.init.push(app_with_body(nmc(
         "Tabs",
-        vec![Expr::Array(vec![tab1, tab2])],
+        vec![Expr::Array(vec![tab1, tab2], None)],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("Tabs() {"));
@@ -48,7 +48,7 @@ fn menu_emits_buttons_per_item() {
     ]);
     m.init.push(app_with_body(nmc(
         "Menu",
-        vec![Expr::Array(vec![item1, item2])],
+        vec![Expr::Array(vec![item1, item2], None)],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("Button('Edit')"));
@@ -67,11 +67,14 @@ fn grid_emits_columns_template_and_griditems() {
         "Grid",
         vec![
             Expr::Number(3.0),
-            Expr::Array(vec![
-                nmc("Text", vec![Expr::String("a".into())]),
-                nmc("Text", vec![Expr::String("b".into())]),
-                nmc("Text", vec![Expr::String("c".into())]),
-            ]),
+            Expr::Array(
+                vec![
+                    nmc("Text", vec![Expr::String("a".into())]),
+                    nmc("Text", vec![Expr::String("b".into())]),
+                    nmc("Text", vec![Expr::String("c".into())]),
+                ],
+                None,
+            ),
         ],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
@@ -113,22 +116,25 @@ fn navstack_emits_state_driven_branches() {
         mutable: false,
         init: Some(state_call(Expr::String("home".into()))),
     });
-    let routes = Expr::Array(vec![
-        Expr::Object(vec![
-            ("name".into(), Expr::String("home".into())),
-            (
-                "body".into(),
-                nmc("Text", vec![Expr::String("Home".into())]),
-            ),
-        ]),
-        Expr::Object(vec![
-            ("name".into(), Expr::String("detail".into())),
-            (
-                "body".into(),
-                nmc("Text", vec![Expr::String("Detail".into())]),
-            ),
-        ]),
-    ]);
+    let routes = Expr::Array(
+        vec![
+            Expr::Object(vec![
+                ("name".into(), Expr::String("home".into())),
+                (
+                    "body".into(),
+                    nmc("Text", vec![Expr::String("Home".into())]),
+                ),
+            ]),
+            Expr::Object(vec![
+                ("name".into(), Expr::String("detail".into())),
+                (
+                    "body".into(),
+                    nmc("Text", vec![Expr::String("Detail".into())]),
+                ),
+            ]),
+        ],
+        None,
+    );
     m.init.push(app_with_body(nmc(
         "NavStack",
         vec![Expr::LocalGet(5), routes],
@@ -172,13 +178,16 @@ fn navstack_no_state_falls_back_to_first_route() {
         mutable: false,
         init: Some(Expr::String("home".into())),
     });
-    let routes = Expr::Array(vec![Expr::Object(vec![
-        ("name".into(), Expr::String("home".into())),
-        (
-            "body".into(),
-            nmc("Text", vec![Expr::String("Home".into())]),
-        ),
-    ])]);
+    let routes = Expr::Array(
+        vec![Expr::Object(vec![
+            ("name".into(), Expr::String("home".into())),
+            (
+                "body".into(),
+                nmc("Text", vec![Expr::String("Home".into())]),
+            ),
+        ])],
+        None,
+    );
     m.init.push(app_with_body(nmc(
         "NavStack",
         vec![Expr::LocalGet(7), routes],
@@ -207,7 +216,7 @@ fn navstack_empty_routes_emits_empty_column_with_comment() {
     });
     m.init.push(app_with_body(nmc(
         "NavStack",
-        vec![Expr::LocalGet(5), Expr::Array(vec![])],
+        vec![Expr::LocalGet(5), Expr::Array(vec![], None)],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("// NavStack: empty routes array"));
@@ -252,10 +261,13 @@ fn navstack_set_in_closure_rewrites_to_settext() {
             },
         ],
     );
-    let routes = Expr::Array(vec![Expr::Object(vec![
-        ("name".into(), Expr::String("home".into())),
-        ("body".into(), nav_button),
-    ])]);
+    let routes = Expr::Array(
+        vec![Expr::Object(vec![
+            ("name".into(), Expr::String("home".into())),
+            ("body".into(), nav_button),
+        ])],
+        None,
+    );
     m.init.push(app_with_body(nmc(
         "NavStack",
         vec![Expr::LocalGet(5), routes],
@@ -384,10 +396,13 @@ fn multiple_state_decls_get_unique_ids() {
     });
     m.init.push(app_with_body(nmc(
         "VStack",
-        vec![Expr::Array(vec![
-            state_method_call(1, "text", vec![]),
-            state_method_call(2, "text", vec![]),
-        ])],
+        vec![Expr::Array(
+            vec![
+                state_method_call(1, "text", vec![]),
+                state_method_call(2, "text", vec![]),
+            ],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("@State text___state_0: string = '0'"));
@@ -446,10 +461,13 @@ fn scrollview_with_children() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "ScrollView",
-        vec![Expr::Array(vec![
-            nmc("Text", vec![Expr::String("a".into())]),
-            nmc("Text", vec![Expr::String("b".into())]),
-        ])],
+        vec![Expr::Array(
+            vec![
+                nmc("Text", vec![Expr::String("a".into())]),
+                nmc("Text", vec![Expr::String("b".into())]),
+            ],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("Scroll() {"));
@@ -463,10 +481,13 @@ fn lazyvstack_emits_column_with_deferral_comment() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "LazyVStack",
-        vec![Expr::Array(vec![
-            nmc("Text", vec![Expr::String("row 0".into())]),
-            nmc("Text", vec![Expr::String("row 1".into())]),
-        ])],
+        vec![Expr::Array(
+            vec![
+                nmc("Text", vec![Expr::String("row 0".into())]),
+                nmc("Text", vec![Expr::String("row 1".into())]),
+            ],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     // Phase 2 v10: explicit-children variant (non-ArrayMap) still
@@ -496,10 +517,10 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);
     let map_expr = Expr::ArrayMap {
-        array: Box::new(Expr::Array(vec![
-            Expr::String("a".into()),
-            Expr::String("b".into()),
-        ])),
+        array: Box::new(Expr::Array(
+            vec![Expr::String("a".into()), Expr::String("b".into())],
+            None,
+        )),
         callback: Box::new(Expr::Closure {
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
@@ -542,10 +563,10 @@ fn lazyvstack_no_array_map_skips_lazy_class_emission() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(
         "LazyVStack",
-        vec![Expr::Array(vec![nmc(
-            "Text",
-            vec![Expr::String("hi".into())],
-        )])],
+        vec![Expr::Array(
+            vec![nmc("Text", vec![Expr::String("hi".into())])],
+            None,
+        )],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(!r.ets_source.contains("class PerryListDataSource"));
@@ -558,11 +579,14 @@ fn picker_with_options_and_closure() {
     m.init.push(app_with_body(nmc(
         "Picker",
         vec![
-            Expr::Array(vec![
-                Expr::String("Red".into()),
-                Expr::String("Green".into()),
-                Expr::String("Blue".into()),
-            ]),
+            Expr::Array(
+                vec![
+                    Expr::String("Red".into()),
+                    Expr::String("Green".into()),
+                    Expr::String("Blue".into()),
+                ],
+                None,
+            ),
             closure_stub(),
         ],
     )));
@@ -765,10 +789,13 @@ fn section_with_title_and_children() {
         "Section",
         vec![
             Expr::String("Personal Info".into()),
-            Expr::Array(vec![
-                nmc("Text", vec![Expr::String("name".into())]),
-                nmc("Text", vec![Expr::String("email".into())]),
-            ]),
+            Expr::Array(
+                vec![
+                    nmc("Text", vec![Expr::String("name".into())]),
+                    nmc("Text", vec![Expr::String("email".into())]),
+                ],
+                None,
+            ),
         ],
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();

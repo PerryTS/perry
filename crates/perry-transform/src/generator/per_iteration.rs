@@ -998,7 +998,7 @@ fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>) {
         Stmt::Let { id, init, ty, .. } if cells.contains(id) => {
             let mut inner = init.take().unwrap_or(Expr::Undefined);
             rewrite_cells_in_expr(&mut inner, cells);
-            *init = Some(Expr::Array(vec![inner]));
+            *init = Some(Expr::Array(vec![inner], None));
             *ty = Type::Array(Box::new(Type::Any));
         }
         _ => {

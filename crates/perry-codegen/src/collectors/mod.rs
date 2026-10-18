@@ -113,7 +113,9 @@ pub(crate) use mutation::{
 };
 pub(crate) use number_by_construction::collect_number_by_construction_locals;
 pub(crate) use object_create_proto::{object_create_protos, ObjectCreateProtos};
-pub(crate) use object_literal_exports::exported_object_literal_capabilities;
+pub(crate) use object_literal_exports::{
+    exported_object_literal_capabilities, object_literal_facts,
+};
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use proven_args::{

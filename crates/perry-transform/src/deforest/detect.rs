@@ -203,7 +203,7 @@ pub fn analyze_producer(func: &Function) -> Option<ProducerInfo> {
         match stmt {
             Stmt::Let {
                 id,
-                init: Some(Expr::Array(elems)),
+                init: Some(Expr::Array(elems, _)),
                 ..
             } if elems.is_empty() => {
                 if out_local.is_some() {
