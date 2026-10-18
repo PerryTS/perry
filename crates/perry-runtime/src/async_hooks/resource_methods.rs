@@ -63,28 +63,14 @@ pub(super) extern "C" fn async_resource_bind_thunk(
     let callback = scope.root_nanbox_f64(callback);
     let this_arg = scope.root_nanbox_f64(this_arg);
     validate_bind_callback(callback.get_nanbox_f64());
-    // Native callers retain their existing silent-invalid-receiver contract.
-    // Only the JavaScript method seam permits a deferred receiver lookup.
-    let native = unsafe {
-        crate::native_payload::payload_mut_attached::<AsyncResourcePayload>(
-            receiver.get_nanbox_f64(),
-            &ASYNC_RESOURCE_FAMILY,
-        )
-        .is_ok()
-    };
-    let bound = if native {
-        js_async_resource_bind(
-            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()),
-            callback.get_nanbox_f64(),
-            this_arg.get_nanbox_f64(),
-        )
-    } else {
-        bind_deferred_receiver(
-            receiver.get_nanbox_f64(),
-            callback.get_nanbox_f64(),
-            this_arg.get_nanbox_f64(),
-        )
-    };
+    // Native callers keep `js_async_resource_bind`'s silent-invalid-receiver
+    // contract; the JavaScript seam always dispatches through public Get, so
+    // an own `runInAsyncScope` on a real resource is honored as in Node.
+    let bound = bind_deferred_receiver(
+        receiver.get_nanbox_f64(),
+        callback.get_nanbox_f64(),
+        this_arg.get_nanbox_f64(),
+    );
     if bound == 0 {
         TAG_UNDEFINED_F64
     } else {
@@ -133,17 +119,29 @@ fn bind_deferred_receiver(receiver: f64, callback: f64, this_arg: f64) -> i64 {
     {
         js_closure_set_capture_f64(closure.get_raw_mut_ptr(), index as u32, value);
     }
-    if let Some(length) =
-        crate::closure::closure_length(crate::fs::extract_closure_ptr(callback.get_nanbox_f64()))
-    {
-        crate::object::set_builtin_closure_length(
-            closure.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            length,
-        );
+    // An explicit thisArg is FunctionPrototypeBind of the method in Node, so
+    // the name follows the method's public `name`; implicit stays anonymous.
+    let mut name = String::from("bound");
+    if !JSValue::from_bits(method.get_nanbox_f64().to_bits()).is_undefined() {
+        let method_name = unsafe {
+            crate::value::js_get_property(method.get_nanbox_f64(), b"name".as_ptr() as i64, 4)
+        };
+        name.push(' ');
+        if JSValue::from_bits(method_name.to_bits()).is_string() {
+            name.push_str(&js_string_value_to_string(method_name));
+        }
     }
-    crate::object::set_bound_native_closure_name(
-        closure.get_raw_mut_ptr::<ClosureHeader>(),
-        "bound",
+    crate::object::set_bound_native_closure_name(closure.get_raw_mut_ptr::<ClosureHeader>(), &name);
+    // Node copies `fn.length` through ordinary Get, whatever its type.
+    let length = unsafe {
+        crate::value::js_get_property(callback.get_nanbox_f64(), b"length".as_ptr() as i64, 6)
+    };
+    let length = scope.root_nanbox_f64(length);
+    crate::closure::closure_define_data_with_attrs(
+        closure.get_raw_mut_ptr::<ClosureHeader>() as usize,
+        "length",
+        length.get_nanbox_f64(),
+        crate::object::PropertyAttrs::new(false, false, true),
     );
     closure.get_raw_mut_ptr::<ClosureHeader>() as i64
 }
