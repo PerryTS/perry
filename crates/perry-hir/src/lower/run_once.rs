@@ -112,6 +112,8 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
     module.visit_with(&mut counts);
     let none = HashSet::new();
     let mut walk = Walk::new(&none, &none, &counts.counts);
+    // Only direct syntax proves invocation: call/apply are overridable.
+    walk.direct_iifes_only = true;
     module.visit_with(&mut walk);
     let mut names = Names {
         spans: walk.spans(),
@@ -193,6 +195,7 @@ impl Visit for ArgumentsRef {
 
 struct Walk<'a> {
     run_once: bool,
+    direct_iifes_only: bool,
     once_fns: &'a HashSet<String>,
     candidates: &'a HashSet<String>,
     counts: &'a HashMap<String, u32>,
@@ -209,6 +212,7 @@ impl<'a> Walk<'a> {
     ) -> Self {
         Walk {
             run_once: true,
+            direct_iifes_only: false,
             once_fns,
             candidates,
             counts,
@@ -238,6 +242,7 @@ impl<'a> Walk<'a> {
     fn iife_target<'e>(&self, callee: &'e ast::Expr) -> Option<Iife<'e>> {
         let callee = strip_parens(callee);
         let target = match callee {
+            ast::Expr::Member(_) if self.direct_iifes_only => return None,
             ast::Expr::Member(member) => match &member.prop {
                 ast::MemberProp::Ident(prop) if &*prop.sym == "call" || &*prop.sym == "apply" => {
                     strip_parens(&member.obj)
@@ -452,6 +457,21 @@ mod name_proof_tests {
         assert_eq!(
             super::class_names(&ast).into_iter().collect::<Vec<_>>(),
             vec!["Iife", "Top"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod direct_iife_proof_tests {
+    #[test]
+    fn canonical_names_exclude_overridable_call_and_apply() {
+        let ast = perry_parser::parse_typescript(
+            "class Body {} (() => { class Direct {} })(); (function(){ class Call {} }).call(null); (() => { class Apply {} }).apply(null, []);",
+            "direct-iife.ts",
+        ).unwrap();
+        assert_eq!(
+            super::class_names(&ast),
+            ["Body".to_string(), "Direct".to_string()].into()
         );
     }
 }
