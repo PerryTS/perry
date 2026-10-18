@@ -40,6 +40,7 @@ pub struct Gen<'a> {
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
+    pub resolved_reexports: std::collections::BTreeMap<(String, String), String>,
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
     pub thrown: NodeId,
@@ -134,6 +135,7 @@ impl<'a> Gen<'a> {
             modules,
             mods: Vec::new(),
             path_index,
+            resolved_reexports: Default::default(),
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
             thrown,
@@ -676,7 +678,7 @@ impl<'a> Gen<'a> {
                     } => {
                         let a = self.m.atom(exported);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let b = self.m.atom(imported);
                                 let src = self.export_node(t, b);
@@ -689,7 +691,7 @@ impl<'a> Gen<'a> {
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
                     }
-                    Export::ExportAll { source } => match self.resolve_source(module, source) {
+                    Export::ExportAll { source } => match self.resolve_source(mi, module, source) {
                         Some(t) => {
                             // Every export of `t` is visible through `mi`.
                             let tns = self.mods[t as usize].ns_tok;
@@ -707,7 +709,7 @@ impl<'a> Gen<'a> {
                     Export::NamespaceReExport { source, name } => {
                         let a = self.m.atom(name);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let tns = self.mods[t as usize].ns_tok;
                                 self.m.add_tok(en, tns);
@@ -774,7 +776,11 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
+    fn resolve_source(&self, mi: u32, module: &Module, source: &str) -> Option<u32> {
+        let key = (self.mods[mi as usize].path.clone(), source.to_string());
+        if let Some(path) = self.resolved_reexports.get(&key) {
+            return self.path_index.get(path).copied();
+        }
         let imp = module.imports.iter().find(|i| i.source == source)?;
         let p = imp.resolved_path.as_ref()?;
         self.path_index.get(p).copied()

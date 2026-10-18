@@ -6054,25 +6054,6 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-    );
-    // Step 5b: closure class parameters as typed-body receiver proofs, once
-    // the facts say some class's layout is stable.
-    let receiver_params = super::fn_infer::receiver_params(
-        &ctx.native_modules,
-        super::program_facts::has_stable_classes(&program_facts),
-    );
-    // Object model case 2c: the program's static class families and global
-    // key colouring, one value for every module (its digest keys the object
-    // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
     // Re-exports have no HIR Import row. Use the driver's resolved graph,
     // including package/symlink identity, rather than reconstructing paths.
     let mut layout_reexports = std::collections::BTreeMap::new();
@@ -6092,6 +6073,26 @@ pub fn run_with_parse_cache(
             }
         }
     }
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        &layout_reexports,
+    );
+    // Step 5b: closure class parameters as typed-body receiver proofs, once
+    // the facts say some class's layout is stable.
+    let receiver_params = super::fn_infer::receiver_params(
+        &ctx.native_modules,
+        super::program_facts::has_stable_classes(&program_facts),
+    );
+    // Object model case 2c: the program's static class families and global
+    // key colouring, one value for every module (its digest keys the object
+    // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
     let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
         ctx.native_modules
             .iter()

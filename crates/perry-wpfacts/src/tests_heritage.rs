@@ -224,13 +224,19 @@ fn imported_and_reexported_parent_uses_existing_value_graph() {
     );
     let bridge = module("/bridge.ts", "export {Base as Parent} from '/base.ts';");
     let leaf = module("/leaf.ts", "import {Parent} from '/bridge.ts'; function make() { return class Child extends Parent { static x = 1; }; } const factory = make; const C = factory(); console.log(new C().read());");
+    // Re-exports have no HIR Import row. Reuse the canonical edge supplied
+    // to layout-family parent resolution by the driver (including aliases).
+    let cfg = FactsConfig {
+        resolved_reexports: [(("/bridge.ts".into(), "/base.ts".into()), "/base.ts".into())].into(),
+        ..Default::default()
+    };
     let pf = compute(
         &[
             ("/base.ts".into(), &base),
             ("/bridge.ts".into(), &bridge),
             ("/leaf.ts".into(), &leaf),
         ],
-        &FactsConfig::default(),
+        &cfg,
     );
     let c = child(&pf, "Child");
     assert!(c.escape.is_none() && c.hard.is_none(), "{}", pf.dump_text());
