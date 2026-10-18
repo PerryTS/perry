@@ -90,19 +90,28 @@ pub(crate) fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
 /// `line` with its `thread_local` specifier (the default general-dynamic
 /// model, or `initialexec`) replaced by `thread_local(localexec)`, or `None`
 /// when it has none (not a thread-local, or already local-exec).
+///
+/// The specifier is one of the keywords before `global`/`constant`; only those
+/// are read. The initializer can spell the same word: a string image's bytes
+/// (highlight.js's C++ keyword list in Claude Code) once grew by the 11 bytes
+/// of `(localexec)` and no longer matched its declared array length.
 pub(crate) fn with_local_exec_tls(line: &str) -> Option<String> {
     let (lhs, rhs) = line.split_once(" = ")?;
-    let (at, spec) = ["thread_local ", "thread_local(initialexec) "]
-        .into_iter()
-        .find_map(|spec| rhs.find(spec).map(|at| (at, spec)))?;
-    if at != 0 && !rhs[..at].ends_with(' ') {
-        return None;
+    let mut at = 0;
+    for word in rhs.split(' ') {
+        match word {
+            "global" | "constant" => return None,
+            "thread_local" | "thread_local(initialexec)" => {
+                return Some(format!(
+                    "{lhs} = {}thread_local(localexec) {}",
+                    &rhs[..at],
+                    rhs.get(at + word.len() + 1..).unwrap_or("")
+                ));
+            }
+            _ => at += word.len() + 1,
+        }
     }
-    Some(format!(
-        "{lhs} = {}thread_local(localexec) {}",
-        &rhs[..at],
-        &rhs[at + spec.len()..]
-    ))
+    None
 }
 
 /// True when a global definition already carries LOCAL linkage

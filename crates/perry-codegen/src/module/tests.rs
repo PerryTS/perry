@@ -972,6 +972,16 @@ fn with_local_exec_tls_rewrites_every_thread_local_model() {
     );
     assert_eq!(with_local_exec_tls("@g = global i64 0"), None);
     assert_eq!(with_local_exec_tls("@thread_local = global i64 0"), None);
+    // The word inside an initializer is data, not a specifier.
+    assert_eq!(
+        with_local_exec_tls(r#"@s = weak_odr constant [17 x i8] c"a thread_local b\00""#),
+        None
+    );
+    assert_eq!(
+        with_local_exec_tls(r#"@s = thread_local global [17 x i8] c"a thread_local b\00""#)
+            .as_deref(),
+        Some(r#"@s = thread_local(localexec) global [17 x i8] c"a thread_local b\00""#)
+    );
 }
 
 /// A layout descriptor plus its `layout_id` alias, as `layout_desc` emits
