@@ -1053,12 +1053,7 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
                 .or_default() += 1;
         }
     }
-    let mut candidates: Vec<(&str, u64)> = positions
-        .keys()
-        .map(|k| (*k, reads.get(*k).copied().unwrap_or(0)))
-        .collect();
-    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    candidates.truncate(MAX_COLOURED_KEYS);
+    let candidates = colour_candidates(&positions, &reads);
     let mut out = ProgramLayouts {
         layout_count: layouts.len() as u32,
         read_keys: reads.len() as u32,
@@ -1066,7 +1061,7 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
     };
     let mut chosen: Vec<(&str, u32)> = candidates
         .iter()
-        .map(|(k, _)| {
+        .map(|k| {
             let slot = positions[k]
                 .iter()
                 .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
@@ -1086,6 +1081,26 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
         }
     }
     out
+}
+
+/// The keys that get a colour, at most [`MAX_COLOURED_KEYS`]: the most read
+/// first; among keys read as often, the one more layouts hold (a colour pays
+/// once per layout holding the key at its slot), then the name.
+fn colour_candidates<'a>(
+    positions: &HashMap<&'a str, BTreeMap<u32, u32>>,
+    reads: &HashMap<String, u64>,
+) -> Vec<&'a str> {
+    let mut ranked: Vec<(&str, u64, u32)> = positions
+        .iter()
+        .map(|(k, at)| (*k, reads.get(*k).copied().unwrap_or(0), at.values().sum()))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    ranked.truncate(MAX_COLOURED_KEYS);
+    ranked.into_iter().map(|(k, _, _)| k).collect()
 }
 
 /// The slot of every key of every family layout, in key order. Slots are a
@@ -1305,6 +1320,31 @@ mod tests {
 
     fn keys(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_colour_tie_goes_to_the_key_more_layouts_hold() {
+        // An enum object's members, each read once and held by one layout,
+        // fill the budget; a key read as often but held by thirty layouts
+        // (a base class and its subclasses) still gets its colour.
+        let names: Vec<String> = (0..MAX_COLOURED_KEYS)
+            .map(|i| format!("Kind{i:03}"))
+            .collect();
+        let mut positions: HashMap<&str, BTreeMap<u32, u32>> = HashMap::new();
+        let mut reads: HashMap<String, u64> = HashMap::new();
+        for (i, n) in names.iter().enumerate() {
+            positions.insert(n.as_str(), BTreeMap::from([(i as u32, 1)]));
+            reads.insert(n.clone(), 1);
+        }
+        positions.insert("spa", BTreeMap::from([(0, 30)]));
+        reads.insert("spa".into(), 1);
+        positions.insert("data", BTreeMap::from([(1, 1)]));
+        reads.insert("data".into(), 9);
+        let chosen = colour_candidates(&positions, &reads);
+        assert_eq!(chosen.len(), MAX_COLOURED_KEYS);
+        assert_eq!(chosen[0], "data");
+        assert_eq!(chosen[1], "spa");
+        assert!(!chosen.contains(&"Kind126"));
     }
 
     #[test]
