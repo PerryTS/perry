@@ -1102,6 +1102,15 @@ pub(crate) unsafe fn array_prototype_property_value(
     ) {
         return Some(JSValue::from_bits(v.to_bits()));
     }
+    // The intrinsic's recorded parent is authoritative too. In particular a
+    // relink to a null-rooted chain must never fall back to Object.prototype.
+    if let Some(parent) = super::super::prototype_chain::object_static_prototype(proto_ptr()) {
+        return super::super::prototype_chain::resolve_inherited_field_from_prototype(
+            receiver_addr(),
+            parent,
+            key(),
+        );
+    }
     if proto_ptr() == receiver_addr() {
         return default_object_prototype_property_value(receiver_addr(), key());
     }

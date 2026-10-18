@@ -44,13 +44,12 @@ pub(crate) fn array_spec_has_index(arr: *const ArrayHeader, index: u32) -> bool 
             }
             None => {}
         }
-        if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        // The existing invalidation word includes a relink of Array.prototype.
+        // Its own indices alone do not describe the relinked parent chain.
+        if array_index_fast_path_invalid_for(0) {
             let proto = array_prototype_addr();
             if proto != 0 && proto != arr as usize {
-                let proto_arr = proto as *const ArrayHeader;
-                if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
-                    return true;
-                }
+                return array_spec_has_index(proto as *const ArrayHeader, index);
             }
         }
         if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
