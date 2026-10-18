@@ -366,3 +366,27 @@ fn bounds_hold_during_generation() {
         full.stats.nodes
     );
 }
+
+#[test]
+fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
+    assert!(facts("console.log((function() { return 1; }).call(null));")
+        .fnproto_borrow_written
+        .is_none());
+    assert!(
+        facts("const p = Function.prototype; p.call = function() {}; ")
+            .fnproto_borrow_written
+            .is_some()
+    );
+    assert!(
+        facts("const p = Function.prototype; p.apply = function() {}; ")
+            .fnproto_borrow_written
+            .is_some()
+    );
+    assert!(facts("const p = missing(); p.call = function() {}; ")
+        .fnproto_borrow_written
+        .is_some());
+    // A bind-specific write must not prevent a call/apply proof.
+    assert!(facts("Function.prototype.bind = function() {}; ")
+        .fnproto_borrow_written
+        .is_none());
+}

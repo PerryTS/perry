@@ -102,7 +102,7 @@ fn live_namespace(ns: &str) -> Expr {
 /// Can the lowered arguments appear in both arms of the guard? Each arm runs
 /// alone, so nothing is evaluated twice; but a definition (a closure or class
 /// body, with its function id) or a suspension point must exist once.
-fn duplicable(args: &[Expr]) -> bool {
+pub(super) fn duplicable(args: &[Expr]) -> bool {
     fn ok(e: &Expr) -> bool {
         if matches!(
             e,

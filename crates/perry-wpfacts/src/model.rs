@@ -596,6 +596,7 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    pub fnproto_borrow_write: Option<u32>,
     /// Wall-clock budget on generation and solve; when exceeded the pass
     /// stops and the program gets no facts at all (every fact off: the
     /// sound fallback).
@@ -657,25 +658,30 @@ impl Model {
     /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
-        if self.fnproto_write.is_some()
-            || !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto))
-        {
+        if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
             return;
         }
-        let hits = match key {
-            None | Some(Key::Any) => true,
-            Some(Key::Named(a)) => matches!(
-                self.atoms[a as usize].as_str(),
-                "bind" | "name" | "length" | crate::STAR_KEY
-            ),
+        let key_name = match key {
+            Some(Key::Named(a)) => Some(self.atoms[a as usize].as_str()),
+            _ => None,
         };
-        if hits {
+        let any = key_name.is_none() || key_name == Some(crate::STAR_KEY);
+        let bind = any || matches!(key_name, Some("bind" | "name" | "length"));
+        let borrow = any || matches!(key_name, Some("call" | "apply"));
+        if (bind && self.fnproto_write.is_none()) || (borrow && self.fnproto_borrow_write.is_none())
+        {
             let on = if t == TOP {
                 "a value from unmodeled code"
             } else {
                 "a builtin prototype"
             };
-            self.fnproto_write = Some(self.reason(&format!("{what} on {on}")));
+            let reason = self.reason(&format!("{what} on {on}"));
+            if bind && self.fnproto_write.is_none() {
+                self.fnproto_write = Some(reason);
+            }
+            if borrow && self.fnproto_borrow_write.is_none() {
+                self.fnproto_borrow_write = Some(reason);
+            }
         }
     }
 

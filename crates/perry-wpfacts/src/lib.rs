@@ -118,6 +118,8 @@ pub struct ProgramFacts {
     /// aborted solve answers `Some`). Interpreted code is
     /// [`ProgramFacts::interp_guard`]'s.
     pub fnproto_bind_written: Option<String>,
+    /// Compiled code may replace Function.prototype.call/apply; fail closed.
+    pub fnproto_borrow_written: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
@@ -295,8 +297,15 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     } else {
         g.m.fnproto_write.map(|r| g.m.reasons[r as usize].clone())
     };
+    let fnproto_borrow_written = if stats.aborted {
+        Some("solve aborted".to_string())
+    } else {
+        g.m.fnproto_borrow_write
+            .map(|r| g.m.reasons[r as usize].clone())
+    };
     let mut pf = ProgramFacts {
         fnproto_bind_written,
+        fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
         sites,

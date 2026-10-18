@@ -85,7 +85,10 @@ impl<'a> Gen<'a> {
             } => {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
-                if module == "__perry_runtime" {
+                if module == "__perry_borrowed_proof" {
+                    // A leaf layout/Pristine predicate, not a call into unknown code.
+                    self.prim_node(prim::BOOL)
+                } else if module == "__perry_runtime" {
                     self.runtime_glue(fx, method, o, a)
                 } else {
                     if module == "vm" || module == "node:vm" {

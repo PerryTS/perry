@@ -473,6 +473,7 @@ impl WasmModuleEmitter {
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
+                    "__perry_borrowed_proof" => "u64ToF64(TAG_FALSE)".to_string(),
                     "console" => {
                         let args_js: Vec<String> = args
                             .iter()

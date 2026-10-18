@@ -91,6 +91,8 @@ pub struct ElisionFacts {
     /// base-shape function needs no `Pristine(Function)` test, only the
     /// `interp_guard` word when that is set (`expr/function_bind.rs`).
     pub fnproto_bind_unwritten: bool,
+    /// Compiled code cannot replace Function.prototype.call/apply.
+    pub fnproto_borrow_unwritten: bool,
 }
 
 impl ElisionFacts {
