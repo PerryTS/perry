@@ -498,6 +498,12 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
     match header.obj_type {
         crate::gc::GC_TYPE_OBJECT => unsafe { note_write(addr as *const ObjectHeader, site) },
         crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
+        crate::gc::GC_TYPE_CLOSURE => unsafe {
+            note_write(
+                (*(addr as *const crate::closure::ClosureHeader)).props,
+                site,
+            );
+        },
         _ => {}
     }
 }

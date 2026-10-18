@@ -554,3 +554,6 @@ runtime_layout!(PASSTHROUGH_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500019, 
     NP_ATOM_CONSTRUCTOR => E_NON_ENUMERABLE,
     NP_ATOM_U_TRANSFORM,
 ]);
+
+// Constructor own-property declarations share this runtime family inventory.
+include!("native_constructor_bags.rs");

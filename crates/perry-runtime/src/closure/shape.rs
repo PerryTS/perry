@@ -65,6 +65,21 @@ pub(crate) const INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE: u64 = 19;
 pub(crate) const INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE: u64 = 20;
 pub(crate) const INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE: u64 = 21;
 pub(crate) const INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE: u64 = 22;
+/// The sealed own-property bags of native constructors (not the closures).
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER: u64 = 23;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_STREAM: u64 = 24;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_READABLE: u64 = 25;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE: u64 = 26;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX: u64 = 27;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM: u64 = 28;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH: u64 = 29;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE: u64 = 30;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE: u64 = 31;
+pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE: u64 = 32;
+const _: () = assert!(
+    INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE
+        < crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL
+);
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,6 +310,10 @@ pub(crate) unsafe fn closure_on_plain_function_shape(closure: *const ClosureHead
 /// `closure` is a live `GC_TYPE_CLOSURE` cell (forwarding already resolved).
 #[inline]
 pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
+    // A sealed native constructor's own bag also describes its parent
+    // link. Accessors, symbols, deletes and relinks all reach this funnel,
+    // including constructors already on FunctionDictionary.
+    crate::object::builtin_proto::note_write((*closure).props, "function own state");
     let dict = function_dictionary_shape();
     let id = (*closure).shape_id;
     // A class function object keeps its (sticky, dictionary-kind) class shape.

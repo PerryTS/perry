@@ -1181,7 +1181,7 @@ pub unsafe extern "C" fn perry_bind_family_prototype(
 ///
 /// # Safety
 /// `d` is a descriptor of this program.
-unsafe fn prototype_image(
+pub(crate) unsafe fn prototype_image(
     d: &PerryLayoutDesc,
     built: f64,
     serial: u64,

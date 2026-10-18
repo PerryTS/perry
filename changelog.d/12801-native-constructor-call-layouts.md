@@ -1,0 +1,3 @@
+Native constructors from events, stream and http now keep their own properties on sealed static layouts. Function.prototype call/apply/bind entries check those layout words and the fixed constructor ancestors instead of repeating dictionary method lookup. Property definitions, writes, deletes and constructor prototype changes shadow the same bag word; the closure's existing function shape is preserved.
+
+Split method calls retain the inherited intrinsic before argument evaluation, so a later write or prototype change cannot replace the method already read. Stream constructors called with an unrelated object return a fresh stream, matching Node, while util.inherits subclasses continue to initialize their receiver.
