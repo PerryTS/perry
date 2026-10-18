@@ -174,7 +174,7 @@ unsafe fn copy_slots(
         return;
     }
     let keys = record.keys() as usize as *const ArrayHeader;
-    let key_words = if prefix_count == 0 {
+    let key_words = if prefix_count == 0 || record.logical_key_count() == 0 {
         ptr::null()
     } else {
         crate::array::array_elements_ptr(keys)
@@ -595,7 +595,12 @@ unsafe fn birth_slow(
                 words.push(*slots.add(i));
             }
         }
-        let slots = crate::array::array_elements_ptr(record.keys() as usize as *const ArrayHeader);
+        // A keyless source (`{ ...undefined }`'s result) has a null key list.
+        let slots = if count == 0 {
+            ptr::null()
+        } else {
+            crate::array::array_elements_ptr(record.keys() as usize as *const ArrayHeader)
+        };
         for slot in 0..count as usize {
             let word = *slots.add(slot);
             let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
