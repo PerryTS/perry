@@ -159,6 +159,25 @@ pub use replace_fn::{
     js_string_replace_all_js, js_string_replace_all_string, js_string_replace_all_string_fn,
     js_string_replace_js, js_string_replace_string, js_string_replace_string_fn,
 };
+// Engine-disabled builds still carry the String.prototype builtin entries
+// (`object::builtin_proto_entries`) that name these boxed bodies. A program
+// that uses regex forces the engine on, so they are unreachable there; they
+// answer as the engine-off `native_call_method` arms do: no match.
+#[cfg(not(feature = "regex-engine"))]
+#[no_mangle]
+pub extern "C" fn js_string_match_js(_receiver: f64, _pattern: f64) -> f64 {
+    f64::from_bits(crate::value::JSValue::null().bits())
+}
+#[cfg(not(feature = "regex-engine"))]
+#[no_mangle]
+pub extern "C" fn js_string_match_all_js(_receiver: f64, _pattern: f64) -> f64 {
+    f64::from_bits(crate::value::JSValue::null().bits())
+}
+#[cfg(not(feature = "regex-engine"))]
+#[no_mangle]
+pub extern "C" fn js_string_search_js(_receiver: f64, _pattern: f64) -> f64 {
+    -1.0
+}
 #[cfg(feature = "regex-engine")]
 mod exec;
 #[cfg(feature = "regex-engine")]
