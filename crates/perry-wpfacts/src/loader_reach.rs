@@ -112,6 +112,14 @@ impl Gen<'_> {
                 }
             }
         }
+        if matches!(e, Expr::ObjectGetPrototypeOf(_)) {
+            self.m.reach_ops.push((
+                fx.f,
+                Op::Capability(
+                    "prototype introspection may expose an evaluator constructor".into(),
+                ),
+            ));
+        }
         if let Expr::DynamicImport { paths, .. } = e {
             for path in paths {
                 if let Some(&mi) = self.path_index.get(path) {
@@ -243,6 +251,7 @@ fn possible_loader_member(name: Option<&str>) -> bool {
         matches!(
             n,
             "Function"
+                | "__proto__"
                 | "eval"
                 | "module"
                 | "require"
@@ -580,15 +589,20 @@ impl<'a> Reach<'a> {
                 continue;
             }
             let m = &self.g.m;
+            // ObjectProto is a collapsed invariance token, also injected
+            // into ordinary unknown results. Original prototype reads are
+            // guarded above; this summary alone is not a source loader path.
             if self.require_token(t, &mut FxHashSet::default())
                 || self.module_record(t)
                 || matches!(
                     m.toks[t as usize],
                     TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Other)
-                        | TokKind::ObjectProto
                 )
             {
-                self.reason(f, format!("{} exposed to unknown code", m.tok_name(t)));
+                self.reason(
+                    f,
+                    format!("{} exposed to unknown code [node {n}]", m.tok_name(t)),
+                );
                 return;
             }
             self.touch(t);
@@ -686,7 +700,8 @@ impl<'a> Reach<'a> {
                     ) || (store && n != "exports")
                 });
             let cap = loader_names
-                && (private_loader
+                && (name == Some("__proto__")
+                    || private_loader
                     || require
                     || record
                     || (self.private_arguments.contains(&t) && name.is_none_or(|n| n == "callee"))
@@ -754,6 +769,9 @@ impl<'a> Reach<'a> {
                         | TokKind::BuiltinFn => {
                             name.is_none() || matches!(name, Some("constructor" | "caller"))
                         }
+                        TokKind::Builtin(
+                            BuiltinNs::Object | BuiltinNs::Function | BuiltinNs::Reflect,
+                        ) => matches!(name, Some("constructor" | "prototype" | "getPrototypeOf")),
                         TokKind::Builtin(_) => name == Some("constructor"),
                         TokKind::ObjectProto if m.nodes[n as usize].pts.contains_tok(t) => {
                             name.is_none() || name == Some("constructor")

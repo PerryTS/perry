@@ -115,6 +115,7 @@ fn inherited_function_prototypes_are_loader_paths() {
     for s in [
         "const fn=Object.create(Object.getPrototypeOf(()=>0)).constructor; fn(process.argv[2]);",
         "const obj={}; Object.setPrototypeOf(obj,Object.getPrototypeOf(()=>0)); obj.constructor(process.argv[2]);",
+        "console.log(Object.getPrototypeOf(()=>0));",
         "const obj=Object.create(null); console.log(typeof obj);",
     ] {let p=facts(s);assert_eq!(p.module_reentry.is_some(),!s.contains("create(null)"),"{s}: {}",p.dump_text());}
 }
