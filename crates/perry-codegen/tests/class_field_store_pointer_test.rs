@@ -182,6 +182,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, constructor: Option<Funct
 fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
     let class_name = class.name.clone();
     Module {
+        requested_modules: Vec::new(),
         name: "class_field_store_pointer_test.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

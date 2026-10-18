@@ -85,6 +85,7 @@ fn mock_property_call(args: Vec<Expr>) -> Stmt {
 fn fixture_module() -> Module {
     let target = || Expr::Object(vec![("value".to_string(), Expr::Integer(5))]);
     Module {
+        requested_modules: Vec::new(),
         name: "node_test_mock_property_presence.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

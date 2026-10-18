@@ -111,6 +111,7 @@ fn module_with_recursive_constructor_return() -> Module {
     };
 
     Module {
+        requested_modules: Vec::new(),
         name: "constructor_recursion.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

@@ -186,6 +186,7 @@ fn shadow_hygiene_module() -> Module {
 
 fn top_level_shadow_module(name: &str) -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -300,6 +301,7 @@ fn persistent_index_alias_shadow_module() -> Module {
 
 fn flat_const_row_alias_shadow_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: "entry_flat_const_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

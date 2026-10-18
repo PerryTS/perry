@@ -78,6 +78,7 @@ fn entry_opts(target: Option<&str>) -> CompileOptions {
 
 fn empty_entry_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: "chdir_gate.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

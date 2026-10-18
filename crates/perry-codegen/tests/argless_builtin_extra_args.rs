@@ -78,6 +78,7 @@ fn empty_opts() -> CompileOptions {
 
 fn module_with_init(init: Vec<Stmt>) -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: "argless_extra_args.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

@@ -111,6 +111,7 @@ fn field(name: &str) -> ClassField {
 /// is addressed by the `@perry_class_keys_*` codegen global.
 fn module_with_declared_field_class() -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: "class_keys_gc_root.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

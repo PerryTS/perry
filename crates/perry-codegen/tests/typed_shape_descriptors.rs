@@ -98,6 +98,7 @@ fn object_type(fields: &[(&str, Type)]) -> Type {
 
 fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

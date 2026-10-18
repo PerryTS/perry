@@ -130,6 +130,7 @@ fn entry_opts() -> CompileOptions {
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
     Module {
+        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
