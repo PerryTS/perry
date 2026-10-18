@@ -1306,6 +1306,10 @@ pub fn compute<'a>(
             });
             for c in &module.classes {
                 if c.extends_expr.is_some()
+                    && !c.has_private_elements()
+                    && c.native_extends.is_none()
+                    && c.decorators.is_empty()
+                    && c.computed_members.is_empty()
                     && candidates.contains(&c.name)
                     && layouts.families.contains_key(&c.id)
                 {

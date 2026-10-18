@@ -308,6 +308,21 @@ mod family_syntax_tests {
             .writes
             .push((None, "Base".into()));
         assert_ne!(crate::stable_hash::hash_module(&module), exported);
+        let before = crate::stable_hash::hash_module(&module);
+        module
+            .class_family_syntax
+            .as_mut()
+            .unwrap()
+            .run_once_classes
+            .insert("Child".into());
+        let once = crate::stable_hash::hash_module(&module);
+        assert_ne!(before, once);
+        module
+            .class_family_syntax
+            .as_mut()
+            .unwrap()
+            .module_capability_uses += 1;
+        assert_ne!(once, crate::stable_hash::hash_module(&module));
         assert_eq!(
             crate::stable_hash::hash_module(&module),
             crate::stable_hash::hash_module(&module.clone())
