@@ -449,6 +449,7 @@ pub struct Node {
     /// Canonical shared-value vertex after a prototype-summary cycle merge.
     pub prototype_alias: Option<NodeId>,
     pub prototype_key: Option<Key>,
+    pub prototype_predecessors: Option<Box<crate::pts::FxHashSet<NodeId>>>,
     /// The set grew past the widening bound: it holds only ⊤ from now on,
     /// and every token that reaches it escapes.
     pub widened: bool,

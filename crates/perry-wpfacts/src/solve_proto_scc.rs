@@ -24,6 +24,9 @@ impl Model {
         if self.nodes[dest as usize].prototype_key != Some(key) {
             return false;
         }
+        self.work += 1;
+        self.nodes[dest as usize].prototype_predecessors
+            .get_or_insert_with(Default::default).insert(source);
         // The ordinary edge deduplicator will handle an existing arc.
         if self.nodes[source as usize].succ.contains(&dest) {
             return false;
@@ -75,6 +78,31 @@ impl Model {
         true
     }
 
+    /// Redirect all incoming prototype arcs after merging representatives.
+    /// Without this, distinct old targets repeatedly copy into the same union.
+    fn repair_prototype_successors(&mut self, source: NodeId) {
+        let mut edges = std::mem::take(&mut self.nodes[source as usize].succ);
+        edges.extend(std::mem::take(&mut self.nodes[source as usize].prim_succ));
+        self.work += edges.len() as u64;
+        let mut seen = crate::pts::FxHashSet::default();
+        let mut normal = Vec::new();
+        let mut primitive = Vec::new();
+        for target in edges {
+            let target = self.prototype_root(target);
+            if target == source || !seen.insert(target) { continue; }
+            if self.nodes[target as usize].widened {
+                primitive.push(target);
+            } else {
+                normal.push(target);
+            }
+        }
+        let node = &mut self.nodes[source as usize];
+        node.esc_out |= !primitive.is_empty();
+        node.succ = normal;
+        node.prim_succ = primitive;
+        node.succ_set = if seen.len() >= 16 { Some(Box::new(seen)) } else { None };
+    }
+
     fn merge_prototype_members(&mut self, mut members: Vec<NodeId>) {
         members.sort_unstable();
         members.dedup();
@@ -86,8 +114,12 @@ impl Model {
         let mut calls = Vec::new();
         let mut constraints = Vec::new();
         let mut builtin = false;
+        let mut incoming = crate::pts::FxHashSet::default();
         for &n in &members {
             let node = &self.nodes[n as usize];
+            if let Some(preds) = &node.prototype_predecessors {
+                incoming.extend(preds.iter().copied());
+            }
             values.extend(node.pts.to_sorted());
             prims |= node.prim;
             wide |= node.widened;
@@ -116,6 +148,14 @@ impl Model {
             }
             self.rel(|| format!("copy {n} {root}"));
             self.rel(|| format!("copy {root} {n}"));
+        }
+        self.nodes[root as usize].prototype_predecessors = Some(Box::new(incoming.clone()));
+        let mut repaired = crate::pts::FxHashSet::default();
+        for source in incoming {
+            let source = self.prototype_root(source);
+            if source != root && repaired.insert(source) {
+                self.repair_prototype_successors(source);
+            }
         }
         let node = &mut self.nodes[root as usize];
         node.succ.clear();
