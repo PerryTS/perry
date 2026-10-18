@@ -367,7 +367,16 @@ unsafe fn symbol_prototype_word(owner: usize) -> Option<u64> {
             };
             return (parent != 0).then(|| crate::value::js_nanbox_pointer(parent as i64).to_bits());
         }
-        return None;
+        // A function's default parent is a fact of its body kind, even when
+        // it has no explicit prototype override. Resolve the same intrinsic
+        // chain as Object.getPrototypeOf; the walker then reads the holder's
+        // live symbol slot, including user definitions and deletes.
+        let _no_move = crate::gc::GcSuppressScope::new();
+        if let Some(proto) = crate::object::global_this::generator_function_proto_of(owner) {
+            return Some(proto.to_bits());
+        }
+        let proto = crate::closure::shape::function_prototype_ptr_materialized();
+        return (proto != 0).then(|| crate::value::js_nanbox_pointer(proto as i64).to_bits());
     }
     crate::object::prototype_chain::object_static_prototype(owner).or_else(|| {
         crate::object::is_class_object_ptr(owner as *const u8)
