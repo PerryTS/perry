@@ -41,6 +41,14 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         return Ok(Expr::In { property, object });
     }
 
+    // `0 && x`, `"s" || x`, `1 ?? x`: a literal left operand decides the
+    // result, which is that operand, and the right operand never runs. It is
+    // not lowered at all (esbuild ends a bundle with `0 && (module.exports =
+    // { ...every export })` for cjs-module-lexer: thousands of dead keys).
+    if short_circuits(bin) {
+        return lower_expr(ctx, &bin.left);
+    }
+
     // Handle instanceof specially - needs to extract class name
     if matches!(bin.op, ast::BinaryOp::InstanceOf) {
         // `inspector.Session` inherits EventEmitter in Node. The session is
@@ -361,5 +369,30 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         }),
 
         _ => Err(anyhow!("Unsupported binary operator: {:?}", bin.op)),
+    }
+}
+
+/// Does `bin` short-circuit on a literal left operand, whatever its right?
+fn short_circuits(bin: &ast::BinExpr) -> bool {
+    let mut left = bin.left.as_ref();
+    while let ast::Expr::Paren(paren) = left {
+        left = &paren.expr;
+    }
+    let ast::Expr::Lit(lit) = left else {
+        return false;
+    };
+    // (truthy, nullish) of the literal's value.
+    let (truthy, nullish) = match lit {
+        ast::Lit::Num(n) => (n.value != 0.0 && !n.value.is_nan(), false),
+        ast::Lit::Bool(b) => (b.value, false),
+        ast::Lit::Str(s) => (!s.value.is_empty(), false),
+        ast::Lit::Null(_) => (false, true),
+        _ => return false,
+    };
+    match bin.op {
+        ast::BinaryOp::LogicalAnd => !truthy,
+        ast::BinaryOp::LogicalOr => truthy,
+        ast::BinaryOp::NullishCoalescing => !nullish,
+        _ => false,
     }
 }
