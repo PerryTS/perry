@@ -84,6 +84,13 @@ pub unsafe extern "C" fn perry_probe_set_keyed(
     key_bits: u64,
     value: f64,
 ) -> i32 {
+    if obj_bits & TAG_MASK != POINTER_TAG {
+        return 0;
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
+        return 0;
+    }
     // Overflow is the key-order/descriptor authority once it shadows the
     // immutable prefix. Its descriptor can replace a prefix entry without
     // changing that entry's attributes, so only the complete setter owns it.
