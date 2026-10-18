@@ -487,12 +487,43 @@ pub(crate) fn lower_put_value_dyn_ic_inline(
     v: &str,
     strict_i32: &str,
 ) -> Result<String> {
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        "@PERRY_EMPTY_SHAPE_DIR",
+    );
+    let obj_bits = ctx.block().bitcast_double_to_i64(t);
+    let key_bits = ctx.block().bitcast_double_to_i64(k);
+    let stored = ctx.block().call(
+        I32,
+        "perry_probe_set_keyed",
+        &[
+            (crate::types::PTR, &dir),
+            (I64, &obj_bits),
+            (I64, &key_bits),
+            (DOUBLE, v),
+        ],
+    );
+    let served = ctx.block().icmp_ne(I32, &stored, "0");
+    let slow = ctx.new_block("keyset.slow");
+    let done = ctx.new_block("keyset.done");
+    let slow_l = ctx.block_label(slow);
+    let done_l = ctx.block_label(done);
+    let hit_end = ctx.block().label.clone();
+    ctx.block().cond_br(&served, &done_l, &slow_l);
+    ctx.current_block = slow;
     let _decision = crate::fallback_diag::decision("computed-key store has no fixed key/slot; runtime layout and ordinary Set dispatch required", "runtime key coercion/layout/presence/store admission");
-    Ok(ctx.block().call(
+    let result = ctx.block().call(
         DOUBLE,
         "js_put_value_set_dynamic",
         &[(DOUBLE, t), (DOUBLE, k), (DOUBLE, v), (I32, strict_i32)],
-    ))
+    );
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    Ok(ctx
+        .block()
+        .phi(DOUBLE, &[(v, &hit_end), (&result, &slow_end)]))
 }
 
 pub(crate) fn static_string_write_key(ctx: &FnCtx<'_>, key: &Expr) -> Option<String> {

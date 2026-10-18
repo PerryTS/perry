@@ -420,6 +420,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("perry_probe_get_length", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_binding", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_keyed", DOUBLE, &[PTR, I64, I64]);
+    module.declare_function("perry_probe_set_keyed", I32, &[PTR, I64, I64, DOUBLE]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),
     // returns a new object pointer.
