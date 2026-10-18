@@ -24,10 +24,15 @@ impl Model {
         if self.nodes[dest as usize].prototype_key != Some(key) {
             return false;
         }
+        // The ordinary edge deduplicator will handle an existing arc.
+        if self.nodes[source as usize].succ.contains(&dest) {
+            return false;
+        }
         let mut previous = crate::pts::FxHashMap::default();
         let mut stack = vec![dest];
         previous.insert(dest, dest);
         let mut found = false;
+        let mut scanned = 0;
         // Bounded discovery is an optimization: missing a long cycle leaves
         // the ordinary inclusion edges and their work bound in force.
         while let Some(n) = stack.pop() {
@@ -40,6 +45,11 @@ impl Model {
                 break;
             }
             for &next in &self.nodes[n as usize].succ {
+                self.work += 1;
+                scanned += 1;
+                if scanned > 1024 {
+                    return false;
+                }
                 let next = self.prototype_root(next);
                 if self.nodes[next as usize].prototype_key == Some(key)
                     && !previous.contains_key(&next)
