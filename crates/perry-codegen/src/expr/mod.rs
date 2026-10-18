@@ -2500,11 +2500,11 @@ pub(crate) struct ElementShapeLoopFact {
 /// when `object.property` is a tracked `arr[counter].field` read inside an
 /// element-shape fast clone.
 ///
-/// The single entry point for the three sites that must agree about that read
+/// The single entry point for the four sites that must agree about that read
 /// — the field lowering itself
 /// (`expr::property_get::lower_raw_f64_class_field_get_for_number_context`),
-/// `type_analysis::is_numeric_expr`, and `expr::binary`'s arithmetic-operand
-/// router. #7480 step 3 made the clone self-contained by routing all three
+/// `type_analysis::is_numeric_expr`, `expr::binary`'s arithmetic-operand
+/// router, and `wpfacts_access::prove`, which declines a tracked read. #7480 step 3 made the clone self-contained by routing all three
 /// through the fact instead of through `receiver_class_name`, which by design
 /// does not resolve an object-literal element type; the fact's own
 /// `class_name` is therefore the authoritative answer rather than a filter on
