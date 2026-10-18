@@ -630,11 +630,12 @@ impl<'a> Reach<'a> {
         }
     }
     fn module_record(&self, t: Tok) -> bool {
-        self.g
-            .m
-            .atom_index
-            .get("__perry_cjs_record")
-            .is_some_and(|&k| self.g.m.fields.contains_key(&(t, k)))
+        let m = &self.g.m;
+        m.tmpl_of(t).is_some_and(|tm| {
+            m.atom_index
+                .get("__perry_cjs_record")
+                .is_some_and(|k| m.tmpls[tm as usize].birth_keys.contains(k))
+        })
     }
     fn access(&mut self, f: FnIdx, n: NodeId, key: Key, store: bool, loader_names: bool) {
         let m = &self.g.m;
@@ -661,7 +662,7 @@ impl<'a> Reach<'a> {
             );
             return;
         }
-        let mut todo = m.nodes[n as usize].pts.to_sorted();
+        let mut todo = self.values(n);
         let mut seen = FxHashSet::default();
         while let Some(t) = todo.pop() {
             if !seen.insert(t) {

@@ -151,3 +151,31 @@ fn compiler_private_tokens_in_top_are_not_original_reads() {
         assert_eq!(p.module_reentry.is_some(),source.contains("typeof __perry"),"{source}: {}",p.dump_text());
     }
 }
+
+#[test]
+fn generated_record_marker_pollution_does_not_make_an_ordinary_object_a_loader() {
+    let ast =
+        perry_parser::parse_typescript("const own=Object(); console.log(own.Run);", "private.ts")
+            .unwrap();
+    let mut module = perry_hir::lower_module(&ast, "private", "private.ts").unwrap();
+    module.init.insert(
+        0,
+        perry_hir::Stmt::Expr(perry_hir::Expr::CompilerOwned(Box::new(
+            perry_hir::Expr::Call {
+                callee: Box::new(perry_hir::Expr::ExternFuncRef {
+                    name: "external_opaque".into(),
+                    param_types: vec![],
+                    return_type: perry_hir::types::Type::Any,
+                }),
+                args: vec![perry_hir::Expr::Object(vec![(
+                    "__perry_cjs_record".into(),
+                    perry_hir::Expr::Bool(true),
+                )])],
+                type_args: vec![],
+                byte_offset: 0,
+            },
+        ))),
+    );
+    let p = crate::compute(&[("private.ts".into(), &module)], &Default::default());
+    assert!(p.module_reentry.is_none(), "{}", p.dump_text());
+}
