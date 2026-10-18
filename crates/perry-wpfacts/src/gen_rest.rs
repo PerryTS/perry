@@ -1554,6 +1554,7 @@ impl<'a> Gen<'a> {
 
             // Variants modeled in `gen_expr::expr` (never routed here).
             Expr::CompilerOwned(..)
+            | Expr::LoaderReference(..)
             | Expr::Undefined
             | Expr::Null
             | Expr::Bool(..)

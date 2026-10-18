@@ -140,6 +140,9 @@ pub struct LoweringContext {
     /// User-visible declaration spans keyed by the `LocalId` allocated during
     /// lowering. Synthetic compiler locals intentionally have no entry.
     pub(crate) local_source_spans: HashMap<LocalId, LocalSourceSpan>,
+    pub(crate) compiler_owned_functions: std::collections::BTreeSet<FuncId>,
+    pub(crate) compiler_owned_bodies: std::collections::BTreeSet<FuncId>,
+    pub(crate) loader_reach_wrapped: bool,
     /// Bindings lowered out of a multi-declarator classic `for` head and into
     /// its loop-scoped prelude. Copied to `Module` for capture analysis.
     pub(crate) classic_for_lexical_bindings: HashSet<LocalId>,

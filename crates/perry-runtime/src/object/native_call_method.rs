@@ -479,8 +479,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id(
     if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if let Some(value) = super::layout_desc::methods::call_by_id(
-        object, method_id, args_ptr, args_len) {
+    if let Some(value) =
+        super::layout_desc::methods::call_by_id(object, method_id, args_ptr, args_len)
+    {
         return value;
     }
     js_native_call_method_str_key(object, method_id, args_ptr, args_len)

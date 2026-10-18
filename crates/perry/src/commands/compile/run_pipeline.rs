@@ -6107,6 +6107,24 @@ pub fn run_with_parse_cache(
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
     );
+    // Source provenance is a proof input. Restore the ordinary expression
+    // shape before backend representation selection and object emission.
+    for (_, module) in &mut ctx.native_modules {
+        perry_hir::for_each_module_expr_mut(module, &mut |e| {
+            while matches!(
+                e,
+                perry_hir::Expr::CompilerOwned(_) | perry_hir::Expr::LoaderReference(..)
+            ) {
+                let old = std::mem::replace(e, perry_hir::Expr::Undefined);
+                *e = match old {
+                    perry_hir::Expr::CompilerOwned(v) | perry_hir::Expr::LoaderReference(_, v) => {
+                        *v
+                    }
+                    _ => unreachable!(),
+                };
+            }
+        });
+    }
     let program_layouts =
         std::sync::Arc::new(perry_codegen::layout_families::compute_with_loader_reach(
             ctx.native_modules

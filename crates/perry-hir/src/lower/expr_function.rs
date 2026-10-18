@@ -49,7 +49,15 @@ pub(crate) fn capture_function_source(
     is_async: bool,
     is_non_strict_ordinary: bool,
 ) {
-    let Some(mut src) = crate::ir::current_module_source_slice(span.lo.0, span.hi.0) else {
+    if span.lo.0 & crate::SOURCE_COMPILER_OWNED != 0 {
+        ctx.compiler_owned_functions.insert(func_id);
+    }
+    if span.lo.0 & crate::SOURCE_COMPILER_BODY != 0 {
+        ctx.compiler_owned_bodies.insert(func_id);
+    }
+    let mask = !(crate::SOURCE_COMPILER_OWNED | crate::SOURCE_COMPILER_BODY);
+    let Some(mut src) = crate::ir::current_module_source_slice(span.lo.0 & mask, span.hi.0 & mask)
+    else {
         return;
     };
     if is_async && !src.trim_start().starts_with("async") {

@@ -7,6 +7,8 @@ use crate::types::{FuncId, Type};
 /// copied/inlined site keeps its origin independently of its new module.
 /// Zero remains unknown and never grants an exemption.
 pub const SOURCE_COMPILER_OWNED: u32 = 1 << 31;
+pub const SOURCE_COMPILER_BODY: u32 = 1 << 30;
+pub const SOURCE_LOADER_ALLOWED: u32 = 1 << 29;
 
 /// Original CommonJS syntax, retained before wrapping erases binding kinds
 /// and export assignments. Only a closed export with one top-level class
@@ -57,6 +59,11 @@ pub struct FunctionSourceMetadata {
 /// A complete HIR module (corresponds to one TypeScript file)
 #[derive(Debug, Clone)]
 pub struct Module {
+    /// Compiler-private function values and wholly generated bodies. The
+    /// factory containing original user statements is private, not wholly
+    /// generated. These are immutable provenance, never runtime state.
+    pub compiler_owned_functions: std::collections::BTreeSet<FuncId>,
+    pub compiler_owned_bodies: std::collections::BTreeSet<FuncId>,
     /// Module name/path
     pub name: String,
     pub class_family_syntax: Option<ClassFamilySyntax>,
@@ -293,6 +300,8 @@ impl Module {
             class_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
             local_source_spans: std::collections::HashMap::new(),
+            compiler_owned_functions: Default::default(),
+            compiler_owned_bodies: Default::default(),
             gen_param_prologue_len: std::collections::HashMap::new(),
             requested_modules: Vec::new(),
         }

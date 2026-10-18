@@ -557,16 +557,33 @@ impl Model {
     // ---------------------------------------------------------------- rules
 
     pub fn apply(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
+        let saved = self.reach_call;
+        match *c {
+            Cons::Call { call }
+            | Cons::CallThis { call, .. }
+            | Cons::CallArgs { call }
+            | Cons::New { call }
+            | Cons::MCall { call, .. }
+            | Cons::ProtoMethods { call, .. }
+            | Cons::SuperCtor { call, .. }
+            | Cons::SuperCtorParent { call, .. } => self.reach_call = Some(call),
+            _ => {}
+        }
         if self.profile.is_some() {
             let started = std::time::Instant::now();
             self.apply_inner(n, c, toks, prim);
-            let name = c.kind_name();
-            let e = self.profile.as_mut().unwrap().entry(name).or_default();
+            let e = self
+                .profile
+                .as_mut()
+                .unwrap()
+                .entry(c.kind_name())
+                .or_default();
             e.0 += 1;
             e.1 += started.elapsed();
-            return;
+        } else {
+            self.apply_inner(n, c, toks, prim);
         }
-        self.apply_inner(n, c, toks, prim);
+        self.reach_call = saved;
     }
 
     fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
@@ -1788,6 +1805,9 @@ impl Model {
         // there are synthetic functions whose argument reaches the result.
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            reach_parent: self.reach_call,
+            reach_owner: self.reach_owner,
+            reach_user: self.reach_user,
             this: ThisArg::Tok(t),
             args: vec![arg; 4],
             spread: vec![],

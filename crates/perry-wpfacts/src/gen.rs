@@ -60,6 +60,7 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    pub(crate) cjs_module_bindings: crate::pts::FxHashSet<(u32, u32, bool)>,
 }
 
 /// Per-function walking context.
@@ -147,6 +148,7 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            cjs_module_bindings: Default::default(),
         }
     }
 
@@ -343,6 +345,14 @@ impl<'a> Gen<'a> {
             }
         }
         self.m.funcs.push(FuncInfo {
+            compiler_owned: self.modules[mi as usize]
+                .1
+                .compiler_owned_functions
+                .contains(&id),
+            compiler_body: self.modules[mi as usize]
+                .1
+                .compiler_owned_bodies
+                .contains(&id),
             module: mi,
             func_id: id,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
@@ -493,6 +503,8 @@ impl<'a> Gen<'a> {
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
         self.m.funcs.push(FuncInfo {
+            compiler_owned: true,
+            compiler_body: false,
             module: mi,
             func_id: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
@@ -948,7 +960,21 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor,
         };
-        let saved_user = std::mem::replace(&mut self.m.reach_user, true);
+        let literal = ctor_of.is_some_and(|tm| {
+            matches!(
+                self.m.tmpls[tm as usize].kind,
+                TmplKind::Class {
+                    literal_shape: true,
+                    ..
+                }
+            )
+        });
+        if literal {
+            self.m.funcs[fxi as usize].compiler_owned = true;
+            self.m.funcs[fxi as usize].compiler_body = true;
+        }
+        let saved_user =
+            std::mem::replace(&mut self.m.reach_user, !(info.compiler_body || literal));
         self.params(&fx, &f.params);
         if f.is_async || f.is_generator {
             // Not transformed (rare at this point): results are runtime
@@ -1158,6 +1184,17 @@ impl<'a> Gen<'a> {
     }
 
     fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+        if let Stmt::Let {
+            name,
+            id,
+            init: Some(perry_hir::Expr::CompilerOwned(_)),
+            ..
+        } = s
+        {
+            if name == "module" && self.modules[fx.module as usize].1.is_commonjs_wrap() {
+                self.cjs_module_bindings.insert((fx.module, *id, false));
+            }
+        }
         let saved = self.m.reach_owner.replace(fx.f);
         self.stmt_inner(fx, s);
         self.m.reach_owner = saved;

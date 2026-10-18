@@ -31,6 +31,7 @@ impl SH for Expr {
     fn hash<H: StableHasher>(&self, h: &mut H) {
         match self {
             Expr::CompilerOwned(value) => { tag(h, 12900); value.as_ref().hash(h); }
+            Expr::LoaderReference(kind,value) => { tag(h,12901); kind.hash(h); value.as_ref().hash(h); }
             Expr::Undefined => tag(h, 0),
             Expr::Null => tag(h, 1),
             Expr::Bool(b) => { tag(h, 2); b.hash(h); }

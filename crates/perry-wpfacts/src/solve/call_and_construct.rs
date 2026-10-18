@@ -4,6 +4,12 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        let saved = self.reach_call.replace(call);
+        self.call_tok_inner(call, t, this_tok);
+        self.reach_call = saved;
+    }
+
+    fn call_tok_inner(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
@@ -182,6 +188,9 @@ impl Model {
         let mut args: Vec<NodeId> = bargs.clone();
         args.extend(c.args.iter().copied());
         self.calls.push(CallSite {
+            reach_parent: self.reach_call,
+            reach_owner: self.reach_owner,
+            reach_user: self.reach_user,
             this: ThisArg::Node(bthis),
             args,
             spread: c.spread.clone(),
@@ -217,6 +226,9 @@ impl Model {
         let ret = self.node_l("bound-ret");
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            reach_parent: self.reach_call,
+            reach_owner: self.reach_owner,
+            reach_user: self.reach_user,
             this: if new {
                 ThisArg::Undef
             } else {
@@ -293,6 +305,12 @@ impl Model {
 
     /// `new t(args)`.
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        let saved = self.reach_call.replace(call);
+        self.construct_inner(call, t);
+        self.reach_call = saved;
+    }
+
+    fn construct_inner(&mut self, call: CallId, t: Tok) {
         if !self.construct_done.insert((call, t)) {
             return;
         }
@@ -338,6 +356,9 @@ impl Model {
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
                 self.calls.push(CallSite {
+                    reach_parent: self.reach_call,
+                    reach_owner: self.reach_owner,
+                    reach_user: self.reach_user,
                     this: ThisArg::Undef,
                     args,
                     spread: c.spread.clone(),
@@ -429,6 +450,12 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        let saved = self.reach_call.replace(call);
+        self.method_on_inner(t, key, call);
+        self.reach_call = saved;
+    }
+
+    fn method_on_inner(&mut self, t: Tok, key: Key, call: CallId) {
         if t == TOP {
             self.call_tok(call, TOP, Some(TOP));
             return;
@@ -583,6 +610,9 @@ impl Model {
                 self.add_prim(args_n, prim::ALL);
                 let call = self.calls.len() as CallId;
                 self.calls.push(CallSite {
+                    reach_parent: self.reach_call,
+                    reach_owner: self.reach_owner,
+                    reach_user: self.reach_user,
                     this: ThisArg::Undef,
                     args: vec![args_n; 8],
                     spread: vec![],

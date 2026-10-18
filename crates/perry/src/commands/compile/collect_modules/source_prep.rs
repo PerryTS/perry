@@ -346,7 +346,7 @@ pub(super) fn prepare_from_raw(
             stdlib_modules.push(spec.strip_prefix("node:").unwrap_or(&spec).to_string());
         }
     }
-    if source.len() >= perry_hir::SOURCE_COMPILER_OWNED as usize {
+    if source.len() >= perry_hir::SOURCE_LOADER_ALLOWED as usize {
         return Err(anyhow!(
             "source exceeds supported byte-offset range: {}",
             canonical.display()

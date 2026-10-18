@@ -8,6 +8,8 @@ use perry_hir::Expr;
 #[derive(Clone, Debug)]
 pub(crate) enum Op {
     Root,
+    Value(NodeId, bool),
+    Reference(NodeId, u8),
     Accessor(Tok, FnIdx),
     Module(u32),
     LoaderCall(NodeId, Option<String>),
@@ -157,6 +159,12 @@ impl Gen<'_> {
             {
                 Some("process.getBuiltinModule may return a loader".into())
             }
+            Expr::NativeMethodCall { module, method, .. }
+                if module.strip_prefix("node:").unwrap_or(module) == "process"
+                    && matches!(method.as_str(), "binding" | "_linkedBinding" | "dlopen") =>
+            {
+                Some(format!("process.{method} loader entry"))
+            }
             Expr::NativeMethodCall { module, method, .. } if native_capability(module) => {
                 Some(format!("native loader operation {module}.{method}"))
             }
@@ -198,6 +206,10 @@ struct Reach<'a> {
     extra_accessors: FxHashMap<Tok, Vec<FnIdx>>,
     refusal: Option<String>,
     context: FnIdx,
+    children: Vec<Vec<CallId>>,
+    active_calls: FxHashSet<CallId>,
+    protocols: FxHashMap<Tok, Vec<CallId>>,
+    top_reached: bool,
 }
 impl<'a> Reach<'a> {
     fn function(&mut self, f: FnIdx) {
@@ -251,7 +263,11 @@ impl<'a> Reach<'a> {
         }
     }
     fn touch(&mut self, t: Tok) {
-        if t == TOP || !self.touched.insert(t) {
+        if t == TOP {
+            self.top();
+            return;
+        }
+        if !self.touched.insert(t) {
             return;
         }
         if self.require_token(t, &mut FxHashSet::default())
@@ -266,6 +282,11 @@ impl<'a> Reach<'a> {
                 format!("{} reached by unknown/protocol code", self.g.m.tok_name(t)),
             );
             return;
+        }
+        if let Some(cs) = self.protocols.get(&t).cloned() {
+            for c in cs {
+                self.call(self.context, c, true, false);
+            }
         }
         let m = &self.g.m;
         match m.toks[t as usize] {
@@ -331,9 +352,15 @@ impl<'a> Reach<'a> {
             return;
         }
         match self.g.m.toks[t as usize] {
+            TokKind::Top => self.top(),
             TokKind::Func(f) => self.function(f),
             TokKind::ClassObj(tm) => self.class(tm),
             TokKind::Bound(b) => {
+                for construct in [false, true] {
+                    if let Some(&c) = self.g.m.bound_merged.get(&(b, construct)) {
+                        self.call(self.context, c, false, false);
+                    }
+                }
                 let n = self.g.m.bound[b as usize].0;
                 for t in self.g.m.nodes[n as usize].pts.to_sorted() {
                     self.call_target(t, seen);
@@ -346,7 +373,31 @@ impl<'a> Reach<'a> {
             _ => {}
         }
     }
+    // TOP contains every escaped user value. Generated loader closures and
+    // records are private; any source read exposing them is a Reference op.
+    // Do not run a private factory merely because compiler bookkeeping
+    // escaped it to the invariance solver's global summary.
+    fn top(&mut self) {
+        if std::mem::replace(&mut self.top_reached, true) {
+            return;
+        }
+        let m = &self.g.m;
+        for (&t, _) in &m.escaped {
+            match m.toks[t as usize] {
+                TokKind::Func(f) if !m.funcs[f as usize].compiler_owned => self.touch(t),
+                TokKind::Obj(_) | TokKind::ClassObj(_) | TokKind::Bound(_)
+                    if !self.module_record(t) =>
+                {
+                    self.touch(t)
+                }
+                _ => {}
+            }
+        }
+    }
     fn call(&mut self, f: FnIdx, c: CallId, user: bool, literal: bool) {
+        if !self.active_calls.insert(c) {
+            return;
+        }
         let mut seen = FxHashSet::default();
         for t in self.calls[c as usize].clone() {
             if user && !literal && self.require_token(t, &mut FxHashSet::default()) {
@@ -357,31 +408,21 @@ impl<'a> Reach<'a> {
             }
             self.call_target(t, &mut seen);
         }
-        // Runtime and unknown calls may call their callbacks, including a
-        // returned callback or one nested in an argument's object graph.
-        if seen.is_empty()
-            || seen.iter().any(|&t| {
-                matches!(
-                    self.g.m.toks[t as usize],
-                    TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_)
-                )
-            })
+        for child in self.children[c as usize].clone() {
+            self.call(f, child, user, false);
+        }
+        // A known builtin's callback calls are explicit children. An opaque
+        // call may invoke any callback reachable in its argument graph.
+        if seen
+            .iter()
+            .any(|&t| matches!(self.g.m.toks[t as usize], TokKind::Top | TokKind::BuiltinFn))
         {
-            let opaque = user
-                && seen.iter().any(|&t| {
-                    matches!(self.g.m.toks[t as usize], TokKind::Top | TokKind::BuiltinFn)
-                });
             let call = &self.g.m.calls[c as usize];
             for &a in call.args.iter().chain(&call.spread) {
-                if opaque {
-                    self.escape(f, a);
-                } else {
-                    self.node(a);
-                }
+                self.escape(f, a);
             }
             match call.this {
-                ThisArg::Node(n) if opaque => self.escape(f, n),
-                ThisArg::Node(n) => self.node(n),
+                ThisArg::Node(n) => self.escape(f, n),
                 ThisArg::Tok(t) => self.touch(t),
                 _ => {}
             }
@@ -430,7 +471,10 @@ impl<'a> Reach<'a> {
             return false;
         }
         match self.g.m.toks[t as usize] {
-            TokKind::Func(f) => self.g.m.funcs[f as usize].name == "require",
+            TokKind::Func(f) => {
+                self.g.m.funcs[f as usize].compiler_owned
+                    && self.g.m.funcs[f as usize].name.ends_with(":require")
+            }
             TokKind::Bound(b) => self.g.m.nodes[self.g.m.bound[b as usize].0 as usize]
                 .pts
                 .to_sorted()
@@ -595,7 +639,23 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
         extra_accessors: Default::default(),
         refusal: None,
         context: 0,
+        children: vec![Vec::new(); g.m.calls.len()],
+        active_calls: Default::default(),
+        protocols: Default::default(),
+        top_reached: false,
     };
+    for (c, site) in g.m.calls.iter().enumerate() {
+        if let Some(parent) = site.reach_parent {
+            if parent != c as u32 {
+                r.children[parent as usize].push(c as u32);
+            }
+        }
+        if g.m.protocol_calls.contains(&(c as u32)) {
+            if let ThisArg::Tok(t) = site.this {
+                r.protocols.entry(t).or_default().push(c as u32);
+            }
+        }
+    }
     // Computed object accessors use the solver's STAR-key rule, which
     // escapes their function rather than installing a named accessor. Its
     // retained constraint still identifies both the holder and the body.
@@ -652,6 +712,35 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
         for op in r.ops[f as usize].clone() {
             match *op {
                 Op::Root | Op::Accessor(..) => {}
+                Op::Reference(n, kind) => {
+                    let cap = kind == 3
+                        || g.m.nodes[n as usize].pts.to_sorted().into_iter().any(|t| {
+                            t == TOP
+                                || (kind == 1 && r.require_token(t, &mut FxHashSet::default()))
+                                || (kind == 2 && r.module_record(t))
+                        });
+                    if cap {
+                        r.reason(f, format!("source reference to loader capability ({kind})"));
+                    }
+                }
+                Op::Value(n, allow_require) => {
+                    for t in g.m.nodes[n as usize].pts.to_sorted() {
+                        if let TokKind::Func(target) = g.m.toks[t as usize] {
+                            let info = &g.m.funcs[target as usize];
+                            if info.compiler_owned
+                                && !(allow_require && info.name.ends_with(":require"))
+                            {
+                                r.reason(
+                                    f,
+                                    format!(
+                                        "source reference to private loader function {}",
+                                        info.name
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
                 Op::Module(mi) => r.module(mi),
                 Op::Function(target) => r.function(target),
                 Op::LoaderCall(n, ref literal) => {

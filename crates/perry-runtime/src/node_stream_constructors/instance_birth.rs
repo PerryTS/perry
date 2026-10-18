@@ -257,8 +257,7 @@ pub(crate) unsafe fn instance_layout_slot(
     hash: Option<u64>,
 ) -> Option<Option<u32>> {
     let layout = &*instance_layout(obj)?;
-    let hash =
-        hash.unwrap_or_else(|| crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len()));
+    let hash = hash.unwrap_or_else(|| crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len()));
     match crate::object::layout_desc::desc_position_hashed(layout, bytes, hash) {
         None => Some(None),
         Some(pos) => {

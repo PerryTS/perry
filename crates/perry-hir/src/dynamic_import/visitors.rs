@@ -105,6 +105,15 @@ pub fn for_each_dynamic_import<F: FnMut(&Expr)>(module: &Module, f: &mut F) {
 /// deterministic resolver as dynamic `import()`, but they lower to a
 /// different runtime shape at codegen.
 pub fn for_each_worker_new_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: &mut F) {
+    for_each_module_expr_mut(module, &mut |e| {
+        if matches!(e, Expr::WorkerNew { .. }) {
+            f(e)
+        }
+    });
+}
+
+/// Visit every mutable module expression, including closure bodies and defaults.
+pub fn for_each_module_expr_mut<F: FnMut(&mut Expr)>(module: &mut Module, f: &mut F) {
     for stmt in &mut module.init {
         visit_stmt_for_worker_new(stmt, f);
     }
@@ -712,19 +721,7 @@ fn visit_stmt_for_worker_new_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
 }
 
 fn visit_expr_for_worker_new<F: FnMut(&mut Expr)>(expr: &mut Expr, f: &mut F) {
-    if matches!(expr, Expr::WorkerNew { .. }) {
-        f(expr);
-        if let Expr::WorkerNew {
-            filename, options, ..
-        } = expr
-        {
-            visit_expr_for_worker_new(filename, f);
-            if let Some(options) = options {
-                visit_expr_for_worker_new(options, f);
-            }
-        }
-        return;
-    }
+    f(expr);
     if let Expr::Closure { body, .. } = expr {
         for s in body {
             visit_stmt_for_worker_new(s, f);

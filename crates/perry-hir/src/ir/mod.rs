@@ -43,7 +43,8 @@ pub use constants::is_buffer_backed_builtin_name;
 
 // ---- module.rs ----
 pub use module::{
-    ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module, SOURCE_COMPILER_OWNED,
+    ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module, SOURCE_COMPILER_BODY,
+    SOURCE_COMPILER_OWNED, SOURCE_LOADER_ALLOWED,
 };
 
 // ---- widget.rs ----

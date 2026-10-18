@@ -176,6 +176,8 @@ pub struct Template {
 
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
+    pub compiler_owned: bool,
+    pub compiler_body: bool,
     pub module: u32,
     pub func_id: u32,
     pub name: String,
@@ -206,6 +208,11 @@ pub enum ThisArg {
 
 #[derive(Clone, Debug)]
 pub struct CallSite {
+    /// The summary call which created this callback/protocol call. Gen calls
+    /// have no parent; parentless generation helpers retain their body owner.
+    pub reach_parent: Option<CallId>,
+    pub reach_owner: Option<FnIdx>,
+    pub reach_user: bool,
     pub this: ThisArg,
     pub args: Vec<NodeId>,
     /// Spread argument arrays: their elements may land in any parameter.
@@ -491,6 +498,9 @@ pub struct FieldWriters {
 pub struct Model {
     /// Current generation body; never participates in the points-to solve.
     pub(crate) reach_owner: Option<FnIdx>,
+    pub(crate) reach_call: Option<CallId>,
+    pub(crate) reach_allow_require: bool,
+    pub(crate) reach_allow_record: bool,
     pub(crate) reach_user: bool,
     pub(crate) reach_index: Option<NodeId>,
     pub(crate) reach_loader_literal: bool,

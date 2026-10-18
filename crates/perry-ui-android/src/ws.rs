@@ -114,7 +114,10 @@ fn io_thread(mut ws: WebSocket<MaybeTlsStream<TcpStream>>, conn: std::sync::Arc<
         // Try to read a message (with 50ms timeout)
         match ws.read() {
             Ok(Message::Text(text)) => {
-                conn.messages.lock().unwrap().push_back(text.as_str().to_string());
+                conn.messages
+                    .lock()
+                    .unwrap()
+                    .push_back(text.as_str().to_string());
             }
             Ok(Message::Close(_)) => {
                 ws_log("io_thread: server closed connection");

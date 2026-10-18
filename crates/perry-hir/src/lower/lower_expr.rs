@@ -71,6 +71,24 @@ const EXPR_LOWER_STACK_RED_ZONE: usize = 256 * 1024;
 const EXPR_LOWER_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    let adjusted = loader_closed_uses(expr);
+    let expr = adjusted.as_ref().unwrap_or(expr);
+    let loader_reference = if expr.span().lo.0
+        & (crate::SOURCE_COMPILER_OWNED | crate::SOURCE_LOADER_ALLOWED)
+        == 0
+    {
+        match expr {
+            ast::Expr::Ident(i) if loader_private_name(i.sym.as_ref()) => Some(3),
+            ast::Expr::Ident(i) if ctx.loader_reach_wrapped && i.sym == *"require" => Some(1),
+            ast::Expr::Ident(i) if ctx.loader_reach_wrapped && i.sym == *"module" => Some(2),
+            ast::Expr::Call(c) if matches!(&c.callee,ast::Callee::Expr(e) if matches!(e.as_ref(),ast::Expr::Ident(i) if loader_private_name(i.sym.as_ref()))) => {
+                Some(3)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     if relower_trace::enabled() {
         let sp = expr.span();
         relower_trace::record(sp.lo.0, sp.hi.0);
@@ -132,11 +150,89 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
     }
     if expr.span().lo.0 & crate::SOURCE_COMPILER_OWNED != 0 {
         result = result.map(|value| match value {
-            Expr::Call { .. } | Expr::PropertyGet { .. } => value,
+            Expr::Call { .. }
+            | Expr::PropertyGet { .. }
+            | Expr::Closure { .. }
+            | Expr::FuncRef(_)
+            | Expr::ExternFuncRef { .. } => value,
             _ => Expr::CompilerOwned(Box::new(value)),
         });
     }
+    if let Some(kind) = loader_reference {
+        result = result.map(|value| Expr::LoaderReference(kind, Box::new(value)));
+    }
     result
+}
+
+fn loader_private_name(name: &str) -> bool {
+    name.starts_with("__perry_cjs_")
+        || name.starts_with("__cjs_")
+        || (name.starts_with("__perry_")
+            && (name.contains("path_module")
+                || name.contains("cjs_main_module")
+                || name.starts_with("__perry_require_")))
+}
+fn loader_native_specifier(s: &str) -> bool {
+    matches!(
+        s.strip_prefix("node:").unwrap_or(s),
+        "module" | "vm" | "repl" | "inspector" | "inspector/promises" | "bun:ffi"
+    ) || s.ends_with(".node")
+        || s.starts_with("data:")
+}
+// Only the immediate callee/receiver gets the exemption. In particular the
+// RHS of `module.exports = module` remains a module-record exposure.
+fn loader_closed_uses(expr: &ast::Expr) -> Option<ast::Expr> {
+    let closed = match expr {
+        ast::Expr::Call(c) => {
+            matches!(&c.callee,ast::Callee::Expr(e) if matches!(e.as_ref(),ast::Expr::Ident(i) if i.sym==*"require"))
+                && matches!(c.args.as_slice(),[a] if a.spread.is_none() && matches!(a.expr.as_ref(),ast::Expr::Lit(ast::Lit::Str(s)) if !loader_native_specifier(s.value.to_string_lossy().as_ref())))
+        }
+        ast::Expr::Member(m) => {
+            matches!(m.obj.as_ref(),ast::Expr::Ident(i) if i.sym==*"module")
+                && crate::patched_builtins::static_member_name(&m.prop).is_some_and(|p| {
+                    matches!(
+                        p.as_str(),
+                        "exports" | "id" | "path" | "filename" | "loaded" | "paths"
+                    )
+                })
+        }
+        ast::Expr::Assign(a) => {
+            matches!(&a.left,ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m)) if matches!(m.obj.as_ref(),ast::Expr::Ident(i) if i.sym==*"module") && crate::patched_builtins::static_member_name(&m.prop).as_deref()==Some("exports"))
+        }
+        _ => false,
+    };
+    if !closed {
+        return None;
+    }
+    let mut out = expr.clone();
+    let ident = match &mut out {
+        ast::Expr::Call(c) => match &mut c.callee {
+            ast::Callee::Expr(e) => match e.as_mut() {
+                ast::Expr::Ident(i) => i,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        },
+        ast::Expr::Member(m) => match m.obj.as_mut() {
+            ast::Expr::Ident(i) => i,
+            _ => unreachable!(),
+        },
+        ast::Expr::Assign(a) => match &mut a.left {
+            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m)) => match m.obj.as_mut() {
+                ast::Expr::Ident(i) => i,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+    // An already-adjusted call needs no second clone when lower_expr recurs.
+    if ident.span.lo.0 & crate::SOURCE_LOADER_ALLOWED != 0 {
+        return None;
+    }
+    ident.span.lo.0 |= crate::SOURCE_LOADER_ALLOWED;
+    ident.span.hi.0 |= crate::SOURCE_LOADER_ALLOWED;
+    Some(out)
 }
 
 fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {

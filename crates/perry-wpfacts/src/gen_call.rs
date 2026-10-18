@@ -108,7 +108,10 @@ impl<'a> Gen<'a> {
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
+                let saved = self.m.reach_allow_require;
+                self.m.reach_allow_require = self.m.reach_loader_literal;
                 let c = self.expr(fx, callee);
+                self.m.reach_allow_require = saved;
                 self.call_value(c, ThisArg::Undef, args, spread)
             }
         }
@@ -178,7 +181,7 @@ impl<'a> Gen<'a> {
                 let ph = crate::ctor_phase::analyze_closure(params, body);
                 self.note_fn_phase(f, ph);
             }
-            let saved_user = std::mem::replace(&mut self.m.reach_user, true);
+            let saved_user = std::mem::replace(&mut self.m.reach_user, !info.compiler_body);
             self.params(&cfx, params);
             if *is_async || *is_generator {
                 self.m
@@ -227,7 +230,9 @@ impl<'a> Gen<'a> {
         spread: Vec<NodeId>,
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+        let saved = self.m.reach_call.replace(call);
         crate::builtins::construct_named(&mut self.m, name, call);
+        self.m.reach_call = saved;
         ret
     }
 

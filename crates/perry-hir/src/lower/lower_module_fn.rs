@@ -942,6 +942,11 @@ pub fn lower_module_full_with_platform_globals(
     // same `__perry_cap_*` symbols.
     let mut ctx =
         LoweringContext::with_class_id_start_salted(source_file_path, name, start_class_id);
+    ctx.loader_reach_wrapped=ast_module.body.iter().any(|item|matches!(item,
+        ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(i)) if i.specifiers.iter().any(|sp|matches!(sp,
+            ast::ImportSpecifier::Named(n) if n.local.sym==*"__perry_cjs_create_require" && n.local.span.lo.0 & crate::SOURCE_COMPILER_OWNED != 0
+        ))
+    ));
     ctx.platform_globals
         .extend(platform_globals.iter().map(|name| (*name).to_string()));
     // Static imports are hoisted. Register `perry/native` type and value
@@ -1984,6 +1989,8 @@ pub fn lower_module_full_with_platform_globals(
     );
 
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
+    module.compiler_owned_functions = std::mem::take(&mut ctx.compiler_owned_functions);
+    module.compiler_owned_bodies = std::mem::take(&mut ctx.compiler_owned_bodies);
     module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);
 
     Ok((module, ctx.next_class_id))

@@ -71,3 +71,14 @@ fn aborted_solve_cannot_prove_module_run_once() {
     assert!(p.stats.aborted);
     assert!(p.module_reentry.is_some());
 }
+
+#[test]
+fn bound_unused_body_is_not_invoked() {
+    let p=facts("const loader=()=>process.getBuiltinModule('module'); const unused=loader.bind(null); console.log(typeof unused);");
+    assert!(p.module_reentry.is_none(), "{}", p.dump_text());
+}
+#[test]
+fn widened_calls_reach_escaped_user_bodies() {
+    let p=facts_with("const fs=[()=>1,()=>2,()=>3,()=>4,()=>process.getBuiltinModule('module')]; function choose(i:number){return fs[i];} choose(4)();",FactsConfig {widen_k:Some(2),..Default::default()});
+    assert!(p.module_reentry.is_some(), "{}", p.dump_text());
+}

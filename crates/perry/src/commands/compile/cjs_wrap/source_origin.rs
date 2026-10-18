@@ -53,7 +53,49 @@ pub(in crate::commands::compile) fn stamp(
             }
         }
     }
+    impl Stamp<'_> {
+        fn function(&self, span: &mut swc_common::Span) {
+            let lo = span.lo.0;
+            let hi = span.hi.0;
+            self.mark(span);
+            if span.lo.0 & perry_hir::SOURCE_COMPILER_OWNED != 0
+                && !self.0.iter().any(|&(a, b)| lo < b && a < hi)
+            {
+                span.lo.0 |= perry_hir::SOURCE_COMPILER_BODY;
+                span.hi.0 |= perry_hir::SOURCE_COMPILER_BODY;
+            }
+        }
+    }
     impl VisitMut for Stamp<'_> {
+        fn visit_mut_import_named_specifier(
+            &mut self,
+            node: &mut swc_ecma_ast::ImportNamedSpecifier,
+        ) {
+            node.visit_mut_children_with(self);
+            self.mark(&mut node.local.span);
+        }
+        fn visit_mut_function(&mut self, node: &mut swc_ecma_ast::Function) {
+            node.visit_mut_children_with(self);
+            self.function(&mut node.span);
+        }
+        fn visit_mut_arrow_expr(&mut self, node: &mut swc_ecma_ast::ArrowExpr) {
+            node.visit_mut_children_with(self);
+            self.function(&mut node.span);
+        }
+        fn visit_mut_var_declarator(&mut self, node: &mut swc_ecma_ast::VarDeclarator) {
+            node.visit_mut_children_with(self);
+            if let Some(value) = &mut node.init {
+                use swc_ecma_ast::Expr as A;
+                match value.as_mut() {
+                    A::Ident(x) => self.mark(&mut x.span),
+                    A::Object(x) => self.mark(&mut x.span),
+                    A::Array(x) => self.mark(&mut x.span),
+                    A::Bin(x) => self.mark(&mut x.span),
+                    A::Paren(x) => self.mark(&mut x.span),
+                    _ => {}
+                }
+            }
+        }
         fn visit_mut_call_expr(&mut self, node: &mut swc_ecma_ast::CallExpr) {
             node.visit_mut_children_with(self);
             self.mark(&mut node.span);

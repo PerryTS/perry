@@ -173,6 +173,8 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
     let p = m.node_l("resolver-param");
     m.edge(p, dst);
     m.funcs.push(FuncInfo {
+        compiler_owned: true,
+        compiler_body: true,
         module: 0,
         func_id: u32::MAX,
         name: "<resolver>".into(),
@@ -219,6 +221,9 @@ pub fn adopt(m: &mut Model, v: NodeId, dst: NodeId) {
     let ret = m.node_l("then-ret");
     let call = m.calls.len() as CallId;
     m.calls.push(CallSite {
+        reach_parent: m.reach_call,
+        reach_owner: m.reach_owner,
+        reach_user: m.reach_user,
         this: ThisArg::Node(v),
         args: vec![rn, jn],
         spread: vec![],
@@ -551,6 +556,9 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 let ret = m.node_l("timer-ret");
                 let call2 = m.calls.len() as CallId;
                 m.calls.push(CallSite {
+                    reach_parent: m.reach_call,
+                    reach_owner: m.reach_owner,
+                    reach_user: m.reach_user,
                     this: ThisArg::Undef,
                     args: c.args.iter().skip(2).copied().collect(),
                     spread: vec![],
@@ -685,6 +693,9 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 let num = m.node_l("num");
                 m.add_prim(num, prim::NUM);
                 m.calls.push(CallSite {
+                    reach_parent: m.reach_call,
+                    reach_owner: m.reach_owner,
+                    reach_user: m.reach_user,
                     this: ThisArg::Undef,
                     args: vec![fa, num],
                     spread: vec![],
@@ -715,6 +726,9 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
                 m.calls.push(CallSite {
+                    reach_parent: m.reach_call,
+                    reach_owner: m.reach_owner,
+                    reach_user: m.reach_user,
                     this: ThisArg::Tok(j),
                     args: vec![s, fa],
                     spread: vec![],
@@ -908,6 +922,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 let ret = m.node_l("executor-ret");
                 let call2 = m.calls.len() as CallId;
                 m.calls.push(CallSite {
+                    reach_parent: m.reach_call,
+                    reach_owner: m.reach_owner,
+                    reach_user: m.reach_user,
                     this: ThisArg::Undef,
                     args: vec![rn, jn],
                     spread: vec![],
@@ -1011,6 +1028,9 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 None => ThisArg::Undef,
             };
             m.calls.push(CallSite {
+                reach_parent: m.reach_call,
+                reach_owner: m.reach_owner,
+                reach_user: m.reach_user,
                 this,
                 args: c.args.iter().skip(1).copied().collect(),
                 spread: c.spread.clone(),
@@ -1030,6 +1050,9 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 spread.push(a);
             }
             m.calls.push(CallSite {
+                reach_parent: m.reach_call,
+                reach_owner: m.reach_owner,
+                reach_user: m.reach_user,
                 this,
                 args: vec![],
                 spread,
@@ -1098,6 +1121,9 @@ fn cb_call(m: &mut Model, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeI
     let ret = m.node_l("cb-ret");
     let call2 = m.calls.len() as CallId;
     m.calls.push(CallSite {
+        reach_parent: m.reach_call,
+        reach_owner: m.reach_owner,
+        reach_user: m.reach_user,
         this,
         args,
         spread: vec![],
@@ -1120,6 +1146,9 @@ fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
         let ret = m.node_l("b-iter-ret");
         let c2 = m.calls.len() as CallId;
         m.calls.push(CallSite {
+            reach_parent: m.reach_call,
+            reach_owner: m.reach_owner,
+            reach_user: m.reach_user,
             this: ThisArg::Node(this),
             args: vec![],
             spread: vec![],
@@ -1643,6 +1672,9 @@ fn native_method(m: &mut Model, native: &str, origin: Tok, name: &str, call: Cal
             let ret = m.node_l("emit-ret");
             let call2 = m.calls.len() as CallId;
             m.calls.push(CallSite {
+                reach_parent: m.reach_call,
+                reach_owner: m.reach_owner,
+                reach_user: m.reach_user,
                 this: ThisArg::Tok(origin),
                 args: c.args.iter().skip(1).copied().collect(),
                 spread: c.spread.clone(),

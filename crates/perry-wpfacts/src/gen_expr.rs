@@ -51,6 +51,9 @@ impl<'a> Gen<'a> {
             ));
         }
         self.m.calls.push(CallSite {
+            reach_parent: None,
+            reach_owner: self.m.reach_owner,
+            reach_user: self.m.reach_user,
             this,
             args,
             spread,
@@ -359,6 +362,8 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let saved = self.m.reach_owner.replace(fx.f);
+        let saved_read_require = std::mem::replace(&mut self.m.reach_allow_require, false);
+        let saved_read_record = std::mem::replace(&mut self.m.reach_allow_record, false);
         let saved_index = self.m.reach_index.take();
         let saved_literal = self.m.reach_loader_literal;
         self.m.reach_loader_literal = matches!(e,Expr::Call {callee,args,..} if matches!(callee.as_ref(),Expr::LocalGet(_)|Expr::FuncRef(_)|Expr::ExternFuncRef {..}) && matches!(args.as_slice(),[Expr::String(s)] if !crate::loader_reach::native_capability(s)));
@@ -368,6 +373,29 @@ impl<'a> Gen<'a> {
         }
         self.note_loader_expr(fx, e);
         let result = self.expr_inner(fx, e);
+        if self.m.reach_user
+            && matches!(
+                e,
+                Expr::LocalGet(_)
+                    | Expr::GlobalGet(_)
+                    | Expr::FuncRef(_)
+                    | Expr::ExternFuncRef { .. }
+            )
+        {
+            self.m.reach_ops.push((
+                fx.f,
+                crate::loader_reach::Op::Value(result, saved_read_require),
+            ));
+        }
+        if self.m.reach_user {
+            if let Expr::LoaderReference(kind, _) = e {
+                self.m
+                    .reach_ops
+                    .push((fx.f, crate::loader_reach::Op::Reference(result, *kind)));
+            }
+        }
+        self.m.reach_allow_require = saved_read_require;
+        self.m.reach_allow_record = saved_read_record;
         self.m.reach_owner = saved;
         self.m.reach_user = saved_user;
         self.m.reach_index = saved_index;
@@ -378,7 +406,7 @@ impl<'a> Gen<'a> {
     fn expr_inner(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
-            Expr::CompilerOwned(value) => self.expr(fx, value),
+            Expr::CompilerOwned(value) | Expr::LoaderReference(_, value) => self.expr(fx, value),
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
             Expr::Bool(_) => self.prim_node(prim::BOOL),
@@ -611,7 +639,13 @@ impl<'a> Gen<'a> {
                 property,
                 byte_offset,
             } => {
+                let saved = self.m.reach_allow_record;
+                self.m.reach_allow_record = matches!(
+                    property.as_str(),
+                    "exports" | "id" | "path" | "filename" | "loaded" | "paths"
+                );
                 let o = self.expr(fx, object);
+                self.m.reach_allow_record = saved;
                 let a = self.m.atom(property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
@@ -630,7 +664,10 @@ impl<'a> Gen<'a> {
                 property,
                 value,
             } => {
+                let saved = self.m.reach_allow_record;
+                self.m.reach_allow_record = property == "exports";
                 let o = self.expr(fx, object);
+                self.m.reach_allow_record = saved;
                 let v = self.expr(fx, value);
                 let a = self.m.atom(property);
                 let owner = self.phase_owner(fx, e, object);

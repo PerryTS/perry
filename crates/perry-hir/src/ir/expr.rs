@@ -59,6 +59,10 @@ pub enum Expr {
     /// still follows callbacks/getters but does not treat the operation as a
     /// source-level loader exposure. Only the driver can stamp this origin.
     CompilerOwned(Box<Expr>),
+    /// A source reference to a CJS loader binding (1 require, 2 module) or
+    /// reserved loader entry (3). The proof checks its solved value; erased
+    /// after whole-program facts, before birth collection and codegen.
+    LoaderReference(u8, Box<Expr>),
     // Literals
     Undefined,
     Null,
