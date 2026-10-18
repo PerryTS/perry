@@ -6178,7 +6178,7 @@ pub fn run_with_parse_cache(
     ));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
-        &PathBuf,
+        PathBuf,
         (Vec<(perry_codegen::BirthShape, u32)>, BTreeSet<u32>),
     > = module_births
         .into_iter()
@@ -6190,9 +6190,31 @@ pub fn run_with_parse_cache(
                 .collect();
             ids.sort();
             ids.dedup();
-            (path, (ids, class_ids))
+            (path.clone(), (ids, class_ids))
         })
         .collect();
+    let static_shape_ids_by_module = {
+        let mut module_seeds = static_shape_ids_by_module;
+        // Complete seed inputs before options are frozen and import inputs released.
+        for (path, (ids, _)) in &mut module_seeds {
+            let module = ctx.native_modules.get(path).expect("birth module");
+            let imports = prepare_module(path, module, true).map_err(|error| anyhow!(error))?;
+            for object in imports
+                .imported_classes
+                .iter()
+                .filter_map(|class| class.object_literal.as_ref())
+            {
+                if let Some(shape) = &object.final_shape {
+                    if let Some(id) = static_shape_ids.get(shape) {
+                        ids.push((shape.clone(), *id));
+                    }
+                }
+            }
+            ids.sort();
+            ids.dedup();
+        }
+        module_seeds
+    };
     if std::env::var_os("PERRY_STATIC_SHAPE_IDS_REPORT").is_some() {
         let literal = static_shape_ids
             .keys()
@@ -6257,17 +6279,6 @@ pub fn run_with_parse_cache(
             for cid in class_ids.iter().chain(foreign.iter()) {
                 if let Some(finals) = class_final_shapes.get(cid) {
                     opts.static_shape_ids.extend(finals.iter().cloned());
-                }
-            }
-            for object in opts
-                .imported_classes
-                .iter()
-                .filter_map(|c| c.object_literal.as_ref())
-            {
-                if let Some(shape) = &object.final_shape {
-                    if let Some(id) = static_shape_ids.get(shape) {
-                        opts.static_shape_ids.push((shape.clone(), *id));
-                    }
                 }
             }
             opts.static_shape_ids.sort();
