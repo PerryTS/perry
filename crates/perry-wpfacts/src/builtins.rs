@@ -179,6 +179,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         this,
         ret,
         args_all,
+        has_arguments: false,
         token: tok,
         ctor_of: None,
         lexical_this: true,

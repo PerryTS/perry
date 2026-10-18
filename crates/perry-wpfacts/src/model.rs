@@ -177,6 +177,10 @@ pub struct FuncInfo {
     pub ret: NodeId,
     /// Holds every argument (the `arguments` object's elements + extra args).
     pub args_all: NodeId,
+    /// The body has an `arguments` object, the only reader of `args_all`:
+    /// calls feed `args_all` only then (a node nobody reads must not widen
+    /// and escape the arguments of a helper called with many objects).
+    pub has_arguments: bool,
     pub token: Tok,
     /// This function is the constructor of that class template.
     pub ctor_of: Option<TmplId>,
@@ -867,11 +871,12 @@ impl Model {
         }
         for (i, f) in self.funcs.iter().enumerate() {
             out.push(format!(
-                "M func {i} tok={} this={} ret={} args={} rest={} lexical={} ctor_of={} params={}",
+                "M func {i} tok={} this={} ret={} args={} arguments={} rest={} lexical={} ctor_of={} params={}",
                 f.token,
                 f.this,
                 f.ret,
                 f.args_all,
+                f.has_arguments as u8,
                 f.rest.map(|r| r.to_string()).unwrap_or_else(|| "-".into()),
                 f.lexical_this as u8,
                 f.ctor_of

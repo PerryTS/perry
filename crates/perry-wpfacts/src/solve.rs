@@ -1799,7 +1799,7 @@ impl Model {
         let f = f as usize;
         let c = call as usize;
         let rest = self.funcs[f].rest;
-        let args_all = self.funcs[f].args_all;
+        let args_all = self.funcs[f].has_arguments.then_some(self.funcs[f].args_all);
         let nparams = self.funcs[f].params.len();
         let nargs = self.calls[c].args.len();
         for i in 0..nargs {
@@ -1811,7 +1811,9 @@ impl Model {
                 let fa = self.field_any_node_of_node(rest);
                 self.edge(a, fa);
             }
-            self.edge(a, args_all);
+            if let Some(args_all) = args_all {
+                self.edge(a, args_all);
+            }
         }
         // Missing arguments are undefined.
         for i in nargs..nparams {
@@ -1838,7 +1840,9 @@ impl Model {
                 let fa = self.field_any_node_of_node(rest);
                 self.edge(elems, fa);
             }
-            self.edge(elems, args_all);
+            if let Some(args_all) = args_all {
+                self.edge(elems, args_all);
+            }
         }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
