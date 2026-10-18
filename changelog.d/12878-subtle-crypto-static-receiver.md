@@ -1,0 +1,3 @@
+Fix static `SubtleCrypto` member calls losing their real receiver when the builtin constructor arity table has no entry. Retain the existing intrinsic and metadata guards, and cover imported WebCrypto direct, computed, aliased, extracted, evaluated and shadowed call routes with one public node-parity fixture.
+
+Independent verification of the frozen unit observed 244/247 crypto cases passing, with three pre-existing parity failures unchanged. Global-only WebCrypto initialization remains outside this fix; the fixture explicitly imports and uses `node:crypto`. No new algorithm, backend or capability policy is introduced.
