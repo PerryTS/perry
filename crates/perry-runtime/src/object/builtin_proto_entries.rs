@@ -31,6 +31,7 @@ use super::builtin_proto::{pristine, redirect_or_refresh, BuiltinProto};
 use crate::string::StringHeader;
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_UNDEFINED};
 
+use crate::regex::{js_string_match_all_js, js_string_match_js, js_string_search_js};
 use crate::string::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_concat, js_string_ends_with, js_string_ends_with_at, js_string_index_of,
@@ -43,15 +44,14 @@ use crate::string::{
 use crate::value::js_get_string_pointer_unified;
 
 // The regex-backed bodies take boxed operands and are defined per engine
-// feature; link to whichever definition is built.
+// feature; link to whichever definition is built. `crate::regex` names the
+// match/matchAll/search bodies in both configurations; reaching them by
+// symbol name left them unresolved in the Windows release link.
 extern "C" {
     fn js_string_position_to_index(pos_f64: f64) -> i32;
     fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64;
     fn js_string_replace_js(receiver: f64, search: f64, replacement: f64) -> f64;
     fn js_string_replace_all_js(receiver: f64, search: f64, replacement: f64) -> f64;
-    fn js_string_match_js(receiver: f64, pattern: f64) -> f64;
-    fn js_string_match_all_js(receiver: f64, pattern: f64) -> f64;
-    fn js_string_search_js(receiver: f64, pattern: f64) -> f64;
 }
 
 const UNDEFINED: f64 = f64::from_bits(TAG_UNDEFINED);
