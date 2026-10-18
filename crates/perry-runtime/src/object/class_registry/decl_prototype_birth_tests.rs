@@ -440,3 +440,36 @@ fn static_root_parent_uses_the_realm_intrinsic_identity() {
         crate::value::js_nanbox_pointer(other as i64).to_bits(),
     ));
 }
+
+#[test]
+fn a_refused_static_request_keeps_the_general_born_final_shape() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let cid = 0x6e91;
+    register(cid, b"RefusedStaticRequest");
+    let requested = crate::object::shapes::SHAPE_ID_BASE + 1996;
+    assert!(crate::object::shapes::shape_record_by_id(requested).is_none());
+    let declaration = Box::leak(Box::new(super::declarations::ClassDeclaration {
+        birth_shape: requested,
+        ..super::declarations::ClassDeclaration::native(&[])
+    }));
+    unsafe {
+        super::declarations::js_register_class_declaration(cid, declaration);
+    }
+    assert!(!super::decl_prototype_birth::static_parent_matches(
+        cid,
+        requested,
+        crate::value::TAG_NULL,
+    ));
+    let value = super::decl_prototype_birth::decl_prototype_born_final(cid, crate::value::TAG_NULL)
+        .expect("the actual-parent shape needs no compiled identity");
+    let obj = object_of(value);
+    unsafe {
+        assert_ne!((*obj).parent_class_id, requested);
+        assert_eq!(
+            crate::object::shapes::object_proto_id(obj),
+            crate::object::shapes::PROTO_ID_NULL
+        );
+        assert_eq!(slot(obj, 0), class_constructor_ref_value(cid).to_bits());
+    }
+}

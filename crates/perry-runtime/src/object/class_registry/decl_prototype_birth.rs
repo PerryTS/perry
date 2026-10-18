@@ -97,10 +97,12 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     if super::declarations::class_has_computed_members(class_id) {
         return None;
     }
-    let requested = Some(super::declarations::class_birth_shape(class_id)).filter(|&id| id != 0);
-    if requested.is_some_and(|id| !static_parent_matches(class_id, id, parent_bits)) {
-        return None;
-    }
+    // Refusing the compiled identity does not invalidate the ordinary born-
+    // final builder: it can still derive a shape from the actual parent bits,
+    // as it did before a static candidate existed. Preserve that allocation
+    // path instead of rebuilding every member through transient key shapes.
+    let requested = Some(super::declarations::class_birth_shape(class_id))
+        .filter(|&id| id != 0 && static_parent_matches(class_id, id, parent_bits));
     let members = class_prototype_member_names(class_id);
     if members.iter().any(|(name, accessor)| {
         name == b"constructor" || (!*accessor && class_method_entry_bytes(class_id, name).is_none())
