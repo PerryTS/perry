@@ -292,24 +292,14 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
         .cond_br(&is_array, &object_array_guard_label, &ta_brand_label);
 
     // Ordinary Array: the receiver tag and forwarding state were checked in
-    // the predecessor.  Reject descriptors or any process-wide prototype
-    // invalidation, then prove a dense in-capacity index before loading the
-    // raw JSValue.  A hole is exposed as `undefined`, exactly like the guarded
-    // statically-Array tier.  Every exotic/OOB case retains the unchanged
-    // boxed dispatcher.
+    // the predecessor. Prove plain elements and an in-capacity index before
+    // loading the raw JSValue. An own non-hole slot is authoritative even
+    // after a prototype change. Holes and every exotic/OOB case retain the
+    // complete boxed dispatcher.
     ctx.current_block = object_array_guard_idx;
-    let array_reserved_addr = ctx.block().sub(I64, &object_raw, "6");
-    let array_reserved_ptr = ctx.block().inttoptr(I64, &array_reserved_addr);
-    let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
     // Element descriptors live in the array's named layout.
     let array_has_named = super::array_element_kind::has_descriptors(ctx, &object_raw);
     let array_no_descriptors = ctx.block().xor(I1, &array_has_named, "true");
-    // #10593: the process-wide byte AND this array's own custom-proto bit.
-    let array_default_prototypes =
-        crate::expr::array_proto_guard::emit_array_default_prototype_chain(
-            ctx.block(),
-            &array_reserved,
-        );
     let array_ptr = ctx.block().inttoptr(I64, &object_raw);
     let array_length = ctx.block().load(I32, &array_ptr);
     let array_capacity_addr = ctx.block().add(I64, &object_raw, "4");
@@ -325,8 +315,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
             .icmp_ule(I64, &array_length_i64, &array_capacity_i64);
     let array_guard_ok = ctx
         .block()
-        .and(I1, &array_no_descriptors, &array_default_prototypes);
-    let array_guard_ok = ctx.block().and(I1, &array_guard_ok, &array_index_in_bounds);
+        .and(I1, &array_no_descriptors, &array_index_in_bounds);
     let array_guard_ok = ctx
         .block()
         .and(I1, &array_guard_ok, &array_length_within_capacity);
@@ -347,12 +336,32 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let array_is_hole = ctx
         .block()
         .icmp_eq(I64, &array_raw_bits, crate::nanbox::TAG_HOLE_I64);
-    let array_undefined = ctx
+    // A present own element precedes every prototype, including a custom
+    // one. Only holes ask whether inherited lookup can return a value.
+    let array_load_end = ctx.block().label.clone();
+    let array_hole_idx = ctx.new_block("arrlike.ic.array_hole");
+    let array_value_idx = ctx.new_block("arrlike.ic.array_value");
+    let array_hole_l = ctx.block_label(array_hole_idx);
+    let array_value_l = ctx.block_label(array_value_idx);
+    ctx.block()
+        .cond_br(&array_is_hole, &array_hole_l, &array_value_l);
+    ctx.current_block = array_hole_idx;
+    let reserved_at = ctx.block().sub(I64, &object_raw, "6");
+    let reserved_ptr = ctx.block().inttoptr(I64, &reserved_at);
+    let reserved = ctx.block().load(I16, &reserved_ptr);
+    let pristine =
+        crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &reserved);
+    let undefined = ctx
         .block()
         .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-    let array_value = ctx
-        .block()
-        .select(I1, &array_is_hole, DOUBLE, &array_undefined, &array_raw);
+    let hole_end = ctx.block().label.clone();
+    ctx.block()
+        .cond_br(&pristine, &array_value_l, &object_miss_label);
+    ctx.current_block = array_value_idx;
+    let array_value = ctx.block().phi(
+        DOUBLE,
+        &[(&array_raw, &array_load_end), (&undefined, &hole_end)],
+    );
     let array_value = if coerce_slow_to_number {
         ctx.block()
             .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &array_value)])
