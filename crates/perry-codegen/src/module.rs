@@ -999,6 +999,13 @@ impl LlModule {
     fn push_referenced_metadata_ids(&self, ir: &mut String, mut needed: HashSet<u32>) {
         ir.push_str("\n!0 = !{}\n");
         needed.remove(&0);
+        // Named module metadata is shared by every unit. Its numbered
+        // operands must survive the same transitive closure as body refs.
+        for line in &self.metadata_lines {
+            if metadata_definition_id(line).is_none() {
+                collect_metadata_refs(line, &mut needed);
+            }
+        }
         let mut by_id: HashMap<u32, &str> = HashMap::with_capacity(self.metadata_lines.len());
         for line in &self.metadata_lines {
             if let Some(id) = metadata_definition_id(line) {
@@ -1017,7 +1024,7 @@ impl LlModule {
             }
         }
         for line in &self.metadata_lines {
-            if metadata_definition_id(line).is_some_and(|id| needed.contains(&id)) {
+            if metadata_definition_id(line).is_none_or(|id| needed.contains(&id)) {
                 ir.push_str(line);
                 ir.push('\n');
             }

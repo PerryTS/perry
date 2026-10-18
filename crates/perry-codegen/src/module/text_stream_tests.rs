@@ -35,3 +35,18 @@ fn streamed_unit_text_and_objects_match_eager_emission() {
         }
     }
 }
+
+#[test]
+fn named_module_proofs_and_their_operands_survive_unit_splitting() {
+    for units in [1, 2, 4] {
+        let mut module = fixture();
+        module.add_metadata_line("!17 = !{i32 1}".to_string());
+        module.add_metadata_line("!perry.no_workers = !{!0}".to_string());
+        module.add_metadata_line("!perry.test_proof = !{!17}".to_string());
+        for text in module.render_codegen_units(units) {
+            assert!(text.contains("!perry.no_workers = !{!0}"), "{text}");
+            assert!(text.contains("!perry.test_proof = !{!17}"), "{text}");
+            assert!(text.contains("!17 = !{i32 1}"), "{text}");
+        }
+    }
+}
