@@ -26,7 +26,7 @@ fn boxed(raw: i64) -> f64 {
     f64::from_bits(JsValue::from_object_ptr(raw as *mut u8).bits())
 }
 fn raw(value: f64) -> i64 {
-    JsValue::from_bits(value.to_bits()).as_pointer::<u8>() as i64
+    perry_runtime::value::js_nanbox_get_pointer(value)
 }
 fn bytes(value: f64) -> Vec<u8> {
     perry_ffi::bytes::no_gc(|scope| {

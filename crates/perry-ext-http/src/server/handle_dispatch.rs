@@ -134,12 +134,12 @@ extern "C" {
     fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
     fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
     fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
-    fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader;
-    fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader;
+    fn js_node_http_res_get_headers(handle: i64) -> f64;
+    fn js_node_http_res_get_header_names(handle: i64) -> f64;
     fn js_node_http_res_append_header(
         handle: i64,
         name_ptr: *const StringHeader,
-        value_ptr: *const StringHeader,
+        value: f64,
     ) -> i64;
     fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64;
     fn js_node_http_res_get_status_message(handle: i64) -> f64;
@@ -880,7 +880,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
     }
 
     let result = match method.as_str() {
-        "setHeader" if args.len() >= 2 => {
+        "setHeader" if !args.is_empty() => {
             super::response_methods::set_header(response_root.get(), args)
         }
         "getHeader" if !args.is_empty() => {
@@ -904,18 +904,13 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                 !name.is_null() && js_node_http_res_has_header(response_root.get(), name) != 0,
             )
         }
-        "getHeaders" => json_string_value(js_node_http_res_get_headers_json(response_root.get())),
-        "getHeaderNames" => {
-            json_string_value(js_node_http_res_get_header_names_json(response_root.get()))
-        }
-        "appendHeader" if args.len() >= 2 => {
+        "getHeaders" => js_node_http_res_get_headers(response_root.get()),
+        "getHeaderNames" => js_node_http_res_get_header_names(response_root.get()),
+        "appendHeader" if !args.is_empty() => {
+            let value = response_scope.root_nanbox(args.get(1).copied().unwrap_or(undef));
             let name = string_value_arg(args[0]);
             if !name.is_null() {
-                js_node_http_res_append_header(
-                    response_root.get(),
-                    name,
-                    string_value_arg(args[1]),
-                );
+                js_node_http_res_append_header(response_root.get(), name, value.get());
             }
             handle_to_pointer_f64(response_root.get())
         }

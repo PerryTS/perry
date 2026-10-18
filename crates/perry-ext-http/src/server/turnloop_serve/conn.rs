@@ -466,7 +466,11 @@ fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
         let consumed = step.consumed;
         let mut outcome = Step::Idle;
         match step.event {
-            Some(http1::Event::Head(head)) => {
+            Some(http1::Event::Head(mut head)) => {
+                crate::response_headers::preserve_wire_header_names(
+                    &mut head.headers,
+                    &c.input[..consumed],
+                );
                 let mut building = building_from(&head);
                 // A client that sent `Expect: 100-continue` withholds the
                 // body until it sees `100 Continue`, and this decoder only
@@ -618,12 +622,7 @@ fn building_from(head: &http1::Head) -> Building {
         let Ok(value) = std::str::from_utf8(&header.value) else {
             continue;
         };
-        // `http1::Header::name` is already lowercase: `Decoder` lowercases as
-        // it parses, which matches Node's `req.headers` and leaves
-        // `req.rawHeaders` reporting the same name. (Node's rawHeaders keeps
-        // the sender's case; that difference is the decoder's, and it is
-        // recorded in the P5 report rather than papered over here.)
-        headers_lower.insert(header.name.clone(), value.to_string());
+        headers_lower.insert(header.name.to_ascii_lowercase(), value.to_string());
         raw_headers.push((header.name.clone(), value.to_string()));
     }
     let connection = headers_lower.get("connection").cloned();

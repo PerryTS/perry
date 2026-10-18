@@ -48,7 +48,7 @@ macro_rules! method {
         static $info: JsFunctionInfo = JsFunctionInfo::of($body as JsBody3).with_declared(3);
     };
 }
-method!(set_header_body, set_header, SET_HEADER, 2, false);
+method!(set_header_body, set_header, SET_HEADER, 1, false);
 method!(write_head_body, write_head, WRITE_HEAD, 1, true);
 method!(write_body, write, WRITE, 1, false);
 method!(end_body, end, END, 0, false);
@@ -70,7 +70,11 @@ pub(super) unsafe fn set_header(handle: i64, args: &[f64]) -> f64 {
     let response_scope = TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
 
-    let value = response_scope.root_nanbox(args[1]);
+    let value = response_scope.root_nanbox(
+        args.get(1)
+            .copied()
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+    );
     let name = string_value_arg(args[0]);
     if !name.is_null() {
         // Pass the raw JSValue so array values (Set-Cookie) keep their
@@ -198,12 +202,8 @@ mod tests {
                 assert_eq!(call().to_bits(), receiver().to_bits());
                 let handle = || (receiver().to_bits() & super::super::types::PTR_MASK) as i64;
                 assert_eq!(
-                    super::super::response_payload::state(handle())
-                        .unwrap()
-                        .headers
-                        .get("x-direct")
-                        .map(String::as_str),
-                    Some("42")
+                    super::super::response::js_node_http_res_get_header(handle(), perry_ffi::string_arg_ptr(key.get_nanbox_f64())),
+                    42.0
                 );
                 let field = perry_runtime::string::js_string_from_bytes(b"extra".as_ptr(), 5);
                 object::js_object_set_field_by_name(
@@ -239,12 +239,8 @@ mod tests {
                 let other_handle =
                     (other.get_nanbox_f64().to_bits() & super::super::types::PTR_MASK) as i64;
                 assert_eq!(
-                    super::super::response_payload::state(other_handle)
-                        .unwrap()
-                        .headers
-                        .get("x-direct")
-                        .map(String::as_str),
-                    Some("43")
+                    super::super::response::js_node_http_res_get_header(other_handle, perry_ffi::string_arg_ptr(key.get_nanbox_f64())),
+                    43.0
                 );
                 let legacy = perry_ffi::register_handle(
                     super::super::response::ServerResponse::new(),
@@ -263,9 +259,8 @@ mod tests {
                     "the complete fallback must remain live",
                 );
                 assert_eq!(
-                    perry_ffi::get_handle::<super::super::response::ServerResponse>(legacy)
-                        .unwrap().headers.get("x-direct").map(String::as_str),
-                    Some("44"),
+                    super::super::response::js_node_http_res_get_header(legacy, perry_ffi::string_arg_ptr(key.get_nanbox_f64())),
+                    44.0,
                 );
                 perry_ffi::take_handle::<super::super::response::ServerResponse>(legacy);
             })

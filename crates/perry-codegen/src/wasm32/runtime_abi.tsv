@@ -2249,7 +2249,7 @@ js_node_http_im_url	ptr	i64
 js_node_http_incoming_message_standalone_new	i64	f64
 js_node_http_outgoing_message_new	i64	
 js_node_http_res_add_trailers	void	i64,f64
-js_node_http_res_append_header	i64	i64,ptr,ptr
+js_node_http_res_append_header	i64	i64,ptr,f64
 js_node_http_res_assign_socket	void	i64,f64
 js_node_http_res_cork	void	i64
 js_node_http_res_detach_socket	void	i64,f64
@@ -2259,8 +2259,8 @@ js_node_http_res_end_with_cb	void	i64,f64,i64
 js_node_http_res_finished	i32s	i64
 js_node_http_res_flush_headers	void	i64
 js_node_http_res_get_header	f64	i64,ptr
-js_node_http_res_get_header_names_json	ptr	i64
-js_node_http_res_get_headers_json	ptr	i64
+js_node_http_res_get_header_names	f64	i64
+js_node_http_res_get_headers	f64	i64
 js_node_http_res_get_status	f64	i64
 js_node_http_res_get_status_message	f64	i64
 js_node_http_res_has_header	i32s	i64,ptr
@@ -2287,7 +2287,7 @@ js_node_http_res_write	i32s	i64,f64
 js_node_http_res_write_continue	void	i64
 js_node_http_res_write_early_hints	void	i64,f64,i64
 js_node_http_res_write_full	f64	i64,f64,i64,i64
-js_node_http_res_write_head	void	i64,f64,i64,i64
+js_node_http_res_write_head	i64	i64,f64,i64,i64
 js_node_http_res_write_processing	void	i64
 js_node_http_res_write_with_cb	i32s	i64,f64,i64
 js_node_http_response_state_get	f64	f64
@@ -2370,7 +2370,7 @@ js_node_inspector_session_post	f64	i64,f64,f64,f64
 js_node_inspector_session_remove_all_listeners	f64	i64,f64
 js_node_inspector_url	f64	
 js_node_inspector_wait_for_debugger	f64	
-js_node_setheaders_entries_json	ptr	f64
+js_node_setheaders_entries	f64	f64
 js_node_sqlite_backup	ptr	f64,f64,f64
 js_node_sqlite_database_sync_call	f64	f64,f64
 js_node_sqlite_database_sync_new	f64	f64,f64
@@ -2539,6 +2539,7 @@ js_object_alloc_class_with_keys	ptr	i32u,i32u,i32u,ptr,i32u
 js_object_alloc_fast	ptr	i32u,i32u
 js_object_alloc_fast_with_parent	ptr	i32u,i32u,i32u
 js_object_alloc_null_proto	ptr	i32u,i32u
+js_object_alloc_null_proto_entries	ptr	ptr,ptr,ptr,i32u
 js_object_alloc_plain	ptr	i32u
 js_object_alloc_with_parent	ptr	i32u,i32u,i32u
 js_object_alloc_with_shape	ptr	i32u,i32u,ptr,i32u
@@ -3151,7 +3152,6 @@ js_property_rmw_fast	f64	f64,f64,i32s,ptr
 js_proto_constant_contract_check	void	f64,i64,i32,i64
 js_proto_holder_contract_check	void	f64,f64,i64
 js_proto_shadow_contract_check	void	i32,f64,i64
-perry_intrinsic_proto	ptr	i32
 js_proxy_apply	f64	f64,f64,f64
 js_proxy_construct	f64	f64,f64,f64
 js_proxy_delete	f64	f64,f64
@@ -4774,6 +4774,7 @@ perry_i18n_set_currencies	void	ptr,i32u
 perry_i18n_set_locale_index	void	i32s
 perry_i18n_set_plural_locales	void	ptr,ptr,i32u
 perry_init_guard_check_and_set	i32s	i64
+perry_intrinsic_proto	ptr	i32
 perry_ios_classes_registered	void	
 perry_ios_get_connected_scene	i64	
 perry_key_content_hash	i64	ptr

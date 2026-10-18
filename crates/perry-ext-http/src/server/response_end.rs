@@ -153,13 +153,25 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
             Some(sr) if !sr.writable_ended => sr.header_committed,
             _ => return,
         };
-        super::response_payload::sync_head_fields(response_root.get());
-        if !committed {
+        if committed {
+            // The committed head already fixes status and date. Node end()
+            // only consults the current strictContentLength option here.
+            let strict = super::response_payload::field(response_root.get(), b"strictContentLength")
+                .is_some_and(super::response_payload::truthy);
+            if let Some(sr) = super::response::response_state_mut(response_root.get()) {
+                sr.strict_content_length = strict;
+            }
+        } else {
+            super::response_payload::sync_head_fields(response_root.get());
             let code = super::response::response_state(response_root.get())
                 .map_or(200, |sr| sr.status_code);
             super::response_payload::write_head_fields(response_root.get(), code, None);
         }
     }
+    let original_headers = super::response::header_values::take_wire_headers(response_root.get());
+    let has_explicit_length = original_headers.iter().any(|(n, _)| {
+        n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
+    });
     let payload;
     let head_len;
     let mut content_length = None;
@@ -176,9 +188,12 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         }
         sr.headers_sent = true;
         sr.writable_ended = true;
-        let auto_content_length = sr.ensure_content_length();
+        let auto_content_length = !has_explicit_length && sr.ensure_content_length();
         let body = std::mem::take(&mut sr.buffered_body);
-        let mut headers = sr.snapshot_headers();
+        let mut headers = original_headers;
+        if auto_content_length {
+            headers.push(("Content-Length".into(), body.len().to_string()));
+        }
         let framing = wire::framing_for(
             &headers,
             sr.status_code,
@@ -237,7 +252,9 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         // response finishes when the socket has taken the last chunk (never
         // without one, as in node).
         let h = response_root.get();
-        super::response_payload::set_header_text(h, &payload[..head_len]);
+        if super::response::response_state(h).is_some_and(|s| !s.header_committed) {
+            super::response_payload::set_header_text(h, &payload[..head_len]);
+        }
         if let Some(n) = content_length {
             super::response_payload::set_field(h, b"_contentLength", n as f64);
         }
@@ -355,8 +372,9 @@ impl<'a> EndTail<'a> {
 
 /// The head `writeHead` renders for a heap response's `_header` (node's
 /// `_storeHeader`): the headers so far, framed as nothing more is known yet.
-pub(crate) fn render_head(sr: &super::response::ResponseState) -> Option<Vec<u8>> {
-    let mut headers = sr.snapshot_headers();
+pub(crate) fn render_head(handle: i64) -> Option<Vec<u8>> {
+    let mut headers = super::response::header_values::snapshot(handle);
+    let sr = super::response::response_state(handle)?;
     let method = sr.standalone_req_method.as_deref().unwrap_or("GET");
     let framing = wire::framing_for(&headers, sr.status_code, method, 1, None, false);
     wire::align_headers(&mut headers, framing, false);

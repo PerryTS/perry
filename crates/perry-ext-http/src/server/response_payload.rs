@@ -11,6 +11,7 @@ static FAMILY: payload::PayloadFamily = payload::PayloadFamily::new::<ResponseSt
     &VTABLE,
 );
 extern "C" {
+    fn js_is_truthy(value: f64) -> i32;
     fn js_node_http_response_state_get(owner: f64) -> f64;
     fn js_node_http_response_state_set(owner: f64, state: f64);
     fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mut perry_ffi::ArrayHeader;
@@ -64,11 +65,19 @@ pub(crate) unsafe fn attach_to(this: f64, state: ResponseState, req: f64) -> boo
 fn retained_bytes(s: &ResponseState) -> usize {
     std::mem::size_of::<ResponseState>()
         + s.buffered_body.capacity()
-        + s.headers
+        + s.header_fields.as_ref().map_or(0, |f| f.retained_bytes())
+        + s.committed_headers.as_ref().map_or(0, |headers| {
+            headers.capacity() * std::mem::size_of::<(String, String)>()
+                + headers
+                    .iter()
+                    .map(|(k, v)| k.capacity() + v.capacity())
+                    .sum::<usize>()
+        })
+        + s.native_headers
             .iter()
             .map(|(k, v)| k.capacity() + v.capacity())
             .sum::<usize>()
-        + s.header_value_lists
+        + s.native_header_value_lists
             .iter()
             .map(|(k, v)| {
                 k.capacity()
@@ -105,19 +114,20 @@ pub(crate) fn restate(handle: i64) {
 pub(crate) enum Key {
     Socket,
     WriteCallbacks,
-    Headers,
     /// `end(cb)` callbacks: run when the response finishes, or at its
     /// `close` when it never does (node's `kEndCallbacks`).
     EndCallbacks,
+    /// Lowercase header directory retained when the native payload closes.
+    HeaderNames,
 }
-fn js_state(handle: i64) -> f64 {
+pub(crate) fn js_state(handle: i64) -> f64 {
     let roots = TransientRootScope::enter();
     let owner = roots.root_nanbox(value(handle));
     let old = unsafe { js_node_http_response_state_get(owner.get()) };
     if old.to_bits() != TAG_UNDEFINED {
         return old;
     }
-    let empty = [TAG_UNDEFINED; Key::EndCallbacks as usize + 1];
+    let empty = [TAG_UNDEFINED; Key::HeaderNames as usize + 1];
     let state = unsafe { js_array_from_jsvalue(empty.as_ptr(), empty.len() as u32) };
     let state = roots.root_nanbox(f64::from_bits(
         JsValue::from_object_ptr(state.cast::<u8>()).bits(),
@@ -129,6 +139,28 @@ fn js_state(handle: i64) -> f64 {
     }
     unsafe { js_node_http_response_state_set(owner.get(), state.get()) };
     state.get()
+}
+/// Header values occupy the variable tail after the fixed private fields.
+pub(crate) const HEADER_VALUES_START: u32 = Key::HeaderNames as u32 + 1;
+pub(crate) fn existing_state(handle: i64) -> f64 {
+    unsafe { js_node_http_response_state_get(value(handle)) }
+}
+pub(crate) fn store_state(handle: i64, state: f64) {
+    unsafe { js_node_http_response_state_set(value(handle), state) };
+}
+/// Read the private array without creating it. This only reads data slots;
+/// callers have already classified and rooted the response.
+pub(crate) fn get_existing(handle: i64, key: Key) -> f64 {
+    let state = existing_state(handle);
+    if state.to_bits() == TAG_UNDEFINED {
+        return state;
+    }
+    unsafe {
+        f64::from_bits(
+            perry_ffi::js_array_get(JsValue::from_bits(state.to_bits()).as_pointer(), key as u32)
+                .bits(),
+        )
+    }
 }
 pub(crate) fn get(handle: i64, key: Key) -> f64 {
     let state = js_state(handle);
@@ -202,28 +234,11 @@ pub(crate) fn callbacks(handle: i64, key: Key, take: bool) -> Vec<i64> {
 pub(crate) fn close(handle: i64) {
     let roots = TransientRootScope::enter();
     let owner = roots.root_nanbox(value(handle));
-    let Some(s) = (unsafe { state(handle) }) else {
-        return;
-    };
-    let headers = serde_json::to_string(&s.headers).unwrap();
-    let h = perry_ffi::alloc_string(&headers);
-    set(
-        (owner.get().to_bits() & PTR_MASK) as i64,
-        Key::Headers,
-        f64::from_bits(JsValue::from_string_ptr(h.as_raw()).bits()),
-    );
+    super::response::header_values::close_headers((owner.get().to_bits() & PTR_MASK) as i64);
     unsafe { payload::close_attached(owner.get(), &VTABLE) };
 }
 fn closed(handle: i64) -> bool {
     is_response(handle) && unsafe { state(handle) }.is_none()
-}
-pub(crate) fn closed_headers(handle: i64) -> Option<std::collections::HashMap<String, String>> {
-    if !closed(handle) {
-        return None;
-    }
-    let json = get(handle, Key::Headers);
-    let json = JsValue::from_bits(json.to_bits()).to_owned_string()?;
-    serde_json::from_str(&json).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -258,13 +273,9 @@ pub(crate) fn set_field(handle: i64, name: &'static [u8], v: f64) -> bool {
     true
 }
 pub(crate) fn truthy(v: f64) -> bool {
-    let j = JsValue::from_bits(v.to_bits());
-    if j.is_number() {
-        let n = j.to_number();
-        return n != 0.0 && !n.is_nan();
-    }
-    j.to_bool()
+    unsafe { js_is_truthy(v) != 0 }
 }
+
 fn string_value(text: &str) -> f64 {
     f64::from_bits(JsValue::from_string_ptr(perry_ffi::alloc_string(text).as_raw()).bits())
 }
@@ -309,6 +320,21 @@ pub(crate) fn sync_head_fields(handle: i64) {
         if !s.header_committed {
             s.status_message = message;
         }
+        s.send_date = send_date;
+        s.strict_content_length = strict;
+    }
+}
+/// Explicit writeHead supplies the status and reads its current message in
+/// write_head_fields. Only the rendering options need synchronizing here.
+pub(crate) fn sync_head_options(handle: i64) {
+    if !is_response(handle) {
+        return;
+    }
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    let send_date = truthy(unsafe { perry_ffi::runtime_get(owner.get(), b"sendDate") });
+    let strict = truthy(unsafe { perry_ffi::runtime_get(owner.get(), b"strictContentLength") });
+    if let Some(s) = unsafe { state((owner.get().to_bits() & PTR_MASK) as i64) } {
         s.send_date = send_date;
         s.strict_content_length = strict;
     }

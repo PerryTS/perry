@@ -15,9 +15,8 @@ use perry_ffi::{
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::response_end::call_closure0;
 use crate::server::types::{
-    js_json_stringify, js_node_setheaders_entries_json, js_value_is_closure, jsvalue_to_body_bytes,
-    jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL,
-    TAG_TRUE, TAG_UNDEFINED,
+    js_json_stringify, js_node_setheaders_entries, js_value_is_closure, jsvalue_to_body_bytes,
+    read_string_header, PTR_MASK, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 /// Node's default `highWaterMark` for an HTTP `OutgoingMessage` (16 KiB).
@@ -51,14 +50,12 @@ fn http_is_valid_token(s: &str) -> bool {
 /// must fire even when the handle has gone away, so callers check this before
 /// touching state.
 fn response_headers_sent(handle: i64) -> bool {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(v) = heap::closed_field(response_root.get(), b"_header") {
-        return heap::truthy(v);
-    }
-    response_state(response_root.get())
-        .map(|sr| sr.headers_sent)
-        .unwrap_or(false)
+    // An open typed payload is authoritative; only a released payload needs
+    // the object's retained _header field.
+    if let Some(sr) = response_state(handle) { return sr.headers_sent || sr.header_committed; }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    heap::closed_field(owner.get(), b"_header").is_some_and(heap::truthy)
 }
 
 /// `lib/internal/http.js` link-header format: a `<uri>` followed by at least
@@ -90,6 +87,8 @@ fn is_valid_link_header(value: &str) -> bool {
 pub struct ServerResponse {
     pub(crate) owner_agent: u64,
     pub state: ResponseState,
+    /// Traced original headers for registry-backed transport/OutgoingMessage owners.
+    pub header_values: f64,
     pub listeners: HashMap<String, Vec<i64>>,
     pub once_listeners: HashMap<String, Vec<i64>>,
     pub standalone_socket: f64,
@@ -107,23 +106,25 @@ impl std::ops::DerefMut for ServerResponse {
     }
 }
 pub struct ResponseState {
+    /// Node distinguishes an absent outgoing map from a created, empty one.
+    pub(crate) header_fields: Option<header_values::HeaderFields>,
+    /// The committed wire representation, frozen by writeHead.
+    pub committed_headers: Option<Vec<(String, String)>>,
     pub status_code: u16,
     pub status_message: Option<String>,
-    /// Lowercase-keyed header map (the lookup table). For array-valued
-    /// headers this holds Node's scalar coercion (the array's elements
-    /// joined with `, `); the per-element values live in
-    /// `header_value_lists` so the wire layer can emit one line each.
-    pub headers: HashMap<String, String>,
+    /// Native wire fields synthesized by framing or the Bun Response adapter.
+    /// Application headers live exclusively in the owner's traced JS record.
+    pub native_headers: HashMap<String, String>,
     /// Lowercase-keyed multi-value header map. Populated when a header is
     /// assigned an array value (e.g. `Set-Cookie`): Node emits one header
     /// line per element rather than a single comma-joined line, so the wire
     /// serializer expands these into repeated `name: value` lines (#4826).
-    pub header_value_lists: HashMap<String, Vec<String>>,
+    pub native_header_value_lists: HashMap<String, Vec<String>>,
     /// Lowercase-keyed trailer map for HTTP trailers emitted after the
     /// response body, per Node's `ServerResponse.addTrailers` contract.
     pub trailers: HashMap<String, String>,
-    /// Lowercase → original-case map so `getHeaderNames()` returns
-    /// what the user originally set (matches Node behavior).
+    /// Lowercase → original spelling for the wire. The original JS values
+    /// are kept in the owner's traced record, not in this Rust metadata.
     pub raw_header_names: HashMap<String, String>,
     /// Lowercase header names in first-insertion order. The lookup maps above
     /// intentionally stay hash-based; this side list preserves Node's wire
@@ -199,6 +200,7 @@ impl ServerResponse {
         Self {
             owner_agent: perry_ffi::agent_post::current_agent(),
             state: ResponseState::new(),
+            header_values: f64::from_bits(TAG_UNDEFINED),
             listeners: HashMap::new(),
             once_listeners: HashMap::new(),
             standalone_socket: f64::from_bits(TAG_UNDEFINED),
@@ -219,10 +221,12 @@ impl ServerResponse {
 impl ResponseState {
     pub fn new() -> Self {
         Self {
+            header_fields: None,
+            committed_headers: None,
             status_code: 200,
             status_message: None,
-            headers: HashMap::new(),
-            header_value_lists: HashMap::new(),
+            native_headers: HashMap::new(),
+            native_header_value_lists: HashMap::new(),
             trailers: HashMap::new(),
             raw_header_names: HashMap::new(),
             header_order: Vec::new(),
@@ -248,18 +252,18 @@ impl ResponseState {
 
     /// Snapshot the current header map as `Vec<(orig_name, value)>`
     /// preserving original case. Array-valued headers (tracked in
-    /// `header_value_lists`) expand to one entry per element so the wire
+    /// `native_header_value_lists`) expand to one entry per element so the wire
     /// layer emits a separate header line each (#4826).
     pub fn snapshot_headers(&self) -> Vec<(String, String)> {
-        let mut out = Vec::with_capacity(self.headers.len());
+        let mut out = Vec::with_capacity(self.native_headers.len());
         let mut ordered = self.header_order.clone();
-        for lower in self.headers.keys() {
+        for lower in self.native_headers.keys() {
             if !ordered.contains(lower) {
                 ordered.push(lower.clone());
             }
         }
         for lower_k in &ordered {
-            let Some(v) = self.headers.get(lower_k) else {
+            let Some(v) = self.native_headers.get(lower_k) else {
                 continue;
             };
             let orig = self
@@ -267,7 +271,7 @@ impl ResponseState {
                 .get(lower_k)
                 .cloned()
                 .unwrap_or_else(|| lower_k.clone());
-            if let Some(values) = self.header_value_lists.get(lower_k) {
+            if let Some(values) = self.native_header_value_lists.get(lower_k) {
                 for elem in values {
                     out.push((orig.clone(), elem.clone()));
                 }
@@ -275,7 +279,7 @@ impl ResponseState {
                 out.push((orig, v.clone()));
             }
         }
-        if self.send_date && !self.headers.contains_key("date") {
+        if self.send_date && !self.native_headers.contains_key("date") {
             out.push((
                 "Date".to_string(),
                 httpdate::fmt_http_date(std::time::SystemTime::now()),
@@ -313,12 +317,12 @@ impl ResponseState {
         if self.header_committed || !self.trailers.is_empty() {
             return false;
         }
-        if !self.headers.contains_key("content-length")
-            && !self.headers.contains_key("transfer-encoding")
+        if !self.native_headers.contains_key("content-length")
+            && !self.native_headers.contains_key("transfer-encoding")
         {
             self.remember_header("content-length");
             let len = self.buffered_body.len();
-            self.headers
+            self.native_headers
                 .insert("content-length".to_string(), len.to_string());
             self.raw_header_names
                 .insert("content-length".to_string(), "Content-Length".to_string());
@@ -392,11 +396,8 @@ pub unsafe extern "C" fn js_node_http_res_set_status_message(
     }
 }
 
-/// `res.setHeader(name, value)`. `value` arrives as a raw NaN-boxed
-/// JSValue (`NA_F64`) so array values (e.g. `Set-Cookie`) can be detected
-/// and stored as a per-element list — Node emits one header line per array
-/// element rather than a single comma-joined / JSON-stringified line
-/// (#4826). Scalar values are coerced to a string as before.
+/// `res.setHeader(name, value)`: retain the original value in the owner's
+/// traced header record. Coercion is for validation and wire rendering only.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_set_header(
     handle: i64,
@@ -405,6 +406,7 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
 ) {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let value_root = response_scope.root_nanbox(value);
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
     // #4907 — Node's `OutgoingMessage.setHeader` throws if headers are already
     // sent, then validates the field name, before touching any state.
@@ -415,9 +417,6 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             perry_ffi::ErrorKind::Error,
         );
     }
-    if name.is_empty() {
-        return;
-    }
     if !http_is_valid_token(&name) {
         perry_ffi::throw_with_code(
             &format!("Header name must be a valid HTTP token [\"{name}\"]"),
@@ -425,55 +424,9 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             perry_ffi::ErrorKind::TypeError,
         );
     }
-    let lower = name.to_lowercase();
 
-    // Detect an array value via JSON: an array serializes to `[ … ]` and
-    // parses back to `serde_json::Value::Array`. Anything else is coerced
-    // to its string form (matching the previous `NA_STR` behavior).
-    let jsv = JsValue::from_bits(value.to_bits());
-    let array_elems: Option<Vec<String>> = if jsv.is_pointer() {
-        let ptr = js_json_stringify(value, 0);
-        if ptr.is_null() {
-            None
-        } else {
-            read_string_header(ptr).and_then(|json| {
-                match serde_json::from_str::<serde_json::Value>(&json) {
-                    Ok(serde_json::Value::Array(items)) => Some(
-                        items
-                            .into_iter()
-                            .map(|item| match item {
-                                serde_json::Value::String(s) => s,
-                                other => other.to_string(),
-                            })
-                            .collect(),
-                    ),
-                    _ => None,
-                }
-            })
-        }
-    } else {
-        None
-    };
-
-    if let Some(sr) = response_state_mut(response_root.get()) {
-        if !sr.headers_sent {
-            sr.remember_header(&lower);
-            if let Some(elems) = array_elems {
-                sr.headers.insert(lower.clone(), elems.join(", "));
-                sr.header_value_lists.insert(lower.clone(), elems);
-            } else {
-                sr.headers.insert(
-                    lower.clone(),
-                    jsvalue_to_owned_string(value).unwrap_or_default(),
-                );
-                sr.header_value_lists.remove(&lower);
-            }
-            sr.raw_header_names.insert(lower, name);
-        }
-    }
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::restate(response_root.get());
-    }
+    header_values::validate(&name, value_root.get());
+    header_values::set(response_root.get(), &name, value_root.get());
 }
 
 /// `res.setHeader(name, value)` chainable wrapper for static dispatch.
@@ -489,32 +442,17 @@ pub unsafe extern "C" fn js_node_http_res_set_header_self(
     response_root.get()
 }
 
-/// `res.getHeader(name)` — case-insensitive lookup. Returns `null`
-/// when the header isn't set.
+/// Case-insensitive lookup of the original JS value, or undefined.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_get_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> f64 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        return headers
-            .get(&name)
-            .map(|v| f64::from_bits(JsValue::from_string_ptr(alloc_string(v).as_raw()).bits()))
-            .unwrap_or(f64::from_bits(TAG_UNDEFINED));
-    }
-    if let Some(sr) = response_state(response_root.get()) {
-        if let Some(v) = sr.headers.get(&name) {
-            let header = alloc_string(v);
-            return f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK));
-        }
-    }
-    f64::from_bits(TAG_UNDEFINED)
+    header_values::lookup(handle, &name)
 }
 
 /// `res.removeHeader(name)`.
@@ -538,10 +476,16 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
         Some(s) => s.to_lowercase(),
         None => return,
     };
+    if name == "date" {
+        // Node's removeHeader('Date') also suppresses the synthesized date.
+        heap::set_field(response_root.get(), b"sendDate", f64::from_bits(TAG_FALSE));
+        if let Some(sr) = response_state_mut(response_root.get()) { sr.send_date = false; }
+    }
+    header_values::remove(response_root.get(), &name);
     if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent {
-            sr.headers.remove(&name);
-            sr.header_value_lists.remove(&name);
+            sr.native_headers.remove(&name);
+            sr.native_header_value_lists.remove(&name);
             sr.raw_header_names.remove(&name);
             sr.header_order.retain(|header| header != &name);
         }
@@ -554,21 +498,11 @@ pub unsafe extern "C" fn js_node_http_res_has_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> i32 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return 0,
     };
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        return headers.contains_key(&name) as i32;
-    }
-    if let Some(sr) = response_state(response_root.get()) {
-        if sr.headers.contains_key(&name) {
-            return 1;
-        }
-    }
-    0
+    header_values::has(handle, &name) as i32
 }
 
 /// `res.hasHeader(name)` boolean wrapper for static dispatch.
@@ -584,91 +518,53 @@ pub unsafe extern "C" fn js_node_http_res_has_header_value(
     )
 }
 
-/// `res.appendHeader(name, value)` — append another string value to the
-/// in-memory header slot. Multi-value header storage is represented as the
-/// same comma-joined string Node exposes through `String(res.getHeader())`.
+/// Append originals, mutating an existing header array in place.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_append_header(
     handle: i64,
     name_ptr: *const StringHeader,
-    value_ptr: *const StringHeader,
+    value: f64,
 ) -> i64 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    let value = scope.root_nanbox(value);
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
-    let value = read_string_header(value_ptr as *mut _).unwrap_or_default();
-    if name.is_empty() {
-        return response_root.get();
+    if response_headers_sent(owner.get()) {
+        perry_ffi::throw_with_code(
+            "Cannot append headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
     }
-    let lower = name.to_lowercase();
-    if let Some(sr) = response_state_mut(response_root.get()) {
-        if !sr.headers_sent {
-            sr.remember_header(&lower);
-            if let Some(list) = sr.header_value_lists.get_mut(&lower) {
-                // Already a multi-value header (e.g. Set-Cookie): append a new
-                // element so it emits its own wire line (#4826).
-                list.push(value.clone());
-                let joined = list.join(", ");
-                sr.headers.insert(lower.clone(), joined);
-            } else {
-                sr.headers
-                    .entry(lower.clone())
-                    .and_modify(|existing| {
-                        existing.push(',');
-                        existing.push_str(&value);
-                    })
-                    .or_insert(value);
-            }
-            sr.raw_header_names.entry(lower).or_insert(name);
-        }
+    if !http_is_valid_token(&name) {
+        perry_ffi::throw_with_code(
+            &format!("Header name must be a valid HTTP token [\"{name}\"]"),
+            "ERR_INVALID_HTTP_TOKEN",
+            perry_ffi::ErrorKind::TypeError,
+        );
     }
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::restate(response_root.get());
-    }
-    response_root.get()
+    header_values::validate(&name, value.get());
+    header_values::append(owner.get(), &name, value.get());
+    owner.get()
 }
 
-/// `res.getHeaders()` — JSON-stringify the lowercase-keyed map.
-/// TS-side parses with `JSON.parse`.
+/// A fresh null-prototype map containing the original values (a shallow copy).
 #[no_mangle]
-pub extern "C" fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        return alloc_string(&serde_json::to_string(&headers).unwrap()).as_raw();
-    }
-    let s = response_state(response_root.get())
-        .map(|sr| serde_json::to_string(&sr.headers).unwrap_or_else(|_| "{}".to_string()))
-        .unwrap_or_else(|| "{}".to_string());
-    alloc_string(&s).as_raw()
+pub extern "C" fn js_node_http_res_get_headers(handle: i64) -> f64 {
+    header_values::get_headers(handle)
 }
 
-/// `res.getHeaderNames()` — JSON-stringify the list of lowercase
-/// header names (matches Node — `getHeaderNames` returns lowercase).
+/// Lowercase names in Node's own-property order.
 #[no_mangle]
-pub extern "C" fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
-        let mut names = headers.keys().collect::<Vec<_>>();
-        names.sort();
-        return alloc_string(&serde_json::to_string(&names).unwrap()).as_raw();
-    }
-    let s = response_state(response_root.get())
-        .map(|sr| {
-            let mut names: Vec<&String> = sr.headers.keys().collect();
-            names.sort();
-            serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string())
-        })
-        .unwrap_or_else(|| "[]".to_string());
-    alloc_string(&s).as_raw()
+pub extern "C" fn js_node_http_res_get_header_names(handle: i64) -> f64 {
+    header_values::get_names(handle)
 }
 
 /// `res.setHeaders(headers)` — Node accepts only a `Headers` or a `Map`
 /// (anything else is `ERR_INVALID_ARG_TYPE`), and throws
 /// `ERR_HTTP_HEADERS_SENT` if the head was already committed. The runtime's
-/// `js_node_setheaders_entries_json` normalizes the argument into a JSON
-/// `[name, value]` entries array (or null for an invalid type) WITHOUT ever
+/// `js_node_setheaders_entries` returns original Map entries or converted
+/// Headers entries (undefined for an invalid type) without ever
 /// dereferencing a registry handle — the old path JSON-stringified the
 /// `Headers` handle directly, walking its fetch-band id (`0x40000`+) as a heap
 /// `GcHeader` and segfaulting nondeterministically (#4965).
@@ -689,73 +585,26 @@ pub extern "C" fn js_node_http_res_set_headers(handle: i64, headers_value: f64) 
             perry_ffi::ErrorKind::Error,
         );
     }
-    let entries_ptr = unsafe { js_node_setheaders_entries_json(headers_value) };
-    if entries_ptr.is_null() {
+    let headers_value = response_scope.root_nanbox(headers_value);
+    let entries =
+        response_scope.root_nanbox(unsafe { js_node_setheaders_entries(headers_value.get()) });
+    if JsValue::from_bits(entries.get().to_bits()).is_undefined() {
         perry_ffi::throw_with_code(
             "The \"headers\" argument must be an instance of Headers or Map.",
             "ERR_INVALID_ARG_TYPE",
             perry_ffi::ErrorKind::TypeError,
         );
     }
-    if let Some(json) = read_string_header(entries_ptr) {
-        if let Some(sr) = response_state_mut(response_root.get()) {
-            if !sr.headers_sent {
-                apply_headers_entries(sr, &json);
-            }
+    for i in 0..header_values::array_len(entries.get()) {
+        let pair = response_scope.root_nanbox(header_values::array_get(entries.get(), i));
+        let name = header_values::string(header_values::array_get(pair.get(), 0));
+        let value = response_scope.root_nanbox(header_values::array_get(pair.get(), 1));
+        let name_value = alloc_string(&name);
+        unsafe {
+            js_node_http_res_set_header(response_root.get(), name_value.as_raw(), value.get());
         }
-    }
-    if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::restate(response_root.get());
     }
     response_root.get()
-}
-
-/// Apply a normalized `setHeaders` entries array: `[[name, value], …]` where
-/// `value` is a string or (for `Set-Cookie`/multi-valued headers) an array of
-/// strings. The pairwise (vs object) shape preserves a `Set-Cookie` array as a
-/// per-element list so the wire layer emits one line each (#4826/#4965).
-fn apply_headers_entries(sr: &mut ResponseState, json: &str) {
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
-    else {
-        return;
-    };
-    for item in items {
-        let serde_json::Value::Array(pair) = item else {
-            continue;
-        };
-        let mut pair = pair.into_iter();
-        let (Some(name_v), Some(value_v)) = (pair.next(), pair.next()) else {
-            continue;
-        };
-        let name = match name_v {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        };
-        if name.is_empty() {
-            continue;
-        }
-        let lower = name.to_lowercase();
-        sr.remember_header(&lower);
-        if let serde_json::Value::Array(elems) = value_v {
-            let elems: Vec<String> = elems
-                .into_iter()
-                .map(|item| match item {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                })
-                .collect();
-            sr.headers.insert(lower.clone(), elems.join(", "));
-            sr.header_value_lists.insert(lower.clone(), elems);
-        } else {
-            let value = match value_v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            sr.headers.insert(lower.clone(), value);
-            sr.header_value_lists.remove(&lower);
-        }
-        sr.raw_header_names.insert(lower, name);
-    }
 }
 
 /// `res.statusMessage` getter.
@@ -853,14 +702,7 @@ pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
 /// `res.headersSent` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_headers_sent(handle: i64) -> i32 {
-    let response_scope = perry_ffi::TransientRootScope::enter();
-    let response_root = response_scope.root_addr(handle);
-    if let Some(v) = heap::closed_field(response_root.get(), b"_header") {
-        return i32::from(heap::truthy(v));
-    }
-    response_state(response_root.get())
-        .map(|sr| if sr.headers_sent { 1 } else { 0 })
-        .unwrap_or(0)
+    i32::from(response_headers_sent(handle))
 }
 
 /// `res.writableEnded` getter.
@@ -889,65 +731,36 @@ pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
         .unwrap_or(0)
 }
 
-/// Merge a JSON-encoded header object (`{"Content-Type":"text/plain",...}`)
-/// into a `ServerResponse`'s header map, preserving the original case for
-/// `getHeaderNames()` while keying the lookup table lowercase. Shared by
-/// `writeHead`'s bulk-header path.
-fn apply_headers_json(sr: &mut ResponseState, json: &str) {
-    if json.is_empty() || json == "null" || json == "undefined" {
-        return;
-    }
-    if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(json) {
-        for (k, v) in obj {
-            let lower = k.to_lowercase();
-            sr.remember_header(&lower);
-            // Array values (e.g. Set-Cookie) emit one wire line per element.
-            // Node coerces the scalar `getHeader`/lookup value to the
-            // elements joined with `, `, and keeps the per-element list so
-            // the response serializer can emit each on its own line (#4826).
-            if let serde_json::Value::Array(items) = v {
-                let elems: Vec<String> = items
-                    .into_iter()
-                    .map(|item| match item {
-                        serde_json::Value::String(s) => s,
-                        other => other.to_string(),
-                    })
-                    .collect();
-                sr.headers.insert(lower.clone(), elems.join(", "));
-                sr.header_value_lists.insert(lower.clone(), elems);
-                sr.raw_header_names.insert(lower, k);
-                continue;
-            }
-            let value = match v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            sr.headers.insert(lower.clone(), value);
-            sr.header_value_lists.remove(&lower);
-            sr.raw_header_names.insert(lower, k);
-        }
-    }
-}
-
 /// `res.writeHead(statusCode[, statusMessage][, headers])` — set status +
 /// optional status message + bulk headers.
 ///
 /// #2132: `arg2`/`arg3` arrive as raw NaN-boxed JSValues (`NA_JSV`) so the
 /// runtime can resolve Node's overloads — a string in slot 2 is the
 /// `statusMessage`, an object in slot 2 or 3 is the bulk `headers`. Headers
-/// objects are serialized here via `js_json_stringify`. The previous wiring
-/// typed both slots `NA_STR`, which coerced a headers *object* to the literal
-/// `"[object Object]"` and silently dropped every header set through
-/// `writeHead` (visible as missing `Content-Type` etc. on the wire).
+/// objects are read directly so their original values and identities survive.
+/// A previously created header map is merged; otherwise Node renders the
+/// supplied headers directly without making them visible through getHeader.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_write_head(
     handle: i64,
     status: f64,
     arg2: i64,
     arg3: i64,
-) {
+) -> i64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let arg2 = response_scope.root_nanbox(f64::from_bits(arg2 as u64));
+    let arg3 = response_scope.root_nanbox(f64::from_bits(arg3 as u64));
+    if response_headers_sent(response_root.get()) {
+        perry_ffi::throw_with_code(
+            "Cannot write headers after they are sent to the client",
+            "ERR_HTTP_HEADERS_SENT",
+            perry_ffi::ErrorKind::Error,
+        );
+    }
+    heap::sync_head_options(response_root.get());
+    let arg2 = arg2.get().to_bits() as i64;
+    let arg3 = arg3.get().to_bits() as i64;
     let v2 = JsValue::from_bits(arg2 as u64);
     let v3 = JsValue::from_bits(arg3 as u64);
 
@@ -966,19 +779,15 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         status_message = v2.to_owned_string();
     }
 
-    let headers_json = headers_value.and_then(|hv| {
-        let ptr = js_json_stringify(hv, 0);
-        if ptr.is_null() {
-            None
-        } else {
-            read_string_header(ptr)
-        }
-    });
+    let headers_value = headers_value.map(|v| response_scope.root_nanbox(v));
+    let direct_headers = headers_value
+        .as_ref()
+        .and_then(|v| header_values::apply_write_head(response_root.get(), v.get()));
 
     let status_message_arg = status_message.clone();
     if let Some(sr) = response_state_mut(response_root.get()) {
         if sr.headers_sent {
-            return;
+            return response_root.get();
         }
         if status.is_finite() && status > 0.0 {
             sr.status_code = status as u16;
@@ -988,16 +797,8 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
                 sr.status_message = Some(m);
             }
         }
-        if let Some(json) = headers_json {
-            // Node's `writeHead` accepts the headers as an object OR as a flat
-            // array `[name, value, name, value, …]` (even offsets are names,
-            // odd are values — NOT a list of tuples). Route the array form to
-            // the pairwise applier; objects keep the original path (#4965).
-            if json.trim_start().starts_with('[') {
-                apply_headers_flat_array(sr, &json);
-            } else {
-                apply_headers_json(sr, &json);
-            }
+        if let Some(headers) = direct_headers {
+            sr.committed_headers = Some(headers);
         }
         // Mark the head committed (Node's `_header`) so a later
         // `res.setHeaders(...)` throws `ERR_HTTP_HEADERS_SENT`. The actual wire
@@ -1006,21 +807,27 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         sr.header_committed = true;
     }
     if heap::is_response(response_root.get()) {
-        heap::restate(response_root.get());
-        commit_heap_head(response_root.get(), status, status_message_arg);
+        // The public writeHead already read the program's head fields above.
+        finish_heap_head(response_root.get(), status, status_message_arg);
+    } else if response_state(response_root.get()).is_some_and(|s| s.committed_headers.is_none()) {
+        let headers = header_values::snapshot(response_root.get());
+        if let Some(sr) = response_state_mut(response_root.get()) { sr.committed_headers = Some(headers); }
     }
+    response_root.get()
 }
 
 /// node's `_implicitHeader` on a heap response's first write:
 /// `writeHead(this.statusCode)`.
 fn heap_implicit_head(handle: i64) {
-    if !heap::is_response(handle)
-        || response_state(handle).is_none_or(|sr| sr.header_committed || sr.writable_ended)
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    if !heap::is_response(owner.get())
+        || response_state(owner.get()).is_none_or(|sr| sr.header_committed || sr.writable_ended)
     {
         return;
     }
-    commit_heap_head(handle, f64::NAN, None);
-    if let Some(sr) = response_state_mut(handle) {
+    commit_heap_head(owner.get(), f64::NAN, None);
+    if let Some(sr) = response_state_mut(owner.get()) {
         sr.header_committed = true;
     }
 }
@@ -1028,57 +835,29 @@ fn heap_implicit_head(handle: i64) {
 /// node's `writeHead` on a heap response: `statusMessage`, `statusCode`, then
 /// `_header` (`_storeHeader`).
 fn commit_heap_head(handle: i64, status: f64, reason: Option<String>) {
-    heap::sync_head_fields(handle);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    heap::sync_head_fields(owner.get());
+    finish_heap_head(owner.get(), status, reason);
+}
+fn finish_heap_head(handle: i64, status: f64, reason: Option<String>) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let code = if status.is_finite() && status > 0.0 {
         status as u16
     } else {
-        response_state(handle).map_or(200, |sr| sr.status_code)
+        response_state(owner.get()).map_or(200, |sr| sr.status_code)
     };
-    heap::write_head_fields(handle, code, reason.filter(|m| !m.is_empty()));
-    if let Some(head) = response_state(handle).and_then(super::response_end::render_head) {
-        heap::set_header_text(handle, &head);
+    heap::write_head_fields(owner.get(), code, reason.filter(|m| !m.is_empty()));
+    if response_state(owner.get()).is_some_and(|s| s.committed_headers.is_none()) {
+        let headers = header_values::snapshot(owner.get());
+        if let Some(sr) = response_state_mut(owner.get()) {
+            sr.committed_headers = Some(headers);
+        }
     }
-}
-
-/// Apply a Node `writeHead` flat-array headers value (`[name, value, …]`).
-/// Even offsets are header names, odd offsets the associated values; an array
-/// element may itself be an array (multi-valued header). Mirrors
-/// `apply_headers_json`'s lowercase-key / original-case / array-list handling.
-fn apply_headers_flat_array(sr: &mut ResponseState, json: &str) {
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
-    else {
-        return;
-    };
-    let mut it = items.into_iter();
-    while let (Some(name_v), Some(value_v)) = (it.next(), it.next()) {
-        let name = match name_v {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        };
-        if name.is_empty() {
-            continue;
-        }
-        let lower = name.to_lowercase();
-        sr.remember_header(&lower);
-        if let serde_json::Value::Array(elems) = value_v {
-            let elems: Vec<String> = elems
-                .into_iter()
-                .map(|item| match item {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                })
-                .collect();
-            sr.headers.insert(lower.clone(), elems.join(", "));
-            sr.header_value_lists.insert(lower.clone(), elems);
-        } else {
-            let value = match value_v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            sr.headers.insert(lower.clone(), value);
-            sr.header_value_lists.remove(&lower);
-        }
-        sr.raw_header_names.insert(lower, name);
+    heap::restate(owner.get());
+    if let Some(head) = super::response_end::render_head(owner.get()) {
+        heap::set_header_text(owner.get(), &head);
     }
 }
 
@@ -1295,6 +1074,10 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         jsvalue_to_body_bytes(chunk)
     };
 
+    let original_headers = header_values::snapshot(response_root.get());
+    let has_explicit_length = original_headers.iter().any(|(n, _)| {
+        n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
+    });
     let sr = response_state_mut(response_root.get())?;
     if sr.writable_ended {
         return None;
@@ -1325,9 +1108,12 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     }
     sr.headers_sent = true;
     sr.writable_ended = true;
-    let auto_content_length = sr.ensure_content_length();
+    let auto_content_length = !has_explicit_length && sr.ensure_content_length();
     let body = std::mem::take(&mut sr.buffered_body);
-    let headers = sr.snapshot_headers();
+    let mut headers = original_headers;
+    if auto_content_length {
+        headers.push(("Content-Length".into(), body.len().to_string()));
+    }
     let trailers = sr.snapshot_trailers();
     let shape = ResponseShape {
         status: sr.status_code,
@@ -1371,6 +1157,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
 pub(crate) fn begin_streaming(handle: i64) -> bool {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let headers = header_values::snapshot(response_root.get());
     let Some(sr) = response_state_mut(response_root.get()) else {
         return false;
     };
@@ -1389,7 +1176,7 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     let shape = ResponseShape {
         status: sr.status_code,
         status_message: sr.status_message.clone(),
-        headers: sr.snapshot_headers(),
+        headers,
         trailers: Vec::new(),
         body: Vec::new(),
         auto_content_length: false,
@@ -1444,6 +1231,7 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
 pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    heap_implicit_head(response_root.get());
     if !begin_streaming(response_root.get()) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.headers_sent = true;
@@ -1637,6 +1425,7 @@ pub(crate) fn take_event_listeners(sr: &mut ServerResponse, event: &str) -> Vec<
 
 #[no_mangle]
 pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
+    super::ensure_gc_scanner_registered();
     register_handle(ServerResponse::outgoing_message())
 }
 
@@ -1865,15 +1654,19 @@ mod tests;
 
 // State is owned either by an in-flight transport handle or by an ordinary
 // standalone response's traced payload. The latter is never registered.
+#[inline]
+pub(crate) fn is_legacy_response_handle(handle: i64) -> bool {
+    (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR
+}
 pub(crate) fn response_state(handle: i64) -> Option<&'static ResponseState> {
-    if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
+    if is_legacy_response_handle(handle) {
         get_handle::<ServerResponse>(handle).map(|r| &r.state)
     } else {
         unsafe { super::response_payload::state(handle) }.map(|r| &*r)
     }
 }
 pub(crate) fn response_state_mut(handle: i64) -> Option<&'static mut ResponseState> {
-    if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
+    if is_legacy_response_handle(handle) {
         get_handle_mut::<ServerResponse>(handle).map(|r| &mut r.state)
     } else {
         unsafe { super::response_payload::state(handle) }
@@ -1938,3 +1731,9 @@ pub(crate) fn response_event_listeners(handle: i64, event: &str) -> Vec<i64> {
             .unwrap_or_default()
     }
 }
+
+#[path = "response_header_values.rs"]
+pub(crate) mod header_values;
+#[cfg(test)]
+#[path = "response_header_values_tests.rs"]
+mod header_values_tests;

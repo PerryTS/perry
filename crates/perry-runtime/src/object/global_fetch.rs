@@ -507,36 +507,26 @@ fn headers_init_json_ptr(headers: f64) -> *const crate::StringHeader {
     }
 }
 
-/// Normalize a `res.setHeaders(x)` argument into a JSON array of
-/// `[name, value]` entries. Node accepts only `Headers` and `Map`; this
-/// returns null for anything else so the http layer can raise
-/// `ERR_INVALID_ARG_TYPE`.
-///
-/// #4965: the previous http-server path JSON-stringified `x` directly. A
-/// `Headers` value is a fetch-band registry *handle* (its first id is
-/// `0x40000`), not a heap pointer, so the generic stringify walker
-/// dereferenced `id - 8` as a `GcHeader` and segfaulted nondeterministically.
-/// Classify by address band BEFORE any dereference: a `Map` is a real heap
-/// `MapHeader` (its entries are pair-arrays of real heap values — safe to
-/// stringify), and a `Headers` handle is delegated to the registered
-/// perry-stdlib producer which reads its own registry. No path ever
-/// dereferences a handle id.
+/// Original Map entries for `res.setHeaders`, or normalized Headers entries.
+/// Headers are registry handles whose producer owns strings, so their bridge
+/// uses JSON; Map values pass through untouched, retaining type and identity.
+/// Invalid arguments return undefined, without dereferencing handle addresses.
 #[no_mangle]
-pub extern "C" fn js_node_setheaders_entries_json(value: f64) -> *mut crate::StringHeader {
-    let bits = value.to_bits();
-    if let Some(map) = crate::map::map_ptr_from_receiver_bits(bits) {
-        let entries = crate::map::js_map_entries(map);
-        let boxed = crate::value::js_nanbox_pointer(entries as i64);
-        return unsafe { crate::json::js_json_stringify(f64::from_bits(boxed.to_bits()), 0) };
+pub extern "C" fn js_node_setheaders_entries(value: f64) -> f64 {
+    if let Some(map) = crate::map::map_ptr_from_receiver_bits(value.to_bits()) {
+        return crate::value::js_nanbox_pointer(crate::map::js_map_entries(map) as i64);
     }
-    let jsv = crate::value::JSValue::from_bits(bits);
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
     if jsv.is_handle() {
-        let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let addr = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
         if crate::value::addr_class::is_handle_band(addr) {
-            return call_global_headers_entries_json(value);
+            let json = call_global_headers_entries_json(value);
+            if !json.is_null() {
+                return f64::from_bits(unsafe { crate::json::js_json_parse(json) }.bits());
+            }
         }
     }
-    null_mut()
+    f64::from_bits(crate::value::JSValue::undefined().bits())
 }
 
 #[cfg(feature = "external-fetch-symbols")]

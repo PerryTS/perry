@@ -405,7 +405,11 @@ fn process(conn: &mut Conn, fx: &mut Vec<Effect>) {
         };
         let consumed = step.consumed;
         let decoded = match step.event {
-            Some(http1::Event::Head(head)) => {
+            Some(http1::Event::Head(mut head)) => {
+                crate::response_headers::preserve_wire_header_names(
+                    &mut head.headers,
+                    &conn.inbuf[..consumed],
+                );
                 let reason = wire::reason_phrase(&conn.inbuf[..consumed]);
                 Decoded::Head(head, reason)
             }

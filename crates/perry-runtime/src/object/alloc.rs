@@ -95,6 +95,36 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     super::alloc_basic::object_alloc_null_proto(class_id, field_count)
 }
 
+/// Copy distinct UTF-8 keys and original values into a fresh null-prototype
+/// data object. The borrowed inputs stay valid throughout this callback-free
+/// birth; the existing bulk initializer publishes the final canonical shape.
+/// No JS pointer is retained outside the returned object's traced fields.
+///
+/// # Safety
+/// Each input array has `count` entries; every key is a valid distinct UTF-8
+/// byte span. Values are live NaN-boxed JS values on entry.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_alloc_null_proto_entries(
+    keys: *const *const u8,
+    key_lengths: *const usize,
+    values: *const f64,
+    count: u32,
+) -> *mut ObjectHeader {
+    // The existing unpublished-object birth requires one non-collecting
+    // construction window. Dropping this guard only restores the policy;
+    // it does not run a deferred collection.
+    let _birth = crate::gc::GcSuppressScope::new();
+    let mut entries = Vec::with_capacity(count as usize);
+    for i in 0..count as usize {
+        let key = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            *keys.add(i),
+            *key_lengths.add(i),
+        ));
+        entries.push((key, *values.add(i)));
+    }
+    object_alloc_null_proto_with_key_attrs(&entries, &[])
+}
+
 /// A null-prototype object born holding `entries` as its own data properties,
 /// in order: the shape of the whole list is published once, from
 /// the birth shape, instead of one key-add transition per key, and the object

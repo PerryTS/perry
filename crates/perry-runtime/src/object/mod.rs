@@ -60,7 +60,7 @@ pub use spread::js_object_spread_fresh;
 mod spread_tests;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
-    js_object_alloc_null_proto, js_object_alloc_plain, js_object_alloc_with_parent,
+    js_object_alloc_null_proto, js_object_alloc_null_proto_entries, js_object_alloc_plain, js_object_alloc_with_parent,
     js_object_coerce,
 };
 #[cfg(feature = "regex-engine")]

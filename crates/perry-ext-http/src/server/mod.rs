@@ -192,6 +192,7 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         if sr.owner_agent == perry_ffi::agent_post::current_agent() {
             visitor.visit_nanbox_f64_slot(&mut sr.socket_value);
+            visitor.visit_nanbox_f64_slot(&mut sr.header_values);
             if let Some((connection, _)) = &mut sr.turnloop {
                 connection.scan(visitor);
             }
@@ -256,6 +257,7 @@ extern "C" fn retire_transport_edges(agent: u64) {
         if response.owner_agent == agent {
             response.turnloop = None;
             response.socket_value = undefined;
+            response.header_values = undefined;
         }
     });
     iter_handles_of_mut::<Http2SessionHandle, _>(|session| {

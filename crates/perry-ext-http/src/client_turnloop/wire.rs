@@ -1,4 +1,4 @@
-//! What this lane puts on the wire, and the one thing it reads off it by hand.
+//! Request serialization and response status-line metadata.
 //!
 //! Requests are serialized here rather than through `turnloop_http`'s
 //! `Encoder`, for two reasons the codec cannot accommodate:
@@ -13,8 +13,8 @@
 //!   is kept, not re-derived.
 //!
 //! The *response* side stays entirely on the codec (`http1::Decoder`). The
-//! only thing read by hand is the reason phrase, which `http1::Head` does not
-//! carry: it is lifted from the status line the decoder just consumed, so
+//! reason phrase, which `http1::Head` does not
+//! carry, is lifted from the status line the decoder just consumed, so
 //! `res.statusMessage` is the server's text, as in Node — not the canonical
 //! phrase reqwest substituted.
 
