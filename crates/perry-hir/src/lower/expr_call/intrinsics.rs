@@ -29,8 +29,7 @@ mod require;
 
 pub(crate) use apply_call::as_builtin_proto_method_ref;
 pub(super) use apply_call::{
-    try_builtin_prototype_method_apply_call, try_iife_call_rewrite,
-    try_native_module_method_apply_call,
+    try_builtin_prototype_method_apply_call, try_native_module_method_apply_call,
 };
 pub(super) use bare_builtins::{try_bare_regexp_call, try_function_return_this, try_iterator_from};
 pub(super) use eval_strict::{check_eval_function_call, try_strict_eval_arguments_assignment};

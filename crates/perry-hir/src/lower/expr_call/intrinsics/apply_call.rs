@@ -6,86 +6,9 @@ use swc_ecma_ast as ast;
 
 use super::super::super::{lower_expr, LoweringContext};
 
-/// Issue #957 — `(function(...) { ... }.call(<thisArg>, ...args))` IIFE
-/// pattern used at the top of older CJS packages (lodash, underscore, and
-/// every package that copies their UMD prelude). Pre-fix the inner
-/// function expression lowers to a Closure, then `.call(thisArg, ...args)`
-/// falls through to `js_native_call_method` on the closure handle which
-/// doesn't recognize Function.prototype.call — the body never runs and
-/// mutations to outer captures (e.g. `module.exports = _` inside the
-/// wrap) are silently dropped, so `import _ from "lodash"` resolves to
-/// `undefined` and `_.add` throws. Rewrite the AST shape directly to a
-/// plain Call on the inner function expression, dropping the thisArg.
-///
-/// Conservative scope: only fires when the callee's receiver is a
-/// FunctionExpression or ArrowExpression literal AND the inner function
-/// does NOT reference `this` (`captures_this == false` after lowering).
-/// Method dispatch like `obj.fn.call(otherObj, args)` keeps its existing
-/// semantics — those go through the generic property-call path. We can
-/// safely drop the thisArg because `captures_this == false` means the
-/// body has no `this` references that depend on the bound value.
-pub(crate) fn try_iife_call_rewrite(
-    ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
-    has_spread: bool,
-) -> Result<Option<Expr>> {
-    if !has_spread {
-        if let ast::Callee::Expr(callee_expr) = &call.callee {
-            if let ast::Expr::Member(member) = callee_expr.as_ref() {
-                if let ast::MemberProp::Ident(prop) = &member.prop {
-                    if prop.sym.as_ref() == "call" && !call.args.is_empty() {
-                        // Unwrap `(`...`)` parens so `((a,b) => a+b).call(...)`
-                        // matches the same shape as `(function(){...}).call(...)`.
-                        let mut inner = member.obj.as_ref();
-                        while let ast::Expr::Paren(p) = inner {
-                            inner = p.expr.as_ref();
-                        }
-                        let is_fn_lit = matches!(inner, ast::Expr::Fn(_) | ast::Expr::Arrow(_));
-                        if is_fn_lit {
-                            let lowered_callee = lower_expr(ctx, inner)?;
-                            if let Expr::Closure {
-                                captures_this: false,
-                                is_arrow,
-                                body,
-                                ..
-                            } = &lowered_callee
-                            {
-                                // Dropping the `.call` thisArg is only sound
-                                // when the body never observes `this`. An arrow
-                                // (captures_this == false) has no own `this`. A
-                                // regular function expression ALSO reports
-                                // captures_this == false (it has its own dynamic
-                                // `this`, not a captured one — expr_function.rs),
-                                // so its body may still read `this`; folding
-                                // `(function(){ "use strict"; return this })
-                                // .call(null)` to `fn()` would lose the bound
-                                // receiver (the body would see undefined, not
-                                // null). Require a this-free body there. #3576.
-                                let drops_this_safely =
-                                    *is_arrow || !crate::analysis::closure_uses_this(body);
-                                if drops_this_safely {
-                                    let rest_args = call
-                                        .args
-                                        .iter()
-                                        .skip(1)
-                                        .map(|arg| lower_expr(ctx, &arg.expr))
-                                        .collect::<Result<Vec<_>>>()?;
-                                    return Ok(Some(Expr::Call {
-                                        callee: Box::new(lowered_callee),
-                                        args: rest_args,
-                                        type_args: Vec::new(),
-                                        byte_offset: 0,
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(None)
-}
+// Function-literal `.call` stays on the ordinary property-call path. The
+// builtin method's existing shape proof can enter its compiled body directly;
+// erasing the lookup here would ignore prototype overrides and thisArg effects.
 
 /// Issue #1722 — `<stdlibNamespace>.<method>.apply(thisArg, args)` /
 /// `<stdlibNamespace>.<method>.call(thisArg, ...args)`.
@@ -117,7 +40,7 @@ pub(crate) fn try_iife_call_rewrite(
 /// statically expanded into positional args, so it falls through
 /// unchanged (the runtime spread path `ns.method(...arr)` is a separate
 /// gap). The namespace-binding guard keeps this away from `obj.fn.call(…)`
-/// method dispatch, function-literal IIFEs (`try_iife_call_rewrite`), and
+/// method dispatch, function-literal IIFEs, and
 /// `Object.prototype.<m>.call(…)` (`try_object_prototype_call`).
 pub(crate) fn try_native_module_method_apply_call(
     ctx: &mut LoweringContext,
