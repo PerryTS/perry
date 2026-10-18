@@ -937,8 +937,11 @@ jobs:
           # the runner (a static musl binary): hand the container that binary.
           # Its object store stays inside the container: the runner's store
           # carries the host session's settings (links, GC, export group) and
-          # gave the containers no hits, and with it shared both glibc legs
-          # hung until the job limit (runs 39097269295, 39103067500).
+          # gave the containers no hits. In the glibc container mbx's
+          # build-script shim for llvm-sys spun at 100% CPU for the whole
+          # 150 minutes (watchdog, run 39129046553; earlier runs hung until
+          # the job limit), so the containers run build scripts directly and
+          # without mbx's scheduler.
           mbx_bin=$(command -v mbx)
           # If the build is still running after 100 min, log what the
           # container's processes are doing (every 20 min after that).
@@ -966,6 +969,8 @@ jobs:
             --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$mbx_bin:/usr/local/bin/mbx:ro" \
             --env MBX_CACHE_DIR=/tmp/mbx-cache \
+            --env MBX_BUILD_SCRIPT_EXECUTION=false \
+            --env MBX_SCHEDULER=false \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             perry-glibc-2.31-llvm22 \
@@ -1009,8 +1014,11 @@ jobs:
           # the runner (a static musl binary): hand the container that binary.
           # Its object store stays inside the container: the runner's store
           # carries the host session's settings (links, GC, export group) and
-          # gave the containers no hits, and with it shared both glibc legs
-          # hung until the job limit (runs 39097269295, 39103067500).
+          # gave the containers no hits. In the glibc container mbx's
+          # build-script shim for llvm-sys spun at 100% CPU for the whole
+          # 150 minutes (watchdog, run 39129046553; earlier runs hung until
+          # the job limit), so the containers run build scripts directly and
+          # without mbx's scheduler.
           mbx_bin=$(command -v mbx)
           # If the build is still running after 100 min, log what the
           # container's processes are doing (every 20 min after that).
@@ -1037,6 +1045,8 @@ jobs:
             --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$mbx_bin:/usr/local/bin/mbx:ro" \
             --env MBX_CACHE_DIR=/tmp/mbx-cache \
+            --env MBX_BUILD_SCRIPT_EXECUTION=false \
+            --env MBX_SCHEDULER=false \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             perry-musl-llvm22 \
