@@ -43,11 +43,14 @@ pub(crate) unsafe fn dispatch_typed_array_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    // A missing argument is `undefined`. Its NaN-box is a NaN, so the
+    // numeric callees (`at`, `with`, `copyWithin`, `fill`) read what they
+    // read before; `join()` needs it to fall back to ",".
     let arg0 = || -> f64 {
         if args_len >= 1 && !args_ptr.is_null() {
             *args_ptr
         } else {
-            f64::NAN
+            f64::from_bits(crate::value::TAG_UNDEFINED)
         }
     };
     // #4091: validate the 1st argument is callable, throwing a spec `TypeError`
