@@ -103,7 +103,7 @@ fn io_thread(mut ws: WebSocket<MaybeTlsStream<TcpStream>>, conn: std::sync::Arc<
         {
             let mut sends = conn.pending_sends.lock().unwrap();
             for msg in sends.drain(..) {
-                if let Err(e) = ws.send(Message::Text(msg)) {
+                if let Err(e) = ws.send(Message::Text(msg.into())) {
                     ws_log(&format!("io_thread: send error: {}", e));
                     conn.is_open.store(false, Ordering::Relaxed);
                     return;
@@ -114,7 +114,7 @@ fn io_thread(mut ws: WebSocket<MaybeTlsStream<TcpStream>>, conn: std::sync::Arc<
         // Try to read a message (with 50ms timeout)
         match ws.read() {
             Ok(Message::Text(text)) => {
-                conn.messages.lock().unwrap().push_back(text);
+                conn.messages.lock().unwrap().push_back(text.as_str().to_string());
             }
             Ok(Message::Close(_)) => {
                 ws_log("io_thread: server closed connection");
