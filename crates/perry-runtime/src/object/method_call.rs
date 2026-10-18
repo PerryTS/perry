@@ -128,15 +128,18 @@ pub unsafe extern "C-unwind" fn js_method_lookup(
     if is_site_receiver(recv) {
         let biased =
             (recv.to_bits() & crate::value::POINTER_MASK) - perry_abi::RECEIVER_HANDLE_FLOOR as u64;
-        let family = super::layout_desc::methods::perry_probe_family_method(
-            dir,
-            biased as i64,
-            key_bits,
-            hash,
-            u32::MAX,
-        );
-        if family != 0 {
-            return f64::from_bits(crate::value::POINTER_TAG | family as u64);
+        let obj = ((recv.to_bits() & crate::value::POINTER_MASK) as usize) as *const ObjectHeader;
+        if super::layout_desc::methods::may_have_methods((*obj).parent_class_id) {
+            let family = super::layout_desc::methods::perry_probe_family_method(
+                dir,
+                biased as i64,
+                key_bits,
+                hash,
+                u32::MAX,
+            );
+            if family != 0 {
+                return f64::from_bits(crate::value::POINTER_TAG | family as u64);
+            }
         }
         let v = super::layout_probe::perry_probe_get_value(dir, recv.to_bits(), key_bits, hash);
         let vb = v.to_bits();

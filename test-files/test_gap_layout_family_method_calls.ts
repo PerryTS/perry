@@ -58,3 +58,8 @@ function changeForeign(): number {
   return 4;
 }
 console.log("foreign", foreign.external(changeForeign()), foreign.external(4));
+
+// Rebinding the source variable in an argument preserves the old receiver.
+let snapshot: any = new AWDStable(70);
+function rebindReceiver(): number { snapshot = 0; return 4; }
+console.log("receiver-snapshot", snapshot.keep(rebindReceiver()), snapshot);

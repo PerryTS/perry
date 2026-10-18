@@ -897,8 +897,34 @@ pub(crate) fn try_lower_instance_method_call(
                 && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
                 && crate::expr::method_site::args_may_observe_lookup(ctx, args)
             {
-                let lanes =
+                let mut lanes =
                     crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
+                // Compare the actual function value's code identity. Native-
+                // parent and wide classes need no static prototype proof to
+                // enter their selected callable with its real environment.
+                if !fallback_has_rest
+                    && !fallback_has_synthetic_arguments
+                    && ctx.method_param_counts.contains_key(&fallback_key)
+                    && fallback_fn.starts_with("perry_method_")
+                    && ctx.classes.get(&fallback_key.0).is_some_and(|class| {
+                        !class.is_literal_shape()
+                            && class.specialized_from.is_none()
+                            && class.methods.iter().any(|m| {
+                                m.name == property && m.params.len() == fallback_decl_count
+                            })
+                    })
+                {
+                    let body = format!("{fallback_fn}__eclo");
+                    if !lanes.iter().any(|l| l.body == body) {
+                        lanes.push(crate::codegen::static_constfn::StaticMethodLane {
+                            word: 0,
+                            slot: 0,
+                            body,
+                            arity: fallback_decl_count,
+                            own: false,
+                        });
+                    }
+                }
                 return crate::lower_call::lower_split_method_call(
                     ctx,
                     object,

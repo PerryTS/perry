@@ -467,7 +467,9 @@ pub(crate) fn emit_method_site(
     // The probe: the receiver's own layout, then its prototypes'.
     ctx.current_block = probe_idx;
     let (dir, key_bits, hash) = emit_site_key(ctx, property);
-    if !ctx.program_layouts.families.is_empty() {
+    if !ctx.program_layouts.families.is_empty()
+        && crate::codegen::static_shape_ids::has_prototype_method(property)
+    {
         let family_call = ctx.new_block("msite.family_call");
         let ordinary_probe = ctx.new_block("msite.ordinary_probe");
         let family_l = ctx.block_label(family_call);

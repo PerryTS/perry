@@ -28,6 +28,13 @@ const _: () = assert!(std::mem::size_of::<PerryFamilyMethods>() == 16);
 const _: () = assert!(std::mem::size_of::<PerryFamilyMethod>() == 24);
 const _: () = assert!(std::mem::size_of::<PerryMethodHolder>() == 8);
 
+/// The carried descriptor band (including possible class method tables).
+/// This immutable word range rejects runtime and shadowed layouts cheaply.
+#[inline(always)]
+pub(crate) const fn may_have_methods(word: u32) -> bool {
+    word.wrapping_sub(LAYOUT_BASE) < LAYOUT_INDEX_LIMIT
+}
+
 /// A GC leaf: a layout-indexed method lookup, with no allocation, TLS lookup,
 /// user code, learned state or name/holder walk. Zero means ordinary dispatch.
 /// The returned function takes explicit `this`, has no rest/arguments bundling,
@@ -47,7 +54,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
     let obj = (recv as usize + perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     // The range test also rejects shadowed words, before touching a record
     // or a GC header. Most ordinary method receivers carry a runtime shape.
-    if (*obj).parent_class_id.wrapping_sub(LAYOUT_BASE) >= LAYOUT_INDEX_LIMIT {
+    if !may_have_methods((*obj).parent_class_id) {
         return 0;
     }
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
@@ -74,7 +81,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
         if e.atom.is_null() {
             return 0;
         }
-        if (*e.atom).hash == hash && atom_bytes(e.atom) == Some(bytes) {
+        if (*e.atom).hash == hash && ((*e.atom).string == k || atom_bytes(e.atom) == Some(bytes)) {
             break e;
         }
         at = (at + 1) & table.mask;
@@ -141,7 +148,7 @@ pub(crate) unsafe fn call_by_id(
         return None;
     }
     let obj = (biased as usize + perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
-    if (*obj).parent_class_id.wrapping_sub(LAYOUT_BASE) >= LAYOUT_INDEX_LIMIT {
+    if !may_have_methods((*obj).parent_class_id) {
         return None;
     }
     let d = family_desc_of(obj)?;
@@ -151,7 +158,11 @@ pub(crate) unsafe fn call_by_id(
     let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
     let name = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)?;
     let bytes = std::slice::from_raw_parts(name.ptr, name.len);
-    let hash = super::super::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    let hash = if name.static_id != 0 {
+        name.hash
+    } else {
+        super::super::key_bytes_hash(bytes.as_ptr(), bytes.len())
+    };
     let key = crate::string::atom_lookup(bytes, hash)?;
     let key_bits = crate::value::STRING_TAG | key as u64;
     let callee = perry_probe_family_method(
