@@ -170,7 +170,10 @@ mod tests {
         let result = m.node_l("result");
         m.load_from_prototypes(a, Key::Named(key), result);
         m.solve();
-        assert_eq!(m.nodes[result as usize].pts.to_sorted(), vec![x, y]);
+        let opaque = m.tok(TokKind::BuiltinFn);
+        let mut expected = vec![x, y, opaque];
+        expected.sort_unstable();
+        assert_eq!(m.nodes[result as usize].pts.to_sorted(), expected);
         let z = m.tok(TokKind::ModNs(3));
         m.add_tok(fb, z);
         m.solve();
@@ -196,7 +199,7 @@ mod tests {
         let result = m.node_l("result");
         m.load_from_prototypes(protos[0], Key::Named(key), result);
         m.solve();
-        assert_eq!(m.nodes[result as usize].pts.len(), 128);
+        assert_eq!(m.nodes[result as usize].pts.len(), 129);
         assert!(m.pts_entries < 4000, "{}", m.size_line());
     }
 }
