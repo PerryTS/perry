@@ -1,0 +1,5 @@
+Runtime object stores, array element stores and overflow insertion now consume the live parent header inline before calling the shared GC barrier. Nursery parents skip the call while incremental marking is idle; old and malloc parents retain the existing remembered-set path, and active marking still shades children.
+
+Object tracing already derives from ShapeId representation. Slot notes now reject object payloads and already-unknown array/closure layouts inline, with array element-shape maintenance admitted by its header bit. Pointer-free and all-pointer declarations still transition through the existing array/closure layout logic. The element-shape path reuses the validated header instead of reading it again.
+
+GC coverage includes old/malloc remembered-set equivalence, young-parent incremental shading and scoped layout tracing. Old-generation fixtures now use the production born-tenured allocator; the unseeded iterator-array trace fixture explicitly registers its static layout so it also runs in isolation.

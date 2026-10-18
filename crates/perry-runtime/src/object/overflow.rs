@@ -451,9 +451,9 @@ pub(crate) unsafe fn insert_key_bits(
         *attrs_at(t, slot) = attrs as u64;
         (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
     }
-    crate::gc::runtime_write_barrier_slot(t as usize, key_at(t, slot) as usize, key);
+    crate::gc::runtime_write_barrier_resolved_slot(t as usize, key_at(t, slot) as usize, key);
     if *attrs_at(t, slot) & SLOT_REF == 0 {
-        crate::gc::runtime_write_barrier_slot(
+        crate::gc::runtime_write_barrier_resolved_slot(
             t as usize,
             value_at(t, slot) as usize,
             *value_at(t, slot),

@@ -271,6 +271,15 @@ fn runtime_write_barrier_slot_matches_nanboxed_entry_point() {
             runtime_write_barrier_slot(parent_addr, slot_addr, child_bits);
             let decoded = remembered_state_fingerprint();
 
+            reset_remembered_set();
+            unsafe { runtime_write_barrier_resolved_slot(parent_addr, slot_addr, child_bits) };
+            assert_eq!(
+                remembered_state_fingerprint(),
+                decoded,
+                "parent={parent_label} child={child_label}: the inline header gate must \
+                 preserve the ordinary barrier's remembered set"
+            );
+
             assert_eq!(
                 decoded, nanboxed,
                 "parent={parent_label} child={child_label}: the decoded entry point must \

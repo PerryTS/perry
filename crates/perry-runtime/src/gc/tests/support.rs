@@ -976,7 +976,7 @@ pub(super) unsafe fn alloc_old_test_object(
     // tests assert on is unchanged.
     let allocated_slots = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let payload = std::mem::size_of::<crate::object::ObjectHeader>() + allocated_slots * 8;
-    let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
+    let obj = crate::arena::arena_alloc_gc_old_born_tenured(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
     // The fixture uses an Ordinary ShapeId; mark its newborn store kind
@@ -1078,7 +1078,7 @@ pub(super) unsafe fn alloc_old_test_array(
     length: u32,
 ) -> (*mut crate::array::ArrayHeader, *mut u64) {
     let payload = std::mem::size_of::<crate::array::ArrayHeader>() + length as usize * 8;
-    let arr = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_ARRAY)
+    let arr = crate::arena::arena_alloc_gc_old_born_tenured(payload, 8, GC_TYPE_ARRAY)
         as *mut crate::array::ArrayHeader;
     (*arr).length = length;
     (*arr).capacity = length;

@@ -128,8 +128,7 @@ pub use self::concat_reverse::{
 };
 pub(crate) use self::element_shape::{
     forget_element_shape, forget_element_shape_after_full_prune, invalidate_all_element_shapes,
-    note_element_store, note_element_store_resolved_flags, prune_dead_element_shape_owners,
-    transfer_element_shape,
+    note_element_store_resolved_flags, prune_dead_element_shape_owners, transfer_element_shape,
 };
 pub use self::element_shape::{
     js_array_element_shape_check, js_array_element_shape_class, js_array_element_shape_epoch,

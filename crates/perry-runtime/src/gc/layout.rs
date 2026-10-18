@@ -405,6 +405,11 @@ unsafe fn layout_all_pointer_array_append(
     slot_index == length && length < capacity
 }
 
+/// Array/closure layout maintenance. Objects are traced by ShapeId and owe
+/// no slot note. For other kinds the live header layout is authoritative:
+/// UNKNOWN already scans every tagged slot, so only an array element-shape
+/// proof can still need maintenance in that state.
+#[inline(always)]
 pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits: u64) {
     #[cfg(test)]
     crate::object::TEST_LAYOUT_NOTE_SLOT_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -415,99 +420,117 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         let Some(header) = layout_header_for_user(parent_user) else {
             return;
         };
-        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-            let new_user = forwarding_address(header) as usize;
-            if new_user != 0 && new_user != parent_user {
-                layout_note_slot(new_user, slot_index, value_bits);
-            }
-            return;
-        }
-        // #7480: maintain the per-array homogeneous element-shape invariant.
-        // This is the one funnel BOTH the runtime's element-store helpers
-        // (`note_array_slot` and siblings) and codegen's inline element
-        // stores already pass through — `array_store_needs_layout_note`
-        // elides the note only for an array statically proven numeric and
-        // pointer-free, which an element-shape array can never be. It sits
-        // ahead of the `GC_LAYOUT_UNKNOWN` early return below because an
-        // all-pointer array is marked unknown on its first generic write,
-        // and costs one `obj_type` compare on the header word the next line
-        // reads anyway.
-        if (*header).obj_type == GC_TYPE_ARRAY {
-            crate::array::note_element_store(
-                parent_user as *mut crate::array::ArrayHeader,
-                slot_index,
-                value_bits,
-            );
-        }
-        if (*header).obj_type == GC_TYPE_OBJECT {
-            // Object stores retire the numeric proof in their owner funnel.
-            // GC tracing uses the ShapeId rep, never an address-keyed mask.
-            return;
-        }
-        if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
-            return;
-        }
-        let pointer = layout_pointer_bearing_bits(value_bits);
-        // A result array built by a runtime helper can declare that its live
-        // prefix is pointer-only once, instead of growing a HashMap-backed
-        // bitmap for every inserted element. Runtime construction bypasses
-        // this generic write path; any later ordinary array write may create
-        // holes or replace an element, so conservatively fall back to the
-        // generic scan path regardless of the stored value.
-        //
-        // ONE exception (#7469): an APPEND of a pointer at the array's current
-        // append position keeps the declaration exact rather than violating it,
-        // so it is preserved instead of downgraded. Without this a codegen
-        // `[]` + push-loop array (declared all-pointer at allocation) would be
-        // demoted by the very first growth — `js_array_push_f64_grow` routes
-        // through this function — and every later push would fall off the
-        // declared fast path for the rest of the array's life.
-        let all_pointer_layout = (*header)._reserved & GC_LAYOUT_ALL_POINTERS != 0;
-        if all_pointer_layout {
-            if pointer && layout_all_pointer_array_append(header, parent_user, slot_index) {
+        if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
+            if (*header).obj_type == GC_TYPE_OBJECT {
                 return;
             }
-            layout_mark_unknown(parent_user as *mut u8);
-            return;
-        }
-        // An empty array's first pointer append is also a complete proof of
-        // the all-pointer invariant: before the caller bumps `length` the
-        // live prefix is empty, and immediately afterwards its sole element
-        // is the pointer we just classified. Publish that stronger state
-        // instead of minting a one-bit side mask (or falling back to UNKNOWN),
-        // so later pointer appends can consume the same O(1) header proof as
-        // arrays declared all-pointer by codegen.
-        //
-        // This is deliberately restricted to `length == 0`. A POINTER_FREE
-        // array with an existing numeric prefix may also receive a pointer at
-        // its append position, but that prefix does not satisfy the claim.
-        // Clear both raw-f64 flags before publishing ALL_POINTERS: the two
-        // representations are mutually exclusive, and generated append code
-        // uses their absence as part of its admission test.
-        if pointer
-            && (*header).obj_type == GC_TYPE_ARRAY
-            && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE
-        {
-            let arr = parent_user as *const crate::array::ArrayHeader;
-            if (*arr).length == 0
-                && layout_all_pointer_array_append(header, parent_user, slot_index)
+            let needs_element_note = (*header).obj_type == GC_TYPE_ARRAY
+                && (*header)._reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
+            if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN
+                && !needs_element_note
             {
-                crate::array::clear_array_numeric_layout_ptr(parent_user);
-                layout_init_all_pointer_slots(parent_user as *mut u8);
                 return;
             }
-            // Generated layout notes also reach this funnel directly. A
-            // pointer invalidates both numeric sub-flags before publication,
-            // even when no array store helper has cleared them yet.
-            crate::array::clear_array_numeric_layout_ptr(parent_user);
         }
-        if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
+        layout_note_slot_transition(parent_user, slot_index, value_bits, header);
+    }
+}
+
+/// A declaration needs weakening, an element-shape proof needs maintenance,
+/// or the caller passed a forwarding stub. Keep these transitions shared.
+#[inline(never)]
+unsafe fn layout_note_slot_transition(
+    parent_user: usize,
+    slot_index: usize,
+    value_bits: u64,
+    header: *mut GcHeader,
+) {
+    if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+        let new_user = forwarding_address(header) as usize;
+        if new_user != 0 && new_user != parent_user {
+            layout_note_slot(new_user, slot_index, value_bits);
+        }
+        return;
+    }
+    // #7480: maintain the per-array homogeneous element-shape invariant.
+    // This is the one funnel BOTH the runtime's element-store helpers
+    // (`note_array_slot` and siblings) and codegen's inline element
+    // stores already pass through — `array_store_needs_layout_note`
+    // elides the note only for an array statically proven numeric and
+    // pointer-free, which an element-shape array can never be. It sits
+    // ahead of the `GC_LAYOUT_UNKNOWN` early return below because an
+    // all-pointer array is marked unknown on its first generic write,
+    // and costs one `obj_type` compare on the header word the next line
+    // reads anyway.
+    if (*header).obj_type == GC_TYPE_ARRAY {
+        crate::array::note_element_store_resolved_flags(
+            parent_user as *mut crate::array::ArrayHeader,
+            slot_index,
+            value_bits,
+            (*header)._reserved,
+        );
+    }
+    if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
+        return;
+    }
+    let pointer = layout_pointer_bearing_bits(value_bits);
+    // A result array built by a runtime helper can declare that its live
+    // prefix is pointer-only once, instead of growing a HashMap-backed
+    // bitmap for every inserted element. Runtime construction bypasses
+    // this generic write path; any later ordinary array write may create
+    // holes or replace an element, so conservatively fall back to the
+    // generic scan path regardless of the stored value.
+    //
+    // ONE exception (#7469): an APPEND of a pointer at the array's current
+    // append position keeps the declaration exact rather than violating it,
+    // so it is preserved instead of downgraded. Without this a codegen
+    // `[]` + push-loop array (declared all-pointer at allocation) would be
+    // demoted by the very first growth — `js_array_push_f64_grow` routes
+    // through this function — and every later push would fall off the
+    // declared fast path for the rest of the array's life.
+    let all_pointer_layout = (*header)._reserved & GC_LAYOUT_ALL_POINTERS != 0;
+    if all_pointer_layout {
+        if pointer && layout_all_pointer_array_append(header, parent_user, slot_index) {
             return;
         }
-        // Mixed payloads use the same tag test as the tracer. A store can
-        // only weaken this declaration; explicit bulk scans may strengthen it.
         layout_mark_unknown(parent_user as *mut u8);
+        return;
     }
+    // An empty array's first pointer append is also a complete proof of
+    // the all-pointer invariant: before the caller bumps `length` the
+    // live prefix is empty, and immediately afterwards its sole element
+    // is the pointer we just classified. Publish that stronger state
+    // instead of minting a one-bit side mask (or falling back to UNKNOWN),
+    // so later pointer appends can consume the same O(1) header proof as
+    // arrays declared all-pointer by codegen.
+    //
+    // This is deliberately restricted to `length == 0`. A POINTER_FREE
+    // array with an existing numeric prefix may also receive a pointer at
+    // its append position, but that prefix does not satisfy the claim.
+    // Clear both raw-f64 flags before publishing ALL_POINTERS: the two
+    // representations are mutually exclusive, and generated append code
+    // uses their absence as part of its admission test.
+    if pointer
+        && (*header).obj_type == GC_TYPE_ARRAY
+        && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE
+    {
+        let arr = parent_user as *const crate::array::ArrayHeader;
+        if (*arr).length == 0 && layout_all_pointer_array_append(header, parent_user, slot_index) {
+            crate::array::clear_array_numeric_layout_ptr(parent_user);
+            layout_init_all_pointer_slots(parent_user as *mut u8);
+            return;
+        }
+        // Generated layout notes also reach this funnel directly. A
+        // pointer invalidates both numeric sub-flags before publication,
+        // even when no array store helper has cleared them yet.
+        crate::array::clear_array_numeric_layout_ptr(parent_user);
+    }
+    if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
+        return;
+    }
+    // Mixed payloads use the same tag test as the tracer. A store can
+    // only weaken this declaration; explicit bulk scans may strengthen it.
+    layout_mark_unknown(parent_user as *mut u8);
 }
 
 /// Existing-slot note. Stable scalar or pointer classification needs no kind
@@ -540,10 +563,11 @@ pub(crate) fn layout_note_slot_aware(
                 return;
             }
             if (*header).obj_type == GC_TYPE_ARRAY {
-                crate::array::note_element_store(
+                crate::array::note_element_store_resolved_flags(
                     parent_user as *mut crate::array::ArrayHeader,
                     slot_index,
                     value_bits,
+                    (*header)._reserved,
                 );
             }
         }
