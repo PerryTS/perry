@@ -26,6 +26,24 @@ fn native_capability(source: &str) -> bool {
                 | "bun:ffi"
         )
 }
+fn loader_property(name: &str) -> bool {
+    matches!(
+        name,
+        "cache"
+            | "_cache"
+            | "require"
+            | "mainModule"
+            | "getBuiltinModule"
+            | "createRequire"
+            | "binding"
+            | "_linkedBinding"
+            | "constructor"
+            | "__proto__"
+            | "getPrototypeOf"
+            | "getOwnPropertyDescriptor"
+            | "getOwnPropertyDescriptors"
+    )
+}
 #[derive(Default)]
 struct Uses(u32);
 impl Visit for Uses {
@@ -94,27 +112,32 @@ impl Visit for Uses {
         {
             return;
         }
-        if matches!(
-            name(m).as_deref(),
-            Some(
-                "cache"
-                    | "_cache"
-                    | "require"
-                    | "mainModule"
-                    | "getBuiltinModule"
-                    | "createRequire"
-                    | "binding"
-                    | "_linkedBinding"
-                    | "constructor"
-                    | "__proto__"
-                    | "getPrototypeOf"
-                    | "getOwnPropertyDescriptor"
-                    | "getOwnPropertyDescriptors"
-            )
-        ) {
+        if name(m).as_deref().is_some_and(loader_property) {
             self.0 += 1;
         }
         m.visit_children_with(self);
+    }
+    fn visit_object_pat_prop(&mut self, p: &ast::ObjectPatProp) {
+        // Pattern keys are IdentName, not identifier reads: the ordinary
+        // identifier visitor never sees `{createRequire: alias}`.
+        let reaches = match p {
+            ast::ObjectPatProp::KeyValue(kv) => match &kv.key {
+                ast::PropName::Ident(i) => loader_property(i.sym.as_ref()),
+                ast::PropName::Str(s) => loader_property(s.value.to_string_lossy().as_ref()),
+                ast::PropName::Computed(c) => match c.expr.as_ref() {
+                    ast::Expr::Lit(ast::Lit::Str(s)) => {
+                        loader_property(s.value.to_string_lossy().as_ref())
+                    }
+                    ast::Expr::Lit(_) => false,
+                    _ => true, // An unknown key may select a loader capability.
+                },
+                _ => false,
+            },
+            ast::ObjectPatProp::Assign(a) => loader_property(a.key.id.sym.as_ref()),
+            ast::ObjectPatProp::Rest(_) => false,
+        };
+        self.0 += u32::from(reaches);
+        p.visit_children_with(self);
     }
     fn visit_ident(&mut self, i: &ast::Ident) {
         if matches!(
@@ -174,6 +197,9 @@ mod tests {
             "const key = process.argv[2]; process[key]('module');",
             "const {createRequire: cr} = host; cr('x');",
             "host.createRequire('x');",
+            "const {['createRequire']: cr} = host; cr('x');",
+            "const {[key]: cr} = host; cr('x');",
+            "const {_cache: cache} = host; delete cache[k];",
             "import x from 'data:text/javascript,export default 1';",
             "require('node:repl');",
         ] {
