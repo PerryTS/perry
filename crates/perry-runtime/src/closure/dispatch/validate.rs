@@ -146,5 +146,8 @@ pub fn dispatch_proxy_callee_or_throw(
     if crate::proxy::js_proxy_is_proxy(boxed) == 1 {
         return crate::proxy::call_proxy_value_with_this(boxed, this.as_f64(), args);
     }
+    if crate::object::is_function_prototype_object_value(boxed) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     throw_not_callable()
 }

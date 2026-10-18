@@ -195,6 +195,8 @@ pub struct Module {
     /// is recorded here. Keyed by ClassId; consumed by codegen when
     /// emitting `js_register_class_name`.
     pub class_display_names: std::collections::HashMap<crate::ClassId, String>,
+    /// Ordinary methods/accessors have [[Call]] but no [[Construct]].
+    pub non_constructor_funcs: std::collections::HashSet<crate::types::FuncId>,
     /// #4101: original source text for each user function, keyed by HIR
     /// FuncId. Populated at lowering by slicing the module source against the
     /// AST span of every function declaration / expression / arrow. Consumed
@@ -283,6 +285,7 @@ impl Module {
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
             class_display_names: std::collections::HashMap::new(),
+            non_constructor_funcs: Default::default(),
             closure_source_text: std::collections::HashMap::new(),
             class_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),

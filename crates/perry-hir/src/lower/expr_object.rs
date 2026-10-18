@@ -193,6 +193,11 @@ fn lower_method_prop(
     };
     let key: String = key_label.clone();
     let func_id = ctx.fresh_func();
+    // Generator methods already carry their non-constructible body kind,
+    // and retain their required own prototype object.
+    if !method.function.is_generator {
+        ctx.non_constructor_funcs.insert(func_id);
+    }
     // #2076: an object-literal shorthand method's `fn.name` is the
     // property key per spec (`{m(){}}.m.name === "m"`). The synthetic
     // function name we mint below (`__obj_method_<key>_<id>`) starts
@@ -525,6 +530,7 @@ fn lower_accessor_prop(
     };
 
     let func_id = ctx.fresh_func();
+    ctx.non_constructor_funcs.insert(func_id);
     // #9468: accessor definitions run SetFunctionName with the `get`/`set`
     // prefix. Class accessors already acquire this name when reflected from a
     // descriptor; object-literal accessors are ordinary closure values and

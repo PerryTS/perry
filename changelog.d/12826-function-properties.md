@@ -1,0 +1,1 @@
+Object-literal methods and accessors now carry the existing non-constructor function fact into code generation. The Object constructor inherits Object/Function prototype methods instead of defining its own copies, and indirect calls of Function.prototype return undefined. Function.prototype own keys also retain Node's method-before-poison-pill order.
