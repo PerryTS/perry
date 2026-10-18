@@ -182,20 +182,34 @@ fn string_value(value: &str) -> f64 {
 }
 
 fn snapshot_readable_stream(json: &str) -> f64 {
-    let chunk = bytes_to_buffer(json.as_bytes());
-    let mut chunks = crate::array::js_array_alloc(1);
-    chunks = crate::array::js_array_push_f64(chunks, chunk);
-    let chunks_value = f64::from_bits(JSValue::pointer(chunks as *const u8).bits());
-    let opts = crate::object::js_object_alloc(0, 1);
+    // This producer can create a Readable without a node:stream import; arm
+    // its constructor attachment before the static constructor bag is sealed.
+    extern "C" {
+        fn js_nm_install_stream();
+    }
+    unsafe { js_nm_install_stream() };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let chunk = scope.root_nanbox_f64(bytes_to_buffer(json.as_bytes()));
+    let chunks = scope.root_raw_mut_ptr(crate::array::js_array_alloc(1));
+    chunks.set_raw_mut_ptr(crate::array::js_array_push_f64(
+        chunks.get_raw_mut_ptr(),
+        chunk.get_nanbox_f64(),
+    ));
+    let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     let object_mode_key = b"objectMode";
-    let object_mode = js_string_from_bytes(object_mode_key.as_ptr(), object_mode_key.len() as u32);
+    let object_mode = scope.root_raw_mut_ptr(js_string_from_bytes(
+        object_mode_key.as_ptr(),
+        object_mode_key.len() as u32,
+    ));
     crate::object::js_object_set_field_by_name(
-        opts,
-        object_mode,
+        opts.get_raw_mut_ptr(),
+        object_mode.get_raw_mut_ptr(),
         f64::from_bits(JSValue::bool(false).bits()),
     );
-    let opts_value = f64::from_bits(JSValue::pointer(opts as *const u8).bits());
-    crate::node_stream::js_node_stream_readable_from_options(chunks_value, opts_value)
+    crate::node_stream::js_node_stream_readable_from_options(
+        f64::from_bits(JSValue::pointer(chunks.get_raw_mut_ptr::<u8>()).bits()),
+        f64::from_bits(JSValue::pointer(opts.get_raw_mut_ptr::<u8>()).bits()),
+    )
 }
 
 /// `v8.serialize(value)` → Node `Buffer` holding the structured-clone payload.
