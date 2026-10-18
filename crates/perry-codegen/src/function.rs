@@ -27,6 +27,19 @@ use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for
 /// global in address space 0.
 pub const TLS_ADDRESS_INTRINSIC: &str = "llvm.threadlocal.address.p0";
 
+/// A size-based decision made after worker-local operands acquire their
+/// serial spellings. Symbol digit counts are part of the existing IR budget.
+pub(crate) enum PreinlineAfterNaming {
+    SelfBody {
+        statements: usize,
+        name_bytes: usize,
+    },
+    OtherBody {
+        statements: usize,
+        symbol: String,
+    },
+}
+
 pub struct LlFunction {
     pub name: String,
     pub return_type: LlvmType,
@@ -45,6 +58,7 @@ pub struct LlFunction {
     /// general small-function policy gives the early pass an explicit code-size
     /// budget instead of activating every historical hint at once.
     pub pre_statepoint_inline: bool,
+    preinline_after_naming: Option<PreinlineAfterNaming>,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -299,6 +313,7 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             pre_statepoint_inline: false,
+            preinline_after_naming: None,
             no_inline: false,
             nanbox_operands: false,
             inline_hint: false,
@@ -1733,5 +1748,44 @@ impl TextFinish {
         }
 
         ir
+    }
+}
+
+mod owned;
+pub(crate) use owned::OwnedFunction;
+
+impl LlFunction {
+    pub(crate) fn defer_self_preinline(&mut self, statements: usize) {
+        self.preinline_after_naming = Some(PreinlineAfterNaming::SelfBody {
+            statements,
+            name_bytes: self.name.len(),
+        });
+    }
+    pub(crate) fn defer_body_preinline(&mut self, statements: usize, symbol: String) {
+        self.preinline_after_naming = Some(PreinlineAfterNaming::OtherBody { statements, symbol });
+    }
+    pub(crate) fn cancel_deferred_preinline(&mut self) {
+        self.preinline_after_naming = None;
+    }
+    pub(crate) fn resolve_callable_preinline(&mut self, body_size: impl Fn(&str) -> Option<usize>) {
+        use PreinlineAfterNaming::*;
+        let Some(decision) = self.preinline_after_naming.take() else {
+            return;
+        };
+        let (size, statements) = match decision {
+            SelfBody {
+                statements,
+                name_bytes,
+            } => (
+                Some(self.estimated_ir_bytes() - self.name.len() + name_bytes),
+                statements,
+            ),
+            OtherBody { statements, symbol } => (body_size(&symbol), statements),
+        };
+        if size.is_some_and(|size| {
+            crate::codegen::helpers::guarded_specialization_admits_preinline(size, statements)
+        }) {
+            self.pre_statepoint_inline = true;
+        }
     }
 }

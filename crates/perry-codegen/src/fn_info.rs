@@ -170,7 +170,7 @@ pub(crate) struct DefinedBody {
 }
 
 /// The module's info requests and facts.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct FnInfoState {
     requested: BTreeSet<String>,
     facts: BTreeMap<String, FnInfoFacts>,
@@ -652,5 +652,76 @@ mod tests {
         assert!(line.contains("ptr @perry_closure_m__9$versioned"));
         assert!(line.contains("i64 5 }"));
         assert!(line.ends_with("i32 31 }"));
+    }
+}
+
+impl FnInfoState {
+    /// Apply worker changes relative to its immutable starting facts. Other
+    /// workers may have set independent flag bits on the same closure body.
+    pub(crate) fn merge_callable(&mut self, base: &Self, worker: Self) {
+        self.requested.extend(worker.requested);
+        self.static_seed_bodies.extend(worker.static_seed_bodies);
+        for (body, incoming) in worker.facts {
+            let previous = base.facts.get(&body);
+            if previous == Some(&incoming) {
+                continue;
+            }
+            // An explicitly created default fact still requests a local info
+            // definition. Absence and a present default record are distinct.
+            let previous = previous.cloned().unwrap_or_default();
+            let current = self.facts.entry(body).or_default();
+            let changed = previous.flags ^ incoming.flags;
+            current.flags = (current.flags & !changed) | (incoming.flags & changed);
+            macro_rules! field {
+                ($name:ident) => {
+                    if incoming.$name != previous.$name {
+                        assert!(
+                            current.$name == previous.$name || current.$name == incoming.$name,
+                            "conflicting callable function metadata"
+                        );
+                        current.$name = incoming.$name;
+                    }
+                };
+            }
+            field!(rest_fixed);
+            field!(length);
+            field!(declared);
+            field!(trusted);
+            field!(versioned);
+            field!(source);
+            field!(name);
+            field!(fixed_generator_state);
+        }
+    }
+}
+
+#[cfg(test)]
+mod callable_merge_tests {
+    use super::*;
+    #[test]
+    fn callable_merge_keeps_explicit_default_body_info() {
+        let base = FnInfoState::default();
+        let mut serial = base.clone();
+        serial.facts_mut("body");
+        let mut merged = base.clone();
+        merged.merge_callable(&base, serial.clone());
+        let render = |s: &FnInfoState| {
+            s.render_globals(
+                |name| {
+                    (name == "body").then(|| DefinedBody {
+                        params: 0,
+                        linkage: "internal".into(),
+                    })
+                },
+                [],
+                false,
+            )
+        };
+        assert_eq!(
+            render(&serial).len(),
+            1,
+            "an explicit default emits its info"
+        );
+        assert_eq!(render(&merged), render(&serial));
     }
 }

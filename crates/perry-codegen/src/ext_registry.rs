@@ -1305,3 +1305,11 @@ mod tests {
         );
     }
 }
+
+pub(crate) fn merge_callable_capture(markers: Vec<&'static str>) {
+    MODULE_CAPTURE.with(|s| {
+        if let Some(active) = s.borrow_mut().as_mut() {
+            active.extend(markers);
+        }
+    });
+}

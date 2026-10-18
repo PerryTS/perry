@@ -1029,3 +1029,45 @@ pub(crate) fn static_prototype_shape(cid: u32) -> Option<(u32, BirthShape)> {
         })
     })
 }
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_content_ids: HashMap<BirthShape, u32>,
+    module_final_ids: HashMap<BirthShape, u32>,
+    module_static_ids: HashMap<String, (u32, BirthShape)>,
+    module_program_ids: ProgramClassShapeIds,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_content_ids: MODULE_CONTENT_IDS.with(|s| s.borrow().clone()),
+        module_final_ids: MODULE_FINAL_IDS.with(|s| s.borrow().clone()),
+        module_static_ids: MODULE_STATIC_IDS.with(|s| s.borrow().clone()),
+        module_program_ids: MODULE_PROGRAM_IDS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CONTENT_IDS.with(|s| *s.borrow_mut() = self.module_content_ids.clone());
+        MODULE_FINAL_IDS.with(|s| *s.borrow_mut() = self.module_final_ids.clone());
+        MODULE_STATIC_IDS.with(|s| *s.borrow_mut() = self.module_static_ids.clone());
+        MODULE_PROGRAM_IDS.with(|s| *s.borrow_mut() = self.module_program_ids.clone());
+        MODULE_FINAL_USES.with(|s| s.borrow_mut().clear());
+        MODULE_SEEDS.with(|s| s.borrow_mut().clear());
+    }
+}
+pub(crate) struct CallableEffects {
+    module_final_uses: BTreeMap<u32, BirthShape>,
+    module_seeds: BTreeMap<u32, BirthShape>,
+}
+pub(crate) fn take_callable_effects() -> CallableEffects {
+    CallableEffects {
+        module_final_uses: MODULE_FINAL_USES.with(|s| std::mem::take(&mut *s.borrow_mut())),
+        module_seeds: MODULE_SEEDS.with(|s| std::mem::take(&mut *s.borrow_mut())),
+    }
+}
+impl CallableEffects {
+    pub(crate) fn merge(self) {
+        MODULE_FINAL_USES.with(|s| s.borrow_mut().extend(self.module_final_uses));
+        MODULE_SEEDS.with(|s| s.borrow_mut().extend(self.module_seeds));
+    }
+}

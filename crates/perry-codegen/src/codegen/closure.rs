@@ -22,89 +22,10 @@ use super::typed_abi::{
     typed_param_reps_for_params, typed_string_closure_capture_reps, typed_string_closure_name,
     TypedFunctionTrampolineKind, TypedParamRep,
 };
-use super::typed_entry::{
-    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
-    EntryArgGuard,
-};
+use super::typed_entry::{emit_tiered_entry_dispatch, typed_entry_arg_guard, EntryArgGuard};
 
-fn emit_typed_closure_trampoline_fast_value(
-    blk: &mut crate::block::LlBlock,
-    kind: TypedFunctionTrampolineKind,
-    typed_name: &str,
-    arg_names: &[String],
-    arg_reps: &[TypedParamRep],
-) -> String {
-    match kind {
-        TypedFunctionTrampolineKind::F64 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            blk.call(DOUBLE, typed_name, &typed_args)
-        }
-        TypedFunctionTrampolineKind::I32 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let raw_i32 = blk.call(I32, typed_name, &typed_args);
-            crate::expr::i32_to_nanbox(blk, &raw_i32)
-        }
-        TypedFunctionTrampolineKind::I1 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let typed_i1 = blk.call(I1, typed_name, &typed_args);
-            let typed_i32 = blk.zext(I1, &typed_i1, I32);
-            crate::expr::i32_bool_to_nanbox(blk, &typed_i32)
-        }
-        TypedFunctionTrampolineKind::StringRef => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let raw_string = blk.call(I64, typed_name, &typed_args);
-            blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
-        }
-    }
-}
+mod trampoline;
+use trampoline::emit_typed_closure_trampoline_fast_value;
 
 fn emit_public_typed_closure_trampoline(
     llmod: &mut LlModule,
@@ -1644,8 +1565,11 @@ pub(super) fn compile_closure(
         && !is_generator
         && super::static_shape_ids::body_has_constfn_lane(&llvm_name)
     {
+        let callable_worker = llmod.callable_worker;
         if let Some(lowered) = llmod.function_mut(closure_function_index) {
-            if super::helpers::guarded_specialization_admits_preinline(
+            if callable_worker {
+                lowered.defer_self_preinline(body.len());
+            } else if super::helpers::guarded_specialization_admits_preinline(
                 lowered.estimated_ir_bytes(),
                 body.len(),
             ) {

@@ -335,7 +335,7 @@ pub(super) fn guarded_specialization_fits_preinline_budget(ir_bytes: usize) -> b
 
 /// [`guarded_specialization_fits_preinline_budget`] plus the source-small arm.
 #[inline]
-pub(super) fn guarded_specialization_admits_preinline(ir_bytes: usize, statements: usize) -> bool {
+pub(crate) fn guarded_specialization_admits_preinline(ir_bytes: usize, statements: usize) -> bool {
     guarded_specialization_fits_preinline_budget(ir_bytes)
         || (guarded_specialization_source_small(statements)
             && ir_bytes <= guarded_specialization_source_small_max_ir_bytes())
@@ -1859,4 +1859,34 @@ pub(crate) fn body_needs_method_owner(body: &[perry_hir::Stmt]) -> bool {
 /// their resume state) and per-evaluation homes need an explicit owner ABI.
 pub(crate) fn body_needs_explicit_method_owner(body: &[perry_hir::Stmt], fresh: bool) -> bool {
     body_has_fixed_generator_state(body) || (fresh && body_needs_method_owner(body))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CallableTargetState {
+    native: bool,
+    ilp32: bool,
+    outline: bool,
+    jscvt: bool,
+    #[cfg(any(test, feature = "testing"))]
+    pinned: Option<bool>,
+}
+pub(crate) fn callable_target_state() -> CallableTargetState {
+    CallableTargetState {
+        native: NATIVE_ROOTS_TARGET_OK.with(|s| s.get()),
+        ilp32: ILP32_TARGET.with(|s| s.get()),
+        outline: FULL_OUTLINE_IC.with(|s| s.get()),
+        jscvt: JSCVT.with(|s| s.get()),
+        #[cfg(any(test, feature = "testing"))]
+        pinned: NATIVE_ROOTS_OVERRIDE.with(|s| s.get()),
+    }
+}
+impl CallableTargetState {
+    pub(crate) fn install(self) {
+        NATIVE_ROOTS_TARGET_OK.with(|s| s.set(self.native));
+        ILP32_TARGET.with(|s| s.set(self.ilp32));
+        FULL_OUTLINE_IC.with(|s| s.set(self.outline));
+        JSCVT.with(|s| s.set(self.jscvt));
+        #[cfg(any(test, feature = "testing"))]
+        NATIVE_ROOTS_OVERRIDE.with(|s| s.set(self.pinned));
+    }
 }

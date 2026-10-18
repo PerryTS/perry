@@ -496,3 +496,54 @@ fn push_args(out: &mut String, args: &[(LlvmType, String)]) {
         let _ = write!(out, "{t} {v}");
     }
 }
+
+impl LlInst {
+    pub(crate) fn relocate_callable(&mut self, r: &crate::codegen::callable_reloc::Relocations) {
+        use LlInst::*;
+        match self {
+            Raw(s) => r.text(s),
+            Bin { a, b, .. } | FCmp { a, b, .. } | ICmp { a, b, .. } => {
+                r.text(a);
+                r.text(b);
+            }
+            FNeg { a, .. } | Freeze { a, .. } => r.text(a),
+            Load { ptr, .. } => r.text(ptr),
+            Store { val, ptr, .. } => {
+                r.text(val);
+                r.text(ptr);
+            }
+            Cast { v, .. } => r.text(v),
+            Select { cond, a, b, .. } => {
+                r.text(cond);
+                r.text(a);
+                r.text(b);
+            }
+            Call { callee, args, .. } => {
+                r.symbol(callee);
+                for (_, arg) in args {
+                    r.text(arg);
+                }
+            }
+            CallIndirect { fptr, args, .. } => {
+                r.text(fptr);
+                for (_, arg) in args {
+                    r.text(arg);
+                }
+            }
+            CondBr { cond, .. } => r.text(cond),
+            Ret { val, .. } => r.text(val),
+            Gep { ptr, idxs, .. } => {
+                r.text(ptr);
+                for (_, idx) in idxs {
+                    r.text(idx);
+                }
+            }
+            Phi { pairs, .. } => {
+                for (val, _) in pairs {
+                    r.text(val);
+                }
+            }
+            Alloca { .. } | AsmBarrier | Br { .. } | RetVoid | Unreachable => {}
+        }
+    }
+}

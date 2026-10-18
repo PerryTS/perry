@@ -339,7 +339,7 @@ const OBJECT_PROTOTYPE_KEYS: &[&str] = &[
 
 /// The module's prototype facts, derived once from its HIR, and the
 /// layouts its lowered code used (the emission's input).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ModuleCreateFamilies {
     prefix: String,
     /// Prototype bindings the compiler follows.
@@ -1876,4 +1876,23 @@ pub(crate) fn lower_assign(ctx: &mut FnCtx<'_>, site: &Site, expr: &Expr) -> Res
             &[(&object_box, &family_end), (&generic_box, &generic_end)],
         ))
     })
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState(ModuleCreateFamilies);
+pub(crate) fn callable_state() -> CallableState {
+    let mut state = MODULE_CREATE_FAMILIES.with(|s| s.borrow().clone());
+    state.used.clear();
+    CallableState(state)
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CREATE_FAMILIES.with(|s| *s.borrow_mut() = self.0.clone());
+    }
+}
+pub(crate) fn take_callable_effects() -> BTreeMap<String, Site> {
+    MODULE_CREATE_FAMILIES.with(|s| std::mem::take(&mut s.borrow_mut().used))
+}
+pub(crate) fn merge_callable_effects(uses: BTreeMap<String, Site>) {
+    MODULE_CREATE_FAMILIES.with(|s| s.borrow_mut().used.extend(uses));
 }

@@ -1395,3 +1395,12 @@ fn emit_object_prototype_unwritten(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, 
     blk.cond_br(&unshadowed, &done_l, refused_l);
     ctx.current_block = done;
 }
+
+#[cfg(test)]
+pub(crate) fn callable_test_census() -> Option<perry_hir::ProtoCensus> {
+    TEST_CENSUS.with(|s| s.borrow().clone())
+}
+#[cfg(test)]
+pub(crate) fn install_callable_test_census(census: Option<perry_hir::ProtoCensus>) {
+    TEST_CENSUS.with(|s| *s.borrow_mut() = census);
+}

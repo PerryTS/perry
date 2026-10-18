@@ -1,0 +1,3 @@
+Large native modules now lower callable groups concurrently with private string pools. Completed graphs and shape/layout requests merge in serial order, preserving generated objects across worker counts while reducing the serial lowering tail. Extra workers share the existing CPU/memory budget; `PERRY_LOWERING_JOBS=1` selects serial lowering for comparisons.
+
+The string-pool index now distinguishes UTF-8 literals from WTF-8 diagnostic spellings, preventing an ordinary string from aliasing a lone-surrogate literal. Focused tests cover worker ownership, deterministic function/closure/class emission, inlining budget boundaries, and release of lowering analyses before LLVM emission.

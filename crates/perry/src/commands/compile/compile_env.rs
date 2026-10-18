@@ -223,6 +223,7 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ("PERRY_ENUM_IMAGE_CENSUS", "Prints enum-image census diagnostics only; no lowering decision depends on this report."),
     ("PERRY_FALLBACK_DIAG", "Opt-in sidecar labels; all caches are bypassed while enabled. Off leaves emitted code and cache identity unchanged."),
+    ("PERRY_LOWERING_JOBS", "Changes callable scheduling only; deterministic merging preserves emitted objects."),
     (
         "PERRY_5951_TRACE",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
