@@ -129,11 +129,13 @@ fn check(checked: bool, interp_guard: bool) {
             .any(|line| line.contains("lshr i64") && line.contains(", 32")),
         "layout is the high header word: {ir}"
     );
-    assert!(
-        ir.lines()
-            .any(|line| line.contains("call ") && line.contains("@js_get_field")),
-        "generic miss must retain the property read: {ir}"
-    );
+    for symbol in ["@js_object_get_field_slow", "@js_object_get_field_nonptr"] {
+        assert!(
+            ir.lines()
+                .any(|line| line.contains("call ") && line.contains(symbol)),
+            "generic miss must retain the object and primitive property routes: {ir}"
+        );
+    }
     if interp_guard {
         assert!(ir.contains("load i32, ptr @PERRY_INTERP_PROTO_WRITTEN"));
     }
