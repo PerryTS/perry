@@ -249,4 +249,25 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn shorthand_reads_keep_loader_binding_roles() {
+        for body in [
+            "const held={module};console.log(typeof held);",
+            "const held={module,...{}};console.log(typeof held);",
+            "const held={require};console.log(typeof held);",
+        ] {
+            let marks = markers(body);
+            let text=format!("import {{createRequire as __perry_cjs_create_require}} from 'node:module'; function require(x){{return x;}} const module={{__perry_cjs_record:true}}; {}",mark(body,&marks));
+            let syntax = perry_hir::ir::ClassFamilySyntax {
+                original_source_ranges: ranges(&text, &marks),
+                ..Default::default()
+            };
+            let ast = perry_parser::parse_typescript(&text, "short.cjs").unwrap();
+            let ast = stamp(&ast, &Some(syntax.clone())).unwrap();
+            let mut module = perry_hir::lower_module(&ast, "short", "short.cjs").unwrap();
+            module.set_class_family_syntax(Some(syntax));
+            let p = perry_wpfacts::compute(&[("short.cjs".into(), &module)], &Default::default());
+            assert!(p.module_reentry.is_some(), "{body}: {:?}", p.module_reentry);
+        }
+    }
 }

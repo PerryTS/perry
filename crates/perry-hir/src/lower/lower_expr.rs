@@ -171,6 +171,33 @@ fn loader_private_name(name: &str) -> bool {
                 || name.contains("cjs_main_module")
                 || name.starts_with("__perry_require_")))
 }
+/// Shorthand lowering resolves bindings directly; retain the same original
+/// loader-read marker as an explicit identifier expression.
+pub(super) fn loader_shorthand_reference(
+    ctx: &LoweringContext,
+    i: &ast::Ident,
+    value: Expr,
+) -> Expr {
+    if i.span.lo.0 & (crate::SOURCE_COMPILER_OWNED | crate::SOURCE_LOADER_ALLOWED) != 0
+        || matches!(value, Expr::LoaderReference(..))
+    {
+        return value;
+    }
+    let kind = if loader_private_name(i.sym.as_ref()) {
+        Some(3)
+    } else if ctx.loader_reach_wrapped && i.sym == *"require" {
+        Some(1)
+    } else if ctx.loader_reach_wrapped && i.sym == *"module" {
+        Some(2)
+    } else {
+        None
+    };
+    match kind {
+        Some(k) => Expr::LoaderReference(k, Box::new(value)),
+        None => value,
+    }
+}
+
 fn loader_native_specifier(s: &str) -> bool {
     matches!(
         s.strip_prefix("node:").unwrap_or(s),

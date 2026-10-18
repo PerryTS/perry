@@ -640,6 +640,12 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectCreate(proto, props) => {
                 let p = self.expr(fx, proto);
+                if self.m.reach_user && !matches!(proto.as_ref(), Expr::Null) {
+                    self.m
+                        .reach_ops
+                        .push((fx.f, crate::loader_reach::Op::Prototype(p)));
+                }
+
                 let r = self.m.reason("E10 Object.create");
                 self.m.cons(p, Cons::CreateProto { reason: r });
                 let site = self.next_site(mi);
@@ -709,6 +715,12 @@ impl<'a> Gen<'a> {
             } => {
                 let on = self.expr(fx, o);
                 let pn = self.expr(fx, p);
+                if self.m.reach_user && !matches!(p.as_ref(), Expr::Null) {
+                    self.m
+                        .reach_ops
+                        .push((fx.f, crate::loader_reach::Op::Prototype(pn)));
+                }
+
                 let r = self.m.reason("E6 Object.setPrototypeOf");
                 self.m.cons(
                     on,

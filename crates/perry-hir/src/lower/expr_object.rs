@@ -906,6 +906,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         bail = true;
                         break;
                     };
+                    let value = super::lower_expr::loader_shorthand_reference(ctx, ident, value);
                     fields.push((name, ty, value));
                 }
                 ast::Prop::Method(method) => {
@@ -1160,6 +1161,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             // path above). Lower a normal identifier read.
                             lower_expr(ctx, &ast::Expr::Ident(ident.clone()))?
                         };
+                        let value =
+                            super::lower_expr::loader_shorthand_reference(ctx, ident, value);
                         ops.push(SpreadOp::Set {
                             key: Expr::String(name),
                             value,
@@ -1610,6 +1613,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         // name (and reads a sloppy implicit global if one exists).
                         lower_expr(ctx, &ast::Expr::Ident(ident.clone()))?
                     };
+                    let value = super::lower_expr::loader_shorthand_reference(ctx, ident, value);
                     props.push((name, value));
                 }
                 ast::Prop::Method(method) => {

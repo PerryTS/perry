@@ -14,6 +14,7 @@ pub(crate) enum Op {
     Module(u32),
     LoaderCall(NodeId, Option<String>),
     Function(FnIdx),
+    Prototype(NodeId),
     Call(CallId, bool, bool),
     Access(NodeId, Key, bool, bool),
     Index(NodeId, NodeId, bool, bool),
@@ -145,6 +146,22 @@ impl Gen<'_> {
                     .push((fx.f, Op::Capability(format!("global evaluator {name}"))));
             }
         }
+        if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = e {
+            if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                if matches!(
+                    name.as_str(),
+                    "js_eval"
+                        | "js_eval_in_scope"
+                        | "js_function_ctor_from_strings"
+                        | "js_vm_module_call"
+                        | "js_module_create_require_devirt"
+                ) {
+                    self.m
+                        .reach_ops
+                        .push((fx.f, Op::Capability(format!("dynamic/loader call {name}"))));
+                }
+            }
+        }
         let why = match e {
             Expr::NativeModuleRef(s) if native_capability(s) => {
                 Some(format!("native loader module {s}"))
@@ -218,6 +235,8 @@ struct Reach<'a> {
     call_ops: Vec<Vec<&'a Op>>,
     protocols: FxHashMap<Tok, Vec<CallId>>,
     top_reached: bool,
+    in_top_graph: bool,
+    private_arguments: FxHashSet<Tok>,
 }
 fn possible_loader_member(name: Option<&str>) -> bool {
     name.is_none_or(|n| {
@@ -238,6 +257,8 @@ fn possible_loader_member(name: Option<&str>) -> bool {
                 | "_linkedBinding"
                 | "dlopen"
                 | "constructor"
+                | "caller"
+                | "callee"
                 | "extensions"
                 | "_extensions"
                 | "_compile"
@@ -247,6 +268,72 @@ fn possible_loader_member(name: Option<&str>) -> bool {
     })
 }
 impl<'a> Reach<'a> {
+    // TOP is shared with compiler bookkeeping in the invariance solve.
+    // Private loader state is acquired only through the guarded original
+    // source references/property paths, not by that summary pollution.
+    fn private_token(&self, t: Tok, seen: &mut FxHashSet<Tok>) -> bool {
+        if !seen.insert(t) {
+            return true;
+        }
+        match self.g.m.toks[t as usize] {
+            TokKind::Func(f) => self.g.m.funcs[f as usize].compiler_owned,
+            TokKind::Bound(b) => {
+                let p = &self.g.m.nodes[self.g.m.bound[b as usize].0 as usize].pts;
+                !p.is_empty()
+                    && !p.contains_tok(TOP)
+                    && p.to_sorted()
+                        .into_iter()
+                        .all(|t| self.private_token(t, seen))
+            }
+            _ => self.module_record(t),
+        }
+    }
+    fn factory_token(&self, t: Tok, seen: &mut FxHashSet<Tok>) -> bool {
+        if !seen.insert(t) {
+            return false;
+        }
+        match self.g.m.toks[t as usize] {
+            TokKind::Func(f) => {
+                self.g.m.funcs[f as usize].compiler_owned
+                    && self.g.m.funcs[f as usize]
+                        .name
+                        .ends_with(":__perry_cjs_factory")
+            }
+            TokKind::Bound(b) => {
+                let p = &self.g.m.nodes[self.g.m.bound[b as usize].0 as usize].pts;
+                !p.contains_tok(TOP)
+                    && p.to_sorted()
+                        .into_iter()
+                        .any(|t| self.factory_token(t, seen))
+            }
+            _ => false,
+        }
+    }
+    fn values(&self, n: NodeId) -> Vec<Tok> {
+        let p = &self.g.m.nodes[n as usize].pts;
+        p.to_sorted()
+            .into_iter()
+            .filter(|&t| {
+                !(self.in_top_graph || p.contains_tok(TOP))
+                    || !self.private_token(t, &mut FxHashSet::default())
+            })
+            .collect()
+    }
+    fn prototype(&mut self, f: FnIdx, n: NodeId) {
+        let p = &self.g.m.nodes[n as usize];
+        if p.prim & (prim::NULL | prim::UNDEF) != 0
+            || (p.prim == 0 && p.pts.is_empty())
+            || p.pts
+                .to_sorted()
+                .into_iter()
+                .any(|t| t == TOP || matches!(self.g.m.toks[t as usize], TokKind::ObjectProto))
+        {
+            self.reason(
+                f,
+                "prototype may expose a Function constructor or global loader".into(),
+            );
+        }
+    }
     fn function(&mut self, f: FnIdx) {
         if self.live.insert(f) {
             self.queue.push_back(f);
@@ -293,11 +380,14 @@ impl<'a> Reach<'a> {
         }
     }
     fn node(&mut self, n: NodeId) {
-        for t in self.g.m.nodes[n as usize].pts.to_sorted() {
+        for t in self.values(n) {
             self.touch(t);
         }
     }
     fn touch(&mut self, t: Tok) {
+        if self.in_top_graph && self.private_token(t, &mut FxHashSet::default()) {
+            return;
+        }
         if t == TOP {
             self.top();
             return;
@@ -416,6 +506,7 @@ impl<'a> Reach<'a> {
         if std::mem::replace(&mut self.top_reached, true) {
             return;
         }
+        let saved = std::mem::replace(&mut self.in_top_graph, true);
         let m = &self.g.m;
         for (&t, _) in &m.escaped {
             match m.toks[t as usize] {
@@ -428,13 +519,24 @@ impl<'a> Reach<'a> {
                 _ => {}
             }
         }
+        self.in_top_graph = saved;
     }
     fn call(&mut self, f: FnIdx, c: CallId, user: bool, literal: bool) {
         if !self.active_calls.insert(c) {
             return;
         }
         let mut seen = FxHashSet::default();
+        let opaque = self.calls[c as usize].contains(&TOP);
         for t in self.calls[c as usize].clone() {
+            if user && opaque && self.private_token(t, &mut FxHashSet::default()) {
+                continue;
+            }
+            if user && self.factory_token(t, &mut FxHashSet::default()) {
+                self.reason(
+                    f,
+                    "private module factory called from original source".into(),
+                );
+            }
             if user && !literal && self.require_token(t, &mut FxHashSet::default()) {
                 self.reason(
                     f,
@@ -474,7 +576,7 @@ impl<'a> Reach<'a> {
         }
     }
     fn escape(&mut self, f: FnIdx, n: NodeId) {
-        let mut todo = self.g.m.nodes[n as usize].pts.to_sorted();
+        let mut todo = self.values(n);
         let mut seen = FxHashSet::default();
         while let Some(t) = todo.pop() {
             if !seen.insert(t) {
@@ -486,6 +588,7 @@ impl<'a> Reach<'a> {
                 || matches!(
                     m.toks[t as usize],
                     TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Other)
+                        | TokKind::ObjectProto
                 )
             {
                 self.reason(f, format!("{} exposed to unknown code", m.tok_name(t)));
@@ -493,21 +596,17 @@ impl<'a> Reach<'a> {
             }
             self.touch(t);
             if let Some(&n) = m.field_any.get(&t) {
-                todo.extend(m.nodes[n as usize].pts.to_sorted());
+                todo.extend(self.values(n));
             }
             if let Some(keys) = m.field_keys.get(&t) {
                 for &k in keys {
                     if let Some(&n) = m.fields.get(&(t, k)) {
-                        todo.extend(m.nodes[n as usize].pts.to_sorted());
+                        todo.extend(self.values(n));
                     }
                 }
             }
             if let TokKind::Func(target) = m.toks[t as usize] {
-                todo.extend(
-                    m.nodes[m.funcs[target as usize].ret as usize]
-                        .pts
-                        .to_sorted(),
-                );
+                todo.extend(self.values(m.funcs[target as usize].ret));
             }
         }
     }
@@ -520,11 +619,13 @@ impl<'a> Reach<'a> {
                 self.g.m.funcs[f as usize].compiler_owned
                     && self.g.m.funcs[f as usize].name.ends_with(":require")
             }
-            TokKind::Bound(b) => self.g.m.nodes[self.g.m.bound[b as usize].0 as usize]
-                .pts
-                .to_sorted()
-                .into_iter()
-                .any(|t| self.require_token(t, seen)),
+            TokKind::Bound(b) => {
+                let p = &self.g.m.nodes[self.g.m.bound[b as usize].0 as usize].pts;
+                !p.contains_tok(TOP)
+                    && p.to_sorted()
+                        .into_iter()
+                        .any(|t| self.require_token(t, seen))
+            }
             _ => false,
         }
     }
@@ -592,6 +693,7 @@ impl<'a> Reach<'a> {
                 && (private_loader
                     || require
                     || record
+                    || (self.private_arguments.contains(&t) && name.is_none_or(|n| n == "callee"))
                     || match m.toks[t as usize] {
                         TokKind::Top => {
                             name.is_none()
@@ -612,6 +714,8 @@ impl<'a> Reach<'a> {
                                             | "binding"
                                             | "_linkedBinding"
                                             | "constructor"
+                                            | "caller"
+                                            | "callee"
                                             | "extensions"
                                             | "_extensions"
                                             | "_compile"
@@ -651,7 +755,9 @@ impl<'a> Reach<'a> {
                         TokKind::Func(_)
                         | TokKind::Bound(_)
                         | TokKind::ClassObj(_)
-                        | TokKind::BuiltinFn => name.is_none() || name == Some("constructor"),
+                        | TokKind::BuiltinFn => {
+                            name.is_none() || matches!(name, Some("constructor" | "caller"))
+                        }
                         TokKind::Builtin(_) => name == Some("constructor"),
                         TokKind::ObjectProto if m.nodes[n as usize].pts.contains_tok(t) => {
                             name.is_none() || name == Some("constructor")
@@ -727,7 +833,17 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
         call_ops: vec![Vec::new(); g.m.calls.len()],
         protocols: Default::default(),
         top_reached: false,
+        in_top_graph: false,
+        private_arguments: Default::default(),
     };
+    for f in &g.m.funcs {
+        if f.compiler_owned && !f.compiler_body && f.has_arguments {
+            if let Some(n) = f.rest {
+                r.private_arguments
+                    .extend(g.m.nodes[n as usize].pts.to_sorted());
+            }
+        }
+    }
     for (c, op) in &g.m.reach_call_ops {
         r.call_ops[*c as usize].push(op);
     }
@@ -811,6 +927,9 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
                     }
                 }
                 Op::Value(n, allow_require) => {
+                    if g.m.nodes[n as usize].pts.contains_tok(TOP) {
+                        continue;
+                    }
                     for t in g.m.nodes[n as usize].pts.to_sorted() {
                         if let TokKind::Func(target) = g.m.toks[t as usize] {
                             let info = &g.m.funcs[target as usize];
@@ -830,6 +949,7 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
                 }
                 Op::Module(mi) => r.module(mi),
                 Op::Function(target) => r.function(target),
+                Op::Prototype(n) => r.prototype(f, n),
                 Op::LoaderCall(n, ref literal) => {
                     for t in g.m.nodes[n as usize].pts.to_sorted() {
                         if r.require_token(t, &mut FxHashSet::default()) {
