@@ -1145,7 +1145,9 @@ jobs:
           # perry-stdlib's crypto feature builds vendored OpenSSL, whose
           # Unix-target Configure needs a perl with Unix paths (not
           # Strawberry's) and whose build runs `make` recipes under sh. Take
-          # both from MSYS2, appended to PATH so its tools shadow nothing.
+          # both from MSYS2, first on PATH: Git's stripped perl (no
+          # Pod::Usage) must not answer the recipes' `perl`. rustc and cc-rs
+          # find MSVC's link.exe through Visual Studio, not PATH.
           # sh cannot run the NDK's .cmd wrappers or backslash paths, so the C
           # tools are the NDK's clang/llvm executables by forward-slash path;
           # the API level comes from the --target flags below.
@@ -1156,8 +1158,14 @@ jobs:
           }
           & (Join-Path $msys "bash.exe") -lc "pacman -S --noconfirm --needed make perl"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:PATH = "$env:PATH;$msys"
+          $env:PATH = "$msys;$env:PATH"
           $env:OPENSSL_SRC_PERL = Join-Path $msys "perl.exe"
+          & $env:OPENSSL_SRC_PERL -MPod::Usage -MLocale::Maketext::Simple -e 1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "::error::MSYS2 perl lacks a module OpenSSL's build needs"
+            exit 1
+          }
+          Write-Host "OpenSSL perl: $env:OPENSSL_SRC_PERL (Pod::Usage, Locale::Maketext::Simple present)"
           $tools = $toolchain -replace '\\', '/'
           $env:CC_aarch64_linux_android = "$tools/clang.exe"
           $env:CXX_aarch64_linux_android = "$tools/clang++.exe"

@@ -10,6 +10,7 @@ FROM ${OLD_GLIBC_IMAGE}
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
       'deb https://archive.debian.org/debian-security bullseye-security main' \
+      'deb [check-valid-until=no] https://archive.debian.org/debian bullseye-backports main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \
@@ -17,8 +18,12 @@ RUN printf '%s\n' \
       install -y --no-install-recommends ca-certificates \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential cmake curl gnupg libssl-dev libzstd-dev \
+      build-essential curl gnupg libssl-dev libzstd-dev \
       perl pkg-config xz-utils zlib1g-dev \
+    # bullseye's CMake 3.18 finds no ar/ranlib behind mbx's compiler shim
+    # (CMAKE_AR-NOTFOUND: libz-ng-sys's static archive step); 3.25 does.
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      -t bullseye-backports cmake \
     && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
       -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
     && printf '%s\n' \
