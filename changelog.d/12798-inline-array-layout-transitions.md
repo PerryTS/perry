@@ -9,3 +9,8 @@ dense prefix, including when a bulk append grows a partially filled array, and
 hole-initializes all remaining capacity. Mixed values, holes, array integrity,
 length accessors, subclasses, named properties, sparse arrays and RHS mutation
 are covered by the new GC gap test.
+
+Dynamic assignments snapshot a receiver when the key or RHS can rebind its
+binding, preserving the evaluated assignment reference. The GC walker unit
+test declares the test executable's main as a function so instrumented
+library tests compile alongside Rust's generated entry point.

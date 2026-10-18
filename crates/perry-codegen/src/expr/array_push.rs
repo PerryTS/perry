@@ -535,7 +535,7 @@ fn expr_rebinds_local(arg: &Expr, array_id: u32) -> bool {
 /// collection point at all (`any_operand_may_collect`, the same window
 /// predicate every rooting decision in this crate consults). `g.push(1)` on a
 /// module global cannot rebind anything: there is no call to do it in.
-fn push_receiver_is_rebindable(ctx: &FnCtx<'_>, array_id: u32, arg: &Expr) -> bool {
+pub(super) fn push_receiver_is_rebindable(ctx: &FnCtx<'_>, array_id: u32, arg: &Expr) -> bool {
     if expr_rebinds_local(arg, array_id) {
         return true;
     }
