@@ -541,10 +541,6 @@ impl Model {
         n
     }
 
-    fn fns_of(&self, n: NodeId) -> Vec<Tok> {
-        self.nodes[n as usize].pts.to_sorted()
-    }
-
     // ---------------------------------------------------------------- rules
 
     pub fn apply(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {

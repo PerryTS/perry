@@ -149,7 +149,6 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         evaluated_parent: None,
         ctor: None,
         native_parent: None,
-        evaluated_parent: None,
         accessor_keys: vec![],
         has_computed_members: false,
         field_init: None,

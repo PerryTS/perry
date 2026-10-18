@@ -102,6 +102,6 @@ impl Model {
     }
 
     pub fn fn_tokens(&self, n: NodeId) -> Vec<Tok> {
-        self.fns_of(n)
+        self.nodes[n as usize].pts.to_sorted()
     }
 }
