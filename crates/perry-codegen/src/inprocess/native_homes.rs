@@ -27,7 +27,8 @@ pub(super) const SMALL_HOME_SET: usize = 8;
 pub(super) fn retain(module: &inkwell::module::Module<'_>) {
     for function in module.get_functions() {
         let (_, sites) = rs4gc_preflight_factors(function);
-        if sites < HOME_CALL_SPAN {
+        let slow_arms = split_slow_arms(function);
+        if sites < HOME_CALL_SPAN && slow_arms.is_empty() {
             // Explicit compiler-owned ranges are already homes, independent
             // of the SSA lifetime heuristic. Coalesce them before LLVM walks
             // the function once per alloca.
@@ -37,6 +38,11 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
         // Representation choice only: a root that is read after multiple
         // intervening calls benefits from a stable home. Short lifetimes keep
         // ordinary SSA statepoints. Both are lowered by this one backend.
+        // A root read after the slow arm of a split site also keeps its home:
+        // the rejoin merges its unrelocated fast-path value with the slow
+        // statepoint's relocation, which statepoint lowering cannot keep in
+        // one frame slot, so every later slow arm would copy each such root
+        // into fresh slots and back. The home is that single slot.
         // Loads in collecting loop components also retain their home. One
         // linear CFG walk covers loop carries without per-root dataflow.
         // Source-order
@@ -57,9 +63,12 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
         let mut retained = std::collections::HashSet::new();
-        let (collecting_loops, cyclic_blocks, block_ranks) = collecting_loop_blocks(function);
+        let (collecting_loops, cyclic_blocks, block_ranks) =
+            collecting_loop_blocks(function, &slow_arms);
         let mut store_blocks = std::collections::HashMap::new();
         let mut ordinal = 0usize;
+        let mut slow_ordinal = 0usize;
+        let mut stored_at_slow = std::collections::HashMap::new();
         let mut last_access = std::collections::HashMap::new();
         for bb in function.get_basic_blocks() {
             let mut next = bb.get_first_instruction();
@@ -79,6 +88,7 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                             }
                             if let Some(last) = slots.get_mut(&slot) {
                                 *last = ordinal;
+                                stored_at_slow.insert(slot, slow_ordinal);
                                 store_blocks
                                     .insert(slot, LLVMGetInstructionParent(inst.as_value_ref()));
                             }
@@ -107,11 +117,19 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                             {
                                 retained.insert(slot);
                             }
+                            if stored_at_slow
+                                .get(&slot)
+                                .is_some_and(|stored| slow_ordinal > *stored)
+                            {
+                                retained.insert(slot);
+                            }
                         }
                         _ => {}
                     }
                 }
-                ordinal += usize::from(rs4gc_call_may_collect(inst));
+                let collects = rs4gc_call_may_collect(inst);
+                ordinal += usize::from(collects);
+                slow_ordinal += usize::from(collects && slow_arms.contains(&bb.as_mut_ptr()));
             }
         }
         if retained.len() <= SMALL_HOME_SET {
@@ -146,6 +164,7 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                     LLVMSetVolatile(clear, 1);
                     LLVMDisposeBuilder(builder);
                 }
+                erase_overwritten_null_stores(slot);
                 let mut use_ = LLVMGetFirstUse(slot);
                 while !use_.is_null() {
                     let user = LLVMGetUser(use_);
@@ -158,6 +177,94 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
         merge_before_optimization(module, function);
+    }
+}
+
+/// Slow arms of split sites: `br (icmp (call leaf)), M, S` where the arm
+/// starting at S runs through single-predecessor blocks (an invoke continues
+/// at its normal destination) back to M and makes a collecting call. The fast
+/// path is the leaf call's direct edge to M. Only the IR shape decides.
+fn split_slow_arms(
+    function: inkwell::values::FunctionValue<'_>,
+) -> std::collections::HashSet<LLVMBasicBlockRef> {
+    let mut arms = std::collections::HashSet::new();
+    for head in function.get_basic_blocks() {
+        let Some(term) = head.get_terminator() else {
+            continue;
+        };
+        unsafe {
+            let term = term.as_value_ref();
+            if LLVMGetInstructionOpcode(term) != LLVMOpcode::LLVMBr
+                || LLVMIsConditional(term) == 0
+                || !branches_on_leaf_call(LLVMGetCondition(term))
+            {
+                continue;
+            }
+            for (start, merge) in [(0, 1), (1, 0)] {
+                let merge = LLVMGetSuccessor(term, merge);
+                let mut block = LLVMGetSuccessor(term, start);
+                let mut chain = Vec::new();
+                let mut collects = false;
+                while block != merge && !chain.contains(&block) && single_predecessor(block) {
+                    chain.push(block);
+                    let mut inst = LLVMGetFirstInstruction(block);
+                    while !inst.is_null() {
+                        collects |=
+                            rs4gc_call_may_collect(inkwell::values::InstructionValue::new(inst));
+                        inst = LLVMGetNextInstruction(inst);
+                    }
+                    let next = LLVMGetBasicBlockTerminator(block);
+                    block = match LLVMGetInstructionOpcode(next) {
+                        LLVMOpcode::LLVMBr if LLVMIsConditional(next) == 0 => {
+                            LLVMGetSuccessor(next, 0)
+                        }
+                        LLVMOpcode::LLVMInvoke => LLVMGetNormalDest(next),
+                        _ => break,
+                    };
+                }
+                if block == merge && collects {
+                    arms.extend(chain);
+                }
+            }
+        }
+    }
+    arms
+}
+
+/// The fast attempt: a compare of a non-intrinsic call that cannot collect.
+unsafe fn branches_on_leaf_call(condition: LLVMValueRef) -> bool {
+    unsafe {
+        if LLVMIsAICmpInst(condition).is_null() {
+            return false;
+        }
+        (0..2).any(|i| {
+            let operand = LLVMGetOperand(condition, i);
+            if LLVMIsACallInst(operand).is_null() {
+                return false;
+            }
+            let callee = LLVMGetCalledValue(operand);
+            !LLVMIsAFunction(callee).is_null()
+                && LLVMGetIntrinsicID(callee) == 0
+                && !rs4gc_call_may_collect(inkwell::values::InstructionValue::new(operand))
+        })
+    }
+}
+
+unsafe fn single_predecessor(block: LLVMBasicBlockRef) -> bool {
+    unsafe {
+        let mut edges = 0;
+        let mut use_ = LLVMGetFirstUse(LLVMBasicBlockAsValue(block));
+        while !use_.is_null() {
+            let user = LLVMGetUser(use_);
+            if LLVMIsAInstruction(user).is_null()
+                || LLVMGetBasicBlockTerminator(LLVMGetInstructionParent(user)) != user
+            {
+                return false;
+            }
+            edges += 1;
+            use_ = LLVMGetNextUse(use_);
+        }
+        edges == 1
     }
 }
 
@@ -174,6 +281,47 @@ unsafe fn record_home_access(
             .is_none_or(|previous| ranks[&LLVMGetInstructionParent(*previous)] <= ranks[&block])
         {
             last.insert(slot, access);
+        }
+    }
+}
+
+/// A volatile home keeps every store, so drop a null store that the same
+/// block overwrites before any call or read of the home: no collection can
+/// observe it, and `publish` zeroes the whole range at entry anyway.
+unsafe fn erase_overwritten_null_stores(slot: LLVMValueRef) {
+    unsafe {
+        let mut dead = Vec::new();
+        let mut use_ = LLVMGetFirstUse(slot);
+        while !use_.is_null() {
+            let user = LLVMGetUser(use_);
+            if LLVMGetInstructionOpcode(user) == LLVMOpcode::LLVMStore
+                && LLVMGetOperand(user, 1) == slot
+                && !LLVMIsAConstantPointerNull(LLVMGetOperand(user, 0)).is_null()
+            {
+                let mut next = LLVMGetNextInstruction(user);
+                while !next.is_null() {
+                    let opcode = LLVMGetInstructionOpcode(next);
+                    if opcode == LLVMOpcode::LLVMStore && LLVMGetOperand(next, 1) == slot {
+                        dead.push(user);
+                        break;
+                    }
+                    let touches = (0..LLVMGetNumOperands(next))
+                        .any(|i| LLVMGetOperand(next, i as u32) == slot);
+                    if touches
+                        || matches!(
+                            opcode,
+                            LLVMOpcode::LLVMCall | LLVMOpcode::LLVMInvoke | LLVMOpcode::LLVMCallBr
+                        )
+                    {
+                        break;
+                    }
+                    next = LLVMGetNextInstruction(next);
+                }
+            }
+            use_ = LLVMGetNextUse(use_);
+        }
+        for store in dead {
+            LLVMInstructionEraseFromParent(store);
         }
     }
 }
@@ -314,6 +462,7 @@ fn merge_before_optimization(
 // iteration even when source order places the load before either call.
 fn collecting_loop_blocks(
     function: inkwell::values::FunctionValue<'_>,
+    slow_arms: &std::collections::HashSet<LLVMBasicBlockRef>,
 ) -> (
     std::collections::HashSet<LLVMBasicBlockRef>,
     std::collections::HashSet<LLVMBasicBlockRef>,
@@ -380,9 +529,11 @@ fn collecting_loop_blocks(
         let mut pending = vec![start];
         let mut component = Vec::new();
         let mut sites = 0;
+        let mut slow = false;
         while let Some(block) = pending.pop() {
             component.push(block);
             sites += calls[block];
+            slow |= calls[block] > 0 && slow_arms.contains(&blocks[block].as_mut_ptr());
             for &predecessor in &reverse[block] {
                 if !seen[predecessor] {
                     seen[predecessor] = true;
@@ -400,7 +551,7 @@ fn collecting_loop_blocks(
         if cyclic {
             cyclic_blocks.extend(component.iter().map(|&i| blocks[i].as_mut_ptr()));
         }
-        if cyclic && sites >= HOME_CALL_SPAN {
+        if cyclic && (sites >= HOME_CALL_SPAN || slow) {
             retained.extend(component.into_iter().map(|i| blocks[i].as_mut_ptr()));
         }
     }

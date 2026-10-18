@@ -560,3 +560,102 @@ entry:
     assert_eq!(roots.len(), 1);
     assert_eq!(roots[0].len(), 12);
 }
+
+/// `n` roots stored at entry, then `sites` split sites in the shape the store
+/// IC emits: a gc-leaf probe whose miss arm makes a collecting call and
+/// rejoins. Every root is read after the last site.
+fn split_fixture(n: usize, sites: usize, split: bool) -> String {
+    let leaf = if split { " \"gc-leaf-function\"" } else { "" };
+    let mut ir = format!(
+        "declare void @collect()\ndeclare i32 @probe(i64){leaf}\ndeclare ptr addrspace(1) @make(i64, i32) \"gc-leaf-function\"\ndefine i64 @split(i64 %arg) gc \"statepoint-example\" {{\nentry:\n"
+    );
+    for i in 0..n {
+        ir.push_str(&format!(
+            "  %slot{i} = alloca ptr addrspace(1)\n  %p{i} = call ptr addrspace(1) @make(i64 %arg, i32 {i})\n  store ptr addrspace(1) %p{i}, ptr %slot{i}\n"
+        ));
+    }
+    ir.push_str("  br label %site0\n");
+    for s in 0..sites {
+        ir.push_str(&format!(
+            "site{s}:\n  %hit{s} = call i32 @probe(i64 {s})\n  %ok{s} = icmp ne i32 %hit{s}, 0\n  br i1 %ok{s}, label %site{next}, label %slow{s}\nslow{s}:\n  call void @collect()\n  br label %site{next}\n",
+            next = s + 1
+        ));
+    }
+    ir.push_str(&format!("site{sites}:\n"));
+    let mut sum = String::from("0");
+    for i in 0..n {
+        ir.push_str(&format!(
+            "  %v{i} = load ptr addrspace(1), ptr %slot{i}\n  %bits{i} = ptrtoint ptr addrspace(1) %v{i} to i64\n  %sum{i} = xor i64 {sum}, %bits{i}\n"
+        ));
+        sum = format!("%sum{i}");
+    }
+    ir.push_str(&format!("  ret i64 {sum}\n}}\n"));
+    ir
+}
+
+fn split_text(ir: &str, homes: bool) -> String {
+    let context = Context::create();
+    let module = parse_ir_text(&context, ir, "split_home_test").unwrap();
+    if homes {
+        retain(&module);
+    }
+    global_init(&[]);
+    let triple = TargetTriple::create("x86_64-unknown-linux-gnu");
+    let tm = Target::from_triple(&triple)
+        .unwrap()
+        .create_target_machine(
+            &triple,
+            "",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .unwrap();
+    module
+        .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
+        .unwrap();
+    module
+        .run_passes("default<Os>", &tm, PassBuilderOptions::create())
+        .unwrap();
+    if homes {
+        publish(&module).expect("split homes publish");
+    }
+    module.verify().expect("split homes verify");
+    module.print_to_string().to_string()
+}
+
+#[test]
+fn roots_across_split_site_slow_arms_get_one_frame_home() {
+    // Far fewer collecting calls than HOME_CALL_SPAN: the split shape alone
+    // decides. Each root has one home published on every slow statepoint.
+    let n = native_homes::SMALL_HOME_SET + 1;
+    let text = split_text(&split_fixture(n, 4, true), true);
+    assert_eq!(
+        text.matches(&format!("alloca [{n} x ptr addrspace(1)]"))
+            .count(),
+        1
+    );
+    assert_eq!(text.matches("\"gc-live\"(ptr %gc.homes)").count(), 4);
+    assert!(!text.contains("@llvm.experimental.gc.relocate"));
+}
+
+#[test]
+fn sabotage_split_site_roots_without_homes_merge_unrelocated_values() {
+    // Without the home every root becomes phi(unrelocated, relocated) at each
+    // rejoin: the shape statepoint lowering copies through fresh slots.
+    let n = native_homes::SMALL_HOME_SET + 1;
+    let text = split_text(&split_fixture(n, 4, true), false);
+    assert!(text.matches("@llvm.experimental.gc.relocate").count() >= 4 * n);
+    assert!(text.contains("phi ptr addrspace(1)"));
+}
+
+#[test]
+fn unconditional_collecting_calls_below_the_span_stay_ssa() {
+    // The same CFG whose probe may collect has no split site: both arms are
+    // statepoints, so the relocate chain keeps its slots and nothing changes.
+    let n = native_homes::SMALL_HOME_SET + 1;
+    let text = split_text(&split_fixture(n, 4, false), true);
+    assert!(!text.contains("gc.homes"));
+    assert!(text.contains("@llvm.experimental.gc.relocate"));
+}
