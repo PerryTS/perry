@@ -268,9 +268,7 @@ impl Model {
         if a == b {
             return;
         }
-        if self.merge_prototype_cycle(a, b, log) {
-            return;
-        }
+        self.note_prototype_arc(a, b);
         // Dedup against short successor lists only: a duplicate edge costs
         // a little propagation, a global edge set costs gigabytes.
         let b_widened = self.nodes[b as usize].widened;
@@ -363,8 +361,9 @@ impl Model {
 
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
+        self.collapse_prototype_cycles();
         loop {
-            self.drain_widened();
+            self.drain_prototype_work();
             let Some(n) = self.wl.pop_front() else {
                 break;
             };

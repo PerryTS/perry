@@ -12,70 +12,78 @@ impl Model {
         n
     }
 
-    pub(crate) fn merge_prototype_cycle(
-        &mut self,
-        source: NodeId,
-        dest: NodeId,
-        log: bool,
-    ) -> bool {
-        let Some(key) = self.nodes[source as usize].prototype_key else {
-            return false;
-        };
-        if self.nodes[dest as usize].prototype_key != Some(key) {
-            return false;
-        }
-        self.work += 1;
+    pub(crate) fn note_prototype_arc(&mut self, source: NodeId, dest: NodeId) {
+        let Some(key) = self.nodes[source as usize].prototype_key else { return; };
+        if self.nodes[dest as usize].prototype_key != Some(key)
+            || self.nodes[source as usize].succ.contains(&dest) { return; }
         self.nodes[dest as usize].prototype_predecessors
             .get_or_insert_with(Default::default).insert(source);
-        // The ordinary edge deduplicator will handle an existing arc.
-        if self.nodes[source as usize].succ.contains(&dest) {
-            return false;
+        self.prototype_edges_since_scc += 1;
+    }
+
+    pub(crate) fn drain_prototype_work(&mut self) {
+        self.drain_widened();
+        if (self.pops & 1023 == 0 && self.prototype_edges_since_scc >= 1024)
+            || (self.wl.is_empty() && self.prototype_edges_since_scc != 0) {
+            self.collapse_prototype_cycles();
         }
-        let mut previous = crate::pts::FxHashMap::default();
-        let mut stack = vec![dest];
-        previous.insert(dest, dest);
-        let mut found = false;
-        let mut scanned = 0;
-        // Bounded discovery is an optimization: missing a long cycle leaves
-        // the ordinary inclusion edges and their work bound in force.
-        while let Some(n) = stack.pop() {
-            self.work += 1;
-            if n == source {
-                found = true;
-                break;
-            }
-            if previous.len() > 256 {
-                break;
-            }
-            for &next in &self.nodes[n as usize].succ {
+    }
+
+    /// Compute whole components in linear graph passes rather than searching
+    /// for a path on every arc. Only private same-key union vertices merge.
+    pub(crate) fn collapse_prototype_cycles(&mut self) {
+        if self.prototype_merging || self.prototype_edges_since_scc == 0 { return; }
+        self.prototype_merging = true;
+        self.prototype_edges_since_scc = 0;
+        let mut roots: Vec<_> = self.prototype_values.values()
+            .map(|&n| self.prototype_root(n)).collect();
+        self.work += roots.len() as u64;
+        roots.sort_unstable(); roots.dedup();
+        let index: crate::pts::FxHashMap<_,_> = roots.iter().enumerate()
+            .map(|(i,&n)| (n,i)).collect();
+        let mut graph = vec![Vec::new(); roots.len()];
+        let mut reverse = vec![Vec::new(); roots.len()];
+        for (i, &n) in roots.iter().enumerate() {
+            for &dest in &self.nodes[n as usize].succ {
                 self.work += 1;
-                scanned += 1;
-                if scanned > 1024 {
-                    return false;
-                }
-                let next = self.prototype_root(next);
-                if self.nodes[next as usize].prototype_key == Some(key)
-                    && !previous.contains_key(&next)
-                {
-                    previous.insert(next, n);
-                    stack.push(next);
+                let dest = self.prototype_root(dest);
+                if self.nodes[dest as usize].prototype_key != self.nodes[n as usize].prototype_key { continue; }
+                if let Some(&j) = index.get(&dest) {
+                    graph[i].push(j); reverse[j].push(i);
                 }
             }
         }
-        if !found {
-            return false;
+        let mut seen = vec![false; roots.len()];
+        let mut order = Vec::new();
+        for i in 0..roots.len() {
+            if seen[i] { continue; }
+            let mut stack = vec![(i, false)];
+            while let Some((at, exit)) = stack.pop() {
+                self.work += 1;
+                if exit { order.push(at); continue; }
+                if seen[at] { continue; }
+                seen[at] = true;
+                stack.push((at, true));
+                stack.extend(graph[at].iter().map(|&next| (next, false)));
+            }
         }
-        if log {
-            self.rel(|| format!("copy {source} {dest}"));
+        seen.fill(false);
+        let mut components = Vec::new();
+        for &i in order.iter().rev() {
+            if seen[i] { continue; }
+            let mut members = Vec::new();
+            let mut stack = vec![i];
+            while let Some(at) = stack.pop() {
+                self.work += 1;
+                if seen[at] { continue; }
+                seen[at] = true;
+                members.push(roots[at]);
+                stack.extend(reverse[at].iter().copied());
+            }
+            if members.len() > 1 { components.push(members); }
         }
-        let mut members = vec![source];
-        let mut at = source;
-        while at != dest {
-            at = previous[&at];
-            members.push(at);
-        }
-        self.merge_prototype_members(members);
-        true
+        for members in components { self.merge_prototype_members(members); }
+        self.prototype_merging = false;
     }
 
     /// Redirect all incoming prototype arcs after merging representatives.

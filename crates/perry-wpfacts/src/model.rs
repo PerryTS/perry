@@ -582,6 +582,8 @@ pub struct Model {
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Own plus inherited values at a prototype, shared by its receivers.
+    pub prototype_edges_since_scc: usize,
+    pub prototype_merging: bool,
     pub prototype_values: FxHashMap<(Tok, Key), NodeId>,
     /// Prototype closure nodes: token → node.
     pub cp_nodes: FxHashMap<Tok, NodeId>,
