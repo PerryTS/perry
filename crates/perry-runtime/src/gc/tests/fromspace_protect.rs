@@ -123,6 +123,7 @@ fn protection_off_retires_no_from_space() {
 /// vacuously: (1) the subject was live — an object actually MOVED, so this was
 /// a real evacuating minor; (2) the from-space bytes it moved out of are now
 /// poison rather than recyclable; (3) the instrument says so in its counters.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn protection_poisons_the_from_space_an_object_moved_out_of() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -189,6 +190,7 @@ fn protection_poisons_the_from_space_an_object_moved_out_of() {
 /// The memory bound. Long runs must not OOM: the quarantine is a ring, and
 /// evicted blocks regain permissions and go back into Eden for its ordinary
 /// reuse window (nothing still under `mprotect` is handed to `dealloc`).
+#[cfg(perry_gc_instruments)]
 #[test]
 fn quarantine_is_bounded_and_recycles_expired_blocks() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -229,6 +231,7 @@ fn quarantine_is_bounded_and_recycles_expired_blocks() {
 /// fresh expired block in Eden on every collection. Hold a new leaf across
 /// each moving minor so survivor space is live, then compare two equal batches
 /// after the ring and Eden reuse window have warmed up.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn protected_minors_reclaim_expired_idle_eden_blocks() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -279,6 +282,7 @@ fn protected_minors_reclaim_expired_idle_eden_blocks() {
 /// A regression that made the quarantine miss the retired range would flip the
 /// ON arm to look like the OFF arm, and this test would fail. A regression that
 /// made it protect bytes that were never retired would break the OFF arm.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn quarantine_catches_a_planted_stale_from_space_deref() {
     // --- red control: WITHOUT the instrument, the stale deref succeeds ------
@@ -364,6 +368,7 @@ fn quarantine_catches_a_planted_stale_from_space_deref() {
 // arbitrary and fixed only so the test reads as a reproducible recipe.
 // ---------------------------------------------------------------------------
 
+#[cfg(perry_gc_instruments)]
 const ENDPOINT_SEED: u64 = 7;
 
 // ---------------------------------------------------------------------------
@@ -420,6 +425,7 @@ fn schedule_alloc_stride_knob_parses_both_states() {
 /// achievable by collecting nothing and that would be a worse regression than
 /// the one being fixed (CLAUDE.md, four ways a gate cannot fail — #4): the run
 /// must still force collections, and those collections must still MOVE objects.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn pacing_bounds_forced_collections_but_still_moves_objects() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -482,6 +488,7 @@ fn pacing_bounds_forced_collections_but_still_moves_objects() {
 /// The OFF state of the pacing knob, per the kill-policy: `=0` must restore the
 /// literal every-poll semantics, which is the right setting for a small fixture
 /// (`gc_instrument_smoke.sh` pins it) or a window executed exactly once.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn schedule_alloc_stride_zero_restores_every_poll_collection() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -544,6 +551,7 @@ fn pacing_rearms_above_survivors_so_a_useless_collection_cannot_loop() {
 /// what turns a #7154 bug into an immediate fault instead of a cycle-late
 /// `TypeError`. This asserts they actually run together rather than one
 /// disabling the other.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn the_schedule_and_protection_compose() {
     let _guard = CopyingNurseryTestGuard::new(1);

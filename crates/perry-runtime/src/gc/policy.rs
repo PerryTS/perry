@@ -1130,7 +1130,7 @@ pub(super) enum GcCollectionKind {
 }
 
 impl GcCollectionKind {
-    #[cfg(perry_diagnostics)]
+    #[cfg(any(perry_diagnostics, test))]
     #[inline]
     pub(super) fn as_str(self) -> &'static str {
         match self {
@@ -1169,7 +1169,7 @@ pub(super) enum GcTriggerKind {
 }
 
 impl GcTriggerKind {
-    #[cfg(perry_diagnostics)]
+    #[cfg(any(perry_diagnostics, test))]
     #[inline]
     pub(super) fn as_str(self) -> &'static str {
         match self {

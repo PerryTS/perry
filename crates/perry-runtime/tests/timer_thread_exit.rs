@@ -12,6 +12,7 @@ use perry_runtime::timer::{
 
 #[test]
 fn primary_timers_are_released_when_helper_thread_arenas_exit() {
+    perry_runtime::gc::initialize_runtime_fixture();
     assert_eq!(js_timer_has_pending(), 0);
 
     // This main-thread timer is the live control: helper teardown must leave
@@ -52,6 +53,7 @@ fn primary_timers_are_released_when_helper_thread_arenas_exit() {
 }
 
 fn queue_long_timer() {
+    perry_runtime::gc::initialize_runtime_fixture();
     let promise = js_set_timeout_value(30_000.0, 42.0);
     assert!(!promise.is_null());
 }

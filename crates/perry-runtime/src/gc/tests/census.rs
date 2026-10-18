@@ -6,6 +6,7 @@
 use super::super::*;
 use super::support::*;
 
+#[cfg(perry_gc_instruments)]
 fn take(label: &'static str) {
     assert!(!super::super::census::test_has_pass1_snapshot());
     super::super::census::census_arm(label);
@@ -16,6 +17,7 @@ fn take(label: &'static str) {
     );
 }
 
+#[cfg(perry_gc_instruments)]
 fn read_lines(path: &str) -> Vec<serde_json::Value> {
     std::fs::read_to_string(path)
         .expect("census file exists")
@@ -25,6 +27,7 @@ fn read_lines(path: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+#[cfg(perry_gc_instruments)]
 fn type_live(c: &serde_json::Value, name: &str) -> (u64, u64) {
     for t in c["by_type"].as_array().expect("by_type") {
         if t["type"] == name {
@@ -37,6 +40,7 @@ fn type_live(c: &serde_json::Value, name: &str) -> (u64, u64) {
     (0, 0)
 }
 
+#[cfg(perry_gc_instruments)]
 fn class_row<'a>(c: &'a serde_json::Value, class_id: u64) -> Option<&'a serde_json::Value> {
     c["objects"]["by_class"]
         .as_array()
@@ -45,6 +49,7 @@ fn class_row<'a>(c: &'a serde_json::Value, class_id: u64) -> Option<&'a serde_js
         .find(|r| r["class_id"] == class_id)
 }
 
+#[cfg(perry_gc_instruments)]
 #[test]
 fn census_reports_a_known_composition_and_sees_deadness() {
     std::thread::spawn(|| {

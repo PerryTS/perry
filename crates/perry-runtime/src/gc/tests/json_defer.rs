@@ -225,6 +225,7 @@ fn json_deferral_byte_limit_forces_collection_before_poll_allowance_expires() {
     assert_ne!(child.get_nanbox_u64(), original);
 }
 
+#[cfg(perry_gc_instruments)]
 #[test]
 fn json_deferral_seeded_collection_bypasses_the_grace_period() {
     let _isolation = CopyingNurseryTestGuard::new(0);

@@ -702,7 +702,12 @@ pub(crate) unsafe fn birth_fill_f64_lanes(obj: *mut ObjectHeader) {
 /// deprecation changes future admission, never an existing carrier's body fact.
 /// Collector traversal may precede closure-slot rewriting, so SPECIAL checks
 /// resolve validated forwarding before examining closure payload metadata.
-#[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
+#[cfg(any(
+    test,
+    debug_assertions,
+    feature = "field-rep-assert",
+    perry_gc_instruments
+))]
 pub(crate) unsafe fn assert_field_rep_lanes(
     obj: *const ObjectHeader,
     record: Option<super::shapes::ShapeRecordRef>,
@@ -737,7 +742,12 @@ pub(crate) unsafe fn assert_field_rep_lanes(
 
 /// Also used at the existing cold method-prime refusal: an unchecked store
 /// must be diagnosed even if no collection follows before generic dispatch.
-#[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
+#[cfg(any(
+    test,
+    debug_assertions,
+    feature = "field-rep-assert",
+    perry_gc_instruments
+))]
 #[cold]
 #[inline(never)]
 pub(crate) unsafe fn assert_constfn_slot_body(
