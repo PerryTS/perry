@@ -200,12 +200,22 @@ mod tests {
                 ctor_of: None,
                 lexical_this,
             });
+            m.add_prim(ret, prim::NUM);
             functions.push((token, this));
         }
         let callee = m.node_l("test-methods");
+        let result = m.node_l("test-result");
+        let call = m.calls.len() as CallId;
+        m.calls.push(CallSite {
+            this: ThisArg::Undef,
+            args: vec![],
+            spread: vec![],
+            ret: result,
+            site: 0,
+        });
         let a = m.tok(TokKind::ModNs(1));
         let b = m.tok(TokKind::ModNs(2));
-        m.add_receiver_group(callee, a);
+        m.bind_via(callee, call, a);
         // Non-callable alternatives throw; they must not trigger the unknown
         // callback escape boundary or interfere with callable alternatives.
         let non_callable = m.tok(TokKind::ModNs(99));
@@ -214,7 +224,7 @@ mod tests {
         m.add_tok(callee, functions[0].0);
         m.add_tok(callee, functions[2].0);
         m.solve();
-        m.add_receiver_group(callee, b);
+        m.bind_via(callee, call, b);
         m.add_tok(callee, functions[1].0);
         m.solve();
         for &(_, this) in &functions[..2] {
@@ -223,11 +233,14 @@ mod tests {
         }
         assert!(m.nodes[functions[2].1 as usize].pts.is_empty());
         assert!(!m.is_escaped(a) && !m.is_escaped(b));
+        assert_eq!(m.nodes[result as usize].prim, prim::NUM);
+        assert!(m.nodes[result as usize].pts.is_empty());
         m.add_tok(callee, TOP);
         m.solve();
         assert!(m.is_escaped(a) && m.is_escaped(b));
+        assert!(m.nodes[result as usize].pts.contains_tok(TOP));
         let c = m.tok(TokKind::ModNs(3));
-        m.add_receiver_group(callee, c);
+        m.bind_via(callee, call, c);
         m.solve();
         assert!(m.is_escaped(c));
     }
