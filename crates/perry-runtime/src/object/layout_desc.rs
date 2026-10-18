@@ -316,8 +316,16 @@ const _: () = assert!(super::shapes::SHAPE_ID_BASE != 0);
 /// The ShapeId a descriptor word holds, if registration already wrote one
 /// (this agent or an earlier one); `None` for 0 and for the carried sentinel.
 #[inline]
-fn registered_layout_id(word: u32) -> Option<u32> {
+pub(crate) fn registered_layout_id(word: u32) -> Option<u32> {
     super::shapes::is_shape_id(word).then_some(word)
+}
+
+/// Read the existing registration word atomically: an ordinary function's
+/// first construction may publish its id from another agent.
+#[inline]
+pub(crate) unsafe fn load_layout_id(desc: *const PerryLayoutDesc) -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut()).load(Ordering::Acquire)
 }
 
 /// A section sentinel's family: not a layout.
@@ -663,9 +671,33 @@ pub(crate) unsafe fn register_one_bound(
     requested: u32,
     bound: &[u64],
 ) -> u32 {
+    register_bound(desc, requested, bound, None)
+}
+
+/// An ordinary function's layout, with the actual prototype serial carried
+/// by its ordinary shape record. The existing identity word roots its link.
+pub(crate) unsafe fn register_function_layout(
+    desc: *const PerryLayoutDesc,
+    requested: u32,
+    bound: &[u64],
+    proto_id: u64,
+) -> u32 {
+    register_bound(desc, requested, bound, Some(proto_id))
+}
+
+unsafe fn register_bound(
+    desc: *const PerryLayoutDesc,
+    requested: u32,
+    bound: &[u64],
+    function_proto: Option<u64>,
+) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
     let existing = registered_layout_id(word.load(Ordering::Acquire));
+    let function = (*desc).variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR;
+    if function && function_proto.is_none() {
+        return existing.unwrap_or(0);
+    }
     let local = binding_symbol_keys(&*desc);
     if let Some(id) = existing {
         if (local != 0 && bound.is_empty()) || super::shapes::shape_descriptor_by_id(id).is_some() {
@@ -679,7 +711,7 @@ pub(crate) unsafe fn register_one_bound(
     let Some(kind) = declared_kind(d.kind) else {
         return 0;
     };
-    if requested >= super::shapes::STATIC_SHAPE_ID_END {
+    if !function && requested >= super::shapes::STATIC_SHAPE_ID_END {
         return 0;
     }
     let all_keys: &[PerryLayoutKey] = if d.key_count == 0 {
@@ -726,7 +758,8 @@ pub(crate) unsafe fn register_one_bound(
             crate::codegen_abi::ATOM_KIND_REGISTERED_SYMBOL if !(*key.atom).string.is_null() => {}
             // A module-local symbol: a prototype image's, bound at its bind.
             crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL
-                if d.variant == PROTOTYPE_IMAGE_VARIANT => {}
+                if d.variant == PROTOTYPE_IMAGE_VARIANT
+                    || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR => {}
             _ => return 0,
         }
     }
@@ -737,12 +770,20 @@ pub(crate) unsafe fn register_one_bound(
         _ if class_family => super::shapes::class_proto_id(d.class_id),
         0 => super::shapes::PROTO_ID_DEFAULT,
         1 => super::shapes::PROTO_ID_NULL,
+        2 if d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR => {
+            match function_proto {
+                Some(id) if id != 0 => id,
+                _ => return 0,
+            }
+        }
         fam if fam >= LAYOUT_PROTO_TAG_END => proto_family_serial(d.proto),
         _ => return 0,
     };
     if local != 0 && bound.is_empty() {
         // Reserve the id the registration would take; the bind installs it.
-        let proposed = if proto_id == super::shapes::PROTO_ID_DEFAULT {
+        let proposed = if proto_id == super::shapes::PROTO_ID_DEFAULT
+            || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
+        {
             requested
         } else {
             super::shapes::allocate_declared_layout_id(proto_id)
@@ -778,7 +819,13 @@ pub(crate) unsafe fn register_one_bound(
         let mut next = 0;
         for (i, key) in keys.iter().enumerate() {
             // GC_STORE_AUDIT(INIT): unpublished list, under suppression.
-            *values.add(i) = layout_key_word(key, bound, &mut next);
+            *values.add(i) = if function && (*key.atom).kind == crate::codegen_abi::ATOM_KIND_STRING
+            {
+                let atom = crate::string::property_atom((*key.atom).string);
+                crate::value::JSValue::string_ptr(atom.cast_mut()).bits()
+            } else {
+                layout_key_word(key, bound, &mut next)
+            };
             if !attributes.is_null() {
                 super::key_attrs::attrs_write(attributes, i as u32, key.attrs, &*key.atom);
                 if mapped {
@@ -817,12 +864,22 @@ pub(crate) unsafe fn register_one_bound(
         &[],
         integrity,
     )
-    .filter(|&id| super::shapes::is_static_shape_id(id) && !class_family && !image);
+    .filter(|&id| {
+        super::shapes::is_static_shape_id(id)
+            && !class_family
+            && !image
+            && d.variant != crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
+    });
     let proposed = if let Some(id) = existing {
         id
+    } else if function {
+        super::shapes::allocate_declared_layout_id(proto_id)
     } else if let Some(id) = found {
         id
-    } else if proto_id == super::shapes::PROTO_ID_DEFAULT || class_family {
+    } else if proto_id == super::shapes::PROTO_ID_DEFAULT
+        || class_family
+        || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
+    {
         requested
     } else {
         super::shapes::allocate_declared_layout_id(proto_id)
@@ -876,11 +933,33 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
 /// Allocate an object of the registered layout `id` of `d` (see
 /// [`perry_alloc_layout`]). Can collect.
 unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader {
-    // Case 2c: a birth writes no key, so it needs no prototype-chain check:
-    // a constructor's stores check the chain once per run
-    // (`layout_probe::perry_family_run_admits`).
+    alloc_layout_object_sized(d, id, d.slot_count as usize)
+}
+
+/// Function births alone retain the ordinary inline floor. Keep their
+/// sizing and diagnostic work out of the shared class/literal allocator.
+/// `desc` is the registered layout admitted by function_family_birth.
+pub(crate) unsafe fn alloc_function_layout(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
+    let d = &*desc;
+    let id =
+        registered_layout_id(load_layout_id(desc)).expect("registered function constructor layout");
+    let obj =
+        alloc_layout_object_sized(d, id, (d.slot_count as usize).max(super::INLINE_SLOT_FLOOR));
+    FAMILY_DIAG
+        .births
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    obj
+}
+
+#[inline(always)]
+unsafe fn alloc_layout_object_sized(
+    d: &PerryLayoutDesc,
+    id: u32,
+    physical_slots: usize,
+) -> *mut ObjectHeader {
+    // A birth writes only holes; constructor stores check the live chain.
     let word = id;
-    let size = std::mem::size_of::<ObjectHeader>() + d.slot_count as usize * 8;
+    let size = std::mem::size_of::<ObjectHeader>() + physical_slots * 8;
     let obj =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_OBJECT).cast::<ObjectHeader>();
     // GC_STORE_AUDIT(INIT): unpublished header and hole-only declared slots.
@@ -898,7 +977,7 @@ unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader
         .cast::<u8>()
         .add(std::mem::size_of::<ObjectHeader>())
         .cast::<u64>();
-    for i in 0..d.slot_count as usize {
+    for i in 0..physical_slots {
         *fields.add(i) = crate::value::TAG_HOLE;
     }
     mark_layout_object_facts(obj, d);

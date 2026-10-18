@@ -76,6 +76,14 @@ pub(crate) struct RetainedName {
     pub image: bool,
 }
 
+/// Immutable constructor operands after the source/name ranges of an info.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConstructorLayout {
+    pub descriptor: String,
+    pub operands: String,
+    pub symbols: u32,
+}
+
 /// What the module knows about one of its bodies beyond its parameter
 /// count, which comes from the body's definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -88,6 +96,7 @@ pub(crate) struct FnInfoFacts {
     pub versioned: Option<CloneTarget>,
     pub source: Option<RetainedSource>,
     pub name: Option<RetainedName>,
+    pub constructor_layout: Option<ConstructorLayout>,
     /// Compiler-private synchronous continuation: mutable captures are its state slots.
     pub fixed_generator_state: bool,
 }
@@ -295,6 +304,11 @@ fn render_definition(
     let flags = facts.flags
         | FN_COMPILED_BODY
         | source_flags
+        | if facts.constructor_layout.is_some() {
+            crate::runtime_abi::FN_HAS_CONSTRUCTOR_LAYOUT
+        } else {
+            0
+        }
         | match &facts.name {
             Some(name) if name.image => FN_HAS_NAME | FN_NAME_IMAGE,
             Some(_) => FN_HAS_NAME,
@@ -375,6 +389,14 @@ fn render_definition(
             format!("i32 trunc (i64 {delta} to i32)"),
             format!("i32 {byte_len}"),
         ]);
+    }
+    if let Some(layout) = facts.constructor_layout {
+        let tail_type = "{ ptr, ptr, i32, i32 }";
+        types.push(tail_type.to_string());
+        fields.push(format!(
+            "{tail_type} {{ ptr @{}, ptr @{}, i32 {}, i32 0 }}",
+            layout.descriptor, layout.operands, layout.symbols
+        ));
     }
     if types.len() == 1 {
         format!("@{info} = {linkage}constant {INFO_TYPE} {value}")
@@ -652,5 +674,68 @@ mod tests {
         assert!(line.contains("ptr @perry_closure_m__9$versioned"));
         assert!(line.contains("i64 5 }"));
         assert!(line.ends_with("i32 31 }"));
+    }
+}
+
+#[cfg(test)]
+mod constructor_tail_tests {
+    use super::*;
+    #[test]
+    fn constructor_pointer_follows_existing_source_and_name_ranges() {
+        let mut state = FnInfoState::default();
+        let facts = state.facts_mut("ctor");
+        facts.constructor_layout = Some(ConstructorLayout {
+            descriptor: "ctor_layout".into(),
+            operands: "ctor_operands".into(),
+            symbols: 2,
+        });
+        facts.source = Some(RetainedSource {
+            global: "source".into(),
+            offset: 0,
+            byte_len: 7,
+            is_non_strict_ordinary: false,
+        });
+        facts.name = Some(RetainedName {
+            global: "name".into(),
+            byte_len: 4,
+            image: false,
+        });
+        let line = state
+            .render_globals(
+                |_| {
+                    Some(DefinedBody {
+                        params: 0,
+                        linkage: "internal".into(),
+                    })
+                },
+                [],
+                true,
+            )
+            .remove(0);
+        assert!(line.contains(&format!(
+            "{{ {INFO_TYPE}, i32, i32, {{ ptr, ptr, i32, i32 }} }}"
+        )));
+        assert!(line.ends_with("{ ptr @ctor_layout, ptr @ctor_operands, i32 2, i32 0 } }"));
+        state.facts_mut("ctor").versioned = Some(CloneTarget {
+            symbol: "version".into(),
+            captures: 1,
+            boxed_mask: 0,
+        });
+        let line = state
+            .render_globals(
+                |_| {
+                    Some(DefinedBody {
+                        params: 0,
+                        linkage: "internal".into(),
+                    })
+                },
+                [],
+                true,
+            )
+            .remove(0);
+        assert!(line.contains(&format!(
+            "{{ {INFO_TYPE}, i32, i32, i32, i32, {{ ptr, ptr, i32, i32 }} }}"
+        )));
+        assert!(line.ends_with("{ ptr @ctor_layout, ptr @ctor_operands, i32 2, i32 0 } }"));
     }
 }

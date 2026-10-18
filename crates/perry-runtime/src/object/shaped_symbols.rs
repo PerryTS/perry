@@ -77,7 +77,44 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
         // An existing key keeps its storage slot; an added key's slot is its
         // position (`key_attrs::SUMMARY_SLOTS`).
         let index = if let Some(index) = existing {
-            keys.storage_slot(index)
+            let slot = keys.storage_slot(index);
+            if entry & !key_attrs::ENTRY_OPTIONAL == 0
+                && key_attrs::keys_entry(keys.arr(), index) == key_attrs::ENTRY_OPTIONAL
+                && slot < object_inline_capacity(current)
+            {
+                let word = object_key_field_at_with_keys(
+                    current,
+                    keys.arr(),
+                    index,
+                    object_live_slot_count(current),
+                )
+                .bits();
+                let later = word == crate::value::TAG_HOLE
+                    && (index + 1..keys.count()).any(|i| {
+                        object_key_field_at_with_keys(
+                            current,
+                            keys.arr(),
+                            i,
+                            object_live_slot_count(current),
+                        )
+                        .bits()
+                            != crate::value::TAG_HOLE
+                    });
+                if later {
+                    super::overflow::ensure(current);
+                    super::overflow::reattach_fixed(current, symbol.get_nanbox_u64());
+                    super::overflow::insert_key_bits(
+                        current,
+                        symbol.get_nanbox_u64(),
+                        value.get_nanbox_u64(),
+                        entry & !key_attrs::ENTRY_OPTIONAL,
+                    );
+                } else {
+                    super::store_object_field_slot(current, slot as usize, value.get_nanbox_u64());
+                }
+                return true;
+            }
+            slot
         } else {
             // Reserved native-layout fields precede dynamic keys just as they do
             // on the string-property append path.

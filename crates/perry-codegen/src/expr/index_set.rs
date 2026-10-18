@@ -516,6 +516,15 @@ pub(crate) fn lower(
             index,
             value,
         } => {
+            if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
+                ctx,
+                object,
+                index,
+                value,
+                assignment_strict,
+            )? {
+                return Ok(result);
+            }
             if let Some(result) =
                 super::array_append::try_lower(ctx, object, index, value, assignment_strict)?
             {

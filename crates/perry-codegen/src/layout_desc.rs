@@ -15,6 +15,7 @@
 
 pub(crate) mod array_families;
 pub(crate) mod create_families;
+pub(crate) mod function_families;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
@@ -1042,6 +1043,7 @@ pub(crate) fn emit_module_layouts(
         atom(llmod, strings, &mut atoms, &key);
     }
 
+    function_families::emit(llmod, strings, &mut atoms);
     n
 }
 

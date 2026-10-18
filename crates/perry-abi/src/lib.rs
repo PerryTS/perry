@@ -71,6 +71,8 @@ pub const ATOM_KIND_BINDING_SYMBOL: u8 = 4;
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): a marked prototype's, registered under its own semantic generation.
 pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
+/// Ordinary function constructor family, with a live per-object prototype.
+pub const LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR: u16 = 2;
 /// The well-known symbols by number (`StaticAtom.index` of a kind-1 atom),
 /// spelled as `Symbol.<name>`.
 pub const WELL_KNOWN_SYMBOLS: [&str; 15] = [
@@ -609,6 +611,8 @@ pub const FN_HAS_NAME: u32 = 1 << 21;
 /// string, whose `StringHeader` immediately precedes them. That string is
 /// the function's own `name` value, static data of its body.
 pub const FN_NAME_IMAGE: u32 = 1 << 22;
+/// An immutable constructor-layout record follows source/name tails.
+pub const FN_HAS_CONSTRUCTOR_LAYOUT: u32 = 1 << 23;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;

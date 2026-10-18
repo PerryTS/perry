@@ -935,6 +935,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             receiver,
             strict,
         } => {
+            if matches!(receiver.as_ref(), Expr::This) {
+                if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
+                    ctx, target, key, value, *strict,
+                )? {
+                    return Ok(result);
+                }
+            }
             if let Some(value) =
                 try_lower_process_env_put_value_set(ctx, target, key, value, receiver)?
             {

@@ -262,6 +262,15 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
             }
         }
     }
+    if let Some(obj) = crate::object::function_family_birth::allocate(&func_handle, &proto_handle) {
+        return Some(run_constructor_body(
+            func_handle.get_nanbox_f64(),
+            crate::value::js_nanbox_pointer(obj as i64),
+            args_ptr,
+            args_len,
+            true,
+        ));
+    }
     let birth = crate::object::shapes::keyless_birth_width(
         serial,
         crate::object::shapes::object_shape_stamp(proto),

@@ -3335,6 +3335,16 @@ fn lower_module(
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+    crate::layout_desc::function_families::collect(
+        hir,
+        &module_prefix,
+        &module_globals,
+        &closures,
+        &module_boxed_vars,
+        &cross_module.scope_map,
+        crate::layout_desc::layouts_enabled(&opts.output_type, &triple)
+            && !crate::target_layout::target_is_ilp32(&triple),
+    );
     // Step 5C: a method site whose static lane names one of these bodies
     // calls it directly, so it needs each body's exact parameter count.
     static_constfn::set_module_body_arities(&module_prefix, &closure_arities);
