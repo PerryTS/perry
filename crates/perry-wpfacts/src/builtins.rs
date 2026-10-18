@@ -1261,7 +1261,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 Some("flatMap") => {
                     // The callback's results are iterated in turn.
                     let inner = m.node_l("flatmap-inner");
-                    m.cons(
+                    m.numeric_cons(
                         r,
                         Cons::Load {
                             key: Key::Any,
@@ -1331,7 +1331,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 m.edge(a, elems);
             }
             for &s in &c.spread {
-                m.cons(
+                m.numeric_cons(
                     s,
                     Cons::Load {
                         key: Key::Any,
@@ -1364,7 +1364,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             for &a in &c.args {
                 // concat: array arguments contribute their elements.
                 m.edge(a, elems);
-                m.cons(
+                m.numeric_cons(
                     a,
                     Cons::Load {
                         key: Key::Any,
@@ -1373,7 +1373,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 );
             }
             if name == Some("flat") {
-                m.cons(
+                m.numeric_cons(
                     elems,
                     Cons::Load {
                         key: Key::Any,
@@ -1387,7 +1387,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             if let Some(&cb) = c.args.first() {
                 let r = cb_call(m, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
-                m.cons(r, Cons::Implicit { reason: why });
+                m.numeric_cons(r, Cons::Implicit { reason: why });
             }
             ret_tok(m, call, t);
         }
@@ -1405,7 +1405,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     let ofa = m.field_any(out);
                     m.edge(r, ofa);
                     if name == Some("flatMap") {
-                        m.cons(
+                        m.numeric_cons(
                             r,
                             Cons::Load {
                                 key: Key::Any,
@@ -1443,7 +1443,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
         }
         Some("join" | "toString" | "toLocaleString") => {
             let why = m.reason("array join (element ToString)");
-            m.cons(elems, Cons::Implicit { reason: why });
+            m.numeric_cons(elems, Cons::Implicit { reason: why });
             implicit_args(m, call, "join separator");
             ret_prim(m, call, prim::STR);
         }

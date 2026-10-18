@@ -310,20 +310,34 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        self.cons_with_loader_names(n, c, true);
+    }
+    /// Array builtin bookkeeping reads numeric entries, not arbitrary names.
+    pub fn numeric_cons(&mut self, n: NodeId, c: Cons) {
+        let numeric = matches!(
+            c,
+            Cons::Load { key: Key::Any, .. } | Cons::Store { key: Key::Any, .. }
+        );
+        self.cons_with_loader_names(n, c, !numeric);
+    }
+    fn cons_with_loader_names(&mut self, n: NodeId, c: Cons, loader_names: bool) {
         if let Some(call) = self.reach_call {
             if let Some(op) = crate::loader_reach::Op::constraint(
                 n,
                 c,
-                self.calls[call as usize].reach_user,
+                self.calls[call as usize].reach_user && loader_names,
                 None,
             ) {
                 self.reach_call_ops.push((call, op));
             }
         } else if self.rel_phase == b'G' {
             if let Some(f) = self.reach_owner {
-                if let Some(op) =
-                    crate::loader_reach::Op::constraint(n, c, self.reach_user, self.reach_index)
-                {
+                if let Some(op) = crate::loader_reach::Op::constraint(
+                    n,
+                    c,
+                    self.reach_user && loader_names,
+                    self.reach_index,
+                ) {
                     self.reach_ops.push((f, op));
                 }
             }

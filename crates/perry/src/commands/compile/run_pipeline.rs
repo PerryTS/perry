@@ -1021,6 +1021,35 @@ pub fn run_with_parse_cache(
         reachability::tree_shake(&mut ctx, &entry_canonical)?;
     }
 
+    if matches!(
+        args.target.as_deref(),
+        Some(
+            "web"
+                | "wasm"
+                | "ios-widget"
+                | "ios-widget-simulator"
+                | "watchos-widget"
+                | "watchos-widget-simulator"
+                | "android-widget"
+                | "wearos-tile"
+        )
+    ) {
+        program_facts::erase_source_provenance(&mut ctx.native_modules);
+        // These routes do not consume native fact-site offsets.
+        for module in ctx.native_modules.values_mut() {
+            perry_hir::for_each_module_expr_mut(module, &mut |e| {
+                if let perry_hir::Expr::Call { byte_offset, .. }
+                | perry_hir::Expr::PropertyGet { byte_offset, .. }
+                | perry_hir::Expr::DynamicImport { byte_offset, .. } = e
+                {
+                    *byte_offset &= !(perry_hir::SOURCE_COMPILER_OWNED
+                        | perry_hir::SOURCE_COMPILER_BODY
+                        | perry_hir::SOURCE_LOADER_ALLOWED);
+                }
+            });
+        }
+    }
+
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
     if matches!(args.target.as_deref(), Some("web") | Some("wasm")) {
         #[cfg(feature = "backend-wasm")]
@@ -6329,24 +6358,8 @@ pub fn run_with_parse_cache(
         program_class_accessor_names,
         object_literal_method_candidates,
     ));
-    // Source provenance is a proof input. Restore the ordinary expression
-    // shape before backend representation selection and object emission.
-    for (_, module) in &mut ctx.native_modules {
-        perry_hir::for_each_module_expr_mut(module, &mut |e| {
-            while matches!(
-                e,
-                perry_hir::Expr::CompilerOwned(_) | perry_hir::Expr::LoaderReference(..)
-            ) {
-                let old = std::mem::replace(e, perry_hir::Expr::Undefined);
-                *e = match old {
-                    perry_hir::Expr::CompilerOwned(v) | perry_hir::Expr::LoaderReference(_, v) => {
-                        *v
-                    }
-                    _ => unreachable!(),
-                };
-            }
-        });
-    }
+    // Preserve fact-site positions while restoring ordinary runtime expressions.
+    program_facts::erase_source_provenance(&mut ctx.native_modules);
     let mut owned_modules = std::mem::take(&mut ctx.native_modules);
     for (path, module) in &owned_modules {
         let mut link_module = perry_hir::Module::new(module.name.clone());

@@ -32,6 +32,26 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Proof wrappers are transparent to every emission backend.
+pub(super) fn erase_source_provenance(modules: &mut BTreeMap<PathBuf, perry_hir::Module>) {
+    for module in modules.values_mut() {
+        perry_hir::for_each_module_expr_mut(module, &mut |e| {
+            while matches!(
+                e,
+                perry_hir::Expr::CompilerOwned(_) | perry_hir::Expr::LoaderReference(..)
+            ) {
+                let old = std::mem::replace(e, perry_hir::Expr::Undefined);
+                *e = match old {
+                    perry_hir::Expr::CompilerOwned(v) | perry_hir::Expr::LoaderReference(_, v) => {
+                        *v
+                    }
+                    _ => unreachable!(),
+                };
+            }
+        });
+    }
+}
+
 /// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
 /// the whole pass costs a few seconds at most. With `this` bound per
 /// (receiver, key), shared accessor walks and groups, and edges into
