@@ -570,6 +570,21 @@ jobs:
           cache-on-failure: true
           workspaces: |
             . -> target
+      # Same repair as the build job's eviction step: rust-cache deleted the
+      # mbx build-script shims its restored wrappers exec.
+      - name: Restore mbx build-script shims
+        shell: bash
+        run: |
+          set -euo pipefail
+          mbx_bin=$(command -v mbx)
+          { grep -rIhoE --include=build_script_build '/[^ "]*/\.mbx-build-script-shims/[0-9a-f]+/mbx' target*/ 2>/dev/null || true; } \
+            | sort -u | while IFS= read -r shim; do
+                if [ ! -e "$shim" ]; then
+                  mkdir -p "$(dirname "$shim")"
+                  cp "$mbx_bin" "$shim"
+                  echo "restored mbx build-script shim: $shim"
+                fi
+              done
       - name: Compile dependencies for x86_64-apple-darwin
         run: mbx build --profile prod --target x86_64-apple-darwin -p perry
 
@@ -726,6 +741,20 @@ jobs:
                    target-musl-abort/prod/.fingerprint/"$pkg"-* \
                    target-musl-abort/*/prod/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          # rust-cache's target cleanup deletes mbx's per-file build-script
+          # shims (target/.mbx-build-script-shims/<id>/mbx) but keeps the
+          # wrappers that exec them; cargo then finds those build scripts
+          # fresh and mbx never recreates the shim (psm: exit 126). Put the
+          # pinned mbx back at every shim path a restored wrapper names.
+          mbx_bin=$(command -v mbx)
+          { grep -rIhoE --include=build_script_build '/[^ "]*/\.mbx-build-script-shims/[0-9a-f]+/mbx' target*/ 2>/dev/null || true; } \
+            | sort -u | while IFS= read -r shim; do
+                if [ ! -e "$shim" ]; then
+                  mkdir -p "$(dirname "$shim")"
+                  cp "$mbx_bin" "$shim"
+                  echo "restored mbx build-script shim: $shim"
+                fi
+              done
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
       # `perry compile foo.ts -o app --target ios[-simulator]` failed at link
@@ -1047,6 +1076,33 @@ jobs:
           $env:CC_aarch64_linux_android = $linker
           $env:CXX_aarch64_linux_android = $linkerxx
           $env:AR_aarch64_linux_android = Join-Path $toolchain "llvm-ar.exe"
+          $env:RANLIB_aarch64_linux_android = Join-Path $toolchain "llvm-ranlib.exe"
+          # As on the Linux Android legs: CMake's Android support compiles with
+          # the NDK's bare clang (API 21), and cc-rs' `--target=<triple>` (no
+          # API) overrides the wrapper's level. Name the API last.
+          $env:CFLAGS_aarch64_linux_android = "--target=aarch64-linux-android$($env:ANDROID_API_LEVEL)"
+          $env:CXXFLAGS_aarch64_linux_android = "--target=aarch64-linux-android$($env:ANDROID_API_LEVEL)"
+          # CMake defaults to the Visual Studio generator on Windows, which
+          # cannot configure an Android target (libz-ng-sys: MSBuild fails to
+          # get VCTargetsPath). Use Ninja: on PATH, else Visual Studio's copy.
+          $ninja = (Get-Command ninja -ErrorAction SilentlyContinue).Source
+          if (-not $ninja) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+            $vs = & $vswhere -latest -products * -property installationPath
+            $candidate = Join-Path $vs "Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+            if (Test-Path $candidate) { $ninja = $candidate }
+          }
+          if (-not $ninja) {
+            choco install ninja -y --no-progress
+            $ninja = (Get-Command ninja -ErrorAction SilentlyContinue).Source
+          }
+          if (-not $ninja) {
+            Write-Error "::error::no ninja for the Android CMake builds"
+            exit 1
+          }
+          $env:PATH = "$(Split-Path $ninja);$env:PATH"
+          $env:CMAKE_GENERATOR_aarch64_linux_android = "Ninja"
+          Write-Host "Android CMake generator: Ninja ($ninja)"
           # pwsh has no `set -e`; these two are mandatory, so fail the step on a
           # non-zero exit (otherwise the best-effort UI build below, which resets
           # $LASTEXITCODE, could mask a runtime/stdlib failure).
@@ -1567,6 +1623,20 @@ jobs:
             rm -rf target/prod/.fingerprint/"$pkg"-* \
                    target/*/prod/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          # rust-cache's target cleanup deletes mbx's per-file build-script
+          # shims (target/.mbx-build-script-shims/<id>/mbx) but keeps the
+          # wrappers that exec them; cargo then finds those build scripts
+          # fresh and mbx never recreates the shim (psm: exit 126). Put the
+          # pinned mbx back at every shim path a restored wrapper names.
+          mbx_bin=$(command -v mbx)
+          { grep -rIhoE --include=build_script_build '/[^ "]*/\.mbx-build-script-shims/[0-9a-f]+/mbx' target*/ 2>/dev/null || true; } \
+            | sort -u | while IFS= read -r shim; do
+                if [ ! -e "$shim" ]; then
+                  mkdir -p "$(dirname "$shim")"
+                  cp "$mbx_bin" "$shim"
+                  echo "restored mbx build-script shim: $shim"
+                fi
+              done
 
       # --- Per-runner toolchain wiring --------------------------------------
       # Each of these blocks installs what the cross target needs that's NOT
