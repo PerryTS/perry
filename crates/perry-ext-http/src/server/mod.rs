@@ -67,6 +67,7 @@ mod request;
 mod response;
 mod response_end;
 mod response_fast;
+mod response_methods;
 mod response_payload;
 mod server;
 mod tls;

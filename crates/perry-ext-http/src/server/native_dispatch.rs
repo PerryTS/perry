@@ -148,6 +148,12 @@ pub unsafe extern "C" fn js_ext_http_native_dispatch(
     };
     let module = name(module_ptr, module_len);
     let method = name(method_ptr, method_len);
+    // Private cold protocol: select the body once while the runtime builds
+    // the sealed prototype. Calls themselves enter that body directly.
+    if module == "#http-prototype-method-info" {
+        return super::response_methods::info(method);
+    }
+
     let args = Args {
         ptr: args_ptr,
         len: if args_ptr.is_null() { 0 } else { args_len },

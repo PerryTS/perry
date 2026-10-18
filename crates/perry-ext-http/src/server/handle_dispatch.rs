@@ -131,7 +131,6 @@ extern "C" {
     fn js_node_http_res_set_status(handle: i64, code: f64);
     fn js_node_http_res_get_status(handle: i64) -> f64;
     fn js_node_http_res_set_status_message(handle: i64, msg_ptr: *const StringHeader);
-    fn js_node_http_res_set_header(handle: i64, name_ptr: *const StringHeader, value: f64);
     fn js_node_http_res_get_header(handle: i64, name_ptr: *const StringHeader) -> f64;
     fn js_node_http_res_remove_header(handle: i64, name_ptr: *const StringHeader);
     fn js_node_http_res_has_header(handle: i64, name_ptr: *const StringHeader) -> i32;
@@ -153,7 +152,6 @@ extern "C" {
     fn js_node_http_res_strict_content_length(handle: i64) -> i32;
     fn js_node_http_res_set_strict_content_length(handle: i64, value: f64);
     fn js_node_http_res_req_handle(handle: i64) -> i64;
-    fn js_node_http_res_write_head(handle: i64, status: f64, arg2: i64, arg3: i64);
     fn js_node_http_res_add_trailers(handle: i64, headers_value: f64);
     fn js_node_http_res_flush_headers(handle: i64);
     fn js_node_http_res_cork(handle: i64);
@@ -883,13 +881,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
 
     let result = match method.as_str() {
         "setHeader" if args.len() >= 2 => {
-            let name = string_value_arg(args[0]);
-            if !name.is_null() {
-                // Pass the raw JSValue so array values (Set-Cookie) keep their
-                // per-element structure for one-line-per-element wire output.
-                js_node_http_res_set_header(response_root.get(), name, args[1]);
-            }
-            handle_to_pointer_f64(response_root.get())
+            super::response_methods::set_header(response_root.get(), args)
         }
         "getHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
@@ -932,60 +924,14 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             handle_to_pointer_f64(response_root.get())
         }
         "writeHead" if !args.is_empty() => {
-            js_node_http_res_write_head(
-                response_root.get(),
-                number_arg(Some(args[0]), 200.0),
-                raw_arg(args.get(1).copied()),
-                raw_arg(args.get(2).copied()),
-            );
-            handle_to_pointer_f64(response_root.get())
+            super::response_methods::write_head(response_root.get(), args)
         }
-        "write" if !args.is_empty() => {
-            // `write(chunk[, encoding][, callback])` — the callback is the
-            // last closure-valued arg (#4904).
-            let cb = args[1..]
-                .iter()
-                .rev()
-                .map(|a| closure_arg(Some(*a)))
-                .find(|c| *c != 0)
-                .unwrap_or(0);
-            bool_value(
-                crate::server::response::js_node_http_res_write_with_cb(
-                    response_root.get(),
-                    args[0],
-                    cb,
-                ) != 0,
-            )
-        }
+        "write" if !args.is_empty() => super::response_methods::write(response_root.get(), args),
         "addTrailers" if !args.is_empty() => {
             js_node_http_res_add_trailers(response_root.get(), args[0]);
             undef
         }
-        "end" => {
-            // `end([chunk][, encoding][, callback])` — `end(cb)` passes the
-            // callback first (#4904).
-            let first = args.first().copied().unwrap_or(undef);
-            let first_cb = closure_arg(Some(first));
-            let (chunk, cb) = if first_cb != 0 {
-                (undef, first_cb)
-            } else {
-                let cb = args
-                    .get(1..)
-                    .unwrap_or(&[])
-                    .iter()
-                    .rev()
-                    .map(|a| closure_arg(Some(*a)))
-                    .find(|c| *c != 0)
-                    .unwrap_or(0);
-                (first, cb)
-            };
-            crate::server::response_end::js_node_http_res_end_with_cb(
-                response_root.get(),
-                chunk,
-                cb,
-            );
-            handle_to_pointer_f64(response_root.get())
-        }
+        "end" => super::response_methods::end(response_root.get(), args),
         "flushHeaders" => {
             js_node_http_res_flush_headers(response_root.get());
             undef
@@ -1384,7 +1330,7 @@ unsafe fn args_slice<'a>(args_ptr: *const f64, args_len: usize) -> &'a [f64] {
 }
 
 #[inline]
-fn handle_to_pointer_f64(handle: i64) -> f64 {
+pub(super) fn handle_to_pointer_f64(handle: i64) -> f64 {
     f64::from_bits(perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits())
 }
 
@@ -1542,12 +1488,12 @@ fn json_string_value_empty_object(ptr: *mut StringHeader) -> f64 {
 }
 
 #[inline]
-fn bool_value(value: bool) -> f64 {
+pub(super) fn bool_value(value: bool) -> f64 {
     f64::from_bits(JsValue::from_bool(value).bits())
 }
 
 #[inline]
-fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
+pub(super) fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
     let Some(value) = value else { return fallback };
     let v = JsValue::from_bits(value.to_bits());
     if v.is_number() {
@@ -1558,14 +1504,14 @@ fn number_arg(value: Option<f64>, fallback: f64) -> f64 {
 }
 
 #[inline]
-fn raw_arg(value: Option<f64>) -> i64 {
+pub(super) fn raw_arg(value: Option<f64>) -> i64 {
     value
         .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
         .to_bits() as i64
 }
 
 #[inline]
-fn string_value_arg(value: f64) -> *const StringHeader {
+pub(super) fn string_value_arg(value: f64) -> *const StringHeader {
     let v = JsValue::from_bits(value.to_bits());
     if v.is_string() {
         return v.as_string_ptr();
@@ -1671,7 +1617,7 @@ fn string_arg(value: f64) -> *const StringHeader {
 /// existing close/on FFI expects. Returns 0 when the arg is undefined / null
 /// / non-pointer.
 #[inline]
-fn closure_arg(value: Option<f64>) -> i64 {
+pub(super) fn closure_arg(value: Option<f64>) -> i64 {
     let Some(v) = value else { return 0 };
     let bits = v.to_bits();
     let tag = bits >> 48;

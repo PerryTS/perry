@@ -152,8 +152,29 @@ fn named_closure(
     closure.with_mut_ptr(|c: *mut u8| crate::value::js_nanbox_pointer(c as i64))
 }
 
-fn method_info() -> *const crate::closure::JsFunctionInfo {
-    crate::fn_info!(http_method_thunk, 3; with_declared(3))
+/// Select immutable method metadata from the already installed HTTP provider
+/// while building the prototype. No call site or receiver state is retained.
+fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
+    let ptr = crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::Acquire);
+    if !ptr.is_null() && matches!(name, "setHeader" | "writeHead" | "write" | "end") {
+        let dispatch: crate::value::JsNativeHttpDispatchFn = unsafe { std::mem::transmute(ptr) };
+        let module = b"#http-prototype-method-info";
+        let info = unsafe {
+            dispatch(
+                module.as_ptr(),
+                module.len(),
+                name.as_ptr(),
+                name.len(),
+                std::ptr::null(),
+                0,
+            )
+        }
+        .to_bits();
+        if info != 0 && info != crate::value::TAG_UNDEFINED {
+            return info as *const crate::closure::JsFunctionInfo;
+        }
+    }
+    crate::fn_info!(js_node_http_method_fallback, 3; with_declared(3))
 }
 
 /// Build `kind`'s prototype for `constructor`: born on its layout, every slot
@@ -175,7 +196,7 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
     let fill = |name: &str, value: f64| unsafe { layout.data(p(), name.as_bytes(), value) };
     fill("constructor", constructor.get_nanbox_f64());
     let method = |name: &'static str, length: u32| {
-        let value = named_closure(&scope, method_info(), name, length);
+        let value = named_closure(&scope, method_info(name), name, length);
         fill(name, value);
     };
     let accessor = |name: &'static str, setter: bool| {
@@ -198,7 +219,7 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
         };
     };
     let symbol = |atom: *const crate::object::layout_desc::StaticAtom, name: &'static str| {
-        let value = named_closure(&scope, method_info(), name, 0);
+        let value = named_closure(&scope, method_info(name), name, 0);
         // SAFETY: as above; `atom` is a key of the layout.
         unsafe { layout.symbol_data(p(), atom, value) };
     };
@@ -371,6 +392,37 @@ fn native_receiver(receiver: f64) -> Option<f64> {
     crate::native_payload::payload_cell_of_word(unsafe { (*meta).native_state }).map(|_| receiver)
 }
 
+/// An ordinary receiver layout carrying the response payload's native type
+/// word. Own-key growth may change the ordinary layout; its current word and
+/// the payload's physical type still prove the carrier. The binding separately
+/// checks the exact payload vtable before dereferencing Rust response data.
+/// Method lookup already chose the body, and the operation keeps its normal
+/// observable reads. No prototype chain or key list is searched here.
+#[no_mangle]
+pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
+    let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)
+    else {
+        return 0;
+    };
+    unsafe {
+        let word = (*obj).parent_class_id;
+        if !crate::object::shapes::shape_object_kind_by_id(word)
+            .is_some_and(|kind| kind.is_ordinary_layout())
+        {
+            return 0;
+        }
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return 0;
+        }
+        let Some(cell) = crate::native_payload::payload_cell_of_word((*meta).native_state) else {
+            return 0;
+        };
+        ((*cell).type_id as u32 == crate::codegen_abi::native_class_ids::HTTP_SERVER_RESPONSE)
+            as i32
+    }
+}
+
 unsafe fn captured_name(closure: *const ClosureHeader) -> (*const u8, usize) {
     (
         crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8,
@@ -378,10 +430,11 @@ unsafe fn captured_name(closure: *const ClosureHeader) -> (*const u8, usize) {
     )
 }
 
-/// Body of every http prototype method: dispatch the method by name to the
-/// native object `this` carries. Chainable methods return the receiver, as
+/// Complete fallback for HTTP methods whose receiver is outside the direct
+/// response layout: dispatch by name to the native object `this` carries. Chainable methods return the receiver, as
 /// node returns `this`.
-extern "C" fn http_method_thunk(
+#[no_mangle]
+pub extern "C" fn js_node_http_method_fallback(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
     arg0: f64,
