@@ -16,6 +16,11 @@ pub const SOURCE_LOADER_ALLOWED: u32 = 1 << 29;
 /// runtime class/parent/prototype checks still decide layout adoption.
 #[derive(Debug, Clone, Default)]
 pub struct ClassFamilySyntax {
+    /// Compiler-private function values and wholly generated bodies. The
+    /// factory containing original user statements is private, not wholly
+    /// generated. These are immutable provenance, never runtime state.
+    pub compiler_owned_functions: std::collections::BTreeSet<FuncId>,
+    pub compiler_owned_bodies: std::collections::BTreeSet<FuncId>,
     /// Class declarations at original-source run-once positions. A CommonJS
     /// module's body additionally needs whole-program factory non-reentry.
     pub run_once_classes: std::collections::BTreeSet<String>,
@@ -59,11 +64,6 @@ pub struct FunctionSourceMetadata {
 /// A complete HIR module (corresponds to one TypeScript file)
 #[derive(Debug, Clone)]
 pub struct Module {
-    /// Compiler-private function values and wholly generated bodies. The
-    /// factory containing original user statements is private, not wholly
-    /// generated. These are immutable provenance, never runtime state.
-    pub compiler_owned_functions: std::collections::BTreeSet<FuncId>,
-    pub compiler_owned_bodies: std::collections::BTreeSet<FuncId>,
     /// Module name/path
     pub name: String,
     pub class_family_syntax: Option<ClassFamilySyntax>,
@@ -264,6 +264,20 @@ pub struct Module {
 }
 
 impl Module {
+    /// Attach original-source class syntax without discarding lowered
+    /// compiler provenance retained for the run-once proof.
+    pub fn set_class_family_syntax(&mut self, mut syntax: Option<ClassFamilySyntax>) {
+        if let Some(prior) = self.class_family_syntax.take() {
+            if !prior.compiler_owned_functions.is_empty() || !prior.compiler_owned_bodies.is_empty()
+            {
+                let next = syntax.get_or_insert_with(Default::default);
+                next.compiler_owned_functions = prior.compiler_owned_functions;
+                next.compiler_owned_bodies = prior.compiler_owned_bodies;
+            }
+        }
+        self.class_family_syntax = syntax;
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -300,8 +314,6 @@ impl Module {
             class_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
             local_source_spans: std::collections::HashMap::new(),
-            compiler_owned_functions: Default::default(),
-            compiler_owned_bodies: Default::default(),
             gen_param_prologue_len: std::collections::HashMap::new(),
             requested_modules: Vec::new(),
         }

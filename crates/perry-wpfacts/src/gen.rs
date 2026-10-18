@@ -347,12 +347,14 @@ impl<'a> Gen<'a> {
         self.m.funcs.push(FuncInfo {
             compiler_owned: self.modules[mi as usize]
                 .1
-                .compiler_owned_functions
-                .contains(&id),
+                .class_family_syntax
+                .as_ref()
+                .is_some_and(|s| s.compiler_owned_functions.contains(&id)),
             compiler_body: self.modules[mi as usize]
                 .1
-                .compiler_owned_bodies
-                .contains(&id),
+                .class_family_syntax
+                .as_ref()
+                .is_some_and(|s| s.compiler_owned_bodies.contains(&id)),
             module: mi,
             func_id: id,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),

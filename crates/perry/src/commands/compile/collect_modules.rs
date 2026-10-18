@@ -821,7 +821,7 @@ fn collect_module_one(
             return Err(e);
         }
     };
-    hir_module.class_family_syntax = class_family_syntax;
+    hir_module.set_class_family_syntax(class_family_syntax);
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #9599: Bun platform mode is a real global mode, not merely a direct-call

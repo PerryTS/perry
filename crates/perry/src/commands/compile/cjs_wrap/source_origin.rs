@@ -135,7 +135,7 @@ mod tests {
     fn facts(body: &str) -> perry_wpfacts::ProgramFacts {
         let (ast, syntax) = wrapped(body);
         let mut hir = perry_hir::lower_module(&ast, "ro", "ro.cjs").unwrap();
-        hir.class_family_syntax = Some(syntax);
+        hir.set_class_family_syntax(Some(syntax));
         perry_wpfacts::compute(&[("ro.cjs".into(), &hir)], &Default::default())
     }
     #[test]

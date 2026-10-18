@@ -1989,8 +1989,13 @@ pub fn lower_module_full_with_platform_globals(
     );
 
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
-    module.compiler_owned_functions = std::mem::take(&mut ctx.compiler_owned_functions);
-    module.compiler_owned_bodies = std::mem::take(&mut ctx.compiler_owned_bodies);
+    if !ctx.compiler_owned_functions.is_empty() || !ctx.compiler_owned_bodies.is_empty() {
+        let proof = module
+            .class_family_syntax
+            .get_or_insert_with(Default::default);
+        proof.compiler_owned_functions = std::mem::take(&mut ctx.compiler_owned_functions);
+        proof.compiler_owned_bodies = std::mem::take(&mut ctx.compiler_owned_bodies);
+    }
     module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);
 
     Ok((module, ctx.next_class_id))

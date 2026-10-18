@@ -11,8 +11,6 @@ impl SH for Module {
     fn hash<H: StableHasher>(&self, h: &mut H) {
         let Module {
             name,
-            compiler_owned_functions,
-            compiler_owned_bodies,
             class_family_syntax,
             imports,
             exports,
@@ -52,14 +50,6 @@ impl SH for Module {
             requested_modules,
         } = self;
         name.hash(h);
-        (compiler_owned_functions.len() as u64).hash(h);
-        for f in compiler_owned_functions {
-            f.hash(h);
-        }
-        (compiler_owned_bodies.len() as u64).hash(h);
-        for f in compiler_owned_bodies {
-            f.hash(h);
-        }
         match class_family_syntax {
             None => tag(h, 0),
             Some(syntax) => {
@@ -81,6 +71,14 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.original_source_ranges.hash(h);
+                (syntax.compiler_owned_functions.len() as u64).hash(h);
+                for f in &syntax.compiler_owned_functions {
+                    f.hash(h);
+                }
+                (syntax.compiler_owned_bodies.len() as u64).hash(h);
+                for f in &syntax.compiler_owned_bodies {
+                    f.hash(h);
+                }
             }
         }
         imports.hash(h);
