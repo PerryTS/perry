@@ -501,7 +501,13 @@ pub(crate) fn family_run_arm(
         .last_mut()
         .and_then(|b| b.bind_watch.take())
         .flatten();
-    let carried = match (plan.value, &plan.run_in) {
+    // Lowering visits sibling arms sequentially, but a run established in
+    // one arm is not available in the other or beyond a bypassing join.
+    // Check after the RHS too: it may introduce control flow of its own.
+    let run_in = plan.run_in.filter(|r| {
+        plan.value != RunValue::Runs && ctx.func.proof_dominates_block_end(&r.ok, ctx.current_block)
+    });
+    let carried = match (plan.value, &run_in) {
         (RunValue::Free, Some(r)) => Some(r.clone()),
         (RunValue::Bind, Some(r)) => watched.map(|b| FamilyRun {
             ok: ctx.block().and(crate::types::I1, &r.ok, &b),
@@ -607,6 +613,12 @@ pub(crate) fn begin_family_init_store(
     run: Option<&RunArm>,
 ) -> Option<LayoutStore> {
     let arm = run?;
+    debug_assert!(
+        ctx.func
+            .proof_dominates_block_end(&arm.ok, ctx.current_block),
+        "family-run proof {} must dominate its store gate",
+        arm.ok,
+    );
     let slot = arm.slot;
     crate::expr::note_site("case2c-run");
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);

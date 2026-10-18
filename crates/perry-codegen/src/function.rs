@@ -19,6 +19,8 @@ mod precise_roots;
 /// #10463: the entry-block `alloca` invariant, enforced on the final stream.
 mod entry_allocas;
 
+mod proof_dominance;
+
 use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints};
 
 /// The intrinsic [`LlFunction::entry_tls_address`] calls, for a thread-local
