@@ -124,3 +124,6 @@ pub(crate) fn emit_bind_call(
     }
     value
 }
+
+#[path = "borrowed_call.rs"]
+pub(crate) mod borrowed_call;

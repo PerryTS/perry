@@ -211,7 +211,10 @@ pub(crate) fn view_for(
             elision.receiver_params = r.clone();
         }
     }
-    let digest = if elision.is_empty() && !elision.fnproto_bind_unwritten {
+    let digest = if elision.is_empty()
+        && !elision.fnproto_bind_unwritten
+        && !elision.fnproto_borrow_unwritten
+    {
         pf.digest_for(&key)
     } else {
         use std::hash::{Hash, Hasher};
@@ -268,6 +271,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
         pf.fnproto_bind_written.is_none() || pf.sabotage.as_deref() == Some("fnproto-unwritten");
+    out.fnproto_borrow_unwritten = pf.fnproto_borrow_written.is_none() || unchecked;
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };

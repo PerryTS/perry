@@ -166,7 +166,7 @@ const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 /// (no own key of that name, no recorded `[[Prototype]]`) while
 /// `Function.prototype` and `%Object.prototype%` are pristine.
 #[inline(always)]
-unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
+pub(super) unsafe fn function_ok(v: f64, name: &[u8]) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_CLOSURE && {
             let id = (*(raw(v) as *const crate::closure::ClosureHeader)).shape_id;

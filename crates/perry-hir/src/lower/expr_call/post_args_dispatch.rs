@@ -6,7 +6,6 @@
 //! `match &call.callee { ... }` dispatch. Extracted from
 //! `expr_call/mod.rs` as a mechanical move.
 
-use crate::types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -131,131 +130,9 @@ pub(super) fn try_array_static_alias_call(
     Err(args)
 }
 
-/// `Object.hasOwnProperty.call(obj, key)` → `js_object_has_own(obj, key)`.
-///
-/// Current NestJS `@Module()` uses this inherited Object.prototype helper
-/// through the `Object` constructor value instead of spelling
-/// `Object.prototype.hasOwnProperty.call(...)`.
-pub(super) fn try_object_has_own_call(
-    call: &ast::CallExpr,
-    args: Vec<Expr>,
-    has_spread: bool,
-) -> Result<Expr, Vec<Expr>> {
-    if !has_spread && args.len() == 2 {
-        if let ast::Callee::Expr(callee_expr) = &call.callee {
-            if let ast::Expr::Member(outer) = callee_expr.as_ref() {
-                if let (ast::MemberProp::Ident(outer_prop), ast::Expr::Member(mid)) =
-                    (&outer.prop, outer.obj.as_ref())
-                {
-                    if outer_prop.sym.as_ref() == "call" {
-                        if let (ast::MemberProp::Ident(mid_prop), ast::Expr::Ident(mid_obj)) =
-                            (&mid.prop, mid.obj.as_ref())
-                        {
-                            if mid_obj.sym.as_ref() == "Object" {
-                                // #11915: the `js_borrowed_*` entries run the
-                                // builtin body while `Object.prototype` and
-                                // `Function.prototype.call` are pristine, and
-                                // otherwise call the method actually there.
-                                let runtime_fn = match mid_prop.sym.as_ref() {
-                                    "hasOwnProperty" => Some("js_borrowed_object_has_own"),
-                                    // #2891: Object.propertyIsEnumerable.call(obj, key)
-                                    "propertyIsEnumerable" => {
-                                        Some("js_borrowed_object_property_is_enumerable")
-                                    }
-                                    _ => None,
-                                };
-                                if let Some(runtime_fn) = runtime_fn {
-                                    return Ok(Expr::Call {
-                                        callee: Box::new(Expr::ExternFuncRef {
-                                            name: runtime_fn.to_string(),
-                                            param_types: Vec::new(),
-                                            return_type: Type::Any,
-                                        }),
-                                        args,
-                                        type_args: Vec::new(),
-                                        byte_offset: 0,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Err(args)
-}
-
-/// `Object.prototype.toString.call(x)` → `js_object_to_string(x)`.
-///
-/// AST shape is a four-level member expression:
-///   call.call(x)
-///   ^^^^^^^^^^ outer member: (Object.prototype.toString).call
-/// The runtime helper consults the class's `Symbol.toStringTag`
-/// getter (registered at module init via `__perry_wk_tostringtag_*`)
-/// and returns `[object <tag>]` or the default `[object Object]`.
-/// `Object.prototype.<method>.call(...)` idioms — perry doesn't expose
-/// `Object.prototype` so we rewrite to runtime helpers. Refs #420.
-pub(super) fn try_object_prototype_call(
-    call: &ast::CallExpr,
-    args: Vec<Expr>,
-    has_spread: bool,
-) -> Result<Expr, Vec<Expr>> {
-    if !has_spread && (1..=3).contains(&args.len()) {
-        if let ast::Callee::Expr(callee_expr) = &call.callee {
-            if let ast::Expr::Member(outer) = callee_expr.as_ref() {
-                if let (ast::MemberProp::Ident(outer_prop), ast::Expr::Member(mid)) =
-                    (&outer.prop, outer.obj.as_ref())
-                {
-                    if outer_prop.sym.as_ref() == "call" {
-                        if let (ast::MemberProp::Ident(mid_prop), ast::Expr::Member(inner)) =
-                            (&mid.prop, mid.obj.as_ref())
-                        {
-                            // #11915: `js_borrowed_*` = the builtin body under
-                            // the builtin-prototype proof, else the real call.
-                            let runtime_fn = match (mid_prop.sym.as_ref(), args.len()) {
-                                ("toString", 1) => Some("js_borrowed_object_to_string"),
-                                // #2891: Object.prototype.propertyIsEnumerable.call(obj, key)
-                                ("propertyIsEnumerable", 2) => {
-                                    Some("js_borrowed_object_property_is_enumerable")
-                                }
-                                // Annex B accessor helpers: .call(obj, key[, fn]).
-                                ("__defineGetter__", 3) => Some("js_borrowed_object_define_getter"),
-                                ("__defineSetter__", 3) => Some("js_borrowed_object_define_setter"),
-                                ("__lookupGetter__", 2) => Some("js_borrowed_object_lookup_getter"),
-                                ("__lookupSetter__", 2) => Some("js_borrowed_object_lookup_setter"),
-                                _ => None,
-                            };
-                            if let Some(runtime_fn) = runtime_fn {
-                                if let (
-                                    ast::MemberProp::Ident(inner_prop),
-                                    ast::Expr::Ident(inner_obj),
-                                ) = (&inner.prop, inner.obj.as_ref())
-                                {
-                                    if inner_obj.sym.as_ref() == "Object"
-                                        && inner_prop.sym.as_ref() == "prototype"
-                                    {
-                                        return Ok(Expr::Call {
-                                            callee: Box::new(Expr::ExternFuncRef {
-                                                name: runtime_fn.to_string(),
-                                                param_types: Vec::new(),
-                                                return_type: Type::Any,
-                                            }),
-                                            args,
-                                            type_args: Vec::new(),
-                                            byte_offset: 0,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Err(args)
-}
+// Object borrowed helpers used to discard the source function. Their late
+// prototype check cannot cover an own .call override or preserve a callee
+// selected before argument side effects; retain the original reflective call.
 
 #[cfg(test)]
 mod tests {

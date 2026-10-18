@@ -248,4 +248,35 @@ mod tests {
             assert_eq!(crate::array::object_prototype_addr(), proto_now as usize);
         });
     }
+    #[test]
+    fn borrowed_object_constructor_method_reads_its_live_prototype() {
+        on_a_fresh_thread(|| {
+            crate::object::js_get_global_this();
+            let (ctor, proto) = ensure_object_intrinsics();
+            let name = crate::string::js_string_from_bytes(b"hasOwnProperty".as_ptr(), 14);
+            let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
+            assert_eq!(
+                crate::object::js_object_has_own(
+                    ctor_value,
+                    crate::value::js_nanbox_string(name as i64)
+                )
+                .to_bits(),
+                crate::value::TAG_FALSE
+            );
+            let original = crate::proxy::js_reflect_get(
+                ctor_value,
+                crate::value::js_nanbox_string(name as i64),
+                ctor_value,
+            );
+            let inherited = js_object_get_field_by_name(proto, name);
+            assert_eq!(original.to_bits(), inherited.bits());
+            js_object_set_field_by_name(proto, name, 917.0);
+            let current = crate::proxy::js_reflect_get(
+                ctor_value,
+                crate::value::js_nanbox_string(name as i64),
+                ctor_value,
+            );
+            assert_eq!(current, 917.0);
+        });
+    }
 }

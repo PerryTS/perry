@@ -293,7 +293,7 @@ pub(crate) fn emit_contract_check(blk: &mut LlBlock, families: &[BuiltinProto]) 
     }
 }
 
-fn contract_mode() -> bool {
+pub(crate) fn contract_mode() -> bool {
     static MODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {
         std::env::var_os("PERRY_CHECK_CONTRACTS").is_some_and(|v| !v.is_empty() && v != "0")

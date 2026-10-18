@@ -1,0 +1,15 @@
+const savedCall = Function.prototype.call;
+const capturedSlice = Array.prototype.slice;
+const source = process.argv[2] || "Function.prototype.call = function () { return 701; }";
+new Function(source)();
+const iife = (function () { return 1; }).call(null);
+const captured = capturedSlice.call([1, 2]);
+const arrow = (() => 2).call(null);
+const array = Array.prototype.slice.call([1, 2], 0);
+const math = Math.max.call(null, 2, 3);
+const promise = Promise.resolve.call(Promise, 1);
+const own = Object.prototype.hasOwnProperty.call({ x: 1 }, "x");
+const tag = Object.prototype.toString.call({});
+const restore = process.argv[3] || "target.call = value";
+new Function("target", "value", restore)(Function.prototype, savedCall);
+console.log(iife, captured, arrow, array, math, promise, own, tag);

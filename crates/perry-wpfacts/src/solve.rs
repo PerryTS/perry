@@ -2075,7 +2075,7 @@ impl Model {
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
         // writes `store_into` records.
-        if self.fnproto_write.is_none()
+        if (self.fnproto_write.is_none() || self.fnproto_borrow_write.is_none())
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {

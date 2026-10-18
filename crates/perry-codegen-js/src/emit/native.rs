@@ -15,6 +15,9 @@ impl JsEmitter {
         let normalized_module = module.strip_prefix("node:").unwrap_or(module);
 
         match normalized_module {
+            // This backend has no native layout words: retain the complete
+            // reflective arm of a guarded borrowed call.
+            "__perry_borrowed_proof" => self.output.push_str("false"),
             "perry/ui" => {
                 self.emit_ui_method_call(class_name, object, method, args);
             }

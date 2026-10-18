@@ -79,6 +79,9 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "__perry_borrowed_proof" {
+        return crate::expr::function_bind::borrowed_call::lower_proof(ctx, class_name, object);
+    }
     if module == "array" && method == "push_field_single" {
         let (Some(receiver), [value]) = (object, args) else {
             bail!("push_field_single requires one receiver and argument");
