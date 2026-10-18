@@ -950,13 +950,20 @@ pub(super) fn compile_method(
     // applies initializers against the imported class stub — which has none
     // — so without this, imported classes construct with all fields left
     // as uninitialized register values (read as NaN-boxed undefined).
+    if method.name == format!("{}_default_fields", class.name) {
+        crate::lower_call::apply_field_initializers_recursive(
+            &mut ctx,
+            &class.name,
+            crate::lower_call::FieldInitMode::SelfOnly,
+        )?;
+    }
     let is_constructor_method = method.name == format!("{}_constructor", class.name);
     if is_constructor_method {
         ctx.ctor_receiver = ctx
             .this_stack
             .first()
             .map(|slot| (slot.clone(), class.name.clone()));
-        crate::lower_call::defer_dynamic_derived_fields(&mut ctx, class);
+        let live_super = crate::expr::super_constructor::requires_live(&ctx, class);
         // #9043: a default-derived chain can reach a dynamic parent through a
         // constructor-free static ancestor (`Leaf -> Mid -> <captured Base>`).
         // Keep the owner of that dynamic edge so this standalone Leaf symbol
@@ -1015,7 +1022,7 @@ pub(super) fn compile_method(
         } else {
             None
         };
-        if dynamic_parent_owner.is_none() && local_parent_ctor.is_none() {
+        if !live_super && dynamic_parent_owner.is_none() && local_parent_ctor.is_none() {
             let init_mode = if class.extends_name.is_some() {
                 crate::lower_call::FieldInitMode::AncestorsOnly
             } else if class.extends_expr.is_some() {
@@ -1050,7 +1057,17 @@ pub(super) fn compile_method(
         // call to the parent's standalone ctor symbol here, forwarding all
         // args. The walk skips empty-bodied parents (matching the JS spec
         // chain semantics).
+        if class.constructor.is_none() && live_super {
+            let forwarded: Vec<perry_hir::Expr> = method
+                .params
+                .iter()
+                .filter(|p| !p.name.starts_with("__perry_cap_"))
+                .map(|p| perry_hir::Expr::LocalGet(p.id))
+                .collect();
+            crate::expr::super_constructor::call(&mut ctx, class, &forwarded)?;
+        }
         if class.constructor.is_none()
+            && !live_super
             && (class.extends_name.is_some() || class.extends_expr.is_some())
         {
             let builtin_parent_runtime = builtin_stream_parent_runtime(class);
@@ -1615,7 +1632,8 @@ pub(super) fn compile_method(
     // object" and handing back the value the caller already held. Publish only
     // when a replacement `this` can actually exist.
     let publishes_this = standalone_ctor_return.is_some()
-        && crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name);
+        && (crate::expr::super_constructor::requires_live(&ctx, class)
+            || crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name));
     if let Some((target, after_idx)) = standalone_ctor_return.as_ref() {
         let _ = ctx
             .inline_ctor_return

@@ -124,6 +124,8 @@ class Solver:
         self.adds = defaultdict(int)
         self.escaped = set()
         self.hard = {}
+        self.super_relink = set()
+        self.constructor_origins = {}
         self.dyn_eval = None
         self.done = set()
         self.next_call = 1 << 40
@@ -362,11 +364,24 @@ class Solver:
         elif op == "superctor":
             _, cls, call = c
             for t in toks:
-                if t == TOP:
-                    continue
-                p = self.tmpls[cls]["parent"]
-                if p is not None:
-                    self.run_ctor_chain(call, p, t)
+                owner = self.tok("classobj", self.constructor_origin(cls))
+                self.addcons(self.pnode(owner), ("superctorparent", cls, call, t))
+        elif op == "superctorparent":
+            _, cls, call, origin = c
+            owner = self.tok("classobj", self.constructor_origin(cls))
+            if owner in self.super_relink or owner in self.escaped:
+                self.mark_hard(origin, "E6")
+            for parent in toks:
+                kind, arg = self.toks[parent]
+                if kind == "classobj":
+                    self.run_ctor_chain(call, arg, origin)
+                elif kind == "func":
+                    self.call_tok(call, parent, origin)
+                elif kind == "bound":
+                    self.construct(call, parent)
+                elif kind in ("top", "builtinfn", "builtin"):
+                    self.call_tok(call, parent, origin)
+                    self.add(self.calls[call]["ret"], [TOP])
         elif op == "thisfrom":
             recv = c[1]
             for t in toks:
@@ -412,6 +427,8 @@ class Solver:
                 # Object.prototype's [[Prototype]] is immutable.
                 if t != TOP and self.toks[t][0] != "objectproto":
                     self.edge(c[1], self.pnode(t))
+                    if self.toks[t][0] == "classobj":
+                        self.mark_hard(self.tok("obj", self.toks[t][1]), "E6")
         elif op == "protoof":
             for t in toks:
                 if t == TOP:
@@ -513,6 +530,13 @@ class Solver:
         if key == "*" or tm is None:
             return False
         return self.is_fact_unit(tm) and key in self.tmpls[tm]["definite"]
+
+    def constructor_origin(self, cls):
+        for _ in range(len(self.constructor_origins)):
+            if cls not in self.constructor_origins:
+                break
+            cls = self.constructor_origins[cls]
+        return cls
 
     def load_from(self, origin, t, key, dst):
         # The iteration key: an array-like's elements, a runtime object's
@@ -632,6 +656,12 @@ class Solver:
         self.addcons(callee, ("callthis", call, origin))
 
     def store_into(self, t, key, src, site):
+        if key == "*" or (isinstance(key, int) and self.atoms[key] == "__proto__"):
+            self.super_relink.add(t)
+            kind, arg = self.toks[t]
+            if kind == "classobj":
+                self.edge(src, self.pnode(t))
+                self.mark_hard(self.tok("obj", arg), "E6")
         if t == TOP:
             self.edge(src, self.sink())
             return
@@ -806,6 +836,10 @@ class Solver:
             self.addcons(target, ("new", c2))
 
     def run_ctor_chain(self, call, tm, inst):
+        key = ("ctor-this", call, tm, inst)
+        if key in self.done:
+            return
+        self.done.add(key)
         c = self.calls[call]
         tp = self.tmpls[tm]
         if tp["fieldinit"] is not None:
@@ -815,7 +849,9 @@ class Solver:
             self.call_tok(call, self.funcs[f]["tok"], inst)
             self.edge(self.funcs[f]["ret"], c["ret"])
         elif tp["parent"] is not None:
-            self.run_ctor_chain(call, tp["parent"], inst)
+            receiver = self.node()
+            self.addcons(receiver, ("superctor", tm, call))
+            self.add(receiver, [inst])
 
     def method_on(self, t, key, call):
         if t == TOP:
@@ -883,6 +919,8 @@ class Solver:
                 self.edge(n, self.sink())
 
     def mark_hard(self, t, code):
+        if code == "E6":
+            self.super_relink.add(t)
         if t == TOP or t in self.hard:
             return
         if code == "E6" and self.toks[t][0] == "objectproto":
@@ -1020,7 +1058,9 @@ def run(s, rel_lines):
     for line in rel_lines:
         p = line.split(" ")
         rel = p[1]
-        if rel == "widen":
+        if rel == "ctororigin":
+            s.constructor_origins[int(p[2])] = int(p[3])
+        elif rel == "widen":
             s.widened.add(int(p[2]))
         elif rel == "fieldnode":
             s.named_field[(int(p[3]), int(p[4]))] = int(p[2])
@@ -1065,6 +1105,8 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("super", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
         elif rel == "superctor":
             deferred.append((int(a[0]), ("superctor", int(a[1]), int(a[2]))))
+        elif rel == "superctorparent":
+            deferred.append((int(a[0]), ("superctorparent", int(a[1]), int(a[2]), int(a[3]))))
         elif rel == "thisfrom":
             deferred.append((int(a[0]), ("thisfrom", int(a[1]))))
         elif rel == "accessor":

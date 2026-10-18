@@ -54,6 +54,15 @@ pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
     if closure_ptr == 0 || !is_closure_ptr(closure_ptr) {
         return;
     }
+    if unsafe { super::shape::is_class_info((*(closure_ptr as *const ClosureHeader)).info) } {
+        unsafe {
+            crate::object::class_value::constructor_parent_store(
+                closure_ptr as *mut ClosureHeader,
+                proto_bits,
+            );
+        }
+        return;
+    }
     unsafe { super::props::state_set_prototype(closure_ptr, proto_bits) };
     super::shape::note_function_own_state_changed(closure_ptr);
 }
@@ -62,6 +71,11 @@ pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
 pub fn closure_static_prototype(closure_ptr: usize) -> Option<u64> {
     if closure_ptr == 0 || !is_closure_ptr(closure_ptr) {
         return None;
+    }
+    if unsafe { super::shape::is_class_info((*(closure_ptr as *const ClosureHeader)).info) } {
+        return Some(unsafe {
+            crate::object::class_value::constructor_parent_bits(closure_ptr as *mut ClosureHeader)
+        });
     }
     unsafe { super::props::state_prototype(closure_ptr) }
 }

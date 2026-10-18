@@ -510,6 +510,14 @@ impl<'a> Gen<'a> {
 
     fn link_class(&mut self, mi: u32, c: &Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
+        if let Some(origin) = c
+            .specialized_from
+            .as_deref()
+            .and_then(|name| self.resolve_class_name(mi, name))
+        {
+            self.m.constructor_origins.insert(tm, origin);
+            self.m.rel(|| format!("ctororigin {tm} {origin}"));
+        }
         let parent = c
             .extends_name
             .as_ref()

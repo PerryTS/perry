@@ -274,7 +274,7 @@ pub(crate) use self::subclass::{
     array_subclass_fast_length, array_subclass_tail_descriptors_are_plain,
     clear_packed_subclass_numeric_proof, drop_packed_subclass_numeric_proof_record,
     is_array_subclass_class_id, is_array_subclass_value, note_array_subclass_index_write,
-    note_packed_subclass_spill_store,
+    note_packed_subclass_spill_store, ARRAY_EXOTIC_BRAND,
 };
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator

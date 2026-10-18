@@ -3315,6 +3315,7 @@ pub(crate) mod private_field_site;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) use named_accessor::contained_number_get;
+pub(crate) mod checked_super;
 pub(crate) mod proxy_reflect;
 pub(crate) mod put_value_store_ic;
 pub(crate) mod receiver_range;
@@ -3322,6 +3323,7 @@ mod static_field_meta;
 pub(crate) mod static_method;
 pub(crate) mod store_census;
 mod string_regex_proc;
+pub(crate) mod super_constructor;
 mod super_method;
 #[cfg(test)]
 mod super_property_set_order_tests;

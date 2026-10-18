@@ -893,6 +893,8 @@ pub const AGENT_PTR_CLASS_VALUES: usize = 3;
 
 /// Declaration class function capture holding its immutable prototype link.
 pub const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 2;
+/// A class function object's actual mutable [[Prototype]], a traced own edge.
+pub const CLASS_CONSTRUCTOR_PARENT_CAPTURE: usize = 3;
 
 /// `PERRY_NANBOX_OPERANDS` (`perry-runtime/src/value/tags.rs`): the read-only
 /// table x86-64 generated code reads its most frequent 64-bit operands from

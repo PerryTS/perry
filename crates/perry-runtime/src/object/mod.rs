@@ -101,6 +101,7 @@ mod class_registry;
 pub(crate) use class_registry::inherited_evaluation;
 mod class_super_chain;
 pub(crate) mod class_value;
+pub(crate) mod default_derived_constructor;
 #[cfg(test)]
 mod zeroed_cache_tests;
 pub use class_registry::async_local_storage_prototype_value;

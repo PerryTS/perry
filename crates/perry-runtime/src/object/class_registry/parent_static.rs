@@ -57,6 +57,7 @@ pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
 pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
+        super::super::class_value::definition_parent_id_if_minted(class_id, parent_class_id);
     }
 }
 
@@ -138,6 +139,10 @@ pub(crate) fn register_class_parent_dynamic(
     parent_value: f64,
     publish_shared: bool,
 ) {
+    // The first shared class object can be minted before its dynamic heritage
+    // expression runs. Its first definition must finish that own edge; later
+    // evaluations must never overwrite the first evaluation's constructor.
+    let first_heritage = stashed_dynamic_parent_value(class_id).is_none();
     // Stash the parent VALUE keyed by child class id so `super()` can read it
     // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
     // expression inside the constructor scope. The decl-time call here runs in
@@ -158,6 +163,12 @@ pub(crate) fn register_class_parent_dynamic(
                 guard.as_mut().unwrap().insert(class_id, bits);
             });
         }
+    }
+    if publish_shared
+        && (first_heritage || !super::super::class_value::class_value_is_first_evaluation(class_id))
+        && parent_value.to_bits() != crate::value::TAG_UNDEFINED
+    {
+        super::super::class_value::definition_parent_if_minted(class_id, parent_value);
     }
     // A globalThis builtin constructor closure is a valid superclass
     // (`class CloseEvent extends Event` — the `ws` package's WebSocket
@@ -800,17 +811,16 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 property_key,
             );
         }
-        if is_static != 0
-            && entry != 0
-            && crate::closure::info_has(
-                &*(entry as *const crate::closure::JsFunctionInfo),
-                crate::closure::FN_GENERATOR,
-            )
-        {
-            crate::object::install_generator_symbol_method(
+        // Every static symbol method is an own callable property of its
+        // actual class evaluation, including ordinary captured methods.
+        if is_static != 0 && entry != 0 {
+            crate::object::install_class_symbol_method(
                 class_id,
                 owner,
                 property_key,
+                func_ptr as usize,
+                param_count as u32,
+                has_rest != 0,
                 entry as usize,
             );
         }

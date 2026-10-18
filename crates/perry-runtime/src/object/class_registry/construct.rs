@@ -760,23 +760,14 @@ unsafe fn construct_registered_class_ref_entry(
     // ClassRef construction boundary instead of publishing the provisional
     // allocation whose fields the constructor stopped updating (#9503).
     let current_inst = crate::value::js_nanbox_pointer(inst as i64);
-    if constructor_return_overrides_this(ctor_result)
-        && ctor_result.to_bits() != current_inst.to_bits()
+    if ctor_result.to_bits() != current_inst.to_bits()
+        && constructor_return_overrides_this(ctor_result)
     {
         return ctor_result;
     }
-    // ClassRef `new` of a Request/Response subclass — attach the native fetch
-    // handle on the dynamic path (mirrors the class-expression arm above).
-    if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
-        if super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
-            super::super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
-        }
-    }
-    // `NewPromiseCapability(Subclass)` reaches this dynamic ClassRef path.
-    ensure_promise_subclass_backing(&inst_handle, target_cid, args_ptr, args_len);
-    // Re-read once more: the executor `js_promise_subclass_init` runs is user
-    // code, so the last two blocks are both collection points.
-    crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    // Every derived constructor reaches its actual superclass through super;
+    // native state belongs to that call, never to definition-time ancestry.
+    current_inst
 }
 
 /// `GetPrototypeFromConstructor(newTarget)` restricted to the "use it only when

@@ -183,7 +183,9 @@ pub(crate) use builtin::lower_global_intrinsic_new;
 pub(crate) use field_init::{
     apply_field_initializers_recursive, defer_dynamic_derived_fields, FieldInitMode,
 };
-pub(crate) use new::{emit_class_capture_writeback, lower_new, lower_new_member_captured};
+pub(crate) use new::{
+    emit_class_capture_writeback, lower_new, lower_new_checked, lower_new_member_captured,
+};
 pub(crate) use new_ctor_args::{
     bind_inline_constructor_params, restore_inline_constructor_scope, CaptureFill,
 };

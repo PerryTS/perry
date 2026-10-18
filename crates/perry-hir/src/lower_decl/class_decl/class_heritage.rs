@@ -18,7 +18,7 @@ pub(super) fn is_class_self_heritage(expr: &ast::Expr, inner_name: &str) -> bool
 /// the heritage expression so a superclass such as
 /// `class D extends function(){ arguments.callee } {}` gets a strict
 /// arguments object without leaking strictness into surrounding source.
-pub(super) fn lower_class_heritage_expr(
+pub(crate) fn lower_class_heritage_expr(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
 ) -> Result<Expr> {

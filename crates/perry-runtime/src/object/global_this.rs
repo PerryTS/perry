@@ -166,8 +166,8 @@ pub(crate) use generator::{
 };
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub(crate) use generator_state::{
-    call_generator_symbol_method, fixed_generator_state, install_evaluation_generator_symbols,
-    install_generator_symbol_method,
+    call_generator_symbol_method, fixed_generator_state, install_class_symbol_method,
+    install_evaluation_generator_symbols,
 };
 pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
 pub use install_static::js_promise_static_function_value;

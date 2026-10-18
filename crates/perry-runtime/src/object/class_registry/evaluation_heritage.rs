@@ -106,6 +106,16 @@ pub(crate) fn active_class_evaluation_parent(class_id: u32) -> Option<f64> {
     class_object_pinned_parent(obj)
 }
 
+/// The lexical constructor currently being replayed, rather than its heritage.
+pub(crate) fn active_class_evaluation_value(class_id: u32) -> Option<f64> {
+    let bits = ACTIVE_CLASS_EVALUATIONS
+        .with(|stack| stack.read().ok().and_then(|guard| guard.last().copied()))?;
+    let value = f64::from_bits(bits);
+    let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+    (is_class_object_value(value) && !obj.is_null() && js_object_get_class_id(obj) == class_id)
+        .then_some(value)
+}
+
 /// Visit + forward the class objects held by the active replay frames.
 pub(crate) fn scan_active_class_evaluations_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ACTIVE_CLASS_EVALUATIONS.with(|stack| {

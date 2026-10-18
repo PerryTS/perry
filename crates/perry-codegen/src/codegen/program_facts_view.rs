@@ -93,6 +93,8 @@ pub struct ElisionFacts {
     /// base-shape function needs no `Pristine(Function)` test, only the
     /// `interp_guard` word when that is set (`expr/function_bind.rs`).
     pub fnproto_bind_unwritten: bool,
+    /// Whole-program constructor heritage proofs, keyed by class identity.
+    pub super_unrelinked: std::collections::BTreeSet<u32>,
 }
 
 impl ElisionFacts {

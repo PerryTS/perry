@@ -942,15 +942,14 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
         } else {
             None
         };
-        // A class with computed instance members names them on this
-        // evaluation's class object, so the definition runs after the object
-        // exists and its prototype is built once they are named
-        // (`class_registry::declarations`). Any other class keeps the
-        // definition ahead of the object, as it always ran.
+        // Computed instance and static members belong to this evaluation's
+        // class object. Define them after that object exists, then finish its
+        // prototype (`class_registry::declarations`). Static members need the
+        // same owner to retain their lexical environment and own properties.
         let names_on_object = ctx
             .classes
             .get(template)
-            .is_some_and(|c| c.computed_members.iter().any(|m| !m.is_static));
+            .is_some_and(|c| !c.computed_members.is_empty());
         if !names_on_object {
             for step in definition_steps {
                 lower_expr(ctx, step)?;
@@ -973,6 +972,10 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
         let own_member_slots =
             4 + ctx.classes.get(template).map_or(0, |c| {
                 c.static_methods.len()
+                    + c.computed_members
+                        .iter()
+                        .filter(|member| member.is_static)
+                        .count()
                     + usize::from(c.extends_expr.is_some() || evaluated_parent.is_some())
             }) + usize::from(!captured_args.is_empty());
         let nfields = (named_statics.len() + own_member_slots).to_string();

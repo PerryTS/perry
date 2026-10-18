@@ -318,6 +318,12 @@ pub enum Cons {
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
     SuperCtor { class: TmplId, call: CallId },
+    /// A live constructor-prototype candidate runs on the same derived receiver.
+    SuperCtorParent {
+        class: TmplId,
+        call: CallId,
+        origin: Tok,
+    },
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
     ThisFrom { recv: NodeId },
@@ -409,6 +415,7 @@ impl Cons {
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::Super { .. } => "super",
             Cons::SuperCtor { .. } => "superctor",
+            Cons::SuperCtorParent { .. } => "superctorparent",
             Cons::ThisFrom { .. } => "thisfrom",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
@@ -615,6 +622,11 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    /// Targets of a possible [[Prototype]] write (TOP included).
+    pub super_relink: crate::pts::FxHashSet<Tok>,
+    /// Source constructor of a type-specialized instance layout (compiler data).
+    pub constructor_origins: FxHashMap<TmplId, TmplId>,
+    pub constructor_this_done: crate::pts::FxHashSet<(CallId, TmplId, Tok)>,
     /// Wall-clock budget on generation and solve; when exceeded the pass
     /// stops and the program gets no facts at all (every fact off: the
     /// sound fallback).
@@ -751,6 +763,16 @@ impl Model {
         self.reasons.push(s.to_string());
         self.reason_index.insert(s.to_string(), r);
         r
+    }
+
+    pub fn constructor_origin(&self, mut class: TmplId) -> TmplId {
+        for _ in 0..self.constructor_origins.len() {
+            let Some(&origin) = self.constructor_origins.get(&class) else {
+                break;
+            };
+            class = origin;
+        }
+        class
     }
 
     pub fn tok(&mut self, k: TokKind) -> Tok {

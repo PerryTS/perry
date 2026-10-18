@@ -188,7 +188,17 @@ pub(super) fn class_declaration_globals(
             .map_or("null".to_owned(), |_| {
                 format!("@perry_family_variants_{cid}")
             });
-        if members.is_empty() && birth_shape == 0 && layout == "null" {
+        let default_derived = class.constructor.is_none()
+            && (class.extends_name.is_some()
+                || class.extends_expr.is_some()
+                || class.extends.is_some()
+                || class.native_extends.is_some());
+        let initializer = if default_derived {
+            format!("@{}__{}_default_fields", module_prefix, class.name)
+        } else {
+            "null".to_owned()
+        };
+        if members.is_empty() && birth_shape == 0 && layout == "null" && !default_derived {
             continue;
         }
         members.sort_by_key(|m| m.order);
@@ -222,7 +232,8 @@ pub(super) fn class_declaration_globals(
         };
         // Summary flags (runtime `CLASS_DECL_HAS_ACCESSORS` = 1,
         // `CLASS_DECL_HAS_COMPUTED` = 2).
-        let flags = u32::from(members.iter().any(|m| m.kind != KIND_METHOD))
+        let flags = if default_derived { 4 } else { 0 }
+            | u32::from(members.iter().any(|m| m.kind != KIND_METHOD))
             | if members
                 .iter()
                 .any(|m| m.name_len == 0 && m.name == "ptr null")
@@ -232,7 +243,7 @@ pub(super) fn class_declaration_globals(
                 0
             };
         let decl_global = format!(
-            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 0, ptr {layout}, ptr {variants} }}",
+            "@{symbol} = private unnamed_addr constant {{ ptr, i32, i32, i32, i32, ptr, ptr, ptr }} {{ ptr @{members_symbol}, i32 {}, i32 {birth_shape}, i32 {flags}, i32 0, ptr {layout}, ptr {variants}, ptr {initializer} }}",
             members.len()
         );
         out.push(ClassDeclarationGlobal {

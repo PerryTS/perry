@@ -323,7 +323,9 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
     rows
 }
 
-pub(crate) use state::reserved_native_parent_prototype_bits;
+pub(crate) use state::{
+    reserved_native_parent_constructor_value, reserved_native_parent_prototype_bits,
+};
 
 #[cfg(test)]
 pub(crate) use class_meta::refresh_anon_declaration_role;

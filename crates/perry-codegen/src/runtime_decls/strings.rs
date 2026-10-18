@@ -1563,6 +1563,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // at decl time, so `super()` resolves the parent from the module-init scope
     // instead of re-evaluating its extends expression in the constructor scope.
     module.declare_function("js_get_dynamic_parent_value", DOUBLE, &[I32]);
+    module.declare_function("js_class_super_parent", DOUBLE, &[I32]);
+    module.declare_function(
+        "js_class_super_construct_apply",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     // Decl-site snapshot of a function-nested class's captured locals —
     // consumed by the dynamic-construction replay (`new mod.C()`).
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);

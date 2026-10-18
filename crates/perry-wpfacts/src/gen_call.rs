@@ -337,8 +337,11 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-        let _ = ret;
-        self.prim_node(prim::UNDEF)
+        // A superclass can return a replacement object, including a builtin
+        // array. Subsequent derived-body this accesses must retain that flow.
+        self.m.edge(ret, fx.this);
+        self.m.edge(ret, fx.ret);
+        ret
     }
 
     pub(crate) fn super_method(

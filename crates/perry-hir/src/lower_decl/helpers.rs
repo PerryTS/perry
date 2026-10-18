@@ -635,8 +635,8 @@ pub(crate) enum WellKnownComputedMethod {
     /// caller's regular method-pushing path. Never source-order registered.
     Rename(String),
     /// Fully handled here — the method body was lifted to a pending
-    /// top-level function (`__perry_wk_hasinstance_<class>` /
-    /// `__perry_wk_tostringtag_<class>`); the caller skips the member.
+    /// top-level function (`__perry_wk_tostringtag_<class>`); the caller
+    /// skips the member.
     Lifted,
     /// A recognized well-known symbol in a form perry doesn't implement
     /// yet — the caller drops the member, preserving the historical behavior.
@@ -681,7 +681,8 @@ pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
         // the @@iterator generator wrapper (#5128) — handled inline by both
         // class paths rather than through the shared helper below
         "iterator" => method.function.is_generator && !method.is_static,
-        "hasInstance" => method.is_static && is_method,
+        // A real computed static member retains its lexical class captures.
+        "hasInstance" => false,
         "toStringTag" => !method.is_static && is_getter,
         "dispose" | "asyncDispose" => !method.is_static && is_method,
         "asyncIterator" => !method.is_static && is_method,
@@ -701,17 +702,6 @@ pub(crate) fn lower_well_known_computed_method(
     let Some(wk) = symbol_well_known_key(&computed.expr) else {
         return Ok(None);
     };
-    // hasInstance (static method): lift the method body to a top-level
-    // function named `__perry_wk_hasinstance_<class>`. Signature:
-    // `(value: f64) -> f64` — no `this`.
-    if wk == "hasInstance" && method.is_static && matches!(method.kind, ast::MethodKind::Method) {
-        let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
-            super::lower_class_method(ctx, method)
-        })?;
-        func.name = format!("__perry_wk_hasinstance_{}", class_name);
-        ctx.pending_functions.push(func);
-        return Ok(Some(WellKnownComputedMethod::Lifted));
-    }
     // toStringTag (instance getter): lift the getter body to a top-level
     // function named `__perry_wk_tostringtag_<class>`. Signature:
     // `(this: f64) -> f64` — getter takes `this` as an explicit first

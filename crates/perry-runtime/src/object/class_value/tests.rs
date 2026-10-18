@@ -461,3 +461,73 @@ fn ordinary_closures_and_numbers_are_not_class_values() {
         None
     );
 }
+
+#[test]
+fn constructor_parent_word_is_authoritative_and_traced() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let cid = 0x6B44;
+    register(cid);
+    let constructor = class_value_ptr(cid);
+    let original = unsafe { constructor_parent_bits(constructor) };
+    let parent = crate::object::js_object_alloc(0x6B45, 1);
+    crate::object::js_object_set_field(parent, 0, crate::value::JSValue::number(17.0));
+    let before = parent as usize;
+    let parent = crate::value::js_nanbox_pointer(parent as i64);
+    crate::closure::closure_set_static_prototype(constructor as usize, parent.to_bits());
+    assert_eq!(
+        unsafe { constructor_parent_bits(constructor) },
+        parent.to_bits()
+    );
+    assert!(
+        unsafe { crate::closure::props::state_prototype(constructor as usize) }.is_none(),
+        "the prototype word is not duplicated in a property-state record"
+    );
+    for _ in 0..3 {
+        let _ = crate::gc::gc_collect_minor();
+    }
+    let after = unsafe { constructor_parent_bits(constructor) };
+    let ptr = (after & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+    assert_ne!(ptr as usize, before, "parent survived moving collection");
+    assert_eq!(crate::object::js_object_get_field(ptr, 0).as_number(), 17.0);
+    assert_eq!(
+        crate::object::js_object_get_prototype_of(class_value(cid)).to_bits(),
+        after
+    );
+    crate::closure::closure_set_static_prototype(constructor as usize, crate::value::TAG_NULL);
+    assert_eq!(
+        crate::object::js_object_get_prototype_of(class_value(cid)).to_bits(),
+        crate::value::TAG_NULL
+    );
+    crate::closure::closure_set_static_prototype(constructor as usize, original);
+    assert_eq!(unsafe { constructor_parent_bits(constructor) }, original);
+}
+
+#[test]
+fn first_evaluation_receives_its_heritage_before_later_evaluations() {
+    let cid = 0x6B48;
+    let a = 0x6B49;
+    let b = 0x6B4A;
+    register(cid);
+    register(a);
+    register(b);
+    let constructor = class_value_ptr(cid);
+    unsafe {
+        *crate::closure::closure_capture_slots_mut(constructor).add(CLASS_EVALUATION_STATE_SLOT) =
+            crate::codegen_abi::CLASS_FIRST_EVALUATION_STATE;
+    }
+    let first = class_value(a);
+    let later = class_value(b);
+    crate::object::class_registry::js_register_class_parent_dynamic(cid, first);
+    assert_eq!(
+        unsafe { constructor_parent_bits(constructor) },
+        first.to_bits()
+    );
+    crate::object::class_registry::js_register_class_parent_dynamic(cid, later);
+    assert_eq!(
+        unsafe { constructor_parent_bits(constructor) },
+        first.to_bits()
+    );
+}

@@ -58,10 +58,9 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
         } else if obj_type == crate::gc::GC_TYPE_OBJECT {
             // `class X extends Array` — the instance is a plain ObjectHeader, but
             // ECMA-262 IsArray must still report true for an Array subclass.
-            let class_id = crate::object::js_object_get_class_id(
+            if super::subclass::has_array_exotic_brand(
                 raw_ptr as *const crate::object::ObjectHeader,
-            );
-            if super::subclass::is_array_subclass_class_id(class_id) {
+            ) {
                 true_val
             } else {
                 false_val
@@ -69,5 +68,35 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
         } else {
             false_val
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn array_identity_follows_construction_rather_than_constructor_ancestry() {
+        let class_id = 0x0074_2784;
+        crate::object::js_register_class_parent(class_id, 0xFFFF0024);
+        let object = crate::object::js_object_alloc(class_id, 2);
+        let object = crate::value::js_nanbox_pointer(object as i64);
+        assert_eq!(
+            super::js_array_is_array(object).to_bits(),
+            crate::value::TAG_FALSE
+        );
+        crate::node_stream::js_array_subclass_init(object, 0.0);
+        assert_eq!(
+            super::js_array_is_array(object).to_bits(),
+            crate::value::TAG_TRUE
+        );
+        crate::object::js_object_set_prototype_of(object, f64::from_bits(crate::value::TAG_NULL));
+        assert_eq!(
+            super::js_array_is_array(object).to_bits(),
+            crate::value::TAG_TRUE
+        );
+        let sibling = crate::object::js_object_alloc(class_id, 2);
+        assert_eq!(
+            super::js_array_is_array(crate::value::js_nanbox_pointer(sibling as i64)).to_bits(),
+            crate::value::TAG_FALSE
+        );
     }
 }

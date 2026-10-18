@@ -281,7 +281,17 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
     if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
         return this;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_root = scope.root_nanbox_f64(this);
     let obj = raw as *mut ObjectHeader;
+    unsafe {
+        crate::object::shapes::transition_object_shape_add_brand(
+            obj,
+            crate::array::ARRAY_EXOTIC_BRAND,
+        );
+    }
+    let this = this_root.get_nanbox_f64();
+    let obj = raw_ptr_from_value(this) as *mut ObjectHeader;
     // ToLength(n): undefined / NaN / <= 0 → 0; +Infinity (and any value past the
     // max array length) clamps to 2^53 - 1; otherwise floor(n).
     let len = {

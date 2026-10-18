@@ -79,6 +79,23 @@ pub(crate) fn shadow_tests() -> bool {
     with_census(perry_hir::ProtoCensus::shadow_reachable).unwrap_or(true)
 }
 
+/// No compiled or interpreted operation can relink a constructor's heritage.
+/// Missing facts decline the proof; no program-wide dynamic-code veto.
+pub(crate) fn heritage_is_unrelinked(ctx: &crate::expr::FnCtx<'_>, class_id: u32) -> bool {
+    if ctx.wpfacts.super_unrelinked.contains(&class_id) {
+        return true;
+    }
+    // Unit tests install a complete synthetic program census. Production
+    // requires the data-flow proof too: an opaque callee can mutate a class
+    // it receives even when no compiled module names setPrototypeOf.
+    #[cfg(test)]
+    {
+        return with_census(|c| !c.relink && !c.dynamic_write && !c.dynamic_code).unwrap_or(false);
+    }
+    #[cfg(not(test))]
+    false
+}
+
 /// The names whose dynamic add, delete or redefinition sets the shadow bit
 /// (emitted once, by the entry module, as `perry_shadow_names`).
 /// `(name, receiver)`: every class member name (a prototype's shadow

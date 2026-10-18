@@ -597,7 +597,7 @@ static KEEP_JS_PARAM_OR_CLASS_CAPTURE_VALUE: extern "C" fn(f64, u32, u32) -> f64
 /// # Safety
 /// `this_value`/`args_array` must be valid NaN-boxed heap pointers.
 #[no_mangle]
-pub unsafe extern "C" fn js_super_construct_apply(
+pub unsafe extern "C-unwind" fn js_super_construct_apply(
     child_cid: u32,
     this_value: f64,
     args_array: f64,
@@ -875,7 +875,7 @@ pub unsafe extern "C" fn js_super_construct_apply(
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_SUPER_CONSTRUCT_APPLY: unsafe extern "C" fn(u32, f64, f64) -> f64 =
+static KEEP_JS_SUPER_CONSTRUCT_APPLY: unsafe extern "C-unwind" fn(u32, f64, f64) -> f64 =
     js_super_construct_apply;
 
 /// Call `super.method(...)` through the same property lookup as `super.method`.
@@ -1076,6 +1076,15 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     if this_raw == 0 || parent_cid == 0 {
         return undef;
+    }
+    if let Some(value) = super::default_derived_constructor::try_construct(
+        parent_cid,
+        None,
+        crate::value::js_nanbox_pointer(this_raw),
+        args_ptr,
+        args_len,
+    ) {
+        return value;
     }
     let mut cur = parent_cid;
     let mut depth = 0usize;
@@ -1380,6 +1389,15 @@ pub(crate) unsafe fn construct_class_object_resolved(
     entry: Option<(usize, u32, u32)>,
     capture_slot: Option<(u32, u32)>,
 ) -> f64 {
+    if let Some(value) = super::default_derived_constructor::try_construct(
+        class_cid,
+        Some(classobj_value),
+        crate::value::js_nanbox_pointer(inst as i64),
+        args_ptr,
+        args_len,
+    ) {
+        return value;
+    }
     // The construction boundary owns roots for this exact evaluation and
     // receiver, and has installed its heritage pin and private brand. A
     // validated own entry needs no replay setup or duplicate brand lookup.
@@ -1663,6 +1681,15 @@ pub(crate) unsafe fn construct_registered_class_resolved(
     args_len: usize,
     entry: Option<(usize, u32, u32)>,
 ) -> f64 {
+    if let Some(value) = super::default_derived_constructor::try_construct(
+        class_cid,
+        None,
+        crate::value::js_nanbox_pointer(inst as i64),
+        args_ptr,
+        args_len,
+    ) {
+        return value;
+    }
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // runs with the same argument list. `lookup_class_constructor` holds OWN

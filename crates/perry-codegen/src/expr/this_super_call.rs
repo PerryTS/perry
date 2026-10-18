@@ -234,6 +234,15 @@ pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    lower_impl(ctx, expr, false)
+}
+
+/// The caller has just checked this operation's complete static parent chain.
+pub(crate) fn lower_checked(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    lower_impl(ctx, expr, true)
+}
+
+fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Result<String> {
     match expr {
         Expr::This => {
             check_derived_this_initialized(ctx);
@@ -271,6 +280,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
+            let live_class = ctx
+                .classes
+                .get(&current_class_name)
+                .copied()
+                .filter(|class| super::super_constructor::requires_live(ctx, class));
             // Materialize the args array (spread elements appended via
             // the runtime spread helper).
             let zero = "0".to_string();
@@ -321,6 +335,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 },
                 |_ctx, final_array| Ok(final_array.to_string()),
             )?;
+            if let Some(class) = live_class {
+                let mut group = crate::rooting::open_rooted_group(1);
+                let array = nanbox_pointer_inline(ctx.block(), &arr);
+                let array_root = group.adopt_emitted(ctx, Repr::Boxed, &array, true);
+                if !crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name) {
+                    if let Some(plan) = super::checked_super::plan(ctx, class) {
+                        let array = group.reread_emitted(ctx, array_root);
+                        let result = super::checked_super::spread(ctx, class, &array, &plan)?;
+                        group.release(ctx);
+                        return Ok(result);
+                    }
+                }
+                crate::lower_call::defer_dynamic_derived_fields(ctx, class);
+                let lexical_id = super::super_constructor::lexical_class_id(ctx, class);
+                let parent = ctx.block().call(
+                    DOUBLE,
+                    "js_class_super_parent",
+                    &[(I32, &lexical_id.to_string())],
+                );
+                let this = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    });
+                let array = group.reread_emitted(ctx, array_root);
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_class_super_construct_apply",
+                    &[(DOUBLE, &parent), (DOUBLE, &this), (DOUBLE, &array)],
+                );
+                super::super_constructor::bind(ctx, &result);
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                group.release(ctx);
+                return Ok(ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or(result));
+            }
             // Invoke the closest registered ancestor ctor through the
             // CLASS_CONSTRUCTORS registry. KNOWN GAP: constructions from
             // METHOD bodies (standalone-ctor path) currently lose the
@@ -587,6 +648,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
             };
+            if !heritage_checked && super::super_constructor::requires_live(ctx, current_class) {
+                return super::super_constructor::call(ctx, current_class, super_args);
+            }
             let parent_name = match current_class.extends_name.as_deref() {
                 Some(s) => s.to_string(),
                 // A lexically-shadowed / fully-dynamic parent carries no

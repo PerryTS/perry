@@ -118,6 +118,8 @@ pub struct ProgramFacts {
     /// aborted solve answers `Some`). Interpreted code is
     /// [`ProgramFacts::interp_guard`]'s.
     pub fnproto_bind_written: Option<String>,
+    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation.
+    pub super_unrelinked: std::collections::BTreeSet<u32>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
@@ -295,7 +297,31 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     } else {
         g.m.fnproto_write.map(|r| g.m.reasons[r as usize].clone())
     };
+    let super_unrelinked = if stats.aborted {
+        Default::default()
+    } else {
+        g.m.toks
+            .iter()
+            .enumerate()
+            .filter_map(|(t, kind)| {
+                let model::TokKind::ClassObj(tm) = kind else {
+                    return None;
+                };
+                let model::TmplKind::Class { class_id, .. } = g.m.tmpls[*tm as usize].kind else {
+                    return None;
+                };
+                let origin = g.m.constructor_origin(*tm);
+                let owner =
+                    g.m.tok_index
+                        .get(&model::TokKind::ClassObj(origin))
+                        .copied()
+                        .unwrap_or(t as u32);
+                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner)).then_some(class_id)
+            })
+            .collect()
+    };
     let mut pf = ProgramFacts {
+        super_unrelinked,
         fnproto_bind_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,

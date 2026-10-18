@@ -14,6 +14,14 @@ use crate::array::{js_array_alloc_with_length, note_array_slot, ArrayHeader};
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
+/// Array exotic identity is independent of mutable constructor/prototype links.
+/// This intrinsic brand occupies neither template ids nor evaluation-holder ids.
+pub(crate) const ARRAY_EXOTIC_BRAND: u64 = (1 << 61) | 1;
+
+pub(crate) unsafe fn has_array_exotic_brand(object: *const ObjectHeader) -> bool {
+    crate::object::shapes::object_has_brand(object, ARRAY_EXOTIC_BRAND)
+}
+
 #[path = "subclass_loop_guard.rs"]
 pub(super) mod loop_guard;
 #[path = "subclass_packed_index.rs"]
@@ -242,6 +250,11 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
         return None;
     }
     let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+    // Only a constructed Array can enter this exact-shape proof. A class
+    // relinked away from Array still has the declared class id and methods.
+    if shape.brands().binary_search(&ARRAY_EXOTIC_BRAND).is_err() {
+        return None;
+    }
     if !shape.object_kind.is_ordinary_layout() {
         return None;
     }
@@ -1300,8 +1313,7 @@ pub fn is_array_subclass_instance(object: f64) -> bool {
     if obj_type != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
-    let class_id = crate::object::js_object_get_class_id(raw as *const ObjectHeader);
-    is_array_subclass_class_id(class_id)
+    unsafe { has_array_exotic_brand(raw as *const ObjectHeader) }
 }
 
 /// Materialize a `class X extends Array` instance into a fresh dense array by
@@ -1454,8 +1466,7 @@ pub(crate) fn is_array_subclass_value(value: f64) -> bool {
     if !raw_receiver_is_heap_object(raw as *const ArrayHeader) {
         return false;
     }
-    let class_id = crate::object::js_object_get_class_id(raw);
-    class_id != 0 && is_array_subclass_class_id(class_id)
+    unsafe { has_array_exotic_brand(raw) }
 }
 
 /// Run an `Array.prototype` method generically on the array-like object

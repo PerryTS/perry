@@ -1,5 +1,7 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod super_heritage;
+
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
 fn facts(src: &str) -> ProgramFacts {

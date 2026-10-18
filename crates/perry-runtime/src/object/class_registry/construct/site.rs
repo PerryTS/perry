@@ -190,6 +190,25 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
             }
         }
     }
+    if !super::js_value_is_constructor(parent) {
+        crate::object::object_ops::throw_object_type_error(
+            b"Super constructor is not a constructor",
+        );
+    }
+    // Reified builtins have a Construct entry distinct from their Call entry
+    // (Map/Set deliberately throw on Call). Preserve the current newTarget.
+    if crate::proxy::js_proxy_is_proxy(parent) != 0
+        || crate::object::class_registry::identify_global_builtin_constructor(parent).is_some()
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let _new_target = crate::object::SuperNewTargetScope::bind(&scope, this);
+        return crate::object::js_new_function_construct_with_new_target(
+            parent,
+            args_ptr,
+            args_len,
+            crate::object::js_new_target_get(),
+        );
+    }
     crate::object::global_this::js_fetch_or_value_super(parent, this, args_ptr, args_len)
 }
 

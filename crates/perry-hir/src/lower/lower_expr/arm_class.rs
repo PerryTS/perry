@@ -169,7 +169,18 @@ pub(crate) fn lower_class_expr(
     // edge is wired every time the factory function executes; the
     // Sequence yields its last element, so the value remains the
     // ClassRef the call site expects.
-    let parent_expr = class.extends_expr.clone();
+    // Preserve native initialization metadata while recording the actual
+    // constructor value at ClassDefinitionEvaluation, before any new.
+    let parent_expr = match class.extends_expr.clone() {
+        Some(parent) => Some(parent),
+        None if class.native_extends.is_some() => class_expr
+            .class
+            .super_class
+            .as_deref()
+            .map(|parent| crate::lower_decl::lower_class_heritage_expr(ctx, parent).map(Box::new))
+            .transpose()?,
+        None => None,
+    };
     // Issue #894: collect computed-Symbol-key static fields so
     // codegen emits a `RegisterClassStaticSymbol` registration
     // sequenced in front of the ClassRef. Without this, the

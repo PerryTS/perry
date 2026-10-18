@@ -405,6 +405,10 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // GC_STORE_AUDIT(INIT): fresh class function object; no pointer yet.
         std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
         std::ptr::write(
+            captures.add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE),
+            crate::value::TAG_UNDEFINED,
+        );
+        std::ptr::write(
             captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
             crate::value::TAG_UNDEFINED,
         );
@@ -428,6 +432,10 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     // A worker realm that inherited this class's definition evaluation names
     // its computed members now, before the prototype is born from them.
     super::class_registry::inherited_evaluation::replay_inherited_evaluation(class_id);
+    // The class owns this edge. It is never mirrored in the property-state bag.
+    unsafe {
+        constructor_parent_bits(ptr);
+    }
     // MakeConstructor: `prototype` { !w, !e, !c } is created with the class,
     // after `length` and `name` and before every ClassBody static, so the own
     // key order is the bag's creation order.
@@ -974,7 +982,7 @@ pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
 
 /// Captures of a class function object: the class id, the evaluation state
 /// ([`CLASS_EVALUATION_STATE_SLOT`]), then the prototype link.
-const CLASS_VALUE_CAPTURES: usize = 3;
+const CLASS_VALUE_CAPTURES: usize = 4;
 /// The capture holding the class's `prototype` object (NaN-boxed), or
 /// `undefined` before it exists.
 const CLASS_PROTOTYPE_LINK_CAPTURE: usize = crate::codegen_abi::CLASS_PROTOTYPE_LINK_CAPTURE;
@@ -1146,20 +1154,99 @@ pub unsafe extern "C" fn js_class_static_field_put(
 /// function object, else the parent function (`extends <function>`), else
 /// %Function.prototype%.
 pub(crate) fn class_prototype_addr(class_id: u32) -> usize {
-    if super::class_registry::class_static_prototype_is_nulled(class_id) {
-        return 0;
-    }
-    let proto = super::class_registry::class_static_prototype(class_id) as usize;
-    if proto != 0 {
-        proto
-    } else if let Some(parent) = super::get_parent_class_id(class_id)
-        .filter(|&p| p != 0 && p != class_id && super::is_class_id_registered(p))
-    {
-        class_value_ptr(parent) as usize
-    } else if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
-        parent
+    let closure = class_value_ptr(class_id);
+    let bits = unsafe { constructor_parent_bits(closure) };
+    if bits == crate::value::TAG_NULL {
+        0
     } else {
-        crate::closure::shape::function_prototype_ptr_materialized()
+        (bits & crate::value::POINTER_MASK) as usize
+    }
+}
+
+/// The definition's parent is used only to initialize the object and to tell
+/// legacy static-chain consumers when its current edge equals that definition.
+/// The current edge itself lives solely in the class function's capture word.
+pub(crate) fn definition_parent_value(class_id: u32) -> f64 {
+    if let Some(value) = super::class_registry::stashed_dynamic_parent_value(class_id) {
+        let bits = value.to_bits();
+        if bits != crate::value::TAG_UNDEFINED && bits != crate::value::TAG_NULL {
+            if let Some(cid) = class_value_id(value) {
+                return class_value(cid);
+            }
+            return value;
+        }
+    }
+    if let Some(parent) = super::get_parent_class_id(class_id).filter(|&p| p != 0 && p != class_id)
+    {
+        if let Some(value) = reserved_parent_constructor_value(parent) {
+            return value;
+        }
+        if super::is_class_id_registered(parent) {
+            return class_value(parent);
+        }
+    }
+    if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
+        return crate::value::js_nanbox_pointer(parent as i64);
+    }
+    crate::value::js_nanbox_pointer(
+        crate::closure::shape::function_prototype_ptr_materialized() as i64
+    )
+}
+
+/// Birth-time resolution from the existing immutable builtin/native image.
+/// The resulting value is stored solely in the constructor's own edge.
+fn reserved_parent_constructor_value(parent_id: u32) -> Option<f64> {
+    if let Some(value) = super::class_registry::reserved_native_parent_constructor_value(parent_id)
+    {
+        return Some(value);
+    }
+    use super::global_this_tables::{BuiltinInstanceIdentity, GLOBAL_THIS_BUILTIN_CONSTRUCTORS};
+    let declaration = GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().find(|declaration| {
+        declaration.prototype_class == Some(parent_id)
+            || matches!(declaration.instance_identity, Some(BuiltinInstanceIdentity::Class(id)) if id == parent_id)
+    })?;
+    Some(super::js_get_global_this_builtin_value(
+        declaration.name.as_ptr(),
+        declaration.name.len(),
+    ))
+}
+
+/// Read the actual [[Prototype]] of a proven class function object. Undefined
+/// occurs only during its reentrant birth; resolve that deferred object edge.
+#[inline]
+pub(crate) unsafe fn constructor_parent_bits(closure: *mut ClosureHeader) -> u64 {
+    let slot = crate::closure::closure_capture_slots_mut(closure)
+        .add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE);
+    if *slot == crate::value::TAG_UNDEFINED {
+        let cid = class_closure_id_unchecked(closure).unwrap();
+        let parent = definition_parent_value(cid);
+        constructor_parent_store(closure, parent.to_bits());
+    }
+    *slot
+}
+
+/// [[SetPrototypeOf]] for a class function: the one authoritative traced edge.
+pub(crate) unsafe fn constructor_parent_store(closure: *mut ClosureHeader, bits: u64) {
+    let slot = crate::closure::closure_capture_slots_mut(closure)
+        .add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE);
+    *slot = bits;
+    crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, bits);
+}
+
+/// ClassDefinitionEvaluation can finish heritage after lazy class-object birth.
+/// It publishes the definition's edge, without minting an otherwise unused class.
+pub(crate) fn definition_parent_if_minted(class_id: u32, parent: f64) {
+    if let Some(closure) = class_value_cached(class_id) {
+        let parent = if parent.to_bits() == crate::value::TAG_NULL {
+            crate::value::js_nanbox_pointer(
+                crate::closure::shape::function_prototype_ptr_materialized() as i64,
+            )
+        } else {
+            parent
+        };
+        unsafe {
+            constructor_parent_store(closure, parent.to_bits());
+        }
     }
 }
 
@@ -1585,4 +1672,13 @@ pub extern "C" fn perry_class_value_dir_cell() -> *const u8 {
         crate::agent_ptrs::publish(crate::codegen_abi::AGENT_PTR_CLASS_VALUES, p);
         p
     })
+}
+
+/// Publish static heritage only when the child object already exists.
+pub(crate) fn definition_parent_id_if_minted(class_id: u32, parent_id: u32) {
+    if class_value_cached(class_id).is_some() {
+        let parent =
+            reserved_parent_constructor_value(parent_id).unwrap_or_else(|| class_value(parent_id));
+        definition_parent_if_minted(class_id, parent);
+    }
 }

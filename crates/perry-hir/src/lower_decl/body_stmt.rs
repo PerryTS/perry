@@ -427,7 +427,20 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     || shares_first_evaluation
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
-                let dynamic_parent = class.extends_expr.clone();
+                // Preserve native initialization metadata while recording the actual
+                // constructor value at ClassDefinitionEvaluation, before any new.
+                let dynamic_parent = match class.extends_expr.clone() {
+                    Some(parent) => Some(parent),
+                    None if class.native_extends.is_some() => class_decl
+                        .class
+                        .super_class
+                        .as_deref()
+                        .map(|parent| {
+                            crate::lower_decl::lower_class_heritage_expr(ctx, parent).map(Box::new)
+                        })
+                        .transpose()?,
+                    None => None,
+                };
                 let definition_steps = if fresh_binding && !shares_first_evaluation {
                     computed_name_evaluations
                 } else {

@@ -734,6 +734,52 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 false,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
+            if class.constructor.is_none()
+                && (class.extends_name.is_some()
+                    || class.extends_expr.is_some()
+                    || class.extends.is_some()
+                    || class.native_extends.is_some())
+            {
+                let mut initializer = ctor_as_method.clone();
+                initializer.name = format!("{}_default_fields", class.name);
+                initializer.params.clear();
+                initializer.body.clear();
+                let mut initializer_names = method_names.clone();
+                initializer_names.insert(
+                    (class.name.clone(), initializer.name.clone()),
+                    format!("{}__{}_default_fields", module_prefix, class.name),
+                );
+                compile_method(
+                    llmod,
+                    class,
+                    &initializer,
+                    func_names,
+                    strings,
+                    class_table,
+                    &initializer_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    None,
+                    false,
+                    None,
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                )
+                .with_context(|| format!("lowering default fields for '{}'", class.name))?;
+            }
         }
         // Static methods compile as ID-qualified plain functions with no
         // `this` parameter and no class_stack push.

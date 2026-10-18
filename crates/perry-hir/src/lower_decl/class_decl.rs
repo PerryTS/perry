@@ -57,6 +57,7 @@ pub(crate) use decl_self_binding::{
 mod from_ast;
 mod member_helpers;
 mod member_registration;
+pub(crate) use class_heritage::lower_class_heritage_expr;
 use class_heritage::*;
 pub(crate) use from_ast::lower_class_from_ast;
 pub(crate) use member_helpers::capture_class_source;

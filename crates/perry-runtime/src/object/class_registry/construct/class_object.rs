@@ -101,42 +101,14 @@ unsafe fn construct_class_object_entry(
     // the native-backing completion paths below unchanged.
     let current_inst =
         inst_handle.with_mut_ptr::<ObjectHeader, _>(|i| crate::value::js_nanbox_pointer(i as i64));
-    if constructor_return_overrides_this(ctor_result)
-        && ctor_result.to_bits() != current_inst.to_bits()
+    if ctor_result.to_bits() != current_inst.to_bits()
+        && constructor_return_overrides_this(ctor_result)
     {
         return ctor_result;
     }
-    // A template recorded without heritage, of a class with no
-    // declared parent, has no builtin in its chain to back.
-    let heritage = cell.is_none_or(|cell| unsafe { cell.has_heritage() })
-        || get_parent_class_id(class_cid).is_some_and(|parent| parent != 0);
-    if !heritage {
-        return current_inst;
-    }
-    // `class X extends Request/Response {}` constructed via the dynamic
-    // (class-expression value) path: the replayed ctor's `super()`
-    // can't statically route an aliased parent, so attach the native
-    // fetch handle here when the registered parent is a fetch builtin
-    // and the instance didn't already get one. Refs `@hono/node-server`.
-    if let Some(kind) = fetch_parent_kind_in_chain(class_cid) {
-        let has_handle = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-            super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_some()
-        });
-        if !has_handle {
-            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                super::super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len)
-            });
-        }
-    }
-    // Class-expression values can also extend Promise and reach this
-    // dynamic construct path. The synthesized default constructor does
-    // not call construct-only builtins as plain functions; attach the
-    // Promise backing here, matching the ClassRef path below. An
-    // explicit `super(executor)` has already installed it, so avoid
-    // invoking the executor twice.
-    ensure_promise_subclass_backing(&inst_handle, class_cid, args_ptr, args_len);
-    // Re-read: the fetch attachment and Promise executor both allocate.
-    return crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    // Explicit and default super share the native Construct dispatcher.
+    // A relinked constructor must not acquire its original builtin's state.
+    current_inst
 }
 
 /// The instance `new` through fresh class value `class_value` (template

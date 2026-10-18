@@ -644,7 +644,7 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
 /// preserving the prior behavior for every other
 /// runtime-value parent (Effect's `Data.Class`, etc.).
 #[no_mangle]
-pub unsafe extern "C" fn js_fetch_or_value_super(
+pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     parent_val: f64,
     this_box: f64,
     args_ptr: *const f64,
@@ -724,8 +724,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // Resolve each candidate once. Ordinary parents must not pay a second
     // closure/header probe or repeat the dynamic-parent registry lookup just
     // because native net constructors now carry an immutable class fact.
+    let parent_missing = crate::value::JSValue::from_bits(parent_val.to_bits()).is_undefined();
     let native_parent =
         super::super::native_module::bound_native_parent(parent_val).or_else(|| {
+            if !parent_missing {
+                return None;
+            }
             let obj = subclass_this_object_ptr(this_box)?;
             super::super::native_module::bound_native_parent(
                 crate::object::class_registry::js_get_dynamic_parent_value(
@@ -758,6 +762,26 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         }
         None => None,
     };
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if super::super::native_module::normalize_native_module_alias(module.as_str()) == "events" {
+            let options = if args_len != 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            match method.as_str() {
+                "EventEmitter" => {
+                    return crate::node_stream::js_event_emitter_subclass_init(this_box, options)
+                }
+                "EventEmitterAsyncResource" => {
+                    return crate::node_stream::js_event_emitter_async_resource_subclass_init(
+                        this_box, options,
+                    )
+                }
+                _ => {}
+            }
+        }
+    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {
@@ -930,9 +954,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     {
         let temporal_parent = if super::temporal_ctor_kind(parent_val).is_some() {
             parent_val
-        } else if let Some(obj) = subclass_this_object_ptr(this_box) {
-            let cid = crate::object::js_object_get_class_id(obj);
-            crate::object::class_registry::js_get_dynamic_parent_value(cid)
+        } else if parent_missing {
+            subclass_this_object_ptr(this_box)
+                .map(|obj| {
+                    crate::object::class_registry::js_get_dynamic_parent_value(
+                        crate::object::js_object_get_class_id(obj),
+                    )
+                })
+                .unwrap_or(parent_val)
         } else {
             parent_val
         };
@@ -952,9 +981,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     {
         let intl_parent = if crate::intl::hooked::is_intl_constructor_value(parent_val) {
             parent_val
-        } else if let Some(obj) = subclass_this_object_ptr(this_box) {
-            let cid = crate::object::js_object_get_class_id(obj);
-            crate::object::class_registry::js_get_dynamic_parent_value(cid)
+        } else if parent_missing {
+            subclass_this_object_ptr(this_box)
+                .map(|obj| {
+                    crate::object::class_registry::js_get_dynamic_parent_value(
+                        crate::object::js_object_get_class_id(obj),
+                    )
+                })
+                .unwrap_or(parent_val)
         } else {
             parent_val
         };
@@ -978,6 +1012,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             parent_val,
         )
         .or_else(|| {
+            if !parent_missing {
+                return None;
+            }
             let obj = subclass_this_object_ptr(this_box)?;
             let cid = crate::object::js_object_get_class_id(obj);
             let stash = crate::object::class_registry::js_get_dynamic_parent_value(cid);
@@ -1051,7 +1088,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     };
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
-            if parent_is_user_ctor {
+            if parent_is_user_ctor || !parent_missing {
                 return None;
             }
             let obj = subclass_this_object_ptr(this_box)?;
@@ -1121,16 +1158,8 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             // not always publish the runtime cell, so retain the ClassRef
             // fallback when no matching dynamic newTarget is active.
             let active_new_target = crate::object::js_new_target_get();
-            let active_matches = crate::object::class_ref_id(active_new_target) == Some(cid)
-                || if super::super::class_registry::is_class_object_value(active_new_target) {
-                    let class_object =
-                        crate::value::JSValue::from_bits(active_new_target.to_bits())
-                            .as_pointer::<crate::object::ObjectHeader>();
-                    !class_object.is_null()
-                        && crate::object::js_object_get_class_id(class_object) == cid
-                } else {
-                    false
-                };
+            let active_matches =
+                super::super::class_registry::js_value_is_constructor(active_new_target);
             let new_target = if active_matches {
                 active_new_target
             } else {
@@ -1204,7 +1233,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 // numeric slot) is not a constructor.
                 bits & TAG_MASK == 0x7FFE_0000_0000_0000
             };
-            if !usable {
+            if !usable && parent_missing {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     let cid = crate::object::js_object_get_class_id(obj);
                     if let Some(addr) = super::super::class_registry::parent_closure_in_chain(cid) {
@@ -1232,8 +1261,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, usize) -> f64 =
-    js_fetch_or_value_super;
+static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C-unwind" fn(
+    f64,
+    f64,
+    *const f64,
+    usize,
+) -> f64 = js_fetch_or_value_super;
 
 pub(crate) extern "C" fn global_this_response_error_thunk(
     _closure: *const crate::closure::ClosureHeader,

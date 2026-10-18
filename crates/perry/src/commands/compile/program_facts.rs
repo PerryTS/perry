@@ -212,7 +212,10 @@ pub(crate) fn view_for(
             elision.receiver_params = r.clone();
         }
     }
-    let digest = if elision.is_empty() && !elision.fnproto_bind_unwritten {
+    let digest = if elision.is_empty()
+        && !elision.fnproto_bind_unwritten
+        && elision.super_unrelinked.is_empty()
+    {
         pf.digest_for(&key)
     } else {
         use std::hash::{Hash, Hasher};
@@ -266,6 +269,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // gap tests must then fail).
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
+    out.super_unrelinked = pf.super_unrelinked.clone();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =

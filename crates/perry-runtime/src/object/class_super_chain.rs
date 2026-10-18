@@ -103,3 +103,48 @@ pub(super) unsafe fn super_call_with_lookup(
         args.len(),
     )
 }
+
+/// GetSuperConstructor: read the lexical constructor's current [[Prototype]].
+/// The active evaluation disambiguates repeated evaluations of one template.
+#[no_mangle]
+pub extern "C" fn js_class_super_parent(class_id: u32) -> f64 {
+    if let Some(owner) =
+        super::class_registry::evaluation_heritage::active_class_evaluation_value(class_id)
+    {
+        return super::js_object_get_prototype_of(owner);
+    }
+    let constructor = super::class_value::class_value_ptr(class_id);
+    f64::from_bits(unsafe { super::class_value::constructor_parent_bits(constructor) })
+}
+
+/// Spread super uses the same live constructor edge and Construct dispatcher.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_class_super_construct_apply(
+    parent: f64,
+    this: f64,
+    array: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let array = scope.root_nanbox_f64(array);
+    let parent = scope.root_nanbox_f64(parent);
+    let arr = crate::value::JSValue::from_bits(array.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::array::ArrayHeader>();
+    let len = crate::array::js_array_length(arr);
+    let args: Vec<f64> = (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i))
+        .collect();
+    super::class_registry::js_class_value_super_construct_site(
+        parent.get_nanbox_f64(),
+        this.get_nanbox_f64(),
+        args.as_ptr(),
+        args.len(),
+        std::ptr::null(),
+    )
+}
+
+#[used(compiler)]
+static KEEP_SUPER_PARENT: extern "C" fn(u32) -> f64 = js_class_super_parent;
+#[used(compiler)]
+static KEEP_SUPER_APPLY: unsafe extern "C-unwind" fn(f64, f64, f64) -> f64 =
+    js_class_super_construct_apply;
