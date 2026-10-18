@@ -51,16 +51,14 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
         e
     }
     // Names bound (anywhere in the module) to a `new <X>` whose `<X>` is NOT a
-    // tracked weak type — i.e. an ordinary class/constructor. The weak-locals
-    // sets are keyed by BARE NAME with no scope discrimination, so a name reused
-    // across functions (extremely common in minified bundles, e.g. a one-letter
-    // `z`) for both `new WeakMap()` in one function and `new SomeCache()` in
-    // another would route the second function's `z.get/set` to the WeakMap
-    // intrinsic — throwing `Invalid value used as weak map key` when the
-    // non-weak cache is legitimately keyed by a string. Collect such ambiguous
-    // names and subtract them from all weak-locals sets after the walk so the
-    // call falls back to ordinary dynamic method dispatch (correct for both a
-    // real WeakMap and the other constructor).
+    // tracked type — i.e. an ordinary class/constructor. The locals sets are
+    // keyed by BARE NAME with no scope discrimination, so a name reused across
+    // functions (extremely common in minified bundles, e.g. a one-letter `z`)
+    // for both `new Proxy()` in one function and `new SomeCache()` in another
+    // would route the second function's reads to the Proxy intrinsic. Collect
+    // such ambiguous names and subtract them after the walk. (WeakMap/WeakSet
+    // calls are not routed by name: the method site proves the receiver by its
+    // birth layout.)
     fn record_var(
         decl: &ast::VarDeclarator,
         ctx: &mut LoweringContext,
@@ -77,12 +75,6 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                     }
                     Some("FinalizationRegistry") => {
                         ctx.finreg_locals.insert(name);
-                    }
-                    Some("WeakMap") => {
-                        ctx.weakmap_locals.insert(name);
-                    }
-                    Some("WeakSet") => {
-                        ctx.weakset_locals.insert(name);
                     }
                     Some("Proxy") => {
                         ctx.proxy_locals.insert(name);
@@ -342,28 +334,14 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
             _ => {}
         }
     }
-    // A name reused for both `new WeakMap()`/`new WeakSet()` and a non-weak
-    // constructor is ambiguous: the bare-name weak-locals set can't tell the
-    // two bindings apart, so routing `.set/.get/.has/.delete`/`.add` to the
-    // weak intrinsic would be wrong for the non-weak instance (e.g. a
-    // string-keyed cache → `Invalid value used as weak map key`). Drop such
-    // ambiguous names so their method calls fall back to ordinary dynamic
-    // dispatch. This is correct for a real WeakMap/WeakSet too: the runtime's
-    // `WeakMap/WeakSet.prototype` thunks (collection_proto_thunks) re-validate
-    // the receiver's class id and re-enter `js_weakmap_set` etc.
-    //
-    // Restricted to weakmap/weakset only: WeakRef.deref / FinalizationRegistry
-    // .register / Proxy use distinct method names that don't collide with the
-    // cache `.get/.set/.add` family, and (unlike WeakMap/WeakSet) have no
-    // runtime method-dispatch fallback — they rely on the codegen fast path —
-    // so dropping them could regress a genuine instance with no upside.
+    // WeakRef.deref / FinalizationRegistry.register keep their names: their
+    // methods don't collide with a cache's `.get/.set/.add` family and they
+    // rely on the codegen fast path.
     for name in &poison {
-        ctx.weakmap_locals.remove(name);
-        ctx.weakset_locals.remove(name);
-        // #7775: `proxy_locals` was left in — the note above weighed a lost
-        // codegen fast path against "no upside", because it only considered
-        // METHOD dispatch (`.deref()`, `.register()`), where a poisoned name
-        // costs speed. A PROPERTY read is the other half and the objection does
+        // #7775: `proxy_locals` was once left in, weighing a lost codegen fast
+        // path against "no upside" for METHOD dispatch (`.deref()`,
+        // `.register()`), where a poisoned name only costs speed. A PROPERTY
+        // read is the other half and the objection does
         // not hold there: an ambiguous name routed a NON-proxy receiver's
         // `a.length` to `js_proxy_get`, which answers `undefined`. That is a
         // wrong answer, not a slow one, and it is what a poisoned name buys

@@ -6,6 +6,8 @@ use super::*;
 // The first plain granule after the compiler's reserved static band.
 pub(crate) const WEAKMAP_BIRTH_LAYOUT: u32 = SHAPE_ID_BASE + (4 << 20);
 pub(crate) const WEAKSET_BIRTH_LAYOUT: u32 = WEAKMAP_BIRTH_LAYOUT + 1;
+const _: () = assert!(WEAKMAP_BIRTH_LAYOUT == crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT);
+const _: () = assert!(WEAKSET_BIRTH_LAYOUT == crate::codegen_abi::WEAKSET_BIRTH_LAYOUT);
 pub(crate) const NATIVE_BIRTH_LAYOUT_END: u32 = WEAKSET_BIRTH_LAYOUT + 1;
 const _: () = assert!(STATIC_SHAPE_ID_END <= WEAKMAP_BIRTH_LAYOUT);
 const _: () = assert!(NATIVE_BIRTH_LAYOUT_END < SITE_SHAPE_ID_END);

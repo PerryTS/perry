@@ -48,7 +48,9 @@ pub(crate) use shapes_own_data::own_data_shape;
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;
-pub(crate) use shapes_branded_birth::branded_birth_layout;
+pub(crate) use shapes_branded_birth::{
+    branded_birth_layout, WEAKMAP_BIRTH_LAYOUT, WEAKSET_BIRTH_LAYOUT,
+};
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]

@@ -806,12 +806,6 @@ pub struct LoweringContext {
     /// Local names whose value is a `FinalizationRegistry` instance (so
     /// `x.register(...)` / `x.unregister(...)` route to the dedicated HIR variants).
     pub(crate) finreg_locals: HashSet<String>,
-    /// Local names whose value is a `WeakMap` instance — used to route
-    /// `x.set/get/has/delete` to the existing Map HIR variants and to throw
-    /// on primitive keys.
-    pub(crate) weakmap_locals: HashSet<String>,
-    /// Local names whose value is a `WeakSet` instance.
-    pub(crate) weakset_locals: HashSet<String>,
     /// Local names bound by a wildcard namespace import (`import * as X from
     /// "mod"`). These are module namespaces, NOT classes — so `X.member(args)`
     /// must resolve+call the namespace member, never lower to a

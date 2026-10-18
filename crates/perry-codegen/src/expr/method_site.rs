@@ -324,14 +324,61 @@ pub(crate) fn emit_method_site(
         blk.cond_br(&fused.is_object_pointer, &on_object, &slow_l);
         fused.biased
     };
+    // A WeakMap/WeakSet is an ordinary cell: its birth layout word names it
+    // (Z2), and with its family's prototype pristine the call is the runtime
+    // operation itself; any other ordinary object takes the probe.
+    let weak = crate::builtin_proto::weak_method_entry(property, lowered_args.len());
+    let weak_idx = weak.map(|_| ctx.new_block("msite.weak"));
     if let Some(idx) = kind_idx {
         ctx.current_block = idx;
+        let on_ordinary = match weak_idx {
+            Some(w) => ctx.block_label(w),
+            None => first_l.clone(),
+        };
         let blk = ctx.block();
         // GcHeader precedes the cell: obj_type @-8 (i8).
         let tp = emit_field_ptr(blk, &biased, -8);
         let ty = blk.load(crate::types::I8, &tp);
         let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
-        blk.cond_br(&ordinary, &first_l, &slow_l);
+        blk.cond_br(&ordinary, &on_ordinary, &slow_l);
+    }
+    if let (Some(idx), Some((entry, births))) = (weak_idx, weak) {
+        ctx.current_block = idx;
+        let word = {
+            let blk = ctx.block();
+            let wp = emit_field_ptr(blk, &biased, 4);
+            blk.load(I32, &wp)
+        };
+        for (i, (birth, family)) in births.iter().enumerate() {
+            let born_idx = ctx.new_block("msite.weak_born");
+            let call_idx = ctx.new_block("msite.weak_call");
+            let born_l = ctx.block_label(born_idx);
+            let call_l = ctx.block_label(call_idx);
+            let next = (i + 1 < births.len()).then(|| ctx.new_block("msite.weak"));
+            let next_l = match next {
+                Some(n) => ctx.block_label(n),
+                None => first_l.clone(),
+            };
+            {
+                let blk = ctx.block();
+                let eq = blk.icmp_eq(I32, &word, &(*birth as i32).to_string());
+                blk.cond_br(&eq, &born_l, &next_l);
+            }
+            ctx.current_block = born_idx;
+            let patched = crate::builtin_proto::emit_patched_test(ctx, *family);
+            ctx.block().cond_br(&patched, &slow_l, &call_l);
+            ctx.current_block = call_idx;
+            let mut operands: Vec<(crate::types::LlvmType, &str)> = vec![(DOUBLE, recv_box)];
+            operands.extend(lowered_args.iter().map(|a| (DOUBLE, a.as_str())));
+            let blk = ctx.block();
+            let r = blk.call(DOUBLE, entry, &operands);
+            let end = blk.label.clone();
+            blk.br(&merge_l);
+            results.push((r, end));
+            if let Some(n) = next {
+                ctx.current_block = n;
+            }
+        }
     }
     // Static ConstFn lanes: the receiver's completed shape names the body, so
     // the hit is a direct call. The slot value is the callee environment only
@@ -507,21 +554,10 @@ pub(crate) fn emit_method_site_lookup(
     // A key that names a builtin method: a builtin receiver whose family's
     // pristine prototype answers it reads nothing observable
     // (`js_bm_lookup`).
+    // An ordinary object (not a weak collection on its birth layout, Z2)
+    // is no builtin receiver: its lookup is `js_method_lookup` at once.
     let families = crate::builtin_proto::builtin_method_families(property);
-    let value = if families != 0 {
-        ctx.block().call(
-            DOUBLE,
-            "js_bm_lookup",
-            &[
-                (PTR, &dir),
-                (DOUBLE, recv_box),
-                (I64, &key_bits),
-                (I64, &hash),
-                (I64, method_id),
-                (I64, &families.to_string()),
-            ],
-        )
-    } else {
+    let lookup = |ctx: &mut FnCtx<'_>| {
         ctx.block().call(
             DOUBLE,
             "js_method_lookup",
@@ -533,6 +569,72 @@ pub(crate) fn emit_method_site_lookup(
                 (I64, method_id),
             ],
         )
+    };
+    let value = if families != 0 {
+        use crate::expr::receiver_range::{emit_field_ptr, emit_fused_receiver_test};
+        let kind_idx = ctx.new_block("msite.lookup_kind");
+        let builtin_idx = ctx.new_block("msite.lookup_builtin");
+        let plain_idx = ctx.new_block("msite.lookup_plain");
+        let join_idx = ctx.new_block("msite.lookup_join");
+        let kind_l = ctx.block_label(kind_idx);
+        let builtin_l = ctx.block_label(builtin_idx);
+        let plain_l = ctx.block_label(plain_idx);
+        let join_l = ctx.block_label(join_idx);
+        let biased = {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(recv_box);
+            let fused = emit_fused_receiver_test(blk, &bits);
+            blk.cond_br(&fused.is_object_pointer, &kind_l, &builtin_l);
+            fused.biased
+        };
+        ctx.current_block = kind_idx;
+        {
+            let blk = ctx.block();
+            let tp = emit_field_ptr(blk, &biased, -8);
+            let ty = blk.load(crate::types::I8, &tp);
+            let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+            let plain = if crate::builtin_proto::weak_families(families) {
+                let wp = emit_field_ptr(blk, &biased, 4);
+                let word = blk.load(I32, &wp);
+                let base = (crate::runtime_abi::WEAKMAP_BIRTH_LAYOUT as i32).to_string();
+                let off = blk.sub(I32, &word, &base);
+                let born = blk.icmp_ult(I32, &off, "2");
+                let not_born = blk.xor(I1, &born, "true");
+                blk.and(I1, &ordinary, &not_born)
+            } else {
+                ordinary
+            };
+            blk.cond_br(&plain, &plain_l, &builtin_l);
+        }
+        ctx.current_block = plain_idx;
+        let plain_v = lookup(ctx);
+        let plain_end = ctx.block().label.clone();
+        ctx.block().br(&join_l);
+        ctx.current_block = builtin_idx;
+        let builtin_v = ctx.block().call(
+            DOUBLE,
+            "js_bm_lookup",
+            &[
+                (PTR, &dir),
+                (DOUBLE, recv_box),
+                (I64, &key_bits),
+                (I64, &hash),
+                (I64, method_id),
+                (I64, &families.to_string()),
+            ],
+        );
+        let builtin_end = ctx.block().label.clone();
+        ctx.block().br(&join_l);
+        ctx.current_block = join_idx;
+        ctx.block().phi(
+            DOUBLE,
+            &[
+                (plain_v.as_str(), plain_end.as_str()),
+                (builtin_v.as_str(), builtin_end.as_str()),
+            ],
+        )
+    } else {
+        lookup(ctx)
     };
     SiteLookup {
         value,

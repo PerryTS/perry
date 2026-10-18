@@ -172,8 +172,6 @@ impl LoweringContext {
             class_statics_index: HashMap::new(),
             weakref_locals: HashSet::new(),
             finreg_locals: HashSet::new(),
-            weakmap_locals: HashSet::new(),
-            weakset_locals: HashSet::new(),
             namespace_import_locals: HashSet::new(),
             fetch_call_response_locals: HashSet::new(),
             namespace_import_sources: std::collections::HashMap::new(),

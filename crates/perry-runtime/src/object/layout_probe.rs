@@ -1740,37 +1740,6 @@ pub(crate) unsafe fn probe_accessor_word(
     None
 }
 
-/// The weak-collection brand (`CLASS_ID_WEAKMAP` / `CLASS_ID_WEAKSET`) of
-/// `obj` when its layout says the brand's intrinsic prototype answers every
-/// key: the record carries the brand and lists no key, the object holds no
-/// overflow key and records no `[[Prototype]]` of its own. This is the
-/// receiver's own proof of a weak collection's builtin method call
-/// (`builtin_method`); the caller adds the class id (a subclass instance is
-/// branded too, but inherits through its class) and `Pristine(family)`.
-///
-/// # Safety
-/// `obj` is a live, unforwarded `GC_TYPE_OBJECT` above the handle band.
-#[inline]
-pub(crate) unsafe fn plain_weak_collection(obj: *const ObjectHeader) -> Option<u32> {
-    let w = (*obj).parent_class_id;
-    if w & crate::object::overflow::SHADOW_BIT != 0 {
-        return None;
-    }
-    let r = record_of(super::ordinary_dir_addr(), w);
-    if r.is_null() || !(*r).present() || (*r).logical_key_count != 0 {
-        return None;
-    }
-    let brand = (*r).weak_collection_brand()?;
-    let meta = (*obj).meta;
-    if !meta.is_null()
-        && ((*meta).prototype != 0
-            || (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
-    {
-        return None;
-    }
-    Some(brand)
-}
-
 /// The accessor at key position `pos` of `obj` (record `r`), if that key is
 /// an accessor.
 unsafe fn accessor_at(

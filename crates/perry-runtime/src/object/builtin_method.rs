@@ -8,8 +8,7 @@
 //! (`builtin_proto`, step 3). While neither that prototype nor
 //! `%Object.prototype%` is shadowed and the receiver owns no property of the
 //! name (its kind's own proof: a plain array header, a Map or Set with no
-//! meta record, a weak collection whose layout owns no key and records no
-//! `[[Prototype]]`, a function shape over `Function.prototype` that lacks the
+//! meta record, a weak collection on its birth layout, a function shape over `Function.prototype` that lacks the
 //! key), the method the call reads is that family's builtin, which the
 //! compiler names: `js_bm_<name><argc>` calls its body directly.
 //!
@@ -142,19 +141,17 @@ unsafe fn set_ok(v: f64) -> bool {
     }) && pristine(BuiltinProto::Set)
 }
 
-/// A WeakMap (`brand` `CLASS_ID_WEAKMAP`) or WeakSet created by its own
-/// constructor whose layout owns no key and records no `[[Prototype]]`
-/// (`layout_probe::plain_weak_collection`) while its family's prototype and
-/// `%Object.prototype%` are pristine. The class id tells a direct instance
-/// from a subclass instance (also branded, inheriting through its class) and
-/// from a Promise (whose runtime class id is the same word).
+/// A WeakMap (`brand` `CLASS_ID_WEAKMAP`) or WeakSet still on its birth
+/// layout (`shapes::branded_birth_layout`: created by its own constructor,
+/// no own key, no `[[Prototype]]` of its own, no exotic mark; a subclass
+/// instance is born on another layout) while its family's prototype and
+/// `%Object.prototype%` are pristine. The layout word is the whole proof.
 #[inline(always)]
 unsafe fn weak_ok(v: f64, brand: u32) -> bool {
     heap_cell(v).is_some_and(|h| {
-        let obj = raw(v) as *const super::ObjectHeader;
         (*h).obj_type == crate::gc::GC_TYPE_OBJECT
-            && (*obj).class_id == brand
-            && super::layout_probe::plain_weak_collection(obj) == Some(brand)
+            && (*(raw(v) as *const super::ObjectHeader)).parent_class_id
+                == super::shapes::branded_birth_layout(brand)
     }) && pristine(if brand == crate::weakref::CLASS_ID_WEAKSET {
         BuiltinProto::WeakSet
     } else {

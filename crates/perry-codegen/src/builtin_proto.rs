@@ -545,6 +545,35 @@ pub(crate) fn builtin_method(method: &str, argc: usize) -> Option<String> {
         .map(|(m, n, _)| format!("js_bm_{m}{n}"))
 }
 
+/// A WeakMap/WeakSet method call on a receiver whose layout word is its
+/// family's birth layout (Z2, `runtime_abi::WEAKMAP_BIRTH_LAYOUT`): the
+/// runtime operation it calls and, per admitting birth layout, the family
+/// whose `Pristine` the call needs. `has`/`delete` serve both families.
+pub(crate) fn weak_method_entry(
+    method: &str,
+    argc: usize,
+) -> Option<(&'static str, &'static [(u32, BuiltinProto)])> {
+    use crate::runtime_abi::{WEAKMAP_BIRTH_LAYOUT as WM, WEAKSET_BIRTH_LAYOUT as WS};
+    const MAP: &[(u32, BuiltinProto)] = &[(WM, BuiltinProto::WeakMap)];
+    const SET: &[(u32, BuiltinProto)] = &[(WS, BuiltinProto::WeakSet)];
+    const BOTH: &[(u32, BuiltinProto)] =
+        &[(WM, BuiltinProto::WeakMap), (WS, BuiltinProto::WeakSet)];
+    Some(match (method, argc) {
+        ("get", 1) => ("js_weakmap_get", MAP),
+        ("set", 2) => ("js_weakmap_set", MAP),
+        ("add", 1) => ("js_weakset_add", SET),
+        ("has", 1) => ("js_weakmap_has", BOTH),
+        ("delete", 1) => ("js_weakmap_delete", BOTH),
+        _ => return None,
+    })
+}
+
+/// Can a WeakMap or WeakSet answer `method` as a builtin (the Map and Set
+/// families' bits of [`builtin_method_families`])?
+pub(crate) fn weak_families(families: u8) -> bool {
+    families & (4 | 8) != 0
+}
+
 /// The families holding `method` as a builtin at any argument count.
 pub(crate) fn builtin_method_families(method: &str) -> u8 {
     BUILTIN_METHODS

@@ -105,6 +105,11 @@ pub unsafe fn try_weak_method_dispatch(
     let object =
         crate::JSValue::from_bits(recv.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>();
     let value = crate::object::js_object_get_field_by_name(object, key);
+    // The Get found no function (a collection whose `[[Prototype]]` is null
+    // or lacks the method): the call throws, as any other receiver's would.
+    if !crate::collection_iter::is_callable(f64::from_bits(value.bits())) {
+        crate::collection_iter::throw_type_error(&format!("{method_name} is not a function"));
+    }
     let args: Vec<_> = arguments.iter().map(|arg| arg.get_nanbox_f64()).collect();
     let result = crate::closure::call_value(
         f64::from_bits(value.bits()),
