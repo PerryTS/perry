@@ -25,9 +25,12 @@ cd "$(dirname "$0")/.."
 # Fragments are root-level regular files named <PR>-<slug>.md; README.md is
 # documentation, not an entry. Sort by PR number descending (newest change
 # first in the notes). Contract matches the changeset-gate job in test.yml
-# and the create-release job in release-packages.yml.
+# and the create-release job in release-packages.yml. A fragment that landed
+# without its PR number (<slug>.md) is still an entry: it follows the
+# numbered ones, by name.
 list_fragments() {
   find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | sort -t/ -k2 -rn
+  find changelog.d -maxdepth 1 -type f -name '*.md' ! -name '[0-9]*' ! -name README.md | sort
 }
 
 concat_fragments() {
@@ -58,7 +61,7 @@ tag="${1:?usage: cut_release_notes.sh [--notes-only | --fold] vX.Y.Z}"
 if [ "$mode" = "fold" ]; then
   # Only the fragments that existed at the release SHA were folded into the
   # release notes — remove exactly those.
-  frags=$(git ls-tree --name-only "$tag" -- changelog.d/ | grep -E '^changelog\.d/[0-9][^/]*\.md$' || true)
+  frags=$(git ls-tree --name-only "$tag" -- changelog.d/ | grep -E '^changelog\.d/[^/]+\.md$' | grep -vx 'changelog.d/README.md' || true)
   [ -n "$frags" ] || { echo "ERROR: no fragments recorded at $tag — nothing to fold." >&2; exit 1; }
   removed=0
   while IFS= read -r f; do
