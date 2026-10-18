@@ -75,11 +75,15 @@ fn a_closure_birth_attaches_its_layout() {
         }
     }
     assert!(
-        attaching.iter().any(|f| f.contains("@perry_fn_main_ts__mk(")),
+        attaching
+            .iter()
+            .any(|f| f.contains("@perry_fn_main_ts__mk(")),
         "the function birth attaches no layout: {attaching:?}"
     );
     assert!(
-        attaching.iter().any(|f| f.contains("@perry_closure_main_ts__")),
+        attaching
+            .iter()
+            .any(|f| f.contains("@perry_closure_main_ts__")),
         "the closure birth attaches no layout: {attaching:?}"
     );
 

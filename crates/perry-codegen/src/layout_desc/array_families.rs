@@ -19,7 +19,7 @@ enum Node<'a> {
     Local(usize, u32),
     Global(u32),
     Return(usize),
-    Field(&'a str),
+    Field(u32, &'a str),
 }
 fn expr<'a>(e: &Expr) -> Node<'a> {
     Node::Expr(e as *const Expr as usize)
@@ -47,6 +47,19 @@ impl<'a> Flow<'a> {
     fn edge(&mut self, source: Node<'a>, target: Node<'a>) {
         let (source, target) = (self.node(source), self.node(target));
         self.edges.push((source, target));
+    }
+    // Property spelling alone is not a holder identity: joining every `x.items`
+    // in a module makes unrelated array births reserve the union of their keys.
+    // Only follow fields of the same directly identifiable receiver. An alias
+    // or a dynamic receiver we cannot connect simply uses ordinary named adds;
+    // a birth layout is a reservation, not a completeness assertion.
+    fn field(&mut self, scope: usize, object: &Expr, key: &'a str) -> Node<'a> {
+        let receiver = match object {
+            Expr::LocalGet(id) => Node::Local(scope, *id),
+            Expr::GlobalGet(id) => Node::Global(*id),
+            _ => expr(object),
+        };
+        Node::Field(self.node(receiver), key)
     }
     fn expression(&mut self, scope: usize, e: &'a Expr) {
         let here = expr(e);
@@ -86,8 +99,11 @@ impl<'a> Flow<'a> {
                 self.edge(expr(value), Node::Local(scope, *id));
                 self.edge(expr(body), here);
             }
-            Expr::PropertyGet { property, .. } => {
-                self.edge(Node::Field(property), here);
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let field = self.field(scope, object, property);
+                self.edge(field, here);
             }
             Expr::PropertySet {
                 object,
@@ -95,7 +111,8 @@ impl<'a> Flow<'a> {
                 value,
             } => {
                 self.write(expr(object), property);
-                self.edge(expr(value), Node::Field(property));
+                let field = self.field(scope, object, property);
+                self.edge(expr(value), field);
                 self.edge(expr(value), here);
             }
             Expr::IndexSet {
@@ -105,7 +122,8 @@ impl<'a> Flow<'a> {
             } => {
                 if let Expr::String(key) = index.as_ref() {
                     self.write(expr(object), key);
-                    self.edge(expr(value), Node::Field(key));
+                    let field = self.field(scope, object, key);
+                    self.edge(expr(value), field);
                 }
             }
             Expr::PutValueSet {
@@ -122,18 +140,21 @@ impl<'a> Flow<'a> {
             } => {
                 if let Expr::String(key) = key.as_ref() {
                     self.write(expr(receiver), key);
-                    self.edge(expr(value), Node::Field(key));
+                    let field = self.field(scope, receiver, key);
+                    self.edge(expr(value), field);
                 }
                 self.edge(expr(value), here);
             }
-            Expr::IndexGet { index, .. } => {
+            Expr::IndexGet { object, index } => {
                 if let Expr::String(key) = index.as_ref() {
-                    self.edge(Node::Field(key), here);
+                    let field = self.field(scope, object, key);
+                    self.edge(field, here);
                 }
             }
-            Expr::ReflectGet { key, .. } => {
+            Expr::ReflectGet { target, key, .. } => {
                 if let Expr::String(key) = key.as_ref() {
-                    self.edge(Node::Field(key), here);
+                    let field = self.field(scope, target, key);
+                    self.edge(field, here);
                 }
             }
             Expr::PropertyUpdate {
@@ -146,7 +167,8 @@ impl<'a> Flow<'a> {
             }
             Expr::Object(props) => {
                 for (key, value) in props {
-                    self.edge(expr(value), Node::Field(key));
+                    let field = self.field(scope, e, key);
+                    self.edge(expr(value), field);
                 }
             }
             Expr::FuncRef(id) => {
@@ -207,6 +229,12 @@ impl<'a> Flow<'a> {
                     id, init: Some(e), ..
                 } if !self.snapshots.contains(id) => {
                     self.edge(expr(e), Node::Local(scope, *id));
+                    if let Expr::Object(props) = e {
+                        for (key, value) in props {
+                            let field = self.field(scope, &Expr::LocalGet(*id), key);
+                            self.edge(expr(value), field);
+                        }
+                    }
                     self.expression(scope, e);
                 }
                 Stmt::Return(Some(e)) => {
