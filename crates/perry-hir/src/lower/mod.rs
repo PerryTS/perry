@@ -83,6 +83,7 @@ mod eval_super_scan;
 pub(crate) mod fn_ctor_env;
 mod global_eval_hoist;
 mod run_once;
+pub use run_once::class_names as run_once_class_names;
 mod shared_mutable_capture;
 pub(crate) mod type_widening;
 pub(crate) mod unrebound_params;

@@ -70,6 +70,37 @@ pub(crate) fn run_once_class_spans(module: &ast::Module) -> HashSet<(u32, u32)> 
     HashSet::new()
 }
 
+/// Original-source class declarations at structurally run-once positions.
+/// A duplicated spelling is refused: HIR may rename it during lowering.
+pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
+    struct Names {
+        spans: HashSet<(u32, u32)>,
+        counts: HashMap<String, usize>,
+        once: HashSet<String>,
+    }
+    impl Visit for Names {
+        fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
+            let name = c.ident.sym.to_string();
+            *self.counts.entry(name.clone()).or_default() += 1;
+            if self.spans.contains(&(c.class.span.lo.0, c.class.span.hi.0)) {
+                self.once.insert(name);
+            }
+            c.visit_children_with(self);
+        }
+    }
+    let mut names = Names {
+        spans: run_once_class_spans(module),
+        counts: HashMap::new(),
+        once: HashSet::new(),
+    };
+    module.visit_with(&mut names);
+    names
+        .once
+        .into_iter()
+        .filter(|name| names.counts[name] == 1)
+        .collect()
+}
+
 #[derive(Default)]
 struct IdentCounts {
     counts: HashMap<String, u32>,

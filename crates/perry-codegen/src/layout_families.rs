@@ -137,6 +137,9 @@ fn variant_slots(
 /// its digest is in every module's object-cache key.
 #[derive(Debug, Default, Clone)]
 pub struct ProgramLayouts {
+    /// Structurally run-once, closed-world evaluated declarations. Compile
+    /// facts only; generated code adds no flag, table or observation state.
+    pub run_once_evaluated: BTreeSet<u32>,
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
     /// Classes not admitted, counted once each by the first failed proof.
@@ -1258,6 +1261,68 @@ pub fn compute<'a>(
     }
     layouts.late_total = late as u32;
     layouts.refused = refused;
+    // A module body is once per record; exposing the CommonJS loader/cache
+    // can create another record. Refuse globally under any such capability.
+    let closed = !perry_hir::has_deferred_dynamic_code_sites()
+        && modules.iter().all(|m| {
+            m.class_family_syntax
+                .as_ref()
+                .is_some_and(|s| s.module_capability_uses == 0)
+        });
+    if closed {
+        for module in &modules {
+            let syntax = module
+                .class_family_syntax
+                .as_ref()
+                .expect("closed original syntax");
+            let mut candidates: BTreeSet<String> = syntax.run_once_classes.clone();
+            perry_hir::for_each_module_expr(module, &mut |e| {
+                if let Expr::ClassExprFresh {
+                    template,
+                    evaluation_owner,
+                    named_statics,
+                    computed_keys,
+                    computed_statics,
+                    static_init_order,
+                    captured_args,
+                    shared_first_evaluation,
+                    evaluated_parent,
+                    definition_steps,
+                } = e
+                {
+                    if evaluation_owner.is_some()
+                        || !named_statics.is_empty()
+                        || !computed_keys.is_empty()
+                        || !computed_statics.is_empty()
+                        || !static_init_order.is_empty()
+                        || !captured_args.is_empty()
+                        || shared_first_evaluation.is_some()
+                        || evaluated_parent.is_none()
+                        || !definition_steps.is_empty()
+                    {
+                        candidates.remove(template);
+                    }
+                }
+            });
+            for c in &module.classes {
+                if c.extends_expr.is_some()
+                    && candidates.contains(&c.name)
+                    && layouts.families.contains_key(&c.id)
+                {
+                    layouts.run_once_evaluated.insert(c.id);
+                }
+            }
+        }
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    layouts.digest.hash(&mut hash);
+    layouts.run_once_evaluated.hash(&mut hash);
+    layouts.digest = hash.finish();
+    if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
+        eprintln!("perry: canonical run-once evaluated classes: {} (closed module capabilities: {closed})", layouts.run_once_evaluated.len());
+    }
+
     if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
         eprintln!("{}", layouts.report());
     }

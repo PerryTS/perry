@@ -55,32 +55,48 @@ fn evaluated_parent_is_a_candidate_only_with_its_admitted_family() {
     assert!(births(&leaf, &ProgramLayouts::default()).is_empty());
 }
 #[test]
-fn original_top_level_commonjs_class_is_distinct_from_an_unproven_nested_class() {
-    let (mut leaf, layouts, _) = fixture();
+fn nested_evaluation_needs_the_structural_run_once_program_proof() {
+    let (mut leaf, mut layouts, _) = fixture();
     leaf.classes[0].is_nested = true;
-    assert!(
-        births(&leaf, &layouts).is_empty(),
-        "an arbitrary nested class stays refused"
+    assert!(births(&leaf, &layouts).is_empty());
+    // This fact is computed from original-source structure and the program
+    // capability census, independently of runtime observations.
+    layouts.run_once_evaluated.insert(leaf.classes[0].id);
+    assert_eq!(births(&leaf, &layouts).len(), 1);
+    layouts.run_once_evaluated.clear();
+    assert!(births(&leaf, &layouts).is_empty());
+}
+#[test]
+fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
+    let mut base = module(
+        "/base",
+        "export class Base { constructor() { this.base = 1; } }",
+        100,
     );
-    let marker = module(
-        "/marker",
-        "import {createRequire as __perry_cjs_create_require} from 'module';",
-        0,
-    );
-    leaf.imports.extend(marker.imports);
+    let mut leaf = module("/leaf", "import {Base} from '/base'; class Leaf extends Base { constructor() { super(); this.leaf = 2; } own() { return this.leaf; } }", 200);
+    base.class_family_syntax = Some(perry_hir::ir::ClassFamilySyntax::default());
     leaf.class_family_syntax = Some(perry_hir::ir::ClassFamilySyntax {
-        parents: [("Leaf".into(), ("/base".into(), "Base".into()))].into(),
+        run_once_classes: ["Leaf".into()].into(),
         ..Default::default()
     });
-    assert!(leaf.is_commonjs_wrap());
-    assert_eq!(
-        births(&leaf, &layouts).len(),
-        1,
-        "the original top-level declaration is admitted"
-    );
-    leaf.class_family_syntax.as_mut().unwrap().parents.clear();
-    assert!(
-        births(&leaf, &layouts).is_empty(),
-        "the source proof is necessary"
-    );
+    let proof = |base: &Module, leaf: &Module| {
+        compute([("/base", base), ("/leaf", leaf)], true, &BTreeMap::new())
+    };
+    let cid = leaf.classes[0].id;
+    assert!(proof(&base, &leaf).run_once_evaluated.contains(&cid));
+    base.class_family_syntax
+        .as_mut()
+        .unwrap()
+        .module_capability_uses = 1;
+    assert!(!proof(&base, &leaf).run_once_evaluated.contains(&cid));
+    base.class_family_syntax
+        .as_mut()
+        .unwrap()
+        .module_capability_uses = 0;
+    leaf.class_family_syntax
+        .as_mut()
+        .unwrap()
+        .run_once_classes
+        .clear();
+    assert!(!proof(&base, &leaf).run_once_evaluated.contains(&cid));
 }

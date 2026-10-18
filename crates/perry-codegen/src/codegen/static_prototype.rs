@@ -16,25 +16,16 @@ pub(crate) fn collect(
         .iter()
         .filter_map(|c| {
             let candidate = (|| {
-                // CommonJS's wrapper makes an original top-level declaration
-                // HIR-nested. The original-syntax parent proof and an admitted
-                // family identify this case; genuinely fresh evaluations still
-                // refuse below.
-                let closed_cjs = module.is_commonjs_wrap()
-                    && module
-                        .class_family_syntax
-                        .as_ref()
-                        .is_some_and(|syntax| syntax.parents.contains_key(&c.name))
-                    && ids
-                        .get(&c.name)
-                        .is_some_and(|cid| layouts.families.contains_key(cid));
+                let canonical_once = ids
+                    .get(&c.name)
+                    .is_some_and(|cid| layouts.run_once_evaluated.contains(cid));
                 let refused = if c.is_imported_stub() {
                     Some("imported-stub")
                 } else if c.is_literal_shape() {
                     Some("literal")
-                } else if c.is_nested && !closed_cjs {
+                } else if c.is_nested && !canonical_once {
                     Some("nested")
-                } else if fresh.contains(&c.name) {
+                } else if fresh.contains(&c.name) && !canonical_once {
                     Some("fresh-evaluation")
                 } else if c.specialized_from.is_some() {
                     Some("specialized")

@@ -605,6 +605,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             shared_first_evaluation,
             ..
         } => {
+            // Original-source structure plus the program's closed loader
+            // census proved this declaration executes at most once. Preserve
+            // heritage evaluation at this point; the ordinary declaration
+            // birth checks its actual parent and canonical prototype identity.
+            if let Some(cid) = ctx
+                .class_ids
+                .get(template)
+                .copied()
+                .filter(|cid| ctx.program_layouts.run_once_evaluated.contains(cid))
+            {
+                if let Expr::ClassExprFresh {
+                    evaluated_parent: Some(parent),
+                    ..
+                } = expr
+                {
+                    lower_expr(
+                        ctx,
+                        &Expr::RegisterClassParentDynamic {
+                            class_name: template.clone(),
+                            parent_expr: parent.clone(),
+                        },
+                    )?;
+                    return Ok(super::emit_class_value_cached(ctx, cid));
+                }
+            }
             // #11759 (c′): the first evaluation is the shared class; the
             // fresh class object below is every later one.
             if let Some(first_init) = shared_first_evaluation {

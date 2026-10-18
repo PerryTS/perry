@@ -66,6 +66,8 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.writes.hash(h);
+                syntax.run_once_classes.hash(h);
+                syntax.module_capability_uses.hash(h);
             }
         }
         imports.hash(h);
