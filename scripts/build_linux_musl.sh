@@ -24,12 +24,18 @@ case "$target" in
     rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_x86_64_unknown_linux_musl=musl-gcc
     export AR_x86_64_unknown_linux_musl=ar
+    # cc-rs' default, x86_64-linux-musl-ranlib, does not exist (CMake's static
+    # archive step in libz-ng-sys).
+    export RANLIB_x86_64_unknown_linux_musl=ranlib
     ;;
   aarch64-unknown-linux-musl)
     expected_machine=aarch64
     rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_aarch64_unknown_linux_musl=musl-gcc
     export AR_aarch64_unknown_linux_musl=ar
+    # cc-rs' default, aarch64-linux-musl-ranlib, does not exist (CMake's static
+    # archive step in libz-ng-sys).
+    export RANLIB_aarch64_unknown_linux_musl=ranlib
     ;;
   *)
     echo "unsupported musl release target: $target" >&2

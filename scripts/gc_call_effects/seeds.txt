@@ -101,7 +101,7 @@ panic regex ^core::slice::index::|^core::str::slice_error_fail|^core::cell::pani
 # value's destructor never executes inside a helper.
 teardown regex ^perry_runtime::arena::thread_exit:: -- thread-exit arena release, run from the arena's TLS destructor
 teardown regex ^<perry_runtime::arena::block::Arena as core::ops::drop::Drop>::drop$ -- the arena's TLS destructor
-teardown regex ^(core::ptr::drop_glue|std::sys::thread_local::native::lazy::destroy)::<perry_runtime::tls_hot::HotCell< -- a perry_thread_local! value's destructor (TLS teardown)
+teardown regex ^(core::ptr::drop_glue|std::sys::thread_local::native::lazy::destroy|perry_runtime::tls_os_pool::destroy)::<perry_runtime::tls_hot::HotCell< -- a perry_thread_local! value's destructor (TLS teardown); on Android the value lives in tls_os_pool, whose destroy::<T> runs only from the pool's pthread-key destructor (drop_pool)
 teardown regex ^<perry_runtime::state::StateOwner as core::ops::drop::Drop>::drop$ -- the runtime state's TLS owner (crates/perry-runtime/src/state.rs:79): freed at thread exit only. The static edge from `init_state` (state.rs:108) is the destructor of the PREVIOUS STATE_OWNER value in `*o.borrow_mut() = Some(..)`; that slot is written only there, init_state runs only while STATE_PTR is null, and after the first init STATE_PTR stays set until StateOwner::drop itself runs (state.rs:81), at which point the slot is being destroyed and try_with fails. So the previous value is always None
 teardown regex ^std::sys::thread_local::destructors::|^std::sys::thread_local::guard:: -- std's TLS destructor runner: thread exit only
 

@@ -597,8 +597,13 @@ jobs:
         run: |
           set -euo pipefail
           mbx_bin=$(command -v mbx)
-          { grep -rIhoE --include=build_script_build '/[^ "]*/\.mbx-build-script-shims/[0-9a-f]+/mbx' target*/ 2>/dev/null || true; } \
-            | sort -u | while IFS= read -r shim; do
+          # A wrapper names its shim relative to its own directory
+          # (<dir>/../../../../.mbx-build-script-shims/<id>/mbx).
+          { grep -rlI --include=build_script_build '\.mbx-build-script-shims/' target*/ 2>/dev/null || true; } \
+            | while IFS= read -r wrapper; do
+                rel=$(grep -oE '(\.\./)*\.mbx-build-script-shims/[0-9a-f]+/mbx' "$wrapper" | head -1)
+                [ -n "$rel" ] || continue
+                shim="$(dirname "$wrapper")/$rel"
                 if [ ! -e "$shim" ]; then
                   mkdir -p "$(dirname "$shim")"
                   cp "$mbx_bin" "$shim"
@@ -776,8 +781,13 @@ jobs:
           # fresh and mbx never recreates the shim (psm: exit 126). Put the
           # pinned mbx back at every shim path a restored wrapper names.
           mbx_bin=$(command -v mbx)
-          { grep -rIhoE --include=build_script_build '/[^ "]*/\.mbx-build-script-shims/[0-9a-f]+/mbx' target*/ 2>/dev/null || true; } \
-            | sort -u | while IFS= read -r shim; do
+          # A wrapper names its shim relative to its own directory
+          # (<dir>/../../../../.mbx-build-script-shims/<id>/mbx).
+          { grep -rlI --include=build_script_build '\.mbx-build-script-shims/' target*/ 2>/dev/null || true; } \
+            | while IFS= read -r wrapper; do
+                rel=$(grep -oE '(\.\./)*\.mbx-build-script-shims/[0-9a-f]+/mbx' "$wrapper" | head -1)
+                [ -n "$rel" ] || continue
+                shim="$(dirname "$wrapper")/$rel"
                 if [ ! -e "$shim" ]; then
                   mkdir -p "$(dirname "$shim")"
                   cp "$mbx_bin" "$shim"
@@ -1132,10 +1142,27 @@ jobs:
             $linkerxx = Join-Path $toolchain "aarch64-linux-android$($env:ANDROID_API_LEVEL)-clang++.exe"
           }
           $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $linker
-          $env:CC_aarch64_linux_android = $linker
-          $env:CXX_aarch64_linux_android = $linkerxx
-          $env:AR_aarch64_linux_android = Join-Path $toolchain "llvm-ar.exe"
-          $env:RANLIB_aarch64_linux_android = Join-Path $toolchain "llvm-ranlib.exe"
+          # perry-stdlib's crypto feature builds vendored OpenSSL, whose
+          # Unix-target Configure needs a perl with Unix paths (not
+          # Strawberry's) and whose build runs `make` recipes under sh. Take
+          # both from MSYS2, appended to PATH so its tools shadow nothing.
+          # sh cannot run the NDK's .cmd wrappers or backslash paths, so the C
+          # tools are the NDK's clang/llvm executables by forward-slash path;
+          # the API level comes from the --target flags below.
+          $msys = "C:\msys64\usr\bin"
+          if (-not (Test-Path (Join-Path $msys "bash.exe"))) {
+            Write-Error "::error::MSYS2 not found at C:\msys64 (vendored OpenSSL needs its perl and make)"
+            exit 1
+          }
+          & (Join-Path $msys "bash.exe") -lc "pacman -S --noconfirm --needed make perl"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$env:PATH;$msys"
+          $env:OPENSSL_SRC_PERL = Join-Path $msys "perl.exe"
+          $tools = $toolchain -replace '\\', '/'
+          $env:CC_aarch64_linux_android = "$tools/clang.exe"
+          $env:CXX_aarch64_linux_android = "$tools/clang++.exe"
+          $env:AR_aarch64_linux_android = "$tools/llvm-ar.exe"
+          $env:RANLIB_aarch64_linux_android = "$tools/llvm-ranlib.exe"
           # As on the Linux Android legs: CMake's Android support compiles with
           # the NDK's bare clang (API 21), and cc-rs' `--target=<triple>` (no
           # API) overrides the wrapper's level. Name the API last.
@@ -1697,8 +1724,13 @@ jobs:
           # fresh and mbx never recreates the shim (psm: exit 126). Put the
           # pinned mbx back at every shim path a restored wrapper names.
           mbx_bin=$(command -v mbx)
-          { grep -rIhoE --include=build_script_build '/[^ "]*/\.mbx-build-script-shims/[0-9a-f]+/mbx' target*/ 2>/dev/null || true; } \
-            | sort -u | while IFS= read -r shim; do
+          # A wrapper names its shim relative to its own directory
+          # (<dir>/../../../../.mbx-build-script-shims/<id>/mbx).
+          { grep -rlI --include=build_script_build '\.mbx-build-script-shims/' target*/ 2>/dev/null || true; } \
+            | while IFS= read -r wrapper; do
+                rel=$(grep -oE '(\.\./)*\.mbx-build-script-shims/[0-9a-f]+/mbx' "$wrapper" | head -1)
+                [ -n "$rel" ] || continue
+                shim="$(dirname "$wrapper")/$rel"
                 if [ ! -e "$shim" ]; then
                   mkdir -p "$(dirname "$shim")"
                   cp "$mbx_bin" "$shim"
