@@ -149,6 +149,12 @@ impl Gen<'_> {
             Expr::NativeModuleRef(s) if native_capability(s) => {
                 Some(format!("native loader module {s}"))
             }
+            Expr::NativeMethodCall { module, method, .. }
+                if matches!(module.as_str(), "bun" | "deno")
+                    && matches!(method.as_str(), "dlopen" | "plugin") =>
+            {
+                Some(format!("native loader operation {module}.{method}"))
+            }
             Expr::NativeMethodCall {
                 module,
                 method,
@@ -514,7 +520,14 @@ impl<'a> Reach<'a> {
             if !seen.insert(t) {
                 continue;
             }
-            let private_loader = name.is_some_and(|n| n.starts_with("__perry_cjs_"));
+            let private_loader = name.is_some_and(|n| {
+                n.starts_with("__perry_cjs_")
+                    || n.starts_with("__cjs_")
+                    || (n.starts_with("__perry_")
+                        && (n.contains("path_module")
+                            || n.contains("cjs_main_module")
+                            || n.starts_with("__perry_require_")))
+            });
             let require = self.require_token(t, &mut FxHashSet::default())
                 && name.is_none_or(|n| {
                     matches!(
@@ -539,7 +552,12 @@ impl<'a> Reach<'a> {
                                 || name.is_some_and(|n| {
                                     matches!(
                                         n,
-                                        "cache"
+                                        "Function"
+                                            | "eval"
+                                            | "module"
+                                            | "Bun"
+                                            | "Deno"
+                                            | "cache"
                                             | "_cache"
                                             | "require"
                                             | "mainModule"
@@ -560,7 +578,14 @@ impl<'a> Reach<'a> {
                                 || name.is_some_and(|n| {
                                     matches!(
                                         n,
-                                        "require" | "module" | "Function" | "eval" | "Bun" | "Deno"
+                                        "require"
+                                            | "module"
+                                            | "Function"
+                                            | "eval"
+                                            | "Bun"
+                                            | "Deno"
+                                            | "dlopen"
+                                            | "createRequire"
                                     )
                                 })
                         }

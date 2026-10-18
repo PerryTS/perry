@@ -52,7 +52,6 @@ impl<'a> Gen<'a> {
         }
         self.m.calls.push(CallSite {
             reach_parent: None,
-            reach_owner: self.m.reach_owner,
             reach_user: self.m.reach_user,
             this,
             args,

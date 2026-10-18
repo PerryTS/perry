@@ -211,7 +211,6 @@ pub struct CallSite {
     /// The summary call which created this callback/protocol call. Gen calls
     /// have no parent; parentless generation helpers retain their body owner.
     pub reach_parent: Option<CallId>,
-    pub reach_owner: Option<FnIdx>,
     pub reach_user: bool,
     pub this: ThisArg,
     pub args: Vec<NodeId>,

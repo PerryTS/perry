@@ -91,3 +91,11 @@ fn reflection_and_aliased_builtins_keep_capability_edges() {
         "const own={get x(){return process.getBuiltinModule('module');}}; const get=Object.getOwnPropertyDescriptor; get(own,'x').get();",
     ] {let p=facts(s);assert!(p.module_reentry.is_some(),"{s}: {}",p.dump_text());}
 }
+
+#[test]
+fn a_top_receiver_can_name_a_global_evaluator() {
+    let p = facts(
+        "function source(x:any){return x.Function(process.argv[2]);} source(globalThis.custom);",
+    );
+    assert!(p.module_reentry.is_some(), "{}", p.dump_text());
+}
