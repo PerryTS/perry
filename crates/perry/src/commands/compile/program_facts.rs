@@ -83,6 +83,13 @@ pub(crate) fn run(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(64),
         ),
+        // Widening diagnostics (off by default): the census of widened sets,
+        // and the group what-if (a precision ceiling, never a real build).
+        widen_census: std::env::var("PERRY_FACTS_WIDEN_CENSUS").is_ok_and(|v| v == "1"),
+        widen_groups: std::env::var("PERRY_FACTS_WID_GROUPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&g| g != 0),
         // Points-to entries bound (memory); past it the program gets no facts.
         max_pts: Some(
             std::env::var("PERRY_FACTS_MAX_PTS")

@@ -59,6 +59,14 @@ pub struct FactsConfig {
     pub max_work: Option<u64>,
     /// Widening bound on one points-to set (escape + ⊤ beyond it).
     pub widen_k: Option<usize>,
+    /// Diagnostics: print what each set holds when it widens (token kinds
+    /// and its groups under candidate partitions, `solve::widen_diag`).
+    pub widen_census: bool,
+    /// What-if, never for real builds: a set past the widening bound stays
+    /// exact while its tokens fall into at most this many groups. The
+    /// precision ceiling of any group-level widening (reports
+    /// 2026-10-18-wid-design.md); 0/None = off.
+    pub widen_groups: Option<usize>,
     /// The driver knows the program can run interpreted code (a deferred
     /// `new Function`/`eval` site or `node:vm`). Not a kill (decision 150):
     /// interpreted code is the ⊤ summary node; see
@@ -91,6 +99,8 @@ pub struct Stats {
     pub profile: Vec<(String, u64, f64)>,
     pub pts_entries: u64,
     pub widened_nodes: u64,
+    /// Sets the `widen_groups` what-if kept exact past the widening bound.
+    pub widen_kept: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
 }
@@ -153,6 +163,8 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.widen_k = cfg.widen_k.unwrap_or(0);
+    g.m.widen_census = cfg.widen_census;
+    g.m.widen_groups = cfg.widen_groups.unwrap_or(0);
     g.register_all();
     g.link_exports();
     g.walk_all();
@@ -272,6 +284,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         aborted: g.m.aborted,
         pts_entries: g.m.pts_entries,
         widened_nodes: g.m.widened_nodes,
+        widen_kept: g.m.widen_kept,
         big_nodes: big_nodes(&g.m),
         top_calls: g.m.top_calls,
         profile: {

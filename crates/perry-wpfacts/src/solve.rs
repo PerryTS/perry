@@ -11,6 +11,7 @@
 use crate::builtins;
 
 mod call_and_construct;
+mod widen_diag;
 use crate::model::*;
 
 impl Model {
@@ -52,9 +53,17 @@ impl Model {
                     self.aborted = true;
                 }
             }
-            if self.widen_k != 0 && node.pts.len() > self.widen_k && !node.internal {
+            if self.widen_k != 0
+                && node.pts.len() > self.widen_k
+                && !node.internal
+                && !self.widen_groups_keep(n)
+            {
+                if self.widen_census {
+                    self.widen_census_line(n);
+                }
                 // Sound widening: the members escape (unknown code may do
                 // anything with them) and the set becomes ⊤.
+                let node = &mut self.nodes[n as usize];
                 node.widened = true;
                 for t in node.pts.to_sorted() {
                     if t != TOP {
