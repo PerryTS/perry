@@ -678,9 +678,18 @@ fn unread_field_aggregate_never_widens_or_escapes_its_members() {
         let field = m.field(holder, key);
         m.add_tok(field, value);
     }
+    assert!(!m.all_fields.contains_key(&holder));
     let all = m.all_fields(holder);
+    let late_key = m.atom("late");
+    let late_value = m.tok(TokKind::ModNs(9));
+    let late = m.field(holder, late_key);
+    m.add_tok(late, late_value);
+    values.push(late_value);
     m.solve();
     assert!(!m.nodes[all as usize].widened);
+    assert!(values
+        .iter()
+        .all(|&v| m.nodes[all as usize].pts.contains_tok(v)));
     assert!(values.iter().all(|&v| !m.is_escaped(v)));
 }
 

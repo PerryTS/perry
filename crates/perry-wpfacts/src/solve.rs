@@ -534,8 +534,9 @@ impl Model {
             let any = self.field_any(t);
             self.edge(any, n);
         }
-        let all = self.all_fields(t);
-        self.edge(n, all);
+        if let Some(&all) = self.all_fields.get(&t) {
+            self.edge(n, all);
+        }
         n
     }
 
@@ -546,8 +547,9 @@ impl Model {
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
-        let all = self.all_fields(t);
-        self.edge(n, all);
+        if let Some(&all) = self.all_fields.get(&t) {
+            self.edge(n, all);
+        }
         // Arrays and primitive boxes hold primitives at unknown indices.
         n
     }
@@ -563,6 +565,16 @@ impl Model {
         self.nodes[n as usize].internal = true;
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
+        // Only a real consumer needs this union. Replay existing fields;
+        // fields created later subscribe through field()/field_any().
+        let keys = self.field_keys.get(&t).cloned().unwrap_or_default();
+        for key in keys {
+            let field = self.fields[&(t, key)];
+            self.edge(field, n);
+        }
+        if let Some(&any) = self.field_any.get(&t) {
+            self.edge(any, n);
+        }
         n
     }
 
