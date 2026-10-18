@@ -461,6 +461,8 @@ fn a_refused_static_request_keeps_the_general_born_final_shape() {
         requested,
         crate::value::TAG_NULL,
     ));
+    // The builder's caller has already minted the class function object.
+    let _ = class_constructor_ref_value(cid);
     let value = super::decl_prototype_birth::decl_prototype_born_final(cid, crate::value::TAG_NULL)
         .expect("the actual-parent shape needs no compiled identity");
     let obj = object_of(value);
