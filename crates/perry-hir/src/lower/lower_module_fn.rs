@@ -929,6 +929,8 @@ pub fn lower_module_full_with_platform_globals(
     // literal machinery (shape-cached keys, typed slots, direct stores)
     // instead of N dynamic transition writes. `None` (the common case for
     // modules without candidates) lowers the original with no clone.
+    let aliased = module_decl::rewrite_import_equals_aliases(ast_module);
+    let ast_module = aliased.as_ref().unwrap_or(ast_module);
     let specialized = crate::static_dynamic_code::specialize(ast_module);
     let ast_module = specialized.as_ref().unwrap_or(ast_module);
     let folded = super::builder_fold::fold_builder_sequences(ast_module);

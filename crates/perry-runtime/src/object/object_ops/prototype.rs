@@ -501,6 +501,16 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             f64::from_bits(TAG_NULL)
         }
     };
+    // Class constructors own their actual parent edge. The definition-time
+    // native parent need not appear in the legacy override/parent tables.
+    if let Some(class_id) = crate::object::class_value::class_value_id(obj_value) {
+        let parent = crate::object::class_value::class_prototype_addr(class_id);
+        return if parent == 0 {
+            f64::from_bits(TAG_NULL)
+        } else {
+            crate::value::js_nanbox_pointer(parent as i64)
+        };
+    }
     if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
         // derived answer below — it IS the constructor's [[Prototype]].

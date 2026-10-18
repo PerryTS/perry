@@ -84,6 +84,20 @@ pub(in crate::node_stream) fn write_chunk_to_pipe_destinations(stream: f64, chun
         }
         let dest_scope = RuntimeHandleScope::new();
         let dest = dest_scope.root_nanbox_f64(dest);
+        if !is_classic_stream_instance_value(dest.get_nanbox_f64()) {
+            let ret = unsafe {
+                crate::runtime_state_key!(b"write").call_value(
+                    dest.get_nanbox_f64(),
+                    [chunk.get_nanbox_f64()].as_ptr(),
+                    1,
+                )
+            };
+            if ret.to_bits() == TAG_FALSE {
+                let _ = pause_readable_stream(stream.get_nanbox_f64());
+                add_pipe_drain_listener(stream.get_nanbox_f64(), dest.get_nanbox_f64());
+            }
+            continue;
+        }
         let write = crate::object::js_object_get_own_field_or_undef(
             dest.get_nanbox_f64(),
             b"write".as_ptr(),
@@ -139,6 +153,16 @@ pub(in crate::node_stream) fn end_pipe_destinations(stream: f64) {
         if pipe_no_end_destination_contains(stream.get_nanbox_f64(), dest.get_nanbox_f64()) {
             continue;
         }
-        request_pipe_destination_finish(dest.get_nanbox_f64());
+        if is_classic_stream_instance_value(dest.get_nanbox_f64()) {
+            request_pipe_destination_finish(dest.get_nanbox_f64());
+        } else {
+            unsafe {
+                crate::runtime_state_key!(b"end").call_value(
+                    dest.get_nanbox_f64(),
+                    std::ptr::null(),
+                    0,
+                );
+            }
+        }
     }
 }

@@ -447,6 +447,120 @@ mod tests {
         ));
     }
     #[test]
+    fn constructor_statics2_undefined_getter_is_invoked_once_by_the_slow_entry() {
+        const CHILD: u32 = 0x7611_0024;
+        static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        extern "C" fn getter() -> f64 {
+            READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        READS.store(0, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"UndefinedChild".as_ptr(), 14);
+            crate::object::class_registry::js_register_class_static_getter(
+                CHILD as i64,
+                b"undefinedStatic".as_ptr(),
+                15,
+                getter as *const () as usize as i64,
+            );
+        }
+        let child = crate::object::class_value::class_value_ptr(CHILD);
+        let key = crate::string::js_string_from_bytes(b"undefinedStatic".as_ptr(), 15);
+        let value = crate::object::field_get_set::js_object_get_field_slow(child as i64, key);
+        assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(READS.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+    #[test]
+    fn constructor_statics2_reserved_native_parent_is_the_reflected_parent() {
+        const CHILD: u32 = 0x7611_0023;
+        crate::object::native_module_registry::js_nm_install_stream();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent =
+            scope.root_nanbox_f64(bound_native_callable_export_value("stream", "Transform"));
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"ReservedChild".as_ptr(), 13);
+        }
+        crate::object::register_class(CHILD, 0xFFFF0074);
+        let child = crate::object::class_value::class_value(CHILD);
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(child).to_bits(),
+            parent.get_nanbox_u64(),
+        );
+    }
+    #[test]
+    fn constructor_statics2_subclass_own_values_and_live_parent_win() {
+        const CHILD: u32 = 0x7611_0022;
+        crate::object::native_module_registry::js_nm_install_stream();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent =
+            scope.root_nanbox_f64(bound_native_callable_export_value("stream", "Transform"));
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"Statics2Mutation".as_ptr(), 16);
+        }
+        crate::object::js_register_class_parent_dynamic(CHILD, parent.get_nanbox_f64());
+        let child = crate::object::class_value::class_value_ptr(CHILD) as usize;
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"getMaxListeners".as_ptr(),
+            15,
+        ));
+        let read = || {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::js_object_get_field_by_name(child as *const ObjectHeader, key).bits()
+            })
+        };
+        let original = scope.root_nanbox_u64(read());
+        assert!(crate::closure::is_closure_ptr(
+            (original.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        ));
+        for bits in [
+            crate::value::TAG_UNDEFINED,
+            crate::value::TAG_NULL,
+            41.0f64.to_bits(),
+        ] {
+            crate::closure::closure_set_dynamic_prop(
+                child,
+                "getMaxListeners",
+                f64::from_bits(bits),
+            );
+            assert_eq!(read(), bits, "an own value is a complete Get");
+        }
+        assert!(crate::closure::closure_delete_own_dynamic_prop(
+            child,
+            "getMaxListeners"
+        ));
+        assert_eq!(
+            read(),
+            original.get_nanbox_u64(),
+            "delete exposes the native ancestor"
+        );
+        let replacement = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
+        let replacement_value = replacement
+            .with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
+        crate::object::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(child as i64),
+            replacement_value,
+        );
+        assert_eq!(
+            read(),
+            crate::value::TAG_UNDEFINED,
+            "the definition parent is detached"
+        );
+        crate::object::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(child as i64),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        assert_eq!(
+            read(),
+            crate::value::TAG_UNDEFINED,
+            "null ends the static chain"
+        );
+        crate::object::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(child as i64),
+            parent.get_nanbox_f64(),
+        );
+        assert_eq!(read(), original.get_nanbox_u64());
+    }
+    #[test]
     fn constructor_statics2_deprecated_wrappers_share_parent_prototypes() {
         crate::object::native_module_registry::js_nm_install_crypto();
         for name in ["Hash", "Hmac"] {

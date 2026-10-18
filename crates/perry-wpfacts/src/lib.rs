@@ -19,6 +19,7 @@
 pub mod bindings;
 mod builtins;
 mod ctor_phase;
+pub mod delta;
 pub mod derive;
 mod dump;
 mod gen;

@@ -441,7 +441,7 @@ impl Cons {
 pub struct Node {
     pub pts: Pts,
     pub prim: u16,
-    pub delta: Vec<Tok>,
+    pub delta: crate::delta::Delta,
     pub dprim: u16,
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
@@ -456,7 +456,7 @@ pub struct Node {
     /// Successor set, once the list is long (exact edge dedup for hubs: a
     /// function's return node can be offered the same edge millions of
     /// times).
-    pub succ_set: Option<Box<crate::pts::FxHashSet<NodeId>>>,
+    pub succ_set: Option<std::rc::Rc<crate::pts::FxHashSet<NodeId>>>,
     /// Some successor was widened: every token reaching this node escapes
     /// (what that successor did with it), and the edge to it carries only
     /// primitive kinds from then on (`prim_succ`).

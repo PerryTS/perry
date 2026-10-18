@@ -8,9 +8,12 @@
 //! for values leaving into it). The rules here are the executable form of
 //! design section 3.2; `scripts/wpfacts_recompute.py` re-implements them.
 
-use crate::builtins;
+mod copy;
+mod lookup;
 
+use crate::builtins;
 mod call_and_construct;
+use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
 impl Model {
@@ -18,6 +21,17 @@ impl Model {
 
     /// Add tokens/prims to a node; schedules it when anything is new.
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
+        self.add_tokens(n, Tokens::Slice(toks), prim);
+    }
+    fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
+        let targets = if self.nodes[n as usize].widened || toks.is_empty() {
+            Targets::Empty
+        } else {
+            Targets::capture(
+                &self.nodes[n as usize].succ,
+                self.nodes[n as usize].succ_set.as_ref(),
+            )
+        };
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         if node.widened {
@@ -31,7 +45,7 @@ impl Model {
             let mut top_new = false;
             for &t in toks {
                 if node.pts.insert(t) {
-                    node.delta.push(t);
+                    node.delta.push_to(t, &targets);
                     changed = true;
                     self.pts_entries += 1;
                     top_new |= t == TOP;
@@ -69,7 +83,7 @@ impl Model {
                 }
                 let node = &mut self.nodes[n as usize];
                 node.delta.clear();
-                node.delta.push(TOP);
+                node.delta.push_to(TOP, &targets);
                 changed = true;
                 self.widened_nodes += 1;
                 if let Some(r) = self.relations.as_mut() {
@@ -240,74 +254,6 @@ impl Model {
         r
     }
 
-    /// Copy edge a → b (pts(a) ⊆ pts(b)).
-    pub fn edge(&mut self, a: NodeId, b: NodeId) {
-        self.edge_impl(a, b, true);
-    }
-
-    /// `edge` without a relation line: internal relays the checker derives
-    /// from a logged rule (`bind_via`).
-    fn edge_quiet(&mut self, a: NodeId, b: NodeId) {
-        self.edge_impl(a, b, false);
-    }
-
-    fn edge_impl(&mut self, a: NodeId, b: NodeId, log: bool) {
-        if a == b {
-            return;
-        }
-        // Dedup against short successor lists only: a duplicate edge costs
-        // a little propagation, a global edge set costs gigabytes.
-        let b_widened = self.nodes[b as usize].widened;
-        {
-            let node = &mut self.nodes[a as usize];
-            match &mut node.succ_set {
-                Some(set) => {
-                    if !set.insert(b) {
-                        return;
-                    }
-                }
-                None => {
-                    if node.succ.contains(&b) {
-                        return;
-                    }
-                    if node.succ.len() >= 16 {
-                        let mut set: crate::pts::FxHashSet<NodeId> =
-                            node.succ.iter().copied().collect();
-                        set.insert(b);
-                        node.succ_set = Some(Box::new(set));
-                    }
-                }
-            }
-            if node.widened || !b_widened {
-                node.succ.push(b);
-            } else {
-                // Into a widened node: escape at the source, carry prims.
-                node.esc_out = true;
-                node.prim_succ.push(b);
-            }
-        }
-        if log {
-            self.rel(|| format!("copy {a} {b}"));
-        }
-        // Over a bound the program gets no facts: nothing more to propagate.
-        if self.aborted {
-            return;
-        }
-        let prim = self.nodes[a as usize].prim;
-        if self.nodes[a as usize].pts.is_empty() && prim == 0 {
-            return;
-        }
-        let mut toks = self.bufs.pop().unwrap_or_default();
-        toks.clear();
-        self.nodes[a as usize].pts.sorted_into(&mut toks);
-        let saved = (self.cur_src, self.cur_why);
-        self.cur_src = a;
-        self.cur_why = u32::MAX;
-        self.add(b, &toks, prim);
-        (self.cur_src, self.cur_why) = saved;
-        self.bufs.push(toks);
-    }
-
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         self.stats_cons += 1;
@@ -325,7 +271,12 @@ impl Model {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
-        self.nodes[n as usize].cons.push(c);
+        // A widened node with every primitive kind is a closed value.
+        // Applying the rule now is complete; there is no future input to
+        // watch, and later concrete arrivals escape directly in `add`.
+        if !(self.nodes[n as usize].widened && self.nodes[n as usize].prim == prim::ALL) {
+            self.nodes[n as usize].cons.push(c);
+        }
         if self.aborted {
             return;
         }
@@ -367,7 +318,7 @@ impl Model {
                     return;
                 }
             }
-            let (delta, dprim) = {
+            let (mut delta, dprim) = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
                 (
@@ -378,16 +329,16 @@ impl Model {
             if delta.is_empty() && dprim == 0 {
                 continue;
             }
+            delta.prepare();
+            let delivery_overhead = delta.delivery_overhead();
             // Index loops (no clone of the lists): successors and
             // constraints appended while this runs already saw the full set.
             self.cur_src = n;
             self.cur_why = u32::MAX;
-            let nsucc = self.nodes[n as usize].succ.len();
             let ncons0 = self.nodes[n as usize].cons.len();
-            self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64;
+            self.work += (delta.len() as u64 + 1) * ncons0 as u64;
             if self.profile.is_some() {
                 let e = self.label_work.entry(self.labels[n as usize]).or_default();
-                e.0 += delta.len() as u64 * nsucc as u64;
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
@@ -409,31 +360,156 @@ impl Model {
                 }
             }
             let mut i = 0;
+            // Escape state cannot change during this copy loop (`add`
+            // only queues escapes). Keep the meaningful widening transfer
+            // in original delta order; normal destinations see all tokens.
+            let mut escape_delta: Option<Vec<Tok>> = None;
+            let mut widen_at = None;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.nodes[s as usize].widened && !self.nodes[n as usize].widened {
-                    // A widened successor holds ⊤ and escapes what reaches
-                    // it: this node escapes its tokens itself from now on,
-                    // and the edge carries only primitive kinds.
-                    self.add(s, &delta, dprim);
-                    let node = &mut self.nodes[n as usize];
-                    node.succ.swap_remove(i);
-                    if let Some(set) = node.succ_set.as_mut() {
-                        set.remove(&s);
+                if self.try_copy_delivery(n, s, &delta, dprim) {
+                    self.work += 1 + delivery_overhead;
+                    if self.max_work != 0 && self.work > self.max_work {
+                        self.aborted = true;
+                        return;
                     }
-                    node.esc_out = true;
-                    node.prim_succ.push(s);
+                    i += 1;
                     continue;
                 }
-                self.add(s, &delta, dprim);
+                let (covered, checks) = if delta.is_empty() {
+                    (true, 1)
+                } else {
+                    self.copy_coverage(n, s)
+                };
+                let checks = checks
+                    + if self.nodes[s as usize].widened {
+                        0
+                    } else {
+                        delivery_overhead
+                    };
+                let toks = if covered {
+                    Tokens::Slice(&[])
+                } else if self.nodes[s as usize].widened {
+                    Tokens::Slice(
+                        escape_delta
+                            .get_or_insert_with(|| {
+                                let mut out = self.bufs.pop().unwrap_or_default();
+                                out.clear();
+                                self.work += delta.len() as u64;
+                                out.extend(delta.iter().copied().filter(|&t| {
+                                    t != TOP
+                                        && !self.is_escaped(t)
+                                        && !matches!(
+                                            self.toks[t as usize],
+                                            TokKind::ObjectProto
+                                                | TokKind::BuiltinFn
+                                                | TokKind::Builtin(_)
+                                                | TokKind::NativeProto(_)
+                                        )
+                                }));
+                                out
+                            })
+                            .as_slice(),
+                    )
+                } else {
+                    Tokens::Delivery(&delta, s)
+                };
+                let wide = self.nodes[s as usize].widened;
+                let visits = if wide { 0 } else { toks.len() as u64 };
+                self.work += visits + checks;
+                if self.profile.is_some() {
+                    self.label_work
+                        .entry(self.labels[n as usize])
+                        .or_default()
+                        .0 += visits;
+                }
+                if self.max_work != 0 && self.work > self.max_work {
+                    self.aborted = true;
+                    return;
+                }
+                if wide {
+                    // Earlier identical batches are shadowed by the last
+                    // one before the LIFO drain can observe them. Preserve
+                    // that last position among other widening requests.
+                    widen_at = Some(self.widen_queue.len());
+                    self.add(s, &[], dprim);
+                    if !self.nodes[n as usize].widened {
+                        let node = &mut self.nodes[n as usize];
+                        node.succ.swap_remove(i);
+                        if let Some(set) = node.succ_set.as_mut() {
+                            std::rc::Rc::make_mut(set).remove(&s);
+                        }
+                        node.esc_out = true;
+                        node.prim_succ.push(s);
+                        continue;
+                    }
+                    i += 1;
+                    continue;
+                }
+                if covered {
+                    self.add_tokens(s, toks, dprim);
+                } else {
+                    let extra = self.copy_to(n, s, toks, dprim);
+                    self.work += extra;
+                    if self.max_work != 0 && self.work > self.max_work {
+                        self.aborted = true;
+                        return;
+                    }
+                }
                 i += 1;
+            }
+            if let Some(mut out) = escape_delta {
+                if !out.is_empty() {
+                    if let Some(at) = widen_at {
+                        self.work += (out.len() + self.widen_queue.len() - at) as u64;
+                        if self.max_work != 0 && self.work > self.max_work {
+                            self.aborted = true;
+                            return;
+                        }
+                        self.widen_queue.splice(at..at, out.drain(..));
+                    }
+                }
+                out.clear();
+                self.bufs.push(out);
+            }
+            // Once widened, this source never acquires another token. Every
+            // surviving edge has received TOP, so retain its primitive flow
+            // in the existing projection rather than revisiting token sets.
+            if self.nodes[n as usize].widened && self.nodes[n as usize].prim == prim::ALL {
+                let node = &mut self.nodes[n as usize];
+                node.succ.clear();
+                node.prim_succ.clear();
+                node.succ_set = None;
+            } else if self.nodes[n as usize].widened && !self.nodes[n as usize].succ.is_empty() {
+                let node = &mut self.nodes[n as usize];
+                if !node.prim_succ.is_empty() {
+                    self.work += node.succ.len() as u64;
+                    if self.max_work != 0 && self.work > self.max_work {
+                        self.aborted = true;
+                        return;
+                    }
+                }
+                node.esc_out = true;
+                if let Some(set) = node.succ_set.as_mut() {
+                    std::rc::Rc::make_mut(set).extend(node.prim_succ.iter().copied());
+                }
+                if node.prim_succ.is_empty() {
+                    std::mem::swap(&mut node.prim_succ, &mut node.succ);
+                } else {
+                    node.prim_succ.append(&mut node.succ);
+                }
             }
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
                 let c = self.nodes[n as usize].cons[i];
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
-                self.apply(n, &c, &delta, dprim);
+                self.apply_tokens(n, &c, Tokens::Pending(&delta), dprim);
+            }
+            // Existing rules saw the final input in this pass. New rules
+            // on a closed value are applied immediately by `cons`.
+            if self.nodes[n as usize].widened && self.nodes[n as usize].prim == prim::ALL {
+                self.nodes[n as usize].cons.clear();
             }
             // Hand the delta's storage back to the node (no reallocation).
             let mut delta = delta;
@@ -548,6 +624,9 @@ impl Model {
     // ---------------------------------------------------------------- rules
 
     pub fn apply(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
+        self.apply_tokens(n, c, Tokens::Slice(toks), prim);
+    }
+    fn apply_tokens(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if self.profile.is_some() {
             let started = std::time::Instant::now();
             self.apply_inner(n, c, toks, prim);
@@ -560,7 +639,7 @@ impl Model {
         self.apply_inner(n, c, toks, prim);
     }
 
-    fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
+    fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
             Cons::Load { key, dst } => {
                 if prim != 0 {
@@ -1005,666 +1084,6 @@ impl Model {
                     }
                 }
             }
-        }
-    }
-
-    /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
-    pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
-        if self.is_iter_key(key) {
-            match self.toks[t as usize] {
-                TokKind::Top
-                | TokKind::Builtin(_)
-                | TokKind::BuiltinFn
-                | TokKind::NativeProto(_)
-                | TokKind::PrimBox => {}
-                TokKind::Obj(_) if self.is_array_like(t) => {}
-                // A program object/function iterates only through its
-                // protocol, which `Gen::iterate` follows separately.
-                _ => return,
-            }
-            let ek = self.elem_key();
-            return self.load_from(origin, t, ek, dst);
-        }
-        if self.is_elem_key(key) {
-            if t != TOP && self.is_array_like(t) {
-                let all = self.all_fields(t);
-                self.edge(all, dst);
-                self.add_prim(dst, prim::UNDEF);
-                return;
-            }
-            return self.load_from(origin, t, Key::Any, dst);
-        }
-        if t == TOP {
-            self.add_tok(dst, TOP);
-            // Any function's `.constructor` is the Function constructor (E14).
-            if self.is_constructor_key(key) {
-                let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
-                self.add_tok(dst, f);
-            }
-            return;
-        }
-        // An absent key reads `undefined`: only a definite birth key of a
-        // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
-            (Key::Named(a), Some(tm)) => {
-                self.tmpls[tm as usize].kind.is_fact_unit()
-                    && self.tmpls[tm as usize].definite.contains(&a)
-            }
-            _ => false,
-        };
-        if !present {
-            self.add_prim(dst, prim::UNDEF);
-        }
-        match key {
-            Key::Named(a) => {
-                let f = self.field(t, a);
-                self.edge(f, dst);
-            }
-            Key::Any => {
-                let all = self.all_fields(t);
-                self.edge(all, dst);
-            }
-        }
-        self.with_b(|m| builtins::tok_load(m, t, key, dst));
-        // Element reads of array-likes stop at their own elements: their
-        // builtin prototype members are approximated by `tok_load`.
-        if key == Key::Any && self.is_array_like(t) {
-            return;
-        }
-        // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv(t, key);
-        self.edge(cv, dst);
-        // Accessors run with the receiver as `this`: walk per receiver, only
-        // for keys an accessor may be defined under.
-        self.accessor_walk(origin, t, key, ChainAct::Load(dst));
-    }
-
-    /// Accessors run with the receiver as `this`. Named keys an accessor
-    /// may be defined under walk the chain per receiver; computed keys
-    /// visit, through the prototype closure, only holders with accessors.
-    fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
-        if !self.needs_accessor_walk(key) {
-            return;
-        }
-        let Some(act) = self.shared_act(origin, t, key, act) else {
-            return;
-        };
-        match key {
-            Key::Named(_) => self.holder_walk(origin, t, key, act, false),
-            Key::Any => {
-                self.accessor_hit(origin, t, Key::Any, act);
-                let cp = self.cp(t);
-                if self.any_walk_done.insert((cp, origin, act)) {
-                    self.any_walks.push((cp, origin, t, act));
-                    self.any_walk_holders
-                        .entry(t)
-                        .or_default()
-                        .push((origin, act));
-                    self.cons(cp, Cons::AnyAccessors { origin, act });
-                }
-            }
-        }
-    }
-
-    /// Walks are per (receiver, start, key), not per site: the first site
-    /// walks with a shared act (a node the accessors feed, or that feeds
-    /// the setters), every site connects to it. `None`: already walked.
-    /// The same accessors run with the same `this`, so the union each site
-    /// sees is unchanged.
-    fn shared_act(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) -> Option<ChainAct> {
-        let store = matches!(act, ChainAct::Store(_));
-        let kind: u8 = match act {
-            ChainAct::Load(_) => 0,
-            ChainAct::Store(_) => 1,
-            ChainAct::Call(_) => 2,
-        };
-        let (n, fresh) = match self.walk_nodes.get(&(origin, t, key, kind)) {
-            Some(&n) => (n, false),
-            None => {
-                let n = self.node_l(["walk-load", "walk-store", "walk-call"][kind as usize]);
-                // A call walk relays getter results to calls: never widened.
-                // A load walk's members all reach every site's result, and a
-                // store walk's every setter's parameter, which would widen
-                // past the bound anyway: those widen like any value node.
-                match kind {
-                    1 => {
-                        self.walk_store_pending.insert(n, Vec::new());
-                    }
-                    2 => self.nodes[n as usize].internal = true,
-                    _ => {}
-                }
-                self.walk_nodes.insert((origin, t, key, kind), n);
-                (n, true)
-            }
-        };
-        match act {
-            ChainAct::Load(dst) => self.edge(n, dst),
-            ChainAct::Store(src) => match self.walk_store_pending.get_mut(&n) {
-                Some(v) => v.push(src),
-                None => self.edge(src, n),
-            },
-            ChainAct::Call(call) => self.bind_via(n, call, origin),
-        }
-        // A call walk collects getter results as a load does.
-        fresh.then_some(if store {
-            ChainAct::Store(n)
-        } else {
-            ChainAct::Load(n)
-        })
-    }
-
-    /// The holder sets of a named-key lookup that starts at `t` itself
-    /// (`t` is passed through, then its prototypes).
-    fn holders(&mut self, t: Tok, key: Key) -> (NodeId, NodeId) {
-        if let Some(&x) = self.holder_nodes.get(&(t, key)) {
-            return x;
-        }
-        let p = self.node_l("holders");
-        let s = self.node_l("holders-stop");
-        self.nodes[p as usize].internal = true;
-        self.nodes[s as usize].internal = true;
-        self.holder_nodes.insert((t, key), (p, s));
-        self.add(p, &[t], 0);
-        let pn = self.proto_node(t);
-        self.cons(
-            pn,
-            Cons::HolderStep {
-                key,
-                pass: p,
-                stop: s,
-            },
-        );
-        (p, s)
-    }
-
-    /// A named-key accessor lookup for receiver `origin` from `t` (from
-    /// `t`'s prototypes, or, `at_start`, from prototype `t` itself with a
-    /// stop check there: `super.key`). Accessors on the pass holders run
-    /// and replay; those on stop holders run.
-    fn holder_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct, at_start: bool) {
-        let (p, s) = if at_start {
-            let p = self.node_l("holders");
-            let s = self.node_l("holders-stop");
-            self.nodes[p as usize].internal = true;
-            self.nodes[s as usize].internal = true;
-            let x = self.node_l("holders-start");
-            self.add(x, &[t], 0);
-            self.cons(
-                x,
-                Cons::HolderStep {
-                    key,
-                    pass: p,
-                    stop: s,
-                },
-            );
-            (p, s)
-        } else {
-            self.holders(t, key)
-        };
-        self.cons(p, Cons::VisitHolders { origin, key, act });
-        self.cons(s, Cons::VisitStop { origin, key, act });
-    }
-
-    /// A store walk found a consumer: its sites' sources flow from now on.
-    fn store_live(&mut self, n: NodeId) {
-        if let Some(srcs) = self.walk_store_pending.remove(&n) {
-            for src in srcs {
-                self.edge(src, n);
-            }
-        }
-    }
-
-    pub fn needs_accessor_walk(&self, key: Key) -> bool {
-        match key {
-            Key::Named(a) => self.accessor_atoms.contains(&a),
-            Key::Any => !self.accessor_atoms.is_empty(),
-        }
-    }
-
-    /// The values `key` takes on `t`'s prototypes (transitively).
-    pub fn cv(&mut self, t: Tok, key: Key) -> NodeId {
-        if let Some(&n) = self.cv_nodes.get(&(t, key)) {
-            return n;
-        }
-        let n = self.node_l("chainval");
-        self.cv_nodes.insert((t, key), n);
-        let pn = self.proto_node(t);
-        self.cons(pn, Cons::ChainUnion { key, dst: n });
-        n
-    }
-
-    /// Every prototype of `t`, transitively.
-    pub fn cp(&mut self, t: Tok) -> NodeId {
-        if let Some(&n) = self.cp_nodes.get(&t) {
-            return n;
-        }
-        let n = self.node_l("protoclosure");
-        self.cp_nodes.insert(t, n);
-        let pn = self.proto_node(t);
-        self.cons(pn, Cons::ProtoClosure { dst: n });
-        n
-    }
-
-    /// Does a lookup of `key` stop at prototype `q` (a declared member)?
-    fn stops_at(&self, q: Tok, key: Key) -> bool {
-        match (key, &self.toks[q as usize]) {
-            (Key::Named(a), TokKind::Proto(tm)) => {
-                self.tmpls[*tm as usize].proto_members.contains(&a)
-                    && !self.hard.contains_key(&q)
-                    && !self.escaped.contains_key(&q)
-            }
-            _ => false,
-        }
-    }
-
-    pub fn is_array_like(&self, t: Tok) -> bool {
-        match self.toks[t as usize] {
-            TokKind::PrimBox => true,
-            TokKind::Obj(tm) => matches!(
-                self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::BObj { .. }
-            ),
-            _ => false,
-        }
-    }
-
-    pub fn is_constructor_key(&self, key: Key) -> bool {
-        match key {
-            Key::Any => true,
-            Key::Named(a) => self.atoms[a as usize] == "constructor",
-        }
-    }
-
-    /// Start or continue a chain lookup at `t`'s prototypes.
-    fn chain_from(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
-        // Own accessors of `t` itself (object-literal getters/setters).
-        if !matches!(self.toks[t as usize], TokKind::ObjectProto) {
-            self.visits.entry(t).or_default().insert((origin, key, act));
-        }
-        self.accessor_hit(origin, t, key, act);
-        let pn = self.proto_node(t);
-        if self.chain_done.insert((pn, origin, key, act)) {
-            self.cons(pn, Cons::Chain { origin, key, act });
-        }
-    }
-
-    /// One step of a per-receiver accessor walk: prototype `p` of `origin`.
-    /// (Values and methods come from the shared chain nodes `cv`/`cp`.)
-    pub fn chain_step(&mut self, _pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
-        if p == TOP {
-            match act {
-                ChainAct::Load(dst) => self.add_tok(dst, TOP),
-                ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
-                ChainAct::Store(src) => {
-                    self.store_live(src);
-                    let r = self.reason("store through an unknown prototype chain");
-                    self.sink_node(src, r);
-                }
-            }
-            return;
-        }
-        // A class prototype defines its declared members at class creation:
-        // the lookup ends there (resumed if the prototype is later mutated).
-        if self.stops_at(p, key) {
-            self.accessor_hit(origin, p, key, act);
-            self.stopped.entry(p).or_default().push((origin, key, act));
-            return;
-        }
-        self.chain_from(origin, p, key, act);
-    }
-
-    /// `super.key` from receiver `origin`: the lookup starts at `start`.
-    fn super_lookup(&mut self, origin: Tok, start: Tok, key: Key, act: ChainAct) {
-        if start == TOP {
-            self.chain_step(0, origin, TOP, key, act);
-            return;
-        }
-        match act {
-            ChainAct::Load(dst) => {
-                let f = match key {
-                    Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
-                };
-                self.edge(f, dst);
-                self.with_b(|m| builtins::tok_load(m, start, key, dst));
-                if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.edge(up, dst);
-                }
-            }
-            ChainAct::Call(call) => {
-                let f = match key {
-                    Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
-                };
-                self.bind_via(f, call, origin);
-                self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
-                if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.bind_via(up, call, origin);
-                    let cp = self.cp(start);
-                    self.cons(cp, Cons::ProtoMethods { origin, key, call });
-                }
-            }
-            ChainAct::Store(_) => {}
-        }
-        match key {
-            Key::Named(_) if self.needs_accessor_walk(key) => {
-                // `start` itself is a prototype: a lookup can stop there.
-                if let Some(act) = self.shared_act(origin, start | SUPER_BIT, key, act) {
-                    self.holder_walk(origin, start, key, act, true)
-                }
-            }
-            Key::Any => self.accessor_walk(origin, start, key, act),
-            _ => {}
-        }
-    }
-
-    /// A prototype became HARD or escaped: lookups that stopped at it go on.
-    fn resume_stopped(&mut self, p: Tok) {
-        if let Some(v) = self.stopped.remove(&p) {
-            for (origin, key, act) in v {
-                self.chain_from(origin, p, key, act);
-            }
-        }
-        if let Some(v) = self.stopped_holders.remove(&p) {
-            for (key, pass, stop) in v {
-                let (p2, s2) = self.holders(p, key);
-                self.edge_quiet(p2, pass);
-                self.edge_quiet(s2, stop);
-            }
-        }
-        if let Some(v) = self.stopped_shared.remove(&p) {
-            for (key, dst) in v {
-                let up = self.cv(p, key);
-                self.edge(up, dst);
-            }
-        }
-    }
-
-    /// Accessors named `key` (any key: `Key::Any`) declared on `holder`:
-    /// they run with `origin` as `this`, through the holder's group.
-    pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
-        let has = match key {
-            Key::Named(a) => self.accessors.contains_key(&(holder, a)),
-            Key::Any => self
-                .accessor_keys
-                .get(&holder)
-                .is_some_and(|ks| !ks.is_empty()),
-        };
-        if !has {
-            return;
-        }
-        self.acc_group(holder, key);
-        self.group_hit(origin, holder, key, act);
-    }
-
-    /// One lookup from `origin` reaches group (holder, key).
-    fn group_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
-        let g = &self.acc_groups[&(holder, key)];
-        let (gt, ar, st, sp, live) = (g.gt, g.ar, g.st, g.sp, g.has_setter);
-        match act {
-            ChainAct::Load(dst) => {
-                self.add_tok(gt, origin);
-                self.edge(ar, dst);
-            }
-            ChainAct::Call(call) => {
-                // `o.k()` where k is a getter: the getter runs, then its
-                // result is called with `o` as `this`.
-                self.add_tok(gt, origin);
-                self.bind_via(ar, call, origin);
-            }
-            ChainAct::Store(src) => {
-                self.add_tok(st, origin);
-                if live {
-                    self.store_live(src);
-                    self.edge(src, sp);
-                } else {
-                    self.acc_groups
-                        .get_mut(&(holder, key))
-                        .unwrap()
-                        .pending
-                        .push(src);
-                }
-            }
-        }
-    }
-
-    /// The group of (holder, key), created with every accessor declared
-    /// there so far (an Any group: linked to every named group of the
-    /// holder).
-    fn acc_group(&mut self, holder: Tok, key: Key) {
-        if self.acc_groups.contains_key(&(holder, key)) {
-            return;
-        }
-        let gt = self.node_l("acc-this");
-        let ar = self.node_l("acc-ret");
-        let st = self.node_l("acc-setthis");
-        // The setter parameter source widens like the parameter it feeds.
-        let sp = self.node_l("acc-setarg");
-        for n in [gt, ar, st] {
-            self.nodes[n as usize].internal = true;
-        }
-        self.acc_groups.insert(
-            (holder, key),
-            AccGroup {
-                gt,
-                ar,
-                st,
-                sp,
-                has_setter: false,
-                pending: Vec::new(),
-            },
-        );
-        match key {
-            Key::Named(a) => {
-                let (ng, ns) = self
-                    .accessors
-                    .get(&(holder, a))
-                    .map_or((0, 0), |(g, s)| (g.len(), s.len()));
-                for i in 0..ng {
-                    let f = self.accessors[&(holder, a)].0[i];
-                    self.group_connect(holder, key, f, false);
-                }
-                for i in 0..ns {
-                    let f = self.accessors[&(holder, a)].1[i];
-                    self.group_connect(holder, key, f, true);
-                }
-                if self.acc_groups.contains_key(&(holder, Key::Any)) {
-                    self.group_link(holder, a);
-                }
-            }
-            Key::Any => {
-                let star = self.atom(crate::STAR_KEY);
-                let n = self.accessor_keys.get(&holder).map_or(0, |v| v.len());
-                for i in 0..n {
-                    let a = self.accessor_keys[&holder][i];
-                    if a == star || !self.accessors.contains_key(&(holder, a)) {
-                        continue;
-                    }
-                    self.acc_group(holder, Key::Named(a));
-                    self.group_link(holder, a);
-                }
-            }
-        }
-    }
-
-    /// Link named group (holder, a) under the holder's Any group.
-    fn group_link(&mut self, holder: Tok, a: Atom) {
-        let any = self.acc_groups[&(holder, Key::Any)].clone();
-        let g = self.acc_groups[&(holder, Key::Named(a))].clone();
-        self.edge_quiet(any.gt, g.gt);
-        self.edge_quiet(g.ar, any.ar);
-        self.edge_quiet(any.st, g.st);
-        self.edge_quiet(any.sp, g.sp);
-        if g.has_setter {
-            self.group_live(holder, Key::Any);
-        }
-    }
-
-    /// Accessor `f` hangs off group (holder, key).
-    fn group_connect(&mut self, holder: Tok, key: Key, f: FnIdx, setter: bool) {
-        let g = self.acc_groups[&(holder, key)].clone();
-        // An accessor with a lexical `this` (arrow) never sees the
-        // receiver, as for a call (`call_tok`).
-        let this = (!self.funcs[f as usize].lexical_this).then(|| self.funcs[f as usize].this);
-        if setter {
-            if let Some(this) = this {
-                self.edge_quiet(g.st, this);
-            }
-            if let Some(&p0) = self.funcs[f as usize].params.first() {
-                self.edge_quiet(g.sp, p0);
-            }
-            self.group_live(holder, key);
-            if self.acc_groups.contains_key(&(holder, Key::Any)) {
-                self.group_live(holder, Key::Any);
-            }
-        } else {
-            if let Some(this) = this {
-                self.edge_quiet(g.gt, this);
-            }
-            let ret = self.funcs[f as usize].ret;
-            self.edge_quiet(ret, g.ar);
-        }
-    }
-
-    /// A group has a setter: its waiting store sources flow from now on.
-    fn group_live(&mut self, holder: Tok, key: Key) {
-        let g = self.acc_groups.get_mut(&(holder, key)).unwrap();
-        if g.has_setter {
-            return;
-        }
-        g.has_setter = true;
-        let pending = std::mem::take(&mut g.pending);
-        let sp = g.sp;
-        for src in pending {
-            self.store_live(src);
-            self.edge(src, sp);
-        }
-    }
-
-    /// Accessor `f` was installed on (holder, key) while solving. With
-    /// `replay`, lookups that reached the holder before it had a group for
-    /// this key run it now; later ones find it through the group.
-    fn accessor_installed(&mut self, holder: Tok, key: Atom, f: FnIdx, setter: bool, replay: bool) {
-        let k = Key::Named(key);
-        if self.acc_groups.contains_key(&(holder, k)) {
-            self.group_connect(holder, k, f, setter);
-        } else {
-            let any_exists = self.acc_groups.contains_key(&(holder, Key::Any));
-            if replay || any_exists {
-                // Creating the group picks up every accessor there (this
-                // one too) and links it under an existing Any group.
-                self.acc_group(holder, k);
-            }
-            if replay {
-                let visits: Vec<_> = self
-                    .visits
-                    .get(&holder)
-                    .map(|v| v.iter().copied().filter(|&(_, kk, _)| kk == k).collect())
-                    .unwrap_or_default();
-                for (origin, _, act) in visits {
-                    self.group_hit(origin, holder, k, act);
-                }
-            }
-        }
-        if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
-            let walks = self
-                .any_walk_holders
-                .get(&holder)
-                .cloned()
-                .unwrap_or_default();
-            if !walks.is_empty() {
-                self.acc_group(holder, Key::Any);
-                for (origin, act) in walks {
-                    self.group_hit(origin, holder, Key::Any, act);
-                }
-            }
-        }
-    }
-
-    /// Bind `call` to every function that shows up in `callee`, with `this`
-    /// fixed to `origin` (the relation `callthis callee call origin`).
-    ///
-    /// The rule splits in two so a megamorphic site does not pay
-    /// receivers × methods per call: `this` binds once per (method node,
-    /// receiver), shared by every site that looks the same key up on that
-    /// receiver (`ThisTo`), and arguments/result bind once per (call,
-    /// function) through the call's relay node (`CallArgs`). A builtin
-    /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
-    /// The result is the same as one `CallThis` per (callee, call, origin).
-    fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
-        if !self.callthis_done.insert((callee, call, origin)) {
-            return;
-        }
-        self.rel(|| format!("callthis {callee} {call} {origin}"));
-        if self.this_done.insert((callee, origin)) {
-            self.cons(callee, Cons::ThisTo { origin });
-        }
-        let relay = match self.relays.get(&call) {
-            Some(&r) => r,
-            None => {
-                let r = self.node_l("callee-relay");
-                self.nodes[r as usize].internal = true;
-                self.relays.insert(call, r);
-                self.cons(r, Cons::CallArgs { call });
-                r
-            }
-        };
-        if self.relay_done.insert((call, callee)) {
-            self.edge_quiet(callee, relay);
-        }
-        let sites = self.callee_sites.entry(callee).or_default();
-        let first = sites.is_empty();
-        sites.push((call, origin));
-        if first {
-            self.cons(callee, Cons::BuiltinCallee);
-        } else if self.builtin_callee.contains(&callee) {
-            let mut toks = self.bufs.pop().unwrap_or_default();
-            toks.clear();
-            self.nodes[callee as usize].pts.sorted_into(&mut toks);
-            for &t in &toks {
-                if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
-                    self.call_tok(call, t, Some(origin));
-                }
-            }
-            self.bufs.push(toks);
-        }
-    }
-
-    /// The `this` half of `call_tok(_, t, Some(origin))`.
-    fn this_to(&mut self, t: Tok, origin: Tok) {
-        match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
-                let r = self.reason("receiver of a call of an unknown function value");
-                self.escape(origin, r);
-            }
-            TokKind::Func(f) => {
-                if !self.funcs[f as usize].lexical_this {
-                    let this = self.funcs[f as usize].this;
-                    self.add_tok(this, origin);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The argument half of `call_tok(call, t, Some(_))` (builtin namespace
-    /// values excepted: they run per receiver, `BuiltinCallee`).
-    fn call_args(&mut self, call: CallId, t: Tok) {
-        match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
-                if self.bind_done.insert((call, t, u32::MAX - 2)) {
-                    self.unknown_callee_args(call, t, false);
-                }
-            }
-            TokKind::Func(_) => self.bind_args(call, t),
-            TokKind::Bound(_) => {
-                if self.bind_done.insert((call, t, u32::MAX)) {
-                    self.call_bound(call, t);
-                }
-            }
-            _ => {}
         }
     }
 

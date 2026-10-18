@@ -836,14 +836,17 @@ fn lower_property_site_tail(
     let key_box = ctx.block().load(DOUBLE, &key_handle_global);
     let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
     let hash = (crate::layout_desc::atom_hash(property) as i64).to_string();
-    // An array-index name may be an element key, which no layout lists: such
-    // a site takes only answers the probe finds, never absence.
+    // An array-index name may be an element key, which no layout lists, and a
+    // private name (`#x` after its brand guard) may be a method or accessor of
+    // the declaring ClassBody, which no layout lists either: such a site takes
+    // only answers the probe finds, never absence.
     let index_name = !property.is_empty() && property.bytes().all(|b| b.is_ascii_digit());
+    let private_name = property.starts_with('#');
     crate::expr::note_site("probe");
     let answered = ctx.block().call(
         DOUBLE,
         // A global binding must tell absent from `undefined`.
-        if global_binding || index_name {
+        if global_binding || index_name || private_name {
             "perry_probe_get_binding"
         } else if inline_string_length {
             "perry_probe_get_length"

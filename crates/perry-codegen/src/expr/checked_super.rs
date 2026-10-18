@@ -209,6 +209,72 @@ pub(crate) fn call(
     })
 }
 
+/// Share large parent bodies at a standalone default-derived entry. Its
+/// caller already packs the parent's rest/arguments ABI. Capturing parents
+/// keep the existing binding path; their snapshots are not plain arguments.
+/// Small parents retain the inline context used by the ordinary lowering.
+pub(crate) fn default_call(ctx: &mut FnCtx<'_>, class: &Class, args: &[Expr]) -> Result<String> {
+    let parent = class
+        .extends_name
+        .as_deref()
+        .and_then(|name| ctx.classes.get(name).copied());
+    let target = parent.and_then(|parent| {
+        let ctor = parent.constructor.as_ref()?;
+        // Match the ordinary function inliner's eight-statement budget.
+        // Sharing small parents loses context for little code-size benefit.
+        if ctor.body.len() <= 8
+            || ctor
+                .params
+                .iter()
+                .any(|p| p.name.starts_with("__perry_cap_"))
+        {
+            return None;
+        }
+        (ctor.params.len() == args.len()).then(|| {
+            format!(
+                "{}__{}_constructor",
+                ctx.strings.module_prefix(),
+                parent.name
+            )
+        })
+    });
+    let Some((plan, target)) = plan(ctx, class).zip(target) else {
+        return super::super_constructor::call(ctx, class, args);
+    };
+    branch(
+        ctx,
+        &plan,
+        true,
+        |ctx| {
+            // No ancestor field staging here: the parent's standalone entry
+            // owns its fields. Derived fields follow the successful binding.
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(super::lower_expr(ctx, arg)?);
+            }
+            let slot = ctx
+                .this_stack
+                .last()
+                .expect("default constructor this")
+                .clone();
+            let this = ctx.block().load(DOUBLE, &slot);
+            let mut call_args = vec![(DOUBLE, this.as_str())];
+            call_args.extend(values.iter().map(|value| (DOUBLE, value.as_str())));
+            ctx.pending_declares
+                .push((target.clone(), DOUBLE, vec![DOUBLE; args.len() + 1]));
+            let result = ctx.block().call(DOUBLE, &target, &call_args);
+            super::super_constructor::bind(ctx, &result);
+            crate::lower_call::apply_field_initializers_recursive(
+                ctx,
+                &class.name,
+                crate::lower_call::FieldInitMode::SelfOnly,
+            )?;
+            Ok(ctx.block().load(DOUBLE, &slot))
+        },
+        |ctx| super::super_constructor::call_live(ctx, class, args),
+    )
+}
+
 /// Spread operands have already been iterated once. Guard the resulting list
 /// and pass that same list to either dispatcher; never replay user iteration.
 pub(crate) fn spread(
@@ -274,4 +340,113 @@ pub(crate) fn spread(
             },
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{compile_module, CompileOptions};
+
+    fn ir(params: &str, statements: usize) -> String {
+        let parent_body = "parentBody(value);".repeat(statements);
+        let source = format!(
+            "function parentBody(x: any) {{ return x; }}
+             export class Base {{
+               constructor({params}) {{ {parent_body} }}
+             }}
+             export class First extends Base {{}}
+             export class Second extends Base {{}}"
+        );
+        let ast = perry_parser::parse_typescript(&source, "spx_shared.ts").unwrap();
+        let module = perry_hir::lower_module(&ast, "spx_shared", "spx_shared.ts").unwrap();
+        let census = perry_hir::ProtoCensus {
+            relink: true,
+            ..Default::default()
+        };
+        crate::proto_constants::with_test_census(census, || {
+            String::from_utf8(
+                compile_module(
+                    &module,
+                    CompileOptions {
+                        emit_ir_only: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        })
+    }
+
+    fn body<'a>(ir: &'a str, class: &str) -> &'a str {
+        let symbol = format!("__{class}_constructor(");
+        let start = ir
+            .lines()
+            .find(|line| line.starts_with("define ") && line.contains(&symbol))
+            .expect("standalone constructor");
+        let start = ir.find(start).unwrap();
+        &ir[start..start + ir[start..].find("\n}").unwrap()]
+    }
+
+    fn check_shared(ir: &str) {
+        let parent = body(ir, "Base");
+        assert!(
+            parent.contains("parentBody"),
+            "fixture must contain a parent body"
+        );
+        for class in ["First", "Second"] {
+            let child = body(ir, class);
+            assert!(child.contains("super.checked.direct"), "{child}");
+            assert!(child.contains("super.checked.live"), "{child}");
+            assert!(
+                child.contains("icmp eq i64"),
+                "live edge must still be checked: {child}"
+            );
+            assert!(child.contains("@spx_shared__Base_constructor("), "{child}");
+            assert!(
+                child.contains("@js_class_value_super_construct_site("),
+                "{child}"
+            );
+            assert!(
+                !child.contains("parentBody"),
+                "parent body was replicated: {child}"
+            );
+            assert!(
+                !child.contains("@js_array_alloc("),
+                "forwarded arrays were repacked: {child}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_derived_entries_share_the_checked_parent_body() {
+        check_shared(&ir("value: any", 16));
+    }
+
+    #[test]
+    fn default_derived_entries_forward_the_parents_packed_rest_abi() {
+        check_shared(&ir("value: any, ...rest: any[]", 16));
+    }
+    #[test]
+    fn small_parents_keep_the_checked_inline_context() {
+        let ir = ir("value: any", 1);
+        for class in ["First", "Second"] {
+            let child = body(&ir, class);
+            assert!(child.contains("super.checked.direct"), "{child}");
+            assert!(child.contains("super.checked.live"), "{child}");
+            assert!(child.contains("parentBody"), "{child}");
+            assert!(!child.contains("@spx_shared__Base_constructor("), "{child}");
+        }
+    }
+
+    #[test]
+    fn capture_slots_keep_the_existing_snapshot_binding() {
+        let ir = ir("value: any, __perry_cap_77: any", 16);
+        for class in ["First", "Second"] {
+            let child = body(&ir, class);
+            assert!(child.contains("super.checked.direct"), "{child}");
+            assert!(child.contains("parentBody"), "{child}");
+            assert!(child.contains("@js_class_capture_value_or("), "{child}");
+            assert!(!child.contains("@spx_shared__Base_constructor("), "{child}");
+        }
+    }
 }
