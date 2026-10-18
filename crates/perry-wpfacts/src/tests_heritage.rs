@@ -617,3 +617,48 @@ fn a_nonconstructor_heritage_alternative_throws_without_escaping_the_valid_paren
         assert!(t.escape.is_none() && t.hard.is_none(), "{}", pf.dump_text());
     }
 }
+
+#[test]
+fn symbol_read_does_not_name_string_fields_or_builtin_constructors() {
+    let pf = facts(
+        r#"
+        const key = Symbol("key");
+        const o = { other: "wrong" };
+        o[key] = 7;
+        const result = { value: o[key] };
+        console.log(result.value);
+    "#,
+    );
+    let value = pf
+        .templates
+        .iter()
+        .flat_map(|t| &t.fields)
+        .find(|f| f.key == "value")
+        .unwrap();
+    assert_eq!(value.kind.desc(), "num|undef", "{}", pf.dump_text());
+}
+
+#[test]
+fn mixed_symbol_and_string_index_retains_full_lookup() {
+    let pf = facts(
+        r#"
+        function read(o, key) { return o[key]; }
+        const key = Symbol("key");
+        const o = { other: "string" }; o[key] = 7;
+        const result = { value: read(o, key), also: read(o, "other") };
+        console.log(result.value, result.also);
+    "#,
+    );
+    let value = pf
+        .templates
+        .iter()
+        .flat_map(|t| &t.fields)
+        .find(|f| f.key == "value")
+        .unwrap();
+    let desc = value.kind.desc();
+    assert!(
+        desc.contains("num") && desc.contains("str"),
+        "{}",
+        pf.dump_text()
+    );
+}

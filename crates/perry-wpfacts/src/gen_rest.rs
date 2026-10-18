@@ -258,6 +258,9 @@ impl<'a> Gen<'a> {
                 self.to_sink(h, "process event handler (called by the runtime)");
                 self.m.top_val("process event registration result")
             }
+            Expr::SymbolNew(..) | Expr::SymbolFor(..) => {
+                self.prim_kids(fx, e, prim::SYMBOL, "symbol description")
+            }
             Expr::ProcessUptime
             | Expr::ProcessCwd
             | Expr::ProcessPid
@@ -311,8 +314,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
-            | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)

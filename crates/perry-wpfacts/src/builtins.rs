@@ -748,7 +748,15 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
         (BuiltinNs::Symbol, _) => {
             implicit_args(m, call, "ToString");
-            ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
+            ret_prim(
+                m,
+                call,
+                if name == "for" {
+                    prim::SYMBOL
+                } else {
+                    prim::SYMBOL | prim::STR | prim::UNDEF
+                },
+            );
         }
         (BuiltinNs::Promise, "resolve" | "reject") => {
             let p = site_tmpl(m, call, "Promise");
@@ -857,7 +865,11 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let e = error_tok(m, call);
             ret_tok(m, call, e);
         }
-        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
+        BuiltinNs::Symbol => {
+            implicit_args(m, call, "symbol description");
+            ret_prim(m, call, prim::SYMBOL);
+        }
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean => {
             implicit_args(m, call, "ToPrimitive");
             ret_prim(m, call, prim::ALL);
         }

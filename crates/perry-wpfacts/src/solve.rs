@@ -1039,8 +1039,6 @@ impl Model {
                         self.add_tok(dst, TOP);
                         continue;
                     }
-                    let all = self.all_fields(t);
-                    self.edge(all, dst);
                     self.add_prim(dst, prim::UNDEF);
                     if self.idx_done.insert((idx, t, dst, 0)) {
                         self.cons(idx, Cons::IdxKey { obj: t, dst });
@@ -1048,8 +1046,23 @@ impl Model {
                 }
             }
             Cons::IdxKey { obj, dst } => {
-                let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
-                if named && self.idx_done.insert((n, obj, dst, 1)) {
+                if prim & (prim::ALL & !(prim::STR | prim::SYMBOL)) != 0
+                    && self.idx_done.insert((n, obj, dst, 2))
+                {
+                    let all = self.all_fields(obj);
+                    self.edge(all, dst);
+                }
+                if prim & prim::SYMBOL != 0 && self.idx_done.insert((n, obj, dst, 3)) {
+                    // Every symbol store uses fieldAny. A symbol cannot name
+                    // a string property such as Object.prototype.constructor.
+                    // The internal atom only adds flow if user code happens
+                    // to use the same string spelling.
+                    let key = self.atom("\u{1}symbol-key");
+                    self.load_from(obj, obj, Key::Named(key), dst);
+                }
+                if (prim & prim::STR != 0 || !toks.is_empty())
+                    && self.idx_done.insert((n, obj, dst, 1))
+                {
                     self.load_from(obj, obj, Key::Any, dst);
                 }
             }

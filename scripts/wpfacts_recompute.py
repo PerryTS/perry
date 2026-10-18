@@ -586,12 +586,15 @@ class Solver:
             for t in toks:
                 if t == TOP:
                     self.add(dst, [TOP]); continue
-                self.edge(self.fall(t), dst)
                 self.add(dst, [], UNDEF)
                 self.addcons(idx, ("idxkey", t, dst))
         elif op == "idxkey":
             _, obj, dst = c
-            if (prim & (STR | SYMBOL)) or toks:
+            if prim & (ALL & ~(STR | SYMBOL)):
+                self.edge(self.fall(obj), dst)
+            if prim & SYMBOL:
+                self.load_from(obj, obj, self.atom("\x01symbol-key"), dst)
+            if (prim & STR) or toks:
                 key = ("idxfull", obj, dst)
                 if key not in self.done:
                     self.done.add(key)
