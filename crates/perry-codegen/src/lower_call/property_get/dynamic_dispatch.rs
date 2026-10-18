@@ -879,10 +879,8 @@ pub(crate) fn try_lower_instance_method_call(
             // Only a family with a static holder proof enters the new
             // pre-argument selection. Native-parent and unsupported wide
             // prototypes keep their existing tower and argument lowering.
-            let family_method_proof = ctx.class_ids.get(&class_name).is_some_and(|cid| {
-                ctx.program_layouts.families.contains_key(cid)
-                    && crate::codegen::static_prototype::chain(ctx, &class_name, property).is_some()
-            });
+            let family_method_proof =
+                crate::codegen::static_prototype::chain(ctx, &class_name, property).is_some();
             let observes_lookup = family_method_proof
                 && crate::expr::method_site::args_may_observe_lookup(ctx, args);
             // An observable argument needs a selection before it runs even
