@@ -646,13 +646,12 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
                 // Deleting it changes neither membership nor insertion order.
-                if family
-                    && super::key_view::position_is_hole(
-                        obj,
-                        ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
-                        slot,
-                    )
-                {
+                let hole = super::key_view::position_is_hole(
+                    obj,
+                    ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
+                    slot,
+                );
+                if family && hole {
                     return true;
                 }
                 // A refused delete changes nothing, so it establishes no
@@ -663,7 +662,11 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                 {
                     return false;
                 }
-                super::layout_desc::note_install_cause(super::layout_desc::install_cause::DELETE);
+                super::layout_desc::note_install_cause(if hole {
+                    super::layout_desc::install_cause::DELETE_HOLE
+                } else {
+                    super::layout_desc::install_cause::DELETE
+                });
                 ensure(obj);
             } else if family {
                 // An absent family spelling has no order entry to retire.
