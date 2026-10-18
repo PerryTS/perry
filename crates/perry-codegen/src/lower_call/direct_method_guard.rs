@@ -28,6 +28,13 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     // the heap address range (a positive subnormal) can never reach the
     // header load — it misses to the runtime guard instead.
     accept_raw_ptr: bool,
+    // `(family layout id, label)`: the receiver class's compiled births carry
+    // that layout id as their ShapeId word (`new_alloc::class_born_on_family`).
+    // A miss of the birth pair whose word is `(class_id, family id)` takes
+    // `label`, which calls the ordinary method body: the word proves the
+    // class and that no own key outside the family's keys exists, which is
+    // all method identity needs. It proves no slot offsets.
+    family_arm: Option<(&str, &str)>,
 ) {
     let deref_idx = ctx.new_block("method_direct.inline_deref");
     let deref_label = ctx.block_label(deref_idx);
@@ -98,6 +105,23 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
 
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);
-        blk.cond_br(&pass, fast_label, fallback_label);
+        let Some((family_id, family_label)) = family_arm else {
+            blk.cond_br(&pass, fast_label, fallback_label);
+            return;
+        };
+        let family_idx = ctx.new_block("method_direct.family");
+        let family_test = ctx.block_label(family_idx);
+        ctx.block().cond_br(&pass, fast_label, &family_test);
+        ctx.current_block = family_idx;
+        let blk = ctx.block();
+        let family_i64 = blk.zext(I32, family_id, I64);
+        let family_high = blk.shl(I64, &family_i64, "32");
+        let expected_family_word = blk.or(I64, &family_high, expected_class_id);
+        let family_ok = blk.icmp_eq(I64, &class_shape, &expected_family_word);
+        // 0: the runtime could not register the layout (then no birth uses it).
+        let registered = blk.icmp_ne(I32, family_id, "0");
+        let family_ok = blk.and(I1, &family_ok, &registered);
+        let family_ok = blk.and(I1, &family_ok, &gc_header_ok);
+        blk.cond_br(&family_ok, family_label, fallback_label);
     }
 }

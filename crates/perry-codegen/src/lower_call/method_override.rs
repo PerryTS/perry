@@ -839,6 +839,37 @@ fn class_chain_may_declare_method_field(ctx: &FnCtx<'_>, class_name: &str, prope
     true
 }
 
+/// The i32 family layout id instances of `class_name` carry when its
+/// compiled births use the family layout (`new_alloc::class_born_on_family`),
+/// loaded from the descriptor's `layout_id` word (written once at startup,
+/// before user code). `None` when births use the birth pair, for static
+/// methods, or when a family key spells `property` (then the word does not
+/// rule out an own method).
+fn family_method_word(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    class_id: u32,
+    property: &str,
+    direct_fn: &str,
+) -> Option<String> {
+    if direct_fn.starts_with("perry_static_") {
+        return None;
+    }
+    let class = ctx.classes.get(class_name).copied()?;
+    if !super::new_alloc::class_born_on_family(ctx, class, class_id) {
+        return None;
+    }
+    let fam = ctx.program_layouts.families.get(&class_id)?;
+    if fam.keys.iter().any(|(k, _)| k == property) {
+        return None;
+    }
+    let desc = crate::layout_desc::note_family_desc_use(class_id);
+    let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
+    let blk = ctx.block();
+    let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
+    Some(blk.load(I32, &id_ptr))
+}
+
 /// Emit a typed-feedback runtime guard before a known class-method direct call.
 ///
 /// The guard validates that the receiver still has the expected class shape,
@@ -1063,6 +1094,23 @@ pub(super) fn emit_guarded_direct_method_call(
         }
         ctx.current_block = guard_idx;
     }
+    // Object model case 2c: a compiled `new C` births at C's family layout,
+    // so its instances carry the family layout id, never the birth pair
+    // above. Their arm calls the ordinary public body (what dispatch by name
+    // resolves to), not the fast arm's layout-specific clones.
+    let family_arm = if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard
+    {
+        family_method_word(ctx, receiver_class_name, expected_class_id, property, direct_fn)
+    } else {
+        None
+    };
+    let family_label = family_arm.as_ref().map(|_| {
+        let idx = ctx.new_block("method_direct.family_call");
+        (idx, ctx.block_label(idx))
+    });
+    let family_guard = family_arm
+        .as_deref()
+        .zip(family_label.as_ref().map(|(_, l)| l.as_str()));
     if inline_single_arm && certificate.is_none() {
         emit_inline_direct_method_shape_guard(
             ctx,
@@ -1073,6 +1121,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &fallback_label,
             true,
+            family_guard,
         );
     }
     if probe_before_runtime_guard {
@@ -1087,8 +1136,19 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &runtime_guard_label,
             false,
+            family_guard,
         );
         ctx.current_block = runtime_guard_idx;
+    }
+    if let Some((family_idx, _)) = family_label {
+        let resume = ctx.current_block;
+        ctx.current_block = family_idx;
+        let value = ctx.block().call(DOUBLE, direct_fn, direct_arg_slices);
+        let truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &value));
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        layout_misses.push((value, truthy, end));
+        ctx.current_block = resume;
     }
     let guard_ok = if certificate.is_some() || multi_arm || inline_single_arm {
         // The chain above already terminated the guard block and every test

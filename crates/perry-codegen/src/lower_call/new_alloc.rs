@@ -385,6 +385,30 @@ pub(super) fn emit_instance_alloc(
     }
 }
 
+/// Object model case 2c: whether `new C` of class `class` (runtime id `cid`)
+/// births at C's static family layout (`perry_alloc_layout`). Such an
+/// instance carries the family's layout id as its ShapeId word, not the
+/// class keys' static ShapeId, so a receiver guard of the class compares
+/// against that word too (`lower_call::method_override`).
+pub(crate) fn class_born_on_family(ctx: &FnCtx<'_>, class: &Class, cid: u32) -> bool {
+    let Some(fam) = ctx.program_layouts.families.get(&cid) else {
+        return false;
+    };
+    // The runtime parent edge the module registers for the class
+    // (`codegen::string_pool`): a declared class's id, else a builtin
+    // parent's reserved id.
+    let registered_parent = class.extends_name.as_deref().map_or(0, |p| {
+        ctx.class_ids
+            .get(p)
+            .copied()
+            .or_else(|| crate::expr::builtin_parent_reserved_class_id(p))
+            .unwrap_or(0)
+    });
+    fam.parent_class_id == registered_parent
+        && class.extends_expr.is_none()
+        && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+}
+
 fn emit_instance_alloc_inner(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -500,29 +524,14 @@ fn emit_instance_alloc_inner(
     // Object model case 2c: a static family's instance is born at its
     // family layout, every slot the hole; the constructor prologue stores
     // its keys and a late key's slot stays the hole until it is written.
-    if let Some(fam) = ctx.program_layouts.families.get(&cid) {
-        // The runtime parent edge the module registers for the class
-        // (`codegen::string_pool`): a declared class's id, else a builtin
-        // parent's reserved id.
-        let registered_parent = class.extends_name.as_deref().map_or(0, |p| {
-            ctx.class_ids
-                .get(p)
-                .copied()
-                .or_else(|| crate::expr::builtin_parent_reserved_class_id(p))
-                .unwrap_or(0)
-        });
-        if fam.parent_class_id == registered_parent
-            && class.extends_expr.is_none()
-            && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
-        {
-            let desc = crate::layout_desc::note_family_desc_use(cid);
-            let raw = ctx.block().call(
-                crate::types::PTR,
-                "perry_alloc_layout",
-                &[(crate::types::PTR, &desc)],
-            );
-            return ctx.block().ptrtoint(&raw, I64);
-        }
+    if class_born_on_family(ctx, class, cid) {
+        let desc = crate::layout_desc::note_family_desc_use(cid);
+        let raw = ctx.block().call(
+            crate::types::PTR,
+            "perry_alloc_layout",
+            &[(crate::types::PTR, &desc)],
+        );
+        return ctx.block().ptrtoint(&raw, I64);
     }
     if class.extends_expr.is_some()
         || (deferred_keys && !ctx.class_header_image_globals.contains_key(class_name))
