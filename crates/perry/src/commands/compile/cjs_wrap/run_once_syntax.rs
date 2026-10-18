@@ -99,6 +99,7 @@ impl Visit for Uses {
                 | "self"
                 | "eval"
                 | "Function"
+                | "Reflect"
         ) {
             self.0 += 1;
         }

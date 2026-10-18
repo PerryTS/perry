@@ -79,6 +79,10 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
         once: HashSet<String>,
     }
     impl Visit for Names {
+        // A named function may be exported without an extra identifier read
+        // in this module. Its module-local call count is not a whole-program
+        // proof. Direct IIFE expressions still use the existing span proof.
+        fn visit_fn_decl(&mut self, _: &ast::FnDecl) {}
         fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
             let name = c.ident.sym.to_string();
             *self.counts.entry(name.clone()).or_default() += 1;
@@ -414,6 +418,18 @@ mod tests {
         assert_eq!(
             once("class A {} if (x) { class B {} } try { class C {} } catch { class D {} }"),
             vec!["A", "B", "C", "D"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod name_proof_tests {
+    #[test]
+    fn module_and_iife_names_exclude_named_and_exported_function_bodies() {
+        let ast = perry_parser::parse_typescript("class Top {} (() => { class Iife {} })(); export function make() { class Exported {} return Exported; } make(); function one() { class Named {} } one();", "names.ts").unwrap();
+        assert_eq!(
+            super::class_names(&ast).into_iter().collect::<Vec<_>>(),
+            vec!["Iife", "Top"]
         );
     }
 }
