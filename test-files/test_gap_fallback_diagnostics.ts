@@ -18,3 +18,6 @@ const entries: any = { left: (n: number) => n + 1, right: (n: number) => n + 2 }
 const pick = process.argv[3] || 'left';
 const invoke: any = entries[pick];
 console.log(invoke(8));
+
+function makeClass() { return class { value() { return 17; } }; }
+const Generated = makeClass(); const generated = new Generated(); const method = generated.value; console.log(method.call(generated));

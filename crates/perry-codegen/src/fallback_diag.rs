@@ -522,7 +522,10 @@ fn generic_helper(helper: &str) -> bool {
         || helper == "js_object_super_put_value_set"
         || helper.starts_with("js_bm_call")
         || helper.starts_with("js_closure_call")
+        || helper.starts_with("js_closure_unbox_callee_checked")
         || helper.starts_with("js_native_call_method")
+        || helper.starts_with("js_class_method_entry_")
+        || helper.starts_with("js_static_method_entry_")
         || helper.starts_with("js_typed_feedback_native_call_method")
         || helper.starts_with("js_super_method_call")
         || matches!(

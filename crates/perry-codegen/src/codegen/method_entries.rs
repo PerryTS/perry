@@ -35,6 +35,14 @@ pub(super) fn emit_static_method_entry(
 ) -> (String, String) {
     use crate::fn_info::RestKind;
     let entry_name = format!("{}__clo", e.llvm_name);
+    let _fallback = crate::fallback_diag::emission(
+        &entry_name,
+        "lexical home",
+        "static method entry",
+        "static method entry requires selecting/restoring its lexical class and this binding",
+        "class identity, lexical home and static this binding",
+        &[e.cid],
+    );
     {
         let n = e.param_count as usize;
         let mut params: Vec<(crate::types::LlvmType, String)> =
@@ -129,6 +137,14 @@ pub(super) fn emit_class_method_entry(
 ) -> (String, String) {
     use crate::fn_info::RestKind;
     let entry_name = format!("{}__eclo", e.llvm_name);
+    let _fallback = crate::fallback_diag::emission(
+        &entry_name,
+        "lexical home",
+        "method entry",
+        "per-evaluation method entry requires selecting/restoring its lexical home and private brand",
+        "per-evaluation class identity and private lexical brand",
+        &[e.cid],
+    );
     {
         let n = e.param_count as usize;
         let mut params: Vec<(crate::types::LlvmType, String)> =
