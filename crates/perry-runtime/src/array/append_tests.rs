@@ -161,3 +161,26 @@ fn fill_values_matches_one_push_per_value() {
         }
     }
 }
+
+#[test]
+fn append_growth_with_spare_capacity_preserves_live_prefix_and_holes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let mut arr = js_array_alloc(32);
+        arr = js_array_push_f64(arr, 1.25);
+        let object = crate::object::js_object_alloc(0, 0);
+        let value = crate::value::js_nanbox_pointer(object as i64);
+        arr = js_array_push_f64(arr, value);
+        let alias = arr;
+        let grown = js_array_grow(arr, 65);
+        assert_ne!(grown, alias);
+        assert_eq!((*grown).length, 2);
+        assert_eq!((*grown).capacity, 65);
+        assert_eq!(js_array_get_f64(alias, 0), 1.25);
+        assert_eq!(js_array_get_f64(alias, 1).to_bits(), value.to_bits());
+        for i in 2..(*grown).capacity as usize {
+            assert_eq!(*array_elements_ptr(grown).add(i), crate::value::TAG_HOLE);
+        }
+    }
+}

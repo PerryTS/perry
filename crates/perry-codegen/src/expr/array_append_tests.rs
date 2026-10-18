@@ -47,7 +47,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
 }
 
 #[test]
-fn numeric_append_has_only_store_and_length_publication_in_its_fast_arm() {
+fn numeric_append_changes_scan_declaration_without_metadata_calls() {
     for ty in [Type::Any, Type::Array(Box::new(Type::Any))] {
         let ir = append_ir(ty, Expr::Number(1.25));
         let label = ir
@@ -62,6 +62,11 @@ fn numeric_append_has_only_store_and_length_publication_in_its_fast_arm() {
             .next()
             .unwrap();
         assert!(block.contains("store double"));
+        assert!(block.find("store i16").unwrap() < block.find("store double").unwrap());
+        assert!(
+            ir.contains("407339263"),
+            "numeric admission must allow all-pointer to scalar transitions"
+        );
         assert!(block.contains("store i32"));
         assert!(
             !block.contains("call "),
@@ -77,7 +82,7 @@ fn numeric_append_has_only_store_and_length_publication_in_its_fast_arm() {
 #[test]
 fn values_append_inline_with_their_barrier_and_share_the_runtime_continuation() {
     let ir = append_ir(Type::Any, Expr::String("heap string append".into()));
-    // Growth, layout changes, a unique string and every unproven receiver
+    // Growth, raw-f64/element-shape work and every unproven receiver
     // keep the one runtime continuation.
     assert!(ir.contains("call double @js_array_append_set("));
     // The note-free append (`note_noop`) is inline: one store, the slot
@@ -85,12 +90,23 @@ fn values_append_inline_with_their_barrier_and_share_the_runtime_continuation() 
     let label = ir
         .lines()
         .find(|line| line.starts_with("append.fast.") && line.contains(':'))
-        .expect("a value append has the inline note-free arm");
+        .expect("a value append has the inline layout-transition arm");
     let block = ir.split_once(label).unwrap().1;
     assert!(block.contains("store double"));
+    assert!(block.find("store i16").unwrap() < block.find("store double").unwrap());
+    let string_arm = ir.split("append.string.").last().unwrap();
+    assert!(
+        string_arm.contains("store i32 0"),
+        "store sharing rather than rejecting unique strings"
+    );
+    assert!(
+        ir.contains("415727871"),
+        "the plain guard excludes raw and element-shape layouts"
+    );
     assert!(ir.contains("@js_write_barrier_slot_validated_parent("));
     assert!(!ir.contains("call i64 @js_array_append_grow("));
     assert!(!ir.contains("call double @js_array_note_numeric_write_value("));
+    assert!(!ir.contains("call i32 @perry_array_element_kind("));
     assert!(!ir.contains("call void @js_string_addref_if_heap_string("));
     let llvm = inkwell::context::Context::create();
     let parsed = crate::inprocess::parse_ir_text(&llvm, &ir, "shared string append").unwrap();

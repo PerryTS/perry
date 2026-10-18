@@ -156,16 +156,11 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             return arr;
         }
 
-        // Double the capacity, or use min_capacity if larger.
-        //
-        // RULE 3 (`object/shape_rule3.rs`): the result lands in `capacity` at
-        // payload `+4`, so it is bounded here, before the replacement block is
-        // sized. The bound also removes the `old_capacity * 2` overflow this
-        // line used to carry: with `old_capacity <= 2^31-1` the doubling can
-        // no longer wrap a `u32`.
-        // The doubling is clamped to the allocation ceiling
-        // (`ARRAY_MAX_CAPACITY`) so an array near it still grows by what it
-        // needs; only `min_capacity` itself past the ceiling throws.
+        // Double up to ARRAY_MAX_CAPACITY, or honor a larger minimum.
+        // The allocation ceiling keeps both the u32 byte size and the
+        // capacity word (which shares the shape-id band) representable.
+        // Clamp doubling before validating min_capacity so only a request
+        // beyond the ceiling throws, rather than an oversized growth factor.
         let doubled = std::cmp::min(old_capacity * 2, super::alloc::ARRAY_MAX_CAPACITY);
         let new_capacity =
             super::alloc::array_capacity_or_throw(std::cmp::max(doubled, min_capacity));
@@ -225,26 +220,18 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             std::ptr::addr_of_mut!((*new_ptr).named) as usize,
             crate::value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
         );
-        // GC_STORE_AUDIT(BARRIERED): growth normalizes the logical backing
-        // range, transfers its layout, and replays its write barriers below.
-        ptr::copy_nonoverlapping(
-            array_elements_ptr(arr),
-            array_elements_ptr(new_ptr),
-            old_capacity as usize,
-        );
-        // HOLE-initialize the newly added [old_capacity, new_capacity) slack
-        // so it never holds stale arena bits the whole-heap from-space scan
-        // misreads as live from-space pointers.
+        // Copy the live dense prefix; sparse indices remain in the named layout.
+        let used = (*arr).length.min(old_capacity) as usize;
+        // GC_STORE_AUDIT(BARRIERED): growth normalizes the live backing
+        // prefix, transfers its layout, and replays its write barriers below.
+        ptr::copy_nonoverlapping(array_elements_ptr(arr), array_elements_ptr(new_ptr), used);
+        // Hole-fill unused slack so the from-space scan sees no stale pointers.
         {
             let new_elems =
                 crate::array::array_elements_ptr(new_ptr as *const ArrayHeader) as *mut u64;
-            for i in old_capacity as usize..new_capacity as usize {
-                // GC_STORE_AUDIT(INIT): initialization of the freshly grown
-                // array's added [old_capacity, new_capacity) slack — storage
-                // this allocation has never published, written with the
-                // non-pointer TAG_HOLE sentinel. No edge is created, so no
-                // write barrier (the copied prefix replays its own barriers
-                // via replay_array_growth_write_barriers below).
+            for i in used..new_capacity as usize {
+                // GC_STORE_AUDIT(INIT): unpublished slack contains only
+                // TAG_HOLE; the copied live prefix replays barriers below.
                 ptr::write(new_elems.add(i), crate::value::TAG_HOLE);
             }
         }
