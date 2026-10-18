@@ -1,0 +1,1 @@
+Fix optional WebAssembly host detection for ordinary object properties such as `vm.measureMemory().WebAssembly`. The previous token-only fallback incorrectly required the wasm host for unrelated metadata. Inspect HIR receivers while retaining a conservative explicit-global-origin fallback for escaping aliases, without claiming full alias analysis.
