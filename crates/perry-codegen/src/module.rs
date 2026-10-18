@@ -307,11 +307,11 @@ impl LlModule {
         }
         self.declared_names.insert(name.to_string());
         let param_str = param_types.join(", ");
-        // Verified-pure runtime helpers get the #2/#3 optimization groups
-        // (#6082) — see `helper_decl_attrs` for the audit invariants. The
+        // Runtime helpers get `nounwind` from the linked archive's table and
+        // the audited memory contracts (#6082); see `helper_decl_attrs`. The
         // lookup is name-keyed here in the single declaration funnel so
         // every declaration path agrees on the attributes.
-        let attrs = helper_decl_attrs(name);
+        let attrs = helper_decl_attrs(&self.gc_effects(), name);
         self.declarations.push((
             name.to_string(),
             format!("declare {} @{}({}){}", return_type, name, param_str, attrs),
@@ -354,7 +354,7 @@ impl LlModule {
         }
         self.declared_names.insert(name.to_string());
         let param_str = param_types.join(", ");
-        let attrs = helper_decl_attrs(name);
+        let attrs = helper_decl_attrs(&self.gc_effects(), name);
         self.declarations.push((
             name.to_string(),
             format!(
@@ -911,7 +911,7 @@ impl LlModule {
             ir.push('\n');
         }
         ir.push('\n');
-        self.push_attrs_and_metadata(&mut ir);
+        self.push_metadata(&mut ir);
         ir
     }
 
@@ -971,43 +971,15 @@ impl LlModule {
             ir.push('\n');
         }
 
-        self.push_attrs_and_metadata(&mut ir);
+        self.push_metadata(&mut ir);
 
         ir
     }
 
-    /// Emit the shared setjmp attribute groups + the `!0`/buffer-alias metadata
-    /// tail. Factored out of [`to_ir`] so each codegen unit can replicate the
-    /// same attributes and metadata (so `#0`/`#1` and `!N` references resolve in
-    /// every unit). Over-emitting an unused attribute group is harmless.
-    fn push_attrs(&self, ir: &mut String) {
-        // Verified runtime-helper groups (#6082) — emitted only when a
-        // declaration actually references them (mirrors the setjmp gating
-        // above). See `helper_decl_attrs` for the audit invariants.
-        let mut used_pure = false;
-        let mut used_readonly = false;
-        let mut used_nounwind_willreturn = false;
-        for name in &self.declared_names {
-            match helper_decl_attrs(name) {
-                " #2" => used_pure = true,
-                " #3" => used_readonly = true,
-                " #4" => used_nounwind_willreturn = true,
-                _ => {}
-            }
-        }
-        if used_pure {
-            ir.push_str("\nattributes #2 = { nounwind willreturn readnone }\n");
-        }
-        if used_readonly {
-            ir.push_str("\nattributes #3 = { nounwind willreturn readonly }\n");
-        }
-        if used_nounwind_willreturn {
-            ir.push_str("\nattributes #4 = { nounwind willreturn }\n");
-        }
-    }
-
-    fn push_attrs_and_metadata(&self, ir: &mut String) {
-        self.push_attrs(ir);
+    /// Emit the `!0`/buffer-alias metadata tail. Factored out of [`to_ir`]
+    /// so each codegen unit can replicate the same metadata (so `!N`
+    /// references resolve in every unit).
+    fn push_metadata(&self, ir: &mut String) {
         // Issue #52: `!0 = !{}` referenced by `!invariant.load !0`, plus the
         // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
         // loops only with these present.
@@ -1024,8 +996,7 @@ impl LlModule {
     /// and duplicated gigabytes of parse input. References between metadata
     /// nodes are closed transitively (scope lists -> scopes -> domain), while
     /// preserving original definition order for deterministic output.
-    fn push_attrs_and_referenced_metadata_ids(&self, ir: &mut String, mut needed: HashSet<u32>) {
-        self.push_attrs(ir);
+    fn push_referenced_metadata_ids(&self, ir: &mut String, mut needed: HashSet<u32>) {
         ir.push_str("\n!0 = !{}\n");
         needed.remove(&0);
         let mut by_id: HashMap<u32, &str> = HashMap::with_capacity(self.metadata_lines.len());
@@ -1426,7 +1397,7 @@ impl LlModule {
             .into_iter()
             .map(|metadata_refs| {
                 let mut post = String::new();
-                self.push_attrs_and_referenced_metadata_ids(&mut post, metadata_refs);
+                self.push_referenced_metadata_ids(&mut post, metadata_refs);
                 post
             })
             .collect();

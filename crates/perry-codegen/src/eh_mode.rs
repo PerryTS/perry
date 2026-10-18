@@ -111,7 +111,11 @@ mod tests {
             "js_object_get_field_nonptr",
             "js_object_get_field_value",
         ] {
-            assert_eq!(crate::module::helper_decl_attrs(name), " cold", "{name}");
+            assert_eq!(
+                crate::module::helper_decl_attrs(crate::gc_call_effects::test_effects(), name),
+                " cold",
+                "{name}"
+            );
             assert!(
                 !nothrow_callee(crate::gc_call_effects::test_effects(), name),
                 "{name}"
@@ -124,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_nounwind_groups_keep_their_contract() {
+    fn nothrow_callee_reads_the_table_throws_column() {
         for name in [
             "js_nanbox_pointer",
             "js_is_truthy",

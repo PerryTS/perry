@@ -358,13 +358,12 @@ const COLD_HELPERS: &[&str] = &[
     "js_stack_overflow",
 ];
 
-// Every helper in the three nounwind groups below (`#2`, `#3`, `#4`) is an
-// audited promise that the call never unwinds; the runtime archive's table
-// must prove it `throws=no`. `perry-gc-effects`' `workspace_sidecar` test
-// reads these three lists by name from this file and checks them over the
-// freshly built archives of every CI target.
+// The two memory-contract lists below are audited facts about what a
+// helper's body reads and writes, which no table carries. Whether a call can
+// unwind is not part of them: `nounwind` comes only from the table of the
+// archive being linked (see `helper_decl_attrs`).
 
-/// Group `#2`: nounwind, willreturn, readnone.
+/// `willreturn readnone`.
 const PURE_HELPERS: &[&str] = &[
     // PURE — each verified: pure bit tests/masking on the f64/i64 args,
     // total over arbitrary bits, no memory access anywhere in the body.
@@ -386,7 +385,7 @@ const PURE_HELPERS: &[&str] = &[
     "js_typed_string_arg_guard",
 ];
 
-/// Group `#3`: nounwind, willreturn, readonly.
+/// `willreturn readonly`.
 const READONLY_HELPERS: &[&str] = &[
     // READONLY — verified: tag ladder plus reads of StringHeader.utf16_len
     // (via is_valid_string_ptr, a pure magnitude check) and BigInt limbs
@@ -401,93 +400,52 @@ const READONLY_HELPERS: &[&str] = &[
     "js_string_compare",
 ];
 
-/// Group `#4`: nounwind, willreturn.
-const NOUNWIND_HELPERS: &[&str] = &[
-    // Object model step 5 (`object/layout_probe.rs`): the unknown-receiver
-    // probe. Loads and compares, one bounded probe of a key index; its only
-    // store derives a record's probe word (one malloc on a record's first
-    // probe). No throw, lock, collection or user code.
-    "perry_probe_get",
-    "perry_probe_get_value",
-    "perry_probe_get_binding",
-    "perry_probe_get_keyed",
-    // NOUNWIND+WILLRETURN only (#4, repsel Phase 4a.0) — each verified
-    // (`typed_feedback.rs` / `array/header.rs`): no `js_throw` (longjmp)
-    // anywhere in the body, every loop bounded by the 16M length/capacity
-    // sanity caps, no allocation, no GC trigger. They are NOT readonly:
-    // the numeric guards' first-touch path REBUILDS unmarked arrays into
-    // raw-f64 layout (slot writes + flag store), feedback mode
-    // (`PERRY_TYPED_FEEDBACK`, a runtime env check) records observations,
-    // and `js_array_numeric_value_to_raw_f64`'s ClassRef probe takes
-    // registry RwLock reads (a lock word write). #6082 trap notes apply:
-    // argmem is unsound for NaN-box args, and `willreturn` is only
-    // admissible because these helpers cannot reach `js_throw` — any
-    // divergence is a Rust panic-abort, which never resumes the program.
-    // NOT in this list: the NUMERIC index guards
-    // (`js_typed_feedback_numeric_array_index_{get,set}_guard`). They resolve
-    // the receiver through `clean_arr_ptr_resolve`, which force-materializes a
-    // lazy JSON array, and that runs the generic `js_object_set_field_by_name`
-    // (`json_tape.rs` `materialize_object`). The generated throws column cannot
-    // prove that call non-throwing for every key, so they keep no `nounwind`.
-    "js_typed_feedback_plain_array_index_get_guard",
-    "js_typed_feedback_plain_array_index_set_guard",
-    "js_typed_feedback_numeric_array_push_guard",
-    "js_array_numeric_value_to_raw_f64",
-    // S2 GC-leaf hits (`expr/ic_fast_split.rs`), each `extern "C"` with
-    // no throw anywhere in its call graph — every case that would throw
-    // (nullish receiver, setter/getter, TDZ) is declined to the `_fast_miss`
-    // continuation instead — and no loop outside the audited guards'
-    // bounded ones. Being nounwind is also what keeps them a plain `call`
-    // inside a `try`, so the leaf marking never depends on the invoke arm.
-    // The store probe (`expr/put_value_store_ic.rs`).
-    "perry_probe_set",
-    // A family constructor run's check (`expr/layout_read.rs`): a GC leaf
-    // with no throw.
-    "perry_family_run_admits",
-];
-
-/// Attribute-group suffix for a runtime-helper `declare` line, keyed by
-/// helper name (#6082 tranche 1).
+/// Function attributes for a runtime-helper `declare` line (#6082 tranche 1).
 ///
 /// Without attributes, -O3 must treat every `js_*` call as "may read and
-/// write all memory, may not return" — no CSE/LICM/DCE across any helper
-/// call. The two groups below re-enable those optimizations for a small,
-/// individually audited allowlist:
+/// write all memory, may not return, may unwind": no CSE/LICM/DCE across any
+/// helper call. Two sources re-enable those optimizations, and each states
+/// only what it knows:
 ///
-/// * `#2` (PURE) = `nounwind willreturn readnone`. Invariant: the
-///   helper's Rust body (transitively) performs NaN-box BIT manipulation
-///   only — no loads, no stores, no allocation, no GC trigger, no
-///   `js_throw`/longjmp, and it is total over arbitrary input bits (no
-///   panic, no UB), so LLVM may CSE/hoist/sink/delete it freely.
-/// * `#3` (READONLY) = `nounwind willreturn readonly`. Invariant: the
-///   helper may READ heap memory (string headers, BigInt limbs) but never
-///   writes, never allocates, never triggers GC, never takes a lock, and
-///   never throws. LLVM may CSE/LICM it across write-free regions and
-///   delete unused calls, but must still order it against any
-///   possibly-writing call — which keeps it correct w.r.t. the moving GC,
-///   because every GC-capable helper stays maximally clobbering.
+/// * **Unwinding: the table.** `nounwind` is emitted exactly when the GC
+///   effects table of the archive being linked proves the symbol
+///   `throws=no` ([`GcEffects::runtime_throws`], the same fact that picks
+///   `call` over `invoke` in `eh_mode::nothrow_callee`). No hand list states
+///   it, so a declaration can never promise more than the linked bytes do.
+///   Under the all-unsafe table (no archive, Geisterhand, UI-lib runtimes)
+///   nothing is `nounwind`.
+/// * **Memory: the audited contracts.** No table carries what a body reads
+///   or writes, so the two lists above stay hand-audited:
+///   - PURE = `willreturn readnone`. Invariant: the helper's Rust body
+///     (transitively) performs NaN-box BIT manipulation only: no loads, no
+///     stores, no allocation, no GC trigger, and it is total over arbitrary
+///     input bits (no panic, no UB), so LLVM may CSE/hoist/sink it freely.
+///   - READONLY = `willreturn readonly`. Invariant: the helper may READ heap
+///     memory (string headers, BigInt limbs) but never writes, never
+///     allocates, never triggers GC, never takes a lock. LLVM may CSE/LICM it
+///     across write-free regions, but must still order it against any
+///     possibly-writing call, which keeps it correct w.r.t. the moving GC,
+///     because every GC-capable helper stays maximally clobbering.
+///   A call LLVM may delete when unused must also be `nounwind`: `willreturn`
+///   alone keeps a may-unwind call (LLVM counts unwinding as a side effect).
 ///
-/// SYNTAX NOTE: the groups are spelled with the LEGACY `readnone` /
-/// `readonly` function attributes, NOT the modern `memory(none)` /
-/// `memory(read)` — old LLVM asm parsers (e.g. the Apple clang 15 shipped
-/// on macos-14 CI runners, and any user clang predating LLVM's `memory`
-/// attribute) reject the modern spelling with "unterminated attribute
-/// group", which killed every `--backend llvm` compile through that clang
-/// (caught by the simctl iOS smoke gating the v0.5.1265 release). New
-/// parsers still accept the legacy spelling and auto-upgrade it to the
-/// equivalent `memory(...)` form, so semantics are identical everywhere.
+/// SYNTAX NOTE: spelled with the LEGACY `readnone` / `readonly` function
+/// attributes, NOT the modern `memory(none)` / `memory(read)`: old LLVM asm
+/// parsers (e.g. the Apple clang 15 shipped on macos-14 CI runners, and any
+/// user clang predating LLVM's `memory` attribute) reject the modern
+/// spelling, which killed every `--backend llvm` compile through that clang
+/// (caught by the simctl iOS smoke gating the v0.5.1265 release). New parsers
+/// still accept the legacy spelling and auto-upgrade it to the equivalent
+/// `memory(...)` form, so semantics are identical everywhere.
 ///
-/// SOUNDNESS NOTES (read before adding an entry):
+/// SOUNDNESS NOTES (read before adding a memory-contract entry):
 /// * Deliberately reads-any (`readonly`, i.e. `memory(read)`), NOT an
 ///   argmem-scoped form: helper args are f64 NaN-boxes, not LLVM pointer
 ///   arguments, so `argmem` would mean "reads no memory at all" and
 ///   license CSE/DSE across real heap reads.
-/// * Anything that can allocate or trigger GC gets NO group — the moving
-///   GC's shadow-stack reload discipline depends on those calls staying
-///   maximally clobbering.
-/// * Anything that can reach `js_throw` (raises through the unwinder) gets NO group —
-///   `willreturn` would let DCE delete a throwing call whose result is
-///   unused, silently dropping the exception.
+/// * Anything that can allocate or trigger GC gets NO memory contract: the
+///   moving GC's reload discipline depends on those calls staying maximally
+///   clobbering.
 ///
 /// Audited and rejected (do not re-add without a new audit):
 /// `js_nanbox_string` (allocates an empty string for null input),
@@ -504,8 +462,6 @@ fn helper_decl_contract(name: &str) -> HelperDeclContract {
         HelperDeclContract::Pure
     } else if READONLY_HELPERS.contains(&name) {
         HelperDeclContract::ReadOnly
-    } else if NOUNWIND_HELPERS.contains(&name) {
-        HelperDeclContract::NoUnwind
     } else {
         HelperDeclContract::Conservative
     }
@@ -516,7 +472,6 @@ enum HelperDeclContract {
     Cold,
     Pure,
     ReadOnly,
-    NoUnwind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -534,14 +489,21 @@ pub(crate) fn helper_memory_effect(name: &str) -> HelperMemoryEffect {
     }
 }
 
-pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
-    match helper_decl_contract(name) {
+/// The trailing function attributes of `name`'s `declare` line under
+/// `effects` (see [`helper_decl_contract`]): empty, or a leading space
+/// followed by the attributes.
+pub(crate) fn helper_decl_attrs(effects: &crate::gc_call_effects::GcEffects, name: &str) -> String {
+    let mut attrs = String::new();
+    if !effects.runtime_throws(name) {
+        attrs.push_str(" nounwind");
+    }
+    attrs.push_str(match helper_decl_contract(name) {
         HelperDeclContract::Conservative => "",
         HelperDeclContract::Cold => " cold",
-        HelperDeclContract::Pure => " #2",
-        HelperDeclContract::ReadOnly => " #3",
-        HelperDeclContract::NoUnwind => " #4",
-    }
+        HelperDeclContract::Pure => " willreturn readnone",
+        HelperDeclContract::ReadOnly => " willreturn readonly",
+    });
+    attrs
 }
 
 /// Synthesize an external `declare` line matching a locally-defined function's

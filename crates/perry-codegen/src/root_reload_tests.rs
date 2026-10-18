@@ -89,8 +89,7 @@ fn a_non_collecting_window_is_left_byte_for_byte_alone() {
 #[test]
 fn dispatch_probes_do_not_open_a_reload_window() {
     // `js_object_get_own_field_or_undef` was the second probe here. The
-    // generated call-graph table proves it reaches JS (#11522), so the hand
-    // list alone no longer makes it non-collecting; see
+    // linked archive's table decides it, not the hand list (#11522); see
     // `own_field_probe_reaching_js_opens_a_reload_window` below.
     for helper in ["js_object_get_class_id"] {
         assert!(
@@ -104,8 +103,9 @@ fn dispatch_probes_do_not_open_a_reload_window() {
     }
 }
 
-/// #11522: the hand-kept `NON_COLLECTING` entry is overruled by the generated
-/// table, because the call graph proves the helper can reach a Proxy trap.
+/// #11522: the hand-kept `NON_COLLECTING` entry is overruled by the linked
+/// archive's table: in a world whose table says the helper can collect (the
+/// test world states it), the reload window stays.
 #[test]
 fn own_field_probe_reaching_js_opens_a_reload_window() {
     let helper = "js_object_get_own_field_or_undef";

@@ -688,7 +688,12 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
                 node.calls.insert(node.fmt.norm(&g));
                 continue;
             }
-            if mn.starts_with("bl") && tlv_thunk(cfg, i, &reg) {
+            // A Mach-O thread-local access calls its descriptor's thunk. The
+            // machine outliner can split that access off into an
+            // `OUTLINED_FUNCTION_*` that tail-jumps (`br`) to the thunk,
+            // which then returns to the outlined function's caller: the same
+            // edge as the `blr` form.
+            if (mn.starts_with("bl") || mn == "br") && tlv_thunk(cfg, i, &reg) {
                 node.calls.insert("__tlv_get_addr".into());
                 continue;
             }
@@ -875,6 +880,26 @@ mod tests {
             let mut n = Node::new("fixture.o".into(), "__TEXT,__text".into(), 0, Format::MachO);
             analyze_node(&mut n, &body, Arch::Arm64);
             assert_eq!(n.indirect_calls, usize::from(clobber));
+            assert_eq!(n.calls.contains("__tlv_get_addr"), !clobber);
+        }
+    }
+    /// The outlined form (`OUTLINED_FUNCTION_*` on macOS, #12743's last
+    /// witness): the descriptor load, then a tail jump to its thunk.
+    #[test]
+    fn macho_tlv_thunk_tail_jump_is_the_tlv_call() {
+        for clobber in [false, true] {
+            let mut load = ins(0, "ldr", "x0, [x0]");
+            load.relocs
+                .push(("TLVP_LOAD_PAGEOFF12".into(), "_some_tls".into()));
+            let mut body = vec![load];
+            if clobber {
+                body.push(ins(4, "mov", "x0, x1"));
+            }
+            body.push(ins(8, "ldr", "x8, [x0]"));
+            body.push(ins(12, "br", "x8"));
+            let mut n = Node::new("fixture.o".into(), "__TEXT,__text".into(), 0, Format::MachO);
+            analyze_node(&mut n, &body, Arch::Arm64);
+            assert_eq!(n.indirect_jmps, usize::from(clobber));
             assert_eq!(n.calls.contains("__tlv_get_addr"), !clobber);
         }
     }

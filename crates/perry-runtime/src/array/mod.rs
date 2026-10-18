@@ -12,6 +12,7 @@ mod custom_proto_scope_tests;
 mod element_shape;
 mod fill_extend;
 mod flat_clone;
+mod forwarding;
 mod from_concat;
 mod generic;
 #[cfg(test)]
@@ -143,6 +144,7 @@ pub use self::flat_clone::{
     js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys, js_array_values,
     js_arraylike_flat, js_short_packed_spread_values,
 };
+pub(crate) use self::forwarding::clean_owned_arr_ptr;
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,

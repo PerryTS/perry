@@ -257,12 +257,18 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
     // words with the target address. Resolve once, then read BOTH facts from
     // the live header; mixing a resolved length with the stale from-space
     // capacity can truncate an otherwise exact shape count.
-    let live = clean_arr_ptr(arr);
+    //
+    // A keys array is an internal dense array, never a Proxy, Set/Map,
+    // array-like object or lazy JSON array, so neither the generic
+    // `js_array_length` nor `clean_arr_ptr` (whose exotic arms run user JS
+    // and can throw) has anything to add here: the owned-array resolver
+    // follows forwarding only. A pointer that does not resolve to an array
+    // has no keys (#12743).
+    let live = clean_owned_arr_ptr(arr);
     if live.is_null() {
-        return js_array_length(arr) as usize;
+        return 0;
     }
-    let raw = js_array_length(live) as usize;
-    raw.min((*live).capacity as usize)
+    ((*live).length as usize).min((*live).capacity as usize)
 }
 
 /// Read slot `index` of a dense internal keys/property array.

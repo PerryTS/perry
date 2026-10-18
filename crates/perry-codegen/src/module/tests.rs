@@ -687,114 +687,97 @@ fn render_codegen_units_single_unit_matches_to_ir() {
     assert_eq!(m.render_codegen_units(1), vec![m.to_ir()]);
 }
 
-#[test]
-fn helper_attr_groups_on_verified_declarations_only() {
-    // #6082: allowlisted helpers carry the #2 (pure) / #3 (readonly)
-    // group refs; a non-allowlisted helper (js_nanbox_string ALLOCATES)
-    // must not; each attributes line is emitted exactly once.
+/// A module compiled under `table` (the per-compilation install that
+/// `codegen::compile_module` performs before any declaration).
+fn module_under(table: &str) -> LlModule {
     let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+    m.set_gc_effects(std::sync::Arc::new(
+        crate::gc_call_effects::table_from_rows(table),
+    ));
+    m
+}
+
+#[test]
+fn nounwind_comes_from_the_table_and_memory_from_the_contracts() {
+    // `nounwind` exactly on the symbols the linked table proves
+    // `throws=no`; the audited memory contracts (#6082) independently.
+    let mut m = module_under(
+        "js_nanbox_get_pointer\tLeaf\tno\n\
+         js_is_truthy\tLeaf\tno\n\
+         js_string_compare\tLeaf\tyes\n\
+         js_nanbox_string\tAllocOnly\tno\n\
+         js_string_compare_value\tReenters\tyes\n\
+         js_object_get_field_slow\tReenters\tyes\n\
+         js_write_barrier_root_nanbox\tLeaf\tno\n",
+    );
     m.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
     m.declare_function("js_is_truthy", I32, &[DOUBLE]);
     m.declare_function("js_string_compare", I32, &[I64, I64]);
     m.declare_function("js_string_compare_value", I32, &[DOUBLE, DOUBLE]);
     m.declare_function("js_nanbox_string", DOUBLE, &[I64]);
-    m.declare_function(
-        "js_typed_feedback_plain_array_index_get_guard",
-        I32,
-        &[I64, DOUBLE, I32, I32],
-    );
-    m.declare_function(
-        "js_typed_feedback_numeric_array_index_get_guard",
-        I32,
-        &[I64, DOUBLE, I32, I32],
-    );
+    m.declare_function("js_object_get_field_slow", DOUBLE, &[I64, I64]);
+    m.declare_function("js_write_barrier_root_nanbox", VOID, &[DOUBLE]);
+    m.declare_function("not_in_the_table", VOID, &[]);
     let f = m.define_function("main", I32, vec![]);
     f.create_block("entry").ret(I32, "0");
 
     let ir = m.to_ir();
-    assert!(
-        ir.contains("declare i64 @js_nanbox_get_pointer(double) #2"),
-        "pure helper must carry the #2 group ref"
-    );
-    assert!(
-        ir.contains("declare i32 @js_is_truthy(double) #3"),
-        "readonly helper must carry the #3 group ref"
-    );
-    assert!(
-        ir.contains("declare double @js_nanbox_string(i64)\n"),
-        "allocating helper must stay attribute-free"
-    );
-    assert!(ir.contains("declare i32 @js_string_compare(i64, i64) #3"));
-    assert!(ir.contains("declare i32 @js_string_compare_value(double, double)\n"));
-    assert!(!ir.contains("js_nanbox_string(i64) #"));
-    assert_eq!(
-        ir.matches("attributes #2 = { nounwind willreturn readnone }")
-            .count(),
-        1
-    );
-    assert_eq!(
-        ir.matches("attributes #3 = { nounwind willreturn readonly }")
-            .count(),
-        1
-    );
-    // Repsel 4a.0: the array-index guards carry #4 (nounwind willreturn,
-    // no memory attribute — the first-touch path rebuilds raw-f64 layout).
-    assert!(ir.contains(
-        "declare i32 @js_typed_feedback_plain_array_index_get_guard(i64, double, i32, i32) #4"
-    ));
-    // The numeric guards can force-materialize a lazy JSON array (a generic
-    // property set the throws column cannot prove inert): no nounwind.
-    assert!(ir.contains(
-        "declare i32 @js_typed_feedback_numeric_array_index_get_guard(i64, double, i32, i32)\n"
-    ));
-    assert_eq!(
-        ir.matches("attributes #4 = { nounwind willreturn }")
-            .count(),
-        1
-    );
-    // No setjmp declared → the setjmp-only groups stay out.
-    assert!(!ir.contains("attributes #0"));
-    assert!(!ir.contains("attributes #1"));
+    for line in [
+        "declare i64 @js_nanbox_get_pointer(double) nounwind willreturn readnone\n",
+        "declare i32 @js_is_truthy(double) nounwind willreturn readonly\n",
+        // A memory contract does not imply `nounwind`: the table decides.
+        "declare i32 @js_string_compare(i64, i64) willreturn readonly\n",
+        // Allocating, so no memory contract; proven not to throw.
+        "declare double @js_nanbox_string(i64) nounwind\n",
+        "declare i32 @js_string_compare_value(double, double)\n",
+        "declare double @js_object_get_field_slow(i64, i64) cold\n",
+        "declare void @js_write_barrier_root_nanbox(double) nounwind cold\n",
+        // No row proves nothing.
+        "declare void @not_in_the_table()\n",
+    ] {
+        assert!(ir.contains(line), "missing {line:?} in:\n{ir}");
+    }
+    assert!(!ir.contains("attributes #"), "no attribute groups:\n{ir}");
 }
 
 #[test]
-fn helper_attr_groups_omitted_when_unused() {
-    // A module that declares no allowlisted helper must not emit the
-    // #2/#3 attributes lines (mirrors the setjmp #0/#1 gating).
+fn the_all_unsafe_table_makes_nothing_nounwind() {
+    // No archive, Geisterhand and UI-lib runtimes compile under the
+    // all-unsafe table: every helper may unwind, memory contracts stay.
     let mut m = LlModule::new("arm64-apple-macosx15.0.0");
-    m.declare_function("js_console_log_number", VOID, &[DOUBLE]);
+    m.set_gc_effects(std::sync::Arc::new(
+        crate::gc_call_effects::GcEffects::all_unsafe(),
+    ));
+    m.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
+    m.declare_function("js_is_truthy", I32, &[DOUBLE]);
+    m.declare_function("js_nanbox_string", DOUBLE, &[I64]);
     let f = m.define_function("main", I32, vec![]);
     f.create_block("entry").ret(I32, "0");
     let ir = m.to_ir();
-    assert!(!ir.contains("attributes #2"));
-    assert!(!ir.contains("attributes #3"));
-    assert!(!ir.contains("attributes #4"));
+    assert!(!ir.contains("nounwind"), "{ir}");
+    assert!(ir.contains("declare i64 @js_nanbox_get_pointer(double) willreturn readnone\n"));
+    assert!(ir.contains("declare i32 @js_is_truthy(double) willreturn readonly\n"));
+    assert!(ir.contains("declare double @js_nanbox_string(i64)\n"));
 }
 
 #[test]
-fn helper_attr_groups_replicated_in_codegen_units() {
-    // Every codegen unit re-emits the declaration (with its group ref)
-    // and the attributes line, so #2/#3 references resolve per-unit.
-    let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+fn helper_attrs_replicated_in_codegen_units() {
+    // Every codegen unit re-emits the declaration with its attributes.
+    let mut m = module_under("js_is_truthy\tLeaf\tno\n");
     m.declare_function("js_is_truthy", I32, &[DOUBLE]);
     for k in 0..2 {
         let f = m.define_function(format!("perry_fn_m__f{k}"), DOUBLE, vec![]);
         let b = f.create_block("entry");
         // Reference the helper so the declare is genuinely needed: declares
         // are scoped per unit now, and a test whose units never call the
-        // helper would assert nothing about its attribute group.
+        // helper would assert nothing about its attributes.
         b.call(I32, "js_is_truthy", &[(DOUBLE, "0.0")]);
         b.ret(DOUBLE, "0.0");
     }
     let units = m.render_codegen_units(2);
     assert_eq!(units.len(), 2);
     for u in &units {
-        assert!(u.contains("declare i32 @js_is_truthy(double) #3"));
-        assert_eq!(
-            u.matches("attributes #3 = { nounwind willreturn readonly }")
-                .count(),
-            1
-        );
+        assert!(u.contains("declare i32 @js_is_truthy(double) nounwind willreturn readonly\n"));
     }
 }
 

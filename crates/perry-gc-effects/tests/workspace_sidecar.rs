@@ -73,13 +73,14 @@ fn effect(t: &Table, name: &str) -> Effect {
 }
 
 /// #11522: `js_array_length`'s Proxy arm runs the `get` trap and a `valueOf`
-/// coercion; the other three reach JS or the collector too. The hand audit
+/// coercion; the other two reach JS or the collector too. The hand audit
 /// called them leaf / alloc-no-reentry; the graph proves they are neither.
+/// (`js_object_get_own_field_or_undef` was the fourth: its only path to JS was
+/// the keys-array length fallback of #12743, so it is a pinned leaf now.)
 const ISSUE_11522: &[&str] = &[
     "js_array_length",
     "js_object_alloc_class_inline_keys",
     "js_object_alloc_class_inline_keys_stamped",
-    "js_object_get_own_field_or_undef",
 ];
 
 /// #11523: these take the typed-feedback registry's root lock. With an
@@ -135,10 +136,13 @@ const PINNED_LEAF: &[&str] = &[
     "js_tdz_suppress_begin",
     "js_tdz_suppress_end",
     // #11522's split: the plain-array fast lane; RFC S2's IC hit (the store
-    // probe; red on main since the object model's probe reached
-    // `js_array_length` through the keys-array fallback, #12743).
+    // probe; #12743: its keys-array length fallback must not reach the
+    // generic, JS-capable `js_array_length`).
     "js_array_length_leaf",
     "perry_probe_set",
+    // #9480's own-field dispatch probe; it walks a shape's keys array the
+    // same way.
+    "js_object_get_own_field_or_undef",
 ];
 
 #[test]
@@ -319,44 +323,14 @@ fn leaf_box_and_closure_helpers_are_in_the_checker_authority() {
     );
 }
 
-/// The helpers codegen declares with a `nounwind` attribute group
-/// (`PURE_HELPERS`, `READONLY_HELPERS`, `NOUNWIND_HELPERS` in
-/// `perry-codegen/src/module/linkage.rs`) are audited promises that the call
-/// never unwinds: the table must prove each one `throws=no`, or not export it
-/// at all. And a symbol codegen defines itself (`OVERRIDES` in
-/// `gc_call_effects.rs`) must not be exported by the archive, whose row it
-/// would shadow.
+/// A symbol codegen defines itself (`OVERRIDES` in `gc_call_effects.rs`) must
+/// not be exported by the archive, whose row it would shadow. (Codegen's
+/// `nounwind` needs no such check: it is read from this table.)
 #[test]
 #[ignore = "needs built archives: set PERRY_GC_EFFECTS_SIDECAR (see the module docs)"]
-fn codegen_declarations_agree_with_the_table() {
+fn codegen_defined_symbols_are_not_exported_by_the_archive() {
     let t = table();
     let codegen = concat!(env!("CARGO_MANIFEST_DIR"), "/../perry-codegen/src");
-    let linkage = std::fs::read_to_string(format!("{codegen}/module/linkage.rs"))
-        .expect("read perry-codegen/src/module/linkage.rs");
-    let mut declared = Vec::new();
-    for list in ["PURE_HELPERS", "READONLY_HELPERS", "NOUNWIND_HELPERS"] {
-        let names = extract_rust_str_slice(&linkage, list);
-        assert!(
-            !names.is_empty(),
-            "parsed nothing from {list}: the extraction broke"
-        );
-        declared.extend(names);
-    }
-    assert!(
-        declared.len() >= 15,
-        "only {} nounwind helpers parsed: the extraction broke",
-        declared.len()
-    );
-    let throwing: Vec<&str> = declared
-        .iter()
-        .copied()
-        .filter(|n| t.get(*n).is_some_and(|e| e.throws))
-        .collect();
-    assert!(
-        throwing.is_empty(),
-        "declared nounwind by codegen, but the table says a call can throw: {throwing:?} \
-         (perry-gc-effects why --archive <runtime.a> --archive <stdlib.a> <symbol>)"
-    );
     let effects = std::fs::read_to_string(format!("{codegen}/gc_call_effects.rs"))
         .expect("read perry-codegen/src/gc_call_effects.rs");
     let overrides: Vec<&str> = extract_rust_str_slice(&effects, "OVERRIDES")

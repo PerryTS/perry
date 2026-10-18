@@ -58,13 +58,22 @@ pub(crate) unsafe fn keys_array_dense_slots(
         );
     }
 
-    // A shape's keys array is a GC array by construction: its header needs
-    // no address admission (only forwarding/laziness take the resolver).
+    // A shape's keys array is a dense GC array by construction: its header
+    // needs no address admission, and only a forwarded (or forged-length)
+    // one takes the owned-array resolver, which follows forwarding and
+    // nothing else (#12743).
     let arr = if keys.is_null() || (keys as u64) >> 48 != 0 {
-        crate::array::clean_arr_ptr(keys)
+        crate::array::clean_owned_arr_ptr(keys)
     } else {
         let header = crate::value::addr_class::honest_header(keys as usize);
-        crate::array::clean_headed_arr_ptr(keys, header)
+        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (*keys).length <= (*keys).capacity
+        {
+            keys
+        } else {
+            crate::array::clean_owned_arr_ptr(keys)
+        }
     };
     if arr.is_null() {
         return (KeySlots::null(), 0);

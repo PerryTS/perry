@@ -5,8 +5,8 @@
 # A symbol another workspace crate also defines (ext crates, UI stubs) is
 # Reenters whatever its runtime body does: the linked body may be the other one.
 # Known reclassifications kept here on purpose (the graph proves them):
-#   #11522 js_array_length / js_object_alloc_class_inline_keys* /
-#          js_object_get_own_field_or_undef reach JS or a collector -> not Leaf.
+#   #11522 js_array_length / js_object_alloc_class_inline_keys* reach JS or
+#          a collector -> not Leaf.
 #   #11523 CannotCollect helpers whose GcRootRegistryGuard drop flushes a
 #          deferred collection reach the collector -> not Leaf.
 # The throws column (EHFREE_ITEM3 section 2.1): `yes` if a call can reach
