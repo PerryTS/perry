@@ -1125,3 +1125,28 @@ fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: 
 #[cfg(test)]
 #[path = "static_constfn_tests.rs"]
 mod tests;
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_constructions: HashMap<u32, ConstructedObject>,
+    module_body_arities: HashMap<String, usize>,
+    module_function_values: HashMap<u32, (String, usize)>,
+    module_object_create_protos: crate::collectors::ObjectCreateProtos,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_constructions: MODULE_CONSTRUCTIONS.with(|s| s.borrow().clone()),
+        module_body_arities: MODULE_BODY_ARITIES.with(|s| s.borrow().clone()),
+        module_function_values: MODULE_FUNCTION_VALUES.with(|s| s.borrow().clone()),
+        module_object_create_protos: MODULE_OBJECT_CREATE_PROTOS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CONSTRUCTIONS.with(|s| *s.borrow_mut() = self.module_constructions.clone());
+        MODULE_BODY_ARITIES.with(|s| *s.borrow_mut() = self.module_body_arities.clone());
+        MODULE_FUNCTION_VALUES.with(|s| *s.borrow_mut() = self.module_function_values.clone());
+        MODULE_OBJECT_CREATE_PROTOS
+            .with(|s| *s.borrow_mut() = self.module_object_create_protos.clone());
+    }
+}

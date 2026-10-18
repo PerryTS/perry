@@ -9,7 +9,14 @@
 
 use std::collections::HashMap;
 
+#[derive(Default)]
+struct StringIds {
+    utf8: Option<u32>,
+    wtf8: Option<u32>,
+}
+
 pub struct StringPool {
+    pub(crate) callable_worker: bool,
     /// Module symbol prefix used in every emitted global name. Set at
     /// construction time so the pool's `bytes_global`/`handle_global`
     /// names match what `emit_string_pool` generates and the codegen
@@ -19,8 +26,9 @@ pub struct StringPool {
     /// share the symbol even when their local string pool belongs to another
     /// module. Defaults to this module for graph-free direct codegen callers.
     thread_literal_callback_prefix: String,
-    /// `value → interned index`. Identical literals share an entry.
-    interned: HashMap<String, u32>,
+    /// Byte spelling and encoding → interned index. Identical literals
+    /// with the same encoding share an entry.
+    interned: HashMap<Vec<u8>, StringIds>,
     /// Ordered list of unique entries; the index in this Vec is the
     /// interned index referenced by `interned`.
     entries: Vec<StringEntry>,
@@ -85,6 +93,7 @@ impl StringPool {
     /// without colliding on `.str.0.handle` etc.
     pub fn with_prefix(module_prefix: String) -> Self {
         Self {
+            callable_worker: false,
             thread_literal_callback_prefix: module_prefix.clone(),
             module_prefix,
             interned: HashMap::new(),
@@ -176,7 +185,7 @@ impl StringPool {
     /// Intern a string literal. Returns the interned index, stable for the
     /// life of the pool. Identical strings collapse to the same index.
     pub fn intern(&mut self, value: &str) -> u32 {
-        if let Some(&idx) = self.interned.get(value) {
+        if let Some(idx) = self.interned.get(value.as_bytes()).and_then(|ids| ids.utf8) {
             return idx;
         }
         let idx = self.entries.len() as u32;
@@ -211,17 +220,21 @@ impl StringPool {
             is_wtf8: false,
         };
         self.entries.push(entry);
-        self.interned.insert(value.to_string(), idx);
+        self.interned
+            .entry(value.as_bytes().to_vec())
+            .or_default()
+            .utf8 = Some(idx);
         idx
     }
 
     /// Intern a WTF-8 byte sequence (may contain lone surrogates).
-    /// Uses a separate key-space from normal strings (prefixed "wtf8:").
+    /// Encoding is part of the pool identity; diagnostic text cannot alias
+    /// an ordinary string literal with the same spelling.
     pub fn intern_wtf8(&mut self, bytes: &[u8]) -> u32 {
-        let key = format!("wtf8:{}", bytes.escape_ascii());
-        if let Some(&idx) = self.interned.get(&key) {
+        if let Some(idx) = self.interned.get(bytes).and_then(|ids| ids.wtf8) {
             return idx;
         }
+        let key = format!("wtf8:{}", bytes.escape_ascii());
         let idx = self.entries.len() as u32;
         let byte_len = bytes.len();
         let escaped_ir = escape_for_llvm_ir(bytes);
@@ -254,7 +267,7 @@ impl StringPool {
             is_wtf8: true,
         };
         self.entries.push(entry);
-        self.interned.insert(key, idx);
+        self.interned.entry(bytes.to_vec()).or_default().wtf8 = Some(idx);
         idx
     }
 
@@ -272,13 +285,13 @@ impl StringPool {
 
     /// The entry already interned under `value`, without interning it.
     ///
-    /// O(1) through the intern index (#11504). `intern` and `intern_wtf8`
-    /// share that index, so no two entries ever carry the same `value`, and
-    /// this returns exactly what `iter().find(|e| e.value == value)` would.
+    /// O(1) through the UTF-8 half of the intern index. A WTF-8 entry's
+    /// formatted diagnostic spelling is never an ordinary literal key.
     pub fn lookup(&self, value: &str) -> Option<&StringEntry> {
         self.interned
-            .get(value)
-            .map(|&idx| &self.entries[idx as usize])
+            .get(value.as_bytes())
+            .and_then(|ids| ids.utf8)
+            .map(|idx| &self.entries[idx as usize])
     }
 
     /// Mark an interned entry as a static property/method dispatch key and
@@ -569,5 +582,100 @@ mod tests {
         p.set_debug_source_line_offset(0);
         let off_bar = (src.find("bar();").unwrap() + 1) as u32;
         assert_eq!(p.call_location_for(off_bar), Some(("foo.ts", 2)));
+    }
+}
+
+/// Immutable inputs for a worker's initially empty literal pool.
+#[derive(Clone)]
+pub(crate) struct CallableStringConfig {
+    prefix: String,
+    callback: String,
+    tdz: HashMap<u32, String>,
+    debug: Option<(String, String)>,
+    line_offset: u32,
+}
+impl StringPool {
+    pub(crate) fn callable_config(&self) -> CallableStringConfig {
+        CallableStringConfig {
+            prefix: self.module_prefix.clone(),
+            callback: self.thread_literal_callback_prefix.clone(),
+            tdz: self.tdz_binding_names.clone(),
+            debug: self.debug_location_ctx.clone(),
+            line_offset: self.debug_source_line_offset,
+        }
+    }
+    pub(crate) fn merge_callable(&mut self, other: StringPool) -> HashMap<String, String> {
+        let mut symbols = HashMap::new();
+        for entry in other.entries {
+            let idx = if entry.is_wtf8 {
+                self.intern_wtf8(&entry.bytes)
+            } else {
+                self.intern(&entry.value)
+            };
+            let merged = &mut self.entries[idx as usize];
+            merged.dispatch_used |= entry.dispatch_used;
+            for (old, new) in [
+                (entry.bytes_global, &merged.bytes_global),
+                (entry.handle_global, &merged.handle_global),
+                (entry.dispatch_global, &merged.dispatch_global),
+            ] {
+                symbols.insert(old, new.clone());
+            }
+        }
+        symbols
+    }
+}
+impl CallableStringConfig {
+    pub(crate) fn pool(&self) -> StringPool {
+        let mut pool = StringPool::with_prefix(self.prefix.clone());
+        pool.callable_worker = true;
+        pool.thread_literal_callback_prefix = self.callback.clone();
+        pool.tdz_binding_names = self.tdz.clone();
+        pool.debug_location_ctx = self.debug.clone();
+        pool.debug_source_line_offset = self.line_offset;
+        pool
+    }
+}
+
+impl StringPool {
+    pub(crate) fn callable_site_operand(&self, local: u32, id: u64) -> String {
+        if self.callable_worker {
+            format!("__perry_callable_site_{local}")
+        } else {
+            id.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod callable_pool_tests {
+    use super::*;
+    #[test]
+    fn callable_pool_merge_preserves_encoding_and_literal_bytes() {
+        let bytes = [0xed, 0xa0, 0x80];
+        let text = format!("wtf8:{}", bytes.escape_ascii());
+        let mut serial = StringPool::new();
+        let normal = serial.intern(&text);
+        let lone = serial.intern_wtf8(&bytes);
+        assert_ne!(
+            normal, lone,
+            "a literal spelling a WTF-8 debug key is independent"
+        );
+        assert_eq!(serial.entry(normal).bytes, text.as_bytes());
+        assert_eq!(serial.entry(lone).bytes, bytes);
+        let mut first = StringPool::new();
+        first.intern(&text);
+        let mut second = first.callable_config().pool();
+        second.intern_wtf8(&bytes);
+        first.merge_callable(second);
+        assert_eq!(first.len(), serial.len());
+        for i in 0..serial.len() as u32 {
+            assert_eq!(first.entry(i).bytes, serial.entry(i).bytes);
+            assert_eq!(first.entry(i).is_wtf8, serial.entry(i).is_wtf8);
+        }
+        let mut reverse = StringPool::new();
+        let lone = reverse.intern_wtf8(&bytes);
+        let normal = reverse.intern(&text);
+        assert_ne!(lone, normal);
     }
 }

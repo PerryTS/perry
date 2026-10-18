@@ -321,3 +321,7 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
     ctx.block()
         .phi(PTR, &[(&fast_val, &fast_pred), (&called, &slow_pred)])
 }
+
+pub(crate) fn output_is_executable() -> bool {
+    OUTPUT_IS_EXECUTABLE.with(|s| s.get())
+}

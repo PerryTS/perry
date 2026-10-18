@@ -34,6 +34,7 @@ pub(super) fn share(module: &mut LlModule, public: &str, class_id: u32) {
         if f.name == owner_name {
             f.force_inline = false;
             f.pre_statepoint_inline = false;
+            f.cancel_deferred_preinline();
             f.inline_hint = false;
             f.no_inline = true;
         }

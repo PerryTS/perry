@@ -1671,10 +1671,13 @@ pub(super) fn compile_method(
     // statement count.  Indexed clones are already admitted above and
     // pshape-argument clones do not carry an exact receiver proof.
     if is_pshape_clone && !is_index_clone && !method.is_async && !method.is_generator {
+        let callable_worker = llmod.callable_worker;
         let lowered = llmod
             .function_mut(lowered_function_index)
             .expect("just-lowered method function");
-        if super::helpers::guarded_specialization_admits_preinline(
+        if callable_worker {
+            lowered.defer_self_preinline(method.body.len());
+        } else if super::helpers::guarded_specialization_admits_preinline(
             lowered.estimated_ir_bytes(),
             method.body.len(),
         ) {

@@ -1955,3 +1955,9 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 #[cfg(test)]
 #[path = "block_tests.rs"]
 mod tests;
+
+mod owned_counter;
+pub(crate) use owned_counter::OwnedCounter;
+
+mod owned;
+pub(crate) use owned::OwnedBlock;
