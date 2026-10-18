@@ -310,6 +310,10 @@ unsafe fn call_with_domain(domain: f64, callback: f64, args: &[f64]) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_domain_create() -> f64 {
+    extern "C" {
+        fn js_nm_install_domain();
+    }
+    unsafe { js_nm_install_domain() };
     ensure_gc_scanner_registered();
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let events = scope.root_nanbox_f64(js_nanbox_pointer(
