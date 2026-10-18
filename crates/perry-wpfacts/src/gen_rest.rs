@@ -614,7 +614,6 @@ impl<'a> Gen<'a> {
                     evaluated_parent: None,
                     ctor: None,
                     native_parent: None,
-                    evaluated_parent: None,
                     accessor_keys: vec![],
                     has_computed_members: true,
                     field_init: None,

@@ -67,7 +67,7 @@ impl Model {
     /// Unknown callee (⊤ or an opaque builtin function value): arguments
     /// escape, the result is ⊤; with `sink_this` (no receiver token given),
     /// the call's own `this` escapes too.
-    fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
+    pub(crate) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         if t == TOP {
             self.top_calls += 1;
         }
@@ -162,7 +162,7 @@ impl Model {
 
     /// Calling a bound function: its target with the bound this; bound +
     /// call args land in any parameter (positions shift).
-    fn call_bound(&mut self, call: CallId, t: Tok) {
+    pub(crate) fn call_bound(&mut self, call: CallId, t: Tok) {
         let TokKind::Bound(b) = self.toks[t as usize] else {
             return;
         };

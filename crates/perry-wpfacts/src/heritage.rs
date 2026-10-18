@@ -32,7 +32,7 @@ impl Gen<'_> {
                 // Both forms are conservatively modeled, as for named super.
                 for holder in [TokKind::Proto(tm), TokKind::ClassObj(tm)] {
                     let holder = self.m.tok(holder);
-                    let parents = self.m.proto_of(holder);
+                    let parents = self.m.proto_node(holder);
                     self.m.cons(parents, Cons::SuperFrom { recv, key, act });
                 }
                 return;
@@ -73,8 +73,8 @@ impl Model {
     ) {
         let ctor = self.tok(TokKind::ClassObj(class));
         let proto = self.tok(TokKind::Proto(class));
-        let ctor_parent = self.proto_of(ctor);
-        let proto_parent = self.proto_of(proto);
+        let ctor_parent = self.proto_node(ctor);
+        let proto_parent = self.proto_node(proto);
         let prototype = self.atom("prototype");
         for &t in toks {
             match self.toks[t as usize] {
