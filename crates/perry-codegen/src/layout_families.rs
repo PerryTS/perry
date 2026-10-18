@@ -1269,6 +1269,18 @@ pub fn compute<'a>(
                 .as_ref()
                 .is_some_and(|s| s.module_capability_uses == 0)
         });
+    if std::env::var("PERRY_LAYOUT_REPORT").as_deref() == Ok("2") {
+        for module in &modules {
+            if let Some(s) = &module.class_family_syntax {
+                if s.module_capability_uses != 0 {
+                    eprintln!(
+                        "perry: run-once refused by module capabilities: {}: {}",
+                        module.name, s.module_capability_uses
+                    );
+                }
+            }
+        }
+    }
     if closed {
         for module in &modules {
             let syntax = module
@@ -1300,7 +1312,11 @@ pub fn compute<'a>(
                         || evaluated_parent.is_none()
                         || !definition_steps.is_empty()
                     {
-                        candidates.remove(template);
+                        if candidates.remove(template)
+                            && std::env::var("PERRY_LAYOUT_REPORT").as_deref() == Ok("2")
+                        {
+                            eprintln!("perry: run-once retained fresh: {template}: owner={} statics={} computed={} captures={} shared={} parent={} steps={}", evaluation_owner.is_some(), named_statics.len(), computed_keys.len() + computed_statics.len(), captured_args.len(), shared_first_evaluation.is_some(), evaluated_parent.is_some(), definition_steps.len());
+                        }
                     }
                 }
             });
