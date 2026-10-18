@@ -189,8 +189,9 @@ impl Model {
         args.extend(c.args.iter().copied());
         self.calls.push(CallSite {
             reach_parent: self.reach_call,
-            reach_owner: self.reach_owner,
-            reach_user: self.reach_user,
+            reach_user: self
+                .reach_call
+                .map_or(self.reach_user, |c| self.calls[c as usize].reach_user),
             this: ThisArg::Node(bthis),
             args,
             spread: c.spread.clone(),
@@ -227,8 +228,9 @@ impl Model {
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
             reach_parent: self.reach_call,
-            reach_owner: self.reach_owner,
-            reach_user: self.reach_user,
+            reach_user: self
+                .reach_call
+                .map_or(self.reach_user, |c| self.calls[c as usize].reach_user),
             this: if new {
                 ThisArg::Undef
             } else {
@@ -357,8 +359,9 @@ impl Model {
                 args.extend(c.args.iter().copied());
                 self.calls.push(CallSite {
                     reach_parent: self.reach_call,
-                    reach_owner: self.reach_owner,
-                    reach_user: self.reach_user,
+                    reach_user: self
+                        .reach_call
+                        .map_or(self.reach_user, |c| self.calls[c as usize].reach_user),
                     this: ThisArg::Undef,
                     args,
                     spread: c.spread.clone(),
@@ -617,8 +620,9 @@ impl Model {
                 let call = self.calls.len() as CallId;
                 self.calls.push(CallSite {
                     reach_parent: self.reach_call,
-                    reach_owner: self.reach_owner,
-                    reach_user: self.reach_user,
+                    reach_user: self
+                        .reach_call
+                        .map_or(self.reach_user, |c| self.calls[c as usize].reach_user),
                     this: ThisArg::Undef,
                     args: vec![args_n; 8],
                     spread: vec![],
