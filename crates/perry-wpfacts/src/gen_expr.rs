@@ -145,6 +145,29 @@ impl<'a> Gen<'a> {
         site
     }
 
+    /// A store whose site may be a construction-phase writer of `new f()`
+    /// (`mark_fn_phase`). The phase is set before the constraint exists:
+    /// generation solves online, so a `Store` already applies to what `recv`
+    /// holds, and a site marked afterwards would also count as a
+    /// post-construction writer of those instances.
+    #[allow(clippy::too_many_arguments)]
+    fn store_phased(
+        &mut self,
+        fx: &Fx,
+        e: &Expr,
+        object: &Expr,
+        recv: NodeId,
+        key: Key,
+        src: NodeId,
+        desc: String,
+        owner: Option<TmplId>,
+    ) -> SiteId {
+        let site = self.store_site(fx.module, fx.f, desc, owner, false);
+        self.mark_fn_phase(fx, e, object, site);
+        self.m.cons(recv, Cons::Store { key, src, site });
+        site
+    }
+
     /// A `this.k = v` store in a function `new` may call, before `this`
     /// leaks: a birth writer of `new f()` instances.
     fn mark_fn_phase(&mut self, fx: &Fx, e: &Expr, object: &Expr, site: SiteId) {
@@ -579,16 +602,16 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, value);
                 let a = self.m.atom(property);
                 let owner = self.phase_owner(fx, e, object);
-                let site = self.store(
+                self.store_phased(
                     fx,
+                    e,
+                    object,
                     o,
                     Key::Named(a),
                     v,
                     format!(".{property}="),
                     owner,
-                    false,
                 );
-                self.mark_fn_phase(fx, e, object, site);
                 v
             }
             Expr::PutValueSet {
@@ -606,11 +629,9 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, receiver);
                 let key = self.key_of(key);
                 let owner = self.phase_owner(fx, e, target);
-                let s1 = self.store(fx, t, key, v, "putvalue".into(), owner, false);
-                self.mark_fn_phase(fx, e, target, s1);
+                self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
                 // A receiver other than the target gets the own data store.
-                let s2 = self.store(fx, rv, key, v, "putvalue-receiver".into(), owner, false);
-                self.mark_fn_phase(fx, e, target, s2);
+                self.store_phased(fx, e, target, rv, key, v, "putvalue-receiver".into(), owner);
                 v
             }
             Expr::PropertyUpdate {
@@ -630,16 +651,16 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let owner = self.phase_owner(fx, e, object);
-                let site = self.store(
+                self.store_phased(
                     fx,
+                    e,
+                    object,
                     o,
                     Key::Named(a),
                     nv2,
                     format!(".{property}++"),
                     owner,
-                    false,
                 );
-                self.mark_fn_phase(fx, e, object, site);
                 nv2
             }
             Expr::IndexGet { object, index } => {

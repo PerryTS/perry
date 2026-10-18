@@ -466,3 +466,33 @@ fn user_iterable_flows_through_for_of_spread_destructuring() {
         assert!(!st.top, ".p receiver carries TOP\n{}", pf.dump_text());
     }
 }
+
+/// `this.k = v` in a constructor function is a birth writer of `new f()`
+/// instances even when `this` already holds instances as the store is
+/// generated (a nested `new f()` earlier in the program): the site is
+/// marked construction-phase before its constraint applies.
+#[test]
+fn fn_instance_ctor_stores_are_birth_writers() {
+    let pf = facts(
+        r#"
+        function Vec(this: any, x: number, y: number) {
+          this.x = x;
+          this.y = y;
+        }
+        Vec.prototype.add = function (this: any, o: any) {
+          return new (Vec as any)(this.x + o.x, this.y + o.y);
+        };
+        const a = new (Vec as any)(1, 2);
+        const b = a.add(new (Vec as any)(3, 4));
+        console.log(b.x, b.y);
+        "#,
+    );
+    let v = pf
+        .templates
+        .iter()
+        .find(|t| t.display.ends_with(":Vec"))
+        .unwrap_or_else(|| panic!("Vec in\n{}", pf.dump_text()));
+    assert!(v.prefix_stable, "{}", pf.dump_text());
+    assert!(field(v, "x").readonly, "{}", pf.dump_text());
+    assert!(field(v, "y").readonly, "{}", pf.dump_text());
+}
