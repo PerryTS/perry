@@ -237,6 +237,12 @@ pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
 pub const GC_HEADER_SIZE: usize = 8;
 
+/// `GcHeader::_reserved` flags any of which refuses a family constructor's
+/// run of in-place stores (`perry_family_run_admits`, and the site's proof
+/// in `perry-codegen` `proto_constants::emit_family_run_proof`): frozen,
+/// sealed, non-extensible, stable tombstones.
+pub const OBJ_FLAGS_REFUSE_FAMILY_RUN: u16 = 0x0407;
+
 /// Creation-time [[Call]] on OBJECT and PROXY only. This bit has no other
 /// meaning; closures are callable by their type byte.
 pub const GC_OBJECT_CALLABLE: u16 = 0x0020;

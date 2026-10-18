@@ -2429,14 +2429,15 @@ pub unsafe extern "C" fn perry_probe_get_value(
                 note_run(3);
                 return 0;
             }
+            const _: () = assert!(
+                crate::codegen_abi::OBJ_FLAGS_REFUSE_FAMILY_RUN
+                    == crate::gc::OBJ_FLAG_FROZEN
+                        | crate::gc::OBJ_FLAG_SEALED
+                        | crate::gc::OBJ_FLAG_NO_EXTEND
+                        | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            );
             let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
-            if (*gc)._reserved
-                & (crate::gc::OBJ_FLAG_FROZEN
-                    | crate::gc::OBJ_FLAG_SEALED
-                    | crate::gc::OBJ_FLAG_NO_EXTEND
-                    | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
-                != 0
-            {
+            if (*gc)._reserved & crate::codegen_abi::OBJ_FLAGS_REFUSE_FAMILY_RUN != 0 {
                 note_run(4);
                 return 0;
             }

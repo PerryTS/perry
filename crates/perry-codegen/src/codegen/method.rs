@@ -630,6 +630,8 @@ pub(super) fn compile_method(
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
         inline_new_leaf: Vec::new(),
+        ctor_receiver: None,
+        ctor_receiver_selector: None,
         wpfacts_this: vec![(this_slot.clone(), method.id)],
         this_stack: vec![this_slot],
         super_called_stack: Vec::new(),
@@ -950,6 +952,10 @@ pub(super) fn compile_method(
     // as uninitialized register values (read as NaN-boxed undefined).
     let is_constructor_method = method.name == format!("{}_constructor", class.name);
     if is_constructor_method {
+        ctx.ctor_receiver = ctx
+            .this_stack
+            .first()
+            .map(|slot| (slot.clone(), class.name.clone()));
         crate::lower_call::defer_dynamic_derived_fields(&mut ctx, class);
         // #9043: a default-derived chain can reach a dynamic parent through a
         // constructor-free static ancestor (`Leaf -> Mid -> <captured Base>`).

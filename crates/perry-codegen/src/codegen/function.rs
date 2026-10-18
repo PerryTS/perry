@@ -1292,6 +1292,8 @@ pub(super) fn compile_function(
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
         inline_new_leaf: Vec::new(),
+        ctor_receiver: None,
+        ctor_receiver_selector: None,
         wpfacts_this: this_stack
             .last()
             .map(|s| vec![(s.clone(), f.id)])

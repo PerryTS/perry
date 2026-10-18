@@ -160,6 +160,64 @@ pub(crate) fn chain(
     None
 }
 
+/// The static prototype chain of `class`'s instances to `%Object.prototype%`
+/// (class id, static ShapeId of each prototype, the class's first), when
+/// every prototype on it is a declared class with a complete static shape
+/// whose next link it proves, and none holds an accessor, a non-writable or
+/// a private property named like one of `keys`: an add of any of `keys` to
+/// an instance is then never intercepted while each prototype is on its
+/// static shape (and `%Object.prototype%`, whose one accessor is
+/// `__proto__`, is unwritten).
+pub(crate) fn add_chain(
+    ctx: &crate::expr::FnCtx<'_>,
+    class: &str,
+    keys: &[&str],
+) -> Option<Vec<(u32, u32)>> {
+    // `key_attrs` entry bits that intercept an add: accessor, non-writable,
+    // private.
+    const INTERCEPTS: u8 = 0x08 | 0x01 | 0x40;
+    if keys.contains(&"__proto__") {
+        return None;
+    }
+    let mut name = class.to_string();
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for _ in 0..64 {
+        if !seen.insert(name.clone()) {
+            return None;
+        }
+        let c = ctx.classes.get(&name)?;
+        if let Some(origin) = &c.specialized_from {
+            name = origin.clone();
+            continue;
+        }
+        let cid = *ctx.class_ids.get(&name)?;
+        let (id, shape) = super::static_shape_ids::static_prototype_shape(cid)?;
+        if shape.attrs.len() != shape.key_count as usize {
+            return None;
+        }
+        let intercepted = shape
+            .keys
+            .split(|&b| b == 0)
+            .take(shape.key_count as usize)
+            .zip(&shape.attrs)
+            .any(|(k, &attr)| attr & INTERCEPTS != 0 && keys.iter().any(|key| key.as_bytes() == k));
+        if intercepted {
+            return None;
+        }
+        result.push((cid, id));
+        let BirthProto::Prototype(_, parent) = shape.proto else {
+            return None;
+        };
+        match &c.extends_name {
+            None if parent == 0 => return Some(result),
+            Some(next) if ctx.class_ids.get(next) == Some(&parent) => name = next.clone(),
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// A learned inherited 5C entry can name its declaration holder P statically.
 pub(crate) fn inherited_lane(
     ctx: &crate::expr::FnCtx<'_>,

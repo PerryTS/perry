@@ -523,6 +523,21 @@ pub(crate) fn family_run_arm(
         None => {
             crate::expr::note_site("case2c-run-check");
             let (dir, _key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
+            // PLAN 3c: the site proves the run from the receiver's class and
+            // its static chain (`proto_constants::emit_family_run_proof`) and
+            // asks the runtime only when that proof refuses.
+            let proof = crate::proto_constants::emit_family_run_proof(
+                ctx,
+                this_bits,
+                &dir,
+                property,
+                plan.pos,
+                plan.order_known,
+                plan.class_id,
+            );
+            if let Some((_, refused)) = proof {
+                ctx.current_block = refused;
+            }
             let c = ctx.block().call(
                 crate::types::I32,
                 "perry_family_run_admits",
@@ -535,7 +550,24 @@ pub(crate) fn family_run_arm(
                     (crate::types::I32, &plan.class_id.to_string()),
                 ],
             );
-            let ok = ctx.block().icmp_ne(crate::types::I32, &c, "0");
+            let asked = ctx.block().icmp_ne(crate::types::I32, &c, "0");
+            let ok = match proof {
+                None => asked,
+                Some((proved, _)) => {
+                    let join = ctx.new_block("crun.join");
+                    let join_l = ctx.block_label(join);
+                    let asked_end = ctx.block().label.clone();
+                    ctx.block().br(&join_l);
+                    ctx.current_block = proved;
+                    let proved_end = ctx.block().label.clone();
+                    ctx.block().br(&join_l);
+                    ctx.current_block = join;
+                    ctx.block().phi(
+                        crate::types::I1,
+                        &[("true", &proved_end), (&asked, &asked_end)],
+                    )
+                }
+            };
             (
                 FamilyRun {
                     ok,

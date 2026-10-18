@@ -377,6 +377,15 @@ pub(crate) struct FnCtx<'a> {
     /// being lowered: while the top of `this_stack` is that slot, `this` is
     /// the instance born for `C` (`proto_constants::lower_class_holder_read`).
     pub inline_new_leaf: Vec<(String, String)>,
+    /// `(this slot, class)` of the standalone constructor being lowered:
+    /// while the top of `this_stack` is that slot, `this` is an instance of
+    /// the class or of a class descending from it, constructed by `new` of
+    /// that class or reached through `super(…)`
+    /// (`proto_constants::lower_class_holder_read`).
+    pub ctor_receiver: Option<(String, String)>,
+    /// The standalone constructor's receiver selector, made on first use
+    /// (`proto_constants::emit_receiver_class`).
+    pub ctor_receiver_selector: Option<String>,
     /// Elided sites emitted so far in this function (witness site ids).
     pub wpfacts_sites: u32,
     /// (stable local, block) pairs whose receiver test already passed in

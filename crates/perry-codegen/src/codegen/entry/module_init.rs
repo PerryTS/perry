@@ -290,6 +290,8 @@ pub(super) fn compile_module_init(
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
         inline_new_leaf: Vec::new(),
+        ctor_receiver: None,
+        ctor_receiver_selector: None,
         wpfacts_this: Vec::new(),
         this_stack: Vec::new(),
         super_called_stack: Vec::new(),
