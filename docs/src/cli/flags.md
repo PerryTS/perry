@@ -428,6 +428,8 @@ shrink less, proportionally.
 | `--emit-sandbox` | Emit the platform sandbox sidecar; see [Sandbox profiles](emit-sandbox.md). |
 | `--lockdown` | Refuse reachable arbitrary-code-execution surfaces; see [Lockdown](lockdown.md). |
 
+`--type-check` requires a project `tsconfig.json` and the verified preview build: install with `npm install --save-dev @typescript/native-preview@7.0.0-dev.20260612.1`. It reports configuration, syntax, and type errors and stops compilation on errors. If tsgo is missing or has an unsupported version, Perry warns and continues without checking. The preview API has no version handshake, so other builds are explicitly refused before IPC.
+
 ## Environment Variables
 
 | Variable | Description |
