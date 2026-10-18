@@ -18,6 +18,7 @@ impl Model {
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
+        let mut unknown = false;
         if node.widened {
             // A widened set is {⊤}: every token reaching it escapes.
             for &t in toks {
@@ -35,6 +36,7 @@ impl Model {
                     top_new |= t == TOP;
                 }
             }
+            unknown = top_new;
             if top_new && self.explain {
                 self.top_pred
                     .entry(n)
@@ -69,6 +71,7 @@ impl Model {
                 node.delta.clear();
                 node.delta.push(TOP);
                 changed = true;
+                unknown = true;
                 self.widened_nodes += 1;
                 if let Some(r) = self.relations.as_mut() {
                     r.push(format!("W widen {n}"));
@@ -82,9 +85,17 @@ impl Model {
             node.dprim |= newp;
             changed = true;
         }
-        if changed && !node.in_wl {
+        if changed {
+            let queued = node.in_wl;
             node.in_wl = true;
-            self.wl.push_back(n);
+            if unknown {
+                // Deliver an unknown boundary before expanding more known
+                // alternatives. A queued node may get one redundant entry;
+                // its already-drained delta makes that entry a no-op.
+                self.wl.push_front(n);
+            } else if !queued {
+                self.wl.push_back(n);
+            }
         }
     }
 
@@ -365,7 +376,7 @@ impl Model {
                     return;
                 }
             }
-            let (delta, dprim) = {
+            let (mut delta, dprim) = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
                 (
@@ -375,6 +386,9 @@ impl Model {
             };
             if delta.is_empty() && dprim == 0 {
                 continue;
+            }
+            if let Some(top) = delta.iter().position(|&t| t == TOP) {
+                delta.swap(0, top);
             }
             // Index loops (no clone of the lists): successors and
             // constraints appended while this runs already saw the full set.
