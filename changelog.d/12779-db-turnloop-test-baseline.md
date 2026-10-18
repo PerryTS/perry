@@ -1,0 +1,1 @@
+Update four synthetic NetCompletion fixtures for the current ABI: the old reserved field is now flags. Zero flags preserve the no-extra-flags premise of the existing transport completion tests. Production database or transport behavior is unchanged.
