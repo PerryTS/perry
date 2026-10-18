@@ -88,8 +88,9 @@ impl Model {
         if changed {
             let queued = node.in_wl;
             node.in_wl = true;
-            if unknown {
-                // Deliver an unknown boundary before expanding more known
+            if unknown && (self.labels[n as usize] == "callee-relay"
+                || !node.call_succ.is_empty()) {
+                // Deliver a call boundary before expanding more known
                 // alternatives. A queued node may get one redundant entry;
                 // its already-drained delta makes that entry a no-op.
                 self.wl.push_front(n);
@@ -387,8 +388,12 @@ impl Model {
             if delta.is_empty() && dprim == 0 {
                 continue;
             }
-            if let Some(top) = delta.iter().position(|&t| t == TOP) {
-                delta.swap(0, top);
+            if self.labels[n as usize] == "callee-relay"
+                || !self.nodes[n as usize].call_succ.is_empty()
+            {
+                if let Some(top) = delta.iter().position(|&t| t == TOP) {
+                    delta.swap(0, top);
+                }
             }
             // Index loops (no clone of the lists): successors and
             // constraints appended while this runs already saw the full set.
@@ -396,7 +401,21 @@ impl Model {
             self.cur_why = u32::MAX;
             let nsucc = self.nodes[n as usize].succ.len();
             let ncons0 = self.nodes[n as usize].cons.len();
-            self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64;
+            let ncalls = self.nodes[n as usize].call_succ.len();
+            let mut callables = Vec::new();
+            if ncalls != 0 {
+                callables = self.bufs.pop().unwrap_or_default();
+                callables.clear();
+                callables.extend(delta.iter().copied().filter(|&t| self.is_call_target(t)));
+            }
+            // Count the filter once, then only the tokens actually copied to
+            // call relays. The ordinary-edge/constraint work units are unchanged.
+            let call_work = if ncalls == 0 { 0 } else {
+                delta.len() as u64 + if callables.is_empty() { 0 } else {
+                    (callables.len() as u64 + 1) * ncalls as u64
+                }
+            };
+            self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64 + call_work;
             if self.profile.is_some() {
                 let label = if self.labels[n as usize] == "prototype-value"
                     && self.nodes[n as usize].widened
@@ -406,7 +425,8 @@ impl Model {
                     self.labels[n as usize]
                 };
                 let e = self.label_work.entry(label).or_default();
-                e.0 += delta.len() as u64 * nsucc as u64;
+                e.0 += delta.len() as u64 * nsucc as u64
+                    + callables.len() as u64 * ncalls as u64;
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
@@ -445,6 +465,15 @@ impl Model {
                 }
                 self.add(s, &delta, dprim);
                 i += 1;
+            }
+            if !callables.is_empty() {
+                for i in 0..ncalls {
+                    let dst = self.nodes[n as usize].call_succ[i];
+                    self.add(dst, &callables, 0);
+                }
+            }
+            if ncalls != 0 {
+                self.bufs.push(callables);
             }
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
@@ -721,15 +750,6 @@ impl Model {
                 self.prototype_call_values(origin, key, call, toks);
             }
             Cons::ThisGroup { recv } => self.bind_receiver_group(recv, toks),
-            Cons::CallTargets { dst } => {
-                for &t in toks {
-                    if matches!(self.toks[t as usize],
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Func(_) | TokKind::Bound(_))
-                    {
-                        self.add_tok(dst, t);
-                    }
-                }
-            }
             Cons::ClassParent { class, reason } => {
                 self.apply_class_parent(class, reason, toks, prim);
             }
@@ -1566,8 +1586,7 @@ impl Model {
             }
         };
         if self.relay_done.insert((call, callee)) {
-            let targets = self.call_targets(callee);
-            self.edge_quiet(targets, relay);
+            self.call_edge(callee, relay);
         }
         let sites = self.callee_sites.entry(callee).or_default();
         let first = sites.is_empty();

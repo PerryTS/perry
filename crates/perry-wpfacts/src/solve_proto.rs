@@ -44,19 +44,32 @@ impl Model {
         }
     }
 
-    /// `call_args` has no rule for non-callable tokens or primitives.
-    /// Project them out once at the shared source, before fanout to calls.
-    /// Builtin namespaces retain their per-receiver `BuiltinCallee` route.
-    pub(crate) fn call_targets(&mut self, value: NodeId) -> NodeId {
-        if let Some(&targets) = self.method_targets.get(&value) {
-            return targets;
+    pub(crate) fn is_call_target(&self, t: Tok) -> bool {
+        matches!(
+            self.toks[t as usize],
+            TokKind::Top | TokKind::BuiltinFn | TokKind::Func(_) | TokKind::Bound(_)
+        )
+    }
+
+    /// A typed copy edge, fused with normal propagation: filter once per
+    /// source delta, then share those tokens across all of its call sites.
+    /// relay_done registers each (source, destination) exactly once.
+    pub(crate) fn call_edge(&mut self, source: NodeId, dest: NodeId) {
+        self.nodes[source as usize].call_succ.push(dest);
+        self.rel(|| format!("calltargets {source} {dest}"));
+        if self.aborted {
+            return;
         }
-        let targets = self.node_l("method-targets");
-        // Preserve the call relay's domain: this projection adds no widening.
-        self.nodes[targets as usize].internal = true;
-        self.method_targets.insert(value, targets);
-        self.cons(value, Cons::CallTargets { dst: targets });
-        targets
+        let mut values = self.bufs.pop().unwrap_or_default();
+        values.clear();
+        self.nodes[source as usize].pts.sorted_into(&mut values);
+        values.retain(|&t| self.is_call_target(t));
+        let saved = (self.cur_src, self.cur_why);
+        self.cur_src = source;
+        self.cur_why = u32::MAX;
+        self.add(dest, &values, 0);
+        (self.cur_src, self.cur_why) = saved;
+        self.bufs.push(values);
     }
 
     /// Transpose receivers × functions into two ordinary inclusion edges:
@@ -69,8 +82,7 @@ impl Model {
             // A solver relay, not a new program value or widening boundary.
             self.nodes[recv as usize].internal = true;
             self.this_groups.insert(callee, recv);
-            let targets = self.call_targets(callee);
-            self.cons(targets, Cons::ThisGroup { recv });
+            self.cons(callee, Cons::ThisGroup { recv });
             recv
         };
         self.add_tok(recv, origin);
