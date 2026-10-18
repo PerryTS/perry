@@ -521,10 +521,29 @@ extern "C" fn http_setter_thunk(
 /// FFI entry: `this` and `req` are live JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_response_init(this: f64, req: f64) {
+    message_init(this, Some(req));
+}
+
+/// node's `OutgoingMessage` constructor on `this` (`OutgoingMessage.call(this)`
+/// or `super()` of a class extending it, through the http extension's
+/// dispatcher): the emitter's init, then its fields in order, each the
+/// ordinary `[[Set]]`.
+///
+/// # Safety
+/// FFI entry: `this` is a live JS value.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_outgoing_message_init(this: f64) {
+    message_init(this, None);
+}
+
+/// [`js_node_http_server_response_init`] with `req`, and its
+/// `OutgoingMessage` part alone without. Inlined into each entry, so the
+/// response's stays specialized to its request.
+#[inline(always)]
+unsafe fn message_init(this: f64, req: Option<f64>) {
     use crate::object::runtime_layouts::{emitter_slot, response_slot as s};
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
-    let req = scope.root_nanbox_f64(req);
     let Some(receiver) =
         crate::object::field_get_set::runtime_read_site::object_receiver(this.get_nanbox_f64())
     else {
@@ -618,6 +637,10 @@ pub unsafe extern "C" fn js_node_http_server_response_init(this: f64, req: f64) 
     put(s::KEEP_ALIVE_TIMEOUT, b"_keepAliveTimeout", 0.0);
     let nop = scope.root_nanbox_f64(pending_data_nop());
     put(s::ON_PENDING_DATA, b"_onPendingData", nop.get_nanbox_f64());
+    let Some(req) = req else {
+        return;
+    };
+    let req = scope.root_nanbox_f64(req);
     // ServerResponse's own.
     let field_of = |target: f64, key: &'static [u8]| {
         if JSValue::from_bits(target.to_bits()).is_reference() {

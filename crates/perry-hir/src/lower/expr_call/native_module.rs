@@ -102,31 +102,27 @@ fn is_node_stream_class_name(name: &str) -> bool {
     )
 }
 
+/// `EventEmitter.call(this, opts)` (and node's `Stream`, whose constructor is
+/// exactly that call): node's `EventEmitter.init` on the receiver, the same
+/// runtime init `super(opts)` of a class extending EventEmitter runs. Its
+/// reads and stores are the ordinary `[[Get]]`/`[[Set]]` node performs, so an
+/// accessor on a user prototype level sees them. The call's value is
+/// `undefined`.
 fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
-    let Some(receiver) = args.first().cloned() else {
-        return Expr::Undefined;
-    };
-    if !matches!(receiver, Expr::This | Expr::LocalGet(_)) {
-        return Expr::Undefined;
-    }
-    let mut exprs = vec![
-        Expr::PropertySet {
-            object: Box::new(receiver.clone()),
-            property: "_events".to_string(),
-            value: Box::new(Expr::Object(Vec::new())),
-        },
-        Expr::PropertySet {
-            object: Box::new(receiver.clone()),
-            property: "_eventsCount".to_string(),
-            value: Box::new(Expr::Number(0.0)),
-        },
-        Expr::PropertySet {
-            object: Box::new(receiver),
-            property: "_maxListeners".to_string(),
-            value: Box::new(Expr::Undefined),
-        },
-    ];
-    exprs.extend(args.into_iter().skip(1));
+    let mut it = args.into_iter();
+    let receiver = it.next().unwrap_or(Expr::Undefined);
+    let options = it.next().unwrap_or(Expr::Undefined);
+    let mut exprs = vec![Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_event_emitter_subclass_init".to_string(),
+            param_types: Vec::new(),
+            return_type: crate::types::Type::Any,
+        }),
+        args: vec![receiver, options],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }];
+    exprs.extend(it);
     exprs.push(Expr::Undefined);
     Expr::Sequence(exprs)
 }

@@ -1360,6 +1360,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let entry = ctx.strings.entry(name_idx);
                         let name_bytes = format!("@{}", entry.bytes_global);
                         let name_len = entry.byte_len.to_string();
+                        // An inlined constructor's `new.target` is lexical and
+                        // the runtime reads the ambient cell: publish it around
+                        // the construct (`class Y extends X {}` inlines X's ctor
+                        // with Y as the target).
+                        let nt_save = crate::rooting::new_target_save_for_super(ctx);
                         let constructed = ctx.block().call(
                             DOUBLE,
                             "js_builtin_subclass_construct",
@@ -1371,6 +1376,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &args_len),
                             ],
                         );
+                        if let Some(save) = nt_save.as_ref() {
+                            crate::rooting::new_target_restore(ctx, save);
+                        }
                         bind_derived_this_after_super(ctx);
                         if let Some(this_slot) = ctx.this_stack.last().cloned() {
                             ctx.block().store(DOUBLE, &constructed, &this_slot);

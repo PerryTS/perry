@@ -163,6 +163,11 @@ pub unsafe extern "C" fn js_ext_http_native_dispatch(
         ("http", "#ServerResponse.call") => {
             super::response::server_response_construct_this(arg(0), arg(1))
         }
+        // `OutgoingMessage.call(this)` / `super()`: node's constructor on
+        // `this`, which carries no native state.
+        ("http", "#OutgoingMessage.call") => {
+            super::response::outgoing_message_construct_this(arg(0))
+        }
         ("http" | "https", "get" | "request") => client_overload(module, method, args),
         ("http", "Agent") => crate::js_http_agent_new(arg(0)),
         ("https", "Agent") => crate::js_https_agent_new(arg(0)),

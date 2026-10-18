@@ -1675,6 +1675,22 @@ pub(crate) unsafe fn server_response_construct_this(this: f64, req: f64) -> i64 
     (this.get().to_bits() & PTR_MASK) as i64
 }
 
+/// `OutgoingMessage.call(this)` / `super()`: node's constructor fields on
+/// `this` (perry-runtime's `js_node_http_outgoing_message_init`). Returns
+/// `this`.
+///
+/// # Safety
+/// FFI entry; `this` is a live JS value.
+pub(crate) unsafe fn outgoing_message_construct_this(this: f64) -> i64 {
+    extern "C" {
+        fn js_node_http_outgoing_message_init(this: f64);
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let this = scope.root_nanbox(this);
+    js_node_http_outgoing_message_init(this.get());
+    (this.get().to_bits() & PTR_MASK) as i64
+}
+
 /// The native state of a response not bound to a live connection. `req`
 /// contributes only the method (a HEAD response has no body on flush).
 unsafe fn standalone_state(req: f64) -> ResponseState {

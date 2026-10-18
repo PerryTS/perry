@@ -147,7 +147,7 @@ fn is_aliasable_native_class(module: &str, method: &str) -> bool {
 /// http dispatcher up front instead of the ordinary call of the bound
 /// export. `https` has no distinct `ServerResponse` in Node.
 fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
-    module == "http" && method == "ServerResponse"
+    module == "http" && matches!(method, "ServerResponse" | "OutgoingMessage")
 }
 
 /// Alias `this_arg` to `result` using one traced record on the receiver, when
@@ -408,15 +408,22 @@ unsafe fn construct_native_http_class_with_this(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_root = scope.root_nanbox_f64(this_val);
-    if method == "ServerResponse" {
+    if matches!(method, "ServerResponse" | "OutgoingMessage") {
         // node's `ServerResponse.call(this, req)` initializes `this`: the
         // native response is attached to `this` itself and node's fields are
         // stored on it (`node_http_prototypes::js_node_http_server_response_init`),
         // so there is one object, as in node, and no alias.
+        // `OutgoingMessage.call(this)` likewise stores the message's fields
+        // on `this` (`js_node_http_outgoing_message_init`); it has no native
+        // state of its own.
         let mut with_this = Vec::with_capacity(len + 1);
         with_this.push(this_root.get_nanbox_f64());
         with_this.extend_from_slice(&args[..len]);
-        let attach = "#ServerResponse.call";
+        let attach = if method == "ServerResponse" {
+            "#ServerResponse.call"
+        } else {
+            "#OutgoingMessage.call"
+        };
         dispatch(
             module.as_ptr(),
             module.len(),

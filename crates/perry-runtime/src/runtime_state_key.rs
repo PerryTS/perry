@@ -158,22 +158,22 @@ impl NamedStateKey {
                 Some(Some(slot)) => slot,
                 Some(None) => return false,
                 None => {
-                let Some(position) = crate::object::keys_find_property_slot_by_bytes(
-                    keys,
-                    shape.logical_key_count,
-                    self.bytes,
-                ) else {
-                    return false;
-                };
-                let entry = crate::object::key_attrs::keys_entry(keys, position);
-                if entry
-                    & (crate::object::key_attrs::ENTRY_NON_WRITABLE
-                        | crate::object::key_attrs::ENTRY_ACCESSOR)
-                    != 0
-                {
-                    return false;
-                }
-                crate::object::key_attrs::key_storage_slot(keys, position)
+                    let Some(position) = crate::object::keys_find_property_slot_by_bytes(
+                        keys,
+                        shape.logical_key_count,
+                        self.bytes,
+                    ) else {
+                        return false;
+                    };
+                    let entry = crate::object::key_attrs::keys_entry(keys, position);
+                    if entry
+                        & (crate::object::key_attrs::ENTRY_NON_WRITABLE
+                            | crate::object::key_attrs::ENTRY_ACCESSOR)
+                        != 0
+                    {
+                        return false;
+                    }
+                    crate::object::key_attrs::key_storage_slot(keys, position)
                 }
             },
         };
@@ -289,12 +289,16 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_get(
     crate::object::js_object_get_property_key(value.get_nanbox_f64(), f64::from_bits(key.bits()))
 }
 
-/// Ordinary fixed-key Set for an extension's call site: an own writable data
-/// slot is overwritten in place, anything else takes the ordinary `[[Set]]`
-/// (a hole of an optional layout key fills, or appends, as node's does).
+/// Fixed-key Set for an extension's call site: node's `this.<key> = value`
+/// in a native constructor or method. An own writable data slot is
+/// overwritten in place; an add the receiver's chain does not intercept (the
+/// store vet) is the store funnel's; anything else is the ordinary `[[Set]]`
+/// (`node_stream::constructor_field_set`), so an inherited setter runs and
+/// inherited read-only data throws, as node's strict internals do.
 /// # Safety
 /// As js_runtime_state_key_get; `value` and `v` are live JavaScript values.
 #[no_mangle]
+#[inline(never)]
 pub unsafe extern "C-unwind" fn js_runtime_state_key_set(
     value: f64,
     key: *const u8,
@@ -307,17 +311,34 @@ pub unsafe extern "C-unwind" fn js_runtime_state_key_set(
         bytes,
         hash: const_key_hash(bytes),
     };
-    match crate::object::field_get_set::runtime_read_site::object_receiver(value) {
-        // An own writable data slot is overwritten in place; anything else is
-        // the compiled store funnel's `[[Set]]` (an add consults the chain
-        // through the layout records).
-        Some(obj) if !named.write_existing(obj, v) => crate::object::js_object_set_field_by_name(
+    let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(value) else {
+        named.write_value(value, v);
+        return;
+    };
+    if named.write_existing(obj, v) {
+        return;
+    }
+    // Interning allocates nothing for a key a layout or earlier store named;
+    // the receiver is re-read after it either way.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(value);
+    let v = scope.root_nanbox_f64(v);
+    let interned = crate::string::intern_ascii_literal(bytes);
+    let key = f64::from_bits(crate::value::JSValue::string_ptr(interned as *mut _).bits());
+    let Some(obj) =
+        crate::object::field_get_set::runtime_read_site::object_receiver(target.get_nanbox_f64())
+    else {
+        return;
+    };
+    if crate::object::plain_data_write_may_intercept(obj as usize, (*obj).class_id, key) {
+        crate::node_stream::constructor_field_set(
+            target.get_nanbox_f64(),
             obj,
-            crate::string::intern_ascii_literal(bytes),
-            v,
-        ),
-        Some(_) => {}
-        None => named.write_value(value, v),
+            named,
+            v.get_nanbox_f64(),
+        );
+    } else {
+        crate::object::js_object_set_field_by_name(obj, interned, v.get_nanbox_f64());
     }
 }
 
