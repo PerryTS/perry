@@ -189,3 +189,38 @@ console.log(Object.keys(d).join(","), d.more);
     let out = compile_and_run(source, r#"{"compilerOptions":{"target":"ES2020"}}"#);
     assert_eq!(out, "early,late\nearly,late,extra,more e!\n");
 }
+
+/// Defined fields: parameter properties are declared ahead of every class
+/// field, so their keys come first (`tsc --target ES2022` emits `early;
+/// hidden; late = "late"; bare;`).
+#[test]
+fn defined_fields_follow_parameter_properties() {
+    let source = r#"
+class Props {
+  late = "late";
+  bare!: number;
+  constructor(public early: string, private hidden = 2) {}
+}
+class Derived extends Props {
+  more = this.early + "!";
+  constructor(public extra: number) { super("e"); }
+}
+class Mixed {
+  a = 1;
+  static s = 0;
+  b: string | undefined;
+  constructor(readonly p: number, protected q: number) { this.c = p + q; }
+  c: number;
+}
+console.log(Object.keys(new Props("early")).join(","));
+const d = new Derived(1);
+console.log(Object.keys(d).join(","), d.more);
+console.log(Object.keys(new Mixed(1, 2)).join(","), JSON.stringify(new Mixed(3, 4)));
+"#;
+    let out = compile_and_run(source, r#"{"compilerOptions":{"target":"ES2022"}}"#);
+    assert_eq!(
+        out,
+        "early,hidden,late,bare\nearly,hidden,late,bare,extra,more e!\n\
+         p,q,a,b,c {\"p\":3,\"q\":4,\"a\":1,\"c\":7}\n"
+    );
+}

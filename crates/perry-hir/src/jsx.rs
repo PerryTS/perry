@@ -66,7 +66,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     } else if has_spread_attr {
         Expr::ObjectSpread { parts: props_parts }
     } else {
-        Expr::Object(
+        Expr::object_literal(
             props_parts
                 .into_iter()
                 .map(|(key, value)| (key.expect("non-spread JSX prop"), value))

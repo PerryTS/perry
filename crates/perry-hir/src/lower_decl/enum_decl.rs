@@ -54,7 +54,7 @@ pub(crate) fn enum_runtime_object(members: &[(String, EnumValue)]) -> Expr {
             }
         }
     }
-    Expr::Object(fields)
+    Expr::object_literal(fields)
 }
 
 /// Bind an enum's own name to its runtime object at the declaration position,

@@ -1100,6 +1100,9 @@ pub fn lower_class_decl(
     {
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
+        // Defined fields: TypeScript (ES2022+) declares parameter properties
+        // ahead of every class field, so their keys come first.
+        let mut param_prop_fields = Vec::new();
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 for param in &ctor.params {
@@ -1128,7 +1131,7 @@ pub fn lower_class_decl(
                             } else {
                                 crate::ClassFieldOrigin::Definition
                             };
-                            fields.push(ClassField {
+                            param_prop_fields.push(ClassField {
                                 origin,
                                 name: param_name,
                                 key_expr: None,
@@ -1142,6 +1145,11 @@ pub fn lower_class_decl(
                     }
                 }
             }
+        }
+        if ctx.assign_class_fields {
+            fields.extend(param_prop_fields);
+        } else {
+            fields.splice(0..0, param_prop_fields);
         }
     }
 

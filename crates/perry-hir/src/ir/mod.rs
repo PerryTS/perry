@@ -13,6 +13,7 @@ mod constants;
 mod decl;
 mod expr;
 mod module;
+mod object_literal;
 mod ops;
 mod stmt;
 mod widget;
