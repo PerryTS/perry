@@ -863,6 +863,12 @@ jobs:
             --tag perry-glibc-2.31-llvm22 \
             --file scripts/linux-glibc-2.31.Dockerfile \
             .
+          # build_linux_*.sh build with mbx, which perry-mbx-cache installed on
+          # the runner (a static musl binary): hand the container that binary
+          # and its object store.
+          mbx_bin=$(command -v mbx)
+          mbx_cache=$(mbx cache dir)
+          mkdir -p "$mbx_cache"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/perry-home \
@@ -874,6 +880,9 @@ jobs:
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
+            --volume "$mbx_bin:/usr/local/bin/mbx:ro" \
+            --env MBX_CACHE_DIR=/tmp/mbx-cache \
+            --volume "$mbx_cache:/tmp/mbx-cache" \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             perry-glibc-2.31-llvm22 \
@@ -911,6 +920,12 @@ jobs:
             --tag perry-musl-llvm22 \
             --file scripts/linux-musl-llvm22.Dockerfile \
             .
+          # build_linux_*.sh build with mbx, which perry-mbx-cache installed on
+          # the runner (a static musl binary): hand the container that binary
+          # and its object store.
+          mbx_bin=$(command -v mbx)
+          mbx_cache=$(mbx cache dir)
+          mkdir -p "$mbx_cache"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/perry-home \
@@ -921,6 +936,9 @@ jobs:
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
+            --volume "$mbx_bin:/usr/local/bin/mbx:ro" \
+            --env MBX_CACHE_DIR=/tmp/mbx-cache \
+            --volume "$mbx_cache:/tmp/mbx-cache" \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             perry-musl-llvm22 \
@@ -1067,7 +1085,8 @@ jobs:
             # The analyzer imports LLVM-C.dll.
             export PATH="$(cygpath -u "$LLVM_SYS_221_PREFIX")/bin:$PATH"
           fi
-          dirs=$(find target \( -path "*/prod/libperry_runtime.a" -o -path "*/prod/perry_runtime.lib" \) -exec dirname {} \; | sort -u)
+          # mbx makes target/ a symlink into its store: -H follows it.
+          dirs=$(find -H target \( -path "*/prod/libperry_runtime.a" -o -path "*/prod/perry_runtime.lib" \) -exec dirname {} \; | sort -u)
           if [ -z "$dirs" ]; then
             echo "::error::no built runtime archives found under target/ -- nothing to analyze"
             exit 1
@@ -1082,7 +1101,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          libs=$(find target -path "*/prod/libperry_runtime.a" -o -path "*/prod/perry_runtime.lib")
+          libs=$(find -H target -path "*/prod/libperry_runtime.a" -o -path "*/prod/perry_runtime.lib")
           if [ -z "$libs" ]; then
             echo "::error::no built runtime archives found under target/ — nothing to verify"
             exit 1
@@ -1589,6 +1608,8 @@ jobs:
           fi
           # cc-rs lookup vars: `CC_<triple>` / `CXX_<triple>` / `AR_<triple>`
           # with `-` → `_`. The cargo-target linker var uses uppercase + `_`.
+          API=${CLANG##*/"$TRIPLE"}
+          API=${API%-clang}
           TRIPLE_UNDER=$(echo "$TRIPLE" | tr '-' '_')
           TRIPLE_UPPER=$(echo "$TRIPLE_UNDER" | tr '[:lower:]' '[:upper:]')
           {
@@ -1596,6 +1617,13 @@ jobs:
             echo "CXX_${TRIPLE_UNDER}=$CLANGXX"
             echo "AR_${TRIPLE_UNDER}=$TOOLCHAIN/llvm-ar"
             echo "CARGO_TARGET_${TRIPLE_UPPER}_LINKER=$CLANG"
+            # cc-rs adds `--target=<triple>` (no API level) to every C flag
+            # list. Under mbx, CMake gets mbx's compiler shim, not the NDK
+            # wrapper, so its Android support picks the NDK's bare clang and
+            # that flag overrides the API: no crtbegin_dynamic.o (libz-ng-sys).
+            # Name the wrapper's API level last.
+            echo "CFLAGS_${TRIPLE_UNDER}=--target=${TRIPLE}${API}"
+            echo "CXXFLAGS_${TRIPLE_UNDER}=--target=${TRIPLE}${API}"
           } >> "$GITHUB_ENV"
           echo "NDK wired for $TRIPLE: $CLANG"
 
@@ -1609,6 +1637,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The vendored OpenSSL's Configure needs Locale::Maketext::Simple,
+            # which Git Bash's msys perl lacks; use the Windows perl that the
+            # pwsh steps (the build job's runtime build) resolve.
+            OPENSSL_SRC_PERL=$(pwsh -NoProfile -Command '(Get-Command perl).Source' | tr -d '\r')
+            export OPENSSL_SRC_PERL
+            echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          fi
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
           # UI crate is matrix-driven. perry-ui-android needs the NDK env
