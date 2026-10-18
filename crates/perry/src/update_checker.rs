@@ -899,14 +899,14 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
         .error_for_status()
         .context("failed to download update manifest")?
         .body;
-    let manifest: perry_updater::cli_manifest::CliUpdateManifest =
+    let manifest: perry_update_manifest::CliUpdateManifest =
         serde_json::from_slice(&manifest_bytes).context("update manifest is malformed")?;
     let keys = trusted_cli_update_keys()?;
     let key_refs: Vec<(&str, &str)> = keys
         .iter()
         .map(|k| (k.key_id.as_str(), k.public_key.as_str()))
         .collect();
-    perry_updater::cli_manifest::verify_cli_manifest(&manifest, artifact_name, current, &key_refs)
+    perry_update_manifest::verify_cli_manifest(&manifest, artifact_name, current, &key_refs)
         .context("refusing unauthenticated update manifest")?;
     if manifest.artifact.name != artifact_name {
         bail!("authenticated manifest artifact name does not match this platform");
@@ -961,7 +961,7 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
     archive.flush()?;
     archive.sync_all()?;
     drop(archive);
-    perry_updater::cli_manifest::verify_cli_artifact(&archive_path, &manifest.artifact)
+    perry_update_manifest::verify_cli_artifact(&archive_path, &manifest.artifact)
         .context("refusing update artifact")?;
     let extract_dir = staging.path().join("extract");
     fs::create_dir(&extract_dir)?;

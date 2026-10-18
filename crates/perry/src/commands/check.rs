@@ -650,7 +650,7 @@ fn target_stubs_out_symbols(target: Option<&str>) -> bool {
     matches!(target, Some("harmonyos") | Some("harmonyos-simulator"))
 }
 
-/// Walk a parsed module's named imports against `STUB_MANIFEST` and
+/// Walk a parsed module's named imports against the stub list and
 /// emit a `NoOpStub` warning for each one that maps to a stubbed
 /// symbol on the requested target.
 fn scan_imports_for_stubs(
@@ -659,7 +659,7 @@ fn scan_imports_for_stubs(
     diagnostics: &mut Diagnostics,
 ) {
     use perry_parser::swc_ecma_ast::{ImportSpecifier, ModuleDecl, ModuleExportName, ModuleItem};
-    use perry_runtime::stub_diag::STUB_MANIFEST;
+    let stubs = perry_runtime_manifest::stubs();
 
     for item in &module.body {
         let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
@@ -696,7 +696,7 @@ fn scan_imports_for_stubs(
                 ImportSpecifier::Namespace(_) | ImportSpecifier::Default(_) => continue,
             };
 
-            for entry in STUB_MANIFEST {
+            for entry in &stubs {
                 if entry.module != source {
                     continue;
                 }

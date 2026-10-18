@@ -1,4 +1,6 @@
-//! Authenticated manifest format for the Perry CLI self-updater.
+//! Authenticated manifest format for the Perry CLI self-updater. It lives
+//! outside `perry-updater` (the desktop-app updater, which links
+//! perry-runtime) so the CLI links no runtime code.
 
 use anyhow::{bail, Context, Result};
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};

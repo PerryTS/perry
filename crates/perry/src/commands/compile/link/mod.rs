@@ -154,10 +154,7 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
 /// Checked-in Node v26.5.1 / N-API v8 export inventory. The runtime build
 /// consumes the same file to generate retention anchors.
 pub(super) fn node_api_host_symbols() -> impl Iterator<Item = &'static str> {
-    include_str!("../../../../../perry-runtime/src/node_api_host/symbols.txt")
-        .lines()
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && !name.starts_with('#'))
+    perry_runtime_manifest::node_api_host_symbols()
 }
 
 fn add_node_api_host_link_args(

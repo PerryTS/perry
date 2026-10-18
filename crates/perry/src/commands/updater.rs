@@ -290,12 +290,12 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
     if name != args.platform {
         bail!("artifact filename must equal --platform to prevent platform confusion");
     }
-    let mut manifest = perry_updater::cli_manifest::CliUpdateManifest {
+    let mut manifest = perry_update_manifest::CliUpdateManifest {
         schema_version: 1,
         key_id: args.key_id,
         version: args.release_version,
         platform: args.platform,
-        artifact: perry_updater::cli_manifest::CliUpdateArtifact {
+        artifact: perry_update_manifest::CliUpdateArtifact {
             name,
             url: args.url,
             sha256: perry_hex::encode(digest),
@@ -303,7 +303,7 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
         },
         signature: String::new(),
     };
-    perry_updater::cli_manifest::sign_cli_manifest(&mut manifest, &signing)?;
+    perry_update_manifest::sign_cli_manifest(&mut manifest, &signing)?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
 }

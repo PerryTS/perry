@@ -453,6 +453,9 @@ mach2 = "0.6"
 # See `build.rs` and issue #395 for the rationale.
 [build-dependencies]
 perry-dispatch = { path = "../perry-dispatch" }
+# The stub list and the Node-API host export inventory, shared with the
+# compiler (which must not link this crate).
+perry-runtime-manifest = { path = "../perry-runtime-manifest" }
 # Build-time only: compiles the 20-line setjmp trampoline
 # (src/ffi/perry_sjlj.c) that the exception transport routes every
 # jmp_buf arm through — rustc cannot express `returns_twice` (#9305).

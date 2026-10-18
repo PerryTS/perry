@@ -26,7 +26,8 @@ const ADDON_V10_MAIN: &str = include_str!("fixtures/node_api_host/addon_v10_main
 const ADDON_V10_EXPECTED: &str = include_str!("fixtures/node_api_host/addon_v10_expected.txt");
 #[cfg(windows)]
 const ADDON_DEF: &str = include_str!("fixtures/node_api_host/addon.def");
-const HOST_SYMBOLS: &str = include_str!("../../perry-runtime/src/node_api_host/symbols.txt");
+const HOST_SYMBOLS: &str =
+    include_str!("../../perry-runtime-manifest/src/node_api_host_symbols.txt");
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))

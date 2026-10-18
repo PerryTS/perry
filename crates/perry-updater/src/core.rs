@@ -11,7 +11,7 @@ use perry_base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 /// Verify an Ed25519 signature over `payload` in-crate via `ed25519-dalek`
-/// (already a hard dependency for the sign side in `cli_manifest.rs`).
+/// (a direct dependency of this crate).
 ///
 /// This used to extern-call perry-stdlib's `js_crypto_ed25519_verify`, but
 /// the `perry` CLI links perry-updater WITHOUT perry-stdlib: MSVC `link.exe`

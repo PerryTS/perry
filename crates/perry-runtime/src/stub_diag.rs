@@ -193,51 +193,9 @@ pub unsafe extern "C" fn perry_stub_warn_ffi(
     perry_stub_warn(as_static(name), as_static(reason), issue);
 }
 
-/// One row of the auto-generated stub manifest.
-///
-/// Populated by `build.rs` from `perry-dispatch`'s tables plus the
-/// hand-listed `direct_call_stubs`. Consumed by:
-///  - the generated stub bodies (each calls `perry_stub_warn` with
-///    matching args), and
-///  - the `perry check` static scan, which walks user imports against
-///    the `ts_name` column to surface stubs ahead of runtime.
-#[derive(Copy, Clone, Debug)]
-pub struct StubEntry {
-    /// Runtime FFI symbol the stub body defines (`perry_ui_*`, …).
-    pub symbol: &'static str,
-    /// TypeScript-level name the user imports (`"keychainSave"`,
-    /// `"notificationSchedule"`, …) when it can be derived from the
-    /// dispatch tables. `None` for direct-call stubs whose TS shape
-    /// is computed at codegen (e.g. trigger-variant fan-out).
-    pub ts_name: Option<&'static str>,
-    /// Source TS module that exposes `ts_name`
-    /// (e.g. `"perry/system"`, `"perry/ui"`, `"perry/updater"`).
-    pub module: &'static str,
-    /// Why this symbol is a stub (shown in the warning).
-    pub reason: &'static str,
-    /// Tracking issue for the stub family (`"#399"`, etc.).
-    pub issue: Option<&'static str>,
-}
-
-include!(concat!(env!("OUT_DIR"), "/perry_stub_manifest.rs"));
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn manifest_constant_resolves() {
-        // Smoke test that `STUB_MANIFEST` compiles and has the
-        // expected shape — empty on non-harmonyos builds, populated
-        // when `ohos-napi` is on. Either case is valid; this test
-        // just exercises the include path.
-        let _: &[StubEntry] = STUB_MANIFEST;
-        for entry in STUB_MANIFEST {
-            assert!(!entry.symbol.is_empty(), "stub manifest symbol empty");
-            assert!(!entry.module.is_empty(), "stub manifest module empty");
-            assert!(!entry.reason.is_empty(), "stub manifest reason empty");
-        }
-    }
 
     #[test]
     fn warn_does_not_panic_with_off_mode() {

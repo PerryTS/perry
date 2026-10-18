@@ -14,6 +14,7 @@ members = [
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
+    "crates/perry-runtime-manifest",
     "crates/perry-abi",
     "crates/perry-runtime",
     "crates/perry-ffi",
@@ -69,6 +70,7 @@ members = [
     "crates/perry-ui-testkit",
     "crates/perry-doc-tests",
     "crates/perry-updater",
+    "crates/perry-update-manifest",
     "crates/perry-runtime-static",
     "crates/perry-stdlib-static",
     "docs/examples/_fixtures/native-libraries/my-bindings",
@@ -592,6 +594,7 @@ perry-wpfacts = { path = "crates/perry-wpfacts" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
+perry-runtime-manifest = { path = "crates/perry-runtime-manifest" }
 perry-abi = { path = "crates/perry-abi", version = "0.5.1654" }
 # #1112: `perry-ffi` is published for external native wrappers. Its optional
 # `runtime-link` edge supplies runtime symbols to in-tree adapter tests.
@@ -670,6 +673,7 @@ perry-codegen-wasm = { path = "crates/perry-codegen-wasm" }
 perry-ui-testkit = { path = "crates/perry-ui-testkit" }
 perry-audio-miniaudio = { path = "crates/perry-audio-miniaudio" }
 perry-updater = { path = "crates/perry-updater" }
+perry-update-manifest = { path = "crates/perry-update-manifest" }
 
 # Release codegen with debug assertions ON, for the GC root-scanning guards
 # that only exist under `cfg(debug_assertions)` — above all

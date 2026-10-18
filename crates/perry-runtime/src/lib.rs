@@ -317,8 +317,7 @@ pub mod static_plugins;
 #[cfg(not(feature = "stdlib"))]
 pub mod stdlib_stubs;
 /// First-call runtime diagnostic for no-op FFI stubs (#464). Owns the
-/// `PERRY_STUB_DIAG` env-var policy and the auto-generated `STUB_MANIFEST`
-/// derived from `build.rs`'s dispatch-table walk.
+/// `PERRY_STUB_DIAG` env-var policy; the stub list is perry-runtime-manifest's.
 pub mod stub_diag;
 pub mod thread;
 pub mod tls;

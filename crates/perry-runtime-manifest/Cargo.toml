@@ -1,0 +1,12 @@
+[package]
+name = "perry-runtime-manifest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The runtime surface lists both the Perry compiler and the perry-runtime build read (harmonyos stub list, Node-API host exports), so the compiler links no runtime code."
+
+[lints]
+workspace = true
+
+[dependencies]
+perry-dispatch.workspace = true

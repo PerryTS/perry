@@ -59,6 +59,11 @@ fn pinned_build_id(raw: Option<String>) -> Option<u64> {
 /// or any dep that gets baked into the perry executable) produces a new
 /// build id and the cache invalidates correctly.
 ///
+/// The executable links no runtime code (`tests/runtime_decoupled.rs` gates
+/// it), so a runtime-only edit leaves this id unchanged. What codegen reads
+/// from the runtime is the GC effects table, whose digest is its own key
+/// field (`gc_effects`): such an edit misses exactly when a table row changes.
+///
 /// Failure modes degrade silently: if `current_exe()` or the read fails,
 /// returns 0 and we fall back to the version-only behavior — at worst the
 /// user is back to the pre-fix status quo, never worse.

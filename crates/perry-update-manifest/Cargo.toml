@@ -1,0 +1,21 @@
+[package]
+name = "perry-update-manifest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Signed manifest format of the Perry CLI self-updater: Ed25519 sign/verify and the artifact SHA-256 check. It has no runtime dependency, so the CLI links it without perry-runtime."
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0"
+serde = { workspace = true, features = ["derive"] }
+semver.workspace = true
+sha2 = "0.11"
+perry-base64.workspace = true
+perry-hex.workspace = true
+ed25519-dalek = "3.0"
+
+[dev-dependencies]
+tempfile.workspace = true

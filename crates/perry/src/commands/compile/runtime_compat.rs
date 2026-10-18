@@ -1,8 +1,19 @@
 //! Compiler/runtime archive compatibility stamping (#8752).
 //!
 //! A stale `libperry_runtime` used to pass discovery and fail much later with
-//! undefined symbols. The runtime now embeds a small version/build record;
-//! this module streams the archive to find it and rejects skew before linking.
+//! undefined symbols. The runtime embeds a small version/build record; this
+//! module streams the archive to find it and rejects a version skew before
+//! linking.
+//!
+//! Only the version is compared. The compiler does not link perry-runtime, so
+//! it has no runtime build id of its own to compare: the object cache keys on
+//! a hash of the perry binary, and a runtime linked into it would make every
+//! runtime edit miss every cached object. What codegen takes from the runtime
+//! is the GC effects table, read from the archive's `.gc-effects` sidecar,
+//! which is checked against the archive bytes on every compile and whose
+//! digest is in every object key (`gc_effects_sidecar`). An archive built from
+//! other runtime sources of the same version links; a table that disagrees
+//! with it is refused there.
 
 use anyhow::{bail, Result};
 use std::fmt;
@@ -20,14 +31,10 @@ pub(crate) struct RuntimeBuildStamp {
     build_id: String,
 }
 
-impl RuntimeBuildStamp {
-    fn current() -> Self {
-        Self {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            build_id: perry_runtime::PERRY_RUNTIME_BUILD_ID.to_string(),
-        }
-    }
+/// The runtime version this compiler links: its own.
+const EXPECTED_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+impl RuntimeBuildStamp {
     fn parse(bytes: &[u8]) -> std::result::Result<Self, String> {
         let text =
             std::str::from_utf8(bytes).map_err(|error| format!("stamp is not UTF-8: {error}"))?;
@@ -79,10 +86,7 @@ pub(crate) enum RuntimeLibraryStatus {
     Compatible(RuntimeBuildStamp),
     MissingStamp,
     MalformedStamp(String),
-    Mismatch {
-        expected: RuntimeBuildStamp,
-        found: RuntimeBuildStamp,
-    },
+    Mismatch { found: RuntimeBuildStamp },
     Unreadable(io::Error),
 }
 
@@ -149,16 +153,15 @@ pub(crate) fn runtime_library_status(path: &Path) -> RuntimeLibraryStatus {
         },
         Err(error) => return RuntimeLibraryStatus::Unreadable(error),
     };
-    let expected = RuntimeBuildStamp::current();
-    if found == expected {
+    if found.version == EXPECTED_VERSION {
         RuntimeLibraryStatus::Compatible(found)
     } else {
-        RuntimeLibraryStatus::Mismatch { expected, found }
+        RuntimeLibraryStatus::Mismatch { found }
     }
 }
 
 pub(crate) fn runtime_library_diagnostic(path: &Path, status: &RuntimeLibraryStatus) -> String {
-    let expected = RuntimeBuildStamp::current();
+    let expected = format!("v{EXPECTED_VERSION}");
     let reason = match status {
         RuntimeLibraryStatus::Compatible(found) => {
             return format!("{} ({found}, matches this Perry)", path.display())
@@ -171,7 +174,7 @@ pub(crate) fn runtime_library_diagnostic(path: &Path, status: &RuntimeLibrarySta
             "library build: unknown (invalid stamp in {}: {error})\n  Perry build: {expected}",
             path.display()
         ),
-        RuntimeLibraryStatus::Mismatch { expected, found } => format!(
+        RuntimeLibraryStatus::Mismatch { found } => format!(
             "library build: {found}\n  Perry build: {expected}\n  library: {}",
             path.display()
         ),
@@ -210,6 +213,13 @@ mod tests {
         file
     }
 
+    fn current() -> RuntimeBuildStamp {
+        RuntimeBuildStamp {
+            version: EXPECTED_VERSION.to_string(),
+            build_id: "src:0123456789abcdef".to_string(),
+        }
+    }
+
     fn encoded(stamp: &RuntimeBuildStamp) -> Vec<u8> {
         format!(
             "noise{STAMP_MAGIC}|version={}|build={}\0trailer",
@@ -220,7 +230,7 @@ mod tests {
 
     #[test]
     fn accepts_matching_embedded_stamp() {
-        let expected = RuntimeBuildStamp::current();
+        let expected = current();
         let archive = write_archive(&encoded(&expected));
         assert!(matches!(
             runtime_library_status(archive.path()),
@@ -230,7 +240,7 @@ mod tests {
 
     #[test]
     fn finds_stamp_across_reader_chunk_boundary() {
-        let expected = RuntimeBuildStamp::current();
+        let expected = current();
         let mut bytes = vec![b'x'; 64 * 1024 - 7];
         bytes.extend(encoded(&expected));
         let archive = write_archive(&bytes);
@@ -253,7 +263,7 @@ mod tests {
 
     #[test]
     fn rejects_mismatched_archive_and_names_both_builds() {
-        let expected = RuntimeBuildStamp::current();
+        let expected = current();
         let stale = RuntimeBuildStamp {
             version: "0.0.1".to_string(),
             build_id: "git:1111111111111111111111111111111111111111".to_string(),
@@ -263,9 +273,25 @@ mod tests {
         assert!(matches!(&status, RuntimeLibraryStatus::Mismatch { .. }));
         let diagnostic = runtime_library_diagnostic(archive.path(), &status);
         assert!(diagnostic.contains(&stale.to_string()));
-        assert!(diagnostic.contains(&expected.to_string()));
+        assert!(diagnostic.contains(&format!("Perry build: v{}", expected.version)));
         assert!(diagnostic.contains("archive may be stale"));
         assert!(diagnostic.contains("-p perry -p perry-runtime-static -p perry-stdlib-static"));
+    }
+
+    /// The archive's build id is not compared: an archive of the same version
+    /// built from other runtime sources links (its GC effects sidecar speaks
+    /// for its bytes).
+    #[test]
+    fn accepts_same_version_from_other_runtime_sources() {
+        let other = RuntimeBuildStamp {
+            version: EXPECTED_VERSION.to_string(),
+            build_id: "src:fedcba9876543210".to_string(),
+        };
+        let archive = write_archive(&encoded(&other));
+        assert!(matches!(
+            runtime_library_status(archive.path()),
+            RuntimeLibraryStatus::Compatible(found) if found == other
+        ));
     }
 
     #[test]

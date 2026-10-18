@@ -4873,8 +4873,9 @@ dependencies = [
  "perry-parser",
  "perry-perex",
  "perry-runtime",
+ "perry-runtime-manifest",
  "perry-transform",
- "perry-updater",
+ "perry-update-manifest",
  "perry-wpfacts",
  "rand 0.10.3",
  "rayon",
@@ -5414,6 +5415,7 @@ dependencies = [
  "perry-dispatch",
  "perry-hex",
  "perry-parser",
+ "perry-runtime-manifest",
  "rand 0.10.3",
  "rustc-demangle",
  "ryu",
@@ -5438,6 +5440,13 @@ dependencies = [
  "x509-cert",
  "xxhash-rust",
  "zstd",
+]
+
+[[package]]
+name = "perry-runtime-manifest"
+version = "0.5.1659"
+dependencies = [
+ "perry-dispatch",
 ]
 
 [[package]]
@@ -5741,6 +5750,20 @@ dependencies = [
  "perry-ui-windows",
  "windows 0.62.2",
  "windows-reactor",
+]
+
+[[package]]
+name = "perry-update-manifest"
+version = "0.5.1659"
+dependencies = [
+ "anyhow",
+ "ed25519-dalek",
+ "perry-base64",
+ "perry-hex",
+ "semver",
+ "serde",
+ "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]
