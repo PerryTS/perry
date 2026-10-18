@@ -1,0 +1,3 @@
+Array births inside closures retain their named-property layout through HIR cloning, including arrays in CommonJS wrapper closures. Birth-layout metadata is carried by array literals, Array.from, and array slices and is ignored by stable HIR hashing.
+
+Array-family field flow now identifies the receiver as well as the property key. This avoids reserving unrelated holders' combined property sets on an array birth, which previously caused 325 tsc attach sites to allocate 159-slot holders. Unknown alias flows retain the ordinary named-property add path. Coverage checks distinct receivers and closure arrays with captures, aliases, computed writes, deletion, and re-addition.
