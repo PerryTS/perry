@@ -26,6 +26,15 @@ try { Calls.f(); } catch (error) { console.log((error as Error).name); }
 (Calls as any)["f"] = original;
 console.log(Calls.f(9));
 
+namespace PointerExports {
+    export let first = { value: 13 };
+    export let second = [14];
+    export function read() { return first.value + second[0]; }
+}
+console.log(PointerExports.read(), JSON.stringify(PointerExports.first), JSON.stringify(PointerExports.second));
+PointerExports.second = [15];
+console.log(PointerExports.read(), JSON.stringify(PointerExports.second));
+
 function make(v: number) {
     const object: any = {};
     object.level = 1;
