@@ -88,6 +88,12 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
             f.visit_children_with(self);
             self.named_function_depth -= 1;
         }
+        fn visit_class_expr(&mut self, c: &ast::ClassExpr) {
+            if let Some(name) = &c.ident {
+                *self.counts.entry(name.sym.to_string()).or_default() += 1;
+            }
+            c.visit_children_with(self);
+        }
         fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
             let name = c.ident.sym.to_string();
             *self.counts.entry(name.clone()).or_default() += 1;
@@ -434,7 +440,7 @@ mod tests {
 mod name_proof_tests {
     #[test]
     fn module_and_iife_names_exclude_named_and_exported_function_bodies() {
-        let ast = perry_parser::parse_typescript("class Top {} (() => { class Iife {} })(); export function make() { class Exported {} return Exported; } make(); function one() { class Named {} } one(); function factory() { class Clash {} } (() => { class Clash {} })();", "names.ts").unwrap();
+        let ast = perry_parser::parse_typescript("class Top {} (() => { class Iife {} })(); export function make() { class Exported {} return Exported; } make(); function one() { class Named {} } one(); function factory() { class Clash {} } (() => { class Clash {} })(); function expr() { return class ClashExpr {}; } (() => { class ClashExpr {} })();", "names.ts").unwrap();
         assert_eq!(
             super::class_names(&ast).into_iter().collect::<Vec<_>>(),
             vec!["Iife", "Top"]
