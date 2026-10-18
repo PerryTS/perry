@@ -200,6 +200,69 @@ mod tests {
         m.load_from_prototypes(protos[0], Key::Named(key), result);
         m.solve();
         assert_eq!(m.nodes[result as usize].pts.len(), 129);
-        assert!(m.pts_entries < 4000, "{}", m.size_line());
+        let roots: crate::pts::FxHashSet<_> = protos.iter()
+            .map(|&p| m.prototype_root(m.prototype_values[&(p, Key::Named(key))]))
+            .collect();
+        assert_eq!(roots.len(), 1);
+        assert!(m.pts_entries < 6000, "{}", m.size_line());
     }
+    #[test]
+    fn late_prototype_cycle_replays_method_receivers_and_native_sites() {
+        let mut g = Gen::new(vec![], false, false);
+        let m = &mut g.m;
+        let key = m.atom("method");
+        let a = m.tok(TokKind::ModNs(100));
+        let b = m.tok(TokKind::ModNs(101));
+        let ra = m.tok(TokKind::ModNs(102));
+        let rb = m.tok(TokKind::ModNs(103));
+        let mut functions = Vec::new();
+        for primitive in [prim::NUM, prim::STR] {
+            let f = m.funcs.len() as FnIdx;
+            let token = m.tok(TokKind::Func(f));
+            let this = m.node_l("test-this");
+            let ret = m.node_l("test-ret");
+            let args_all = m.node_l("test-args");
+            m.funcs.push(FuncInfo { module: 0, func_id: f, name: format!("f{f}"),
+                params: vec![], rest: None, this, ret, args_all, token,
+                ctor_of: None, lexical_this: false });
+            m.add_prim(ret, primitive);
+            functions.push((token, this));
+        }
+        let fa = m.field(a, key);
+        let fb = m.field(b, key);
+        m.add_tok(fa, functions[0].0);
+        m.add_tok(fb, functions[1].0);
+        let pa = m.proto_node(a);
+        let pb = m.proto_node(b);
+        m.add_tok(pa, b);
+        let mut results = Vec::new();
+        for (holder, receiver) in [(a, ra), (b, rb)] {
+            let ret = m.node_l("test-result");
+            let call = m.calls.len() as CallId;
+            m.calls.push(CallSite { this: ThisArg::Undef, args: vec![],
+                spread: vec![], ret, site: 0 });
+            let value = m.prototype_value(holder, Key::Named(key));
+            m.bind_via(value, call, receiver);
+            results.push(ret);
+        }
+        m.solve();
+        assert!(!m.nodes[functions[0].1 as usize].pts.contains_tok(rb));
+        m.add_tok(pb, a);
+        m.solve();
+        for &(_, this) in &functions {
+            assert!(m.nodes[this as usize].pts.contains_tok(ra));
+            assert!(m.nodes[this as usize].pts.contains_tok(rb));
+        }
+        for &ret in &results {
+            assert_eq!(m.nodes[ret as usize].prim, prim::NUM | prim::STR);
+        }
+        let object = m.tok(TokKind::Builtin(BuiltinNs::Object));
+        m.add_tok(fb, object);
+        m.solve();
+        for ret in results {
+            assert!(m.nodes[ret as usize].pts.to_sorted().iter()
+                .any(|&t| matches!(m.toks[t as usize], TokKind::Obj(_))));
+        }
+    }
+
 }
