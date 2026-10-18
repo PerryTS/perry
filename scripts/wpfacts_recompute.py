@@ -365,8 +365,8 @@ class Solver:
                 self.chain_step(t, start, key, act)
         elif op == "classparent":
             cls = c[1]
-            cp = self.proto(self.tok("classobj", cls))
-            pp = self.proto(self.tok("proto", cls))
+            cp = self.pnode(self.tok("classobj", cls))
+            pp = self.pnode(self.tok("proto", cls))
             for t in toks:
                 if self.toks[t][0] == "classobj":
                     self.add(cp, [t])
