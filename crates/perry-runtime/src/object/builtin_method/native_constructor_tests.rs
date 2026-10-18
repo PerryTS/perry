@@ -33,6 +33,21 @@ fn sealed_native_constructor_words_prove_and_withdraw_every_fixed_chain() {
                     inherits_function(ptr(value), key),
                     "positive admission must be live before mutation"
                 );
+                let actual = super::function_receiver::lookup_value(value, key, 0.0)
+                    .expect("the sealed native constructor captures its inherited intrinsic");
+                let proto =
+                    crate::agent_ptrs::intrinsic_proto(super::BuiltinProto::Function as usize);
+                let expected = crate::object::native_get::try_data_get_bytes(
+                    crate::value::JSValue::pointer(proto.cast()),
+                    key,
+                )
+                .expect("Function.prototype owns this method");
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.bits(),
+                    "lookup must use the declared storage slot"
+                );
+                assert!(crate::object::value_is_callable(actual));
             }
             assert!(!inherits_function(ptr(value), b"from"));
         }

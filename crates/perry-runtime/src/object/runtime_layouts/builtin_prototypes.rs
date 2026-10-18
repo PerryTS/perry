@@ -148,18 +148,19 @@ runtime_layout!(OBJECT_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x5254_0010, 0,
 // the restricted `caller` / `arguments` accessors of §10.2.4
 // (AddRestrictedFunctionProperties), in V8's own-key order. `valueOf` and
 // `toLocaleString` are not its own: it inherits them from
-// `%Object.prototype%`.
+// `%Object.prototype%`. Preserve the storage slots independently of key order:
+// native constructor lookups read apply/bind/call at these declared positions.
 runtime_layout!(FUNCTION_PROTOTYPE, kind = LAYOUT_KIND_CALLABLE, 0x5254_0011, 0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
-    BP_ATOM_LENGTH => BUILTIN_READ_ONLY,
-    BP_ATOM_NAME => BUILTIN_READ_ONLY,
-    BP_ATOM_CONSTRUCTOR => BUILTIN_METHOD,
-    BP_ATOM_APPLY => BUILTIN_METHOD,
-    BP_ATOM_BIND => BUILTIN_METHOD,
-    BP_ATOM_CALL => BUILTIN_METHOD,
-    BP_ATOM_TO_STRING => BUILTIN_METHOD,
-    BP_ATOM_ARGUMENTS => BUILTIN_ACCESSOR,
-    BP_ATOM_CALLER => BUILTIN_ACCESSOR,
+    BP_ATOM_LENGTH @ 0 => BUILTIN_READ_ONLY,
+    BP_ATOM_NAME @ 1 => BUILTIN_READ_ONLY,
+    BP_ATOM_CONSTRUCTOR @ 4 => BUILTIN_METHOD,
+    BP_ATOM_APPLY @ 5 => BUILTIN_METHOD,
+    BP_ATOM_BIND @ 6 => BUILTIN_METHOD,
+    BP_ATOM_CALL @ 7 => BUILTIN_METHOD,
+    BP_ATOM_TO_STRING @ 8 => BUILTIN_METHOD,
+    BP_ATOM_ARGUMENTS @ 2 => BUILTIN_ACCESSOR,
+    BP_ATOM_CALLER @ 3 => BUILTIN_ACCESSOR,
     ATOM_SYMBOL_HAS_INSTANCE,
 ]);
 
