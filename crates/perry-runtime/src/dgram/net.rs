@@ -437,20 +437,72 @@ pub(crate) fn complete_send(
     socket: f64,
     callback_bits: u64,
     outcome: Result<usize, crate::turnloop_proc::NodeError>,
+    mut context: Option<crate::async_context::AsyncContextSnapshot>,
 ) {
-    let callback = (callback_bits != 0).then(|| f64::from_bits(callback_bits));
-    match (outcome, callback) {
-        (Ok(size), Some(callback)) => {
-            defer_send_callback(callback, socket, null_value(), size as f64);
+    let result = try_complete_send(socket, callback_bits, outcome, &mut context);
+    // A JS throw skips Rust destructors: release the native snapshot before rethrowing.
+    drop(context);
+    if let Err(error) = result {
+        crate::exception::js_throw(error);
+    }
+}
+
+fn try_complete_send(
+    socket: f64,
+    callback_bits: u64,
+    outcome: Result<usize, crate::turnloop_proc::NodeError>,
+    context: &mut Option<crate::async_context::AsyncContextSnapshot>,
+) -> Result<(), f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let callback = scope.root_nanbox_u64(callback_bits);
+    // take_send removed the registry's roots; keep every store live through allocations/hooks.
+    let context_roots = context
+        .as_ref()
+        .map(|snapshot| crate::async_context::root_snapshot(&scope, snapshot));
+    let failed = outcome.is_err();
+    let (error, bytes) = match outcome {
+        Ok(size) => (null_value(), size as f64),
+        Err(error) => (
+            crate::exception::js_call_catching(|| node_error_value(error))?,
+            undefined_value(),
+        ),
+    };
+    let error = scope.root_nanbox_f64(error);
+    if callback_bits == 0 {
+        if failed {
+            crate::exception::js_call_catching(|| {
+                emit_event(socket.get_nanbox_f64(), "error", &[error.get_nanbox_f64()]);
+                undefined_value()
+            })?;
         }
-        (Ok(_), None) => {}
-        (Err(error), Some(callback)) => {
-            defer_send_callback(callback, socket, node_error_value(error), undefined_value());
-        }
-        (Err(error), None) => {
-            emit_event(socket, "error", &[node_error_value(error)]);
+        return Ok(());
+    }
+    if let Some(snapshot) = context.as_mut() {
+        crate::async_context::refresh_snapshot_from_roots(
+            snapshot,
+            context_roots.as_ref().unwrap(),
+        );
+        let previous = crate::async_context::enter_context(snapshot);
+        crate::async_context::push_context_guard(
+            crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
+        );
+    }
+    let result = crate::exception::js_call_catching(|| {
+        defer_send_callback(
+            callback.get_nanbox_f64(),
+            socket.get_nanbox_f64(),
+            error.get_nanbox_f64(),
+            bytes,
+        );
+        undefined_value()
+    });
+    if context.is_some() {
+        if let Some(action) = crate::async_context::pop_context_guard() {
+            crate::async_context::apply_context_guard(action);
         }
     }
+    result.map(|_| ())
 }
 
 /// Surface a receive-side driver failure as Node does: an `'error'` event on
@@ -496,13 +548,17 @@ extern "C" fn deferred_send_callback(
 }
 
 fn defer_send_callback(callback: f64, socket: f64, error: f64, bytes: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let socket = scope.root_nanbox_f64(socket);
+    let error = scope.root_nanbox_f64(error);
     let closure = crate::closure::js_closure_alloc(
         crate::fn_info!(deferred_send_callback, 0; with_declared(0)),
         4,
     );
-    crate::closure::js_closure_set_capture_f64(closure, 0, callback);
-    crate::closure::js_closure_set_capture_f64(closure, 1, socket);
-    crate::closure::js_closure_set_capture_f64(closure, 2, error);
+    crate::closure::js_closure_set_capture_f64(closure, 0, callback.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure, 1, socket.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure, 2, error.get_nanbox_f64());
     crate::closure::js_closure_set_capture_f64(closure, 3, bytes);
     crate::builtins::js_queue_microtask(closure as i64);
 }

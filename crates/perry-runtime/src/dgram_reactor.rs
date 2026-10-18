@@ -70,6 +70,7 @@ struct PendingSend {
     /// NaN-boxed completion callback — a GC root until the completion fires
     /// (see [`scan_roots_mut`]). Zero when `send()` was called without one.
     callback_bits: u64,
+    context: Option<crate::async_context::AsyncContextSnapshot>,
     len: usize,
 }
 
@@ -285,6 +286,7 @@ pub(crate) fn on_completion(id: u64, event: StreamEvent) {
                 f64::from_bits(socket_bits),
                 pending.callback_bits,
                 Ok(pending.len.max(len)),
+                pending.context,
             );
         }
         StreamEvent::Error { user, error, .. } => {
@@ -297,9 +299,12 @@ pub(crate) fn on_completion(id: u64, event: StreamEvent) {
                 // A failed send: report it exactly where a synchronous failure
                 // was reported — the callback if there is one, otherwise an
                 // `'error'` event.
-                Some(pending) => {
-                    crate::dgram::complete_send(socket, pending.callback_bits, Err(error))
-                }
+                Some(pending) => crate::dgram::complete_send(
+                    socket,
+                    pending.callback_bits,
+                    Err(error),
+                    pending.context,
+                ),
                 // A receive-side failure. Node surfaces these on the socket.
                 None => crate::dgram::emit_socket_error(socket, error),
             }
@@ -358,6 +363,7 @@ pub(crate) fn send_on_loop(
             user,
             PendingSend {
                 callback_bits,
+                context: (callback_bits != 0).then(crate::async_context::capture_context),
                 len: bytes.len(),
             },
         );
@@ -669,6 +675,9 @@ pub(crate) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             for pending in ls.sends.values_mut() {
                 if pending.callback_bits != 0 {
                     visitor.visit_nanbox_u64_slot(&mut pending.callback_bits);
+                }
+                if let Some(context) = pending.context.as_mut() {
+                    crate::async_context::scan_snapshot_roots_mut(context, visitor);
                 }
             }
         }
