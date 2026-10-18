@@ -41,6 +41,7 @@ impl SH for Module {
             closure_display_names,
             class_display_names,
             closure_source_text,
+            non_constructor_funcs,
             class_source_text,
             async_generator_funcs,
             // Observational source metadata does not affect emitted code and
@@ -118,6 +119,9 @@ impl SH for Module {
         let mut async_gen_ids: Vec<u32> = async_generator_funcs.iter().copied().collect();
         async_gen_ids.sort_unstable();
         async_gen_ids.hash(h);
+        let mut method_ids: Vec<u32> = non_constructor_funcs.iter().copied().collect();
+        method_ids.sort_unstable();
+        method_ids.hash(h);
         // HashMap has nondeterministic iteration order; sort by key.
         let mut display_pairs: Vec<(u32, &String)> =
             closure_display_names.iter().map(|(k, v)| (*k, v)).collect();

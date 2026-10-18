@@ -1603,6 +1603,9 @@ pub fn lower_module_full_with_platform_globals(
             module.gen_param_prologue_len.insert(id, len);
         }
         // #4101: flush captured function source text for `fn.toString()`.
+        module
+            .non_constructor_funcs
+            .extend(ctx.non_constructor_funcs.drain());
         for (id, src) in ctx.closure_source_text.drain() {
             module.closure_source_text.insert(id, src);
         }

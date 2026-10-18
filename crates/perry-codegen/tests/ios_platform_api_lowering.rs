@@ -129,6 +129,7 @@ fn module(body: Vec<Stmt>) -> Module {
         async_step_closures: Default::default(),
         closure_display_names: Default::default(),
         class_display_names: Default::default(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: Default::default(),
         class_source_text: Default::default(),
         async_generator_funcs: Default::default(),

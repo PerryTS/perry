@@ -95,6 +95,13 @@ pub(super) fn emit_module_artifacts(
 
     // The body and its value wrapper share the synthetic-arguments ABI.
     for f in &hir.functions {
+        if hir.non_constructor_funcs.contains(&f.id) {
+            if let Some(name) = func_names.get(&f.id) {
+                llmod.note_fn_info(&format!("__perry_wrap_{name}"), |info| {
+                    info.set_non_constructor()
+                });
+            }
+        }
         let flags = super::arguments::arguments_object_flags(&f.params, &f.body);
         if flags != 0 {
             if let Some(name) = func_names.get(&f.id) {
@@ -103,6 +110,11 @@ pub(super) fn emit_module_artifacts(
         }
     }
     for (fid, expr) in closures {
+        if hir.non_constructor_funcs.contains(fid) {
+            llmod.note_fn_info(&format!("perry_closure_{module_prefix}__{fid}"), |info| {
+                info.set_non_constructor()
+            });
+        }
         if let perry_hir::Expr::Closure { params, body, .. } = expr {
             let flags = super::arguments::arguments_object_flags(params, body);
             if flags != 0 {

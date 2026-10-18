@@ -553,45 +553,6 @@ pub(crate) fn install_builtin_constructor_statics(
                 crate::fn_info!(object_hasown_thunk, 2; with_declared(2)),
                 2,
             );
-            // `Object` is a function, so reading a non-static member resolves up
-            // its prototype chain (Function.prototype → Object.prototype). In
-            // particular `Object.hasOwnProperty` IS `Object.prototype.hasOwnProperty`
-            // — a callable. immer's `O.hasOwnProperty.call(proto, "constructor")`
-            // (with `const O = Object`) relied on this; without the inherited
-            // methods installed on the reified ctor value the read returned
-            // `undefined` and `.call` threw "Function.prototype.call on a value
-            // that is not a function". Install the Object.prototype methods that
-            // are reachable on the constructor by inheritance.
-            s.method(
-                "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1)),
-                1,
-            );
-            s.method(
-                "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1)),
-                1,
-            );
-            s.method(
-                "propertyIsEnumerable",
-                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1)),
-                1,
-            );
-            s.method(
-                "toString",
-                crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0)),
-                0,
-            );
-            s.method(
-                "toLocaleString",
-                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0)),
-                0,
-            );
-            s.method(
-                "valueOf",
-                crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0)),
-                0,
-            );
         }
         "Array" => {
             s.method(

@@ -108,6 +108,7 @@ fn concat_probe_ir(property: &str) -> String {
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: HashMap::new(),
         class_display_names: HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: HashMap::new(),
         class_source_text: HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),

@@ -136,6 +136,8 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
 /// id (#5976/#6321) — which turned the SIGSEGV into a spurious TypeError. Node
 /// calls the proxy. Re-boxing the id and asking the proxy registry costs nothing
 /// on the hot path: this runs only where the code used to throw unconditionally.
+#[cold]
+#[inline(never)]
 pub fn dispatch_proxy_callee_or_throw(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -145,6 +147,9 @@ pub fn dispatch_proxy_callee_or_throw(
     let boxed = crate::value::js_nanbox_pointer(closure as i64);
     if crate::proxy::js_proxy_is_proxy(boxed) == 1 {
         return crate::proxy::call_proxy_value_with_this(boxed, this.as_f64(), args);
+    }
+    if crate::object::is_function_prototype_object_value(boxed) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     throw_not_callable()
 }
