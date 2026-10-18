@@ -197,4 +197,51 @@ mod tests {
         m.solve();
         assert!(m.is_escaped(c));
     }
+    #[test]
+    fn copies_into_widened_values_are_idempotent_and_keep_late_primitives() {
+        for early in [true, false] {
+            let mut g = Gen::new(vec![], false, false);
+            let m = &mut g.m;
+            m.widen_k = 1;
+            let source = m.node_l("source");
+            let dest = m.node_l("destination");
+            let a = m.tok(TokKind::ModNs(1));
+            let b = m.tok(TokKind::ModNs(2));
+            let c = m.tok(TokKind::ModNs(3));
+            m.add_tok(source, a);
+            if early {
+                m.add(dest, &[b, c], 0);
+            } else {
+                m.edge(source, dest);
+                // Exercise conversion after the source already has a hub set.
+                for _ in 0..20 {
+                    let other = m.node_l("other");
+                    m.edge(source, other);
+                }
+                m.add_tok(dest, b);
+            }
+            for _ in 0..1000 {
+                m.edge(source, dest);
+            }
+            m.solve();
+            for _ in 0..1000 {
+                m.edge(source, dest);
+            }
+            let node = &m.nodes[source as usize];
+            assert_eq!(
+                node.succ
+                    .iter()
+                    .chain(&node.prim_succ)
+                    .filter(|&&n| n == dest)
+                    .count(),
+                1
+            );
+            m.add_prim(source, prim::STR);
+            m.add_tok(source, c);
+            m.solve();
+            assert!(m.nodes[dest as usize].pts.contains_tok(TOP));
+            assert_ne!(m.nodes[dest as usize].prim & prim::STR, 0);
+            assert!(m.is_escaped(a) && m.is_escaped(c));
+        }
+    }
 }

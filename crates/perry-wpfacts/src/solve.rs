@@ -265,18 +265,18 @@ impl Model {
                     }
                 }
                 None => {
-                    if node.succ.contains(&b) {
+                    if node.succ.contains(&b) || node.prim_succ.contains(&b) {
                         return;
                     }
-                    if node.succ.len() >= 16 {
+                    if node.succ.len() + node.prim_succ.len() >= 16 {
                         let mut set: crate::pts::FxHashSet<NodeId> =
-                            node.succ.iter().copied().collect();
+                            node.succ.iter().chain(&node.prim_succ).copied().collect();
                         set.insert(b);
                         node.succ_set = Some(Box::new(set));
                     }
                 }
             }
-            if node.widened || !b_widened {
+            if !b_widened {
                 node.succ.push(b);
             } else {
                 // Into a widened node: escape at the source, carry prims.
@@ -384,7 +384,14 @@ impl Model {
             let ncons0 = self.nodes[n as usize].cons.len();
             self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64;
             if self.profile.is_some() {
-                let e = self.label_work.entry(self.labels[n as usize]).or_default();
+                let label = if self.labels[n as usize] == "prototype-value"
+                    && self.nodes[n as usize].widened
+                {
+                    "prototype-value-wide"
+                } else {
+                    self.labels[n as usize]
+                };
+                let e = self.label_work.entry(label).or_default();
                 e.0 += delta.len() as u64 * nsucc as u64;
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
@@ -409,16 +416,15 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.nodes[s as usize].widened && !self.nodes[n as usize].widened {
+                if self.nodes[s as usize].widened {
                     // A widened successor holds ⊤ and escapes what reaches
                     // it: this node escapes its tokens itself from now on,
                     // and the edge carries only primitive kinds.
                     self.add(s, &delta, dprim);
                     let node = &mut self.nodes[n as usize];
                     node.succ.swap_remove(i);
-                    if let Some(set) = node.succ_set.as_mut() {
-                        set.remove(&s);
-                    }
+                    // The logical copy edge still exists as a primitive
+                    // edge. Keep its identity in the shared dedup set.
                     node.esc_out = true;
                     node.prim_succ.push(s);
                     continue;

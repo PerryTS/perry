@@ -451,7 +451,8 @@ pub struct Node {
     /// value: never widened (its members are bound or forwarded exactly as
     /// the per-site rules it replaces would have).
     pub internal: bool,
-    /// Successor set, once the list is long (exact edge dedup for hubs: a
+    /// All logical copy successors, including primitive-only edges, once
+    /// the lists are long (exact edge dedup for hubs: a
     /// function's return node can be offered the same edge millions of
     /// times).
     pub succ_set: Option<Box<crate::pts::FxHashSet<NodeId>>>,
