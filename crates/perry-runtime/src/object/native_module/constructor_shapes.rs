@@ -447,6 +447,23 @@ mod tests {
         ));
     }
     #[test]
+    fn constructor_statics2_reserved_native_parent_is_the_reflected_parent() {
+        const CHILD: u32 = 0x7611_0023;
+        crate::object::native_module_registry::js_nm_install_stream();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent =
+            scope.root_nanbox_f64(bound_native_callable_export_value("stream", "Transform"));
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"ReservedChild".as_ptr(), 13);
+        }
+        crate::object::register_class(CHILD, 0xFFFF0074);
+        let child = crate::object::class_value::class_value(CHILD);
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(child).to_bits(),
+            parent.get_nanbox_u64(),
+        );
+    }
+    #[test]
     fn constructor_statics2_subclass_own_values_and_live_parent_win() {
         const CHILD: u32 = 0x7611_0022;
         crate::object::native_module_registry::js_nm_install_stream();
