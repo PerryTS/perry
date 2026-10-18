@@ -5,12 +5,57 @@ use crate::gen::{Fx, Gen};
 use crate::model::*;
 
 impl Gen<'_> {
+    /// Factory specialization can keep an evaluated parent in ClassExprFresh
+    /// after resolving/removing the Class metadata's extends_expr. Discover
+    /// those sites before prototype nodes, phase analysis, or birth keys exist.
+    pub(crate) fn prepare_heritage(&mut self) {
+        for (mi, (_, module)) in self.modules.clone().iter().enumerate() {
+            let mut names = crate::pts::FxHashSet::default();
+            let mut site = |e: &perry_hir::Expr| match e {
+                perry_hir::Expr::ClassExprFresh {
+                    template,
+                    evaluated_parent: Some(_),
+                    ..
+                } => {
+                    names.insert(template.clone());
+                }
+                perry_hir::Expr::RegisterClassParentDynamic { class_name, .. } => {
+                    names.insert(class_name.clone());
+                }
+                _ => {}
+            };
+            // The exhaustive visitor includes computed members and closures;
+            // the public module visitor additionally covers global initializers.
+            perry_hir::tdz_check::for_each_module_expr(module, &mut site);
+            perry_hir::for_each_module_expr(module, &mut site);
+            for c in &module.classes {
+                let tm = self.mods[mi].classes[&c.name];
+                let has_site = names.contains(&c.name);
+                if has_site {
+                    self.evaluated_parent_sites.insert(tm);
+                }
+                if has_site || c.extends_expr.is_some() {
+                    let node = self.m.node_l("evaluated-parent");
+                    self.m.tmpls[tm as usize].evaluated_parent = Some(node);
+                    let reason = self.m.reason("E11 class with an unknown evaluated parent");
+                    self.m.cons(node, Cons::ClassParent { class: tm, reason });
+                }
+            }
+        }
+    }
+
     pub(crate) fn evaluated_parent(&mut self, mi: u32, name: &str, value: NodeId) {
         if let Some(tm) = self.resolve_class_name(mi, name) {
             if let Some(parent) = self.m.tmpls[tm as usize].evaluated_parent {
                 self.m.edge(value, parent);
                 return;
             }
+            let inst = self.m.tok(TokKind::Obj(tm));
+            let r = self
+                .m
+                .reason("E11 evaluated parent without a heritage slot");
+            self.m.escape(inst, r);
+            self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
         }
         // Metadata without an evaluated-parent slot cannot prove heritage.
         self.to_sink(value, "E11 evaluated parent without a class template");

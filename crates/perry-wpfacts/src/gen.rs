@@ -60,6 +60,9 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// Templates whose heritage is evaluated by an expression site, rather
+    /// than solely by their hoisted Class metadata.
+    pub evaluated_parent_sites: crate::pts::FxHashSet<TmplId>,
 }
 
 /// Per-function walking context.
@@ -193,6 +196,7 @@ impl<'a> Gen<'a> {
             // Closures are registered when the walker meets them.
             let _ = module;
         }
+        self.prepare_heritage();
         // Class parents and native parents (second pass: names resolve).
         for (mi, (_, module)) in modules.iter().enumerate() {
             for c in &module.classes {
@@ -509,11 +513,7 @@ impl<'a> Gen<'a> {
 
     fn link_class(&mut self, mi: u32, c: &Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
-        if c.extends_expr.is_some() {
-            let node = self.m.node_l("evaluated-parent");
-            self.m.tmpls[tm as usize].evaluated_parent = Some(node);
-            let reason = self.m.reason("E11 class with an unknown evaluated parent");
-            self.m.cons(node, Cons::ClassParent { class: tm, reason });
+        if self.m.tmpls[tm as usize].evaluated_parent.is_some() {
             return;
         }
         let parent = c
@@ -1071,8 +1071,14 @@ impl<'a> Gen<'a> {
             let r = self.m.reason("class decorator");
             self.m.escape(cobj, r);
         }
-        // Evaluated heritage is walked at its source-order ClassExprFresh /
-        // RegisterClassParentDynamic site, never again from hoisted metadata.
+        // An expression site owns evaluation when present. Some transformed
+        // classes retain only the metadata expression; walk that copy once.
+        if !self.evaluated_parent_sites.contains(&tm) {
+            if let Some(e) = &c.extends_expr {
+                let value = self.expr(outer, e);
+                self.evaluated_parent(mi, &c.name, value);
+            }
+        }
         if let Some(ctor) = &c.constructor {
             let f = self.mods[mi as usize].funcs[&ctor.id];
             self.walk_fn(mi, f, ctor, Some(tm), Some(tm));

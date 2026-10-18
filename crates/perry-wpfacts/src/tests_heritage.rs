@@ -281,3 +281,33 @@ fn repeated_mixin_evaluations_have_a_finite_constructor_fixpoint() {
     assert!(!pf.stats.aborted);
     assert!(child(&pf, "Wrapped").escape.is_none(), "{}", pf.dump_text());
 }
+
+#[test]
+fn specialized_class_site_keeps_heritage_after_metadata_resolution() {
+    let ast = perry_parser::parse_typescript(
+        r#"
+        class Base { value = 1; read() { return this.value; } }
+        function make(Parent) { return class Child extends Parent { static x = 1; }; }
+        const C = make(Base); console.log(new C().read());
+    "#,
+        "heritage.ts",
+    )
+    .unwrap();
+    let mut hir = perry_hir::lower_module(&ast, "heritage", "heritage.ts").unwrap();
+    let c = hir.classes.iter_mut().find(|c| c.name == "Child").unwrap();
+    c.extends_expr = None;
+    c.extends_name = Some("Base".into());
+    let pf = compute(&[("heritage.ts".into(), &hir)], &FactsConfig::default());
+    let c = child(&pf, "Child");
+    assert!(c.escape.is_none() && c.hard.is_none(), "{}", pf.dump_text());
+    assert!(
+        c.fields.iter().any(|f| f.key == "value"),
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        c.fields.iter().all(|f| f.slot.is_none()),
+        "{}",
+        pf.dump_text()
+    );
+}
