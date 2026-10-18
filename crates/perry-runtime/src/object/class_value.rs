@@ -1089,6 +1089,40 @@ pub extern "C" fn js_class_value(class_id: i32) -> f64 {
     class_value(class_id as u32)
 }
 
+/// Public [[Get]] on a class function: its own shape-backed bag/accessor,
+/// then its actual [[Prototype]]. Native parents use the same closure lookup
+/// as any other function, including sealed bags and their shadowed layouts.
+/// Private references and internal state keys retain their dedicated lookup.
+///
+/// # Safety
+/// `key` is a live string header and `ptr` is a possible class function.
+#[inline]
+pub(crate) unsafe fn constructor_property_get(
+    ptr: usize,
+    key: *const crate::StringHeader,
+    class_id: u32,
+) -> Option<crate::value::JSValue> {
+    use crate::value::JSValue;
+    if class_closure_id(ptr)? != class_id {
+        return None;
+    }
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    if bytes.starts_with(b"#") || is_internal_static_key_bytes(bytes) {
+        return None;
+    }
+    if let Some(value) = crate::closure::props::bag_get(ptr, bytes) {
+        return Some(JSValue::from_bits(value.to_bits()));
+    }
+    let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+    if let Some((accessor, _, _)) = class_static_own_accessor_bytes(class_id, bytes) {
+        return Some(JSValue::from_bits(
+            class_static_accessor_call_get(accessor, receiver).to_bits(),
+        ));
+    }
+    Some(class_prototype_get(class_id, key, receiver))
+}
+
 /// `C[prop]` for a class function object at `ptr` (routed by
 /// `closure_get_dynamic_prop` on the class ShapeId): the class lookup.
 #[cold]

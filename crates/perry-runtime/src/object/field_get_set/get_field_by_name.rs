@@ -5,6 +5,8 @@
 use super::*;
 
 mod shape_inherited;
+mod class_wtf8;
+use class_wtf8::class_value_get_wtf8_field;
 
 /// Wall 10 — read a property a framework attached to a native registry handle
 /// via `Object.setPrototypeOf(handle, proto)` (Express's `res`/`req`). The link
@@ -92,93 +94,6 @@ pub extern "C" fn js_object_get_field_by_name(
     get_field_by_name_past_data_probe(obj, key)
 }
 
-/// `C.key` for a class constructor value (its function object, or the legacy
-/// INT32 immediate / `C.prototype` reference): the class-static lookup. Split
-/// out so a class function object is routed here BEFORE the closure arms of
-/// the generic read (`get_field_by_name_after_site_miss`), which it
-/// would otherwise walk end to end first.
-unsafe fn class_value_get_wtf8_field(
-    class_value: f64,
-    class_id: u32,
-    is_prototype_ref: bool,
-    key: *const crate::StringHeader,
-    name: &[u8],
-) -> JSValue {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let class_value = scope.root_nanbox_f64(class_value);
-    let key = scope.root_string_ptr(key);
-    if is_prototype_ref {
-        if super::super::native_module::class_has_own_method_bytes(class_id, name) {
-            if let Some(value) =
-                super::super::class_registry::class_method_slot_value_bytes(class_id, name)
-            {
-                return JSValue::from_bits(value);
-            }
-        }
-        if let Some((value, _)) =
-            super::super::class_registry::class_chain_getter_value_bytes(class_id, name, || {
-                class_value.get_nanbox_f64()
-            })
-        {
-            return value;
-        }
-        return key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            crate::object::class_value::class_prototype_get(
-                class_id,
-                key,
-                class_value.get_nanbox_f64(),
-            )
-        });
-    }
-
-    // A capture-carrying class declaration may be referenced through its
-    // template ClassRef from an earlier-created helper closure. Runtime-added
-    // static properties live on the current evaluation's heap class object,
-    // so give that object first chance to answer the exact WTF-8 key too.
-    if let Some(class_object) = super::super::class_registry::class_object_value_for_cid(class_id) {
-        let class_object = JSValue::from_bits(class_object.to_bits());
-        if class_object.is_pointer() {
-            let class_object = class_object.as_pointer::<ObjectHeader>();
-            if !class_object.is_null() {
-                let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                    js_object_get_field_by_name(class_object, key)
-                });
-                if !value.is_undefined() {
-                    return value;
-                }
-            }
-        }
-    }
-
-    if super::super::class_registry::class_static_key_deleted_bytes(class_id, name) {
-        return key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            crate::object::class_value::class_prototype_get(
-                class_id,
-                key,
-                class_value.get_nanbox_f64(),
-            )
-        });
-    }
-    if let Some(value) = crate::object::class_value::class_static_get_bytes(class_id, name) {
-        return JSValue::from_bits(value.to_bits());
-    }
-    if let Some(value) =
-        crate::object::class_value::inherited_static_method_value_bytes(class_id, name)
-    {
-        return JSValue::from_bits(value.to_bits());
-    }
-    if let Some(value) = super::super::class_registry::class_static_accessor_getter_value_bytes(
-        class_id,
-        name,
-        class_value.get_nanbox_f64(),
-    ) {
-        return JSValue::from_bits(value.to_bits());
-    }
-    key.with_const_ptr::<crate::StringHeader, _>(|key| {
-        crate::object::class_value::class_prototype_get(class_id, key, class_value.get_nanbox_f64())
-    })
-}
-
 #[inline(never)]
 pub(crate) fn class_value_get_field(
     obj: *const ObjectHeader,
@@ -186,25 +101,21 @@ pub(crate) fn class_value_get_field(
     bits: u64,
     class_id: u32,
 ) -> JSValue {
-    // A class function object's own data property (a static field, a runtime
-    // `C.x = v`): its bag answers first — own data wins [[Get]] — unless a
-    // per-evaluation class object exists for some class (the redirect below
-    // then decides).
+    // A class function's own bag and actual constructor parent are the
+    // complete public [[Get]]. Per-evaluation object redirects below still
+    // choose their own receiver before entering this same lookup.
     if bits >> 48 != 0x7FFE
         && !super::super::class_registry::CLASS_OBJECT_EVER
             .load(std::sync::atomic::Ordering::Relaxed)
     {
-        let ptr = (bits & crate::value::POINTER_MASK) as usize;
-        // SAFETY: a class function object (the caller decoded `class_id` from
-        // it); `key` is a live string header.
-        unsafe {
-            let bytes = std::slice::from_raw_parts(
-                crate::string::string_data(key),
-                (*key).byte_len as usize,
-            );
-            if let Some(v) = crate::closure::props::bag_get(ptr, bytes) {
-                return JSValue::from_bits(v.to_bits());
-            }
+        if let Some(value) = unsafe {
+            crate::object::class_value::constructor_property_get(
+                (bits & crate::value::POINTER_MASK) as usize,
+                key,
+                class_id,
+            )
+        } {
+            return value;
         }
     }
     let class_value = crate::object::class_value::boxed_class_word(bits);
@@ -293,6 +204,15 @@ pub(crate) fn class_value_get_field(
                         }
                     }
                 }
+            }
+        }
+        if !is_prototype_ref {
+            if let Some(value) = crate::object::class_value::constructor_property_get(
+                (bits & crate::value::POINTER_MASK) as usize,
+                key,
+                class_id,
+            ) {
+                return value;
             }
         }
         // Instance (prototype) methods must only resolve when reading

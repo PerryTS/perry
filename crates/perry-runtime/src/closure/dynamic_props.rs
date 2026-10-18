@@ -220,7 +220,8 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
         if closure.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+        let receiver = crate::object::field_get_set::accessor_receiver_override_take()
+            .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64));
         return crate::closure::js_closure_call0(
             closure,
             crate::closure::JsThis::from_f64(receiver),
@@ -311,8 +312,10 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let receiver =
-                    this_scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64));
+                let receiver = this_scope.root_nanbox_f64(
+                    crate::object::field_get_set::accessor_receiver_override_take()
+                        .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
+                );
                 let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
                 let getter = (getter_bits & crate::value::POINTER_MASK)
                     as *const crate::closure::ClosureHeader;
@@ -342,7 +345,10 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let receiver = this_scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64));
+            let receiver = this_scope.root_nanbox_f64(
+                crate::object::field_get_set::accessor_receiver_override_take()
+                    .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
+            );
             let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
             let getter =
                 (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
