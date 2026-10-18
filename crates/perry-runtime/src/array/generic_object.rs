@@ -8,8 +8,7 @@
 //! `HasProperty` helpers, and the dynamic-dispatch entry points stay there.
 
 use super::generic::{
-    al_get, al_has, al_length, as_real_array, nanbox_arr, proxy_string_key, real_array_mutator,
-    to_object, undef,
+    al_get, al_has, al_length, as_real_array, nanbox_arr, real_array_mutator, to_object, undef,
 };
 use super::*;
 use crate::closure::ClosureHeader;
@@ -38,7 +37,7 @@ use std::ptr;
 /// `Set(O, ToString(k), v, true)` for an array-like object receiver.
 fn al_set(recv: f64, k: i64, v: f64) {
     if crate::proxy::js_proxy_is_proxy(recv) != 0 {
-        crate::proxy::js_proxy_set(recv, proxy_string_key(k), v);
+        unsafe { super::push_pop::proxy_set_str_key(recv, k.to_string().as_bytes(), v) };
         return;
     }
     crate::object::js_object_set_index_polymorphic(recv.to_bits() as i64, k as f64, v);
@@ -47,7 +46,7 @@ fn al_set(recv: f64, k: i64, v: f64) {
 /// `DeletePropertyOrThrow(O, ToString(k))` for an array-like object receiver.
 fn al_delete(recv: f64, k: i64) {
     if crate::proxy::js_proxy_is_proxy(recv) != 0 {
-        crate::proxy::js_proxy_delete(recv, proxy_string_key(k));
+        unsafe { super::push_pop::proxy_delete_str_key_or_throw(recv, k.to_string().as_bytes()) };
         return;
     }
     let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;

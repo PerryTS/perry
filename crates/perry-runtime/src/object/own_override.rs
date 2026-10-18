@@ -605,6 +605,14 @@ unsafe fn push_or_own_declined(
     value: f64,
     own_out: *mut u32,
 ) -> u64 {
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(arr) {
+        let result = super::builtin_proto::redirect_call(proxy, b"push", &value, 1)
+            .expect("a Proxy method always uses the generic call");
+        if !own_out.is_null() {
+            *own_out = 1;
+        }
+        return result.to_bits();
+    }
     let Some(live) = array_owning_push(arr) else {
         return crate::array::push_spec_declined(arr, value) as u64;
     };

@@ -35,7 +35,28 @@ unsafe fn write_fast_path_receiver_kind_ok(
 /// forward to the target directly.
 #[no_mangle]
 pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
-    proxy_set_with_receiver(proxy_boxed, key, value, proxy_boxed)
+    let tag = key.to_bits() & crate::value::TAG_MASK;
+    if tag == crate::value::STRING_TAG
+        || tag == crate::value::SHORT_STRING_TAG
+        || unsafe { crate::symbol::js_is_symbol(key) } != 0
+    {
+        return proxy_set_with_receiver(proxy_boxed, key, value, proxy_boxed);
+    }
+    // Dynamic numeric-index callers pass their raw index. Proxy [[Set]]
+    // traps receive only property keys, just like [[Get]]; preserve operands
+    // across ToPropertyKey, which can allocate or invoke user coercion.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proxy = scope.root_nanbox_f64(proxy_boxed);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_nanbox_f64(key);
+    let key =
+        scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(key.get_nanbox_f64()) });
+    proxy_set_with_receiver(
+        proxy.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        value.get_nanbox_f64(),
+        proxy.get_nanbox_f64(),
+    )
 }
 
 /// Proxy `[[Set]]` (ECMA-262 §10.5.9) with an explicit `Receiver`, distinct

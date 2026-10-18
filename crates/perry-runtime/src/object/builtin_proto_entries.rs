@@ -587,6 +587,7 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
     }
     let addr = (bits & POINTER_MASK) as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_PROXY => false,
         Some(h)
             if matches!(
                 h.obj_type,

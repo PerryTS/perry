@@ -227,7 +227,12 @@ pub(crate) fn emit_own_override_branch(
             let named = blk.load(I64, &named_ptr);
             let has_named = blk.icmp_ne(I64, &named, "0");
             let maybe_owns = blk.or(I1, &not_default, &has_named);
-            blk.cond_br(&maybe_owns, &ask_label, builtin_label);
+            // The annotation does not prove ArrayHeader layout. In
+            // particular a Proxy's empty prefix proves no method identity.
+            let kind = blk.and(I32, &hdr, "255");
+            let not_array = blk.icmp_ne(I32, &kind, "1"); // GC_TYPE_ARRAY
+            let requires_get = blk.or(I1, &maybe_owns, &not_array);
+            blk.cond_br(&requires_get, &ask_label, builtin_label);
         } else {
             let blk = ctx.block();
             let installed = blk.load_atomic_monotonic(I32, "@PERRY_OWN_NAMED_PROP_INSTALLED", 4);

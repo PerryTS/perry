@@ -117,3 +117,29 @@ fn the_array_admission_reads_the_prototype_word_and_the_cell() {
         );
     }
 }
+
+#[test]
+fn proxy_layout_never_proves_an_array_builtin() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+        let mut ordinary = crate::value::js_nanbox_pointer(
+            target.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
+        );
+        assert!(array_admits(&mut ordinary, b"map", &mut []));
+        let handler = crate::object::js_object_alloc(0, 0);
+        let mut proxy = crate::proxy::js_proxy_new(
+            crate::value::js_nanbox_pointer(
+                target.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+            ),
+            crate::value::js_nanbox_pointer(handler as i64),
+        );
+        assert!(!array_fast_admits(proxy));
+        assert!(!array_admits(&mut proxy, b"map", &mut []));
+        assert!(!crate::object::builtin_proto::receiver_pristine(proxy));
+        crate::proxy::js_proxy_revoke(proxy);
+        assert!(!array_admits(&mut proxy, b"push", &mut []));
+        assert!(!crate::object::builtin_proto::receiver_pristine(proxy));
+    }
+}

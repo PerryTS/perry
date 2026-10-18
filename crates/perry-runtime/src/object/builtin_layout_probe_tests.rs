@@ -458,3 +458,38 @@ extern "C" fn two_parameters(
 ) -> f64 {
     0.0
 }
+
+#[test]
+fn array_intrinsic_length_precedes_named_bag_and_prototypes() {
+    on_a_fresh_thread(|| unsafe {
+        let _ = realm();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(4));
+        let key = scope.root_nanbox_f64(f64::from_bits(atom("length")));
+        for length in 0..4 {
+            let arr = array.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            assert_eq!(agrees(arr as usize, "length"), (length as f64).to_bits());
+            // A freshly allocated non-atom key takes the same intrinsic read.
+            let dynamic = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+            let dynamic = crate::value::js_nanbox_string(dynamic as i64);
+            let arr = array.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            assert_eq!(
+                perry_probe_get_keyed(test_dir(), POINTER_TAG | arr as u64, dynamic.to_bits()),
+                length as f64,
+            );
+            let next = crate::array::js_array_push_f64(arr, 10.0);
+            array.set_raw_mut_ptr(next);
+        }
+        let proxy = crate::proxy::js_proxy_new(
+            crate::value::js_nanbox_pointer(
+                array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+            ),
+            crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64),
+        );
+        assert_eq!(
+            perry_probe_get_keyed(test_dir(), proxy.to_bits(), key.get_nanbox_f64().to_bits())
+                .to_bits(),
+            TAG_HOLE,
+        );
+    });
+}

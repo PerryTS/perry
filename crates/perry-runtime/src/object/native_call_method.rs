@@ -1894,24 +1894,6 @@ pub(crate) unsafe fn native_call_method_tower(
     // through the target's prototype chain) then `Call(method, proxy, args)`
     // with `this` bound to the proxy itself.
     if crate::proxy::js_proxy_is_proxy(object()) == 1 {
-        // #5196: a generic, non-mutating `Array.prototype` method on a Proxy
-        // (`proxyArray.map(fn)`). `Array.prototype.map` etc. iterate `this`
-        // through `[[Get]]`/`length`; routing the spec-generic engine over the
-        // proxy fires its `get` trap for `length` and each index. The fused
-        // path below (Get(proxy,"method") → Call) instead resolves the built-in
-        // method value and re-enters this dispatcher by name — recursing until
-        // the depth guard and surfacing the original `Cannot convert undefined
-        // or null to object`. The generic engine is the same one used for
-        // plain array-like objects whose prototype chain holds a real array.
-        let args = refreshed_args();
-        if let Some(result) = crate::array::dispatch_arraylike_read_method(
-            object(),
-            method_name,
-            args.as_ptr(),
-            args.len(),
-        ) {
-            return result;
-        }
         let key = crate::string::js_string_from_bytes(
             method_name_ptr as *const u8,
             method_name_len as u32,
@@ -1921,6 +1903,25 @@ pub(crate) unsafe fn native_call_method_tower(
         let method_value =
             crate::proxy::js_proxy_get(object_handle.get_nanbox_f64(), key_handle.get_nanbox_f64());
         let method_handle = root_scope.root_nanbox_f64(method_value);
+        // First Get the method through the trap. Only the actual Array
+        // builtin may enter the generic engine; a trap's replacement must
+        // be called with the original Proxy receiver.
+        if crate::object::builtin_closure_is_non_constructable_value(method_handle.get_nanbox_f64())
+            && crate::object::is_array_prototype_method_value(
+                method_handle.get_nanbox_f64(),
+                method_name,
+            )
+        {
+            let args = refreshed_args();
+            if let Some(result) = crate::array::dispatch_arraylike_read_method(
+                object(),
+                method_name,
+                args.as_ptr(),
+                args.len(),
+            ) {
+                return result;
+            }
+        }
         let args = refreshed_args();
         // The proxy is the call's receiver, matching the receiver semantics
         // of a normal `obj.method(args)` invocation. A canonical class-method

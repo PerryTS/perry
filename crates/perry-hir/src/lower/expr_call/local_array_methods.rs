@@ -179,10 +179,9 @@ pub(super) fn try_local_array_methods(
             // generic tail builds an `Expr::CallSpread`, whose member-callee arm
             // flattens the spread into one argument array and dispatches the array
             // method by name with `this` bound to the receiver
-            // (`js_native_call_method_apply_by_id`). `push` is excluded: it has a
-            // dedicated spread-aware arm below (`Expr::ArrayPushSpread`) that
-            // materializes the spread correctly.
-            if call.args.iter().any(|a| a.spread.is_some()) && method_name != "push" {
+            // (`js_native_call_method_apply_by_id`). This also keeps a push's
+            // entire argument list in one call through Proxy traps.
+            if call.args.iter().any(|a| a.spread.is_some()) {
                 return Ok(Err(args));
             }
             if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
@@ -456,54 +455,26 @@ pub(super) fn try_local_array_methods(
                                         args: vec![],
                                     }));
                                 }
-                                // Check if any argument has spread operator —
-                                // when present, route through the spread path.
-                                // Multi-arg push without spread is desugared to a
-                                // Sequence of ArrayPush expressions (one per arg);
-                                // JS spec returns the final array length, which is
-                                // exactly what the last ArrayPush returns.
-                                let any_spread = call.args.iter().any(|a| a.spread.is_some());
-                                if any_spread {
-                                    if args.len() == 1 && call.args[0].spread.is_some() {
-                                        return Ok(Ok(Expr::ArrayPushSpread {
-                                            array_id,
-                                            source: Box::new(args.into_iter().next().unwrap()),
-                                        }));
-                                    }
-                                    let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                                    for (ast_arg, arg) in call.args.iter().zip(args) {
-                                        if ast_arg.spread.is_some() {
-                                            stmts.push(Expr::ArrayPushSpread {
-                                                array_id,
-                                                source: Box::new(arg),
-                                            });
-                                        } else {
-                                            stmts.push(Expr::ArrayPush {
-                                                array_id,
-                                                value: Box::new(arg),
-                                                field_writeback: None,
-                                            });
-                                        }
-                                    }
-                                    return Ok(Ok(Expr::Sequence(stmts)));
-                                } else {
-                                    if args.len() == 1 {
-                                        return Ok(Ok(Expr::ArrayPush {
-                                            array_id,
-                                            value: Box::new(args.into_iter().next().unwrap()),
-                                            field_writeback: None,
-                                        }));
-                                    }
-                                    let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                                    for a in args.into_iter() {
-                                        stmts.push(Expr::ArrayPush {
-                                            array_id,
-                                            value: Box::new(a),
-                                            field_writeback: None,
-                                        });
-                                    }
-                                    return Ok(Ok(Expr::Sequence(stmts)));
+                                if args.len() == 1 {
+                                    return Ok(Ok(Expr::ArrayPush {
+                                        array_id,
+                                        value: Box::new(args.into_iter().next().unwrap()),
+                                        field_writeback: None,
+                                    }));
                                 }
+                                // A push is one method read, one length read,
+                                // N indexed Sets, and one final length Set.
+                                // Splitting it into N pushes changes Proxy traps.
+                                return Ok(Ok(Expr::Call {
+                                    callee: Box::new(Expr::PropertyGet {
+                                        object: Box::new(Expr::LocalGet(array_id)),
+                                        property: "push".to_string(),
+                                        byte_offset: call.span.lo.0,
+                                    }),
+                                    args,
+                                    type_args: vec![],
+                                    byte_offset: call.span.lo.0,
+                                }));
                             }
                             "pop" => {
                                 return Ok(Ok(Expr::ArrayPop(array_id)));
