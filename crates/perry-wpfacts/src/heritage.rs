@@ -1,6 +1,7 @@
 //! Evaluated class heritage uses the ordinary value/import graph. This is
 //! analysis state only; runtime layout/identity guards remain authoritative.
 
+use crate::delta::Tokens;
 use crate::gen::{Fx, Gen};
 use crate::model::*;
 
@@ -156,7 +157,7 @@ impl Model {
         &mut self,
         class: TmplId,
         reason: u32,
-        toks: &[Tok],
+        toks: Tokens<'_>,
         prim: u16,
     ) {
         let ctor = self.tok(TokKind::ClassObj(class));

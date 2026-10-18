@@ -1,6 +1,7 @@
 //! Shared values at a prototype holder. Receiver-specific accessors remain
 //! in the existing accessor walks; these nodes summarize data/method values.
 
+use crate::delta::Tokens;
 use crate::{builtins, model::*};
 
 impl Model {
@@ -28,7 +29,7 @@ impl Model {
         origin: Tok,
         key: Key,
         call: CallId,
-        parents: &[Tok],
+        parents: Tokens<'_>,
     ) {
         for &parent in parents {
             if parent == TOP {
@@ -60,7 +61,7 @@ impl Model {
         self.add_tok(recv, origin);
     }
 
-    pub(crate) fn bind_receiver_group(&mut self, recv: NodeId, funcs: &[Tok]) {
+    pub(crate) fn bind_receiver_group(&mut self, recv: NodeId, funcs: Tokens<'_>) {
         for &t in funcs {
             match self.toks[t as usize] {
                 TokKind::Func(f) if !self.funcs[f as usize].lexical_this => {
