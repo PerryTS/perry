@@ -649,6 +649,34 @@ impl Model {
                     self.load_from(t, t, key, dst);
                 }
             }
+            Cons::OwnValues { dst } => {
+                self.add_prim(dst, prim & prim::STR);
+                for &t in toks {
+                    let opaque = match &self.toks[t as usize] {
+                        TokKind::Top
+                        | TokKind::Builtin(_)
+                        | TokKind::BuiltinFn
+                        | TokKind::NativeProto(_) => true,
+                        TokKind::Obj(tm) => matches!(self.tmpls[*tm as usize].kind,
+                            TmplKind::BObj { what, .. } if what != "CjsMain"),
+                        _ => false,
+                    };
+                    if opaque {
+                        self.add_top(dst, |_| "own values of an unmodeled object".into());
+                        self.add_prim(dst, prim::ALL);
+                    }
+                    if t == TOP {
+                        continue;
+                    }
+                    let fields = self.all_fields(t);
+                    self.edge(fields, dst);
+                    let act = ChainAct::Load(dst);
+                    // Any-key lookups subscribe through the holder relation;
+                    // named-key replay in `visits` does not cover them.
+                    self.any_walk_holders.entry(t).or_default().push((t, act));
+                    self.accessor_hit(t, t, Key::Any, act);
+                }
+            }
             Cons::Store { key, src, site } => {
                 for &t in toks {
                     self.store_into(t, key, src, site);
@@ -949,7 +977,7 @@ impl Model {
                         TokKind::Top => self.add_tok(dst, TOP),
                         TokKind::Func(_) | TokKind::Bound(_) => self.add_tok(dst, t),
                         TokKind::Obj(tm) => match self.tmpls[tm as usize].kind {
-                            TmplKind::Arr { .. } | TmplKind::BObj { .. } => {}
+                            _ if self.is_array_like(t) => {}
                             _ => {
                                 let a = self.atom("next");
                                 self.load_from(t, t, Key::Named(a), dst);
@@ -1215,6 +1243,7 @@ impl Model {
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
+            Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
             }

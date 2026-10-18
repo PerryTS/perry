@@ -271,6 +271,8 @@ impl Hard {
 pub enum Cons {
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
+    /// Values of own properties only (enumerability over-approximated).
+    OwnValues { dst: NodeId },
     /// write(t, key) ⊇ src for every t in the node.
     Store { key: Key, src: NodeId, site: SiteId },
     /// The node is a callee.
@@ -397,6 +399,7 @@ impl Cons {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Load { .. } => "load",
+            Cons::OwnValues { .. } => "ownvalues",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",

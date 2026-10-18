@@ -314,6 +314,22 @@ class Solver:
             _, key, dst = c
             for t in toks:
                 self.load_from(t, t, key, dst)
+        elif op == "ownvalues":
+            dst = c[1]
+            self.add(dst, [], prim & STR)
+            for t in toks:
+                k = self.toks[t]
+                opaque = k[0] in ("top", "builtin", "builtinfn", "nativeproto")
+                if k[0] == "obj":
+                    tm = self.tmpls[k[1]]
+                    opaque |= tm["kind"] == "bobj" and tm["what"] != "CjsMain"
+                if opaque:
+                    self.add(dst, [TOP], ALL)
+                if t == TOP:
+                    continue
+                self.edge(self.fall(t), dst)
+                self.visits[t].add((t, "*", ("load", dst)))
+                self.accessor_hit(t, t, "*", ("load", dst))
         elif op == "store":
             _, key, src, site = c
             for t in toks:
@@ -443,7 +459,7 @@ class Solver:
                     self.add(dst, [TOP])
                 elif k[0] in ("func", "bound"):
                     self.add(dst, [t])
-                elif k[0] == "obj" and self.tmpls[k[1]]["kind"] in ("arr", "bobj"):
+                elif k[0] == "obj" and self.is_array_like(t):
                     pass
                 elif k[0] == "primbox":
                     pass
@@ -571,7 +587,7 @@ class Solver:
 
     def is_array_like(self, t):
         k = self.toks[t]
-        return k[0] == "primbox" or (k[0] == "obj" and self.tmpls[k[1]]["kind"] in ("arr", "bobj"))
+        return k[0] == "primbox" or (k[0] == "obj" and (self.tmpls[k[1]]["kind"] == "arr" or (self.tmpls[k[1]]["kind"] == "bobj" and self.tmpls[k[1]]["what"] != "CjsMain")))
 
     def chain_from(self, origin, t, key, act):
         if self.toks[t][0] != "objectproto":
@@ -1083,6 +1099,8 @@ def run(s, rel_lines):
             s.edge(int(a[0]), int(a[1]))
         elif rel == "load":
             deferred.append((int(a[0]), ("load", key_of(s, a[1]), int(a[2]))))
+        elif rel == "ownvalues":
+            deferred.append((int(a[0]), ("ownvalues", int(a[1]))))
         elif rel == "store":
             deferred.append((int(a[0]), ("store", key_of(s, a[1]), int(a[2]), int(a[3]))))
         elif rel in ("call", "new"):
