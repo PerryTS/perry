@@ -975,6 +975,30 @@ impl Model {
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
+        if self.is_iter_key(key) {
+            match self.toks[t as usize] {
+                TokKind::Top
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn
+                | TokKind::NativeProto(_)
+                | TokKind::PrimBox => {}
+                TokKind::Obj(_) if self.is_array_like(t) => {}
+                // A program object/function iterates only through its
+                // protocol, which `Gen::iterate` follows separately.
+                _ => return,
+            }
+            let ek = self.elem_key();
+            return self.load_from(origin, t, ek, dst);
+        }
+        if self.is_elem_key(key) {
+            if t != TOP && self.is_array_like(t) {
+                let all = self.all_fields(t);
+                self.edge(all, dst);
+                self.add_prim(dst, prim::UNDEF);
+                return;
+            }
+            return self.load_from(origin, t, Key::Any, dst);
+        }
         if t == TOP {
             self.add_tok(dst, TOP);
             // Any function's `.constructor` is the Function constructor (E14).

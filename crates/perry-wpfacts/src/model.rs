@@ -15,6 +15,11 @@ pub type Atom = u32;
 pub type CallId = u32;
 pub type SiteId = u32;
 
+/// The atom of the element key (`Model::elem_key`).
+pub const ELEM: &str = "#elem";
+/// The atom of the iteration key (`Model::iter_key`).
+pub const ITER_ELEM: &str = "#iter";
+
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
 pub const TOP: Tok = 0;
@@ -69,6 +74,10 @@ pub enum BuiltinNs {
     String,
     Boolean,
     Function,
+    /// `Map` / `WeakMap`: `new` builds a collection of the entries' contents.
+    Map,
+    /// `Set` / `WeakSet`: `new` builds a collection of the values.
+    Set,
     Other,
 }
 
@@ -683,6 +692,29 @@ impl Model {
             };
             self.fnproto_write = Some(self.reason(&format!("{what} on {on}")));
         }
+    }
+
+    /// The element key: an element read of an array-like (iteration, array
+    /// callbacks) sees its elements, not the builtin methods a computed key
+    /// could also name; on anything else it is a computed read (`Key::Any`).
+    pub fn elem_key(&mut self) -> Key {
+        Key::Named(self.atom(ELEM))
+    }
+
+    pub fn is_elem_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == ELEM)
+    }
+
+    /// The iteration key: what iterating a value yields WITHOUT its
+    /// protocol (`Gen::iterate` models `[Symbol.iterator]().next().value`
+    /// beside it): an array-like's elements; a program object or function
+    /// yields nothing that way; a runtime object is a computed read.
+    pub fn iter_key(&mut self) -> Key {
+        Key::Named(self.atom(ITER_ELEM))
+    }
+
+    pub fn is_iter_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == ITER_ELEM)
     }
 
     pub fn atom(&mut self, s: &str) -> Atom {

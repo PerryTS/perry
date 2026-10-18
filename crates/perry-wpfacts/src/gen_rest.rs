@@ -45,6 +45,18 @@ impl<'a> Gen<'a> {
         self.tok_node(t)
     }
 
+    /// A builtin iterator object (`arr.values()`, `entries()`, `keys()`)
+    /// yielding `vals` through `next().value` (`builtins::iterator_method`).
+    pub(crate) fn new_iter_from(&mut self, mi: u32, vals: &[NodeId]) -> NodeId {
+        let (t, n) = self.bobj(mi, "Iterator");
+        let a = self.m.atom("#elems");
+        let e = self.m.field(t, a);
+        for &v in vals {
+            self.m.edge(v, e);
+        }
+        n
+    }
+
     /// Store `v` into every element/entry of what `recv` holds.
     fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
         self.store(fx, recv, Key::Any, v, what.to_string(), None, false);
@@ -58,7 +70,8 @@ impl<'a> Gen<'a> {
     fn array_cb(&mut self, fx: &Fx, array: &Expr, callback: &Expr) -> (NodeId, NodeId, NodeId) {
         let a = self.expr(fx, array);
         let cb = self.expr(fx, callback);
-        let elems = self.load(a, Key::Any);
+        let ek = self.m.elem_key();
+        let elems = self.load(a, ek);
         let num = self.prim_node(prim::NUM);
         let ret = self.callback(cb, vec![elems, num, a]);
         (a, elems, ret)
@@ -1158,10 +1171,16 @@ impl<'a> Gen<'a> {
                 let inner = self.load(el, Key::Any);
                 self.new_arr_from(mi, "flat", &[el, inner])
             }
-            Expr::ArrayToReversed { array } | Expr::ArrayValues(array) => {
+            Expr::ArrayToReversed { array } => {
                 let a = self.expr(fx, array);
                 let el = self.load(a, Key::Any);
                 self.new_arr_from(mi, "copy", &[el])
+            }
+            Expr::ArrayValues(array) => {
+                let a = self.expr(fx, array);
+                let ek = self.m.elem_key();
+                let el = self.load(a, ek);
+                self.new_iter_from(mi, &[el])
             }
             Expr::ArrayToSpliced {
                 array,
@@ -1224,15 +1243,16 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayEntries(array) => {
                 let a = self.expr(fx, array);
-                let el = self.load(a, Key::Any);
+                let ek = self.m.elem_key();
+                let el = self.load(a, ek);
                 let num = self.prim_node(prim::NUM);
                 let pair = self.new_arr_from(mi, "entry", &[el, num]);
-                self.new_arr_from(mi, "entries", &[pair])
+                self.new_iter_from(mi, &[pair])
             }
             Expr::ArrayKeys(array) => {
                 let _ = self.expr(fx, array);
                 let num = self.prim_node(prim::NUM);
-                self.new_arr_from(mi, "keys", &[num])
+                self.new_iter_from(mi, &[num])
             }
             Expr::ArrayLikeMethod { receiver, args, .. } => {
                 let r = self.expr(fx, receiver);
@@ -1258,14 +1278,23 @@ impl<'a> Gen<'a> {
 
             // ---------------------------------------------- maps and sets
             Expr::MapNew | Expr::SetNew => self.bobj(mi, "Collection").1,
-            Expr::MapNewFromArray(x) | Expr::SetNewFromArray(x) => {
+            Expr::MapNewFromArray(x) => {
+                // Entries `[key, value]`: the map holds their contents.
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
-                let inner = self.load(it, Key::Any);
+                let ek = self.m.elem_key();
+                let inner = self.load(it, ek);
+                let (t, n) = self.bobj(mi, "Collection");
+                let fa = self.m.field_any(t);
+                self.m.edge(inner, fa);
+                n
+            }
+            Expr::SetNewFromArray(x) => {
+                let v = self.expr(fx, x);
+                let it = self.iterate(v);
                 let (t, n) = self.bobj(mi, "Collection");
                 let fa = self.m.field_any(t);
                 self.m.edge(it, fa);
-                self.m.edge(inner, fa);
                 n
             }
             Expr::MapSet { map, key, value } => {
@@ -1300,13 +1329,15 @@ impl<'a> Gen<'a> {
             }
             Expr::MapEntries(x) => {
                 let m = self.expr(fx, x);
-                let el = self.load(m, Key::Any);
+                let ek = self.m.elem_key();
+                let el = self.load(m, ek);
                 let pair = self.new_arr_from(mi, "entry", &[el]);
                 self.new_arr_from(mi, "entries", &[pair])
             }
             Expr::MapKeys(x) | Expr::MapValues(x) | Expr::SetValues(x) => {
                 let m = self.expr(fx, x);
-                let el = self.load(m, Key::Any);
+                let ek = self.m.elem_key();
+                let el = self.load(m, ek);
                 self.new_arr_from(mi, "values", &[el])
             }
             Expr::ObjectFromEntries(x) => {

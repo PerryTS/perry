@@ -26,6 +26,8 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "String" => BuiltinNs::String,
         "Boolean" => BuiltinNs::Boolean,
         "Function" => BuiltinNs::Function,
+        "Map" | "WeakMap" => BuiltinNs::Map,
+        "Set" | "WeakSet" => BuiltinNs::Set,
         _ => return None,
     })
 }
@@ -241,6 +243,8 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     let len = m.atom("length");
     match key {
         Key::Named(a) if a == len => m.add_prim(dst, prim::NUM),
+        // The elements of a string: its characters.
+        k if m.is_elem_key(k) || m.is_iter_key(k) => m.add_prim(dst, prim::STR | prim::UNDEF),
         _ => {
             m.add_prim(dst, prim::STR | prim::NUM | prim::UNDEF | prim::BOOL);
             let bf = m.tok(TokKind::BuiltinFn);
@@ -357,6 +361,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.add_prim(dst, prim::NUM)
                 }
                 Some("size" | "length" | "byteLength" | "byteOffset") => m.add_prim(dst, prim::NUM),
+                // An iterator result's own fields hold all it has.
+                Some("value" | "done") if what == "IterResult" => {}
+                // Builtin iterator / iterator result: a prototype method or
+                // `undefined`.
+                Some(_) if what == "Iterator" || what == "IterResult" => {
+                    let bf = m.tok(TokKind::BuiltinFn);
+                    m.add_tok(dst, bf);
+                    m.add_prim(dst, prim::UNDEF);
+                }
                 _ => {
                     let bf = m.tok(TokKind::BuiltinFn);
                     m.add_tok(dst, bf);
@@ -434,6 +447,24 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any => None,
     };
+    // A well-known-symbol method is a computed-key method, except the
+    // iteration protocol of the builtin iterables, which is modeled.
+    let iterable = match &m.toks[t as usize] {
+        TokKind::PrimBox => true,
+        TokKind::Obj(tm) => matches!(
+            m.tmpls[*tm as usize].kind,
+            TmplKind::Arr { .. }
+                | TmplKind::BObj {
+                    what: "Collection" | "Iterator",
+                    ..
+                }
+        ),
+        _ => false,
+    };
+    let name = match name {
+        Some(n) if n.starts_with(WK_PREFIX) && !(iterable && n == WK_ITERATOR) => None,
+        n => n,
+    };
     match m.toks[t as usize].clone() {
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
         TokKind::Func(_) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
@@ -469,6 +500,9 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
         Key::Named(a) => m.atoms[a as usize].clone(),
         Key::Any => return,
     };
+    if name.starts_with(WK_PREFIX) {
+        return;
+    }
     match m.toks[p as usize].clone() {
         TokKind::ObjectProto => match name.as_str() {
             "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
@@ -844,6 +878,21 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 
 pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     match ns {
+        BuiltinNs::Map | BuiltinNs::Set => {
+            let c = site_tmpl(m, call, "Collection");
+            let fa = m.field_any(c);
+            if let Some(src) = arg(m, call, 0) {
+                let vals = iterate(m, call, src);
+                if ns == BuiltinNs::Map {
+                    // Entries `[key, value]`: the collection holds both.
+                    let ek = m.elem_key();
+                    m.cons(vals, Cons::Load { key: ek, dst: fa });
+                } else {
+                    m.edge(vals, fa);
+                }
+            }
+            ret_tok(m, call, c);
+        }
         BuiltinNs::Promise => {
             let p = site_tmpl(m, call, "Promise");
             let v = promise_value(m, p);
@@ -907,29 +956,6 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
         return new_builtin_ns(m, ns, call);
     }
     match name {
-        "Map" | "Set" | "WeakMap" | "WeakSet" => {
-            let c = site_tmpl(m, call, "Collection");
-            let fa = m.field_any(c);
-            if let Some(it) = arg(m, call, 0) {
-                let elems = m.node_l("coll-init");
-                m.cons(
-                    it,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
-                m.edge(elems, fa);
-                m.cons(
-                    elems,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: fa,
-                    },
-                );
-            }
-            ret_tok(m, call, c);
-        }
         "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
         | "AbortController" | "Headers" => {
             implicit_args(m, call, "builtin constructor argument");
@@ -1081,6 +1107,163 @@ fn cb_call(m: &mut Model, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeI
     ret
 }
 
+/// The values iterating `v` yields, as `Gen::iterate` models them for
+/// compiled code: array-like elements, then the protocol
+/// `v[Symbol.iterator]().next().value` (and `v.next().value`).
+fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
+    let site = m.calls[call as usize].site;
+    let out = m.node_l("b-iterated");
+    let ik = m.iter_key();
+    m.cons(v, Cons::Load { key: ik, dst: out });
+    let mut sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
+        let ret = m.node_l("b-iter-ret");
+        let c2 = m.calls.len() as CallId;
+        m.calls.push(CallSite {
+            this: ThisArg::Node(this),
+            args: vec![],
+            spread: vec![],
+            ret,
+            site,
+        });
+        m.protocol_calls.insert(c2);
+        m.cons(this, Cons::MCall { key, call: c2 });
+        ret
+    };
+    let wk = Key::Named(m.atom(WK_ITERATOR));
+    let it = sub(m, v, wk);
+    let na = Key::Named(m.atom("next"));
+    let r1 = sub(m, it, na);
+    let r2 = sub(m, v, na);
+    let va = Key::Named(m.atom("value"));
+    m.cons(r1, Cons::Load { key: va, dst: out });
+    m.cons(r2, Cons::Load { key: va, dst: out });
+    out
+}
+
+/// HIR's spelling of a well-known symbol key (`Symbol.iterator` is
+/// `@@__perry_wk_iterator`), see `Gen::key_of`.
+pub(crate) const WK_PREFIX: &str = "@@__perry_wk_";
+pub(crate) const WK_ITERATOR: &str = "@@__perry_wk_iterator";
+
+/// The values a builtin iterator yields, held in its `#elems` field: an
+/// all-keys read (`iterate`) sees them, a named read (`it.next`) does not.
+fn iter_elems(m: &mut Model, it: Tok) -> NodeId {
+    let a = m.atom("#elems");
+    m.field(it, a)
+}
+
+/// A fresh builtin iterator (array/Map/Set/string iterator, one template
+/// per source call site) yielding the values in `values`.
+fn iter_over(m: &mut Model, call: CallId, values: NodeId) -> Tok {
+    let it = site_tmpl(m, call, "Iterator");
+    let e = iter_elems(m, it);
+    m.edge(values, e);
+    it
+}
+
+/// The `[key, value]` pairs of an `entries()` iterator: one array template
+/// per call site holding `values` (plus the index for arrays).
+fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
+    let pair = site_tmpl(m, call, "Array");
+    let fa = m.field_any(pair);
+    m.edge(values, fa);
+    if index {
+        m.add_prim(fa, prim::NUM);
+    }
+    let n = m.node_l("entry-pairs");
+    m.add_tok(n, pair);
+    n
+}
+
+/// Methods of a builtin iterator: `next()` gives `{ value, done }` over its
+/// values; `[Symbol.iterator]()` is itself; the iterator helpers run their
+/// callback on the values. Builtin iterators have no `return`/`throw`.
+fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let elems = iter_elems(m, t);
+    let num = m.node_l("num");
+    m.add_prim(num, prim::NUM);
+    match name {
+        None | Some(WK_ITERATOR) => ret_tok(m, call, t),
+        Some("next") => {
+            let r = site_tmpl(m, call, "IterResult");
+            let va = m.atom("value");
+            let v = m.field(r, va);
+            m.edge(elems, v);
+            m.add_prim(v, prim::UNDEF);
+            let da = m.atom("done");
+            let d = m.field(r, da);
+            m.add_prim(d, prim::BOOL);
+            ret_tok(m, call, r);
+        }
+        Some("return" | "throw") => {}
+        Some("toArray") => {
+            let arr = site_tmpl(m, call, "Array");
+            let fa = m.field_any(arr);
+            m.edge(elems, fa);
+            ret_tok(m, call, arr);
+        }
+        Some("forEach" | "some" | "every" | "find" | "map" | "filter" | "flatMap") => {
+            let Some(&cb) = c.args.first() else {
+                return;
+            };
+            let r = cb_call(m, cb, ThisArg::Undef, vec![elems, num]);
+            match name {
+                Some("forEach") => ret_prim(m, call, prim::UNDEF),
+                Some("some" | "every") => ret_prim(m, call, prim::BOOL),
+                Some("find") => {
+                    m.edge(elems, c.ret);
+                    ret_prim(m, call, prim::UNDEF);
+                }
+                Some("map") => {
+                    let it = iter_over(m, call, r);
+                    ret_tok(m, call, it);
+                }
+                Some("flatMap") => {
+                    // The callback's results are iterated in turn.
+                    let inner = m.node_l("flatmap-inner");
+                    m.cons(
+                        r,
+                        Cons::Load {
+                            key: Key::Any,
+                            dst: inner,
+                        },
+                    );
+                    let it = iter_over(m, call, inner);
+                    ret_tok(m, call, it);
+                }
+                _ => {
+                    let it = iter_over(m, call, elems);
+                    ret_tok(m, call, it);
+                }
+            }
+        }
+        Some("take" | "drop") => {
+            let it = iter_over(m, call, elems);
+            ret_tok(m, call, it);
+        }
+        Some("reduce") => {
+            let Some(&cb) = c.args.first() else {
+                return;
+            };
+            let acc = m.node_l("acc");
+            match c.args.get(1) {
+                Some(&i) => m.edge(i, acc),
+                None => m.edge(elems, acc),
+            }
+            let r = cb_call(m, cb, ThisArg::Undef, vec![acc, elems, num]);
+            m.edge(r, acc);
+            m.edge(acc, c.ret);
+        }
+        Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
+        Some(n) => unknown_method(
+            m,
+            call,
+            &format!("argument of unmodeled iterator method {n}"),
+        ),
+    }
+}
+
 fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
@@ -1093,8 +1276,17 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
         None => ThisArg::Undef,
     };
     match name {
-        // Iteration protocol: an array is its own iterator source.
+        // `[Symbol.iterator]()`: a fresh iterator over the elements.
+        Some(WK_ITERATOR) => {
+            let it = iter_over(m, call, elems);
+            ret_tok(m, call, it);
+        }
+        // Any other computed-key method.
         None => ret_tok(m, call, t),
+        // Arrays and strings are iterables, not iterators: no `next`,
+        // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
+        // on every iterable).
+        Some("next" | "return" | "throw") => {}
         Some("push" | "unshift") => {
             for &a in &c.args {
                 m.edge(a, elems);
@@ -1217,15 +1409,17 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             ret_prim(m, call, prim::STR);
         }
         Some("keys") => {
-            let pb = m.tok(TokKind::PrimBox);
-            ret_tok(m, call, pb);
+            let it = iter_over(m, call, num);
+            ret_tok(m, call, it);
         }
-        Some("values" | "entries") => {
-            m.add_prim(elems, prim::NUM);
-            if name == Some("entries") {
-                m.add_tok(elems, t);
-            }
-            ret_tok(m, call, t);
+        Some("values") => {
+            let it = iter_over(m, call, elems);
+            ret_tok(m, call, it);
+        }
+        Some("entries") => {
+            let pairs = entry_pairs(m, call, elems, true);
+            let it = iter_over(m, call, pairs);
+            ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
         Some(n) => unknown_method(m, call, &format!("argument of unmodeled array method {n}")),
@@ -1236,6 +1430,22 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     match (what, name) {
+        ("Iterator", _) => iterator_method(m, t, name, call),
+        // Iterables or plain results, not iterators: no `next`/`return`/
+        // `throw` (a call throws).
+        (
+            "Collection" | "TypedArray" | "Promise" | "Error" | "IterResult",
+            Some("next" | "return" | "throw"),
+        ) => {}
+        ("Collection", Some(WK_ITERATOR)) => {
+            // `[Symbol.iterator]()`: Map entries or Set values.
+            let pairs = entry_pairs(m, call, elems, false);
+            let vals = m.node_l("coll-iter");
+            m.edge(elems, vals);
+            m.edge(pairs, vals);
+            let it = iter_over(m, call, vals);
+            ret_tok(m, call, it);
+        }
         (_, None) => ret_tok(m, call, t),
         ("Collection", Some("set" | "add")) => {
             for &a in &c.args {
@@ -1249,14 +1459,14 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
         }
         ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
-        ("Collection", Some("keys" | "values" | "entries")) => {
-            let arr = site_tmpl(m, call, "Array");
-            let fa = m.field_any(arr);
-            m.edge(elems, fa);
-            if name == Some("entries") {
-                m.add_tok(fa, arr);
-            }
-            ret_tok(m, call, arr);
+        ("Collection", Some("keys" | "values")) => {
+            let it = iter_over(m, call, elems);
+            ret_tok(m, call, it);
+        }
+        ("Collection", Some("entries")) => {
+            let pairs = entry_pairs(m, call, elems, false);
+            let it = iter_over(m, call, pairs);
+            ret_tok(m, call, it);
         }
         ("Collection", Some("forEach")) => {
             if let Some(&cb) = c.args.first() {

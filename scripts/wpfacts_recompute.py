@@ -515,6 +515,21 @@ class Solver:
         return self.is_fact_unit(tm) and key in self.tmpls[tm]["definite"]
 
     def load_from(self, origin, t, key, dst):
+        # The iteration key: an array-like's elements, a runtime object's
+        # computed read, nothing from a program object/function.
+        if key != "*" and self.atoms.get(key) == "#iter":
+            k = self.toks[t]
+            runtime = t == TOP or k[0] in ("builtin", "builtinfn", "nativeproto", "primbox")
+            if not runtime and not (k[0] == "obj" and self.is_array_like(t)):
+                return
+            key = self.atom("#elem")
+        # The element key: an array-like's elements, else a computed read.
+        if key != "*" and self.atoms.get(key) == "#elem":
+            if t != TOP and self.is_array_like(t):
+                self.edge(self.fall(t), dst)
+                self.add(dst, [], UNDEF)
+                return
+            key = "*"
         if t == TOP:
             self.add(dst, [TOP])
             if key == "*" or self.atoms.get(key) == "constructor":

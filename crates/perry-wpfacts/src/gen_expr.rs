@@ -167,6 +167,23 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The key of a computed READ or method call. `Symbol.iterator` & co.:
+    /// HIR folds a well-known symbol to the runtime's `@@__perry_wk_<name>`
+    /// sentinel, one symbol per name, so the read names it. Stores keep
+    /// `Key::Any`, which every named read sees; as an atom it can only
+    /// merge with a string key of the same spelling (more flow, never less).
+    pub(crate) fn read_key(&mut self, index: &Expr) -> Key {
+        match index {
+            Expr::SymbolFor(name) => match name.as_ref() {
+                Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
+                    Key::Named(self.m.atom(s))
+                }
+                _ => Key::Any,
+            },
+            _ => self.key_of(index),
+        }
+    }
+
     pub(crate) fn load(&mut self, recv: NodeId, key: Key) -> NodeId {
         let dst = self.tmp("load");
         self.m.cons(recv, Cons::Load { key, dst });
@@ -272,27 +289,17 @@ impl<'a> Gen<'a> {
 
     /// The values produced by iterating whatever `v` holds: elements of
     /// arrays/collections/primitive boxes, and for iterables the protocol:
-    /// `v[Symbol.iterator]()` (every method, conservatively), then `.next()`
-    /// on the result and on `v` itself, then `.value`.
+    /// `v[Symbol.iterator]()`, then `.next()` on the result and on `v`
+    /// itself, then `.value`.
     pub(crate) fn iterate(&mut self, v: NodeId) -> NodeId {
         let out = self.tmp("iterated");
-        self.m.cons(
-            v,
-            Cons::Load {
-                key: Key::Any,
-                dst: out,
-            },
-        );
+        let ik = self.m.iter_key();
+        self.m.cons(v, Cons::Load { key: ik, dst: out });
         let (pc, it) = self.new_call(ThisArg::Node(v), vec![], vec![]);
+        let wk = Key::Named(self.m.atom(crate::builtins::WK_ITERATOR));
         self.m.protocol_calls.insert(pc);
         self.m.rel(|| format!("protocolcall {pc}"));
-        self.m.cons(
-            v,
-            Cons::MCall {
-                key: Key::Any,
-                call: pc,
-            },
-        );
+        self.m.cons(v, Cons::MCall { key: wk, call: pc });
         let na = self.m.atom("next");
         let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
         let r2 = self.mcall(v, Key::Named(na), vec![], vec![]);
@@ -640,7 +647,7 @@ impl<'a> Gen<'a> {
                 let i = self.expr(fx, index);
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(i, Cons::Implicit { reason: r });
-                match self.key_of(index) {
+                match self.read_key(index) {
                     Key::Named(a) => self.load(o, Key::Named(a)),
                     Key::Any => {
                         let dst = self.tmp("idxload");

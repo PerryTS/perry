@@ -388,3 +388,81 @@ fn bind_chains_terminate() {
     );
     assert!(!pf.stats.aborted, "{}", pf.dump_text());
 }
+
+fn site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
+    pf.sites
+        .iter()
+        .find(|s| s.key == key)
+        .unwrap_or_else(|| panic!("site .{key} in\n{}", pf.dump_text()))
+}
+
+/// The iteration protocol written out by hand over builtin iterators
+/// (array, `values()`, Map entries, Set): `next().value` is the element,
+/// not a value from unmodeled code, and the source keeps its facts.
+#[test]
+fn builtin_iterator_next_yields_elements() {
+    let pf = facts(
+        r#"
+        class A { a: number; constructor(a: number) { this.a = a; } }
+        class B { b: number; constructor(b: number) { this.b = b; } }
+        class C { c: number; constructor(c: number) { this.c = c; } }
+        class D { d: number; constructor(d: number) { this.d = d; } }
+        const xs = [new A(1), new A(2)];
+        const it = xs[Symbol.iterator]();
+        let s = 0;
+        for (let r = it.next(); !r.done; r = it.next()) s += r.value.a;
+        const ys = [new B(1)];
+        const vi = ys.values();
+        const v = vi.next();
+        if (!v.done) s += v.value.b;
+        const mp = new Map([["k", new C(3)]]);
+        const ei = mp.entries();
+        const e = ei.next();
+        if (!e.done) s += e.value[1].c;
+        const st = new Set([new D(4)]);
+        const si = st.values();
+        const w = si.next();
+        if (!w.done) s += w.value.d;
+        console.log(s);
+        "#,
+    );
+    for k in ["a", "b", "c", "d"] {
+        let st = site(&pf, k);
+        assert!(!st.top, ".{k} receiver carries TOP\n{}", pf.dump_text());
+        assert!(
+            matches!(st.verdict, Verdict::T0Mono | Verdict::T0Set),
+            ".{k}: {:?}\n{}",
+            st.verdict,
+            pf.dump_text()
+        );
+    }
+}
+
+/// for-of, spread and destructuring over a hand-written iterable flow the
+/// user's `next().value` into the loop variable.
+#[test]
+fn user_iterable_flows_through_for_of_spread_destructuring() {
+    let pf = facts(
+        r#"
+        class P { p: number; constructor(p: number) { this.p = p; } }
+        class Bag {
+          items: P[];
+          constructor() { this.items = [new P(1), new P(2)]; }
+          [Symbol.iterator]() {
+            let i = 0;
+            const items = this.items;
+            return { next: () => i < items.length ? { value: items[i++], done: false } : { value: undefined, done: true } };
+          }
+        }
+        const bag = new Bag();
+        let s = 0;
+        for (const x of bag) s += x.p;
+        const [first] = bag;
+        if (first) s += first.p;
+        console.log(s + [...bag].length);
+        "#,
+    );
+    for st in pf.sites.iter().filter(|s| s.key == "p") {
+        assert!(!st.top, ".p receiver carries TOP\n{}", pf.dump_text());
+    }
+}
