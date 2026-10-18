@@ -129,7 +129,12 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          CHECKOUT_REF=""
+          # Every downstream job checks out this ref. The inline checkout
+          # fetches `origin <ref>`, so an empty one is the default branch's
+          # HEAD, not this run's commit: a dry run or a cut from a candidate
+          # branch would build main. Default to the run's exact SHA;
+          # republish pins the tag below.
+          CHECKOUT_REF="$SHA"
           if [ "$EVENT" = "release" ]; then
             MODE=release
             TAG="$RELEASE_TAG"
@@ -222,7 +227,7 @@ jobs:
             echo "version=$VERSION"
             echo "checkout-ref=$CHECKOUT_REF"
           } >> "$GITHUB_OUTPUT"
-          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}  checkout-ref=${CHECKOUT_REF:-<default>}"
+          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}  checkout-ref=$CHECKOUT_REF"
 
   # ---------------------------------------------------------------------------
   # Gate: wait for Tests + Simulator Tests to pass on this commit before we
