@@ -47,10 +47,14 @@ mod tests {
             unreachable!()
         };
         let field = m.field(holder, atom);
-        let payloads: Vec<_> = (0..200)
-            .map(|i| m.tok(TokKind::NativeProto(format!("test-payload-{i}"))))
-            .collect();
-        m.add(field, &payloads, 0);
+        let payloads: Vec<_> = (0..200).map(|i| m.tok(TokKind::ModNs(i))).collect();
+        // Neither source exceeds the bound; their inherited union does.
+        m.add(field, &payloads[..100], 0);
+        let ancestor = m.tok(TokKind::NativeProto("test-ancestor".into()));
+        let inherited = m.field(ancestor, atom);
+        m.add(inherited, &payloads[100..], 0);
+        let parents = m.proto_node(holder);
+        m.add_tok(parents, ancestor);
         let mut results = Vec::new();
         for i in 0..1000 {
             let recv = m.tok(TokKind::NativeProto(format!("test-receiver-{i}")));
