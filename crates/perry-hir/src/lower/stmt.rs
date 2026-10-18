@@ -414,6 +414,10 @@ pub(crate) fn lower_module_fn_decl(
     }
     let mut func = lower_fn_decl(ctx, fn_decl)?;
     if let Some(ns_name) = namespace {
+        // The symbol is qualified; `fn.name` stays the source name.
+        module
+            .closure_display_names
+            .insert(func.id, func.name.clone());
         func.name = format!("{ns_name}.{}", func.name);
     }
     // Register return type for call-site inference
