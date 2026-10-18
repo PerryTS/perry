@@ -526,12 +526,8 @@ fn emit_instance_alloc_inner(
     // its keys and a late key's slot stays the hole until it is written.
     if class_born_on_family(ctx, class, cid) {
         let desc = crate::layout_desc::note_family_desc_use(cid);
-        let raw = ctx.block().call(
-            crate::types::PTR,
-            "perry_alloc_layout",
-            &[(crate::types::PTR, &desc)],
-        );
-        return ctx.block().ptrtoint(&raw, I64);
+        let slots = ctx.program_layouts.families[&cid].slot_count;
+        return crate::expr::inline_birth::layout(ctx, &desc, slots, cid);
     }
     // Imported heritage can have a proven family while its parent identity
     // is available only after evaluation. Let the runtime compare the class

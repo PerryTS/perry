@@ -983,14 +983,7 @@ pub(crate) fn birth_literal(
     Some(crate::rooting::with_operands_rooted_across_call(
         ctx,
         &exprs,
-        |ctx| {
-            let raw = ctx.block().call(
-                crate::types::PTR,
-                "perry_alloc_layout",
-                &[(crate::types::PTR, &desc)],
-            );
-            Ok(ctx.block().ptrtoint(&raw, crate::types::I64))
-        },
+        |ctx| Ok(crate::expr::inline_birth::layout(ctx, &desc, shape.live, 0)),
         |ctx, values, object| {
             use crate::types::{I32, I64, I8};
             let raw = ctx.block().inttoptr(I64, &object);

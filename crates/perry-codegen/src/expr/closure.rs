@@ -499,62 +499,74 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_alloc_with_captures_singleton",
                     &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
                 )
-            } else if small_fresh_birth {
-                let words: Vec<&str> = (0..3)
+            } else {
+                let words: Vec<String> = (0..total_caps)
                     .map(|i| {
-                        captured_value_bits.get(i).map(String::as_str).unwrap_or(
-                            if i < total_caps {
-                                crate::nanbox::TAG_UNDEFINED_I64
-                            } else {
-                                "0"
-                            },
-                        )
+                        captured_value_bits
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| crate::nanbox::TAG_UNDEFINED_I64.to_string())
                     })
                     .collect();
-                ctx.block().call(
-                    I64,
-                    "js_closure_alloc_small",
-                    &[
-                        (PTR, &info_ref),
-                        (I64, &birth_header),
-                        (I64, words[0]),
-                        (I64, words[1]),
-                        (I64, words[2]),
-                    ],
-                )
-            } else if bulk_fresh_init {
-                // Fresh (identity-carrying) closure with bulk captures:
-                // ONE runtime call does allocation + slots + layout instead of
-                // `js_closure_alloc` plus a `js_closure_set_capture_bits` per
-                // capture (each re-resolving the header, forwarding, kind
-                // dispatch and the barrier's page classification). The reserved
-                // `this` / `new.target` slots are pre-filled with the pointer-free
-                // sentinel the per-slot path relied on `js_closure_alloc` writing;
-                // the post-create patch below fills them exactly as before.
-                let buf = ctx.func.alloca_entry_array(I64, total_caps);
-                {
-                    let blk = ctx.block();
-                    for i in 0..total_caps {
-                        let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", i))]);
-                        match captured_value_bits.get(i) {
-                            Some(v_bits) => blk.store(I64, v_bits, &slot),
-                            None => blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot),
+                super::inline_birth::closure(ctx, &info_ref, &birth_header, &words, |ctx| {
+                    if small_fresh_birth {
+                        let words: Vec<&str> = (0..3)
+                            .map(|i| {
+                                captured_value_bits.get(i).map(String::as_str).unwrap_or(
+                                    if i < total_caps {
+                                        crate::nanbox::TAG_UNDEFINED_I64
+                                    } else {
+                                        "0"
+                                    },
+                                )
+                            })
+                            .collect();
+                        ctx.block().call(
+                            I64,
+                            "js_closure_alloc_small",
+                            &[
+                                (PTR, &info_ref),
+                                (I64, &birth_header),
+                                (I64, words[0]),
+                                (I64, words[1]),
+                                (I64, words[2]),
+                            ],
+                        )
+                    } else if bulk_fresh_init {
+                        // Fresh (identity-carrying) closure with bulk captures:
+                        // ONE runtime call does allocation + slots + layout instead of
+                        // `js_closure_alloc` plus a `js_closure_set_capture_bits` per
+                        // capture (each re-resolving the header, forwarding, kind
+                        // dispatch and the barrier's page classification). The reserved
+                        // `this` / `new.target` slots are pre-filled with the pointer-free
+                        // sentinel the per-slot path relied on `js_closure_alloc` writing;
+                        // the post-create patch below fills them exactly as before.
+                        let buf = ctx.func.alloca_entry_array(I64, total_caps);
+                        {
+                            let blk = ctx.block();
+                            for i in 0..total_caps {
+                                let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", i))]);
+                                match captured_value_bits.get(i) {
+                                    Some(v_bits) => blk.store(I64, v_bits, &slot),
+                                    None => blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot),
+                                }
+                            }
                         }
+                        let blk = ctx.block();
+                        blk.call(
+                            I64,
+                            "js_closure_alloc_fixed",
+                            &[(PTR, &info_ref), (I64, &birth_header), (PTR, &buf)],
+                        )
+                    } else {
+                        let blk = ctx.block();
+                        blk.call(
+                            I64,
+                            "js_closure_alloc_empty",
+                            &[(PTR, &info_ref), (I32, &shape)],
+                        )
                     }
-                }
-                let blk = ctx.block();
-                blk.call(
-                    I64,
-                    "js_closure_alloc_fixed",
-                    &[(PTR, &info_ref), (I64, &birth_header), (PTR, &buf)],
-                )
-            } else {
-                let blk = ctx.block();
-                blk.call(
-                    I64,
-                    "js_closure_alloc_empty",
-                    &[(PTR, &info_ref), (I32, &shape)],
-                )
+                })
             };
 
             // The captured-singleton helper writes captures internally. Boxed
