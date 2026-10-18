@@ -540,7 +540,7 @@ pub struct Model {
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
-    /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
+    /// `CallThis` receiver groups (see `Model::bind_via`): one input per method node,
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.
     pub this_groups: FxHashMap<NodeId, NodeId>,

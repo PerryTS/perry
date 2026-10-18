@@ -83,7 +83,10 @@ impl Model {
         // Install before following parents: evaluated heritage can be cyclic
         // in the context-insensitive graph (e.g. repeated mixin templates).
         self.prototype_values.insert((holder, key), value);
-        self.rel(|| format!("prototypevalue {value} {holder} {}", self.key_name(key)));
+        if self.relations.is_some() {
+            let line = format!("prototypevalue {value} {holder} {}", self.key_name(key));
+            self.rel(|| line);
+        }
         let own = match key {
             Key::Named(a) => self.field(holder, a),
             Key::Any => self.all_fields(holder),

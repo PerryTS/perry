@@ -1516,13 +1516,10 @@ impl Model {
     /// Bind `call` to every function that shows up in `callee`, with `this`
     /// fixed to `origin` (the relation `callthis callee call origin`).
     ///
-    /// The rule splits in two so a megamorphic site does not pay
-    /// receivers × methods per call: `this` binds once per (method node,
-    /// receiver), shared by every site that looks the same key up on that
-    /// receiver (`ThisTo`), and arguments/result bind once per (call,
-    /// function) through the call's relay node (`CallArgs`). A builtin
-    /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
-    /// The result is the same as one `CallThis` per (callee, call, origin).
+    /// Receivers join a shared input node for the method value; each function
+    /// links that set to its `this`. Arguments/result bind once per (call,
+    /// function) through the call relay. Builtin namespaces run once per
+    /// (call, receiver), preserving their receiver-dependent summaries.
     pub(crate) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
         if !self.callthis_done.insert((callee, call, origin)) {
             return;
