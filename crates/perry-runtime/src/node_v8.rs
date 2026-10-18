@@ -622,23 +622,108 @@ pub extern "C" fn js_v8_promise_hook_register() -> f64 {
     crate::value::js_nanbox_pointer(c as i64)
 }
 
+extern "C-unwind" fn gc_profiler_dispose_body(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this.as_f64());
+    unsafe {
+        crate::object::js_native_call_method(
+            receiver.get_nanbox_f64(),
+            b"stop".as_ptr().cast(),
+            4,
+            std::ptr::null(),
+            0,
+        );
+    }
+    undefined()
+}
+
+pub(crate) unsafe fn attach_v8_constructor(
+    name: &str,
+    constructor: f64,
+    _closure_addr: usize,
+) -> f64 {
+    if name != "GCProfiler" {
+        return constructor;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor);
+    let prototype =
+        crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
+    let prototype = scope.root_nanbox_f64(prototype);
+    let method = crate::closure::js_closure_alloc_singleton(crate::fn_info!(
+        unwind gc_profiler_dispose_body,
+        0
+    ));
+    let method = scope.root_raw_mut_ptr(method);
+    crate::object::native_module::set_bound_native_closure_name(
+        method.get_raw_mut_ptr(),
+        "[Symbol.dispose]",
+    );
+    crate::object::native_module::set_builtin_closure_length(
+        method.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        0,
+    );
+    let symbol = crate::symbol::well_known_symbol("dispose");
+    let symbol = scope.root_raw_mut_ptr(symbol);
+    crate::symbol::js_object_set_symbol_property(
+        prototype.get_nanbox_f64(),
+        crate::value::js_nanbox_pointer(
+            symbol.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as i64
+        ),
+        crate::value::js_nanbox_pointer(
+            method.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
+        ),
+    );
+    crate::symbol::set_symbol_property_attrs(
+        crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64()) as usize,
+        symbol.get_raw_mut_ptr::<crate::symbol::SymbolHeader>() as usize,
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+    constructor.get_nanbox_f64()
+}
+
 /// `new v8.GCProfiler()` → fresh profiler object.
 #[no_mangle]
 pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
-    {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
         let module = "v8.GCProfiler";
         crate::object::install_native_module_vtable();
-        let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+        let constructor = crate::object::bound_native_callable_export_value("v8", "GCProfiler");
+        let constructor = scope.root_nanbox_f64(constructor);
+        let prototype =
+            crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
+        let prototype = scope.root_nanbox_f64(prototype);
         let module_name = js_string_from_bytes(module.as_ptr(), module.len() as u32);
-        crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(module_name));
-        crate::object::js_object_set_field(obj, 1, JSValue::bool(false));
+        let module_name = scope.root_string_ptr(module_name);
+        let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+        let obj = scope.root_raw_mut_ptr(obj);
+        crate::object::js_object_set_field(
+            obj.get_raw_mut_ptr(),
+            0,
+            JSValue::string_ptr(module_name.get_raw_mut_ptr()),
+        );
+        crate::object::js_object_set_field(obj.get_raw_mut_ptr(), 1, JSValue::bool(false));
 
-        let mut keys = crate::array::js_array_alloc(1);
+        let keys = crate::array::js_array_alloc(1);
+        let keys = scope.root_raw_mut_ptr(keys);
         let key = b"__module__";
         let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        keys = crate::array::js_array_push(keys, JSValue::string_ptr(key_ptr));
-        crate::object::js_object_set_keys(obj, keys);
-        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+        let key_ptr = scope.root_string_ptr(key_ptr);
+        let pushed = crate::array::js_array_push(
+            keys.get_raw_mut_ptr(),
+            JSValue::string_ptr(key_ptr.get_raw_mut_ptr()),
+        );
+        keys.set_raw_mut_ptr(pushed);
+        crate::object::js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+            prototype.get_nanbox_f64().to_bits(),
+        );
+        crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
     }
 }
 
