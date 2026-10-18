@@ -164,7 +164,7 @@ fn source_origin(path: &Path, root: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
+pub(super) fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
     let from: Vec<Component<'_>> = from.components().collect();
     let to: Vec<Component<'_>> = to.components().collect();
     if from.first() != to.first() {

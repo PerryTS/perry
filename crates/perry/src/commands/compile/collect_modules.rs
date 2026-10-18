@@ -515,14 +515,15 @@ fn collect_module_one(
         .unwrap_or("input.ts");
     let parse_filename = canonical.to_str().unwrap_or(filename);
 
-    // Use a relative path from project root for unique module names
-    // This ensures files like "routes/auth.ts" and "middleware/auth.ts" have different names
-    let module_name = canonical
-        .strip_prefix(&ctx.project_root)
-        .ok()
-        .and_then(|p| p.to_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| filename.to_string());
+    // Include sibling/linked dependency directories before lowering, too.
+    // A basename fallback makes external a/index.js and b/index.js share
+    // tagged-template site IDs (and capture salts). Renaming the modules
+    // after discovery cannot repair identities already embedded in HIR.
+    // Relative paths keep those identities independent of the checkout.
+    let module_name = super::asset_manifest::relative_path(&ctx.project_root, &canonical)
+        .unwrap_or_else(|| canonical.clone())
+        .to_string_lossy()
+        .into_owned();
 
     // Parse via the optional in-memory cache (only populated by `perry dev`).
     // On a cache hit, we reuse the AST from the previous rebuild — the single
