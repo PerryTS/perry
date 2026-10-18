@@ -26,7 +26,7 @@
 //! interpreted code at all (`ElisionFacts::interp_guard`). A guarded read
 //! tests what the proof needs at the site (the runtime's
 //! `PERRY_INTERP_PROTO_WRITTEN` word; the receiver test; the class id
-//! against the set) and its miss arm is the site's complete generic
+//! against the set; the receiver's layout word) and its miss arm is the site's complete generic
 //! operation, lowered without the facts; it rejoins the hit arm. Guarded
 //! proofs serve reads only; stores, updates, number-context raw reads and
 //! the F6 element proof stay on their checked routes.
@@ -614,7 +614,9 @@ pub(crate) fn try_lower_get(
 /// code has written a prototype, so every birth field was defined and no
 /// object reached interpreted code by a prototype member); the receiver is
 /// an object (`checked` or `nullable`); its class id is one of the proof's
-/// (`checked`; the ids are constants of the compile, nothing is learned).
+/// (`checked`; the ids are constants of the compile, nothing is learned);
+/// and its layout word is unshadowed (unknown code may otherwise preserve the
+/// class id while deleting or replacing an own field).
 fn lower_guarded_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -641,7 +643,7 @@ fn lower_guarded_get(
         let w = blk.load(I32, "@PERRY_INTERP_PROTO_WRITTEN");
         ok = Some(blk.icmp_eq(I32, &w, "0"));
     }
-    if p.checked || p.nullable {
+    if p.guarded() || p.nullable {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(&recv_box);
         let recv = super::receiver_range::emit_fused_receiver_test(blk, &bits);
@@ -649,24 +651,34 @@ fn lower_guarded_get(
             Some(prev) => blk.and(crate::types::I1, &prev, &recv.is_object_pointer),
             None => recv.is_object_pointer.clone(),
         };
-        if p.checked {
-            // The class id is read only on the object edge.
-            let chk_idx = ctx.new_block("wpf.gget.cid");
+        if p.guarded() {
+            // Unknown code can change an object's own layout while preserving
+            // its class id. Read the header only on the object edge, and keep
+            // the complete generic operation for a shadowed layout.
+            let chk_idx = ctx.new_block("wpf.gget.header");
             let chk_label = ctx.block_label(chk_idx);
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
             let blk = ctx.block();
             let hdr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 0);
-            let cid = blk.load(I32, &hdr);
-            let mut any: Option<String> = None;
-            for c in &p.class_ids {
-                let eq = blk.icmp_eq(I32, &cid, &c.to_string());
-                any = Some(match any {
-                    Some(prev) => blk.or(crate::types::I1, &prev, &eq),
-                    None => eq,
-                });
+            let packed = blk.load(I64, &hdr);
+            let hi = blk.lshr(I64, &packed, "32");
+            let word = blk.trunc(I64, &hi, I32);
+            let layout_ok = crate::proto_constants::emit_word_unshadowed(blk, &word);
+            let mut proof_ok = layout_ok;
+            if p.checked {
+                let cid = blk.trunc(I64, &packed, I32);
+                let mut any: Option<String> = None;
+                for c in &p.class_ids {
+                    let eq = blk.icmp_eq(I32, &cid, &c.to_string());
+                    any = Some(match any {
+                        Some(prev) => blk.or(crate::types::I1, &prev, &eq),
+                        None => eq,
+                    });
+                }
+                proof_ok = blk.and(crate::types::I1, &proof_ok, &any.unwrap());
             }
-            ok = any;
+            ok = Some(proof_ok);
         } else {
             ok = Some(both);
         }

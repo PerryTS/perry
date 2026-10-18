@@ -24,7 +24,7 @@ fn fresh_parent_runs_constructor_and_inherited_method_without_escape() {
         r#"
         class Base { constructor(v) { this.value = v; } read() { return this.value; } }
         function make(Parent) { return class Child extends Parent { static marker = 1; }; }
-        const factories = [make]; const C = factories[0](Base); const c = new C(7); console.log(c.read());
+        const factory = make; const C = factory(Base); const c = new C(7); console.log(c.read());
     "#,
     );
     let c = child(&pf, "Child");
@@ -53,7 +53,7 @@ fn conditional_parents_union_constructor_fields_and_methods() {
         class A { constructor() { this.a = 1; } read() { return this.a; } }
         class B { constructor() { this.b = "b"; } read() { return this.b; } }
         function make(cond) { return class Child extends (cond ? A : B) { static marker = 1; }; }
-        const factories = [make]; const C = factories[0](true); console.log(new C().read());
+        const factory = make; const C = factory(true); console.log(new C().read());
     "#,
     );
     let c = child(&pf, "Child");
@@ -82,7 +82,7 @@ fn mixin_return_value_keeps_the_known_grandparent() {
         class Base { value = 1; read() { return this.value; } }
         function mixin(Parent) { return class Mixed extends Parent { static x = 1; }; }
         function make() { return class Child extends mixin(Base) { static y = 1; }; }
-        const factories = [make]; const C = factories[0](); console.log(new C().read());
+        const factory = make; const C = factory(); console.log(new C().read());
     "#,
     );
     let c = child(&pf, "Child");
@@ -100,7 +100,7 @@ fn unknown_parent_keeps_e11_and_escapes_constructor_arguments() {
         r#"
         class Arg { value = 1; }
         function make() { return class Child extends unknownFactory() { static x = 1; }; }
-        const factories = [make]; const C = factories[0](); new C(new Arg());
+        const factory = make; const C = factory(); new C(new Arg());
     "#,
     );
     let c = child(&pf, "Child");
@@ -124,7 +124,7 @@ fn heritage_side_effect_is_preserved_without_an_extra_metadata_evaluation() {
         class Base { read() { return 1; } }
         function parent() { console.log("parent"); return Base; }
         function make() { return class Child extends parent() { static x = 1; }; }
-        const factories = [make]; const C = factories[0](); new C().read();
+        const factory = make; const C = factory(); new C().read();
     "#,
         "heritage.ts",
     )
@@ -164,7 +164,7 @@ fn null_parent_does_not_escape_or_gain_object_prototype() {
     let pf = facts(
         r#"
         function make() { return class Child extends null { static x = 1; constructor() { return {value: 1}; } }; }
-        const factories = [make]; const C = factories[0](); console.log(new C().value);
+        const factory = make; const C = factory(); console.log(new C().value);
     "#,
     );
     let c = child(&pf, "Child");
@@ -179,7 +179,7 @@ fn evaluated_super_method_binds_the_child_receiver() {
         function make(Parent) { return class Child extends Parent {
             static x = 1; value = 7; read() { return super.read(); }
         }; }
-        const factories = [make]; const C = factories[0](Base); console.log(new C().read());
+        const factory = make; const C = factory(Base); console.log(new C().read());
     "#,
     );
     let c = child(&pf, "Child");
@@ -200,7 +200,7 @@ fn known_parent_prototype_mutation_still_refuses_proofs() {
         r#"
         class Base { read() { return 1; } }
         function make(Parent) { return class Child extends Parent { static x = 1; }; }
-        const factories = [make]; const C = factories[0](Base);
+        const factory = make; const C = factory(Base);
         Object.setPrototypeOf(Base.prototype, unknownPrototype());
         console.log(new C().read());
     "#,
@@ -223,7 +223,7 @@ fn imported_and_reexported_parent_uses_existing_value_graph() {
         "export class Base { value = 1; read() { return this.value; } }",
     );
     let bridge = module("/bridge.ts", "export {Base as Parent} from '/base.ts';");
-    let leaf = module("/leaf.ts", "import {Parent} from '/bridge.ts'; function make() { return class Child extends Parent { static x = 1; }; } const factories = [make]; const C = factories[0](); console.log(new C().read());");
+    let leaf = module("/leaf.ts", "import {Parent} from '/bridge.ts'; function make() { return class Child extends Parent { static x = 1; }; } const factory = make; const C = factory(); console.log(new C().read());");
     let pf = compute(
         &[
             ("/base.ts".into(), &base),
@@ -248,7 +248,7 @@ fn a_late_unknown_parent_revokes_the_known_parent_result() {
         r#"
         class Base { read() { return 1; } }
         function make(Parent) { return class Child extends Parent { static x = 1; }; }
-        const factories = [make]; const C = factories[0](Base); new C().read();
+        const factory = make; const C = factory(Base); new C().read();
     "#,
         "heritage.ts",
     )
@@ -292,7 +292,7 @@ fn specialized_class_site_keeps_heritage_after_metadata_resolution() {
         r#"
         class Base { value = 1; read() { return this.value; } }
         function make(Parent) { return class Child extends Parent { static x = 1; }; }
-        const factories = [make]; const C = factories[0](Base); console.log(new C().read());
+        const factory = make; const C = factory(Base); console.log(new C().read());
     "#,
         "heritage.ts",
     )
