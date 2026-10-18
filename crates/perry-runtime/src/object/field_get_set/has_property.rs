@@ -1409,6 +1409,11 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
     if key.is_null() {
         return None;
     }
+    // A class lookup is the complete [[Get]], including an accessor whose
+    // value is undefined. The slow entry must not retry it as a function miss.
+    if let Some(value) = class_closure_read_by_key(obj, key) {
+        return Some(value);
+    }
     let name = crate::string::header_str_checked(key)?;
     let val = crate::closure::closure_get_dynamic_prop_keyed(obj, name, key);
     // Function methods were already resolved, including a getter or own

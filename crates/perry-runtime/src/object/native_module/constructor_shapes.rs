@@ -447,6 +447,30 @@ mod tests {
         ));
     }
     #[test]
+    fn constructor_statics2_undefined_getter_is_invoked_once_by_the_slow_entry() {
+        const CHILD: u32 = 0x7611_0024;
+        static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        extern "C" fn getter() -> f64 {
+            READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+        READS.store(0, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            crate::object::js_register_class_name(CHILD, b"UndefinedChild".as_ptr(), 14);
+            crate::object::class_registry::js_register_class_static_getter(
+                CHILD as i64,
+                b"undefinedStatic".as_ptr(),
+                15,
+                getter as *const () as usize as i64,
+            );
+        }
+        let child = crate::object::class_value::class_value_ptr(CHILD);
+        let key = crate::string::js_string_from_bytes(b"undefinedStatic".as_ptr(), 15);
+        let value = crate::object::field_get_set::js_object_get_field_slow(child as i64, key);
+        assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(READS.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+    #[test]
     fn constructor_statics2_reserved_native_parent_is_the_reflected_parent() {
         const CHILD: u32 = 0x7611_0023;
         crate::object::native_module_registry::js_nm_install_stream();
