@@ -29,8 +29,9 @@
 //! slot is absent until written, and a key the census missed takes the
 //! overflow.
 
+use perry_hir::fx::FxHashMap;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use perry_hir::{Expr, Module as HirModule, Stmt};
 
@@ -68,7 +69,7 @@ pub(super) struct Group {
     /// Keys stored through it, in first-store order.
     stores: Vec<String>,
     /// Store sites per key.
-    sites: HashMap<String, u32>,
+    sites: FxHashMap<String, u32>,
     /// The local is a new object: initialised by `new`, or by a factory call
     /// whose callee returns one of its own locals (the stores of a creation
     /// group come before any later phase's).
@@ -106,24 +107,24 @@ fn note(g: &mut Group, key: &str, store: bool) {
 
 #[derive(Default)]
 struct Census {
-    locals: RefCell<HashMap<u32, Group>>,
-    thises: RefCell<HashMap<u32, Group>>,
+    locals: RefCell<FxHashMap<u32, Group>>,
+    thises: RefCell<FxHashMap<u32, Group>>,
     /// Local -> the function it binds.
-    fn_of_local: RefCell<HashMap<u32, u32>>,
+    fn_of_local: RefCell<FxHashMap<u32, u32>>,
     /// Local -> the callee of the call that initialises it.
-    init_call: RefCell<HashMap<u32, Expr>>,
+    init_call: RefCell<FxHashMap<u32, Expr>>,
     /// Function -> the one local it returns (`None`: more than one).
-    returns: RefCell<HashMap<u32, Option<u32>>>,
+    returns: RefCell<FxHashMap<u32, Option<u32>>>,
     /// Locals initialised by `new`.
     born: RefCell<BTreeSet<u32>>,
     /// Local -> the number literals of its initialising call's arguments.
-    init_literals: RefCell<HashMap<u32, Vec<Option<f64>>>>,
+    init_literals: RefCell<FxHashMap<u32, Vec<Option<f64>>>>,
     /// Local -> its initialising call (the whole call: [`Factories`]).
-    init_expr: RefCell<HashMap<u32, Expr>>,
+    init_expr: RefCell<FxHashMap<u32, Expr>>,
     /// Factory resolution facts ([`Factories`]).
     factories: RefCell<Factories>,
     /// Closed-shape literal class -> its keys, in order.
-    anon_fields: HashMap<String, Vec<String>>,
+    anon_fields: FxHashMap<String, Vec<String>>,
 }
 
 /// What a name-level factory resolution needs (object model §3.2: a family
@@ -140,14 +141,14 @@ struct Census {
 #[derive(Default)]
 struct Factories {
     /// Function -> the expressions it returns (the interesting forms only).
-    returns: HashMap<u32, Vec<Expr>>,
+    returns: FxHashMap<u32, Vec<Expr>>,
     /// Property or function name -> the functions bound to it.
-    named: HashMap<String, Vec<u32>>,
+    named: FxHashMap<String, Vec<u32>>,
     /// Property name -> the locals bound to it (`{ f }` before `f`'s
     /// hoisted function declaration is visited: resolved at use).
-    named_locals: HashMap<String, Vec<u32>>,
+    named_locals: FxHashMap<String, Vec<u32>>,
     /// Local -> the values stored into it (the interesting forms only).
-    assigns: HashMap<u32, Vec<Expr>>,
+    assigns: FxHashMap<u32, Vec<Expr>>,
 }
 
 /// Is `e` a form [`Factories`] follows (kept by clone)?
@@ -166,7 +167,7 @@ fn factory_form(e: &Expr) -> bool {
 }
 
 impl Factories {
-    fn callee_fns(&self, callee: &Expr, fn_of_local: &HashMap<u32, u32>) -> Vec<u32> {
+    fn callee_fns(&self, callee: &Expr, fn_of_local: &FxHashMap<u32, u32>) -> Vec<u32> {
         match callee {
             Expr::FuncRef(f) => vec![*f],
             Expr::LocalGet(l) => fn_of_local.get(l).map(|f| vec![*f]).unwrap_or_default(),
@@ -256,9 +257,9 @@ impl Factories {
 }
 
 struct FactoryCx<'a> {
-    fn_of_local: &'a HashMap<u32, u32>,
-    init_expr: &'a HashMap<u32, Expr>,
-    class_of_local: &'a HashMap<u32, String>,
+    fn_of_local: &'a FxHashMap<u32, u32>,
+    init_expr: &'a FxHashMap<u32, Expr>,
+    class_of_local: &'a std::collections::HashMap<u32, String>,
 }
 
 impl Census {
@@ -471,8 +472,8 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
     let init_expr = c.init_expr.into_inner();
     let factories = c.factories.into_inner();
     let class_of_local = super::class_bindings(hir);
-    let class_id_of: HashMap<&str, u32> = {
-        let mut m: HashMap<&str, Option<u32>> = HashMap::new();
+    let class_id_of: FxHashMap<&str, u32> = {
+        let mut m: FxHashMap<&str, Option<u32>> = FxHashMap::default();
         for cl in &hir.classes {
             m.entry(cl.name.as_str())
                 .and_modify(|v| *v = None)
@@ -490,7 +491,7 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
         (*returns.get(&f)?).filter(|h| *h != id)
     };
     // Prefix each group with its callee groups' stores (a few levels deep).
-    let mut prefixed: Vec<(u32, Vec<String>, HashMap<String, u32>)> = Vec::new();
+    let mut prefixed: Vec<(u32, Vec<String>, FxHashMap<String, u32>)> = Vec::new();
     for id in locals.keys().copied() {
         let mut chain = vec![id];
         let mut cur = id;
@@ -505,7 +506,7 @@ pub(super) fn module_groups(hir: &HirModule) -> Vec<(Option<u32>, Group)> {
             continue;
         }
         let mut stores: Vec<String> = Vec::new();
-        let mut sites: HashMap<String, u32> = HashMap::new();
+        let mut sites: FxHashMap<String, u32> = FxHashMap::default();
         for g in chain.iter().rev() {
             if let Some(g) = locals.get(g) {
                 for k in &g.stores {
@@ -639,10 +640,10 @@ fn late_evidence() -> usize {
 fn late_order(
     keys: &[String],
     orders: &[&[String]],
-    sites: &HashMap<String, u32>,
+    sites: &FxHashMap<String, u32>,
     creation: &BTreeSet<String>,
 ) -> Vec<String> {
-    let pos: HashMap<&str, usize> = keys
+    let pos: FxHashMap<&str, usize> = keys
         .iter()
         .enumerate()
         .map(|(i, k)| (k.as_str(), i))
@@ -779,7 +780,7 @@ pub(super) fn add_variants(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)
         };
         // The later phases' keys: groups that may hold the family's objects
         // but do not create them, and the methods of its chain.
-        let mut phase_sites: HashMap<String, u32> = HashMap::new();
+        let mut phase_sites: FxHashMap<String, u32> = FxHashMap::default();
         let mut phase_orders: Vec<&[String]> = Vec::new();
         for (gi, (this_class, g)) in groups.iter().enumerate() {
             let may = match this_class {
@@ -809,7 +810,7 @@ pub(super) fn add_variants(raw: &mut [RawFamily], groups: &[(Option<u32>, Group)
         split.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
         let mut variants = Vec::new();
         for (k, gs) in split.into_iter().take(MAX_VARIANTS) {
-            let mut sites: HashMap<String, u32> = HashMap::new();
+            let mut sites: FxHashMap<String, u32> = FxHashMap::default();
             let mut orders: Vec<&[String]> = Vec::new();
             for g in &gs {
                 orders.push(&g.stores);
@@ -864,7 +865,7 @@ pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group
         .collect();
     let mut order: Vec<usize> = (0..raw.len()).collect();
     order.sort_by_key(|&i| raw[i].chain.len());
-    let mut late_of: HashMap<u32, Vec<String>> = HashMap::new();
+    let mut late_of: FxHashMap<u32, Vec<String>> = FxHashMap::default();
     for i in order {
         let f = &raw[i];
         let own: BTreeSet<&str> = f.keys.iter().map(String::as_str).collect();
@@ -882,7 +883,7 @@ pub(super) fn add_late_keys(raw: &mut [RawFamily], groups: &[(Option<u32>, Group
                     .collect()
             })
             .unwrap_or_default();
-        let mut sites: HashMap<String, u32> = HashMap::new();
+        let mut sites: FxHashMap<String, u32> = FxHashMap::default();
         let mut orders: Vec<&[String]> = Vec::new();
         let mut creation: BTreeSet<String> = BTreeSet::new();
         // The creation groups known to create this family's objects (a

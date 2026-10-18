@@ -16,6 +16,7 @@ pub mod egress;
 pub(crate) mod enums;
 pub mod error;
 pub mod eval_classifier;
+pub mod fx;
 pub mod ir;
 pub mod js_transform;
 pub(crate) mod jsx;
