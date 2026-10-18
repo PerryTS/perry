@@ -1,8 +1,9 @@
 /* Use mimalloc's actual header: libmimalloc-sys 0.1.49 does not expose the
  * allow_thp enum member in Rust, and its numeric id is not a stable API. */
 #include <mimalloc.h>
+/* <sys/prctl.h> defines PR_GET/SET_THP_DISABLE on glibc (from
+ * <linux/prctl.h>) and on musl (itself); musl-gcc has no kernel headers. */
 #include <sys/prctl.h>
-#include <linux/prctl.h>
 #ifndef PR_THP_DISABLE_EXCEPT_ADVISED
 #define PR_THP_DISABLE_EXCEPT_ADVISED (1UL << 1)
 #endif
