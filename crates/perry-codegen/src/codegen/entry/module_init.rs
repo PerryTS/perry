@@ -61,6 +61,7 @@ pub(super) fn compile_module_init(
     }
     let init_name = format!("{}__init", module_prefix);
     let init_body_name = format!("{}__init_body", module_prefix);
+    let evaluate_name = format!("{}__init_evaluate", module_prefix);
     {
         let wrap_fn = llmod.define_function(&init_name, VOID, vec![]);
         let _ = wrap_fn.create_block("entry");
@@ -81,6 +82,25 @@ pub(super) fn compile_module_init(
         {
             let blk = wrap_fn.block_mut(2).unwrap();
             blk.store(I8, "1", &format!("@{}", done_global));
+            // The registry owns failed evaluation records. On a throw the
+            // runtime clears this existing reentry guard before propagating it,
+            // so the next call replays the failure instead of returning early.
+            let evaluate_addr = format!("ptrtoint (ptr @{} to i64)", evaluate_name);
+            let guard_addr = format!("ptrtoint (ptr @{} to i64)", done_global);
+            blk.call_void(
+                "js_run_module_init_guarded",
+                &[(I64, &evaluate_addr), (I64, &guard_addr)],
+            );
+            blk.ret_void();
+        }
+    }
+    {
+        // Include dependency evaluation in the same failure boundary: a
+        // dependency can throw before this module reaches its own body.
+        let evaluate_fn = llmod.define_function(&evaluate_name, VOID, vec![]);
+        let _ = evaluate_fn.create_block("entry");
+        {
+            let blk = evaluate_fn.block_mut(0).unwrap();
             // A CommonJS program entry claims this thread's main-module
             // record in its wrapper preamble. Main publishes it before eager
             // imports; a worker also needs it before evaluating dependencies.

@@ -1,0 +1,1 @@
+Failed compiled module evaluations now retain and replay their exception through the existing module registry. A throw clears the existing initializer guard, including when a dependency throws, so later require/import calls cannot observe an unfinished namespace as completed.

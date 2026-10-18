@@ -1272,6 +1272,43 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
     }
 }
 
+/// Execute one compiled module evaluation using the existing module registry.
+/// Its code address identifies this program's evaluation record independently
+/// of CommonJS partial-export publication (an ESM or parse-error stub may
+/// throw before publishing anything). Successful reentries retain the emitted
+/// one-byte guard; a failure clears that guard and remains in the registry.
+///
+/// # Safety
+/// `init_addr` names an `extern "C" fn()` evaluation body; `guard_addr` names
+/// its stable generated i8 global, thread-local for worker programs.
+#[no_mangle]
+pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: i64) {
+    let key = format!("\0module-init:{init_addr:x}");
+    let outcome = MODULE_PATH_REGISTRY.with(|registry| {
+        assert!(registry.register_init(key.clone(), init_addr as usize));
+        registry.require_with(&key, &run_path_initializer)
+    });
+    match outcome {
+        Ok(_) => {}
+        Err(error) => {
+            // A failed evaluation is never "done". The next wrapper entry
+            // reaches the same record and rethrows its rooted failure.
+            *(guard_addr as *mut u8) = 0;
+            match error {
+                PathModuleRequireError::Initializer(error) => {
+                    crate::exception::js_throw(f64::from_bits(error));
+                }
+                PathModuleRequireError::OwnershipConflict => {
+                    crate::fs::validate::throw_error_with_code(
+                        "Perry rejected module evaluation from a non-owner initializer",
+                        "ERR_PERRY_PATH_MODULE_OWNER",
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn directory_module_candidates(key: &str) -> Vec<String> {
     let dir = std::path::Path::new(&key);
     if !dir.is_dir() {
