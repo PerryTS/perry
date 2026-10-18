@@ -41,6 +41,58 @@ pub(super) fn lower_inline_dyn_typed_array_set(
             crate::nanbox::TAG_UNDEFINED,
         )));
     }
+    let key_bits = ctx.block().bitcast_double_to_i64(idx_d);
+    let tag = ctx.block().lshr(I64, &key_bits, "48");
+    let string = ctx.block().icmp_eq(I64, &tag, "32767");
+    let short = ctx.block().icmp_eq(I64, &tag, "32761");
+    let pointer = ctx.block().icmp_eq(I64, &tag, "32765");
+    let named = ctx.block().or(I1, &string, &short);
+    let named = ctx.block().or(I1, &named, &pointer);
+    let named_idx = ctx.new_block("dynset.keyed");
+    let numeric_idx = ctx.new_block("dynset.numeric");
+    let done_idx = ctx.new_block("dynset.done");
+    let named_l = ctx.block_label(named_idx);
+    let numeric_l = ctx.block_label(numeric_idx);
+    let done_l = ctx.block_label(done_idx);
+    ctx.block().cond_br(&named, &named_l, &numeric_l);
+    ctx.current_block = named_idx;
+    let named_value = super::proxy_reflect::lower_indexed_put_value_inline(
+        ctx,
+        obj_box,
+        idx_d,
+        val_double,
+        if strict { "1" } else { "0" },
+    )?;
+    let named_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = numeric_idx;
+    let numeric_value =
+        lower_numeric_index_set(ctx, obj_box, idx_d, val_double, strict, array_arm)?;
+    let numeric_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[(&named_value, &named_end), (&numeric_value, &numeric_end)],
+    ))
+}
+
+fn lower_numeric_index_set(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    val_double: &str,
+    strict: bool,
+    array_arm: Option<DynArrayStoreFacts>,
+) -> Result<String> {
+    // As with the ordinary array store, an operand can throw before this
+    // helper runs. Do not open fresh blocks using values dropped after the
+    // terminator (#11450). No assignment value is consumed on this path.
+    if ctx.block().is_terminated() {
+        return Ok(crate::nanbox::double_literal(f64::from_bits(
+            crate::nanbox::TAG_UNDEFINED,
+        )));
+    }
     let Some(facts) = array_arm else {
         return Ok(emit_inline_ta_set_then_runtime(
             ctx, obj_box, idx_d, val_double, strict,

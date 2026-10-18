@@ -191,3 +191,5 @@ crates/perry-runtime/src/closure/shape.rs | let header = (ptr as *const u8).sub(
 crates/perry-runtime/src/array/indexing_read_cold.rs | as *const crate::gc::GcHeader | The boxed heap-band guard precedes the receiver header; each forwarding payload is admitted by the same address band and then rechecked as GC_TYPE_ARRAY before reuse. No registry probe on ordinary array misses.
 
 crates/perry-runtime/src/closure/alloc.rs | (*(raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))._reserved | existing fixed-capture birth debug assertion: raw is the fresh user pointer returned by closure_alloc_storage_no_collect in the same scope, with no collection before the assertion; the compact bound birth no longer has this assertion
+
+crates/perry-runtime/src/object/layout_probe_store.rs | let gc = (payload - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader; | #12854 mechanical move of the existing layout_probe.rs frozen-object check: pointer tag, handle floor, and a present ordinary immutable shape record admit the object before this header read; no new header read.

@@ -40,6 +40,8 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
+mod array_element_kind;
+mod computed_keys;
 mod foreign_counter;
 pub(super) mod guarded_array;
 pub(crate) use foreign_counter::{
@@ -829,6 +831,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
     match expr {
         Expr::IndexGet { object, index } => {
+            if let Some(value) = computed_keys::try_lower_get(ctx, object, index)? {
+                return Ok(value);
+            }
             // The private record cursor starts at zero, advances only after a
             // successful read, and is bounded by the array's u32 length here.
             // Consume that proof in the ordinary guarded indexed backend.

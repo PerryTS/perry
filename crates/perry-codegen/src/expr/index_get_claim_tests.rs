@@ -252,6 +252,10 @@ const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     "arrlike.ic.fwd_header",
     "arrlike.ic.miss",
     "arrlike.ic.merge",
+    // Own elements bypass prototype checks; only holes need that cold proof.
+    // The witness instruction/.text gate measures these two new blocks.
+    "arrlike.ic.array_hole",
+    "arrlike.ic.array_value",
     // Pointer-layout views have a separate load; owning bytes remain at +8.
     "arrlike.u8.view_load",
 ];
@@ -370,9 +374,17 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
     let array_load = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.array_load.")
         .expect("the ordinary-Array load block exists");
     assert!(
-        array_load.contains("load double") && array_load.contains("select i1"),
-        "the packed Array hit must stay a direct load with an inline hole->undefined:\n{array_load}"
+        array_load.contains("load double")
+            && array_load.contains("label %arrlike.ic.array_hole.")
+            && array_load.contains("label %arrlike.ic.array_value."),
+        "the packed Array hit must load directly and send only holes to prototype checks:\n{array_load}"
     );
+    let array_hole = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.array_hole.")
+        .expect("the ordinary-Array hole block exists");
+    assert!(array_hole.contains("br i1") && !array_hole.contains("call "));
+    let array_value = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.array_value.")
+        .expect("the ordinary-Array value block exists");
+    assert!(array_value.contains("phi double") && !array_value.contains("call "));
     let store = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.store.")
         .expect("the elements-store probe block exists");
     assert!(
@@ -784,7 +796,9 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ],
     );
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
-    assert!(ir.contains("fptosi double") && ir.contains("fcmp oeq"));
+    // The shared exact normalizer is outside this main-only IR slice.
+    assert!(ir.contains("call i32 @perry_array_index_normalize_i32("));
+    assert!(ir.contains("icmp sge i32"));
     assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
     assert!(ir.contains("call double @perry_array_read_cold_"));
     assert!(

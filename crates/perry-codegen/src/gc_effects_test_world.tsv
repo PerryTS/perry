@@ -67,5 +67,6 @@ perry_class_value_dir_cell	Leaf	no
 perry_intrinsic_proto	Leaf	no
 perry_probe_get	Leaf	no
 perry_probe_get_keyed	Leaf	no
+perry_probe_set_keyed	Leaf	no
 perry_probe_get_length	Leaf	no
 perry_probe_get_value	Leaf	no
