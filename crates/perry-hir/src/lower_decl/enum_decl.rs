@@ -107,7 +107,7 @@ pub(crate) fn enum_value_binding(
     };
 
     // Constant enums keep their literal birth. Computed members evaluate once,
-    // in declaration order, then use the stored value for their reverse key.
+    // in declaration order, then use the assignment result for their reverse key.
     let computed = own.iter().any(|m| matches!(m.value, EnumValue::Computed));
     let stmt = if existing.is_none() && !computed {
         Stmt::Let {
@@ -149,18 +149,26 @@ pub(crate) fn enum_value_binding(
                     value?
                 }
             };
-            stores.push(Expr::IndexSet {
+            let forward = Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::String(member.name.clone())),
                 value: Box::new(value),
-            });
+            };
+            if matches!(member.value, EnumValue::Computed) {
+                // E[E.A = init] = "A": [[Set]] can call an inherited setter;
+                // its assignment result is init, independent of a later E.A read.
+                stores.push(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(id)),
+                    index: Box::new(forward),
+                    value: Box::new(Expr::String(member.name.clone())),
+                });
+                continue;
+            }
+            stores.push(forward);
             if !matches!(member.value, EnumValue::String(_)) {
                 let key = match &member.value {
                     EnumValue::Number(n) => Expr::String(crate::js_number_to_string(*n)),
-                    EnumValue::Computed => Expr::IndexGet {
-                        object: Box::new(Expr::LocalGet(id)),
-                        index: Box::new(Expr::String(member.name.clone())),
-                    },
+                    EnumValue::Computed => unreachable!(),
                     EnumValue::String(_) => unreachable!(),
                 };
                 stores.push(Expr::IndexSet {
