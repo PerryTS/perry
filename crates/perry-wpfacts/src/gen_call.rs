@@ -240,15 +240,19 @@ impl<'a> Gen<'a> {
         self.m.top_val(&format!("unresolved class value {name}"))
     }
 
-    /// Captured values of a class body (class expression environments).
-    pub(crate) fn class_env(&mut self, mi: u32, name: &str) -> NodeId {
-        let key = format!("{mi}:{name}");
+    /// One capture slot of a class body. Evaluations share the template's
+    /// slot, while different indices retain their independent value flow.
+    pub(crate) fn class_env(&mut self, mi: u32, name: &str, index: u32) -> NodeId {
+        let key = (mi, name.to_string(), index);
         if let Some(&n) = self.class_envs.get(&key) {
             return n;
         }
         let n = self
             .m
-            .node_named("classenv", || format!("classenv({name})"));
+            .node_named("classenv", || format!("classenv({name},{index})"));
+        // The runtime initializes an unpublished environment/snapshot slot
+        // to undefined; refreshes and later evaluations add its real values.
+        self.m.add_prim(n, prim::UNDEF);
         self.class_envs.insert(key, n);
         n
     }
@@ -301,13 +305,6 @@ impl<'a> Gen<'a> {
         self.m.tmpls[tm as usize].has_computed_members = true;
     }
 
-    pub(crate) fn super_starts(&mut self, fx: &Fx) -> Vec<Tok> {
-        match fx.class {
-            Some(tm) => self.super_starts_of(tm),
-            None => vec![TOP],
-        }
-    }
-
     pub(crate) fn super_starts_of(&mut self, tm: TmplId) -> Vec<Tok> {
         match self.m.tmpls[tm as usize].parent {
             Some(p) => vec![
@@ -353,16 +350,7 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
         let a = self.m.atom(method);
-        for start in self.super_starts(fx) {
-            self.m.cons(
-                fx.this,
-                Cons::Super {
-                    start,
-                    key: Key::Named(a),
-                    act: ChainAct::Call(call),
-                },
-            );
-        }
+        self.super_access(fx, Key::Named(a), ChainAct::Call(call));
         ret
     }
 

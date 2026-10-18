@@ -41,13 +41,15 @@ impl Model {
         }
         // An absent key reads `undefined`: only a definite birth key of a
         // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
-            (Key::Named(a), Some(tm)) => {
-                self.tmpls[tm as usize].kind.is_fact_unit()
-                    && self.tmpls[tm as usize].definite.contains(&a)
-            }
-            _ => false,
-        };
+        let fixed_prototype = self.fixed_class_prototype(t, key);
+        let present = fixed_prototype
+            || match (key, self.tmpl_of(t)) {
+                (Key::Named(a), Some(tm)) => {
+                    self.tmpls[tm as usize].kind.is_fact_unit()
+                        && self.tmpls[tm as usize].definite.contains(&a)
+                }
+                _ => false,
+            };
         if !present {
             self.add_prim(dst, prim::UNDEF);
         }
@@ -62,14 +64,16 @@ impl Model {
             }
         }
         self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        if fixed_prototype {
+            return;
+        }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
         if key == Key::Any && self.is_array_like(t) {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv(t, key);
-        self.edge(cv, dst);
+        self.load_from_prototypes(t, key, dst);
         // Accessors run with the receiver as `this`: walk per receiver, only
         // for keys an accessor may be defined under.
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
@@ -230,18 +234,6 @@ impl Model {
         }
     }
 
-    /// The values `key` takes on `t`'s prototypes (transitively).
-    pub fn cv(&mut self, t: Tok, key: Key) -> NodeId {
-        if let Some(&n) = self.cv_nodes.get(&(t, key)) {
-            return n;
-        }
-        let n = self.node_l("chainval");
-        self.cv_nodes.insert((t, key), n);
-        let pn = self.proto_node(t);
-        self.cons(pn, Cons::ChainUnion { key, dst: n });
-        n
-    }
-
     /// Every prototype of `t`, transitively.
     pub fn cp(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.cp_nodes.get(&t) {
@@ -255,7 +247,7 @@ impl Model {
     }
 
     /// Does a lookup of `key` stop at prototype `q` (a declared member)?
-    pub(super) fn stops_at(&self, q: Tok, key: Key) -> bool {
+    pub(crate) fn stops_at(&self, q: Tok, key: Key) -> bool {
         match (key, &self.toks[q as usize]) {
             (Key::Named(a), TokKind::Proto(tm)) => {
                 self.tmpls[*tm as usize].proto_members.contains(&a)
@@ -331,30 +323,15 @@ impl Model {
         }
         match act {
             ChainAct::Load(dst) => {
-                let f = match key {
-                    Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
-                };
-                self.edge(f, dst);
-                self.with_b(|m| builtins::tok_load(m, start, key, dst));
-                if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.edge(up, dst);
-                }
+                let value = self.prototype_value(start, key);
+                self.edge(value, dst);
             }
             ChainAct::Call(call) => {
-                let f = match key {
-                    Key::Named(a) => self.field(start, a),
-                    Key::Any => self.all_fields(start),
-                };
-                self.bind_via(f, call, origin);
+                let value = self.prototype_method_value(start, key);
+                self.bind_via(value, call, origin);
                 self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
-                if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.bind_via(up, call, origin);
-                    let cp = self.cp(start);
-                    self.cons(cp, Cons::ProtoMethods { origin, key, call });
-                }
+                let cp = self.cp(start);
+                self.cons(cp, Cons::ProtoMethods { origin, key, call });
             }
             ChainAct::Store(_) => {}
         }
@@ -384,10 +361,15 @@ impl Model {
                 self.edge_quiet(s2, stop);
             }
         }
+        if let Some(v) = self.stopped_methods.remove(&p) {
+            let parents = self.proto_node(p);
+            for (key, dst) in v {
+                self.cons(parents, Cons::MethodUnion { key, dst });
+            }
+        }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst) in v {
-                let up = self.cv(p, key);
-                self.edge(up, dst);
+                self.load_from_prototypes(p, key, dst);
             }
         }
     }
@@ -610,14 +592,12 @@ impl Model {
     /// function) through the call's relay node (`CallArgs`). A builtin
     /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
     /// The result is the same as one `CallThis` per (callee, call, origin).
-    pub(super) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
+    pub(crate) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
         if !self.callthis_done.insert((callee, call, origin)) {
             return;
         }
         self.rel(|| format!("callthis {callee} {call} {origin}"));
-        if self.this_done.insert((callee, origin)) {
-            self.cons(callee, Cons::ThisTo { origin });
-        }
+        self.add_receiver_group(callee, origin);
         let relay = match self.relays.get(&call) {
             Some(&r) => r,
             None => {
@@ -629,7 +609,7 @@ impl Model {
             }
         };
         if self.relay_done.insert((call, callee)) {
-            self.edge_quiet(callee, relay);
+            self.cons(callee, Cons::CallTargets { dst: relay });
         }
         let sites = self.callee_sites.entry(callee).or_default();
         let first = sites.is_empty();

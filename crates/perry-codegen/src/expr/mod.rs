@@ -4805,3 +4805,6 @@ mod byte_prepass_tests;
 
 #[cfg(test)]
 mod array_layout_loop_tests;
+
+#[cfg(test)]
+mod wpfacts_guard_tests;

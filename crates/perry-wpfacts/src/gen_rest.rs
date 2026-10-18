@@ -149,16 +149,7 @@ impl<'a> Gen<'a> {
                     let k = self.key_of(key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Load(dst),
-                            },
-                        );
-                    }
+                    self.super_access_of(Some(tm), r, k, ChainAct::Load(dst));
                     dst
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -175,16 +166,7 @@ impl<'a> Gen<'a> {
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Store(v),
-                            },
-                        );
-                    }
+                    self.super_access_of(Some(tm), r, k, ChainAct::Store(v));
                     v
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -202,16 +184,7 @@ impl<'a> Gen<'a> {
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
                     let (call, ret) = self.new_call(ThisArg::Node(r), a, sp);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Call(call),
-                            },
-                        );
-                    }
+                    self.super_access_of(Some(tm), r, k, ChainAct::Call(call));
                     ret
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -660,6 +633,7 @@ impl<'a> Gen<'a> {
                     birth_keys: vec![],
                     definite: vec![],
                     parent: None,
+                    evaluated_parent: None,
                     ctor: None,
                     native_parent: None,
                     accessor_keys: vec![],

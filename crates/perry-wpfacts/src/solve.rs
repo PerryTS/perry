@@ -169,7 +169,7 @@ impl Model {
             self.callthis_done.len(),
             visits,
             self.any_walks.len(),
-            self.cv_nodes.len(),
+            self.prototype_values.len(),
             self.cp_nodes.len(),
             self.widen_queue.len(),
             self.widened_nodes,
@@ -436,9 +436,6 @@ impl Model {
                     if !self.nodes[n as usize].widened {
                         let node = &mut self.nodes[n as usize];
                         node.succ.swap_remove(i);
-                        if let Some(set) = node.succ_set.as_mut() {
-                            std::rc::Rc::make_mut(set).remove(&s);
-                        }
                         node.esc_out = true;
                         node.prim_succ.push(s);
                         continue;
@@ -533,8 +530,10 @@ impl Model {
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
-        let any = self.field_any(t);
-        self.edge(any, n);
+        if !self.fixed_class_prototype(t, Key::Named(a)) {
+            let any = self.field_any(t);
+            self.edge(any, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         n
@@ -589,6 +588,8 @@ impl Model {
                 // Object.create / literal prototypes are added by gen.
                 _ => self.add_tok(n, objproto),
             },
+            TokKind::Proto(tm) | TokKind::ClassObj(tm)
+                if self.tmpls[tm as usize].evaluated_parent.is_some() => {}
             TokKind::Proto(tm) => match (
                 self.tmpls[tm as usize].parent,
                 self.tmpls[tm as usize].native_parent.clone(),
@@ -615,10 +616,6 @@ impl Model {
             _ => {}
         }
         n
-    }
-
-    fn fns_of(&self, n: NodeId) -> Vec<Tok> {
-        self.nodes[n as usize].pts.to_sorted()
     }
 
     // ---------------------------------------------------------------- rules
@@ -755,21 +752,45 @@ impl Model {
                             let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
                             self.add_tok(dst, f);
                         }
-                        continue;
-                    }
-                    let f = match key {
-                        Key::Named(a) => self.field(q, a),
-                        Key::Any => self.all_fields(q),
-                    };
-                    self.edge(f, dst);
-                    self.with_b(|m| builtins::tok_load(m, q, key, dst));
-                    if self.stops_at(q, key) {
-                        self.stopped_shared.entry(q).or_default().push((key, dst));
                     } else {
-                        let up = self.cv(q, key);
-                        self.edge(up, dst);
+                        let value = self.prototype_value(q, key);
+                        self.edge(value, dst);
                     }
                 }
+            }
+            Cons::CallTargets { dst } => {
+                for &t in toks {
+                    if matches!(
+                        self.toks[t as usize],
+                        TokKind::Top
+                            | TokKind::Func(_)
+                            | TokKind::Bound(_)
+                            | TokKind::BuiltinFn
+                            | TokKind::Builtin(_)
+                    ) {
+                        self.add(dst, &[t], 0);
+                    }
+                }
+            }
+            Cons::MethodUnion { key, dst } => {
+                for &parent in toks {
+                    if parent == TOP {
+                        self.add_tok(dst, TOP);
+                        if self.is_constructor_key(key) {
+                            let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
+                            self.add_tok(dst, f);
+                        }
+                    } else {
+                        let value = self.prototype_method_value(parent, key);
+                        self.edge(value, dst);
+                    }
+                }
+            }
+            Cons::ProtoCall { origin, key, call } => {
+                self.prototype_call_values(origin, key, call, toks);
+            }
+            Cons::ThisGroup { recv } => {
+                self.bind_receiver_group(recv, toks);
             }
             Cons::ProtoClosure { dst } => {
                 for &q in toks {
@@ -815,6 +836,14 @@ impl Model {
                     self.super_lookup(t, start, key, act);
                 }
             }
+            Cons::ClassParent { class, reason } => {
+                self.apply_class_parent(class, reason, toks, prim);
+            }
+            Cons::SuperFrom { recv, key, act } => {
+                for &start in toks {
+                    self.cons(recv, Cons::Super { start, key, act });
+                }
+            }
             Cons::SuperCtor { class, call } => {
                 for &t in toks {
                     let owner_class = self.constructor_origin(class);
@@ -828,7 +857,9 @@ impl Model {
                             origin: t,
                         },
                     );
-                    if self.tmpls[class as usize].native_parent.is_some() {
+                    if self.tmpls[class as usize].native_parent.is_some()
+                        && self.tmpls[class as usize].evaluated_parent.is_none()
+                    {
                         self.with_b(|m| crate::builtins::native_parent_ctor(m, class, call, t));
                     }
                 }
@@ -845,6 +876,14 @@ impl Model {
                     self.mark_hard(origin, Hard::E6SetPrototypeOf, reason);
                 }
                 for &parent in toks {
+                    if self.tmpls[class as usize].evaluated_parent.is_some() {
+                        if let Some(name) = self.native_parent_value(class, parent) {
+                            self.with_b(|m| {
+                                builtins::native_parent_ctor_named(m, &name, call, origin)
+                            });
+                            continue;
+                        }
+                    }
                     match self.toks[parent as usize] {
                         TokKind::ClassObj(tm) => self.run_ctor_chain_this(call, tm, origin),
                         TokKind::Func(_) => self.call_tok(call, parent, Some(origin)),
@@ -902,6 +941,9 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    if self.fixed_class_prototype(t, Key::Named(key)) {
+                        continue;
+                    }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
                         continue;
@@ -1116,6 +1158,9 @@ impl Model {
     }
 
     fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        if self.fixed_class_prototype(t, key) {
+            return;
+        }
         self.note_fnproto_write(t, Some(key), "store");
         if matches!(key, Key::Any)
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
@@ -1259,6 +1304,14 @@ impl Model {
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
+            Cons::CallTargets { dst } => format!("calltargets {n} {dst}"),
+            Cons::MethodUnion { key, dst } => {
+                format!("methodunion {n} {} {dst}", self.key_name(*key))
+            }
+            Cons::ProtoCall { origin, key, call } => {
+                format!("protocall {n} {origin} {} {call}", self.key_name(*key))
+            }
+            Cons::ThisGroup { recv } => format!("thisgroup {n} {recv}"),
             Cons::ChainUnion { key, dst } => {
                 format!("chainunion {n} {} {dst}", self.key_name(*key))
             }
@@ -1272,6 +1325,10 @@ impl Model {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }
             Cons::SuperCtor { class, call } => format!("superctor {n} {class} {call}"),
+            Cons::ClassParent { class, reason } => format!("classparent {n} {class} {reason}"),
+            Cons::SuperFrom { recv, key, act } => {
+                format!("superfrom {n} {recv} {} {act:?}", self.key_name(*key))
+            }
             Cons::SuperCtorParent {
                 class,
                 call,
@@ -1340,6 +1397,6 @@ impl Model {
     }
 
     pub fn fn_tokens(&self, n: NodeId) -> Vec<Tok> {
-        self.fns_of(n)
+        self.nodes[n as usize].pts.to_sorted()
     }
 }

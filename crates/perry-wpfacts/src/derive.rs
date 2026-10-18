@@ -2,6 +2,7 @@
 //! the per-site verdicts the precision report uses.
 
 use crate::gen::Gen;
+use crate::heritage::evaluated_chain;
 use crate::model::*;
 use crate::pts::{FxHashMap, FxHashSet};
 
@@ -264,7 +265,7 @@ fn template_facts(
     let adds = m.adds_keys.get(&tm).copied().unwrap_or(0);
     // Slots: birth order, valid up to the first non-definite / accessor key.
     let mut fields = Vec::new();
-    let mut slot_ok = true;
+    let mut slot_ok = !evaluated_chain(m, tm);
     let mut keys: Vec<Atom> = tpl.birth_keys.clone();
     // Fields written later (non-birth) are reported too.
     if let Some(fk) = m.field_keys.get(&t) {
@@ -274,7 +275,7 @@ fn template_facts(
             }
         }
     }
-    let mut fixed_layout = prefix_stable && adds == 0;
+    let mut fixed_layout = prefix_stable && adds == 0 && !evaluated_chain(m, tm);
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
         let is_accessor = accessor_keys.contains(&a);

@@ -197,6 +197,17 @@ impl<'a> Gen<'a> {
     /// merge with a string key of the same spelling (more flow, never less).
     pub(crate) fn read_key(&mut self, index: &Expr) -> Key {
         match index {
+            // Capture cells use a constant zero index. A numeric read of an
+            // alternative non-array object must not read all its properties.
+            // Stores retain Any so builtin array element summaries see them.
+            Expr::Integer(n) if *n >= 0 && *n < u32::MAX as i64 => {
+                Key::Named(self.m.atom(&n.to_string()))
+            }
+            Expr::Number(n)
+                if n.is_finite() && *n >= 0.0 && *n < u32::MAX as f64 && n.fract() == 0.0 =>
+            {
+                Key::Named(self.m.atom(&(*n as u32).to_string()))
+            }
             Expr::SymbolFor(name) => match name.as_ref() {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
                     Key::Named(self.m.atom(s))
@@ -251,6 +262,7 @@ impl<'a> Gen<'a> {
             birth_keys: atoms.clone(),
             definite: atoms,
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: None,
             accessor_keys: vec![],
@@ -966,21 +978,15 @@ impl<'a> Gen<'a> {
                 parent_expr,
             } => {
                 let p = self.expr(fx, parent_expr);
-                self.to_sink(p, "E11 dynamic class parent");
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let inst = self.m.tok(TokKind::Obj(tm));
-                    let r = self.m.reason("E11 dynamic class parent");
-                    self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
-                    self.m.escape(inst, r);
-                }
+                self.evaluated_parent(mi, class_name, p);
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
                 class_name,
                 captures,
             } => {
-                let env = self.class_env(mi, class_name);
-                for c in captures {
+                for (index, c) in captures.iter().enumerate() {
+                    let env = self.class_env(mi, class_name, index as u32);
                     let v = self.expr(fx, c);
                     self.m.edge(v, env);
                 }
@@ -993,8 +999,8 @@ impl<'a> Gen<'a> {
             } => {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
-                let env = self.class_env(mi, &name);
-                for c in captures {
+                for (index, c) in captures.iter().enumerate() {
+                    let env = self.class_env(mi, &name, index as u32);
                     let v = self.expr(fx, c);
                     self.m.edge(v, env);
                     if env_class.is_none() {
@@ -1003,12 +1009,17 @@ impl<'a> Gen<'a> {
                 }
                 cv
             }
-            Expr::ClassEnvGet { class_name, .. } => self.class_env(mi, class_name),
+            Expr::ClassEnvGet {
+                class_name, index, ..
+            } => self.class_env(mi, class_name, *index),
             Expr::ClassEnvSet {
-                class_name, value, ..
+                class_name,
+                index,
+                value,
+                ..
             } => {
                 let v = self.expr(fx, value);
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index);
                 self.m.edge(v, env);
                 v
             }
@@ -1024,10 +1035,11 @@ impl<'a> Gen<'a> {
             Expr::ClassEnvCurrent { .. } => self.m.top_val("ClassEnvCurrent"),
             Expr::ClassCaptureValue {
                 class_name,
+                index,
                 fallback,
                 ..
             } => {
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index);
                 let out = self.tmp("capture");
                 self.m.edge(env, out);
                 if let Some(f) = fallback {
@@ -1108,8 +1120,8 @@ impl<'a> Gen<'a> {
                     let vn = self.expr(fx, v);
                     self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
                 }
-                let env = self.class_env(mi, template);
-                for a in captured_args {
+                for (index, a) in captured_args.iter().enumerate() {
+                    let env = self.class_env(mi, template, index as u32);
                     let v = self.expr(fx, a);
                     self.m.edge(v, env);
                 }
@@ -1118,14 +1130,7 @@ impl<'a> Gen<'a> {
                 }
                 if let Some(p) = evaluated_parent {
                     let pv = self.expr(fx, p);
-                    self.to_sink(pv, "E11 class expression with an evaluated parent");
-                    if let Some(tm) = self.resolve_class_name(mi, template) {
-                        let inst = self.m.tok(TokKind::Obj(tm));
-                        let r = self
-                            .m
-                            .reason("E11 class expression with an evaluated parent");
-                        self.m.escape(inst, r);
-                    }
+                    self.evaluated_parent(mi, template, pv);
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);
@@ -1219,16 +1224,7 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertyGet { property } => {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: Key::Named(a),
-                            act: ChainAct::Load(dst),
-                        },
-                    );
-                }
+                self.super_access(fx, Key::Named(a), ChainAct::Load(dst));
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
@@ -1236,16 +1232,7 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, value);
                 let k = self.key_of(key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: k,
-                            act: ChainAct::Store(v),
-                        },
-                    );
-                }
+                self.super_access(fx, k, ChainAct::Store(v));
                 v
             }
 

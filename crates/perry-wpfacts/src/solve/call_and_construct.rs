@@ -370,6 +370,12 @@ impl Model {
             self.add_tok(this, inst);
         }
         let t = &self.tmpls[tm as usize];
+        if t.ctor.is_none() && t.evaluated_parent.is_some() {
+            let receiver = self.node_l("implicit-super-this");
+            self.cons(receiver, Cons::SuperCtor { class: tm, call });
+            self.add_tok(receiver, inst);
+            return;
+        }
         match (t.ctor, t.parent, t.native_parent.clone()) {
             (Some(ctor), _, _) => {
                 let ftok = self.funcs[ctor as usize].token;
@@ -416,6 +422,7 @@ impl Model {
             birth_keys,
             definite,
             parent: None,
+            evaluated_parent: None,
             ctor: Some(f),
             native_parent: None,
             accessor_keys: Vec::new(),
@@ -439,11 +446,13 @@ impl Model {
             Key::Any => self.all_fields(t),
         };
         self.bind_via(own, call, t);
+        if self.fixed_class_prototype(t, key) {
+            return;
+        }
         self.with_b(|m| builtins::own_method(m, t, key, call));
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).
-        let cv = self.cv(t, key);
-        self.bind_via(cv, call, t);
+        self.call_from_prototypes(t, key, call, t);
         let cp = self.cp(t);
         self.cons(
             cp,

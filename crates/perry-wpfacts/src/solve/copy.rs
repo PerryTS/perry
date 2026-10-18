@@ -32,22 +32,13 @@ impl Model {
                         }
                     }
                     None => {
-                        if node.succ.contains(&b) || (node.widened && node.prim_succ.contains(&b)) {
+                        if node.succ.contains(&b) || node.prim_succ.contains(&b) {
                             return;
                         }
-                        if node.succ.len()
-                            + if node.widened {
-                                node.prim_succ.len()
-                            } else {
-                                0
-                            }
-                            >= 16
-                        {
+                        if node.succ.len() + node.prim_succ.len() >= 16 {
                             let mut set: crate::pts::FxHashSet<NodeId> =
                                 node.succ.iter().copied().collect();
-                            if node.widened {
-                                set.extend(node.prim_succ.iter().copied());
-                            }
+                            set.extend(node.prim_succ.iter().copied());
                             set.insert(b);
                             node.succ_set = Some(std::rc::Rc::new(set));
                         }
