@@ -3,6 +3,22 @@
 use super::*;
 use crate::types::{FuncId, Type};
 
+/// Original CommonJS syntax, retained before wrapping erases binding kinds
+/// and export assignments. Only a closed export with one top-level class
+/// assignment can identify a layout parent. This is compile-time input;
+/// runtime class/parent/prototype checks still decide layout adoption.
+#[derive(Debug, Clone, Default)]
+pub struct ClassFamilySyntax {
+    /// Child class name -> (literal require specifier, named export).
+    pub parents: std::collections::BTreeMap<String, (String, String)>,
+    /// Named export -> locally declared class (one top-level assignment).
+    pub exports: std::collections::BTreeMap<String, String>,
+    /// (None for this module's exports, otherwise a literal require
+    /// specifier, key). An empty key means the namespace escaped or was
+    /// replaced/computed-written and no key is closed.
+    pub writes: Vec<(Option<String>, String)>,
+}
+
 /// Source range of a user-visible local binding.
 ///
 /// Offsets use SWC's 1-based `BytePos` coordinates. Keeping this metadata in a
@@ -30,6 +46,7 @@ pub struct FunctionSourceMetadata {
 pub struct Module {
     /// Module name/path
     pub name: String,
+    pub class_family_syntax: Option<ClassFamilySyntax>,
     /// Imports from other modules
     pub imports: Vec<Import>,
     /// Exports from this module
@@ -232,6 +249,7 @@ impl Module {
             name: name.into(),
             imports: Vec::new(),
             exports: Vec::new(),
+            class_family_syntax: None,
             classes: Vec::new(),
             interfaces: Vec::new(),
             type_aliases: Vec::new(),

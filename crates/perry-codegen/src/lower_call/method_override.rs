@@ -840,14 +840,14 @@ fn class_chain_may_declare_method_field(ctx: &FnCtx<'_>, class_name: &str, prope
 }
 
 /// The i32 family layout id instances of `class_name` carry when its
-/// compiled births use the family layout (`new_alloc::class_born_on_family`),
+/// compiled or runtime births use the family layout,
 /// loaded from the descriptor's `layout_id` word (written once at startup,
 /// before user code). `None` when births use the birth pair, for static
 /// methods, or when a family key spells `property` (then the word does not
 /// rule out an own method).
 fn family_method_word(
     ctx: &mut FnCtx<'_>,
-    class_name: &str,
+    _class_name: &str,
     class_id: u32,
     property: &str,
     direct_fn: &str,
@@ -855,8 +855,10 @@ fn family_method_word(
     if direct_fn.starts_with("perry_static_") {
         return None;
     }
-    let class = ctx.classes.get(class_name).copied()?;
-    if !super::new_alloc::class_born_on_family(ctx, class, class_id) {
+    // Runtime construction also adopts a family's layout after validating
+    // the registered parent. The exact receiver word is the proof, regardless
+    // of which allocation path produced it.
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
         return None;
     }
     let fam = ctx.program_layouts.families.get(&class_id)?;
@@ -1098,9 +1100,14 @@ pub(super) fn emit_guarded_direct_method_call(
     // so its instances carry the family layout id, never the birth pair
     // above. Their arm calls the ordinary public body (what dispatch by name
     // resolves to), not the fast arm's layout-specific clones.
-    let family_arm = if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard
-    {
-        family_method_word(ctx, receiver_class_name, expected_class_id, property, direct_fn)
+    let family_arm = if (inline_single_arm && certificate.is_none()) || probe_before_runtime_guard {
+        family_method_word(
+            ctx,
+            receiver_class_name,
+            expected_class_id,
+            property,
+            direct_fn,
+        )
     } else {
         None
     };

@@ -42,6 +42,7 @@ mod deferred_requires;
 pub(crate) mod detect;
 mod extract_exports;
 mod extract_requires;
+pub(super) mod family_syntax;
 mod hoist_classes;
 mod wrap;
 

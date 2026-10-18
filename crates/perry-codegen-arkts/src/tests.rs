@@ -55,6 +55,8 @@ pub(crate) fn empty_module() -> Module {
         local_source_spans: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 

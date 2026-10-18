@@ -3168,9 +3168,7 @@ pub fn run_with_parse_cache(
         }
         // A JSON module is `module.exports` too: `require("./x.json")` is the
         // parsed value.
-        if is_wrapped_cjs(target_hir)
-            || target_path.extension().is_some_and(|ext| ext == "json")
-        {
+        if is_wrapped_cjs(target_hir) || target_path.extension().is_some_and(|ext| ext == "json") {
             // Node's CJS namespace has two aliases for the exact evaluated
             // `module.exports` object. Do not clone/project it: identity with
             // require(), the default import, and shared nested values matters.
@@ -6075,9 +6073,31 @@ pub fn run_with_parse_cache(
     // Object model case 2c: the program's static class families and global
     // key colouring, one value for every module (its digest keys the object
     // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
+    // Re-exports have no HIR Import row. Use the driver's resolved graph,
+    // including package/symlink identity, rather than reconstructing paths.
+    let mut layout_reexports = std::collections::BTreeMap::new();
+    for (path, module) in &ctx.native_modules {
+        for export in &module.exports {
+            let source = match export {
+                perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                _ => continue,
+            };
+            if let Some((resolved, _)) = resolve_import_with_context(source, path, &ctx) {
+                layout_reexports.insert(
+                    (path.to_string_lossy().into_owned(), source.clone()),
+                    resolved.to_string_lossy().into_owned(),
+                );
+            }
+        }
+    }
     let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
-        ctx.native_modules.iter().map(|(_, m)| m),
+        ctx.native_modules
+            .iter()
+            .map(|(path, m)| (path.to_str().expect("module path"), m)),
         args.output_type == "executable",
+        &layout_reexports,
     ));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<

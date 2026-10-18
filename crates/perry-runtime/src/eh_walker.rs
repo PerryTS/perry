@@ -1718,13 +1718,7 @@ mod tests {
                 "frame {k}: the offered start is not the FDE's"
             );
         }
-        let main = {
-            extern "C" {
-                #[linkage = "extern_weak"]
-                static main: *const u8;
-            }
-            unsafe { main as u64 }
-        };
+        let main = trace::executable_main();
         // On the main thread the walk ends at `main`; on a test thread
         // (no `main` beneath it) it runs to the bottom with the full walk.
         let main_at = full[j0..]

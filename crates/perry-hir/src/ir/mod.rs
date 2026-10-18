@@ -42,7 +42,7 @@ pub use constants::{is_bare_prefix_only_builtin, is_native_module_specifier};
 pub use constants::is_buffer_backed_builtin_name;
 
 // ---- module.rs ----
-pub use module::{FunctionSourceMetadata, LocalSourceSpan, Module};
+pub use module::{ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module};
 
 // ---- widget.rs ----
 pub use widget::{

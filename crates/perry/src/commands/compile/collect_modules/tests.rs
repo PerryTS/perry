@@ -206,7 +206,8 @@ fn expands_directory_files_matching_suffix() {
     let importing = base.join("main.ts");
     std::fs::write(&importing, "").unwrap();
 
-    let got = expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".ts", 64, false);
+    let got =
+        expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".ts", 64, false);
     assert_eq!(
         got.specifiers,
         vec![
@@ -216,7 +217,8 @@ fn expands_directory_files_matching_suffix() {
     );
 
     // A directory with no matches yields nothing (→ rejected promise).
-    let none = expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".mjs", 64, false);
+    let none =
+        expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".mjs", 64, false);
     assert!(none.specifiers.is_empty());
 
     let _ = std::fs::remove_dir_all(&base);
@@ -239,7 +241,14 @@ fn require_glob_spells_files_and_directories_like_node() {
     let got = expand_dynamic_import_glob(importing, "./lib/", "", 64, true);
     assert_eq!(
         got.specifiers,
-        ["./lib/LICENSE", "./lib/a", "./lib/a.js", "./lib/b", "./lib/b.json", "./lib/dir"]
+        [
+            "./lib/LICENSE",
+            "./lib/a",
+            "./lib/a.js",
+            "./lib/b",
+            "./lib/b.json",
+            "./lib/dir"
+        ]
     );
     // Four files and the directory with an index; the empty directory is not a module.
     assert_eq!(got.entries, 4);
@@ -247,7 +256,10 @@ fn require_glob_spells_files_and_directories_like_node() {
 
     // `import()` takes the file name exactly: no extension probing, no directories.
     let got = expand_dynamic_import_glob(importing, "./lib/", "", 64, false);
-    assert_eq!(got.specifiers, ["./lib/LICENSE", "./lib/a.js", "./lib/b.json"]);
+    assert_eq!(
+        got.specifiers,
+        ["./lib/LICENSE", "./lib/a.js", "./lib/b.json"]
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }

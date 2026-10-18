@@ -169,6 +169,8 @@ fn module_with_classes_and_params(
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 
@@ -8862,6 +8864,8 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 
@@ -9040,6 +9044,8 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 
@@ -9136,6 +9142,8 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     };
     match case {
         "positive" => {}
@@ -9254,6 +9262,8 @@ fn typed_i1_numeric_predicate_module() -> Module {
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 
@@ -9335,6 +9345,8 @@ fn typed_i1_i32_predicate_module() -> Module {
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 
@@ -9465,6 +9477,8 @@ fn typed_i32_return_module(case: &str) -> Module {
         async_generator_funcs: std::collections::HashSet::new(),
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        class_family_syntax: None,
+        requested_modules: Vec::new(),
     }
 }
 

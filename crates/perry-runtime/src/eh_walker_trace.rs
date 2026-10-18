@@ -272,13 +272,22 @@ pub(crate) fn capture_return_addresses(out: &mut [usize], top: usize) -> usize {
 /// `Error` walk ends there instead of decoding them. Weak, so an image
 /// without `main` (a test harness loaded some other way, a shared object)
 /// links and simply walks to the bottom of the stack.
-fn executable_main() -> u64 {
+#[cfg(not(test))]
+pub(super) fn executable_main() -> u64 {
     extern "C" {
         #[linkage = "extern_weak"]
         static main: *const u8;
     }
     // SAFETY: an extern_weak static reads as the symbol's address, or null.
     unsafe { main as u64 }
+}
+
+// Unit tests run on worker threads with no executable entry beneath them.
+// Rust synthesizes the test harness's main in this crate; redeclaring that
+// entry as weak data conflicts with its generated function during LTO.
+#[cfg(test)]
+pub(super) fn executable_main() -> u64 {
+    0
 }
 
 /// The `Error` capture: walk outward from `origin` — the register context a

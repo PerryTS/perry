@@ -265,6 +265,7 @@ pub(crate) mod shape_carriers;
 // `#[cfg(any(test, feature = "shape-mint-diag"))]` at the mint funnel (the
 // other hooks are feature-only), so a stock non-test build never
 // reaches it and the linker drops it: the shipped runtime pays nothing.
+mod class_family_birth;
 pub mod layout_desc;
 pub(crate) use shapes::layout_probe;
 #[cfg(test)]

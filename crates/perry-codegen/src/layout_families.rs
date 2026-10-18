@@ -139,6 +139,8 @@ fn variant_slots(
 pub struct ProgramLayouts {
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
+    /// Classes not admitted, counted once each by the first failed proof.
+    pub refused: BTreeMap<String, u32>,
     pub digest: u64,
     /// Keys over all family layouts, and the slots they occupy.
     pub key_total: u32,
@@ -180,7 +182,7 @@ impl ProgramLayouts {
 
     /// One line for `PERRY_LAYOUT_REPORT`.
     pub fn report(&self) -> String {
-        format!(
+        let admitted = format!(
             "perry: layout families {} (keys {}, slots {}, late {}, variants {} with {} slots); key colouring: {} layouts, {} keys read, {} coloured; family keys at their colour {}/{}",
             self.families.len(),
             self.key_total,
@@ -193,6 +195,15 @@ impl ProgramLayouts {
             self.colored.len(),
             self.coloured_placed,
             self.coloured_family_keys
+        );
+        format!(
+            "{admitted}; refused {}: {}",
+            self.refused.values().sum::<u32>(),
+            self.refused
+                .iter()
+                .map(|(why, n)| format!("{why}={n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     }
 }
@@ -719,103 +730,40 @@ fn param_keys(class: &Class) -> Vec<(u32, String)> {
     out
 }
 
-/// The module's classes that are static families.
-fn module_families(hir: &HirModule) -> Vec<RawFamily> {
-    let mut by_name: HashMap<&str, Vec<&Class>> = HashMap::new();
-    for c in &hir.classes {
-        by_name.entry(c.name.as_str()).or_default().push(c);
-    }
-    let bindings = class_bindings(hir);
-    // A heritage named `EventEmitter` that no class of the module declares
-    // is node's (`super(opts)` lowers to its `init`,
-    // `expr::lower_event_emitter_subclass_init`): an opaque parent at its
-    // reserved runtime class id, whose `init` adds its state keys before the
-    // constructor's own. They lead the layout as holes like every key; the
-    // runtime's adds fill them in order, and anything else they do joins the
-    // overflow (correct, only slower).
-    let native_parent = |c: &Class| -> Option<(u32, &'static [&'static str])> {
-        let n = c.extends_name.as_deref()?;
-        if !node_event_emitter_heritage(c) || by_name.contains_key(n) {
-            return None;
-        }
-        let id = crate::expr::builtin_parent_reserved_class_id(n)?;
-        Some((id, &crate::expr::EVENT_EMITTER_INIT_KEYS[..]))
-    };
-    let parent_of = |c: &Class| -> Result<Option<&Class>, ()> {
-        if native_parent(c).is_some() {
-            return Ok(None);
-        }
-        let name = if let Some(n) = c.extends_name.as_deref() {
-            Some(n.to_string())
-        } else if let Some(e) = c.extends_expr.as_deref() {
-            match e {
-                Expr::LocalGet(id) => Some(bindings.get(id).cloned().ok_or(())?),
-                Expr::ClassRef(n) => Some(n.clone()),
-                _ => return Err(()),
-            }
-        } else {
-            None
-        };
-        match name {
-            None => Ok(None),
-            Some(n) => match by_name.get(n.as_str()) {
-                Some(v) if v.len() == 1 => Ok(Some(v[0])),
-                _ => Err(()),
-            },
+mod parents;
+
+/// Every class chain is resolved over the whole program, with the owning
+/// module retained at every step (local ids and names are module scoped).
+fn program_families(
+    modules: &[(&str, &HirModule)],
+    reexports: &BTreeMap<(String, String), String>,
+    refused: &mut BTreeMap<String, u32>,
+) -> Vec<RawFamily> {
+    let graph = parents::Parents::new(modules, reexports);
+    let mut refuse = |c: &Class, why: &str| {
+        *refused.entry(why.to_string()).or_default() += 1;
+        if explain() {
+            eprintln!("perry: layout family refused: {}: {why}", c.name);
         }
     };
     let accessor = |c: &Class, k: &str| {
         c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k)
     };
     let mut out = Vec::new();
-    'class: for c in &hir.classes {
+    'class: for c in modules.iter().flat_map(|(_, hir)| &hir.classes) {
         // The chain, leaf first.
         let mut chain: Vec<&Class> = vec![c];
         let mut cur = c;
         loop {
-            match parent_of(cur) {
-                Err(()) => {
-                    if explain() {
-                        let writes = std::cell::RefCell::new(Vec::<String>::new());
-                        if let Some(Expr::LocalGet(want)) = cur.extends_expr.as_deref() {
-                            for body in module_bodies(hir) {
-                                visit_stmts(
-                                    body,
-                                    &mut |s| {
-                                        if let Stmt::Let { id, init, .. } = s {
-                                            if id == want {
-                                                writes.borrow_mut().push(format!(
-                                                    "let {:.160}",
-                                                    format!("{init:?}")
-                                                ));
-                                            }
-                                        }
-                                    },
-                                    &mut |e| {
-                                        if let Expr::LocalSet(id, v) = e {
-                                            if id == want {
-                                                writes
-                                                    .borrow_mut()
-                                                    .push(format!("set {:.160}", format!("{v:?}")));
-                                            }
-                                        }
-                                    },
-                                );
-                            }
-                        }
-                        eprintln!(
-                            "perry: layout family refused: {}: unresolved parent {:?} {:.300} writes {:?}",
-                            c.name,
-                            cur.extends_name,
-                            format!("{:?}", cur.extends_expr),
-                            writes.borrow()
-                        );
-                    }
+            match graph.parent(cur) {
+                Err(why) => {
+                    refuse(c, why);
                     continue 'class;
                 }
                 Ok(None) => break,
                 Ok(Some(p)) => {
                     if chain.len() > 32 || chain.iter().any(|x| std::ptr::eq(*x, p)) {
+                        refuse(c, "inheritance-cycle-or-depth");
                         continue 'class;
                     }
                     chain.push(p);
@@ -826,7 +774,7 @@ fn module_families(hir: &HirModule) -> Vec<RawFamily> {
         let mut keys: Vec<String> = Vec::new();
         // The chain's root may extend an opaque native parent, whose
         // constructor runs code and adds its keys first.
-        let native = native_parent(chain[chain.len() - 1]);
+        let native = graph.native(chain[chain.len() - 1]);
         // Evaluation order: every `super(...)`'s arguments (leaf first), then
         // the constructor bodies from the root. The initialization is open
         // while nothing that may run code has been evaluated since the birth.
@@ -841,12 +789,7 @@ fn module_families(hir: &HirModule) -> Vec<RawFamily> {
             let own = match own_keys(k, depth + 1 < chain.len() || native.is_some()) {
                 Ok(own) => own,
                 Err(why) => {
-                    if explain() {
-                        eprintln!(
-                            "perry: layout family refused: {} ({}): {why}",
-                            c.name, k.name
-                        );
-                    }
+                    refuse(c, &format!("constructor-{why}"));
                     continue 'class;
                 }
             };
@@ -865,7 +808,12 @@ fn module_families(hir: &HirModule) -> Vec<RawFamily> {
                 }
             }
         }
-        if keys.is_empty() || keys.iter().any(|k| chain.iter().any(|x| accessor(x, k))) {
+        if keys.is_empty() {
+            refuse(c, "no-keys");
+            continue;
+        }
+        if keys.iter().any(|k| chain.iter().any(|x| accessor(x, k))) {
+            refuse(c, "accessor-key");
             continue;
         }
         let parent = chain
@@ -1248,16 +1196,17 @@ fn layouts_of(
 
 /// The program's families and colouring over every module's final HIR.
 pub fn compute<'a>(
-    modules: impl IntoIterator<Item = &'a HirModule>,
+    modules: impl IntoIterator<Item = (&'a str, &'a HirModule)>,
     families: bool,
+    reexports: &BTreeMap<(String, String), String>,
 ) -> ProgramLayouts {
-    let modules: Vec<&HirModule> = modules.into_iter().collect();
+    let program: Vec<(&str, &HirModule)> = modules.into_iter().collect();
+    let modules: Vec<&HirModule> = program.iter().map(|(_, m)| *m).collect();
     let colours = colouring(&modules);
+    let mut refused = BTreeMap::new();
     let mut fams: Vec<RawFamily> = Vec::new();
     if families && !families_disabled() {
-        for hir in &modules {
-            fams.extend(module_families(hir));
-        }
+        fams = program_families(&program, reexports, &mut refused);
     }
     let owns: Vec<usize> = fams.iter().map(|f| f.keys.len()).collect();
     let late = if fams.is_empty() || late_budget() == 0 {
@@ -1293,6 +1242,7 @@ pub fn compute<'a>(
         }
     }
     layouts.late_total = late as u32;
+    layouts.refused = refused;
     if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
         eprintln!("{}", layouts.report());
     }

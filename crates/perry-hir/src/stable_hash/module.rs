@@ -11,6 +11,7 @@ impl SH for Module {
     fn hash<H: StableHasher>(&self, h: &mut H) {
         let Module {
             name,
+            class_family_syntax,
             imports,
             exports,
             classes,
@@ -49,6 +50,24 @@ impl SH for Module {
             requested_modules,
         } = self;
         name.hash(h);
+        match class_family_syntax {
+            None => tag(h, 0),
+            Some(syntax) => {
+                tag(h, 1);
+                (syntax.parents.len() as u64).hash(h);
+                for (class, (source, export)) in &syntax.parents {
+                    class.hash(h);
+                    source.hash(h);
+                    export.hash(h);
+                }
+                (syntax.exports.len() as u64).hash(h);
+                for (export, class) in &syntax.exports {
+                    export.hash(h);
+                    class.hash(h);
+                }
+                syntax.writes.hash(h);
+            }
+        }
         imports.hash(h);
         exports.hash(h);
         requested_modules.hash(h);
@@ -247,5 +266,46 @@ impl SH for Export {
                 name.hash(h);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod family_syntax_tests {
+    use super::*;
+
+    #[test]
+    fn class_family_syntax_affects_module_hash() {
+        let mut module = Module::new("family-origin");
+        let original = crate::stable_hash::hash_module(&module);
+        module.class_family_syntax = Some(ClassFamilySyntax::default());
+        let empty = crate::stable_hash::hash_module(&module);
+        assert_ne!(empty, original);
+        module
+            .class_family_syntax
+            .as_mut()
+            .unwrap()
+            .parents
+            .insert("Child".into(), ("./parent".into(), "Base".into()));
+        let parent = crate::stable_hash::hash_module(&module);
+        assert_ne!(parent, empty);
+        module
+            .class_family_syntax
+            .as_mut()
+            .unwrap()
+            .exports
+            .insert("Base".into(), "Local".into());
+        let exported = crate::stable_hash::hash_module(&module);
+        assert_ne!(exported, parent);
+        module
+            .class_family_syntax
+            .as_mut()
+            .unwrap()
+            .writes
+            .push((None, "Base".into()));
+        assert_ne!(crate::stable_hash::hash_module(&module), exported);
+        assert_eq!(
+            crate::stable_hash::hash_module(&module),
+            crate::stable_hash::hash_module(&module.clone())
+        );
     }
 }

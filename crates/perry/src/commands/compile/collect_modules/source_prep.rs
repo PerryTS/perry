@@ -202,6 +202,7 @@ pub(super) struct PrepClass {
 /// applies and the diagnostics it prints.
 #[derive(Clone)]
 pub(super) struct PreparedSource {
+    pub(super) class_family_syntax: Option<perry_hir::ir::ClassFamilySyntax>,
     pub(super) source: String,
     pub(super) was_cjs_wrapped: bool,
     /// Recoverable parse warnings from the CommonJS wrap, printed by the walk.
@@ -276,6 +277,7 @@ pub(super) fn prepare_from_raw(
     // path. A file that already has top-level `import`/`export` is not
     // CommonJS (`is_commonjs` returns false) and is left untouched.
     let was_cjs_wrapped = class.wrap_eligible && is_commonjs(&raw_source);
+    let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();
     let mut wrap_dump = None;
@@ -363,6 +365,7 @@ pub(super) fn prepare_from_raw(
         _ => None,
     };
     Ok(PreparedSource {
+        class_family_syntax,
         source,
         was_cjs_wrapped,
         messages,

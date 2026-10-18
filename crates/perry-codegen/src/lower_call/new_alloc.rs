@@ -533,6 +533,24 @@ fn emit_instance_alloc_inner(
         );
         return ctx.block().ptrtoint(&raw, I64);
     }
+    // Imported heritage can have a proven family while its parent identity
+    // is available only after evaluation. Let the runtime compare the class
+    // declaration and live parent before choosing the family birth.
+    if ctx.program_layouts.families.contains_key(&cid)
+        && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+    {
+        let desc = crate::layout_desc::note_family_desc_use(cid);
+        let raw = ctx.block().call(
+            crate::types::PTR,
+            "perry_alloc_class_family",
+            &[
+                (crate::types::PTR, &desc),
+                (I32, &parent_cid_str),
+                (I32, &n_str),
+            ],
+        );
+        return ctx.block().ptrtoint(&raw, I64);
+    }
     if class.extends_expr.is_some()
         || (deferred_keys && !ctx.class_header_image_globals.contains_key(class_name))
     {

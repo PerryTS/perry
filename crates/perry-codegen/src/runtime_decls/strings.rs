@@ -1242,6 +1242,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I64, I32, PTR, I32, I32, I32, I32, I64, PTR, I32],
     );
     module.declare_function("perry_alloc_layout", PTR, &[PTR]);
+    module.declare_function("perry_alloc_class_family", PTR, &[PTR, I32, I32]);
     module.declare_function("perry_create_family", DOUBLE, &[PTR, DOUBLE]);
     module.declare_function(
         "perry_bind_family_prototype",
