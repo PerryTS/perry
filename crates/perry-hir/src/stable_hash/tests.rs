@@ -336,7 +336,7 @@ fn module_metadata_affects_hash() {
         name: "E".to_string(),
         members: vec![EnumMember {
             name: "A".to_string(),
-            value: EnumValue::Number(0),
+            value: EnumValue::Number(0.0),
         }],
         is_exported: false,
     });
@@ -472,4 +472,23 @@ fn partial_worker_resolution_changes_the_cache_key() {
         *partial = true;
     }
     assert_ne!(hash_module(&complete), hash_module(&incomplete));
+}
+
+#[test]
+fn enum_numbers_hash_fractional_and_signed_zero_values() {
+    let mut module = Module::new("enum.ts".to_string());
+    module.enums.push(Enum {
+        id: 0,
+        name: "E".to_string(),
+        is_exported: false,
+        members: vec![EnumMember {
+            name: "A".to_string(),
+            value: EnumValue::Number(0.0),
+        }],
+    });
+    let zero = hash_module(&module);
+    module.enums[0].members[0].value = EnumValue::Number(-0.0);
+    assert_ne!(zero, hash_module(&module));
+    module.enums[0].members[0].value = EnumValue::Number(0.5);
+    assert_ne!(zero, hash_module(&module));
 }

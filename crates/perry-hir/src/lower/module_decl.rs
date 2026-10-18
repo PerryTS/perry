@@ -1,14 +1,11 @@
 //! AST to HIR module-declaration lowering, with topical helpers split into
 //! sibling modules.
-
+use super::*;
+use crate::ir::*;
 use crate::types::{LocalId, Type};
 use anyhow::Result;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
-
-use super::*;
-use crate::ir::*;
-
 mod default_export_binding;
 mod namespace;
 pub(super) mod native_default_import;
@@ -330,7 +327,7 @@ pub(crate) fn lower_module_decl(
                                         .into_iter()
                                         .map(|member| EnumMember {
                                             name: member.name.to_string(),
-                                            value: EnumValue::Number(member.value),
+                                            value: EnumValue::Number(member.value as f64),
                                         })
                                         .collect();
                                     let member_values = members
@@ -1385,7 +1382,7 @@ pub(crate) fn lower_module_decl(
                     let enum_name = en.name.clone();
                     if !enum_decl.declare {
                         if let Some((_, bind)) =
-                            crate::lower_decl::enum_value_binding(ctx, &enum_name, true, &en.members)
+                            crate::lower_decl::enum_value_binding(ctx, &enum_name, true, &en.members, enum_decl)?
                         {
                             module.init.push(bind);
                         }

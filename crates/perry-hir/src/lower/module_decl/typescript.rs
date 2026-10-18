@@ -33,7 +33,7 @@ pub(super) fn register_runtime_enum(
         .iter()
         .map(|(name, value)| EnumMember {
             name: (*name).to_string(),
-            value: EnumValue::Number(*value),
+            value: EnumValue::Number(*value as f64),
         })
         .collect();
     ctx.define_enum(

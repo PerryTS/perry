@@ -1124,7 +1124,7 @@ fn lower_stmt_inner(
                     let en = lower_enum_decl(ctx, enum_decl, false)?;
                     if !enum_decl.declare {
                         if let Some((_, bind)) =
-                            crate::lower_decl::enum_value_binding(ctx, &en.name, true, &en.members)
+                            crate::lower_decl::enum_value_binding(ctx, &en.name, true, &en.members, enum_decl)?
                         {
                             module.init.push(bind);
                         }

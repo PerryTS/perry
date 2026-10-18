@@ -938,7 +938,15 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             // enum object, such as one a merged namespace stores.
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let member_name = prop_ident.sym.to_string();
-                if members.iter().any(|(name, _)| *name == member_name) {
+                if let Some((_, value)) = members.iter().find(|(name, _)| *name == member_name) {
+                    if matches!(value, crate::ir::EnumValue::Computed) {
+                        if let Some(id) = ctx.lookup_local(&obj_name) {
+                            return Ok(Expr::IndexGet {
+                                object: Box::new(Expr::LocalGet(id)),
+                                index: Box::new(Expr::String(member_name)),
+                            });
+                        }
+                    }
                     return Ok(Expr::EnumMember {
                         enum_name: obj_name,
                         member_name,
@@ -980,8 +988,19 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 .map(|(_, m)| m.to_vec());
             if let Some(members) = members {
                 let index = lower_expr(ctx, &computed.expr)?;
+                let object =
+                    if members
+                        .iter()
+                        .any(|(_, v)| matches!(v, crate::ir::EnumValue::Computed))
+                    {
+                        Expr::LocalGet(ctx.lookup_local(obj_ident.sym.as_ref()).ok_or_else(
+                            || anyhow::anyhow!("computed enum has no runtime binding"),
+                        )?)
+                    } else {
+                        crate::lower_decl::enum_runtime_object(&members)
+                    };
                 return Ok(Expr::IndexGet {
-                    object: Box::new(crate::lower_decl::enum_runtime_object(&members)),
+                    object: Box::new(object),
                     index: Box::new(index),
                 });
             }

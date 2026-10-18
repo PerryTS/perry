@@ -74,7 +74,9 @@ impl HirTypeFacts for CodegenTypeFacts<'_> {
             .enums
             .get(&(enum_name.to_string(), member_name.to_string()))?
         {
-            perry_hir::EnumValue::Number(_) => Some(HirType::Number),
+            perry_hir::EnumValue::Number(_) | perry_hir::EnumValue::Computed => {
+                Some(HirType::Number)
+            }
             perry_hir::EnumValue::String(_) => Some(HirType::String),
         }
     }

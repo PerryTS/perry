@@ -580,7 +580,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             },
             EnumMember {
                 name: "Blue".to_string(),
-                value: EnumValue::Number(2),
+                value: EnumValue::Number(2.0),
             },
         ],
         is_exported: false,

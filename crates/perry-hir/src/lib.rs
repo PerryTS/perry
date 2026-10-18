@@ -26,6 +26,8 @@ pub(crate) mod lower_patterns;
 pub(crate) mod lower_types;
 pub mod monomorph;
 pub mod native_profile;
+mod number;
+pub use number::js_number_to_string;
 pub mod patched_builtins;
 pub mod solid_jsx;
 pub mod stable_hash;

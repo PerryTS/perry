@@ -289,8 +289,9 @@ fn lower_enum_image(
     strict: bool,
 ) -> anyhow::Result<String> {
     let value_expr = |value: &perry_hir::EnumValue| match value {
-        perry_hir::EnumValue::Number(n) => Expr::Number(*n as f64),
+        perry_hir::EnumValue::Number(n) => Expr::Number(*n),
         perry_hir::EnumValue::String(s) => Expr::String(s.clone()),
+        perry_hir::EnumValue::Computed => unreachable!("enum images contain constants"),
     };
     let mut order: Vec<&str> = Vec::new();
     let mut last: HashMap<&str, &perry_hir::EnumValue> = HashMap::new();

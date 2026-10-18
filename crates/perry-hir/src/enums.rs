@@ -159,6 +159,7 @@ pub(crate) fn fix_imported_enums_in_expr(
                         // For string enums, inline the string value directly
                         // so it's recognized by is_string_expr throughout codegen
                         match value {
+                            EnumValue::Computed => {}
                             EnumValue::String(s) => {
                                 *expr = Expr::String(s.clone());
                             }
@@ -294,7 +295,7 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(
             "Color".to_string(),
-            vec![("Red".to_string(), EnumValue::Number(2))],
+            vec![("Red".to_string(), EnumValue::Number(2.0))],
         );
         let mut got = Expr::StringCoerce(Box::new(imported_member("Color", "Red")));
         fix_imported_enums_in_expr(&mut got, &enums);

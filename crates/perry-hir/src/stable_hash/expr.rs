@@ -105,6 +105,7 @@ impl SH for Expr {
                     match value {
                         crate::ir::EnumValue::Number(n) => { 0u8.hash(h); n.hash(h); }
                         crate::ir::EnumValue::String(s) => { 1u8.hash(h); s.hash(h); }
+                        crate::ir::EnumValue::Computed => { 2u8.hash(h); }
                     }
                 }
             }

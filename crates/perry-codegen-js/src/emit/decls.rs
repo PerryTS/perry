@@ -3,6 +3,13 @@ use std::fmt::Write as FmtWrite;
 
 impl JsEmitter {
     pub(super) fn emit_enum(&mut self, en: &Enum) {
+        if en
+            .members
+            .iter()
+            .any(|m| matches!(m.value, EnumValue::Computed))
+        {
+            return;
+        }
         self.write_indent();
         let _ = write!(self.output, "const {} = Object.freeze({{", en.name);
         for (i, member) in en.members.iter().enumerate() {
@@ -10,8 +17,10 @@ impl JsEmitter {
                 self.output.push_str(", ");
             }
             match &member.value {
+                EnumValue::Computed => unreachable!(),
                 EnumValue::Number(n) => {
-                    let _ = write!(self.output, "{}: {}", member.name, n);
+                    let _ = write!(self.output, "{}: ", member.name);
+                    self.emit_expr(&Expr::Number(if *n == 0.0 { 0.0 } else { *n }));
                 }
                 EnumValue::String(s) => {
                     let _ = write!(self.output, "{}: {}", member.name, self.quote_string(s));

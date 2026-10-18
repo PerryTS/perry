@@ -23,7 +23,7 @@ fn esbuild_form_admits_number_string_and_reverse_stores() {
     assert!(!plan.assigns);
     assert_eq!(keys(&plan), ["A", "0", "N", "-1", "S"]);
     assert!(matches!(plan.stores[1].1, EnumValue::String(ref s) if s == "A"));
-    assert!(matches!(plan.stores[2].1, EnumValue::Number(-1)));
+    assert!(matches!(plan.stores[2].1, EnumValue::Number(-1.0)));
 }
 
 #[test]
@@ -69,10 +69,6 @@ fn loops_eval_and_non_constant_bodies_refuse() {
         ),
         (
             r#"var C = ((C2) => { C2[C2["X"] = f()] = "X"; return C2; })(C || {});"#,
-            "value",
-        ),
-        (
-            r#"var H = ((H2) => { H2[H2["X"] = 0.5] = "X"; return H2; })(H || {});"#,
             "value",
         ),
         (
@@ -134,4 +130,18 @@ fn let_and_an_outer_tsc_var_refuse() {
     );
     assert!(out.sites.is_empty(), "{:?}", out.refused);
     assert_eq!(out.refused.get("not_fresh").copied(), Some(1));
+}
+
+#[test]
+fn enum_image_keeps_fractional_large_and_negative_zero_values() {
+    let plan = only_plan(
+        r#"var E = ((P) => { P[P["A"] = 1.5] = "A"; P[P["B"] = -0.25] = "B"; P[P["Z"] = -0] = "Z"; P[P["L"] = 1e21] = "L"; P[P["S"] = 1e-7] = "S"; return P; })(E || {});"#,
+    );
+    assert_eq!(
+        keys(&plan),
+        ["A", "1.5", "B", "-0.25", "Z", "0", "L", "1e+21", "S", "1e-7"]
+    );
+    assert!(
+        matches!(plan.stores[4].1, EnumValue::Number(n) if n.to_bits() == (-0.0_f64).to_bits())
+    );
 }

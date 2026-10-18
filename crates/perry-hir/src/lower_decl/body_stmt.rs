@@ -2393,7 +2393,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let members = compute_enum_members(enum_decl, ctx);
             if let Some((_, existing)) = ctx.lookup_enum(&name) {
                 let same_value = |a: &EnumValue, b: &EnumValue| match (a, b) {
-                    (EnumValue::Number(x), EnumValue::Number(y)) => x == y,
+                    (EnumValue::Number(x), EnumValue::Number(y)) => x.to_bits() == y.to_bits(),
                     (EnumValue::String(x), EnumValue::String(y)) => x == y,
                     _ => false,
                 };
@@ -2418,7 +2418,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     &lowered.name,
                     false,
                     &lowered.members,
-                ) {
+                    enum_decl,
+                )? {
                     result.push(bind);
                 }
             }

@@ -27,6 +27,7 @@ anyhow.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 stacker.workspace = true
+ryu-js = "1.0.3"
 
 [dev-dependencies]
 swc_ecma_codegen.workspace = true

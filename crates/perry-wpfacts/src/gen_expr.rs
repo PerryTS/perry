@@ -750,7 +750,9 @@ impl<'a> Gen<'a> {
                 let obj = self.tok_node(t);
                 for (k, v) in stores {
                     let vn = self.prim_node(match v {
-                        perry_hir::EnumValue::Number(_) => prim::NUM,
+                        perry_hir::EnumValue::Number(_) | perry_hir::EnumValue::Computed => {
+                            prim::NUM
+                        }
                         perry_hir::EnumValue::String(_) => prim::STR,
                     });
                     let a = self.m.atom(k);

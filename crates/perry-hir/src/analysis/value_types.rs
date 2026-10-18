@@ -1437,7 +1437,7 @@ fn named_type_base(ty: &Type) -> Option<&str> {
 
 fn enum_member_value_type(value: &EnumValue) -> Type {
     match value {
-        EnumValue::Number(_) => Type::Number,
+        EnumValue::Number(_) | EnumValue::Computed => Type::Number,
         EnumValue::String(_) => Type::String,
     }
 }

@@ -130,27 +130,7 @@ fn json_string_literal(s: &str) -> String {
     out
 }
 
-/// Render an `f64` the way JavaScript's `Number::toString` (radix 10) would,
-/// for the small primitive subset Test262 hands to `new Function`. Exactness
-/// only matters when the number lands in a *parameter* slot (where it is an
-/// invalid identifier anyway, so the synth fails to parse and both runtimes
-/// reject); in a *body* slot the literal statement is never executed by these
-/// tests.
-pub(crate) fn js_number_to_string(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".to_string();
-    }
-    if n.is_infinite() {
-        return if n > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    if n == 0.0 {
-        return "0".to_string();
-    }
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        return format!("{}", n as i64);
-    }
-    format!("{}", n)
-}
+pub(crate) use crate::js_number_to_string;
 
 /// Coerce a `new Function` / `Function` argument that is a compile-time
 /// constant *value* to the string Node's `ToString` would produce. Extends

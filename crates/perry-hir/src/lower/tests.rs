@@ -513,9 +513,9 @@ fn test_lower_enum_registration_and_member_lookup() {
         "Color".to_string(),
         enum_id,
         vec![
-            ("Red".to_string(), EnumValue::Number(0)),
-            ("Green".to_string(), EnumValue::Number(1)),
-            ("Blue".to_string(), EnumValue::Number(2)),
+            ("Red".to_string(), EnumValue::Number(0.0)),
+            ("Green".to_string(), EnumValue::Number(1.0)),
+            ("Blue".to_string(), EnumValue::Number(2.0)),
         ],
     );
 
@@ -525,7 +525,7 @@ fn test_lower_enum_registration_and_member_lookup() {
 
     assert!(matches!(
         ctx.lookup_enum_member("Color", "Red"),
-        Some(EnumValue::Number(0))
+        Some(EnumValue::Number(0.0))
     ));
     assert!(ctx.lookup_enum_member("Color", "Yellow").is_none());
     assert!(ctx.lookup_enum("Missing").is_none());

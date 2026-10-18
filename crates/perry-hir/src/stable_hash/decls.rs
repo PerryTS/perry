@@ -210,6 +210,7 @@ impl SH for EnumValue {
                 tag(h, 1);
                 s.hash(h);
             }
+            EnumValue::Computed => tag(h, 2),
         }
     }
 }

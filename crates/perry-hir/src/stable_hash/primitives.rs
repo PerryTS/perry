@@ -55,10 +55,8 @@ impl SH for f64 {
         // sources don't accidentally diverge on bit-payload alone.
         let bits = if self.is_nan() {
             f64::NAN.to_bits()
-        } else if *self == 0.0 {
-            // Treat +0.0 and -0.0 as equal (matches JS ===).
-            0u64
         } else {
+            // Object.is and reciprocal arithmetic distinguish -0 from +0.
             self.to_bits()
         };
         h.write(&bits.to_le_bytes());

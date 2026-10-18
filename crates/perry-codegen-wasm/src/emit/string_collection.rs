@@ -284,10 +284,11 @@ impl WasmModuleEmitter {
                             EnumResolvedValue::String(s.clone()),
                         );
                     }
+                    EnumValue::Computed => {}
                     EnumValue::Number(n) => {
                         self.enum_values.insert(
                             (enum_def.name.clone(), member.name.clone()),
-                            EnumResolvedValue::Number(*n as f64),
+                            EnumResolvedValue::Number(if *n == 0.0 { 0.0 } else { *n }),
                         );
                     }
                 }

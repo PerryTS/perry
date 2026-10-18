@@ -466,7 +466,7 @@ fn enum_stores(param: &str, body: &[ast::Stmt]) -> Result<Vec<(String, EnumValue
                         }
                         let key = static_key(member_of(&inner.left, param).ok_or("body")?)
                             .ok_or("body")?;
-                        let n = integer(&inner.right).ok_or("value")?;
+                        let n = number(&inner.right).ok_or("value")?;
                         match strip_parens(&outer.right) {
                             ast::Expr::Lit(ast::Lit::Str(s))
                                 if s.value.as_str() == Some(key.as_str()) => {}
@@ -476,7 +476,7 @@ fn enum_stores(param: &str, body: &[ast::Stmt]) -> Result<Vec<(String, EnumValue
                             return Err("proto_key");
                         }
                         stores.push((key.clone(), EnumValue::Number(n)));
-                        stores.push((n.to_string(), EnumValue::String(key)));
+                        stores.push((crate::js_number_to_string(n), EnumValue::String(key)));
                         continue;
                     }
                 }
@@ -489,7 +489,7 @@ fn enum_stores(param: &str, body: &[ast::Stmt]) -> Result<Vec<(String, EnumValue
                     ast::Expr::Lit(ast::Lit::Str(s)) => {
                         EnumValue::String(s.value.as_str().ok_or("value")?.to_string())
                     }
-                    other => EnumValue::Number(integer(other).ok_or("value")?),
+                    other => EnumValue::Number(number(other).ok_or("value")?),
                 };
                 stores.push((key, value));
             }
@@ -502,34 +502,26 @@ fn enum_stores(param: &str, body: &[ast::Stmt]) -> Result<Vec<(String, EnumValue
     Ok(stores)
 }
 
-/// A constant property key: `["k"]`, `.k`, or an integer `[n]`.
+/// A constant property key: `["k"]`, `.k`, or a numeric `[n]`.
 fn static_key(prop: &ast::MemberProp) -> Option<String> {
     match prop {
         ast::MemberProp::Ident(id) => Some(id.sym.to_string()),
         ast::MemberProp::Computed(c) => match strip_parens(&c.expr) {
             ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(str::to_string),
-            other => integer(other).map(|n| n.to_string()),
+            other => number(other).map(|n| crate::js_number_to_string(n)),
         },
         ast::MemberProp::PrivateName(_) => None,
     }
 }
 
-/// An integer literal, optionally negated, whose decimal spelling is its
-/// JS `ToString` (|n| ≤ 2^53; `-0` is `0`).
-fn integer(expr: &ast::Expr) -> Option<i64> {
-    let (negative, lit) = match strip_parens(expr) {
-        ast::Expr::Unary(u) if u.op == ast::UnaryOp::Minus => (true, strip_parens(&u.arg)),
-        other => (false, other),
-    };
-    let ast::Expr::Lit(ast::Lit::Num(n)) = lit else {
-        return None;
-    };
-    let v = n.value;
-    if !v.is_finite() || v.fract() != 0.0 || v.abs() > 9_007_199_254_740_992.0 {
-        return None;
+/// A number literal, optionally signed. Keep its exact IEEE-754 value.
+fn number(expr: &ast::Expr) -> Option<f64> {
+    match strip_parens(expr) {
+        ast::Expr::Lit(ast::Lit::Num(n)) => Some(n.value),
+        ast::Expr::Unary(u) if u.op == ast::UnaryOp::Minus => Some(-number(&u.arg)?),
+        ast::Expr::Unary(u) if u.op == ast::UnaryOp::Plus => number(&u.arg),
+        _ => None,
     }
-    let v = v as i64;
-    Some(if negative { -v } else { v })
 }
 
 /// The argument's object name and whether it assigns: `E || {}` (false) or
@@ -578,7 +570,7 @@ pub(crate) fn lower_enum_image(
     let mut at: HashMap<&str, usize> = HashMap::new();
     for (key, value) in &plan.stores {
         let ty = match value {
-            EnumValue::Number(_) => Type::Number,
+            EnumValue::Number(_) | EnumValue::Computed => Type::Number,
             EnumValue::String(_) => Type::String,
         };
         match at.get(key.as_str()) {

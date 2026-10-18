@@ -633,7 +633,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             })?;
             match val {
-                perry_hir::EnumValue::Number(n) => Ok(double_literal(*n as f64)),
+                perry_hir::EnumValue::Number(n) => {
+                    Ok(double_literal(if *n == 0.0 { 0.0 } else { *n }))
+                }
+                perry_hir::EnumValue::Computed => {
+                    anyhow::bail!("computed enum member must read its runtime binding")
+                }
                 perry_hir::EnumValue::String(s) => {
                     // Intern the string and load the handle global at the
                     // use site, just like a regular string literal.

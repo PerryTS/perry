@@ -5322,6 +5322,7 @@ dependencies = [
  "perry-dispatch",
  "perry-parser",
  "perry-ui-model",
+ "ryu-js",
  "serde",
  "serde_json",
  "stacker",

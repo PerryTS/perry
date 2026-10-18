@@ -25,9 +25,11 @@ pub struct EnumMember {
 #[derive(Debug, Clone)]
 pub enum EnumValue {
     /// Numeric value (auto-incremented or explicit)
-    Number(i64),
+    Number(f64),
     /// String value
     String(String),
+    /// Computed at the declaration site; reads use the enum runtime object.
+    Computed,
 }
 
 /// An interface definition

@@ -494,9 +494,9 @@ fn lower_namespace_block(
                         if enum_decl.declare {
                             continue;
                         }
-                        if let Some((id, bind)) =
-                            crate::lower_decl::enum_value_binding(ctx, &name, true, &own)
-                        {
+                        if let Some((id, bind)) = crate::lower_decl::enum_value_binding(
+                            ctx, &name, true, &own, enum_decl,
+                        )? {
                             module.init.push(bind);
                             publish(module, name, Expr::LocalGet(id));
                         }
