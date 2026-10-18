@@ -28,8 +28,10 @@ fn namespace_declared_callee_survives_mutation_and_uses_a_spill_guard() {
     let ir = String::from_utf8(compile_module(&module, options).unwrap()).unwrap();
     for key in ["level", "enabled", "f"] {
         let spelling: String = key.bytes().map(|b| format!("{b:02x}")).collect();
-        assert!(ir.contains(&format!("@perry_atom_{spelling} =")),
-            "seeded namespace key {key} needs its startup image atom");
+        assert!(
+            ir.contains(&format!("@perry_atom_{spelling} =")),
+            "seeded namespace key {key} needs its startup image atom"
+        );
     }
     for block in [
         "completed.layout",

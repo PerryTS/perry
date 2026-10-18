@@ -594,12 +594,19 @@ pub(crate) fn module_final_seeds() -> Vec<(BirthShape, u32)> {
 /// descriptor. Its keys still need the same image atoms as later property sites.
 pub(crate) fn module_seed_keys() -> Vec<String> {
     MODULE_SEEDS.with(|seeds| {
-        seeds.borrow().values()
-            .flat_map(|shape| shape.keys.split(|byte| *byte == 0)
-                .take(shape.key_count as usize)
-                .map(|key| String::from_utf8(key.to_vec()).expect("source key UTF-8")))
+        seeds
+            .borrow()
+            .values()
+            .flat_map(|shape| {
+                shape
+                    .keys
+                    .split(|byte| *byte == 0)
+                    .take(shape.key_count as usize)
+                    .map(|key| String::from_utf8(key.to_vec()).expect("source key UTF-8"))
+            })
             .collect::<std::collections::BTreeSet<_>>()
-            .into_iter().collect()
+            .into_iter()
+            .collect()
     })
 }
 
