@@ -1,0 +1,1 @@
+Regenerate the wasm32 runtime ABI table from current runtime exports after the object-layout migration. Remove retired entry points and update signatures, pointer-width slots, and native-operation exports so adapters use the implemented ABI.
