@@ -6,14 +6,14 @@
 use anyhow::{anyhow, Result};
 use perry_hir::types::Type;
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// Client for communicating with tsgo's IPC API
 pub struct TsGoClient {
     process: Child,
-    next_seq: u32,
+    snapshot: Option<u64>,
+    project: Option<String>,
 }
 
 /// Type information returned by tsgo
@@ -25,417 +25,128 @@ pub struct TypeInfo {
     pub type_string: String,
 }
 
-/// msgpack encoding helpers (minimal, no external dependency)
-mod msgpack {
+mod wire;
+use wire::ApiError;
 
-    /// Encode a msgpack array header with count elements
-    pub fn encode_array_header(buf: &mut Vec<u8>, count: u32) {
-        if count <= 15 {
-            buf.push(0x90 | count as u8);
-        } else if count <= 0xFFFF {
-            buf.push(0xdc);
-            buf.extend_from_slice(&(count as u16).to_be_bytes());
-        } else {
-            buf.push(0xdd);
-            buf.extend_from_slice(&count.to_be_bytes());
-        }
-    }
-
-    /// Encode a msgpack string
-    pub fn encode_str(buf: &mut Vec<u8>, s: &str) {
-        let bytes = s.as_bytes();
-        let len = bytes.len();
-        if len <= 31 {
-            buf.push(0xa0 | len as u8);
-        } else if len <= 0xFF {
-            buf.push(0xd9);
-            buf.push(len as u8);
-        } else if len <= 0xFFFF {
-            buf.push(0xda);
-            buf.extend_from_slice(&(len as u16).to_be_bytes());
-        } else {
-            buf.push(0xdb);
-            buf.extend_from_slice(&(len as u32).to_be_bytes());
-        }
-        buf.extend_from_slice(bytes);
-    }
-
-    /// Encode a positive integer
-    pub fn encode_uint(buf: &mut Vec<u8>, val: u64) {
-        if val <= 127 {
-            buf.push(val as u8);
-        } else if val <= 0xFF {
-            buf.push(0xcc);
-            buf.push(val as u8);
-        } else if val <= 0xFFFF {
-            buf.push(0xcd);
-            buf.extend_from_slice(&(val as u16).to_be_bytes());
-        } else if val <= 0xFFFFFFFF {
-            buf.push(0xce);
-            buf.extend_from_slice(&(val as u32).to_be_bytes());
-        } else {
-            buf.push(0xcf);
-            buf.extend_from_slice(&val.to_be_bytes());
-        }
-    }
-
-    /// Encode nil
-    // #854: msgpack codec primitive; paired with the encode_*/decode helpers
-    // even though no caller emits nil yet.
-    #[allow(dead_code)]
-    pub fn encode_nil(buf: &mut Vec<u8>) {
-        buf.push(0xc0);
-    }
-
-    /// Decode a msgpack value, returning the parsed JSON-like value and bytes consumed
-    pub fn decode(data: &[u8]) -> Result<(serde_json::Value, usize), String> {
-        if data.is_empty() {
-            return Err("empty data".to_string());
-        }
-        let b = data[0];
-        match b {
-            // nil
-            0xc0 => Ok((serde_json::Value::Null, 1)),
-            // false
-            0xc2 => Ok((serde_json::Value::Bool(false), 1)),
-            // true
-            0xc3 => Ok((serde_json::Value::Bool(true), 1)),
-            // positive fixint (0x00-0x7f)
-            0x00..=0x7f => Ok((serde_json::json!(b as u64), 1)),
-            // negative fixint (0xe0-0xff)
-            0xe0..=0xff => Ok((serde_json::json!(b as i8 as i64), 1)),
-            // uint8
-            0xcc => {
-                if data.len() < 2 {
-                    return Err("truncated uint8".to_string());
-                }
-                Ok((serde_json::json!(data[1] as u64), 2))
-            }
-            // uint16
-            0xcd => {
-                if data.len() < 3 {
-                    return Err("truncated uint16".to_string());
-                }
-                let val = u16::from_be_bytes([data[1], data[2]]);
-                Ok((serde_json::json!(val as u64), 3))
-            }
-            // uint32
-            0xce => {
-                if data.len() < 5 {
-                    return Err("truncated uint32".to_string());
-                }
-                let val = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-                Ok((serde_json::json!(val as u64), 5))
-            }
-            // uint64
-            0xcf => {
-                if data.len() < 9 {
-                    return Err("truncated uint64".to_string());
-                }
-                let val = u64::from_be_bytes(data[1..9].try_into().unwrap());
-                Ok((serde_json::json!(val), 9))
-            }
-            // int8
-            0xd0 => {
-                if data.len() < 2 {
-                    return Err("truncated int8".to_string());
-                }
-                Ok((serde_json::json!(data[1] as i8 as i64), 2))
-            }
-            // int16
-            0xd1 => {
-                if data.len() < 3 {
-                    return Err("truncated int16".to_string());
-                }
-                let val = i16::from_be_bytes([data[1], data[2]]);
-                Ok((serde_json::json!(val as i64), 3))
-            }
-            // int32
-            0xd2 => {
-                if data.len() < 5 {
-                    return Err("truncated int32".to_string());
-                }
-                let val = i32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-                Ok((serde_json::json!(val as i64), 5))
-            }
-            // int64
-            0xd3 => {
-                if data.len() < 9 {
-                    return Err("truncated int64".to_string());
-                }
-                let val = i64::from_be_bytes(data[1..9].try_into().unwrap());
-                Ok((serde_json::json!(val), 9))
-            }
-            // float32
-            0xca => {
-                if data.len() < 5 {
-                    return Err("truncated float32".to_string());
-                }
-                let val = f32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-                Ok((serde_json::json!(val as f64), 5))
-            }
-            // float64
-            0xcb => {
-                if data.len() < 9 {
-                    return Err("truncated float64".to_string());
-                }
-                let val = f64::from_be_bytes(data[1..9].try_into().unwrap());
-                Ok((serde_json::json!(val), 9))
-            }
-            // fixstr (0xa0-0xbf)
-            0xa0..=0xbf => {
-                let len = (b & 0x1f) as usize;
-                if data.len() < 1 + len {
-                    return Err("truncated fixstr".to_string());
-                }
-                let s = std::str::from_utf8(&data[1..1 + len]).map_err(|e| e.to_string())?;
-                Ok((serde_json::Value::String(s.to_string()), 1 + len))
-            }
-            // str8
-            0xd9 => {
-                if data.len() < 2 {
-                    return Err("truncated str8 header".to_string());
-                }
-                let len = data[1] as usize;
-                if data.len() < 2 + len {
-                    return Err("truncated str8".to_string());
-                }
-                let s = std::str::from_utf8(&data[2..2 + len]).map_err(|e| e.to_string())?;
-                Ok((serde_json::Value::String(s.to_string()), 2 + len))
-            }
-            // str16
-            0xda => {
-                if data.len() < 3 {
-                    return Err("truncated str16 header".to_string());
-                }
-                let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-                if data.len() < 3 + len {
-                    return Err("truncated str16".to_string());
-                }
-                let s = std::str::from_utf8(&data[3..3 + len]).map_err(|e| e.to_string())?;
-                Ok((serde_json::Value::String(s.to_string()), 3 + len))
-            }
-            // str32
-            0xdb => {
-                if data.len() < 5 {
-                    return Err("truncated str32 header".to_string());
-                }
-                let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-                if data.len() < 5 + len {
-                    return Err("truncated str32".to_string());
-                }
-                let s = std::str::from_utf8(&data[5..5 + len]).map_err(|e| e.to_string())?;
-                Ok((serde_json::Value::String(s.to_string()), 5 + len))
-            }
-            // bin8
-            0xc4 => {
-                if data.len() < 2 {
-                    return Err("truncated bin8 header".to_string());
-                }
-                let len = data[1] as usize;
-                Ok((serde_json::Value::Null, 2 + len)) // skip binary data
-            }
-            // bin16
-            0xc5 => {
-                if data.len() < 3 {
-                    return Err("truncated bin16 header".to_string());
-                }
-                let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-                Ok((serde_json::Value::Null, 3 + len))
-            }
-            // bin32
-            0xc6 => {
-                if data.len() < 5 {
-                    return Err("truncated bin32 header".to_string());
-                }
-                let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-                Ok((serde_json::Value::Null, 5 + len))
-            }
-            // fixarray (0x90-0x9f)
-            0x90..=0x9f => {
-                let count = (b & 0x0f) as usize;
-                decode_array(data, 1, count)
-            }
-            // array16
-            0xdc => {
-                if data.len() < 3 {
-                    return Err("truncated array16 header".to_string());
-                }
-                let count = u16::from_be_bytes([data[1], data[2]]) as usize;
-                decode_array(data, 3, count)
-            }
-            // array32
-            0xdd => {
-                if data.len() < 5 {
-                    return Err("truncated array32 header".to_string());
-                }
-                let count = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-                decode_array(data, 5, count)
-            }
-            // fixmap (0x80-0x8f)
-            0x80..=0x8f => {
-                let count = (b & 0x0f) as usize;
-                decode_map(data, 1, count)
-            }
-            // map16
-            0xde => {
-                if data.len() < 3 {
-                    return Err("truncated map16 header".to_string());
-                }
-                let count = u16::from_be_bytes([data[1], data[2]]) as usize;
-                decode_map(data, 3, count)
-            }
-            // map32
-            0xdf => {
-                if data.len() < 5 {
-                    return Err("truncated map32 header".to_string());
-                }
-                let count = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-                decode_map(data, 5, count)
-            }
-            _ => Err(format!("unsupported msgpack byte: 0x{:02x}", b)),
-        }
-    }
-
-    fn decode_array(
-        data: &[u8],
-        start: usize,
-        count: usize,
-    ) -> Result<(serde_json::Value, usize), String> {
-        let mut offset = start;
-        let mut arr = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (val, consumed) = decode(&data[offset..])?;
-            arr.push(val);
-            offset += consumed;
-        }
-        Ok((serde_json::Value::Array(arr), offset))
-    }
-
-    fn decode_map(
-        data: &[u8],
-        start: usize,
-        count: usize,
-    ) -> Result<(serde_json::Value, usize), String> {
-        let mut offset = start;
-        let mut map = serde_json::Map::new();
-        for _ in 0..count {
-            let (key, consumed) = decode(&data[offset..])?;
-            offset += consumed;
-            let (val, consumed) = decode(&data[offset..])?;
-            offset += consumed;
-            if let serde_json::Value::String(k) = key {
-                map.insert(k, val);
-            }
-        }
-        Ok((serde_json::Value::Object(map), offset))
-    }
-
-    /// Encode a length-prefixed msgpack message (4-byte big-endian length prefix + payload)
-    pub fn encode_message(msg: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(4 + msg.len());
-        out.extend_from_slice(&(msg.len() as u32).to_be_bytes());
-        out.extend_from_slice(msg);
-        out
-    }
-}
+// The preview API has no protocol-version handshake. Only builds whose wire,
+// handles and TypeFlags have been verified are safe to use for lowering.
+const SUPPORTED_TSGO_VERSION: &str = "7.0.0-dev.20260612.1";
 
 impl TsGoClient {
-    /// Spawn a tsgo process in IPC mode.
-    /// Looks for `tsgo` in PATH, or falls back to npx @typescript/native-preview.
     pub fn spawn(project_dir: &Path) -> Result<Self> {
-        // Try to find tsgo binary
         let tsgo_path = find_tsgo_binary(project_dir)?;
-
+        let version = Command::new(&tsgo_path).arg("--version").output()?;
+        let version_text = String::from_utf8_lossy(&version.stdout);
+        if !version.status.success()
+            || version_text.trim().strip_prefix("Version ") != Some(SUPPORTED_TSGO_VERSION)
+        {
+            return Err(ApiError::UnsupportedVersion(version_text.trim().to_owned()).into());
+        }
+        let project_dir = project_dir.canonicalize()?;
         let process = Command::new(&tsgo_path)
-            .arg("--api")
-            .current_dir(project_dir)
+            .args(["--api", "--cwd"])
+            .arg(&project_dir)
+            .current_dir(&project_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| anyhow!("Failed to spawn tsgo: {}. Install with: npm install -g @typescript/native-preview", e))?;
-
-        Ok(Self {
+            .spawn()?;
+        let mut client = Self {
             process,
-            next_seq: 1,
-        })
+            snapshot: None,
+            project: None,
+        };
+        let init = client.send_request("initialize", &serde_json::Value::Null)?;
+        if !init["useCaseSensitiveFileNames"].is_boolean() || !init["currentDirectory"].is_string()
+        {
+            return Err(ApiError::Protocol("invalid initialize response".into()).into());
+        }
+        Ok(client)
     }
 
-    /// Send an IPC request and read the response.
-    /// Protocol: 4-byte big-endian length prefix + msgpack payload.
-    /// Payload is a 3-element array: [messageType, methodName, jsonPayload]
     fn send_request(
         &mut self,
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let seq = self.next_seq;
-        self.next_seq += 1;
+        let payload = self.send_request_binary(method, params)?;
+        if payload.is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_slice(&payload)
+            .map_err(|e| ApiError::Protocol(format!("{method}: invalid JSON: {e}")).into())
+    }
 
-        // Encode the request: [seq, method, params_json_string]
-        let params_json = serde_json::to_string(params)?;
-        let mut payload = Vec::new();
-        msgpack::encode_array_header(&mut payload, 3);
-        msgpack::encode_uint(&mut payload, seq as u64);
-        msgpack::encode_str(&mut payload, method);
-        msgpack::encode_str(&mut payload, &params_json);
-
-        let message = msgpack::encode_message(&payload);
-
-        // Write to stdin
+    fn send_request_binary(&mut self, method: &str, params: &serde_json::Value) -> Result<Vec<u8>> {
         let stdin = self
             .process
             .stdin
             .as_mut()
-            .ok_or_else(|| anyhow!("tsgo stdin not available"))?;
-        stdin.write_all(&message)?;
-        stdin.flush()?;
-
-        // Read response: 4-byte length prefix + msgpack payload
+            .ok_or_else(|| anyhow!("tsgo stdin closed"))?;
+        wire::write_request(stdin, method, &serde_json::to_vec(params)?)?;
         let stdout = self
             .process
             .stdout
             .as_mut()
-            .ok_or_else(|| anyhow!("tsgo stdout not available"))?;
-
-        let mut len_buf = [0u8; 4];
-        stdout.read_exact(&mut len_buf)?;
-        let response_len = u32::from_be_bytes(len_buf) as usize;
-
-        let mut response_buf = vec![0u8; response_len];
-        stdout.read_exact(&mut response_buf)?;
-
-        // Decode msgpack response
-        let (response, _) = msgpack::decode(&response_buf)
-            .map_err(|e| anyhow!("Failed to decode tsgo response: {}", e))?;
-
-        // Response is [seq, result_json_string] or [seq, error_json_string]
-        if let serde_json::Value::Array(arr) = &response {
-            if arr.len() >= 2 {
-                // The result is typically a JSON string that needs parsing
-                if let Some(result_str) = arr[1].as_str() {
-                    let result: serde_json::Value = serde_json::from_str(result_str)
-                        .unwrap_or_else(|_| serde_json::Value::String(result_str.to_string()));
-                    return Ok(result);
-                }
-                return Ok(arr[1].clone());
-            }
-        }
-
-        Ok(response)
+            .ok_or_else(|| anyhow!("tsgo stdout closed"))?;
+        Ok(wire::read_response(stdout, method)?)
     }
 
-    /// Load a project by its tsconfig.json path
+    /// Open the configured project and retain its snapshot/project handles.
     pub fn load_project(&mut self, tsconfig: &Path) -> Result<()> {
-        let params = serde_json::json!({
-            "file": tsconfig.to_string_lossy()
-        });
-        self.send_request("loadProject", &params)?;
+        let tsconfig = tsconfig.canonicalize()?;
+        let result = self.send_request(
+            "updateSnapshot",
+            &serde_json::json!({"openProject": tsconfig}),
+        )?;
+        let snapshot = result["snapshot"]
+            .as_u64()
+            .ok_or_else(|| ApiError::Protocol("missing snapshot handle".into()))?;
+        let projects = result["projects"]
+            .as_array()
+            .ok_or_else(|| ApiError::Protocol("missing projects".into()))?;
+        let project = projects
+            .iter()
+            .find(|p| {
+                p["configFileName"]
+                    .as_str()
+                    .is_some_and(|name| Path::new(name) == tsconfig)
+            })
+            .and_then(|p| p["id"].as_str())
+            .ok_or_else(|| ApiError::Protocol("requested project missing from snapshot".into()))?;
+        self.snapshot = Some(snapshot);
+        self.project = Some(project.to_owned());
         Ok(())
     }
 
-    /// Get type information at specific positions in a file (batch query)
+    fn project_params(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "snapshot": self.snapshot.ok_or_else(|| anyhow!("tsgo project not open"))?,
+            "project": self.project.as_ref().ok_or_else(|| anyhow!("tsgo project not open"))?,
+        }))
+    }
+
+    pub fn diagnostics(&mut self) -> Result<Vec<Diagnostic>> {
+        let params = self.project_params()?;
+        let mut diagnostics = Vec::new();
+        for method in [
+            "getConfigFileParsingDiagnostics",
+            "getSyntacticDiagnostics",
+            "getSemanticDiagnostics",
+        ] {
+            let result = self.send_request(method, &params)?;
+            let mut items: Vec<Diagnostic> = serde_json::from_value(result)
+                .map_err(|e| ApiError::Protocol(format!("{method}: {e}")))?;
+            diagnostics.append(&mut items);
+        }
+        diagnostics.sort_by(|a, b| {
+            (&a.file_name, a.pos, a.code, &a.text).cmp(&(&b.file_name, b.pos, b.code, &b.text))
+        });
+        diagnostics.dedup();
+        Ok(diagnostics)
+    }
+
+    /// Positions in tsgo's API are zero-based UTF-8 byte offsets.
     pub fn get_types_at_positions(
         &mut self,
         file: &str,
@@ -444,73 +155,43 @@ impl TsGoClient {
         if positions.is_empty() {
             return Ok(Vec::new());
         }
-
-        let params = serde_json::json!({
-            "file": file,
-            "positions": positions,
-        });
-
+        let mut params = self.project_params()?;
+        params["file"] = file.into();
+        params["positions"] = serde_json::to_value(positions)?;
         let result = self.send_request("getTypesAtPositions", &params)?;
-
-        // Parse the response into TypeInfo structs
-        let mut types = Vec::with_capacity(positions.len());
-        if let serde_json::Value::Array(arr) = result {
-            for item in arr {
-                if item.is_null() {
-                    types.push(None);
-                } else {
-                    let flags = item.get("flags").and_then(|f| f.as_u64()).unwrap_or(0) as u32;
-                    let type_string = item
-                        .get("typeString")
-                        .or_else(|| item.get("type"))
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("any")
-                        .to_string();
-                    types.push(Some(TypeInfo { flags, type_string }));
-                }
-            }
-        } else {
-            // Single type result or unexpected format
-            for _ in positions {
+        let items = result
+            .as_array()
+            .filter(|a| a.len() == positions.len())
+            .ok_or_else(|| ApiError::Protocol("invalid types response length".into()))?;
+        let mut types = Vec::with_capacity(items.len());
+        for item in items {
+            if item.is_null() {
                 types.push(None);
+                continue;
             }
+            let flags = item["flags"]
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or_else(|| ApiError::Protocol("missing type flags".into()))?;
+            let id = item["id"]
+                .as_u64()
+                .ok_or_else(|| ApiError::Protocol("missing type handle".into()))?;
+            let mut query = self.project_params()?;
+            query["type"] = id.into();
+            let name = self.send_request("typeToString", &query)?;
+            let type_string = name
+                .as_str()
+                .ok_or_else(|| ApiError::Protocol("invalid typeToString response".into()))?
+                .to_owned();
+            types.push(Some(TypeInfo { flags, type_string }));
         }
-
         Ok(types)
     }
 
-    /// Get type at a single position
-    // #854: tsgo client RPC method; single-position counterpart to the batch
-    // positions query, kept as part of the client API surface.
-    #[allow(dead_code)]
-    pub fn get_type_at_position(&mut self, file: &str, position: u32) -> Result<Option<TypeInfo>> {
-        let params = serde_json::json!({
-            "file": file,
-            "position": position,
-        });
-
-        let result = self.send_request("getTypeAtPosition", &params)?;
-
-        if result.is_null() {
-            return Ok(None);
-        }
-
-        let flags = result.get("flags").and_then(|f| f.as_u64()).unwrap_or(0) as u32;
-        let type_string = result
-            .get("typeString")
-            .or_else(|| result.get("type"))
-            .and_then(|s| s.as_str())
-            .unwrap_or("any")
-            .to_string();
-
-        Ok(Some(TypeInfo { flags, type_string }))
-    }
-
-    /// Shut down the tsgo process gracefully
     pub fn shutdown(&mut self) {
-        // Close stdin to signal the process to exit
         drop(self.process.stdin.take());
-        // Wait briefly for clean exit, then kill if needed
+        // Do not wait indefinitely on a broken or incompatible checker.
+        let _ = self.process.kill();
         let _ = self.process.wait();
     }
 }
@@ -521,22 +202,60 @@ impl Drop for TsGoClient {
     }
 }
 
+/// Native API diagnostics use UTF-8 byte offsets and flattened message text.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostic {
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub pos: usize,
+    pub code: u32,
+    pub category: u32,
+    pub text: String,
+}
+
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(file) = &self.file_name {
+            let source = std::fs::read_to_string(file).unwrap_or_default();
+            let offset = self.pos.min(source.len());
+            let prefix = source.get(..offset).unwrap_or("");
+            let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
+            let column = prefix
+                .rsplit('\n')
+                .next()
+                .unwrap_or("")
+                .encode_utf16()
+                .count()
+                + 1;
+            write!(f, "{file}({line},{column}): ")?;
+        }
+        let category = if self.category == 1 {
+            "error"
+        } else {
+            "warning"
+        };
+        write!(f, "{category} TS{}: {}", self.code, self.text)
+    }
+}
+
 /// Convert TypeScript TypeFlags to Perry's Type enum
 pub fn ts_flags_to_perry_type(flags: u32, type_string: &str) -> Type {
-    // TypeScript TypeFlags constants
-    const STRING: u32 = 4;
-    const NUMBER: u32 = 8;
-    const BOOLEAN: u32 = 16;
-    const BIGINT: u32 = 64;
-    const STRING_LITERAL: u32 = 128;
-    const NUMBER_LITERAL: u32 = 256;
-    const BOOLEAN_LITERAL: u32 = 512;
-    const VOID: u32 = 16384;
-    const UNDEFINED: u32 = 32768;
-    const NULL: u32 = 65536;
-    const NEVER: u32 = 131072;
-    const OBJECT: u32 = 524288;
-    const UNION: u32 = 1048576;
+    // Native-preview TypeFlags (different from the JavaScript tsc enum)
+    const STRING: u32 = 32;
+    const NUMBER: u32 = 64;
+    const BOOLEAN: u32 = 256;
+    const BIGINT: u32 = 128;
+    const STRING_LITERAL: u32 = 1024;
+    const NUMBER_LITERAL: u32 = 2048;
+    const BOOLEAN_LITERAL: u32 = 8192;
+    const VOID: u32 = 16;
+    const UNDEFINED: u32 = 4;
+    const NULL: u32 = 8;
+    const NEVER: u32 = 262144;
+    const OBJECT: u32 = 1048576;
+    const UNION: u32 = 134217728;
 
     // Check primitive flags
     if flags & (STRING | STRING_LITERAL) != 0 {
@@ -548,7 +267,7 @@ pub fn ts_flags_to_perry_type(flags: u32, type_string: &str) -> Type {
     if flags & (BOOLEAN | BOOLEAN_LITERAL) != 0 {
         return Type::Boolean;
     }
-    if flags & BIGINT != 0 {
+    if flags & (BIGINT | 4096) != 0 {
         return Type::BigInt;
     }
     if flags & (VOID | UNDEFINED) != 0 {
@@ -754,7 +473,10 @@ pub fn resolve_types_for_file(
         return Ok(HashMap::new());
     }
 
-    let byte_positions: Vec<u32> = positions.iter().map(|(pos, _)| *pos).collect();
+    let byte_positions: Vec<u32> = positions
+        .iter()
+        .map(|(pos, _)| pos.saturating_sub(1))
+        .collect();
 
     let type_infos = client.get_types_at_positions(file_path, &byte_positions)?;
 
@@ -789,3 +511,6 @@ pub fn find_tsconfig(project_dir: &Path) -> Option<PathBuf> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

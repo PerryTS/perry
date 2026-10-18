@@ -53,9 +53,9 @@ pub(super) fn maybe_init_type_checker(
     project_root: &Path,
     format: OutputFormat,
     ctx: &mut CompilationContext,
-) {
+) -> Result<()> {
     if !args.type_check {
-        return;
+        return Ok(());
     }
     match crate::commands::typecheck::TsGoClient::spawn(project_root) {
         Ok(mut client) => {
@@ -74,7 +74,28 @@ pub(super) fn maybe_init_type_checker(
                         OutputFormat::Json => {}
                     }
                 } else {
-                    ctx.type_checker = Some(client);
+                    match client.diagnostics() {
+                        Ok(diagnostics) => {
+                            let errors: Vec<_> =
+                                diagnostics.iter().filter(|d| d.category == 1).collect();
+                            if !errors.is_empty() {
+                                anyhow::bail!(
+                                    "{}",
+                                    errors
+                                        .iter()
+                                        .map(|d| d.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                );
+                            }
+                            ctx.type_checker = Some(client);
+                        }
+                        Err(e) => {
+                            if matches!(format, OutputFormat::Text) {
+                                eprintln!("  Warning: tsgo diagnostics failed: {e}. Continuing without type checking.");
+                            }
+                        }
+                    }
                 }
             } else {
                 match format {
@@ -90,6 +111,7 @@ pub(super) fn maybe_init_type_checker(
             OutputFormat::Json => {}
         },
     }
+    Ok(())
 }
 
 /// Collect each `--bundle-extensions` entry into the same

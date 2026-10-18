@@ -905,7 +905,7 @@ pub fn run_with_parse_cache(
     // generated sources for the main compile below.
     precompile_capture::prepare_precompile(&args, &mut ctx, format)?;
 
-    maybe_init_type_checker(&args, &project_root, format, &mut ctx);
+    maybe_init_type_checker(&args, &project_root, format, &mut ctx)?;
 
     let mut visited = HashSet::new();
     let mut next_class_id: perry_hir::ClassId = 1; // Start at 1, 0 is reserved for "no parent"
