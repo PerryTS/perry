@@ -164,7 +164,9 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
                 None => vec![value],
             },
         },
-        Expr::ArraySlice { array, start, end } => FoldedCall {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => FoldedCall {
             receiver: Receiver::Expr(array),
             method: "slice",
             args: match end {
@@ -996,12 +998,14 @@ mod tests {
     #[test]
     fn optional_arguments_follow_the_source() {
         let one = Expr::ArraySlice {
+            layout: None,
             array: Box::new(Expr::LocalGet(1)),
             start: Box::new(lit(0.0)),
             end: None,
         };
         assert_eq!(folded_call(&one).unwrap().args.len(), 1);
         let two = Expr::ArraySlice {
+            layout: None,
             array: Box::new(Expr::LocalGet(1)),
             start: Box::new(lit(0.0)),
             end: Some(Box::new(lit(2.0))),

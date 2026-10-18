@@ -579,11 +579,11 @@ pub(super) fn try_native_module_methods(
                             if is_gen {
                                 return Ok(Ok(Expr::IteratorToArray(Box::new(value))));
                             }
-                            return Ok(Ok(Expr::ArrayFrom(Box::new(value))));
+                            return Ok(Ok(Expr::ArrayFrom(Box::new(value), None)));
                         }
                         "of" => {
                             // Array.of(1,2,3) is equivalent to [1,2,3]
-                            return Ok(Ok(Expr::Array(args)));
+                            return Ok(Ok(Expr::Array(args, None)));
                         }
                         _ => {} // Fall through to generic handling
                     }

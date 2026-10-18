@@ -399,7 +399,7 @@ pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceive
         }
         Expr::Object(_)
         | Expr::ObjectSpread { .. }
-        | Expr::Array(_)
+        | Expr::Array(_, _)
         | Expr::ArraySpread(_)
         | Expr::LocalSet(_, _)
         | Expr::GlobalSet(_, _) => {

@@ -16,7 +16,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
                 name: "a".to_string(),
                 ty,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(0)),

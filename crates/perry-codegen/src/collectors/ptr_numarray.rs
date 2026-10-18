@@ -421,7 +421,7 @@ impl<'a> UseWalk<'a> {
             },
             // Empty array literal: length 0, nothing to observe until a
             // (numeric-only, by containment) push.
-            Expr::Array(elems) if elems.is_empty() => Some(NumArrayLocal {
+            Expr::Array(elems, _) if elems.is_empty() => Some(NumArrayLocal {
                 density: NumArrayDensity::Dense,
                 proven_initial_length: 0,
             }),
@@ -1022,7 +1022,7 @@ mod tests {
         assert_eq!(fact.proven_initial_length, 8);
 
         let empty = collect(&[
-            let_with(ARR, num_array_ty(), Expr::Array(vec![])),
+            let_with(ARR, num_array_ty(), Expr::Array(vec![], None)),
             Stmt::Expr(push(ARR, Expr::Number(2.5))),
         ]);
         let fact = empty.get(&ARR).expect("[] should promote");
@@ -1127,7 +1127,7 @@ mod tests {
                 "push spread",
                 Stmt::Expr(Expr::ArrayPushSpread {
                     array_id: ARR,
-                    source: Box::new(Expr::Array(vec![])),
+                    source: Box::new(Expr::Array(vec![], None)),
                 }),
             ),
             (
@@ -1168,7 +1168,7 @@ mod tests {
             ),
             (
                 "reassignment",
-                Stmt::Expr(Expr::LocalSet(ARR, Box::new(Expr::Array(vec![])))),
+                Stmt::Expr(Expr::LocalSet(ARR, Box::new(Expr::Array(vec![], None)))),
             ),
             (
                 "freeze",
@@ -1200,7 +1200,7 @@ mod tests {
         assert!(!is_promoted(&[let_with(
             ARR,
             num_array_ty(),
-            Expr::Array(vec![Expr::Number(1.0)])
+            Expr::Array(vec![Expr::Number(1.0)], None)
         )]));
         // Re-declared binding: provenance is not single-Let.
         assert!(!is_promoted(&[alloc_let(4), alloc_let(4)]));
@@ -1208,7 +1208,7 @@ mod tests {
         assert!(!is_promoted(&[let_with(
             ARR,
             HirType::Array(Box::new(HirType::String)),
-            Expr::Array(vec![])
+            Expr::Array(vec![], None)
         )]));
     }
 

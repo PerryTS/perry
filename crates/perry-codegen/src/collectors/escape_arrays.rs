@@ -352,7 +352,7 @@ pub fn find_array_candidates(
         match s {
             Stmt::Let {
                 id,
-                init: Some(Expr::Array(elements)),
+                init: Some(Expr::Array(elements, _)),
                 ..
             } if !boxed_vars.contains(id) && !module_globals.contains_key(id) => {
                 let n = elements.len();
@@ -743,7 +743,7 @@ pub fn check_array_escapes_in_expr(
                 check_array_escapes_in_expr(a, candidates, escaped);
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 check_array_escapes_in_expr(el, candidates, escaped);
             }

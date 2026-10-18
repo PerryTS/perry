@@ -10,24 +10,19 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 pub(super) type PropertyExports = HashMap<String, (u32, String)>;
 
-/// The wrapper emits `export const x = _cjs.x` to register value-export
-/// metadata. Do not execute that read during module initialization: it can
-/// invoke a getter too early and freezes exports assigned after initialization.
-/// Keep the caller's HIR immutable (it is also the object-cache input).
-pub(super) fn prepare(hir: &Module) -> (Cow<'_, Module>, PropertyExports) {
+/// The wrapper's export snapshot bindings (`export const x = _cjs.x`) with
+/// the property each one reads. `prepare` clears their initializers.
+fn snapshots(hir: &Module) -> Option<(PropertyExports, HashSet<u32>)> {
     // Pair the wrapper's private binding with its compiler-owned preamble;
     // an ordinary ESM variable named `_cjs` still has snapshot semantics.
-    let has_preamble = hir.is_commonjs_wrap();
-    if !has_preamble {
-        return (Cow::Borrowed(hir), HashMap::new());
+    if !hir.is_commonjs_wrap() {
+        return None;
     }
     let entry = super::entry_outline::logical_entry_stmts(hir);
-    let Some(object_id) = entry.iter().find_map(|stmt| match stmt {
+    let object_id = entry.iter().find_map(|stmt| match stmt {
         Stmt::Let { id, name, .. } if name == "_cjs" => Some(*id),
         _ => None,
-    }) else {
-        return (Cow::Borrowed(hir), HashMap::new());
-    };
+    })?;
     let exported: HashSet<&str> = hir
         .exports
         .iter()
@@ -56,6 +51,24 @@ pub(super) fn prepare(hir: &Module) -> (Cow<'_, Module>, PropertyExports) {
             }
         }
     }
+    Some((properties, bindings))
+}
+
+/// The locals whose initializers codegen clears (see `prepare`).
+pub(crate) fn snapshot_bindings(hir: &Module) -> HashSet<u32> {
+    snapshots(hir)
+        .map(|(_, bindings)| bindings)
+        .unwrap_or_default()
+}
+
+/// The wrapper emits `export const x = _cjs.x` to register value-export
+/// metadata. Do not execute that read during module initialization: it can
+/// invoke a getter too early and freezes exports assigned after initialization.
+/// Keep the caller's HIR immutable (it is also the object-cache input).
+pub(super) fn prepare(hir: &Module) -> (Cow<'_, Module>, PropertyExports) {
+    let Some((properties, bindings)) = snapshots(hir) else {
+        return (Cow::Borrowed(hir), HashMap::new());
+    };
     if properties.is_empty() {
         return (Cow::Borrowed(hir), properties);
     }

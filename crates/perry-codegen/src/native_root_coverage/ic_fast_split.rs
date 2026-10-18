@@ -138,13 +138,16 @@ fn split_module() -> Module {
                     byte_offset: 0,
                 },
             ),
-            Stmt::Return(Some(Expr::Array(vec![
-                Expr::LocalGet(20),
-                Expr::LocalGet(21),
-                Expr::LocalGet(22),
-                Expr::LocalGet(23),
-                Expr::LocalGet(24),
-            ]))),
+            Stmt::Return(Some(Expr::Array(
+                vec![
+                    Expr::LocalGet(20),
+                    Expr::LocalGet(21),
+                    Expr::LocalGet(22),
+                    Expr::LocalGet(23),
+                    Expr::LocalGet(24),
+                ],
+                None,
+            ))),
         ],
         is_async: false,
         is_generator: false,

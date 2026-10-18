@@ -546,7 +546,7 @@ fn extract_gradient_obj(
         match key.as_str() {
             "angle" => angle = lower_expr(ctx, v)?,
             "stops" => {
-                if let Expr::Array(elems) = v {
+                if let Expr::Array(elems, _) = v {
                     if let Some(first) = elems.first() {
                         if let Some(rgba) = extract_perry_color(ctx, first)? {
                             c1 = rgba;

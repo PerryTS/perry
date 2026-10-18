@@ -935,7 +935,7 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
                 scan_expr(a, depth, "call argument", out);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 scan_expr(i, depth, "array element", out);
             }

@@ -625,7 +625,7 @@ pub fn check_object_literal_escapes_in_expr(
             check_object_literal_escapes_in_expr(index, candidates, escaped);
             check_object_literal_escapes_in_expr(value, candidates, escaped);
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 check_object_literal_escapes_in_expr(el, candidates, escaped);
             }

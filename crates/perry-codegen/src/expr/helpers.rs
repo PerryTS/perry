@@ -162,7 +162,7 @@ pub(crate) fn expr_produces_non_pointer_bits_by_construction(ctx: &FnCtx<'_>, ex
 /// site consult the same function and can never disagree about a store.
 pub(crate) fn expr_produces_fresh_heap_allocation(expr: &Expr) -> bool {
     match expr {
-        Expr::Object(_) | Expr::Array(_) | Expr::Closure { .. } | Expr::New { .. } => true,
+        Expr::Object(_) | Expr::Array(_, _) | Expr::Closure { .. } | Expr::New { .. } => true,
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -258,7 +258,7 @@ pub(crate) fn store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
 /// to" a runtime question, and this predicate must not depend on the answer.
 fn expr_cannot_produce_heap_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
-        Expr::Object(_) | Expr::Array(_) | Expr::Closure { .. } => true,
+        Expr::Object(_) | Expr::Array(_, _) | Expr::Closure { .. } => true,
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -291,7 +291,7 @@ pub(crate) fn emit_all_pointer_array_declaration(
     init_value: &str,
 ) {
     if init_value.is_empty()
-        || !matches!(init_expr, Expr::Array(_))
+        || !matches!(init_expr, Expr::Array(_, _))
         || !ctx.native_facts.declares_all_pointer_elements(id)
     {
         return;

@@ -503,7 +503,7 @@ fn classic_for_class_capture_freshens_lexical_cell_before_update() {
     let lexical_id = match loops[0].0.as_deref() {
         Some(crate::Stmt::Let {
             id,
-            init: Some(crate::Expr::Array(items)),
+            init: Some(crate::Expr::Array(items, _)),
             ..
         }) if items.len() == 1 => *id,
         other => panic!("lexical head must lower to one shared capture cell: {other:#?}"),
@@ -519,7 +519,7 @@ fn classic_for_class_capture_freshens_lexical_cell_before_update() {
                 ] if *set_id == lexical_id
                     && matches!(
                         fresh.as_ref(),
-                        crate::Expr::Array(values)
+                        crate::Expr::Array(values, _)
                             if matches!(
                                 values.as_slice(),
                                 [crate::Expr::IndexGet { object, .. }]

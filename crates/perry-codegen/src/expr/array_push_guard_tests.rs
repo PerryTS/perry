@@ -175,7 +175,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
                 name: "keep".to_string(),
                 ty: Type::Array(Box::new(elem)),
                 mutable: false,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
@@ -778,7 +778,7 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
             name: "__field_push_receiver".into(),
             ty: Type::Array(Box::new(Type::Number)),
             mutable: true,
-            init: Some(Expr::Array(vec![])),
+            init: Some(Expr::Array(vec![], None)),
         },
         Stmt::Expr(Expr::NativeMethodCall {
             module: "array".into(),

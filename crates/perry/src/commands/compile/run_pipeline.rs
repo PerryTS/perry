@@ -1662,6 +1662,11 @@ pub fn run_with_parse_cache(
     // fninfer (decision 140): inferred parameter types as guarded
     // annotations (`PERRY_FNINFER_APPLY`; off by default).
     super::fn_infer::apply(&mut ctx.native_modules);
+    // Array births carry the layout of their named properties; codegen, and
+    // every clone of the HIR it makes, reads it from the birth.
+    for hir_module in ctx.native_modules.values_mut() {
+        perry_codegen::assign_birth_layouts(hir_module);
+    }
     // Collect all non-generic type aliases from all modules.
     // These are passed to each module's compiler so type_to_abi can resolve
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.

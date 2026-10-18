@@ -149,7 +149,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         Expr::Unary { operand, .. } => {
             rewrite_set_hidden_in_expr(operand, bindings);
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items.iter_mut() {
                 rewrite_set_hidden_in_expr(i, bindings);
             }
@@ -281,7 +281,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
         Expr::Unary { operand, .. } => {
             rewrite_set_hidden_in_closures_in_expr(operand, bindings);
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items.iter_mut() {
                 rewrite_set_hidden_in_closures_in_expr(i, bindings);
             }

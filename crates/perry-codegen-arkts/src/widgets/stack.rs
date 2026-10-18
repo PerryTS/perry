@@ -33,14 +33,14 @@ pub(crate) fn emit_stack(
 ) -> String {
     // First-arg shape detection — same logic as lower_call/native.rs:91.
     let (spacing, children_idx) = match args.first() {
-        Some(Expr::Array(_)) | Some(Expr::ArrayMap { .. }) => (8.0, 0),
+        Some(Expr::Array(_, _)) | Some(Expr::ArrayMap { .. }) => (8.0, 0),
         Some(Expr::Number(n)) => (*n, 1),
         Some(Expr::Integer(n)) => (*n as f64, 1),
         _ => (8.0, 0),
     };
 
     let mut children = match args.get(children_idx) {
-        Some(Expr::Array(items)) => items
+        Some(Expr::Array(items, _)) => items
             .iter()
             .map(|child| {
                 emit_widget(

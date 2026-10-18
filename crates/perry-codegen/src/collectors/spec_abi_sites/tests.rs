@@ -254,7 +254,10 @@ fn array_literal_source_counts_elements() {
         let_stmt(
             1,
             true,
-            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
+            Expr::Array(
+                vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
+                None,
+            ),
         ),
         let_stmt(
             2,
@@ -430,7 +433,7 @@ fn length_unsafe_source_use_demotes_const_len_only() {
         let_stmt(
             1,
             true,
-            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)]),
+            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
         ),
         Stmt::Expr(call(8, vec![Expr::LocalGet(1)])),
         let_stmt(
@@ -452,7 +455,7 @@ fn put_value_set_receiver_demotes_source_const_len() {
         let_stmt(
             1,
             true,
-            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)]),
+            Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
         ),
         Stmt::Expr(Expr::PutValueSet {
             target: Box::new(source.clone()),
@@ -713,7 +716,10 @@ fn store_key_const_len(pre: Vec<Stmt>, key: Expr) -> Option<Option<i64>> {
     let mut body = vec![let_stmt(
         1,
         true,
-        Expr::Array(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
+        Expr::Array(
+            vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
+            None,
+        ),
     )];
     body.extend(pre);
     body.push(Stmt::Expr(Expr::IndexSet {

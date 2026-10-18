@@ -41,7 +41,7 @@ fn rhs_certainly_object_like(expr: &Expr, env: &HirTypeEnv) -> bool {
             | Expr::Object(_)
             | Expr::ObjectSpread { .. }
             | Expr::ObjectAssign { .. }
-            | Expr::Array(_)
+            | Expr::Array(_, _)
             | Expr::ArraySpread(_)
             | Expr::Closure { .. }
             | Expr::New { .. }
@@ -92,7 +92,7 @@ fn rhs_certainly_nullish(expr: &Expr, env: &HirTypeEnv) -> bool {
         | Expr::Object(_)
         | Expr::ObjectSpread { .. }
         | Expr::ObjectAssign { .. }
-        | Expr::Array(_)
+        | Expr::Array(_, _)
         | Expr::ArraySpread(_)
         | Expr::Closure { .. }
         | Expr::New { .. } => false,
@@ -528,7 +528,7 @@ mod tests {
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::String)),
                 mutable: true,
-                init: Some(Expr::Array(vec![])),
+                init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::ArrayPop(2)))),
         ];
@@ -549,7 +549,7 @@ mod tests {
                 name: "value".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: true,
-                init: Some(Expr::Array(vec![Expr::Number(1.0)])),
+                init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
             },
             Stmt::Expr(Expr::LocalSet(
                 1,

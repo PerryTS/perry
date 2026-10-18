@@ -32,10 +32,10 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
     for target in NATIVE_TARGETS {
         let module = entry_module(
             "array_element_birth.ts",
-            vec![Stmt::Expr(Expr::Array(vec![
-                Expr::Object(Vec::new()),
-                Expr::Object(Vec::new()),
-            ]))],
+            vec![Stmt::Expr(Expr::Array(
+                vec![Expr::Object(Vec::new()), Expr::Object(Vec::new())],
+                None,
+            ))],
         );
         let ir = native_ir(&module, target, true);
         let rewritten =
@@ -49,7 +49,7 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
 
         let mut module = bare_module("reduce_initial_birth.ts");
         module.init.push(Stmt::Expr(Expr::ArrayReduceRight {
-            array: Box::new(Expr::Array(vec![Expr::Integer(1)])),
+            array: Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
             callback: Box::new(Expr::Closure {
                 func_id: 7,
                 params: Vec::new(),
@@ -65,7 +65,7 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
                 is_generator: false,
                 is_strict: true,
             }),
-            initial: Some(Box::new(Expr::Array(Vec::new()))),
+            initial: Some(Box::new(Expr::Array(Vec::new(), None))),
         }));
         let ir = native_ir(&module, target, true);
         let rewritten =

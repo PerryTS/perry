@@ -715,7 +715,7 @@ mod tests {
     fn array_record_guards_allocations_and_reads_live_length() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![]), &mut setup);
+        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup);
         assert_eq!(
             plan.array, plan.source,
             "the indexed record must reuse the source rather than a declared-array alias"
@@ -912,7 +912,7 @@ mod tests {
     fn array_record_counted_step_preserves_continue_and_close_state() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![]), &mut setup);
+        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup);
         let state = ctx.fresh_local();
         let lowered = plan.drive(
             &mut ctx,

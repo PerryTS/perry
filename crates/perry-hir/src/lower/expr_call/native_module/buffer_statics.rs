@@ -103,7 +103,7 @@ pub(super) fn try_buffer_uint8array_statics(
                     }));
                 }
                 "concat" => {
-                    let list = args.first().cloned().unwrap_or(Expr::Array(vec![]));
+                    let list = args.first().cloned().unwrap_or(Expr::Array(vec![], None));
                     if let Some(total_length) = args.get(1).cloned() {
                         return Ok(Ok(Expr::BufferConcatWithLength {
                             list: Box::new(list),
@@ -123,7 +123,7 @@ pub(super) fn try_buffer_uint8array_statics(
                 }
                 "of" => {
                     return Ok(Ok(Expr::BufferFrom {
-                        data: Box::new(Expr::Array(args)),
+                        data: Box::new(Expr::Array(args, None)),
                         encoding: None,
                     }));
                 }
@@ -205,7 +205,7 @@ pub(super) fn try_buffer_uint8array_statics(
                 // arity (it's just `js_uint8array_from_array`-or-equivalent on the
                 // packed array). Mirrors the `Array.of` arm at :1618.
                 "of" => {
-                    return Ok(Ok(Expr::Uint8ArrayFrom(Box::new(Expr::Array(args)))));
+                    return Ok(Ok(Expr::Uint8ArrayFrom(Box::new(Expr::Array(args, None)))));
                 }
                 _ => {} // Fall through to generic handling
             }

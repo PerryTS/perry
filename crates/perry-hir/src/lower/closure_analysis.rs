@@ -178,7 +178,7 @@ fn widen_mutable_captures_expr(
                 }
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for e in elements {
                 widen_mutable_captures_expr(e, scope_mutable);
             }
@@ -491,7 +491,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 }
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for e in elements {
                 collect_closure_assigned_expr(e, out);
             }
@@ -799,7 +799,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                 }
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for e in elements {
                 collect_closure_captures_expr(e, out);
             }
@@ -1229,7 +1229,7 @@ fn collect_closure_assigned_in_body_expr(
                 }
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for e in elements {
                 collect_closure_assigned_in_body_expr(e, out);
             }

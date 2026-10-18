@@ -17,7 +17,7 @@ fn issue_408_hstack_with_widget_add_child_appends_children() {
     m.init.push(let_widget(
         toolbar_id,
         "toolbar",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         btn_a_id,
@@ -79,10 +79,10 @@ fn issue_408_scrollview_set_child_replaces_body() {
         "content",
         nmc(
             "VStack",
-            vec![Expr::Array(vec![nmc(
-                "Text",
-                vec![Expr::String("hello".into())],
-            )])],
+            vec![Expr::Array(
+                vec![nmc("Text", vec![Expr::String("hello".into())])],
+                None,
+            )],
         ),
     ));
     m.init.push(mutator_stmt(
@@ -116,7 +116,7 @@ fn issue_408_set_padding_emits_modifier_chain() {
     m.init.push(let_widget(
         card_id,
         "card",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "setPadding",
@@ -171,7 +171,7 @@ fn issue_9955_uniform_padding_expands_to_every_side() {
     m.init.push(let_widget(
         card_id,
         "card",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "setPadding",
@@ -280,7 +280,7 @@ fn issue_408_conditional_widget_add_child_emits_if_else() {
     m.init.push(let_widget(
         screen_id,
         "screen",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         phone_id,
@@ -346,7 +346,7 @@ fn issue_408_widget_clear_children_drops_earlier_addchild() {
     m.init.push(let_widget(
         stack_id,
         "stack",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         a_id,
@@ -394,7 +394,7 @@ fn issue_408_untraceable_parent_falls_back_without_crashing() {
     m.init.push(let_widget(
         stack_id,
         "stack",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "widgetAddChild",
@@ -430,7 +430,7 @@ fn issue_408_widget_set_hidden_emits_visibility_modifier() {
     m.init.push(let_widget(
         id,
         "w",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "widgetSetHidden",
@@ -456,7 +456,7 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
     m.init.push(let_widget(
         target_id,
         "formContainer",
-        nmc("VStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     // widgetSetHidden(formContainer, 1);  // module-init initial = hidden
     m.init.push(mutator_stmt(
@@ -491,10 +491,13 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
             "VStack",
             vec![
                 Expr::Number(0.0),
-                Expr::Array(vec![
-                    nmc("Button", vec![Expr::String("Open".to_string()), onclick]),
-                    Expr::LocalGet(target_id),
-                ]),
+                Expr::Array(
+                    vec![
+                        nmc("Button", vec![Expr::String("Open".to_string()), onclick]),
+                        Expr::LocalGet(target_id),
+                    ],
+                    None,
+                ),
             ],
         ),
     ));
@@ -568,7 +571,7 @@ fn issue_408_match_parent_size_emits_100pct_modifiers() {
     m.init.push(let_widget(
         id,
         "w",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "widgetMatchParentWidth",
@@ -604,7 +607,7 @@ fn issue_408_stack_distribution_and_alignment_emit_flexalign_modifiers() {
     m.init.push(let_widget(
         id,
         "w",
-        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
     ));
     m.init.push(mutator_stmt(
         "stackSetDistribution",
@@ -787,7 +790,7 @@ fn stack_alignment_value_names_match_axis_enum() {
         m.init.push(let_widget(
             id,
             "w",
-            nmc(ctor, vec![Expr::Number(0.0), Expr::Array(vec![])]),
+            nmc(ctor, vec![Expr::Number(0.0), Expr::Array(vec![], None)]),
         ));
         m.init.push(mutator_stmt(
             "stackSetAlignment",
@@ -819,13 +822,13 @@ fn issue_408_mango_three_screen_shape_renders_all_screens() {
     m.init.push(let_widget(
         root_id,
         "root",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     // Three screen containers
     m.init.push(let_widget(
         conn_id,
         "connectionScreen",
-        nmc("VStack", vec![Expr::Array(vec![])]),
+        nmc("VStack", vec![Expr::Array(vec![], None)]),
     ));
     m.init.push(let_widget(
         browser_id,
@@ -835,7 +838,7 @@ fn issue_408_mango_three_screen_shape_renders_all_screens() {
     m.init.push(let_widget(
         info_id,
         "infoScreen",
-        nmc("HStack", vec![Expr::Number(8.0), Expr::Array(vec![])]),
+        nmc("HStack", vec![Expr::Number(8.0), Expr::Array(vec![], None)]),
     ));
     // Widget-level child buttons
     m.init.push(let_widget(
@@ -865,7 +868,7 @@ fn issue_408_mango_three_screen_shape_renders_all_screens() {
         "browser_content",
         nmc(
             "VStack",
-            vec![Expr::Array(vec![Expr::LocalGet(browser_btn)])],
+            vec![Expr::Array(vec![Expr::LocalGet(browser_btn)], None)],
         ),
     ));
     m.init.push(mutator_stmt(

@@ -240,7 +240,7 @@ fn find_outer_writes_expr(
             find_outer_writes_expr(object, inner_ids, out);
             find_outer_writes_expr(index, inner_ids, out);
         }
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             for e in elems {
                 find_outer_writes_expr(e, inner_ids, out);
             }

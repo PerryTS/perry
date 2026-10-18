@@ -802,7 +802,7 @@ pub fn transform_expr(
             transform_expr(then_expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(else_expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for elem in elements {
                 transform_expr(elem, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
@@ -1061,7 +1061,7 @@ pub fn transform_expr(
                 transform_expr(fi, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice { array, start, end, .. } => {
             transform_expr(array, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(start, js_imports, extern_func_to_js, local_name_to_js, tracker);
             if let Some(e) = end {

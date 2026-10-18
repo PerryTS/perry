@@ -149,7 +149,7 @@ pub(crate) fn emit_slider(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
 /// Same drain pattern as Toggle/Slider.
 pub(crate) fn emit_picker(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     let options = match args.first() {
-        Some(Expr::Array(items)) => {
+        Some(Expr::Array(items, _)) => {
             let strs: Vec<String> = items
                 .iter()
                 .filter_map(|item| match item {
@@ -164,7 +164,7 @@ pub(crate) fn emit_picker(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     // ArkUI requires a `value` field set to a member of `range`; falling
     // back to an empty string is safe when options is empty.
     let initial = match args.first() {
-        Some(Expr::Array(items)) => match items.first() {
+        Some(Expr::Array(items, _)) => match items.first() {
             Some(Expr::String(s)) => arkts_string_lit(s),
             _ => "''".to_string(),
         },

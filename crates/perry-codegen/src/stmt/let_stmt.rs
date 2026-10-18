@@ -711,7 +711,7 @@ pub(crate) fn lower_let(
     // load directly from the corresponding slot. See the
     // `collect_non_escaping_arrays` pass in collectors.rs for the
     // escape criteria.
-    if let Some(perry_hir::Expr::Array(elements)) = init {
+    if let Some(perry_hir::Expr::Array(elements, _)) = init {
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);

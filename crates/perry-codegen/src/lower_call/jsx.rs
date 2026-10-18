@@ -156,8 +156,8 @@ fn rewrite_jsx_box(ctx: &mut FnCtx<'_>, props_arg: &Expr) -> Result<String> {
     //    this heuristic gets wrong; users with that pattern should
     //    wrap explicitly: `<Box>{[w]}</Box>`.
     let children_array_opt: Option<Expr> = children_opt.map(|c| match &c {
-        Expr::Array(_) => c,
-        Expr::Call { callee, .. } if is_jsx_call_callee(callee) => Expr::Array(vec![c]),
+        Expr::Array(_, _) => c,
+        Expr::Call { callee, .. } if is_jsx_call_callee(callee) => Expr::Array(vec![c], None),
         _ => c,
     });
 
@@ -206,7 +206,7 @@ fn rewrite_jsx_text(ctx: &mut FnCtx<'_>, props_arg: &Expr) -> Result<String> {
     //   `Text("count: " + n)` would.
     // - `Some(_)` otherwise → use the value directly.
     let content_expr: Expr = match children_opt {
-        Some(Expr::Array(elems)) => fold_string_concat(elems),
+        Some(Expr::Array(elems, _)) => fold_string_concat(elems),
         Some(other) => other,
         None => Expr::String(String::new()),
     };

@@ -1550,7 +1550,7 @@ mod receiver_order_tests {
                     name: "a".to_string(),
                     ty: Type::Any,
                     mutable: true,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 },
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 0,
@@ -1613,7 +1613,7 @@ mod receiver_order_tests {
     #[test]
     fn an_argument_that_rebinds_the_receiver_takes_the_spec_ordered_arm() {
         let ir = push_ir(Expr::Sequence(vec![
-            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)]))),
+            Expr::LocalSet(0, Box::new(Expr::Array(vec![Expr::Number(9.0)], None))),
             Expr::Number(2.0),
         ]));
         assert!(
@@ -1699,7 +1699,7 @@ mod parent_gate_tests {
                     name: "a".to_string(),
                     ty: Type::Any,
                     mutable: true,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 },
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 0,

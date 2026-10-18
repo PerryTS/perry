@@ -620,7 +620,7 @@ fn lower_decorator_arg(ctx: &mut LoweringContext, expr: &ast::Expr) -> Option<Ex
                         .unwrap_or(Expr::Undefined)
                 })
                 .collect();
-            Some(Expr::Array(items))
+            Some(Expr::Array(items, None))
         }
         ast::Expr::Object(obj) => {
             let mut fields = Vec::new();

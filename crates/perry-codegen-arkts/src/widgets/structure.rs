@@ -29,7 +29,7 @@ pub(crate) fn emit_section(
     let outer_indent = "    ".repeat(depth);
 
     let mut children: Vec<String> = match args.get(1) {
-        Some(Expr::Array(items)) => items
+        Some(Expr::Array(items, _)) => items
             .iter()
             .map(|c| {
                 emit_widget(
@@ -145,7 +145,7 @@ pub(crate) fn emit_tabs(
     mutations: &HashMap<LocalId, Vec<MutationEntry>>,
 ) -> String {
     let tab_specs: Vec<&Expr> = match args.first() {
-        Some(Expr::Array(items)) => items.iter().collect(),
+        Some(Expr::Array(items, _)) => items.iter().collect(),
         _ => Vec::new(),
     };
     let inner_indent = "    ".repeat(depth + 1);
@@ -254,7 +254,7 @@ pub(crate) fn emit_modal(_args: &[Expr], _callbacks: &mut Vec<Expr>) -> String {
 /// v12.5.
 pub(crate) fn emit_menu(args: &[Expr], callbacks: &mut Vec<Expr>) -> String {
     let items: Vec<&Expr> = match args.first() {
-        Some(Expr::Array(items)) => items.iter().collect(),
+        Some(Expr::Array(items, _)) => items.iter().collect(),
         _ => Vec::new(),
     };
     let buttons: Vec<String> = items
@@ -311,7 +311,7 @@ pub(crate) fn emit_grid(
     let columns = columns.clamp(1, 12);
     let template = (0..columns).map(|_| "1fr").collect::<Vec<_>>().join(" ");
     let items: Vec<&Expr> = match args.get(1) {
-        Some(Expr::Array(items)) => items.iter().collect(),
+        Some(Expr::Array(items, _)) => items.iter().collect(),
         _ => Vec::new(),
     };
     let inner_indent = "    ".repeat(depth + 1);
@@ -426,7 +426,7 @@ pub(crate) fn emit_nav_stack(
     // Routes array: each elem is `{name: string, body: Widget}` (open
     // Object) or `__AnonShape_*` New (Perry's closed-shape form).
     let route_specs: Vec<&Expr> = match args.get(1) {
-        Some(Expr::Array(items)) => items.iter().collect(),
+        Some(Expr::Array(items, _)) => items.iter().collect(),
         _ => Vec::new(),
     };
 

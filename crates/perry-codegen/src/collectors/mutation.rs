@@ -440,7 +440,7 @@ fn expr_contains_call(e: &perry_hir::Expr) -> bool {
             | Expr::Void(_)
             | Expr::FuncRef(_)
             | Expr::Object(_)
-            | Expr::Array(_)
+            | Expr::Array(_, _)
             | Expr::NewTarget
             | Expr::ClassMethodHome { .. }
             | Expr::ClassRef(_)
@@ -582,7 +582,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::IndexGet { object, index } => {
             expr_has_mutation(object, id) || expr_has_mutation(index, id)
         }
-        Expr::Array(elements) => elements.iter().any(|e| expr_has_mutation(e, id)),
+        Expr::Array(elements, _) => elements.iter().any(|e| expr_has_mutation(e, id)),
         Expr::ArraySpread(elements) => elements.iter().any(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => expr_has_mutation(e, id),
             ArrayElement::Hole => false,

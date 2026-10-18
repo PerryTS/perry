@@ -21,7 +21,7 @@ fn exported_aggregate_keeps_materialized_carrier() {
                     stmt,
                     Stmt::Let {
                         id: 1,
-                        init: Some(Expr::Array(_)),
+                        init: Some(Expr::Array(_, _)),
                         ..
                     }
                 )

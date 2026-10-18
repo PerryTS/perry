@@ -361,7 +361,7 @@ mod tests {
         }];
         m.init = vec![Stmt::Expr(Expr::Call {
             callee: Box::new(Expr::FuncRef(721)),
-            args: vec![Expr::Array(vec![Expr::Number(1.0)])],
+            args: vec![Expr::Array(vec![Expr::Number(1.0)], None)],
             type_args: Vec::new(),
             byte_offset: 0,
         })];

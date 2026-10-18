@@ -118,7 +118,7 @@ fn every_registered_global_store_omits_redundant_root_shading() {
     }
     for value in [
         Expr::String("a heap string longer than SSO".into()),
-        Expr::Array(vec![Expr::Number(3.0)]),
+        Expr::Array(vec![Expr::Number(3.0)], None),
         Expr::BigInt("123".into()),
     ] {
         let ir = global_store_ir(value, Type::Any);

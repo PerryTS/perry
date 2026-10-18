@@ -590,7 +590,7 @@ pub(super) fn try_local_array_methods(
                                     let mut args_iter = args.into_iter();
                                     let start = args_iter.next().unwrap();
                                     let end = args_iter.next();
-                                    return Ok(Ok(Expr::ArraySlice {
+                                    return Ok(Ok(Expr::ArraySlice { layout: None,
                                         array: Box::new(Expr::LocalGet(array_id)),
                                         start: Box::new(start),
                                         end: end.map(Box::new),

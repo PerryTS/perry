@@ -525,7 +525,7 @@ impl WasmModuleEmitter {
                     }
                 }
             }
-            Expr::Array(elems) => {
+            Expr::Array(elems, _) => {
                 for e in elems {
                     self.collect_strings_in_expr(e);
                 }
@@ -701,7 +701,9 @@ impl WasmModuleEmitter {
             Expr::ArrayPushSpread { source, .. } => {
                 self.collect_strings_in_expr(source);
             }
-            Expr::ArraySlice { array, start, end } => {
+            Expr::ArraySlice {
+                array, start, end, ..
+            } => {
                 self.collect_strings_in_expr(array);
                 self.collect_strings_in_expr(start);
                 if let Some(e) = end {
@@ -812,7 +814,7 @@ impl WasmModuleEmitter {
             }
             Expr::ArrayFlat { array }
             | Expr::ArrayIsArray(array)
-            | Expr::ArrayFrom(array)
+            | Expr::ArrayFrom(array, _)
             | Expr::ArrayToReversed { array } => {
                 self.collect_strings_in_expr(array);
             }

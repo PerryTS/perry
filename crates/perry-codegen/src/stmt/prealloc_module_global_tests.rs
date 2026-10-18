@@ -169,7 +169,7 @@ fn module_with_hoisted_block_fn(prealloc: bool) -> Module {
         name: "events".to_string(),
         ty: Type::Any,
         mutable: false,
-        init: Some(Expr::Array(Vec::new())),
+        init: Some(Expr::Array(Vec::new(), None)),
     });
     init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::LocalGet(0)),
@@ -284,7 +284,7 @@ fn a_function_local_prealloc_still_gets_its_box() {
             name: "events".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Expr(Expr::Call {
             callee: Box::new(Expr::LocalGet(10)),

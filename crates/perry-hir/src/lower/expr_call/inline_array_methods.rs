@@ -144,7 +144,7 @@ pub(super) fn try_inline_array_methods(
                                 let mut args_iter = args.into_iter();
                                 let start = args_iter.next().unwrap();
                                 let end = args_iter.next();
-                                return Ok(Ok(Expr::ArraySlice {
+                                return Ok(Ok(Expr::ArraySlice { layout: None,
                                     array: Box::new(array_expr),
                                     start: Box::new(start),
                                     end: end.map(Box::new),

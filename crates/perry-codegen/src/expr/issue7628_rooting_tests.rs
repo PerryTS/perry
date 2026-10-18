@@ -133,7 +133,7 @@ fn with_object_local(tail: Stmt) -> Vec<Stmt> {
             mutable: false,
             init: Some(Expr::Object(vec![(
                 "items".to_string(),
-                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)]),
+                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             )])),
         },
         tail,
@@ -277,7 +277,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
                 name: "nums".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::Number(4.0)])),
+                init: Some(Expr::Array(vec![Expr::Number(4.0)], None)),
             },
             Stmt::Return(Some(Expr::IndexUpdate {
                 object: Box::new(Expr::LocalGet(0)),

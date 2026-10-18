@@ -14,7 +14,7 @@ fn assert_carrier_is_materialized(module: &Module) {
             stmt,
             Stmt::Let {
                 id: 1,
-                init: Some(Expr::Array(_)),
+                init: Some(Expr::Array(_, _)),
                 ..
             }
         )

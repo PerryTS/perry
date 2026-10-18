@@ -15,7 +15,7 @@ fn imported_function_method_spreads_use_receiver_dispatch() {
                 property: method.into(),
                 byte_offset: 0,
             }),
-            args: vec![CallArg::Spread(Expr::Array(vec![Expr::Null]))],
+            args: vec![CallArg::Spread(Expr::Array(vec![Expr::Null], None))],
             type_args: vec![],
         })];
         let mut options = crate::CompileOptions {

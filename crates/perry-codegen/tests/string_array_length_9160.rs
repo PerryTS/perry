@@ -90,12 +90,15 @@ fn compile_ir() -> String {
     module.functions.push(sum_lengths());
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
-        args: vec![Expr::Array(vec![
-            Expr::String("a".to_string()),
-            Expr::String("bb".to_string()),
-            Expr::String("ccc".to_string()),
-            Expr::String("dddddddddddddddd".to_string()),
-        ])],
+        args: vec![Expr::Array(
+            vec![
+                Expr::String("a".to_string()),
+                Expr::String("bb".to_string()),
+                Expr::String("ccc".to_string()),
+                Expr::String("dddddddddddddddd".to_string()),
+            ],
+            None,
+        )],
         type_args: Vec::new(),
         byte_offset: 0,
     }));

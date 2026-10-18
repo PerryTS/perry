@@ -304,6 +304,7 @@ pub(crate) fn process_allowed_node_flags_literal() -> Expr {
             .iter()
             .map(|f| Expr::String((*f).to_string()))
             .collect(),
+        None,
     )))
 }
 

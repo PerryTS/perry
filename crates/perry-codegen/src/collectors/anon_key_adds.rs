@@ -136,7 +136,7 @@ pub(crate) fn anon_receiver_added_keys(
             }
             let found = expr_classes(init, facts, &receivers, &elements);
             changed |= merge(&mut receivers, *b, found);
-            if let Expr::Array(items) = init {
+            if let Expr::Array(items, _) = init {
                 for item in items {
                     let found = expr_classes(item, facts, &receivers, &elements);
                     changed |= merge(&mut elements, *b, found);

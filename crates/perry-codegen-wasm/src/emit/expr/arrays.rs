@@ -8,7 +8,7 @@ use super::*;
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_arrays(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
-            Expr::Array(elements) => {
+            Expr::Array(elements, _) => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "array_new", 0);
                 for elem in elements {
@@ -171,7 +171,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }));
                 self.emit_memcall(func, "array_length", 1);
             }
-            Expr::ArraySlice { array, start, end } => {
+            Expr::ArraySlice {
+                array, start, end, ..
+            } => {
                 self.emit_expr(func, array);
                 self.emit_expr(func, start);
                 if let Some(e) = end {
@@ -325,7 +327,7 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
                 func.instruction(&Instruction::End);
             }
-            Expr::ArrayFrom(val) => {
+            Expr::ArrayFrom(val, _) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "array_from", 1);

@@ -275,7 +275,7 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // Recording the constructor provenance (rather than trusting a
         // `symbol` annotation) lets strict equality use raw identity safely.
         Expr::SymbolNew(_) | Expr::SymbolFor(_) => Some(HirType::Symbol),
-        Expr::Array(_) | Expr::ArraySpread(_) => Some(HirType::Array(Box::new(HirType::Any))),
+        Expr::Array(_, _) | Expr::ArraySpread(_) => Some(HirType::Array(Box::new(HirType::Any))),
         Expr::MapNew | Expr::MapNewFromArray(_) => Some(HirType::Generic {
             base: "Map".to_string(),
             type_args: vec![HirType::Any, HirType::Any],
@@ -467,7 +467,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 None
             }
         }
-        Expr::Array(_) | Expr::ArraySpread(_) => {
+        Expr::Array(_, _) | Expr::ArraySpread(_) => {
             Some(HirType::Array(Box::new(HirType::Any)))
         }
         // `new Array(n)` / `new Array(a, b, ...)` — the shared HIR inference
@@ -483,7 +483,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayFilter { .. }
         | Expr::ArrayFlat { .. }
         | Expr::ArrayFlatMap { .. }
-        | Expr::ArrayFrom(_)
+        | Expr::ArrayFrom(_, _)
         | Expr::ArrayFromArrayLikeHoley(_)
         | Expr::ArrayFromMapped { .. }
         | Expr::ArraySort { .. }

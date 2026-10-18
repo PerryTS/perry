@@ -124,7 +124,7 @@ pub(crate) fn walk_init_for_closure_targets_in_expr(
         Expr::Unary { operand, .. } => {
             walk_init_for_closure_targets_in_expr(operand, out);
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 walk_init_for_closure_targets_in_expr(i, out);
             }
@@ -243,7 +243,7 @@ pub(crate) fn walk_for_set_hidden_targets_in_expr(
         Expr::Unary { operand, .. } => {
             walk_for_set_hidden_targets_in_expr(operand, out);
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 walk_for_set_hidden_targets_in_expr(i, out);
             }

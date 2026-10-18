@@ -1614,7 +1614,7 @@ impl<'a> UseWalk<'a> {
                 }
             }
             // Container literals: a tracked member becomes an element.
-            Expr::Array(items) => {
+            Expr::Array(items, _) => {
                 for i in items {
                     self.with_ctx(report::ESC_ELEMENT, |w| w.walk_expr(i));
                 }

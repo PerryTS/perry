@@ -539,7 +539,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         }
 
         // Aggregates.
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 walk_expr(el, in_loop, scan);
             }

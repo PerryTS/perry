@@ -85,7 +85,7 @@ pub(crate) fn emit_driver(
                 Box::new(Expr::ReflectApply {
                     func: Box::new(Expr::LocalGet(method)),
                     this_arg: Box::new(Expr::LocalGet(iter_id)),
-                    args: Box::new(Expr::Array(vec![])),
+                    args: Box::new(Expr::Array(vec![], None)),
                 }),
             )))],
             else_branch: None,

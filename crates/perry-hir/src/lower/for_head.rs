@@ -362,16 +362,19 @@ pub(crate) fn map_index_fast_path_head(left: &ast::ForHead, allow_pair_head: boo
 /// makes, and live where the `MapEntries` materialisation it replaces was a
 /// snapshot.
 pub(crate) fn map_entry_pair(arr_id: LocalId, idx_id: LocalId) -> Expr {
-    Expr::Array(vec![
-        Expr::MapEntryKeyAt {
-            map: Box::new(Expr::LocalGet(arr_id)),
-            idx: Box::new(Expr::LocalGet(idx_id)),
-        },
-        Expr::MapEntryValueAt {
-            map: Box::new(Expr::LocalGet(arr_id)),
-            idx: Box::new(Expr::LocalGet(idx_id)),
-        },
-    ])
+    Expr::Array(
+        vec![
+            Expr::MapEntryKeyAt {
+                map: Box::new(Expr::LocalGet(arr_id)),
+                idx: Box::new(Expr::LocalGet(idx_id)),
+            },
+            Expr::MapEntryValueAt {
+                map: Box::new(Expr::LocalGet(arr_id)),
+                idx: Box::new(Expr::LocalGet(idx_id)),
+            },
+        ],
+        None,
+    )
 }
 
 /// Rewrite `for (… of m.values() / m.keys() / m.entries())` into the

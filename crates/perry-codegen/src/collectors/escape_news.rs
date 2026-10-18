@@ -348,7 +348,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
-        | Expr::ArrayFrom(operand)
+        | Expr::ArrayFrom(operand, _)
         | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
@@ -435,7 +435,7 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
             collect_used_new_fields_in_expr(index, non_escaping_news, used);
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for element in elements {
                 collect_used_new_fields_in_expr(element, non_escaping_news, used);
             }
@@ -599,7 +599,9 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(separator, non_escaping_news, used);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             collect_used_new_fields_in_expr(array, non_escaping_news, used);
             collect_used_new_fields_in_expr(start, non_escaping_news, used);
             if let Some(end) = end {

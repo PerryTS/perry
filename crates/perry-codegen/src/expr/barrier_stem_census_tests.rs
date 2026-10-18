@@ -507,7 +507,7 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
                 name: "a".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
@@ -568,7 +568,7 @@ fn idxset_recv_global_ir() -> String {
         // reaching the receiver ladder this stem lives in).
         ty: Type::Array(Box::new(Type::Any)),
         mutable: true,
-        init: Some(Expr::Array(Vec::new())),
+        init: Some(Expr::Array(Vec::new(), None)),
     }];
     m.functions = vec![Function {
         id: 1,
@@ -685,7 +685,7 @@ fn idxset_recv_captured_ir() -> String {
                 name: "a".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Let {
                 id: FILL_ID,
@@ -769,7 +769,7 @@ fn apush_ir() -> String {
                 name: "a".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: ARR_ID,
@@ -909,7 +909,7 @@ fn idxset_bounded_ir() -> String {
                 name: "a".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {

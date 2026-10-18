@@ -269,7 +269,10 @@ fn arr_length_store_roots_the_receiver_across_an_allocating_rhs() {
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Number)),
                     mutable: false,
-                    init: Some(Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)])),
+                    init: Some(Expr::Array(
+                        vec![Expr::Number(1.0), Expr::Number(2.0)],
+                        None,
+                    )),
                 },
                 Stmt::Expr(Expr::PropertySet {
                     object: Box::new(Expr::LocalGet(1)),
@@ -296,7 +299,7 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),
                     mutable: false,
-                    init: Some(Expr::Array(vec![Expr::Number(1.0)])),
+                    init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
                 },
                 Stmt::Let {
                     id: 2,
@@ -958,7 +961,7 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::Undefined])),
+                init: Some(Expr::Array(vec![Expr::Undefined], None)),
             },
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(1)),

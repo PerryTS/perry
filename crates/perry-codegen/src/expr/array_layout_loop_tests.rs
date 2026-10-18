@@ -370,7 +370,7 @@ fn const_and_mutable_module_arrays_keep_global_roots_across_allocating_loops() {
     for (mutable, allocating) in [(false, false), (false, true), (true, false)] {
         let mut body = base.clone();
         if allocating {
-            body.push(Stmt::Expr(Expr::Array(vec![])));
+            body.push(Stmt::Expr(Expr::Array(vec![], None)));
         }
         let ty = Type::Array(Box::new(Type::Any));
         let mut m = probe_module("rarr_module_elements", ty.clone(), body, None);
@@ -380,7 +380,7 @@ fn const_and_mutable_module_arrays_keep_global_roots_across_allocating_loops() {
             name: "a".into(),
             ty,
             mutable,
-            init: Some(Expr::Array(vec![])),
+            init: Some(Expr::Array(vec![], None)),
         }];
         let ir = String::from_utf8(compile_module(&m, opts()).unwrap()).unwrap();
         check(&ir);

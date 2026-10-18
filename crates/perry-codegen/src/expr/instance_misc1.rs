@@ -901,7 +901,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Array.from(iterable) — stub returns the iterable as-is --------
         // Array.from(iterable) — clone via js_array_clone which
         // handles arrays, Sets (→ js_set_to_array), Maps (→ entries).
-        Expr::ArrayFrom(iter) => {
+        Expr::ArrayFrom(iter, _) => {
             // #2773: `js_array_from_value` throws TypeError for null/undefined
             // sources (and keeps number/boolean/symbol -> []) before delegating
             // to the existing `js_array_clone` materialization. Pass the raw

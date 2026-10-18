@@ -103,7 +103,7 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
         // `i++` on a number local nothing else can see: a numeric add and a
         // store no getter can observe.
         Expr::Update { id, .. } => private(id) && crate::rooting::expr_is_inert_primitive(ctx, e),
-        Expr::Array(items) => items.iter().all(|i| arg_is_order_free(ctx, i)),
+        Expr::Array(items, _) => items.iter().all(|i| arg_is_order_free(ctx, i)),
         Expr::Object(props) => props.iter().all(|(_, v)| arg_is_order_free(ctx, v)),
         // ToBoolean, `typeof` and strict equality never run user code.
         Expr::TypeOf(operand)

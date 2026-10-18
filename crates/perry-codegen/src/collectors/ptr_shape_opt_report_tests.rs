@@ -386,7 +386,7 @@ fn nothing_is_recorded_when_the_report_is_off() {
     // this test's subject is the report gate, not the proof.
     let stmts = vec![
         let_c(1, "escaped"),
-        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)]))),
+        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)], None))),
     ];
 
     // Take the same lock the enabled sessions use — otherwise a

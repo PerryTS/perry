@@ -31,7 +31,7 @@ fn literal_ir(name: &str, method: Option<&str>, opts: CompileOptions, deferred: 
             vec![closure]
         } else {
             vec![
-                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)]),
+                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
                 closure,
             ]
         };

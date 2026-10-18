@@ -120,7 +120,7 @@ pub(crate) fn may_hold_leaf(
     !matches!(
         init,
         Expr::Object(_)
-            | Expr::Array(_)
+            | Expr::Array(_, _)
             | Expr::Closure { .. }
             | Expr::New { .. }
             | Expr::FuncRef(_)

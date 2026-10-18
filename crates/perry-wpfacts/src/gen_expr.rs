@@ -813,7 +813,7 @@ impl<'a> Gen<'a> {
                 self.store(fx, obj, Key::Any, vals, "rest".into(), Some(tm), true);
                 obj
             }
-            Expr::Array(elems) => {
+            Expr::Array(elems, _) => {
                 let tm = self.new_arr_template(mi, "lit");
                 let t = self.m.tok(TokKind::Obj(tm));
                 let fa = self.m.field_any(t);

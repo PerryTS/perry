@@ -439,7 +439,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // the correct shape. Without this, the bare read
                     // returns a 0 sentinel and `Array.isArray(...)` /
                     // `.length` / iteration all explode.
-                    "execArgv" => return Ok(Expr::Array(Vec::new())),
+                    "execArgv" => return Ok(Expr::Array(Vec::new(), None)),
                     // #1348: process.release — object describing the
                     // current runtime release. Node returns at least
                     // `{ name, sourceUrl, headersUrl }`. Perry binaries
@@ -489,7 +489,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // that probes the shape (Array.isArray, .length,
                     // .includes(name)) now does the right thing instead
                     // of crashing on the 0.0 sentinel.
-                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
+                    "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
                     "finalization" => return Ok(process_native_property("finalization")),
                     // #1379: process.config — object describing build-time
                     // config (`{ variables, target_defaults }` in Node).
@@ -636,7 +636,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "version" => return Ok(Expr::ProcessVersion),
                     "versions" => return Ok(Expr::ProcessVersions),
                     "env" => return Ok(Expr::ProcessEnv),
-                    "execArgv" => return Ok(Expr::Array(Vec::new())),
+                    "execArgv" => return Ok(Expr::Array(Vec::new(), None)),
                     "release" => {
                         return Ok(Expr::Object(vec![
                             ("name".to_string(), Expr::String("node".to_string())),
@@ -655,7 +655,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             args: Vec::new(),
                         })
                     }
-                    "moduleLoadList" => return Ok(Expr::Array(vec![])),
+                    "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
                     "finalization" => return Ok(process_native_property("finalization")),
                     "config" => {
                         return Ok(Expr::Object(vec![

@@ -254,7 +254,7 @@ where
         | Expr::NumberIsSafeInteger(v)
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
-        | Expr::ArrayFrom(v)
+        | Expr::ArrayFrom(v, _)
         | Expr::ArrayFromArrayLikeHoley(v)
         | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
@@ -827,7 +827,7 @@ where
         }
 
         // ─── Vec<Expr> children ───────────────────────────────────────────
-        Expr::Array(elements) | Expr::Sequence(elements) | Expr::SuperCall(elements) => {
+        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements) => {
             for e in elements {
                 f(e);
             }
@@ -1601,7 +1601,9 @@ where
                 f(fi);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             f(array);
             f(start);
             if let Some(e) = end {

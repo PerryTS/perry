@@ -396,7 +396,7 @@ mod tests {
                 (
                     1,
                     Type::Any,
-                    Expr::Array(vec![Expr::String("source".into())]),
+                    Expr::Array(vec![Expr::String("source".into())], None),
                 ),
                 (2, Type::Boolean, Expr::Bool(false)),
                 (3, Type::Any, Expr::Undefined),

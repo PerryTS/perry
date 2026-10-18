@@ -844,7 +844,7 @@ fn scan_whole_module(hir: &Module) -> ModuleScan {
 /// one slot (no spread).
 fn array_literal_len(e: &Expr) -> Option<i64> {
     match e {
-        Expr::Array(elements) => Some(elements.len() as i64),
+        Expr::Array(elements, _) => Some(elements.len() as i64),
         Expr::ArraySpread(elements) => {
             if elements
                 .iter()
@@ -862,7 +862,7 @@ fn array_literal_len(e: &Expr) -> Option<i64> {
 fn is_number_array_literal(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::Array(elements)
+        Expr::Array(elements, _)
             if elements
                 .iter()
                 .all(|element| matches!(element, Expr::Integer(_) | Expr::Number(_)))

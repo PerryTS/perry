@@ -296,11 +296,10 @@ fn plain_double_array_literal_skips_notes_and_marking() {
     let ir = probe_ir(&module(
         "numeric_literal",
         vec![param(1, Type::Number), param(2, Type::Number)],
-        vec![Stmt::Return(Some(Expr::Array(vec![
-            Expr::LocalGet(1),
-            Expr::LocalGet(2),
-            Expr::Number(3.0),
-        ])))],
+        vec![Stmt::Return(Some(Expr::Array(
+            vec![Expr::LocalGet(1), Expr::LocalGet(2), Expr::Number(3.0)],
+            None,
+        )))],
     ));
     let plain = block_body(&ir, "arrlit.plain_numbers")
         .unwrap_or_else(|| panic!("no plain-number arm:\n{ir}"));

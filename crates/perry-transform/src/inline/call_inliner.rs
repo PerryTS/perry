@@ -1089,7 +1089,7 @@ pub fn inline_calls_in_expr(
             }
             exact_receiver_facts.clear();
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             let mut earlier = EarlierOperands::default();
             for elem in elements {
                 hoisted.extend(ordered!(elem, &mut earlier));
@@ -1905,7 +1905,7 @@ pub(crate) fn scalar_aggregate_call_len(
 ) -> Option<(LocalId, usize)> {
     let param_id = scalar_aggregate_loop_param(func)?;
     let param_index = func.params.iter().position(|param| param.id == param_id)?;
-    let Expr::Array(elements) = args.get(param_index)? else {
+    let Expr::Array(elements, _) = args.get(param_index)? else {
         return None;
     };
     if elements.is_empty()

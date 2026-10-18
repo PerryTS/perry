@@ -476,7 +476,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk_index_uses_in_expr(value, out);
         }
         Expr::PropertyUpdate { object, .. } => walk_index_uses_in_expr(object, out),
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 walk_index_uses_in_expr(el, out);
             }

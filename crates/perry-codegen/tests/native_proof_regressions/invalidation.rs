@@ -632,7 +632,7 @@ fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
             mutable: true,
-            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)], None)),
         },
         for_loop(
             2,
@@ -667,7 +667,7 @@ fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
             mutable: true,
-            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)], None)),
         },
         Stmt::Let {
             id: 2,
@@ -782,7 +782,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
             name: "box".to_string(),
             ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
             mutable: false,
-            init: Some(Expr::Array(vec![local(1)])),
+            init: Some(Expr::Array(vec![local(1)], None)),
         },
         for_loop(
             2,
@@ -981,7 +981,7 @@ fn nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
             vec![
                 Stmt::Expr(extern_call(
                     "native_touch",
-                    vec![Expr::Array(vec![local(1)])],
+                    vec![Expr::Array(vec![local(1)], None)],
                     Type::Void,
                 )),
                 array_set(1, local(2), local(2)),

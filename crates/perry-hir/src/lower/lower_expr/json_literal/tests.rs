@@ -21,7 +21,7 @@ fn node_threshold_is_inclusive_and_small_arrays_stay_direct() {
     // The root array counts as one value node.
     let below = format!("[{}]", vec!["0"; MIN_NODES - 2].join(","));
     let at = format!("[{}]", vec!["0"; MIN_NODES - 1].join(","));
-    assert!(matches!(lower(&below), Expr::Array(_)));
+    assert!(matches!(lower(&below), Expr::Array(_, _)));
     let Expr::JsonParse(text) = lower(&at) else {
         panic!("threshold must select JSON.parse")
     };
@@ -34,7 +34,7 @@ fn node_threshold_is_inclusive_and_small_arrays_stay_direct() {
 fn primitive_array_text_threshold_is_inclusive() {
     let below = format!(r#"["{}"]"#, "x".repeat(MIN_TEXT_BYTES - 1));
     let at = format!(r#"["{}"]"#, "x".repeat(MIN_TEXT_BYTES));
-    assert!(matches!(lower(&below), Expr::Array(_)));
+    assert!(matches!(lower(&below), Expr::Array(_, _)));
     assert!(matches!(lower(&at), Expr::JsonParse(_)));
 }
 

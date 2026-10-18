@@ -18,7 +18,7 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
                 else_expr,
             } => check_expr(condition) || check_expr(then_expr) || check_expr(else_expr),
             Expr::Call { callee, args, .. } => check_expr(callee) || args.iter().any(check_expr),
-            Expr::Array(elements) => elements.iter().any(check_expr),
+            Expr::Array(elements, _) => elements.iter().any(check_expr),
             Expr::IndexGet { object, index } => check_expr(object) || check_expr(index),
             Expr::IndexSet {
                 object,
@@ -531,7 +531,7 @@ pub fn is_pure_function(func: &Function) -> bool {
             Expr::Call { callee, args, .. } => {
                 expr_is_pure(callee, known) && args.iter().all(|a| expr_is_pure(a, known))
             }
-            Expr::Array(elems) => elems.iter().all(|e| expr_is_pure(e, known)),
+            Expr::Array(elems, _) => elems.iter().all(|e| expr_is_pure(e, known)),
             Expr::IndexGet { object, index } => {
                 expr_is_pure(object, known) && expr_is_pure(index, known)
             }
