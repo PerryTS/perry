@@ -12,6 +12,9 @@ use crate::model::{TmplKind, TokKind, TOP};
 /// What one binding can hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BindingFacts {
+    /// Diagnostic-only TOP provenance; never consumed by emitted-code decisions.
+    pub top: bool,
+    pub top_cause: Option<String>,
     /// Class ids of the class templates (fact units) it can hold, sorted.
     pub class_ids: Vec<u32>,
     /// Primitive kind bits (`model::prim`).
@@ -34,6 +37,9 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     let mut out = BindingFacts {
         prims: node.prim,
         other: node.widened,
+        top: m.explain && (node.widened || node.pts.to_sorted().contains(&TOP)),
+        top_cause: (m.explain && (node.widened || node.pts.to_sorted().contains(&TOP)))
+            .then(|| m.top_origin(n)),
         ..Default::default()
     };
     for t in node.pts.to_sorted() {

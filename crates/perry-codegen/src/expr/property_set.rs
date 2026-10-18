@@ -438,6 +438,7 @@ pub(crate) fn emit_nullish_write_guard(
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     match expr {
         Expr::PropertySet {
             object,

@@ -163,7 +163,7 @@ fn split_path(file: &str) -> (String, String) {
 /// callers can skip the copy (and so a module that never saw `--debug-symbols`
 /// is provably untouched).
 pub fn attach_line_tables(ll: &str) -> Option<String> {
-    if !ll.contains(MARKER_PREFIX) {
+    if !ll.contains(MARKER_PREFIX) && !ll.contains("; perryfb ") {
         return None;
     }
 
@@ -180,9 +180,11 @@ pub fn attach_line_tables(ll: &str) -> Option<String> {
 
     let mut out = String::with_capacity(ll.len() + ll.len() / 2);
     let lines: Vec<&str> = ll.lines().collect();
-    let Some(module_file) = lines.iter().find_map(|l| parse_marker(l)).map(|(_, f)| f) else {
-        return None;
-    };
+    let module_file = lines
+        .iter()
+        .find_map(|l| parse_marker(l))
+        .map(|(_, f)| f)
+        .unwrap_or("perry-fallback");
     // Each marked function's first line, for the delegate rule below.
     let mut first_lines: std::collections::HashMap<&str, (u32, &str)> =
         std::collections::HashMap::new();
@@ -283,8 +285,24 @@ pub fn attach_line_tables(ll: &str) -> Option<String> {
         }
 
         let mut current = first_line;
+        let mut fallback: Option<(u64, u64, String)> = None;
+        let mut probe_index = 0u32;
         let mut in_bracket = false;
         for l in body {
+            if let Some(marker) = l.trim().strip_prefix("; perryfb ") {
+                let mut parts = marker.split_whitespace();
+                fallback = parts
+                    .next()
+                    .and_then(|g| g.parse().ok())
+                    .zip(parts.next().and_then(|i| i.parse().ok()))
+                    .zip(parts.next())
+                    .map(|((g, i), h)| (g, i, h.into()));
+                continue;
+            }
+            if l.trim() == "; perryfb_end" {
+                fallback = None;
+                continue;
+            }
             if let Some((n, f)) = parse_marker(l) {
                 if f == file {
                     current = n;
@@ -327,7 +345,33 @@ pub fn attach_line_tables(ll: &str) -> Option<String> {
                 out.push('\n');
                 continue;
             }
-            let loc = format!(", !dbg !DILocation(line: {current}, scope: !{sp_id})");
+            let mut scope = sp_id;
+            let mut call_text = None;
+            if let Some((guid, index, helper)) = &fallback {
+                if is_call(trimmed) && symbol_after_at(trimmed) == Some(helper.as_str()) {
+                    // LLVM otherwise drops both discriminators when tail-
+                    // merging distinct generic calls. Preserve call-site
+                    // identity only in this opt-in diagnostic image.
+                    let mut text = l.to_string();
+                    let end = comment_start(l).unwrap_or(l.len());
+                    if let Some(close) = l[..end].rfind(')') {
+                        text.insert_str(close + 1, " nomerge");
+                        call_text = Some(text);
+                    }
+                    probe_index += 1;
+                    // LLVM's call-site discriminator has a 16-bit index.
+                    assert!(
+                        probe_index <= 0xffff,
+                        "fallback call-site index exhausted in {name}"
+                    );
+                    let discriminator = (probe_index << 3) | (100 << 19) | (2 << 26) | 7;
+                    scope = fresh();
+                    metadata.push(format!("!{scope} = !DILexicalBlockFile(scope: !{sp_id}, file: !{file_id}, discriminator: {discriminator})"));
+                    crate::fallback_diag::call_label(*guid, *index, name, probe_index);
+                }
+            }
+            let l = call_text.as_deref().unwrap_or(l);
+            let loc = format!(", !dbg !DILocation(line: {current}, scope: !{scope})");
             match comment_start(l) {
                 Some(c) => {
                     out.push_str(l[..c].trim_end());
@@ -382,6 +426,12 @@ pub fn attach_line_tables(ll: &str) -> Option<String> {
             "!{flags_dwarf} = !{{i32 7, !\"Dwarf Version\", i32 4}}\n"
         ));
     }
+    // Codegen-unit partitioning retains raw named metadata in unit zero.
+    // Every unit carrying call labels needs the descriptor anchor too.
+    if ll.contains("; perryfb ") && !ll.contains("!llvm.pseudo_probe_desc") {
+        let desc = fresh();
+        out.push_str(&format!("!llvm.pseudo_probe_desc = !{{!{desc}}}\n!{desc} = !{{i64 1, i64 1, !\"perry-fallback\"}}\n"));
+    }
     for m in metadata {
         out.push_str(&m);
         out.push('\n');
@@ -430,6 +480,28 @@ define void @nodebug() {\n  %x = fadd double 1.0, 2.0\n  %y = tail call double @
         assert!(out.contains("!DIFile(filename: \"app.ts\", directory: \"/src\")"));
         assert!(out.contains("!llvm.dbg.cu"));
         assert!(out.contains("!\"Dwarf Version\", i32 4"));
+    }
+
+    #[test]
+    fn fallback_discriminator_attaches_to_the_named_call_after_rooting() {
+        let module = "declare void @helper()\ndeclare void @rooting()\ndefine void @wrapper() {\n  ; perryfb 17 23 helper\n  call void @rooting()\n  call void @helper()\n  ; perryfb_end\n  ret void\n}\n";
+        let out = attach_line_tables(module).unwrap();
+        assert!(!out.contains("; perryfb"));
+        assert!(out.contains("discriminator: 186646543"));
+        let lines: Vec<_> = out.lines().collect();
+        let root = lines
+            .iter()
+            .find(|l| l.contains("call void @rooting"))
+            .unwrap();
+        let helper = lines
+            .iter()
+            .find(|l| l.contains("call void @helper"))
+            .unwrap();
+        assert_ne!(root.split("scope: ").last(), helper.split("scope: ").last());
+        assert!(!out.contains("call void @llvm.pseudoprobe"));
+        assert!(out.contains("call void @helper() nomerge"));
+        assert!(out.contains("!llvm.pseudo_probe_desc ="));
+        assert!(!out.contains("call void @rooting() nomerge"));
     }
 
     #[test]

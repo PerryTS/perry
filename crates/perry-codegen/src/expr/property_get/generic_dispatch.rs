@@ -466,6 +466,12 @@ fn lower_property_site(
     } else {
         None
     };
+    let _decision = arm.as_ref().map(|_| {
+        crate::fallback_diag::decision(
+            "receiver layout has no admitted colour/presence slot at runtime",
+            "layout-word/colour-mask/presence check",
+        )
+    });
     let value = lower_property_site_tail(ctx, object, property, global_reference, obj_box)?;
     Ok(match arm {
         Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),

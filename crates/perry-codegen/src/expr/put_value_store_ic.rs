@@ -99,6 +99,10 @@ fn emit_static_store_ic_site(
 ) -> String {
     let (dir, key_bits, hash) = crate::expr::method_site::emit_site_key(ctx, property);
     let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
+    let _probe_decision = crate::fallback_diag::decision(
+        "static store has no consumed fixed-slot proof; runtime layout/presence check required",
+        "receiver layout/slot presence/store admission",
+    );
     let stored = ctx.block().call(
         I32,
         "perry_probe_set",
@@ -120,6 +124,10 @@ fn emit_static_store_ic_site(
     ctx.current_block = slow_idx;
     let key_box = ctx.block().bitcast_i64_to_double(&key_bits);
     let strict_i32 = if strict { "1" } else { "0" };
+    let _miss_decision = crate::fallback_diag::decision(
+        "store probe declined; descriptor/prototype/key-add semantics required",
+        "runtime store-probe admission",
+    );
     let set = ctx.block().call(
         DOUBLE,
         "js_put_value_set",

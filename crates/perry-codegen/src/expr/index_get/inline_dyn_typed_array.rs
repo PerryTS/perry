@@ -709,6 +709,10 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     // spare a `js_number_coerce` from an arm that no TypeScript fixture can
     // reach (see `lower_unknown_local_index_get_for_number_context`).
     ctx.current_block = object_miss_idx;
+    let _fallback_decision = crate::fallback_diag::decision(
+        "inline arraylike receiver/element guards declined; boxed indexed lookup required",
+        "receiver layout/element representation/index admissibility",
+    );
     let slow_raw = ctx.block().call(
         DOUBLE,
         "js_packed_arraylike_index_get",

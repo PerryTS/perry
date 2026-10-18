@@ -90,7 +90,8 @@ pub(crate) fn run(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(400_000_000),
         ),
-        explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1"),
+        explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
+            || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
@@ -221,6 +222,7 @@ pub(crate) fn view_for(
         h.finish()
     };
     perry_codegen::ProgramFactsView {
+        fallback: super::fallback_diag::facts_for(pf, &key),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
         contract_section: Arc::new(section),

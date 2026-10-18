@@ -824,6 +824,7 @@ fn with_confined_read<'a, T>(
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     // Step 4b / array S3: a planned-bare element read inside a loop region.
 
     match expr {

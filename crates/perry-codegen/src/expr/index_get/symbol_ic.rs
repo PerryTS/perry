@@ -104,6 +104,10 @@ pub(crate) fn keyed_slow(
     site_id: &str,
     dynamic: bool,
 ) -> String {
+    let _decision = crate::fallback_diag::decision(
+        "keyed layout probe declined; complete keyed lookup required",
+        "key coercion/receiver layout/presence",
+    );
     ctx.block().call(
         DOUBLE,
         "js_object_get_keyed_slow",

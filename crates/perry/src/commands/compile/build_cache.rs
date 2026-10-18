@@ -580,6 +580,9 @@ fn miss(reason: &str) -> BuildCacheStats {
 }
 
 fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
+    if perry_codegen::fallback_diag::enabled() {
+        return Err("fallback-diagnostics".to_string());
+    }
     if args.no_cache {
         return Err("no-cache".to_string());
     }

@@ -808,6 +808,10 @@ fn lower_materialized_receiver_dispatch(
     property: &str,
     lowered_args: &[String],
 ) -> Result<String> {
+    let _decision = crate::fallback_diag::decision(
+        "scalar receiver method requires materialization and runtime dispatch",
+        "method identity after receiver materialization",
+    );
     let recv_box = materialize_scalar_receiver(ctx, receiver_id, class_name)?;
     let key_idx = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);

@@ -154,7 +154,7 @@ pub(super) fn try_compile(
         false,
         false,
         false,
-    );
+    )?;
     if matches!(format, OutputFormat::Text) {
         println!("Wrote executable: {}", output.display());
     }

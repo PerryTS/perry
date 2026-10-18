@@ -542,7 +542,13 @@ pub(crate) fn render_fn_external_with_gc_leaf_callees(
 /// `ir`, `f`'s rendering, with an `internal` / `private` definition promoted
 /// to external linkage (see [`render_fn_external_with_gc_leaf_callees`]).
 pub(crate) fn force_external_linkage(f: &LlFunction, ir: String) -> String {
-    if f.linkage == "internal" || f.linkage == "private" {
+    // Native split-unit headers already force every definition external.
+    // Diagnostics use text to attach call-site metadata; preserve that same
+    // linkage so a helper needed only by another unit cannot be discarded.
+    if f.linkage == "internal"
+        || f.linkage == "private"
+        || (crate::fallback_diag::enabled() && !f.linkage.is_empty())
+    {
         return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
     }
     ir

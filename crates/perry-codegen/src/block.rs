@@ -1644,11 +1644,13 @@ impl LlBlock {
         self.counter.note_fn_info(body, note);
     }
 
+    #[track_caller]
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {
         self.call_with_gc_leaf(ret_ty, func_name, args, false, false)
     }
 
     /// Direct-call counterpart of [`Self::call_indirect_gc_leaf`].
+    #[track_caller]
     pub fn call_gc_leaf(
         &mut self,
         ret_ty: LlvmType,
@@ -1659,6 +1661,7 @@ impl LlBlock {
     }
 
     /// Call an already selected cold body without copying it into this site.
+    #[track_caller]
     pub fn call_noinline(
         &mut self,
         ret_ty: LlvmType,
@@ -1668,6 +1671,7 @@ impl LlBlock {
         self.call_with_gc_leaf(ret_ty, func_name, args, false, true)
     }
 
+    #[track_caller]
     fn call_with_gc_leaf(
         &mut self,
         ret_ty: LlvmType,
@@ -1676,6 +1680,10 @@ impl LlBlock {
         gc_leaf: bool,
         no_inline: bool,
     ) -> String {
+        let fallback = crate::fallback_diag::record(&self.label, func_name);
+        if let Some((guid, index)) = fallback {
+            self.emit_raw(crate::fallback_diag::probe(guid, index, func_name));
+        }
         self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: record this emission against the FFI provenance
         // registry. The driver consults the registry after all per-module
@@ -1716,11 +1724,20 @@ impl LlBlock {
                 no_inline,
             });
         }
+        if let Some((guid, index)) = fallback {
+            let _ = (guid, index);
+            self.emit_raw("; perryfb_end".to_string());
+        }
         self.keep_byte_owners_after_call(Some(func_name));
         r
     }
 
+    #[track_caller]
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
+        let fallback = crate::fallback_diag::record(&self.label, func_name);
+        if let Some((guid, index)) = fallback {
+            self.emit_raw(crate::fallback_diag::probe(guid, index, func_name));
+        }
         self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
@@ -1749,6 +1766,10 @@ impl LlBlock {
                 gc_leaf: false,
                 no_inline: false,
             });
+        }
+        if let Some((guid, index)) = fallback {
+            let _ = (guid, index);
+            self.emit_raw("; perryfb_end".to_string());
         }
         self.keep_byte_owners_after_call(Some(func_name));
     }

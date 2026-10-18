@@ -458,6 +458,14 @@ fn build_clang_compile_plan(
     clang_args.push(effective_target.clone());
 
     let mut analysis_clang_args = vec![opt_flag.to_string(), "-fno-math-errno".to_string()];
+    if crate::fallback_diag::enabled() {
+        // LLVM22's statepoint machine-call lowering does not retain nomerge.
+        // A backend tail merge erases the distinct call-site discriminators.
+        // This diagnostic-only choice is subject to the instruction gate.
+        for args in [&mut clang_args, &mut analysis_clang_args] {
+            args.extend(["-mllvm".into(), "-enable-tail-merge=false".into()]);
+        }
+    }
     if effective_target.starts_with("wasm32") {
         for args in [&mut clang_args, &mut analysis_clang_args] {
             args.extend(

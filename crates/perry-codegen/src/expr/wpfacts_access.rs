@@ -225,21 +225,32 @@ pub(crate) fn prove(
     access: Access,
 ) -> Option<FieldProof> {
     if property.starts_with('#') {
+        crate::fallback_diag::refuse("private key requires private-element semantics");
         return None;
     }
-    let (mut recv, binding) = receiver(ctx, object)?;
+    let (mut recv, binding) = receiver(ctx, object).or_else(|| {
+        crate::fallback_diag::refuse("receiver has no prefix-stable binding proof");
+        None
+    })?;
     if recv.class_ids.is_empty() || recv.class_ids.len() > 4 {
+        crate::fallback_diag::refuse("receiver class set is empty or exceeds four classes");
         return None;
     }
     let checked = recv.checked;
     let interp_guard = ctx.wpfacts.interp_guard;
     if (checked || interp_guard) && access != Access::Get {
+        crate::fallback_diag::refuse(
+            "guarded field proof is read-only; store/update needs checked semantics",
+        );
         return None;
     }
     if recv.nullable && tested_in_block(ctx, object) {
         recv.nullable = false;
     }
     if recv.nullable && access != Access::Get {
+        crate::fallback_diag::refuse(
+            "nullable store/update receiver requires generic nullish semantics",
+        );
         return None;
     }
     let mut slot: Option<u32> = None;
@@ -252,22 +263,39 @@ pub(crate) fn prove(
     let mut names = Vec::new();
     let mut slots = Vec::new();
     for &cid in &recv.class_ids {
-        let name = class_name_of(ctx, cid)?;
-        let f = ctx.wpfacts.field(cid, property)?;
+        let name = class_name_of(ctx, cid).or_else(|| {
+            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
+            None
+        })?;
+        let f = ctx.wpfacts.field(cid, property).or_else(|| {
+            crate::fallback_diag::refuse(
+                "key is not a definite data birth field of every receiver class",
+            );
+            None
+        })?;
         // Codegen's own layout must agree with the facts' birth slot.
-        let idx = crate::type_analysis::class_field_global_index(ctx, &name, property)?;
+        let idx =
+            crate::type_analysis::class_field_global_index(ctx, &name, property).or_else(|| {
+                crate::fallback_diag::refuse("class field has no codegen slot");
+                None
+            })?;
         if idx != f.slot {
+            crate::fallback_diag::refuse("facts slot disagrees with codegen layout");
             return None;
         }
         if super::property_set::class_has_computed_runtime_members(ctx, &name)
             || super::class_field_inline_guard::class_instances_carry_private_elements(ctx, &name)
             || super::class_field_inline_guard::class_instances_grow_past_layout(ctx, &name)
         {
+            crate::fallback_diag::refuse(
+                "computed/private/growing class layout refuses fixed-offset field access",
+            );
             return None;
         }
         if access != Access::Get {
             let keys_global = ctx.class_keys_globals.get(&name)?;
             if crate::codegen::slot_may_be_constfn(keys_global, idx) {
+                crate::fallback_diag::refuse("constant-function lane requires checked store");
                 return None;
             }
         }

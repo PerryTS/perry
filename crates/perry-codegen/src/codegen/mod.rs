@@ -468,6 +468,12 @@ pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+    let _fallback = crate::fallback_diag::begin(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+        opts.program_facts.fallback.clone(),
+    );
     match lower_module(hir, opts, None)? {
         Some(lowered) => emit_lowered_module(lowered),
         None => unreachable!("normal lowering produces a module"),
@@ -477,6 +483,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 /// Compile an owned HIR input, releasing it at the lowering/LLVM boundary.
 /// Lowering only borrows the input, preserving its object-cache identity.
 pub fn compile_module_owned(hir: HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+    let _fallback = crate::fallback_diag::begin(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+        opts.program_facts.fallback.clone(),
+    );
     let lowered = lower_module(&hir, opts, None)?;
     drop(hir);
     emit_lowered_module(lowered.expect("normal lowering produces a module"))
@@ -4321,6 +4333,20 @@ fn emit_lowered_module(lowered: LoweredModule) -> Result<Vec<u8>> {
         &module_name,
         &llmod.native_rep_records,
     )?;
+
+    if let Some((guid, _)) = crate::fallback_diag::module_probe() {
+        llmod.declare_function(
+            "llvm.pseudoprobe",
+            "void",
+            &[
+                crate::types::I64,
+                crate::types::I64,
+                crate::types::I32,
+                crate::types::I64,
+            ],
+        );
+        llmod.add_raw_global(format!("!llvm.pseudo_probe_desc = !{{!3999999999}}\n!3999999999 = !{{i64 {guid}, i64 1, !\"perry-fallback\"}}"));
+    }
 
     // #5391 codegen units: large modules split their object compilation into N
     // independently-compiled units so clang's peak RSS stays ~whole/N instead of

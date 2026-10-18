@@ -18,6 +18,7 @@ pub(crate) mod dialect;
 pub(crate) mod eh_mode;
 pub mod expr;
 pub mod ext_registry;
+pub mod fallback_diag;
 pub(crate) mod fn_info;
 pub mod function;
 pub mod function_order;

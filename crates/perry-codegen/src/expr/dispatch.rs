@@ -24,6 +24,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // Hoisted byte-access proofs are dirtied by every executed call at the
     // call-emission choke point and revalidated at their next use; no
     // expression boundary refreshes them.
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let value = lower_expr_inner(ctx, expr)?;
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(

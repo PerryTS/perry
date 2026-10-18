@@ -48,6 +48,9 @@ pub enum NativeMode {
 }
 
 pub fn native_mode() -> NativeMode {
+    if crate::fallback_diag::enabled() {
+        return NativeMode::Off;
+    }
     match std::env::var("PERRY_LLVM_INPROCESS").as_deref() {
         Ok("native") => NativeMode::Native,
         Ok("diff") => NativeMode::Diff,
@@ -60,6 +63,9 @@ pub fn native_mode() -> NativeMode {
 /// contexts provide useful parallelism. Small/single-unit modules retain the
 /// mature text transport unless `=native` is explicit.
 pub fn native_units_mode() -> NativeMode {
+    if crate::fallback_diag::enabled() {
+        return NativeMode::Off;
+    }
     match std::env::var("PERRY_LLVM_INPROCESS").as_deref() {
         Ok("0" | "off" | "false" | "1" | "on" | "true") => NativeMode::Off,
         Ok("diff") => NativeMode::Diff,

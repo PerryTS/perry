@@ -1906,6 +1906,10 @@ pub(super) fn emit_guarded_direct_method_call(
         );
     }
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+    let _decision = crate::fallback_diag::decision(
+        "receiver/method-entry guard matched no compiled target arm",
+        "receiver layout and method-entry identity",
+    );
     let fallback_value = if let Some(cert) = certificate {
         match cert.lookup {
             Some((lookup, value)) => super::console_promise::emit_split_call_half(

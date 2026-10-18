@@ -3163,6 +3163,7 @@ impl<'a> FnCtx<'a> {
     }
 
     pub fn block(&mut self) -> &mut LlBlock {
+        crate::fallback_diag::set_symbol(&self.func.name);
         self.func
             .block_mut(self.current_block)
             .expect("current_block index points at a valid block")
@@ -4356,6 +4357,7 @@ fn lower_compare_value(
 /// value. The compatibility `lower_expr` path below materializes this value
 /// when an existing caller still expects the generic JSValue/`double` ABI.
 pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<LoweredValue>> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     match expr {
         Expr::Bool(value) => {
             let lowered = LoweredValue::i1(if *value { "true" } else { "false" });

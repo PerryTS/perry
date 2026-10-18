@@ -18,6 +18,8 @@ use crate::module::LlModule;
 /// folds a hash of it into `digest`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProgramFactsView {
+    /// Observational diagnostics; excluded from every emitted-code digest.
+    pub fallback: std::sync::Arc<crate::fallback_diag::Facts>,
     pub digest: u64,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub contract_section: std::sync::Arc<Vec<u8>>,

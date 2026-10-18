@@ -741,6 +741,7 @@ fn program_families(
 ) -> Vec<RawFamily> {
     let graph = parents::Parents::new(modules, reexports);
     let mut refuse = |c: &Class, why: &str| {
+        crate::fallback_diag::family_refused(c.id, why);
         *refused.entry(why.to_string()).or_default() += 1;
         if explain() {
             eprintln!("perry: layout family refused: {}: {why}", c.name);

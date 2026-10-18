@@ -34,6 +34,7 @@ mod collect_modules_helpers;
 mod compressed_libs;
 mod embed;
 mod env_fold;
+mod fallback_diag;
 mod fn_infer;
 mod gc_effects_sidecar;
 mod geisterhand;

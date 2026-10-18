@@ -487,6 +487,7 @@ pub(crate) fn lower_put_value_dyn_ic_inline(
     v: &str,
     strict_i32: &str,
 ) -> Result<String> {
+    let _decision = crate::fallback_diag::decision("computed-key store has no fixed key/slot; runtime layout and ordinary Set dispatch required", "runtime key coercion/layout/presence/store admission");
     Ok(ctx.block().call(
         DOUBLE,
         "js_put_value_set_dynamic",
@@ -814,6 +815,7 @@ fn try_lower_process_env_put_value_set(
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     match expr {
         Expr::ProxyNew { target, handler } => {
             downgrade_unknown_call_expr(ctx, target);

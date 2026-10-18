@@ -314,6 +314,10 @@ fn emit_get(
     ctx.current_block = slow;
     // Preserve the boxed receiver on every miss. A lying annotation may
     // supply an SSO string or a primitive whose masked bits are no address.
+    let _fallback_decision = crate::fallback_diag::decision(
+        "typed element guard declined; complete dynamic indexed semantics required",
+        "receiver brand/index/value admissibility",
+    );
     let fallback = ctx.block().call(
         DOUBLE,
         "js_dyn_index_get",

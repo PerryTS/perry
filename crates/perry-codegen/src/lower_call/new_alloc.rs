@@ -539,6 +539,19 @@ fn emit_instance_alloc_inner(
     if ctx.program_layouts.families.contains_key(&cid)
         && crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
     {
+        let why = if class.extends_expr.is_some() {
+            "family is proven but its parent expression is evaluated at runtime"
+        } else {
+            "family parent differs from the registered parent class"
+        };
+        let _fallback = crate::fallback_diag::emission(
+            &ctx.func.name,
+            "computed",
+            "birth",
+            why,
+            "live parent identity against the declared family parent",
+            &[cid],
+        );
         let desc = crate::layout_desc::note_family_desc_use(cid);
         let raw = ctx.block().call(
             crate::types::PTR,
@@ -554,6 +567,19 @@ fn emit_instance_alloc_inner(
     if class.extends_expr.is_some()
         || (deferred_keys && !ctx.class_header_image_globals.contains_key(class_name))
     {
+        let why = if class.extends_expr.is_some() {
+            "evaluated parent prevents direct static class birth"
+        } else {
+            "deferred public field keys have no precomputed class header image"
+        };
+        let _fallback = crate::fallback_diag::emission(
+            &ctx.func.name,
+            "computed",
+            "birth",
+            why,
+            "parent identity and complete class birth/header layout",
+            &[cid],
+        );
         return ctx.block().call(
             I64,
             "js_object_alloc_with_parent",
