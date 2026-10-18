@@ -140,12 +140,16 @@ mod tests {
         assert_eq!(emit(&mut am, a.entry(ai)), emit(&mut bm, b.entry(bi)));
         assert_eq!(am.to_ir(), bm.to_ir());
         let ir = am.to_ir();
-        assert!(ir.contains("i32 3, i32 5, i32 5, i32 0, i32 4"));
+        let utf8_flags = 28 | crate::layout_desc::image_colour_flags(b"a\xf0\x9f\x98\x80");
+        assert!(ir.contains(&format!("i32 3, i32 5, i32 5, i32 0, i32 {utf8_flags}")));
         assert!(ir.contains("weak_odr constant"));
         assert!(!ir.contains("call "));
         let wi = a.intern_wtf8(b"\xed\xa0\x80");
         emit(&mut am, a.entry(wi));
         assert!(am.to_ir().contains("i8 21, i16 18765"));
-        assert!(am.to_ir().contains("i32 1, i32 3, i32 3, i32 0, i32 5"));
+        let wtf8_flags = 29 | crate::layout_desc::image_colour_flags(b"\xed\xa0\x80");
+        assert!(am
+            .to_ir()
+            .contains(&format!("i32 1, i32 3, i32 3, i32 0, i32 {wtf8_flags}")));
     }
 }

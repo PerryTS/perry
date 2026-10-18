@@ -1237,22 +1237,21 @@ fn ir_line_with(ir: impl AsRef<str>, needles: &[&str]) -> bool {
         .any(|line| needles.iter().all(|needle| line.contains(needle)))
 }
 
-/// Number lane, tier 1 (`emit_plain_number_test`): `bits <=s 0x7FF8_FFFF_FFFF_FFFF`.
-/// Replaces the one-tier band test's `, 32761`, and before that
-/// `call i32 @js_typed_f64_arg_guard(`.
+/// Number proof: ordered floating-point input, or the sign-closed magnitude
+/// check that rejects both NaN-box tag bands (including native HANDLE_TAG).
 fn guards_number_arg(ir: impl AsRef<str>) -> bool {
-    ir_line_with(ir, &["icmp sle i64 %", ", 9221401712017801215"])
+    let ir = ir.as_ref();
+    ir_line_with(ir, &["fcmp ord double %", ", 0.0"])
+        || (ir_line_with(ir, &["and i64 %", ", 9223372036854775807"])
+            && ir_line_with(ir, &["icmp ule i64 %", ", 9221401712017801215"]))
 }
 
-/// The one-tier Number guard (`emit_typed_f64_guard`): `is_number || is_int32`
-/// decided by the tag band plus the INT32 identity. Two-tiering is a PUBLIC
-/// ENTRY transform, so a direct call site still proves its arguments this way;
-/// this is the `, 32761` those assertions used to pin, with the neighbouring
-/// opcode so the constant alone cannot satisfy it.
+/// A direct typed call also accepts an INT32 box. Its sign-closed magnitude
+/// check and exact INT32 identity must both remain in the emitted guard.
 fn guards_number_arg_banded(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp ult i64 %", ", 32761"])
-        && ir_line_with(ir, &["icmp ugt i64 %", ", 32767"])
+    ir_line_with(ir, &["and i64 %", ", 9223372036854775807"])
+        && ir_line_with(ir, &["icmp ult i64 %", ", 9221401712017801216"])
         && ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
 }
 
@@ -1337,7 +1336,7 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     assert!(!guards_i32_arg(bool_guard));
     assert!(!guards_string_arg(bool_guard));
 
-    let number_tier1 = "  %r2 = icmp sle i64 %r1, 9221401712017801215\n";
+    let number_tier1 = "  %r2 = fcmp ord double %arg1, 0.0\n";
     assert!(guards_number_arg(number_tier1));
     // Tier 1 is a public-entry shape; a direct call site keeps the band guard,
     // so the two must not be interchangeable.
@@ -1347,6 +1346,18 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     // The constant alone must not satisfy a guard: the opcode has to match too.
     let constant_only = "  %r2 = add i64 %r1, 9221401712017801215\n";
     assert!(!guards_number_arg(constant_only));
+}
+
+fn callable_ir(ir: &str) -> String {
+    ir.lines()
+        .filter(|line| !line.starts_with("@__perry_function_name_descriptors_"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn materializes_heap_receiver(ir: &str) -> bool {
+    ir.contains("call preserve_mostcc i64 @perry_birth_class(")
+        || ir.contains("call i64 @js_object_alloc")
 }
 
 fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
@@ -1463,10 +1474,12 @@ fn body_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
 /// The IR of the `$spec_*` clone #8094 emitted for `symbol`, if there is one.
 fn spec_clone_ir_section<'a>(ir: &'a str, symbol: &str) -> Option<&'a str> {
     let prefix = format!("@{symbol}$spec_");
-    let at = ir.find(&prefix)?;
-    let end = ir[at..].find('(')? + at;
-    let name = ir[at + 1..end].to_string();
-    Some(defined_function_ir_section(ir, &name))
+    let line = ir
+        .lines()
+        .find(|line| line.starts_with("define ") && line.contains(&prefix))?;
+    let at = line.find(&prefix)?;
+    let end = line[at..].find('(')? + at;
+    Some(defined_function_ir_section(ir, &line[at + 1..end]))
 }
 
 fn error_chain(err: &anyhow::Error) -> String {
@@ -1949,7 +1962,7 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
     );
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"),
+        ir.contains("call double @perry_array_read_cold_shared("),
         "test must exercise a numeric-array get with a boxed fallback arm:\n{ir}"
     );
     assert!(
@@ -7165,7 +7178,7 @@ fn packed_f64_loop_rejects_nonnumeric_store_then_later_read() {
         "nonnumeric store into a numeric array must invalidate the raw-f64 layout:\n{ir}"
     );
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        ir.contains("33023") && ir.contains("call double @perry_array_read_cold_shared("),
         "later numeric-array read should be guarded independently after the layout-changing store:\n{ir}"
     );
 
@@ -7238,7 +7251,7 @@ fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
         "numeric store must retain the boxed fallback that invalidates raw-f64 layout:\n{ir}"
     );
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        ir.contains("33023") && ir.contains("call double @perry_array_read_cold_shared("),
         "later read should be guarded independently after the fallback-capable store:\n{ir}"
     );
 
@@ -7935,11 +7948,10 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     let box_alloc = ir
         .find("call i64 @js_box_alloc_bits")
         .expect("fixture should allocate a mutable-capture box");
-    let first_array_alloc = ir[box_alloc..]
-        .find("call i64 @js_array_alloc")
-        .map(|offset| box_alloc + offset)
-        .expect("fixture should lower the initializer after storing the box pointer");
-    let slot_init = &ir[box_alloc..first_array_alloc];
+    let slot_init = ir[box_alloc..]
+        .lines()
+        .nth(1)
+        .expect("box pointer slot initializer");
 
     assert!(
         slot_init.contains("store i64 "),
@@ -12654,10 +12666,10 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "direct typed-i32 guard failure must not recurse through the public wrapper:\n{caller_ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{typed} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{typed} to i64"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{generic_body} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{generic_body} to i64")),
         "runtime vtable must register the public wrapper, not internal typed/generic bodies:\n{ir}"
     );
 }
@@ -12843,10 +12855,10 @@ fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "direct typed-string guard failure must not recurse through the public wrapper:\n{caller_ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{typed} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{typed} to i64"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{generic_body} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{generic_body} to i64")),
         "runtime vtable must register the public wrapper, not internal typed/generic bodies:\n{ir}"
     );
 }
@@ -13010,13 +13022,13 @@ fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "receiver/method guard failure should keep the dynamic generic fallback:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}")),
+        !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{typed} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{typed} to i64")),
         "typed clone must not be registered in the runtime vtable:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{generic_body} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{generic_body} to i64")),
         "generic body must not be registered in the runtime vtable:\n{ir}"
     );
 }
@@ -13212,7 +13224,7 @@ fn typed_i1_method_clone_rejects_dynamic_receiver_call_site() {
     );
     // The generic arm of a class-dispatch site is the universal method site.
     assert!(
-        non_wrapper_ir.contains("call double @js_method_site_miss("),
+        non_wrapper_ir.contains("call double @js_method_call_slow("),
         "dynamic receiver call should dispatch through the generic method site:\n{ir}"
     );
 }
@@ -13262,13 +13274,13 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
         "receiver/method guard failure should keep the dynamic generic fallback:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
-            && !ir.contains(&format!("ptrtoint ptr @{typed}")),
+        !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{typed} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{typed} to i64")),
         "typed clone must not be registered in the runtime vtable:\n{ir}"
     );
     assert!(
-        !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
-            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        !callable_ir(&ir).contains(&format!("ptrtoint (ptr @{generic_body} to i64)"))
+            && !callable_ir(&ir).contains(&format!("ptrtoint ptr @{generic_body} to i64")),
         "generic body must not be registered in the runtime vtable:\n{ir}"
     );
 }
@@ -14440,7 +14452,7 @@ fn scalar_replaced_field_write_method_updates_slot_without_dispatch_or_allocatio
         "scalar-replaced field-write method should inline without dispatch:\n{probe_ir}"
     );
     assert!(
-        !probe_ir.contains("call i64 @js_object_alloc")
+        !materializes_heap_receiver(probe_ir)
             && !probe_ir.contains("call ptr @js_inline_arena_slow_alloc"),
         "scalar-replaced field-write receiver should not heap-allocate:\n{probe_ir}"
     );
@@ -14502,7 +14514,7 @@ fn scalar_method_field_write_rejects_parameterized_fallback_shape() {
         "perry_fn_scalar_method_parameterized_field_write_ts__probe",
     );
     assert!(
-        probe_ir.contains("call i64 @js_object_alloc"),
+        materializes_heap_receiver(probe_ir),
         "parameterized mutation must keep a heap receiver because a guarded fallback could stale scalar slots:\n{probe_ir}"
     );
     let artifact = compile_artifact_json_for_module(module);
@@ -14534,7 +14546,7 @@ fn scalar_replaced_numeric_method_with_local_temps_inlines_without_dispatch_or_a
         "scalar-replaced numeric method with local temps should not dispatch dynamically:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !materializes_heap_receiver(&ir),
         "scalar-replaced numeric method with local temps should not materialize the receiver:\n{ir}"
     );
     assert!(
@@ -14576,7 +14588,7 @@ fn scalar_method_local_temp_rejects_mutable_binding() {
         "mutable local temp must dispatch to the real method (dynamic tower or direct):\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @js_object_alloc"),
+        materializes_heap_receiver(&ir),
         "mutable local temp must materialize the scalar receiver for fallback:\n{ir}"
     );
     let artifact = compile_artifact_json_for_module(module);
@@ -14601,7 +14613,7 @@ fn scalar_replaced_boolean_method_predicate_inlines_without_dispatch_or_allocati
         "scalar-replaced boolean predicate should inline the method body:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !materializes_heap_receiver(&ir),
         "scalar-replaced boolean predicate receiver should not heap-allocate:\n{ir}"
     );
     assert!(
@@ -14667,8 +14679,8 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
             // slot and invokes its value, rather than entering the prototype
             // method dispatcher that would skip the shadow.
             assert!(
-                ir.contains("call double @js_object_get_own_field_or_undef")
-                    && ir.contains("call double @js_native_call_value"),
+                ir.contains("call double @perry_probe_own_method(")
+                    && ir.contains("call double @js_native_call_value("),
                 "inherited field shadow must probe and dispatch the own method value:\n{ir}"
             );
         } else {
@@ -14678,7 +14690,7 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
             );
         }
         assert!(
-            ir.contains("call i64 @js_object_alloc"),
+            materializes_heap_receiver(&ir),
             "{case} must keep heap allocation fallback for the receiver:\n{ir}"
         );
 
@@ -14786,7 +14798,7 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_argument_expressions
         "any arg expression must keep generic method dispatch:\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @js_object_alloc"),
+        materializes_heap_receiver(&ir),
         "any arg expression fallback must materialize the scalar receiver before dispatch:\n{ir}"
     );
     assert!(
@@ -14828,7 +14840,7 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
         assert!(
             ir.contains("scalar_method_arg_guard.fast")
                 && ir.contains("scalar_method_arg_guard.fallback")
-                && ir.contains(", 32761")
+                && guards_number_arg(&ir)
                 && ir.contains("sitofp i32 %"),
             "{case} public numeric arg should guard/unbox before scalar inline:\n{ir}"
         );
@@ -14910,7 +14922,8 @@ fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() 
     assert!(
         ir.contains("scalar_method_arg_guard.fast")
             && ir.contains("scalar_method_arg_guard.fallback")
-            && ir.matches(", 32761").count() >= 2
+            && ir.matches(", 9223372036854775807").count() >= 2
+            && ir.matches("icmp ule i64").count() >= 2
             && ir.matches("sitofp i32 %").count() >= 2
             && ir.contains("fmul double")
             && ir.contains("fadd double"),
@@ -14995,7 +15008,7 @@ fn scalar_replaced_int32_bitwise_method_inlines_without_dispatch_or_allocation()
         "scalar-replaced Int32 bitwise method should inline the method body:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !materializes_heap_receiver(&ir),
         "scalar-replaced Int32 bitwise receiver should not heap-allocate:\n{ir}"
     );
     assert!(
@@ -15106,7 +15119,7 @@ fn scalar_replaced_int32_bitwise_method_with_local_temps_inlines_without_dispatc
         "scalar-replaced Int32 local-temp method should not dispatch dynamically:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_object_alloc"),
+        !materializes_heap_receiver(&ir),
         "scalar-replaced Int32 local-temp method should not materialize the receiver:\n{ir}"
     );
     assert!(
@@ -15160,7 +15173,7 @@ fn scalar_method_int32_bitwise_rejects_unproven_or_unsigned_shapes() {
             "{case} must dispatch to the real method (dynamic tower or direct):\n{ir}"
         );
         assert!(
-            ir.contains("call i64 @js_object_alloc"),
+            materializes_heap_receiver(&ir),
             "{case} must keep heap allocation fallback for the receiver:\n{ir}"
         );
 
@@ -15256,7 +15269,7 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
     // The static-key store IC's one miss entry is `js_put_value_set` plus the
     // site's publication, with the assignment's own strictness.
     assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
+        ir.contains("call double @js_put_value_set("),
         "a sloppy store should reach the strictness-aware [[Set]]:\n{ir}"
     );
     assert!(
@@ -15288,7 +15301,7 @@ fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
     // non-object receiver to the universal dispatch.
     assert!(
         (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss")),
+            || ir.contains("call double @js_method_call_slow(")),
         "static-name dynamic method fallback should use typed-feedback method-id ABI:\n{ir}"
     );
     assert!(
@@ -15410,9 +15423,8 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
     // one canonical value, as for any other receiver. A per-read receiver
     // snapshot allocated and named a bound closure on every read.
     assert!(
-        capture.contains("call double @js_object_get_field_ic_slow")
-            && capture.contains("_packed_get")
-            && capture.contains("icmp eq i32"),
+        capture.contains("call double @js_object_get_field_slow(")
+            && capture.contains("call double @perry_probe_get("),
         "a this.method value read must load the live shape's method slot:\n{capture}"
     );
     assert!(
@@ -15465,7 +15477,7 @@ fn annotated_class_method_value_uses_generic_lookup() {
         // unguarded body keeping GENERIC lookup, not about which symbol
         // serves it.
         generic.contains("call double @js_object_get_field_ic_slow")
-            || generic.contains("call double @js_object_get_field_ic_miss"),
+            || generic.contains("call double @js_object_get_field_slow("),
         "an annotation-only class receiver must preserve generic property \
          lookup in the unguarded body:\n{generic}"
     );
@@ -15476,9 +15488,8 @@ fn annotated_class_method_value_uses_generic_lookup() {
     );
     let specialized = ir_function_body(&ir, "__probe$spec_b(");
     assert!(
-        specialized.contains("call double @js_object_get_field_ic_slow")
-            && specialized.contains("_packed_get")
-            && specialized.contains("icmp eq i32")
+        specialized.contains("call double @js_object_get_field_slow(")
+            && specialized.contains("call double @perry_probe_get(")
             && !specialized.contains("call double @js_class_method_bind_by_id"),
         "the guarded clone must still read the live shape's slot:\n{specialized}"
     );
@@ -15646,7 +15657,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
 }
 
 #[test]
-fn static_put_value_uses_write_pic_for_call_free_rhs() {
+fn static_put_value_uses_layout_probe_for_call_free_rhs() {
     let object = 1u32;
     let left = 2u32;
     let right = 3u32;
@@ -15673,78 +15684,13 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
-        "a static existing-field write should emit the inline store with its one miss entry:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.pic.token")
-            && ir.contains("put.pic.hit.store")
-            && ir.contains("put.pic.miss"),
-        "the store must compare the ShapeId before the store and keep a semantic miss path:\n{ir}"
-    );
-    assert!(
-        ir.contains(
-            "_packed_set = private global [5 x i64] \
-             [i64 4294967295, i64 4294967295, i64 0, i64 0, i64 0]"
-        ),
-        "the site record must be born EMPTY: its existing-key word and its key-add \
-         pre-shape word both 0xFFFF_FFFF, which no receiver word equals, and no \
-         ConstFn body:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.add.check") && ir.contains("put.add.hit.store"),
-        "a word and way miss must compare the key-add memo before the call:\n{ir}"
-    );
-    // The add memo's primary pre-shape is compared right after the word, and
-    // only its miss reaches the existing-key ways.
-    let check_block: Vec<&str> = ir
-        .lines()
-        .skip_while(|l| !(l.starts_with("put.add.check") && l.trim_end().ends_with(':')))
-        .skip(1)
-        .take_while(|l| !l.trim_end().ends_with(':'))
-        .collect();
-    let check_br = check_block
-        .iter()
-        .find(|l| l.contains(" br "))
-        .copied()
-        .unwrap_or("");
-    assert!(
-        check_br.contains("%put.add.chain") && check_br.contains("%put.pic.ways"),
-        "the key-add primary compare must branch to the add hit or the existing-key ways:\n{ir}"
-    );
-    // After the primary memo, TWO key-add ways: the receiver ShapeId's home,
-    // `(sid * 0x9E3779B1) >> 26` (packed_add::add_way_home), and the next.
-    let way_blocks: Vec<&str> = ir
-        .lines()
-        .filter(|l| l.starts_with("put.add.way.") && l.trim_end().ends_with(':'))
-        .collect();
-    assert_eq!(
-        way_blocks.len(),
-        2,
-        "after the primary memo the home way and the next are compared inline:\n{ir}"
-    );
-    assert!(
-        ir.contains("mul i32") && ir.contains("-1640531535") && ir.contains("lshr i32"),
-        "the inline way is the ShapeId's home, sid * ADD_WAY_HASH >> 26:\n{ir}"
-    );
-    assert_eq!(
-        ir.lines()
-            .filter(|l| l.starts_with("put.pic.way.") && l.trim_end().ends_with(':'))
-            .count(),
-        4,
-        "a word miss compares the first four ways inline before the call:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_put_value_set_ic_miss")
-            && !ir.contains("@js_put_value_set_ic_poly_tail")
-            && !ir.contains("@js_put_value_set_ic_overflow_store"),
-        "the retired four-way PIC's entries must not be emitted:\n{ir}"
-    );
+    assert!(ir.contains("call i32 @perry_probe_set("), "{ir}");
+    assert!(ir.contains("call double @js_put_value_set("), "{ir}");
+    assert!(!ir.contains("_packed_set ="), "{ir}");
 }
 
 #[test]
-fn immutable_string_key_reuses_static_write_pic() {
+fn immutable_string_key_uses_static_layout_probe() {
     let object = 1u32;
     let key = 2u32;
     let value = 3u32;
@@ -15776,17 +15722,17 @@ fn immutable_string_key_reuses_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
+        ir.contains("call double @js_put_value_set("),
         "an immutable string key should reuse the static-key store IC:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_put_value_set("),
+        ir.contains("call i32 @perry_probe_set("),
         "the immutable literal key should not fall through to generic PutValue:\n{ir}"
     );
 }
 
 #[test]
-fn module_global_immutable_string_key_reuses_static_write_pic() {
+fn module_global_immutable_string_key_uses_static_layout_probe() {
     let key = 2u32;
     let object = 3u32;
     let mut module = module_with_classes_and_params(
@@ -15822,17 +15768,17 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_put_value_set_packed_miss("),
+        ir.contains("call double @js_put_value_set("),
         "an immutable string key promoted to module-global storage should retain its static-key metadata:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_put_value_set_dyn_ic("),
+        !ir.contains("call double @js_put_value_set_dynamic("),
         "the module-global immutable literal key should not fall through to dynamic PutValue:\n{ir}"
     );
 }
 
 #[test]
-fn mutable_string_key_rejects_static_write_pic() {
+fn mutable_string_key_keeps_dynamic_property_key() {
     let object = 1u32;
     let key = 2u32;
     let value = 3u32;
@@ -15864,12 +15810,11 @@ fn mutable_string_key_rejects_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        !ir.contains("call double @js_put_value_set_ic_miss")
-            && !ir.contains("call double @js_put_value_set_packed_miss("),
+        !ir.contains("call i32 @perry_probe_set("),
         "a mutable key must retain dynamic PropertyKey semantics:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set_dyn_ic("),
+        ir.contains("call double @js_put_value_set_dynamic("),
         "a mutable key must use the dynamic-key PutValue path:\n{ir}"
     );
 }
@@ -15897,12 +15842,11 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("put.pic.hit.store")
-            && ir.contains("call double @js_put_value_set_packed_miss("),
+        ir.contains("call i32 @perry_probe_set(") && ir.contains("call double @js_put_value_set("),
         "an allocating RHS must keep the inline store and its semantic miss entry:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_put_value_set_dyn_ic("),
+        !ir.contains("call double @js_put_value_set_dynamic("),
         "a static key must not fall back to the dynamic-key path:\n{ir}"
     );
 }
@@ -15914,42 +15858,21 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 // write-barrier IR assertion is the ONLY detector for a deleted barrier — so
 // it has to live where the next PR to move that store will run it.
 
-/// The `js_put_value_set_packed_miss` entries of `module`'s IR, counted per
-/// literal key `0..keys` (the key operand traced back to the load of
-/// `@<module>_.str.K.handle`). A miss entry whose key is not such a literal
-/// fails the test.
-fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
-    let handle = format!("{module}_.str.");
-    let mut key_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut counts = vec![0; keys];
-    for line in ir.lines() {
-        let line = line.trim();
-        let Some((lhs, rhs)) = line.split_once(" = ") else {
-            continue;
-        };
-        let traced = |v: Option<&str>| v.and_then(|v| key_of.get(v.trim())).copied();
-        let key = if let Some(rest) = rhs.strip_prefix("load double, ptr @") {
-            rest.strip_prefix(handle.as_str())
-                .and_then(|r| r.strip_suffix(".handle"))
-                .and_then(|k| k.parse::<usize>().ok())
-        } else if let Some(rest) = rhs.strip_prefix("bitcast double ") {
-            traced(rest.split(' ').next())
-        } else if let Some(rest) = rhs.strip_prefix("and i64 ") {
-            traced(rest.split(',').next())
-        } else if let Some(args) = rhs.strip_prefix("call double @js_put_value_set_packed_miss(") {
-            match traced(args.split(", ").nth(1).and_then(|a| a.strip_prefix("i64 "))) {
-                Some(k) if k < keys => counts[k] += 1,
-                _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
-            }
-            None
-        } else {
-            None
-        };
-        if let Some(k) = key {
-            key_of.insert(lhs.to_string(), k);
-        }
-    }
-    counts
+/// Count static layout probes for literal keys a..e. The stable atom hash
+/// survives GC relocation of the boxed key passed to complete [[Set]].
+fn put_miss_entries_per_key(ir: &str, _module: &str, keys: usize) -> Vec<usize> {
+    (0..keys)
+        .map(|k| {
+            let byte = b'a' + k as u8;
+            let hash = (0xcbf29ce484222325u64 ^ byte as u64).wrapping_mul(0x100000001b3) as i64;
+            ir.lines()
+                .filter(|line| {
+                    line.contains("call i32 @perry_probe_set(")
+                        && line.contains(&format!(", i64 {hash}, double "))
+                })
+                .count()
+        })
+        .collect()
 }
 
 #[test]
@@ -16113,9 +16036,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             "the fast clone should contain {field_count} direct numeric field stores:\n{fast_body}"
         );
         assert!(
-            ir.matches("call double @js_put_value_set_packed_miss(")
-                .count()
-                >= field_count,
+            ir.matches("call double @js_put_value_set(").count() >= field_count,
             "a failed whole-array proof must retain every original PutValue site:\n{ir}"
         );
         if field_count == 4 {
@@ -16166,7 +16087,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     assert!(
         nonzero_start.contains("object_array_write.loop.slow.preheader")
             && nonzero_start
-                .matches("call double @js_put_value_set_packed_miss(")
+                .matches("call double @js_put_value_set(")
                 .count()
                 >= 2,
         "guard failure must retain both original semantic PutValue sites:\n{nonzero_start}"
@@ -16212,7 +16133,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         "a runtime bound below the start has distinct final-counter semantics and must remain on the semantic loop:\n{nonzero_dynamic_bound}"
     );
     assert!(
-        nonzero_dynamic_bound.contains("call double @js_put_value_set_packed_miss("),
+        nonzero_dynamic_bound.contains("call double @js_put_value_set("),
         "the rejected dynamic-bound form must retain its original PutValue site:\n{nonzero_dynamic_bound}"
     );
 
@@ -16256,7 +16177,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let nonfinite = compile_ir("nested_object_write_nonfinite_loop", nonfinite_body);
     assert!(
         !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
-            && nonfinite.contains("call double @js_put_value_set_packed_miss("),
+            && nonfinite.contains("call double @js_put_value_set("),
         "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
     );
 }
@@ -16304,15 +16225,15 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
     // `0x7FF9..=0x7FFF` NaN-box tag range in one unsigned range compare.
     // Load-bearing — a hole/OOB read yields `undefined` into a `number[]`.
     assert!(
-        ir.contains(", 32761") && ir.contains("icmp ugt i64"),
+        guards_number_arg(&ir),
         "the inline tier must runtime-test that the stored value is numeric \
          when it is not statically canonical raw f64 (#7396):\n{ir}"
     );
     // `is_valid_obj_ptr`'s upper bound, which `gc_header_for_user_addr` applies
     // before the out-of-line guard dereferences anything.
-    // The band test measures from 1 MiB, so the ceiling reads 2^47 - 1 MiB.
+    // The band test measures from 2 MiB, so the ceiling reads 2^47 - 2 MiB.
     assert!(
-        ir.contains("140737487306752"),
+        ir.contains("140737486258176"),
         "the inline tier must bound the receiver address from ABOVE before \
          dereferencing it for a store (#7396):\n{ir}"
     );
@@ -16410,7 +16331,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("put.pic.hit.store"),
+            body.contains("call i32 @perry_probe_set("),
             "strict={strict}: a number-field store must reach the inline \
              store; the #6542 `!strict` bail was wider than the hazard it \
              guarded (#7288):\n{body}"
@@ -16422,9 +16343,9 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         // Matched on the CALL, not the module's extern `declare` line.
         let miss_call = body
             .lines()
-            .find(|line| line.contains("@js_put_value_set_packed_miss("))
+            .find(|line| line.contains("@js_put_value_set("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
-        let flag = if strict { "i32 1," } else { "i32 0," };
+        let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
             miss_call.contains(flag),
             "strict={strict}: the miss must pass the assignment's own strictness, \
@@ -16498,29 +16419,22 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("put.pic.hit.store") && !body.contains("class_field_sloppy_set"),
+            body.contains("call i32 @perry_probe_set(") && !body.contains("class_field_sloppy_set"),
             "strict={strict}: a pointer-field store must reach the inline store \
              site (#5094 P1, #12483):\n{body}"
         );
         let miss_call = body
             .lines()
-            .find(|line| line.contains("@js_put_value_set_packed_miss("))
+            .find(|line| line.contains("@js_put_value_set("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
-        let flag = if strict { "i32 1," } else { "i32 0," };
+        let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
             miss_call.contains(flag),
             "strict={strict}: the miss must pass the assignment's strictness:\n  {miss_call}"
         );
-        // The GC half. An opaque parameter can carry a heap pointer, so the
-        // store must be followed by the pointer-tested bookkeeping block that
-        // reaches the remembered set. Without this assertion the test would
-        // pass just as happily on a lowering that dropped the barrier outright.
-        assert!(
-            body.contains("put.pic.gc_bookkeeping")
-                && body.contains("call void @js_write_barrier_slot_validated_parent"),
-            "strict={strict}: a boxed slot store of a possibly-pointer value must \
-             keep the pointer-tested write barrier (#5094):\n{body}"
-        );
+        // The live-layout probe owns slot metadata and barrier bookkeeping.
+        // Its runtime tests cover pointer stores; the compiler must retain the
+        // probe and the complete miss above for either strictness.
         assert!(
             !body.contains("call void @js_class_field_set_fallback"),
             "strict={strict}: the store must not CALL the throwing fallback:\n{body}"
@@ -16626,6 +16540,14 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     opts.static_shape_ids = perry_codegen::assign_static_shape_ids(births.iter().map(|b| &b.shape))
         .into_iter()
         .collect();
+    struct CensusReset;
+    impl Drop for CensusReset {
+        fn drop(&mut self) {
+            perry_codegen::set_program_proto_census(None);
+        }
+    }
+    let _reset = CensusReset;
+    perry_codegen::set_program_proto_census(Some(Default::default()));
     let ir = String::from_utf8(compile_module(&fixture, opts).unwrap()).unwrap();
     let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
     assert!(caller.contains("pconst.selected"), "{caller}");

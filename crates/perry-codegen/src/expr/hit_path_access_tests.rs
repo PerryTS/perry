@@ -79,11 +79,9 @@ fn named(name: &str) -> Type {
     Type::Named(name.to_string())
 }
 
-/// `probe(a: Float64Array) { return a.length }` reads the typed array's header
-/// inline. The name-keyed runtime lookup (which heap-copied "length") is only
-/// the fallback.
+/// An erased typed-array annotation retains exact length property semantics.
 #[test]
-fn declared_typed_array_length_reads_the_header_inline() {
+fn declared_typed_array_length_keeps_the_exact_property_fallback() {
     let ir = probe_ir(&module(
         "ta_length",
         vec![param(1, named("Float64Array"))],
@@ -93,17 +91,15 @@ fn declared_typed_array_length_reads_the_header_inline() {
             byte_offset: 0,
         }))],
     ));
-    let arm = block_body(&ir, "plen.typed_array")
-        .unwrap_or_else(|| panic!("no typed-array length arm:\n{ir}"));
+    let header = block_body(&ir, "plen.check_gc.").unwrap();
     assert!(
-        arm.contains("icmp uge i8") && arm.contains(", 64") && arm.contains(", 76"),
-        "the arm must test GC_TYPE_TYPED_ARRAY:\n{arm}"
+        header.contains("icmp eq i16") && header.contains(", 1"),
+        "only ordinary arrays admit the inline load: {header}"
     );
+    let slow = block_body(&ir, "plen.slow.").unwrap();
     assert!(
-        ir.contains("load atomic i8")
-            && ir.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED") && ir.contains("plen.byte_header")
-            && !arm.lines().any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10")),
-        "the live length is valid for shared views, but metadata edits must withdraw the proof:\n{arm}"
+        slow.contains("call double @js_value_length_property_f64("),
+        "typed views and own descriptors use Get: {slow}"
     );
 }
 

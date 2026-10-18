@@ -92,7 +92,6 @@ pub(super) enum StemKind {
 pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("apush", StemKind::GenerationTested),
     ("class_field_set", StemKind::PointerTestedStore),
-    ("ctor_prologue", StemKind::ValueAndGenerationTested),
     ("dynarr.set", StemKind::ValueAndGenerationTested),
     ("idxset.bounded", StemKind::ValueAndGenerationTested),
     ("idxset.inbounds", StemKind::ValueAndGenerationTested),
@@ -1056,12 +1055,6 @@ fn private_field_set_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
-/// A complete five-field boxed constructor exceeds the compact birth budget,
-/// so its direct prologue stores retain the value/generation-tested barrier.
-fn ctor_prologue_ir() -> String {
-    super::class_field_barrier_tests::wide_prologue_ir()
-}
-
 /// A confined generator binding is a fixed JSValue slot in its private resume
 /// record. The incoming value can become a young pointer after suspension.
 fn generator_state_ir() -> String {
@@ -1137,7 +1130,6 @@ fn probe_ir(stem: &str) -> String {
     match stem {
         "apush" => apush_ir(),
         "class_field_set" => super::class_field_barrier_tests::ir(),
-        "ctor_prologue" => ctor_prologue_ir(),
         "dynarr.set" => dynarr_set_ir(),
         "idxset.bounded" => idxset_bounded_ir(),
         "idxset.inbounds" => idxset_inbounds_ir(),

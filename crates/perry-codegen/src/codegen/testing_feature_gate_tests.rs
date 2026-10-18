@@ -263,7 +263,6 @@ fn host_target_lowering_default_is_native_roots() {
         "aarch64-apple-darwin",
         "arm64-apple-macosx15.0.0",
         "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-ohos",
         "x86_64-pc-windows-msvc",
     ] {
         set_native_roots_for_target(triple);
@@ -303,6 +302,7 @@ fn host_target_lowering_default_is_native_roots() {
     }
 
     for triple in [
+        "aarch64-unknown-linux-ohos",
         "aarch64-linux-android",
         "x86_64-linux-android",
         "aarch64-pc-windows-msvc",

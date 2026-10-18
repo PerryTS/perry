@@ -96,7 +96,9 @@ fn executable_image_handles_are_boxed_at_runtime_for_relocation_limited_targets(
     assert!(linux.contains("add (i64 ptrtoint"));
     assert!(linux.contains("@perry_image_literal_0_6c69746572616c = weak_odr constant"));
     assert!(!linux.contains("js_nanbox_string"));
-    assert!(!linux.contains("__perry_agent_strings_ready_probe"));
+    assert!(linux.contains("@__perry_agent_strings_ready_probe = internal global i8 0"));
+    // Preparation still runs for literal metadata; the handle itself is linker-boxed.
+    assert!(linux.contains("call void @__perry_agent_strings_probe_literal_chunk0()"));
 }
 
 #[test]

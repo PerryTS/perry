@@ -10,7 +10,7 @@
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
+use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
@@ -214,6 +214,42 @@ fn app_config_window_options_emit_ffi_calls() {
     );
 }
 
+fn assert_frame_name_pointer(ir: &str, dynamic: bool) {
+    let (before, call) = ir
+        .split_once("call void @perry_ui_app_set_frame_autosave_name")
+        .expect("the frame name setter must be emitted");
+    let args = call.split_once(')').unwrap().0;
+    let arg = args.rsplit_once(", i64 ").unwrap().1.trim();
+    let definition = |value: &str| {
+        let prefix = format!("{value} = ");
+        before
+            .lines()
+            .rev()
+            .find(|line| line.trim_start().starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no definition for {value}: {ir}"))
+    };
+    let pointer = definition(arg);
+    if pointer.contains("call i64 @js_get_string_pointer_unified") {
+        return;
+    }
+    assert!(
+        !dynamic,
+        "a dynamic string must resolve SSO before the setter: {pointer}"
+    );
+    let image = pointer
+        .split_once("ptrtoint ptr ")
+        .and_then(|(_, tail)| tail.split_once(" to i64"))
+        .expect("a literal must supply a resolved image StringHeader")
+        .0;
+    let header = definition(image);
+    assert!(
+        header.contains("getelementptr")
+            && header.contains("@perry_image_literal_")
+            && header.contains(", i64 8"),
+        "the literal must pass its image StringHeader, not boxed bits: {header}"
+    );
+}
+
 #[test]
 fn named_frame_persistence_is_sso_safe_and_configured_before_run() {
     for name in ["main", "settings-window-with-a-long-name", ""] {
@@ -228,10 +264,7 @@ fn named_frame_persistence_is_sso_safe_and_configured_before_run() {
             let ir = compile_ir("app_frame_persistence", vec![app_call(fields)]);
             let setter = "call void @perry_ui_app_set_frame_autosave_name";
             assert_eq!(ir.matches(setter).count(), 1, "IR:\n{ir}");
-            assert!(
-                ir.contains("call i64 @js_get_string_pointer_unified"),
-                "IR:\n{ir}"
-            );
+            assert_frame_name_pointer(&ir, false);
             let create = ir.find("call i64 @perry_ui_app_create").unwrap();
             let state = ir.find("call void @perry_ui_app_set_window_state").unwrap();
             let autosave = ir.find(setter).unwrap();
@@ -241,6 +274,33 @@ fn named_frame_persistence_is_sso_safe_and_configured_before_run() {
                 "IR:\n{ir}"
             );
         }
+    }
+    for name_first in [true, false] {
+        let name = ("frameAutosaveName", Expr::LocalGet(1));
+        let state = ("windowState", Expr::String("fullscreen".into()));
+        let fields = if name_first {
+            vec![name, state]
+        } else {
+            vec![state, name]
+        };
+        let mut m = module("app_frame_dynamic", vec![app_call(fields)]);
+        m.functions[0].params.push(Param {
+            id: 1,
+            name: "name".into(),
+            ty: Type::String,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        });
+        let ir = String::from_utf8(compile_module(&m, empty_opts()).unwrap()).unwrap();
+        assert_frame_name_pointer(&ir, true);
+        assert!(
+            ir.find("call void @perry_ui_app_set_frame_autosave_name")
+                .unwrap()
+                < ir.find("call void @perry_ui_app_run").unwrap(),
+            "the dynamic name must be configured before run"
+        );
     }
 }
 

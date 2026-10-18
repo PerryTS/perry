@@ -101,8 +101,8 @@ fn a_borrowed_prototype_call_proves_array_and_function_and_a_binding_does_not() 
     );
     assert_eq!(
         proto.matches(PATCHED).count(),
-        2,
-        "a prototype read proves Array (byte 2) and Function (byte 1):\n{proto}"
+        4,
+        "a prototype read proves both Array and Function, each constructor and prototype:\n{proto}"
     );
     assert!(
         proto.contains("@js_builtin_proto_generic_call("),

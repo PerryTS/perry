@@ -47,8 +47,8 @@ fn the_band_is_the_next_power_of_two_of_four_per_content() {
     assert_eq!(static_band_size(512), 2048);
     assert_eq!(static_band_size(513), 4096);
     assert_eq!(static_band_size(5000), 32768);
-    assert_eq!(static_band_size(1 << 18), STATIC_SHAPE_ID_COUNT);
-    assert_eq!(static_band_size(usize::MAX), STATIC_SHAPE_ID_COUNT);
+    assert_eq!(static_band_size(1 << 18), STATIC_SHAPE_ID_COUNT / 2);
+    assert_eq!(static_band_size(usize::MAX), STATIC_SHAPE_ID_COUNT / 2);
 }
 
 #[test]

@@ -721,7 +721,7 @@ fn function_shadow_slots_clear_dead_values_and_skip_numeric_roots() {
         .map(|offset| dead_write + offset)
         .expect("dead shadow slot should be cleared after its last top-level statement");
     let live_alloc = ir[dead_clear..]
-        .find("call i64 @js_array_alloc")
+        .find("call ptr @js_inline_arena_slow_alloc")
         .map(|offset| dead_clear + offset)
         .expect("later allocation should remain after dead slot clear");
 
@@ -839,7 +839,7 @@ fn entry_module_top_level_shadow_slots_update_and_clear() {
         .map(|offset| dead_write + offset)
         .expect("top-level dead shadow slot should be cleared after last use");
     let later_alloc = main_ir[dead_clear..]
-        .find("call i64 @js_array_alloc")
+        .find("call preserve_mostcc i64 @perry_birth_empty_array")
         .map(|offset| dead_clear + offset)
         .expect("later allocation should remain after dead slot clear");
 
@@ -1041,7 +1041,7 @@ fn reassigned_any_from_number_to_pointer_reserves_and_updates_shadow_slot() {
         "Any local with a later pointer write must reserve a shadow slot"
     );
     let array_alloc = fn_ir
-        .find("call i64 @js_array_alloc")
+        .find("call preserve_mostcc i64 @perry_birth_empty_array")
         .expect("pointer reassignment should allocate an array");
     let slot_update = fn_ir[array_alloc..]
         .find("call void @js_shadow_slot_bind(i32 0, ptr %")

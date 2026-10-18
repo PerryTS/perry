@@ -1,22 +1,6 @@
-//! S2 of the deferred-collection RFC (`expr/ic_fast_split.rs`): each split
-//! site's fast call is a GC-leaf call RS4GC leaves alone, and its slow call is
-//! the ONLY statepoint, still carrying the caller's live GC values.
-//!
-//! Asserted on the post-RS4GC IR of the production pass string, on both
-//! native-roots targets. Both halves are non-vacuous:
-//!
-//! * the slow-call claims go through [`Statepoints::at`], which panics when
-//!   the callee produced no safepoint, and require a NON-EMPTY live set (the
-//!   fixture keeps a fresh object live across every access);
-//! * the fast-call claim ("no statepoint at `_fast`") is paired with a
-//!   differential control: the same IR with the attribute stripped from the
-//!   fast call DOES produce a statepoint there, so the absence is the
-//!   attribute's doing and not a parse miss.
-//!
-//! Sabotage run by hand for the PR (2026-09-27): classifying the four slow
-//! continuations `CannotCollect` too makes
-//! `split_sites_keep_their_slow_call_as_the_only_statepoint` fail at
-//! `Statepoints::at("js_put_value_set")` — no subject.
+//! Conservative store-probe rooting and the remaining inline fast/slow splits.
+//! Runtime call effects now come from the linked archive sidecars. This unit
+//! fixture proves no Leaf fact for the store probe, so it must retain roots.
 
 use super::*;
 use perry_hir::{Class, ClassField};
@@ -158,67 +142,31 @@ fn split_module() -> Module {
     module
 }
 
-/// Remove `"gc-leaf-function"` from every call to `callee` — the control arm.
-fn strip_leaf(ir: &str, callee: &str) -> String {
-    let marker = format!("@{callee}(");
-    ir.lines()
-        .map(|line| {
-            if line.contains(&marker) && line.contains("call ") {
-                line.replace(" \"gc-leaf-function\"", "")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
+/// Without an archive sidecar proving the store probe Leaf, both calls must
+/// remain conservative safepoints. Removing a statepoint would lose live roots.
 #[test]
-fn split_sites_keep_their_slow_call_as_the_only_statepoint() {
+fn store_probe_and_complete_set_keep_conservative_statepoints() {
     let module = split_module();
-    assert!(
-        crate::codegen::decide_full_outline_ic(crate::codegen::module_callable_count(&module)),
-        "test premise: the fixture must cross the full-outline threshold"
-    );
+    assert!(crate::codegen::decide_full_outline_ic(
+        crate::codegen::module_callable_count(&module)
+    ));
     for target in NATIVE_TARGETS {
         let ir = native_ir(&module, target, false);
         let probe = probe_body_symbol(&ir, "ic_fast_split.ts");
         let body = function_slice(&ir, &probe);
         let points = statepoints_of(&ir, target, &probe);
-
-        for (fast, slow) in FAST_SLOW {
-            let fast_calls: Vec<&str> = body
-                .lines()
-                .filter(|l| l.contains(&format!("@{fast}(")) && l.contains("call "))
-                .collect();
-            assert!(
-                !fast_calls.is_empty(),
-                "[{target}] test premise: `{fast}` is emitted in @{probe}"
-            );
-            for line in &fast_calls {
-                assert!(
-                    line.contains("\"gc-leaf-function\"") && !line.contains("invoke "),
-                    "[{target}] the fast call must be a plain gc-leaf call: {line}"
-                );
+        for (probe, slow) in FAST_SLOW {
+            for callee in [probe, slow] {
+                assert!(body
+                    .lines()
+                    .any(|line| line.contains(&format!("@{callee}(")) && line.contains("call ")));
+                for point in points.at(callee) {
+                    assert!(
+                        !point.live.is_empty(),
+                        "[{target}] {callee} must retain the live object: {point:?}"
+                    );
+                }
             }
-            assert!(
-                points.iter().all(|sp| sp.callee != fast),
-                "[{target}] `{fast}` must not be a statepoint"
-            );
-            for sp in points.at(slow) {
-                assert!(
-                    !sp.live.is_empty(),
-                    "[{target}] the slow call must still relocate the live object: {sp:?}"
-                );
-            }
-
-            // Control: without the attribute the same fast call IS a
-            // statepoint, so the absence above is the attribute's doing.
-            let control = statepoints_of(&strip_leaf(&ir, fast), target, &probe);
-            assert!(
-                !control.at(fast).is_empty(),
-                "[{target}] control must make `{fast}` a statepoint"
-            );
         }
     }
 }

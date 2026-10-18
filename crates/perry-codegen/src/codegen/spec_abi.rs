@@ -468,15 +468,16 @@ mod tests {
     #[test]
     fn spec_abi_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: [&str; 8] = [
-            "codegen/spec_abi.rs",                   // naming + this test
-            "codegen/function.rs",                   // entry emission
-            "codegen/mod.rs",                        // eligibility/budget loop
+        let allowed: [&str; 9] = [
+            "codegen/artifact_display_names.rs", // stack-frame labels, never dispatch
+            "codegen/spec_abi.rs",               // naming + this test
+            "codegen/function.rs",               // entry emission
+            "codegen/mod.rs",                    // eligibility/budget loop
             "codegen/ordinary_param_guard_tests.rs", // structural assertion only
-            "codegen/spec_preserve_none_tests.rs",   // structural assertion only (#8175)
-            "codegen/spec_self_recursion_tests.rs",  // structural assertion only
-            "expr/hit_path_tests.rs",                // structural assertion only
-            "lower_call/func_ref.rs",                // direct-call dispatch
+            "codegen/spec_preserve_none_tests.rs", // structural assertion only (#8175)
+            "codegen/spec_self_recursion_tests.rs", // structural assertion only
+            "expr/hit_path_tests.rs",            // structural assertion only
+            "lower_call/func_ref.rs",            // direct-call dispatch
         ];
         let mut offenders: Vec<String> = Vec::new();
         fn visit(
