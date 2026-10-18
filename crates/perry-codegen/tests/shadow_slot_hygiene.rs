@@ -109,6 +109,7 @@ fn entry_opts() -> CompileOptions {
 
 fn shadow_hygiene_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -373,6 +374,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
 
 fn reassigned_any_shadow_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -437,6 +439,7 @@ fn reassigned_any_shadow_module() -> Module {
 
 fn mixed_any_alias_shadow_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -516,6 +519,7 @@ fn mixed_any_alias_shadow_module() -> Module {
 
 fn closure_captured_write_shadow_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -1122,6 +1126,7 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
 
 fn canonical_str_shadow_module() -> Module {
     Module {
+        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
