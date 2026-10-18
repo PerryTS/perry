@@ -68,3 +68,38 @@ fn exported_namespace_publishes_a_structural_call_capability() {
         .iter()
         .any(|method| method.name == "f" && method.field_index == 2));
 }
+
+#[test]
+fn imported_uppercase_value_reads_its_method_before_arguments() {
+    let mut cache = SourceCache::new();
+    let parsed = parse_typescript_with_cache(
+        "import { Late, mutate } from './producer'; Late.f(mutate());",
+        "consumer.ts",
+        &mut cache,
+    )
+    .unwrap();
+    let module = lower_module(&parsed.module, "consumer", "consumer.ts").unwrap();
+    let options = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".into(),
+        imported_vars: ["Late".to_string()].into_iter().collect(),
+        import_function_prefixes: [
+            ("Late".to_string(), "producer".to_string()),
+            ("mutate".to_string(), "producer".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, options).unwrap()).unwrap();
+    let lookup = ir
+        .find("call double @js_method_lookup(")
+        .expect("split method lookup");
+    let argument = ir
+        .find("call double @perry_fn_producer__mutate(")
+        .expect("observable argument");
+    assert!(
+        lookup < argument,
+        "method lookup must precede argument evaluation"
+    );
+}
