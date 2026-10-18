@@ -211,6 +211,7 @@ impl<'a> Gen<'a> {
             birth_keys: atoms.clone(),
             definite: atoms,
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: None,
             accessor_keys: vec![],
@@ -938,13 +939,7 @@ impl<'a> Gen<'a> {
                 parent_expr,
             } => {
                 let p = self.expr(fx, parent_expr);
-                self.to_sink(p, "E11 dynamic class parent");
-                if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let inst = self.m.tok(TokKind::Obj(tm));
-                    let r = self.m.reason("E11 dynamic class parent");
-                    self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
-                    self.m.escape(inst, r);
-                }
+                self.evaluated_parent(mi, class_name, p);
                 self.prim_node(prim::UNDEF)
             }
             Expr::RegisterClassCaptures {
@@ -1090,14 +1085,7 @@ impl<'a> Gen<'a> {
                 }
                 if let Some(p) = evaluated_parent {
                     let pv = self.expr(fx, p);
-                    self.to_sink(pv, "E11 class expression with an evaluated parent");
-                    if let Some(tm) = self.resolve_class_name(mi, template) {
-                        let inst = self.m.tok(TokKind::Obj(tm));
-                        let r = self
-                            .m
-                            .reason("E11 class expression with an evaluated parent");
-                        self.m.escape(inst, r);
-                    }
+                    self.evaluated_parent(mi, template, pv);
                 }
                 for d in definition_steps {
                     let _ = self.expr(fx, d);
@@ -1191,16 +1179,7 @@ impl<'a> Gen<'a> {
             Expr::SuperPropertyGet { property } => {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: Key::Named(a),
-                            act: ChainAct::Load(dst),
-                        },
-                    );
-                }
+                self.super_access(fx, Key::Named(a), ChainAct::Load(dst));
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
@@ -1208,16 +1187,7 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, value);
                 let k = self.key_of(key);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
-                for start in self.super_starts(fx) {
-                    self.m.cons(
-                        fx.this,
-                        Cons::Super {
-                            start,
-                            key: k,
-                            act: ChainAct::Store(v),
-                        },
-                    );
-                }
+                self.super_access(fx, k, ChainAct::Store(v));
                 v
             }
 

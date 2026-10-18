@@ -149,6 +149,9 @@ pub struct Template {
     pub definite: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
+    /// Evaluated heritage value. Its class tokens supply constructor/prototype
+    /// edges; unlike `parent`, it may grow to several classes or unknown code.
+    pub evaluated_parent: Option<NodeId>,
     /// The constructor function of a class template (None: implicit ctor).
     pub ctor: Option<FnIdx>,
     /// Native parent (`extends EventEmitter/Error/...`): `(module, class)`.
@@ -305,6 +308,16 @@ pub enum Cons {
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
     SuperCtor { class: TmplId, call: CallId },
+    /// An evaluated heritage value wires the child's two prototype edges.
+    ClassParent { class: TmplId, reason: u32 },
+    /// Invoke each known evaluated parent constructor on the child instance.
+    ParentCtor { call: CallId, this: Tok },
+    /// Continue `super` from every evaluated parent prototype/constructor.
+    SuperFrom {
+        recv: NodeId,
+        key: Key,
+        act: ChainAct,
+    },
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
     ThisFrom { recv: NodeId },
@@ -396,6 +409,9 @@ impl Cons {
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::Super { .. } => "super",
             Cons::SuperCtor { .. } => "superctor",
+            Cons::ClassParent { .. } => "classparent",
+            Cons::ParentCtor { .. } => "parentctor",
+            Cons::SuperFrom { .. } => "superfrom",
             Cons::ThisFrom { .. } => "thisfrom",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
@@ -622,6 +638,9 @@ pub struct Model {
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
+    /// Constructor-chain edges already visited by the inclusion solver. A
+    /// factory can have its own template in its parent set across evaluations.
+    pub ctor_chain_done: crate::pts::FxHashSet<(CallId, TmplId, Tok)>,
     /// Birth keys / definite keys of `new f()` instances, from the
     /// construction-phase analysis of `f`'s body.
     pub fn_birth: FxHashMap<FnIdx, (Vec<Atom>, Vec<Atom>)>,
@@ -852,10 +871,11 @@ impl Model {
                 TmplKind::BObj { what, .. } => format!("bobj {what}"),
             };
             out.push(format!(
-                "M tmpl {i} {kind} birth={} definite={} parent={} ctor={} native={} acc={} computed={} fieldinit={} pm={} display={}",
+                "M tmpl {i} {kind} birth={} definite={} parent={} evaluated={} ctor={} native={} acc={} computed={} fieldinit={} pm={} display={}",
                 join(&t.birth_keys),
                 join(&t.definite),
                 t.parent.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                t.evaluated_parent.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
                 t.ctor.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
                 t.native_parent.as_ref().map(|(_, n)| n.clone()).unwrap_or_else(|| "-".into()),
                 join(&t.accessor_keys),

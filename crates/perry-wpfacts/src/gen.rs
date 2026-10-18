@@ -389,6 +389,7 @@ impl<'a> Gen<'a> {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
@@ -508,6 +509,13 @@ impl<'a> Gen<'a> {
 
     fn link_class(&mut self, mi: u32, c: &Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
+        if c.extends_expr.is_some() {
+            let node = self.m.node_l("evaluated-parent");
+            self.m.tmpls[tm as usize].evaluated_parent = Some(node);
+            let reason = self.m.reason("E11 class with an unknown evaluated parent");
+            self.m.cons(node, Cons::ClassParent { class: tm, reason });
+            return;
+        }
         let parent = c
             .extends_name
             .as_ref()
@@ -589,6 +597,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: None,
             accessor_keys: vec![],
@@ -612,6 +621,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: None,
             accessor_keys: vec![],
@@ -795,10 +805,12 @@ impl<'a> Gen<'a> {
         // Parent leaks close the child's phase at `super()`.
         let tms: Vec<TmplId> = self.ctor_phase.keys().copied().collect();
         for tm in tms.iter().copied() {
-            let mut leaks = false;
+            let mut leaks = self.m.tmpls[tm as usize].evaluated_parent.is_some();
             let mut cur = self.m.tmpls[tm as usize].parent;
             while let Some(p) = cur {
-                if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks) {
+                if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks)
+                    || self.m.tmpls[p as usize].evaluated_parent.is_some()
+                {
                     leaks = true;
                 }
                 cur = self.m.tmpls[p as usize].parent;
@@ -1059,9 +1071,8 @@ impl<'a> Gen<'a> {
             let r = self.m.reason("class decorator");
             self.m.escape(cobj, r);
         }
-        if let Some(e) = &c.extends_expr {
-            let _ = self.expr(outer, e);
-        }
+        // Evaluated heritage is walked at its source-order ClassExprFresh /
+        // RegisterClassParentDynamic site, never again from hoisted metadata.
         if let Some(ctor) = &c.constructor {
             let f = self.mods[mi as usize].funcs[&ctor.id];
             self.walk_fn(mi, f, ctor, Some(tm), Some(tm));
