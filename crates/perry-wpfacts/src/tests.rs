@@ -1,5 +1,6 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod constructor_values;
 mod super_heritage;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};

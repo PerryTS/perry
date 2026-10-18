@@ -240,15 +240,17 @@ impl<'a> Gen<'a> {
         self.m.top_val(&format!("unresolved class value {name}"))
     }
 
-    /// Captured values of a class body (class expression environments).
-    pub(crate) fn class_env(&mut self, mi: u32, name: &str) -> NodeId {
-        let key = format!("{mi}:{name}");
+    /// One capture slot, shared across evaluations of the same class body.
+    /// Keep positions separate: a constructor capture must not acquire
+    /// unrelated captures (including unknown values) from that environment.
+    pub(crate) fn class_env(&mut self, mi: u32, name: &str, index: u32) -> NodeId {
+        let key = format!("{mi}:{name}:{index}");
         if let Some(&n) = self.class_envs.get(&key) {
             return n;
         }
         let n = self
             .m
-            .node_named("classenv", || format!("classenv({name})"));
+            .node_named("classenv", || format!("classenv({name},{index})"));
         self.class_envs.insert(key, n);
         n
     }
