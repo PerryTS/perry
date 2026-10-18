@@ -156,7 +156,7 @@ pub(super) fn collect_closures_from_expr(
                 collect_closures_from_expr(v, out);
             }
         }
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             for e in elems {
                 collect_closures_from_expr(e, out);
             }

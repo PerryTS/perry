@@ -98,7 +98,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![]),
+                        Expr::Array(vec![], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -285,7 +285,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![Expr::Number(7.0)]),
+                        Expr::Array(vec![Expr::Number(7.0)], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -440,7 +440,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     init: Some(Expr::PropertyGet {
                         object: Box::new(Expr::Object(vec![(
                             "value".to_string(),
-                            Expr::Array(vec![Expr::Number(7.0)]),
+                            Expr::Array(vec![Expr::Number(7.0)], None),
                         )])),
                         property: "value".to_string(),
                         byte_offset: 0,
@@ -617,7 +617,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![Expr::Number(7.0)]),
+                        Expr::Array(vec![Expr::Number(7.0)], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -748,7 +748,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![Expr::Number(7.0)]),
+                        Expr::Array(vec![Expr::Number(7.0)], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -762,7 +762,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![Expr::Number(0.0)]),
+                        Expr::Array(vec![Expr::Number(0.0)], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -811,7 +811,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![Expr::Number(7.0)]),
+                        Expr::Array(vec![Expr::Number(7.0)], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,
@@ -825,7 +825,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::Object(vec![(
                         "value".to_string(),
-                        Expr::Array(vec![Expr::Number(0.0)]),
+                        Expr::Array(vec![Expr::Number(0.0)], None),
                     )])),
                     property: "value".to_string(),
                     byte_offset: 0,

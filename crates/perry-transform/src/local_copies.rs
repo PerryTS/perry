@@ -89,7 +89,7 @@ fn inspect_expr(expr: &Expr, uses: &mut Uses) -> bool {
         | Expr::PropertySet { .. }
         | Expr::IndexGet { .. }
         | Expr::IndexSet { .. }
-        | Expr::Array(_) => {}
+        | Expr::Array(_, _) => {}
         _ => return false,
     }
     let mut supported = true;

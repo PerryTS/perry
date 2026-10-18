@@ -182,7 +182,7 @@ mod artifact_display_names;
 mod artifact_source_text;
 mod artifacts;
 pub(crate) mod boxed_locals;
-mod cjs_exports;
+pub(crate) mod cjs_exports;
 mod class_artifacts;
 pub(crate) mod class_hierarchy;
 #[cfg(test)]
@@ -2645,17 +2645,20 @@ fn compile_module_impl(
                 );
             }
         }
-        if crate::layout_desc::layouts_enabled(&opts.output_type, &triple) {
+        let layouts_enabled = crate::layout_desc::layouts_enabled(&opts.output_type, &triple);
+        if layouts_enabled {
             layouts.extend(crate::layout_desc::array_families::collect(
                 hir,
                 &module_prefix,
             ));
             crate::layout_desc::create_families::collect(hir, &module_prefix, &triple);
         } else {
-            crate::layout_desc::array_families::clear();
             crate::layout_desc::create_families::clear();
         }
         crate::layout_desc::set_module_families(adds, layouts);
+        if layouts_enabled {
+            crate::layout_desc::set_array_layout_prefix(&module_prefix);
+        }
     }
     // Step 5C: a literal's method slot holding a module function's value is a
     // ConstFn lane too; births and lowering read the same admitted set.

@@ -441,7 +441,7 @@ impl JsEmitter {
             }
 
             // --- Array literal ---
-            Expr::Array(elements) => {
+            Expr::Array(elements, _) => {
                 self.output.push('[');
                 for (i, el) in elements.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }

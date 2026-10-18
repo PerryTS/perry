@@ -1048,7 +1048,9 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
-            Expr::ArraySlice { array, start, end } => {
+            Expr::ArraySlice {
+                array, start, end, ..
+            } => {
                 let a = self.expr(fx, array);
                 let _ = self.prim_op(fx, &[start], prim::NUM, "slice index");
                 if let Some(x) = end {
@@ -1345,7 +1347,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(k, fa);
                 n
             }
-            Expr::ArrayFrom(x) | Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
+            Expr::ArrayFrom(x, _) | Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
                 self.new_arr_from(mi, "from", &[it])

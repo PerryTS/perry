@@ -188,7 +188,7 @@ pub(crate) fn try_lower_flat_const_index_get(
 /// Returns (rows, cols, flat_values).
 pub(crate) fn try_flat_const_2d_int(e: &Expr) -> Option<(usize, usize, Vec<i32>)> {
     let rows = match e {
-        Expr::Array(r) => r,
+        Expr::Array(r, _) => r,
         _ => return None,
     };
     if rows.is_empty() {
@@ -198,7 +198,7 @@ pub(crate) fn try_flat_const_2d_int(e: &Expr) -> Option<(usize, usize, Vec<i32>)
     let mut vals = Vec::new();
     for row in rows {
         let row_elems = match row {
-            Expr::Array(re) => re,
+            Expr::Array(re, _) => re,
             _ => return None,
         };
         match cols {

@@ -234,7 +234,7 @@ pub(crate) fn inline_calls_in_expr(
                 inline_calls_in_expr(obj, function_map, bindings, next_local, budget, hoists);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for item in items.iter_mut() {
                 inline_calls_in_expr(item, function_map, bindings, next_local, budget, hoists);
             }

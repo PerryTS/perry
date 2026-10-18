@@ -600,7 +600,7 @@ fn dylib_closures_keep_native_roots() {
                     name: "result".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),
                     mutable: true,
-                    init: Some(Expr::Array(Vec::new())),
+                    init: Some(Expr::Array(Vec::new(), None)),
                 },
                 Stmt::Return(Some(Expr::LocalGet(2))),
             ],

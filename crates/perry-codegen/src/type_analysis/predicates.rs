@@ -551,7 +551,7 @@ pub(crate) fn tuple_index_literal(index: &Expr) -> Option<usize> {
 
 pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
     match e {
-        Expr::Array(_) => Some(HirType::Array(Box::new(HirType::Any))),
+        Expr::Array(_, _) => Some(HirType::Array(Box::new(HirType::Any))),
         Expr::String(_) | Expr::WtfString(_) => Some(HirType::String),
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),

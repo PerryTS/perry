@@ -264,9 +264,12 @@ fn an_all_inert_spread_bundle_still_roots_its_accumulator() {
         vec![Stmt::Expr(Expr::CallSpread {
             callee: Box::new(allocating("cb")),
             args: vec![
-                CallArg::Spread(Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)])),
+                CallArg::Spread(Expr::Array(
+                    vec![Expr::Number(1.0), Expr::Number(2.0)],
+                    None,
+                )),
                 CallArg::Expr(Expr::Number(3.0)),
-                CallArg::Spread(Expr::Array(vec![Expr::Number(4.0)])),
+                CallArg::Spread(Expr::Array(vec![Expr::Number(4.0)], None)),
             ],
             type_args: Vec::new(),
         })],

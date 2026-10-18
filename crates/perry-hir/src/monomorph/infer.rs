@@ -17,7 +17,7 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         Expr::BigInt(_) => Some(Type::BigInt),
 
         // Array literals - infer element type from first element
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             if let Some(first) = elems.first() {
                 if let Some(elem_ty) = infer_expr_type(first, module, idx) {
                     return Some(Type::Array(Box::new(elem_ty)));

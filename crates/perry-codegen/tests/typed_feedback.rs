@@ -860,11 +860,10 @@ fn full_outline_array_literal_uses_builder_call() {
             "outline_arr.ts",
             vec![param(1, "x", Type::Number)],
             Type::Any,
-            vec![Stmt::Return(Some(Expr::Array(vec![
-                Expr::LocalGet(1),
-                Expr::Number(2.0),
-                Expr::LocalGet(1),
-            ])))],
+            vec![Stmt::Return(Some(Expr::Array(
+                vec![Expr::LocalGet(1), Expr::Number(2.0), Expr::LocalGet(1)],
+                None,
+            )))],
         )
     };
 
@@ -1275,7 +1274,7 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
                 name: "xs".to_string(),
                 ty: array_ty,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 1,
@@ -1305,15 +1304,18 @@ fn typed_feedback_marks_numeric_array_literals() {
         "typed_feedback_numeric_array_literal.ts",
         Vec::new(),
         Type::Any,
-        vec![Stmt::Return(Some(Expr::Array(vec![
-            Expr::Number(1.0),
-            Expr::Integer(2),
-            Expr::Binary {
-                op: perry_hir::BinaryOp::Mul,
-                left: Box::new(Expr::Number(3.0)),
-                right: Box::new(Expr::Number(4.0)),
-            },
-        ])))],
+        vec![Stmt::Return(Some(Expr::Array(
+            vec![
+                Expr::Number(1.0),
+                Expr::Integer(2),
+                Expr::Binary {
+                    op: perry_hir::BinaryOp::Mul,
+                    left: Box::new(Expr::Number(3.0)),
+                    right: Box::new(Expr::Number(4.0)),
+                },
+            ],
+            None,
+        )))],
     ));
 
     // GcHeader: size=48 (8-byte GcHeader, 16-byte ArrayHeader with its
@@ -1327,10 +1329,10 @@ fn typed_feedback_marks_numeric_array_literals() {
         "typed_feedback_mixed_array_literal.ts",
         Vec::new(),
         Type::Any,
-        vec![Stmt::Return(Some(Expr::Array(vec![
-            Expr::Number(1.0),
-            Expr::String("x".to_string()),
-        ])))],
+        vec![Stmt::Return(Some(Expr::Array(
+            vec![Expr::Number(1.0), Expr::String("x".to_string())],
+            None,
+        )))],
     ));
 
     assert!(!mixed_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
@@ -1351,7 +1353,7 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 name: "xs".to_string(),
                 ty: array_ty,
                 mutable: true,
-                init: Some(Expr::Array(vec![Expr::Number(1.0)])),
+                init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
             },
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(2)),

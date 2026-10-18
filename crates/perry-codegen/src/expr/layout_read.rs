@@ -354,7 +354,7 @@ fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
             Expr::Object(fields) => fields
                 .iter()
                 .all(|(k, v)| k != "__proto__" && free(v, keys)),
-            Expr::Array(items) => items.iter().all(|v| free(v, keys)),
+            Expr::Array(items, _) => items.iter().all(|v| free(v, keys)),
             // An empty collection: a direct runtime allocation, with no
             // constructor lookup and no iterable to drain.
             Expr::MapNew | Expr::SetNew => true,

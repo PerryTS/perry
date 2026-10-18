@@ -108,7 +108,7 @@ fn a_pure_lexical_binding_refreshes_the_byte_proof_on_every_iteration() {
                 name: "views".into(),
                 ty: Type::Array(Box::new(array_type.clone())),
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::LocalGet(2)])),
+                init: Some(Expr::Array(vec![Expr::LocalGet(2)], None)),
             },
             Stmt::While {
                 condition: Expr::Bool(true),

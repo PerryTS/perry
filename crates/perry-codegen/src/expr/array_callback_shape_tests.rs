@@ -102,7 +102,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("Row".to_string()))),
             mutable: false,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Expr(Expr::ArrayPush {
             array_id: ARRAY_ID,
@@ -204,7 +204,7 @@ fn module_with_some_callback(captures_this: bool) -> Module {
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("Row".to_string()))),
             mutable: false,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Expr(Expr::ArraySome {
             array: Box::new(Expr::LocalGet(ARRAY_ID)),

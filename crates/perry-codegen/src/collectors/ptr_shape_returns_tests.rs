@@ -190,7 +190,7 @@ fn return_of_a_container_holding_the_local_still_escapes() {
     let stmts = vec![
         let_c(1, "wrapped"),
         store_x(1),
-        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)]))),
+        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)], None))),
     ];
     assert!(
         !promote(&stmts, &classes, &facts).contains_key(&1),

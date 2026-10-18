@@ -597,7 +597,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                     base_class_counter_seed,
                 );
             }
-            Expr::Array(elems) => {
+            Expr::Array(elems, _) => {
                 for e in elems.iter_mut() {
                     rewrite_call_init(
                         e,

@@ -49,7 +49,7 @@ fn swap_evaluates_one_source_and_guards_iterator_creation() {
             .filter(|s| matches!(
                 s,
                 perry_hir::Stmt::Let {
-                    init: Some(perry_hir::Expr::Array(_)),
+                    init: Some(perry_hir::Expr::Array(_, _)),
                     ..
                 }
             ))

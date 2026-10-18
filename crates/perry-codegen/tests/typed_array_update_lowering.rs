@@ -162,7 +162,7 @@ fn typed_array_update_takes_the_inline_element_path() {
 
 #[test]
 fn untyped_receiver_keeps_the_generic_update() {
-    let receiver = (Type::Any, Expr::Array(vec![Expr::Integer(1)]));
+    let receiver = (Type::Any, Expr::Array(vec![Expr::Integer(1)], None));
     let body = bump_bodies(receiver, BinaryOp::Sub, false);
     assert!(calls(&body, "js_dyn_index_get") >= 1, "{body}");
     assert!(calls(&body, "js_put_value_set") >= 1, "{body}");

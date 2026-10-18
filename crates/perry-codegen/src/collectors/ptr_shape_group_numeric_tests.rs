@@ -145,7 +145,7 @@ fn let_arr(id: u32, class_name: &str) -> Stmt {
         name: format!("a{id}"),
         ty: Type::Array(Box::new(Type::Named(class_name.to_string()))),
         mutable: false,
-        init: Some(Expr::Array(Vec::new())),
+        init: Some(Expr::Array(Vec::new(), None)),
     }
 }
 

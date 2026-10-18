@@ -30,6 +30,7 @@ pub mod inst;
 pub(crate) mod layout_desc;
 pub mod layout_families;
 pub(crate) mod proto_constants;
+pub use layout_desc::array_families::assign_birth_layouts;
 pub use layout_families::ProgramLayouts;
 pub mod linker;
 pub(crate) mod loop_purity;

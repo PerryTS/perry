@@ -18,7 +18,7 @@ fn detects_simple_producer() {
                 name: "out".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
-                init: Some(Expr::Array(vec![])),
+                init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
@@ -70,7 +70,7 @@ fn rejects_producer_with_reassignment() {
     let mut func = make_simple_producer();
     func.body[1] = Stmt::Expr(Expr::LocalSet(
         10,
-        Box::new(Expr::Array(vec![Expr::Integer(1)])),
+        Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
     ));
     assert!(analyze_producer(&func).is_none());
 }
@@ -83,7 +83,7 @@ fn rejects_producer_with_multiple_returns() {
         1,
         Stmt::If {
             condition: Expr::Bool(true),
-            then_branch: vec![Stmt::Return(Some(Expr::Array(vec![])))],
+            then_branch: vec![Stmt::Return(Some(Expr::Array(vec![], None)))],
             else_branch: None,
         },
     );
@@ -100,7 +100,7 @@ fn synthetic_out_params_are_assigned_by_function_id() {
         name: "out2".to_string(),
         ty: Type::Array(Box::new(Type::Number)),
         mutable: false,
-        init: Some(Expr::Array(vec![])),
+        init: Some(Expr::Array(vec![], None)),
     };
     first.body[1] = Stmt::Expr(Expr::ArrayPush {
         array_id: 20,
@@ -521,7 +521,7 @@ fn plain_call_site_stores_the_returned_head_back_over_the_binding() {
     match &caller.body[0] {
         Stmt::Let {
             id,
-            init: Some(Expr::Array(elems)),
+            init: Some(Expr::Array(elems, _)),
             mutable,
             ..
         } => {
@@ -917,7 +917,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 name: "outer".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
-                init: Some(Expr::Array(vec![])),
+                init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Let {
                 id: child,
@@ -988,7 +988,7 @@ fn make_simple_producer() -> Function {
                 name: "out".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
-                init: Some(Expr::Array(vec![])),
+                init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,

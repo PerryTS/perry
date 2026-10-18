@@ -85,7 +85,7 @@ fn grown_global_module() -> Module {
             name: "d".to_string(),
             ty: Type::Any,
             mutable: true,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         counted_store_loop(
             D,

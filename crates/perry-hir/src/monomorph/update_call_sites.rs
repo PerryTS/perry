@@ -253,7 +253,7 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(v, ctx, lookup);
             }
         }
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             for e in elems.iter_mut() {
                 update_call_sites_in_expr(e, ctx, lookup);
             }
@@ -429,7 +429,9 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(fi, ctx, lookup);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice {
+            array, start, end, ..
+        } => {
             update_call_sites_in_expr(array, ctx, lookup);
             update_call_sites_in_expr(start, ctx, lookup);
             if let Some(e) = end {
@@ -690,7 +692,7 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
         Expr::NativeMemoryFillU32 { .. } | Expr::NativeMemoryCopy { .. } => Some(Type::Void),
         Expr::BigInt(_) => Some(Type::BigInt),
 
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             if let Some(first) = elems.first() {
                 if let Some(elem_ty) = infer_expr_type_from_lookup(first, lookup) {
                     return Some(Type::Array(Box::new(elem_ty)));

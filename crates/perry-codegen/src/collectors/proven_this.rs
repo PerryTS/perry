@@ -254,7 +254,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
         .filter(|field| {
             field.key_expr.is_none()
                 && matches!(field.ty, Type::Array(_))
-                && matches!(field.init, Some(Expr::Array(_) | Expr::ArraySpread(_)))
+                && matches!(field.init, Some(Expr::Array(_, _) | Expr::ArraySpread(_)))
         })
         .map(|field| (field.name.as_str(), &field.ty))
         .collect();

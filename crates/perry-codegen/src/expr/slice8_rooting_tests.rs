@@ -230,7 +230,7 @@ fn with_object_local(id: u32, tail: Stmt) -> Vec<Stmt> {
             ty: Type::Any,
             init: Some(Expr::Object(vec![(
                 "items".to_string(),
-                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)]),
+                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             )])),
             mutable: false,
         },

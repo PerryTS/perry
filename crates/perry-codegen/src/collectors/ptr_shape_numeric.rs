@@ -809,7 +809,7 @@ fn expr_numeric_by_construction_with_region(
                 if number_valued_typed_array_kind(*kind)
         ) || matches!(
             init,
-            Expr::Array(elements)
+            Expr::Array(elements, _)
                 if elements
                     .iter()
                     .all(|element| matches!(element, Expr::Integer(_) | Expr::Number(_)))

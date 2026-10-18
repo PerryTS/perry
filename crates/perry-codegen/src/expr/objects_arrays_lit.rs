@@ -63,7 +63,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // new pointer if it had to realloc, so we thread the pointer
         // through each push. Final pointer is NaN-boxed via js_nanbox_pointer
         // (POINTER_TAG, not STRING_TAG).
-        Expr::Array(elements) => lower_array_literal(ctx, elements),
+        Expr::Array(elements, _) => lower_array_literal(ctx, elements),
 
         // `[a, ...b, c]` literal with spread elements. Spread operands go
         // through the runtime iterator materializer so `GetIterator` errors

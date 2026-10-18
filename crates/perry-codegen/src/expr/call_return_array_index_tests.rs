@@ -58,7 +58,10 @@ fn store_class(receiver_selector: i64) -> Class {
         "getData",
         vec![param(3, "selector", Type::Number)],
         Type::Array(Box::new(Type::Any)),
-        vec![Stmt::Return(Some(Expr::Array(vec![Expr::Number(0.0)])))],
+        vec![Stmt::Return(Some(Expr::Array(
+            vec![Expr::Number(0.0)],
+            None,
+        )))],
     );
     let write = function(
         3,

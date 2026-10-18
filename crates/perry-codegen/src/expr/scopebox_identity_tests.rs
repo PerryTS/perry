@@ -142,7 +142,7 @@ fn a_factory_parameter_name_cannot_supply_allocation_provenance() {
             arguments_object: None,
         }],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Array(vec![])))],
+        body: vec![Stmt::Return(Some(Expr::Array(vec![], None)))],
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,

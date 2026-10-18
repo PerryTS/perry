@@ -226,7 +226,7 @@ fn infer_expr(
                 _ => None,
             }
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             if elements.is_empty() {
                 return Some(Type::Array(Box::new(Type::Never)));
             }
@@ -342,7 +342,7 @@ fn expr_proves(
         return false;
     }
     match (expr, normalize(ctx.aliases, expected)) {
-        (Expr::Array(elements), Type::Array(expected_element)) => elements
+        (Expr::Array(elements, _), Type::Array(expected_element)) => elements
             .iter()
             .all(|element| expr_proves(ctx, locals, element, &expected_element, depth + 1)),
         (

@@ -45,7 +45,7 @@ fn var_redeclared_numeric_array_compare_against_void_stays_boxed() {
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: true,
-                init: Some(Expr::Array(vec![Expr::Integer(0)])),
+                init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
             Stmt::Let {
                 id: R,
@@ -93,7 +93,7 @@ fn let_numeric_array_compare_against_void_stays_boxed() {
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::Integer(0)])),
+                init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
             Stmt::Let {
                 id: R,

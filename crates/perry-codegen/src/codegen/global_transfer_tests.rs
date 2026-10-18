@@ -25,7 +25,7 @@ fn proven_nonleaf_kinds_and_structural_allocations_are_not_candidates() {
     assert!(!may_hold_leaf(&Expr::Number(1.0), Some(&Type::Number)));
     assert!(!may_hold_leaf(&Expr::Bool(true), Some(&Type::Boolean)));
     assert!(!may_hold_leaf(&Expr::Object(Vec::new()), None));
-    assert!(!may_hold_leaf(&Expr::Array(Vec::new()), None));
+    assert!(!may_hold_leaf(&Expr::Array(Vec::new(), None), None));
 }
 
 #[test]

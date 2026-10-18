@@ -773,7 +773,7 @@ pub fn lower_getter_method_with_name(
                 name: "arguments".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
         );
     }
@@ -954,7 +954,7 @@ pub fn lower_setter_method_with_name(
                 name: "arguments".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Array(raw_args)),
+                init: Some(Expr::Array(raw_args, None)),
             },
         );
     }

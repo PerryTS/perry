@@ -5,6 +5,19 @@
 use super::*;
 use crate::types::{FuncId, GlobalId, LocalId, Type};
 
+/// The layout an array birth's named properties are born in: the keys whose
+/// writes reach this birth through value flow, in the order of their first
+/// write. `ordinal` names the module's descriptor (the first birth with these
+/// keys). Set once, before codegen, by the array-families pass.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArrayBirthLayout {
+    pub ordinal: u32,
+    pub keys: Vec<String>,
+}
+
+/// An array birth's layout; births with the same keys share one.
+pub type BirthLayout = Option<std::sync::Arc<ArrayBirthLayout>>;
+
 /// Fallback when a dynamic `with` object environment does not bind the
 /// assignment target. The object lookup is performed before the RHS is
 /// evaluated, matching ECMAScript Reference resolution order.
@@ -261,8 +274,8 @@ pub enum Expr {
         sources: Vec<Expr>,
     },
 
-    // Array literal
-    Array(Vec<Expr>),
+    // Array literal, with the layout its named properties are born in
+    Array(Vec<Expr>, BirthLayout),
 
     // Array literal with spread elements
     // Each element is either a regular expression (Left) or a spread expression (Right)
@@ -1749,6 +1762,7 @@ pub enum Expr {
         array: Box<Expr>,
         start: Box<Expr>,
         end: Option<Box<Expr>>,
+        layout: BirthLayout,
     }, // arr.slice(start, end?) -> new array
     ArraySplice {
         array_id: LocalId,
@@ -2441,7 +2455,7 @@ pub enum Expr {
     ArrayIsArray(Box<Expr>),
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
-    ArrayFrom(Box<Expr>),
+    ArrayFrom(Box<Expr>, BirthLayout),
     /// Array.prototype generic receiver materialization preserving absent keys as holes.
     ArrayFromArrayLikeHoley(Box<Expr>),
 

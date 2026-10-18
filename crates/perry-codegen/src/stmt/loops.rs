@@ -6587,7 +6587,7 @@ fn expr_is_packed_f64_loop_safe(
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id),
-        Expr::Array(elements) => elements
+        Expr::Array(elements, _) => elements
             .iter()
             .all(|expr| expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id)),
         Expr::ArraySpread(elements) => elements.iter().all(|element| match element {
@@ -9289,7 +9289,7 @@ fn expr_array_length_effect(
         | Expr::MathTrunc(a)
         | Expr::MathSign(a)
         | Expr::MathF16round(a) => walk(a),
-        Expr::Array(elements) => first_blocking_loop_effect(elements.iter().map(|expr| {
+        Expr::Array(elements, _) => first_blocking_loop_effect(elements.iter().map(|expr| {
             if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases) {
                 LoopArrayLengthEffect::AggregateAliasEscape
             } else {
@@ -9762,7 +9762,7 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::MathTrunc(a)
         | Expr::MathSign(a)
         | Expr::MathF16round(a) => walk(a),
-        Expr::Array(elements) => elements.iter().all(|expr| {
+        Expr::Array(elements, _) => elements.iter().all(|expr| {
             !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases) && walk(expr)
         }),
         Expr::ArraySpread(elements) => elements.iter().all(|el| match el {

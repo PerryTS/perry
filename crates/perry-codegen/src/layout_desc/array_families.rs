@@ -5,10 +5,13 @@
 //! Facts move through one graph pass: the flow graph's strongly connected
 //! components are visited in topological order, and each component's sorted
 //! set of items is merged into its successors once.
+//!
+//! The result is HIR data: `assign_birth_layouts` puts each birth's layout on
+//! the birth expression before codegen, and lowering reads it there.
 use perry_hir::fx::FxHashMap;
-use perry_hir::{Expr, Module, Stmt};
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use perry_hir::{ArrayBirthLayout, Expr, Module, Stmt};
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum Node<'a> {
@@ -32,6 +35,9 @@ struct Flow<'a> {
     refs: Vec<(u32, u32)>,
     calls: Vec<(u32, u32, Vec<u32>)>,
     params: FxHashMap<u32, Vec<u32>>,
+    /// The CJS wrapper's export snapshots, which codegen never initializes
+    /// (`cjs_exports::prepare`).
+    snapshots: HashSet<u32>,
 }
 impl<'a> Flow<'a> {
     fn node(&mut self, node: Node<'a>) -> u32 {
@@ -45,7 +51,7 @@ impl<'a> Flow<'a> {
     fn expression(&mut self, scope: usize, e: &'a Expr) {
         let here = expr(e);
         match e {
-            Expr::Array(_) | Expr::ArraySlice { .. } | Expr::ArrayFrom(_) => {
+            Expr::Array(_, _) | Expr::ArraySlice { .. } | Expr::ArrayFrom(_, _) => {
                 self.births.push(e as *const Expr as usize);
             }
             Expr::LocalGet(id) => self.edge(Node::Local(scope, *id), here),
@@ -199,7 +205,7 @@ impl<'a> Flow<'a> {
             match stmt {
                 Stmt::Let {
                     id, init: Some(e), ..
-                } => {
+                } if !self.snapshots.contains(id) => {
                     self.edge(expr(e), Node::Local(scope, *id));
                     self.expression(scope, e);
                 }
@@ -454,15 +460,46 @@ fn merge_into(into: &mut Vec<u32>, from: &[u32]) {
     *into = out;
 }
 
-thread_local! {
-    static BIRTH_LAYOUTS: RefCell<FxHashMap<usize, String>> = RefCell::new(FxHashMap::default());
-}
+/// The layout descriptor `e` is born with: an array birth whose named
+/// properties have a layout, in a module that emits array layouts.
 pub(crate) fn birth_layout(e: &Expr) -> Option<String> {
-    BIRTH_LAYOUTS.with(|m| m.borrow().get(&(e as *const Expr as usize)).cloned())
+    let layout = match e {
+        Expr::Array(_, layout) | Expr::ArraySlice { layout, .. } | Expr::ArrayFrom(_, layout) => {
+            layout.as_ref()?
+        }
+        _ => return None,
+    };
+    super::array_layout_desc(layout.ordinal)
 }
 
-pub(crate) fn collect(hir: &Module, prefix: &str) -> Vec<super::FamilyLayout> {
-    let mut flow = Flow::default();
+/// Put each array birth's layout on the birth: the keys whose writes reach
+/// it, in the order of their first write. Runs once per module before
+/// codegen; clones of the HIR carry the layout with them.
+pub fn assign_birth_layouts(hir: &mut Module) {
+    let layouts = birth_layouts(hir);
+    if layouts.is_empty() {
+        return;
+    }
+    let mut set = |e: &mut Expr| {
+        let at = e as *const Expr as usize;
+        if let Expr::Array(_, layout)
+        | Expr::ArraySlice { layout, .. }
+        | Expr::ArrayFrom(_, layout) = e
+        {
+            if let Some(found) = layouts.get(&at) {
+                *layout = Some(found.clone());
+            }
+        }
+    };
+    for_each_birth_mut(hir, &mut set);
+}
+
+/// The layout of every birth that has one, by the birth's address.
+fn birth_layouts(hir: &Module) -> FxHashMap<usize, Arc<ArrayBirthLayout>> {
+    let mut flow = Flow {
+        snapshots: crate::codegen::cjs_exports::snapshot_bindings(hir),
+        ..Flow::default()
+    };
     flow.statements(usize::MAX, &hir.init);
     for global in &hir.globals {
         if let Some(e) = &global.init {
@@ -512,9 +549,8 @@ pub(crate) fn collect(hir: &Module, prefix: &str) -> Vec<super::FamilyLayout> {
         .collect();
     let queries: Vec<u32> = birth_nodes.iter().flatten().copied().collect();
     let keys = backward.propagate(&seeds, &queries);
-    let mut layouts = Vec::new();
-    let mut map = FxHashMap::default();
-    let mut shared: BTreeMap<Vec<String>, String> = BTreeMap::new();
+    let mut out = FxHashMap::default();
+    let mut shared: BTreeMap<Vec<String>, Arc<ArrayBirthLayout>> = BTreeMap::new();
     for (ordinal, (birth, node)) in flow.births.iter().zip(&birth_nodes).enumerate() {
         let Some(node) = node else {
             continue;
@@ -530,28 +566,151 @@ pub(crate) fn collect(hir: &Module, prefix: &str) -> Vec<super::FamilyLayout> {
         if names.is_empty() {
             continue;
         }
-        let desc = shared
+        let layout = shared
             .entry(names.clone())
             .or_insert_with(|| {
-                let desc = format!("perry_array_layout_{prefix}_{ordinal}");
-                layouts.push(super::FamilyLayout {
-                    desc_global: desc.clone(),
-                    slot_count: names.len() as u32,
-                    keys: names.clone(),
-                    rep: 0,
-                    array_named: true,
-                });
-                desc
+                Arc::new(ArrayBirthLayout {
+                    ordinal: ordinal as u32,
+                    keys: names,
+                })
             })
             .clone();
-        map.insert(*birth, desc);
+        out.insert(*birth, layout);
     }
-    BIRTH_LAYOUTS.with(|m| *m.borrow_mut() = map);
-    layouts
+    out
 }
 
-pub(crate) fn clear() {
-    BIRTH_LAYOUTS.with(|m| m.borrow_mut().clear());
+/// Visit every array birth of the module (`birth_layouts` reads them in
+/// function bodies, class members, globals and the module init).
+fn for_each_birth_mut(hir: &mut Module, f: &mut impl FnMut(&mut Expr)) {
+    stmts_mut(&mut hir.init, f);
+    for global in &mut hir.globals {
+        if let Some(e) = &mut global.init {
+            expr_mut(e, f);
+        }
+    }
+    for function in &mut hir.functions {
+        stmts_mut(&mut function.body, f);
+    }
+    for class in &mut hir.classes {
+        for function in class
+            .constructor
+            .iter_mut()
+            .chain(&mut class.methods)
+            .chain(&mut class.static_methods)
+            .chain(class.getters.iter_mut().map(|(_, f)| f))
+            .chain(class.setters.iter_mut().map(|(_, f)| f))
+        {
+            stmts_mut(&mut function.body, f);
+        }
+    }
+}
+
+fn expr_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
+    f(e);
+    if let Expr::Closure { body, .. } = e {
+        stmts_mut(body, f);
+    }
+    perry_hir::walker::walk_expr_children_mut(e, &mut |child| expr_mut(child, f));
+}
+
+fn stmts_mut(body: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
+    for stmt in body {
+        match stmt {
+            Stmt::Let { init: Some(e), .. }
+            | Stmt::Expr(e)
+            | Stmt::Throw(e)
+            | Stmt::Return(Some(e)) => expr_mut(e, f),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                expr_mut(condition, f);
+                stmts_mut(then_branch, f);
+                if let Some(body) = else_branch {
+                    stmts_mut(body, f);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                expr_mut(condition, f);
+                stmts_mut(body, f);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    stmts_mut(std::slice::from_mut(init), f);
+                }
+                if let Some(e) = condition {
+                    expr_mut(e, f);
+                }
+                if let Some(e) = update {
+                    expr_mut(e, f);
+                }
+                stmts_mut(body, f);
+            }
+            Stmt::Labeled { body, .. } => stmts_mut(std::slice::from_mut(body), f),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                stmts_mut(body, f);
+                if let Some(c) = catch {
+                    stmts_mut(&mut c.body, f);
+                }
+                if let Some(body) = finally {
+                    stmts_mut(body, f);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                expr_mut(discriminant, f);
+                for case in cases {
+                    if let Some(e) = &mut case.test {
+                        expr_mut(e, f);
+                    }
+                    stmts_mut(&mut case.body, f);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// This module's array layouts, from the layouts its births carry: one per
+/// distinct layout, in birth order.
+pub(crate) fn collect(hir: &Module, prefix: &str) -> Vec<super::FamilyLayout> {
+    let mut layouts: BTreeMap<u32, Arc<ArrayBirthLayout>> = BTreeMap::new();
+    perry_hir::for_each_module_expr(hir, &mut |e| {
+        if let Expr::Array(_, Some(layout))
+        | Expr::ArraySlice {
+            layout: Some(layout),
+            ..
+        }
+        | Expr::ArrayFrom(_, Some(layout)) = e
+        {
+            layouts
+                .entry(layout.ordinal)
+                .or_insert_with(|| layout.clone());
+        }
+    });
+    layouts
+        .into_values()
+        .map(|layout| super::FamilyLayout {
+            desc_global: super::array_layout_symbol(prefix, layout.ordinal),
+            slot_count: layout.keys.len() as u32,
+            keys: layout.keys.clone(),
+            rep: 0,
+            array_named: true,
+        })
+        .collect()
 }
 
 #[cfg(test)]

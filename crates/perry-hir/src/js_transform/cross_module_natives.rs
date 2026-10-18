@@ -842,7 +842,7 @@ pub fn fix_native_instance_expr(
             fix_native_instance_expr(then_expr, native_instances, local_id_instances);
             fix_native_instance_expr(else_expr, native_instances, local_id_instances);
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for elem in elements {
                 fix_native_instance_expr(elem, native_instances, local_id_instances);
             }

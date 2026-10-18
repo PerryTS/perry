@@ -189,7 +189,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
                     0,
                     Stmt::Expr(Expr::LocalSet(
                         id,
-                        Box::new(Expr::Array(vec![Expr::LocalGet(id)])),
+                        Box::new(Expr::Array(vec![Expr::LocalGet(id)], None)),
                     )),
                 );
             }
@@ -1403,7 +1403,7 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
                     Some(e) => e,
                     None => Expr::Undefined,
                 };
-                *init = Some(Expr::Array(vec![wrapped]));
+                *init = Some(Expr::Array(vec![wrapped], None));
                 *ty = Type::Array(Box::new(ty.clone()));
             }
         }
@@ -1469,10 +1469,13 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
                 // changed into an IndexSet.
                 let freshen = Expr::LocalSet(
                     id,
-                    Box::new(Expr::Array(vec![Expr::IndexGet {
-                        object: Box::new(Expr::LocalGet(id)),
-                        index: Box::new(Expr::Integer(0)),
-                    }])),
+                    Box::new(Expr::Array(
+                        vec![Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(id)),
+                            index: Box::new(Expr::Integer(0)),
+                        }],
+                        None,
+                    )),
                 );
                 *update = Some(match update.take() {
                     Some(original) => Expr::Sequence(vec![freshen, original]),
@@ -1712,7 +1715,7 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
                     0,
                     Stmt::Expr(Expr::LocalSet(
                         id,
-                        Box::new(Expr::Array(vec![Expr::LocalGet(id)])),
+                        Box::new(Expr::Array(vec![Expr::LocalGet(id)], None)),
                     )),
                 );
             }

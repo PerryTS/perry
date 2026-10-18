@@ -71,7 +71,7 @@ fn expr_any(expr: &Expr, pred: &impl Fn(&Expr) -> bool) -> bool {
         }
         Expr::PropertyGet { object, .. } => expr_any(object, pred),
         Expr::Object(fields) => fields.iter().any(|(_, value)| expr_any(value, pred)),
-        Expr::Array(items) => items.iter().any(|item| expr_any(item, pred)),
+        Expr::Array(items, _) => items.iter().any(|item| expr_any(item, pred)),
         Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
             expr_any(left, pred) || expr_any(right, pred)
         }

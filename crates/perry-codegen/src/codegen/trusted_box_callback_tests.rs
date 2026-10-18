@@ -822,7 +822,7 @@ fn captured_array_and_with_writes_decode_the_box_container() {
             name: "array".into(),
             ty: Type::Array(Box::new(Type::Number)),
             mutable: true,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Expr(callback_with(
             CALLBACK_FUNC,
@@ -840,7 +840,7 @@ fn captured_array_and_with_writes_decode_the_box_container() {
                 Stmt::Expr(Expr::WithSet {
                     object: Box::new(Expr::Object(Vec::new())),
                     property: "array".into(),
-                    value: Box::new(Expr::Array(Vec::new())),
+                    value: Box::new(Expr::Array(Vec::new(), None)),
                     fallback: perry_hir::WithSetFallback::Local(COUNT),
                     strict: false,
                 }),

@@ -95,7 +95,7 @@ impl ArraySource {
                 name,
                 ty,
                 mutable: true,
-                init: Some(Expr::Array(vec![])),
+                init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Let {
                 id: value,

@@ -281,7 +281,7 @@ fn element_shape_module(body: Vec<Stmt>, extends_name: Option<&str>) -> Module {
             name: "keep".to_string(),
             ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
             mutable: false,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Let {
             id: SUM_ID,
@@ -1184,7 +1184,7 @@ fn element_shape_versioned_loop_declines_a_foreign_arrays_length_bound() {
             name: "other".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
             mutable: false,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
     );
     // `element_shape_module` puts the `For` at index 2; the insert above
@@ -1553,7 +1553,7 @@ fn element_binding_declines_a_second_array() {
             name: "other".to_string(),
             ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
             mutable: false,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
     );
     let ir = emit(&m);

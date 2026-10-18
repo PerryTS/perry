@@ -164,7 +164,9 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::ArraySlice { array, start, end } => {
+            Expr::ArraySlice {
+                array, start, end, ..
+            } => {
                 self.emit_expr(array);
                 self.output.push_str(".slice(");
                 self.emit_expr(start);
@@ -1048,7 +1050,7 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
-            Expr::ArrayFrom(val) => {
+            Expr::ArrayFrom(val, _) => {
                 self.output.push_str("Array.from(");
                 self.emit_expr(val);
                 self.output.push(')');

@@ -877,10 +877,10 @@ fn string_literal_concat_operand_is_not_re_derived_when_nothing_collects() {
 fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
     let ir = ir_for(
         "array_reload.ts",
-        vec![Stmt::Expr(Expr::Array(vec![
-            Expr::String("lit".to_string()),
-            allocating(),
-        ]))],
+        vec![Stmt::Expr(Expr::Array(
+            vec![Expr::String("lit".to_string()), allocating()],
+            None,
+        ))],
     );
 
     let f = init_ir(&ir);

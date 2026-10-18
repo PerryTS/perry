@@ -233,7 +233,7 @@ fn infers_object_and_array_shapes_conservatively() {
     };
     assert_eq!(infer_expr_type(&get, &env), Type::Number);
 
-    let array = Expr::Array(vec![Expr::Number(1.0), Expr::String("x".to_string())]);
+    let array = Expr::Array(vec![Expr::Number(1.0), Expr::String("x".to_string())], None);
     assert_eq!(
         infer_expr_type(&array, &env),
         Type::Array(Box::new(Type::Any))
@@ -250,7 +250,7 @@ fn infers_array_higher_order_result_elements() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArrayMap {
-                array: Box::new(Expr::Array(vec![Expr::Integer(1)])),
+                array: Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
                 callback: Box::new(closure_returning(Type::String)),
             },
             &env,
@@ -260,7 +260,7 @@ fn infers_array_higher_order_result_elements() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArrayFlatMap {
-                array: Box::new(Expr::Array(vec![Expr::Integer(1)])),
+                array: Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
                 callback: Box::new(closure_returning(Type::Array(Box::new(Type::Number)))),
             },
             &env,
@@ -279,7 +279,7 @@ fn infers_array_higher_order_result_elements() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArrayFromMapped {
-                iterable: Box::new(Expr::Array(vec![Expr::Integer(1)])),
+                iterable: Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
                 map_fn: Box::new(closure_returning(Type::BigInt)),
                 this_arg: None,
             },
@@ -337,7 +337,7 @@ fn infers_dynamic_passthrough_and_intrinsic_result_types() {
             &Expr::ReflectApply {
                 func: Box::new(closure_returning(Type::Number)),
                 this_arg: Box::new(Expr::Undefined),
-                args: Box::new(Expr::Array(vec![])),
+                args: Box::new(Expr::Array(vec![], None)),
             },
             &env,
         ),
@@ -349,7 +349,7 @@ fn infers_dynamic_passthrough_and_intrinsic_result_types() {
     );
     assert_eq!(
         infer_expr_type(
-            &Expr::SuperCallSpread(vec![CallArg::Spread(Expr::Array(vec![]))]),
+            &Expr::SuperCallSpread(vec![CallArg::Spread(Expr::Array(vec![], None))]),
             &env,
         ),
         Type::Void
@@ -941,7 +941,7 @@ fn infers_common_constructed_runtime_values() {
         infer_expr_type(
             &Expr::NewDynamicSpread {
                 callee: Box::new(Expr::LocalGet(404)),
-                args: vec![CallArg::Spread(Expr::Array(vec![]))],
+                args: vec![CallArg::Spread(Expr::Array(vec![], None))],
                 byte_offset: 0,
             },
             &env,
@@ -1039,7 +1039,8 @@ fn infers_array_method_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArraySlice {
-                array: Box::new(Expr::Array(vec![])),
+                layout: None,
+                array: Box::new(Expr::Array(vec![], None)),
                 start: Box::new(Expr::Integer(0)),
                 end: None,
             },
@@ -1050,7 +1051,7 @@ fn infers_array_method_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArrayJoin {
-                array: Box::new(Expr::Array(vec![])),
+                array: Box::new(Expr::Array(vec![], None)),
                 separator: None,
             },
             &env,
@@ -1060,7 +1061,7 @@ fn infers_array_method_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArraySort {
-                array: Box::new(Expr::Array(vec![])),
+                array: Box::new(Expr::Array(vec![], None)),
                 comparator: Box::new(Expr::Undefined),
             },
             &env,
@@ -1068,13 +1069,16 @@ fn infers_array_method_runtime_values() {
         Type::Array(Box::new(Type::Any))
     );
     assert_eq!(
-        infer_expr_type(&Expr::ArrayIsArray(Box::new(Expr::Array(vec![]))), &env),
+        infer_expr_type(
+            &Expr::ArrayIsArray(Box::new(Expr::Array(vec![], None))),
+            &env
+        ),
         Type::Boolean
     );
     assert_eq!(
         infer_expr_type(
             &Expr::ArrayFindIndex {
-                array: Box::new(Expr::Array(vec![])),
+                array: Box::new(Expr::Array(vec![], None)),
                 callback: Box::new(Expr::Undefined),
             },
             &env,
@@ -1084,7 +1088,7 @@ fn infers_array_method_runtime_values() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArrayForEach {
-                array: Box::new(Expr::Array(vec![])),
+                array: Box::new(Expr::Array(vec![], None)),
                 callback: Box::new(Expr::Undefined),
             },
             &env,
@@ -1100,6 +1104,7 @@ fn infers_array_methods_from_receiver_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::ArraySlice {
+                layout: None,
                 array: Box::new(Expr::LocalGet(1)),
                 start: Box::new(Expr::Integer(0)),
                 end: None,
@@ -1129,7 +1134,7 @@ fn infers_array_methods_from_receiver_facts() {
     );
     assert_eq!(
         infer_expr_type(
-            &Expr::ArrayFrom(Box::new(Expr::String("abc".to_string()))),
+            &Expr::ArrayFrom(Box::new(Expr::String("abc".to_string())), None),
             &env,
         ),
         Type::Array(Box::new(Type::String))
@@ -1239,7 +1244,7 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
         infer_expr_type(
             &Expr::ReflectConstruct {
                 target: Box::new(Expr::ClassRef("Widget".to_string())),
-                args: Box::new(Expr::Array(Vec::new())),
+                args: Box::new(Expr::Array(Vec::new(), None)),
                 new_target: Box::new(Expr::Undefined),
             },
             &env,
@@ -1388,10 +1393,13 @@ fn infers_map_and_set_methods_from_generic_facts() {
 
     assert_eq!(
         infer_expr_type(
-            &Expr::MapNewFromArray(Box::new(Expr::Array(vec![Expr::Array(vec![
-                Expr::String("k".to_string()),
-                Expr::Number(1.0),
-            ])]))),
+            &Expr::MapNewFromArray(Box::new(Expr::Array(
+                vec![Expr::Array(
+                    vec![Expr::String("k".to_string()), Expr::Number(1.0),],
+                    None
+                )],
+                None
+            ))),
             &env,
         ),
         Type::Generic {
@@ -1401,7 +1409,7 @@ fn infers_map_and_set_methods_from_generic_facts() {
     );
     assert_eq!(
         infer_expr_type(
-            &Expr::SetNewFromArray(Box::new(Expr::Array(vec![Expr::Bool(true)]))),
+            &Expr::SetNewFromArray(Box::new(Expr::Array(vec![Expr::Bool(true)], None))),
             &env,
         ),
         Type::Generic {
@@ -1539,7 +1547,10 @@ fn infers_misc_collection_and_reflection_results() {
         Type::Array(Box::new(Type::String))
     );
     assert_eq!(
-        infer_expr_type(&Expr::TemplateRaw(Box::new(Expr::Array(vec![]))), &env),
+        infer_expr_type(
+            &Expr::TemplateRaw(Box::new(Expr::Array(vec![], None))),
+            &env
+        ),
         Type::Union(vec![Type::Array(Box::new(Type::String)), Type::Void])
     );
     assert_eq!(
@@ -1548,9 +1559,10 @@ fn infers_misc_collection_and_reflection_results() {
     );
     assert_eq!(
         infer_expr_type(
-            &Expr::GetIterator(Box::new(Expr::Array(vec![Expr::String(
-                "item".to_string()
-            )]))),
+            &Expr::GetIterator(Box::new(Expr::Array(
+                vec![Expr::String("item".to_string())],
+                None
+            ))),
             &env,
         ),
         Type::Object(ObjectType::default())

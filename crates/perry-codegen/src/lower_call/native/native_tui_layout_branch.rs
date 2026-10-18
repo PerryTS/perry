@@ -324,7 +324,7 @@
             children_arg = Some(&args[1]);
         } else if let Some(arg) = args.first() {
             match arg {
-                Expr::Array(_) | Expr::ArraySpread(_) => children_arg = Some(arg),
+                Expr::Array(_, _) | Expr::ArraySpread(_) => children_arg = Some(arg),
                 Expr::Object(_) | Expr::New { .. } => style_arg = Some(arg),
                 // Bare identifier / call / etc. — most TS programs
                 // use this for children, e.g. `Box(rows)` where
@@ -343,7 +343,7 @@
 
         if let Some(children_expr) = children_arg {
             let elements_owned: Option<Vec<Expr>> = match children_expr {
-                Expr::Array(elems) => Some(elems.clone()),
+                Expr::Array(elems, _) => Some(elems.clone()),
                 _ => None,
             };
             if let Some(elements) = elements_owned {
@@ -403,7 +403,7 @@
         // (when the user calls `VStack([children])` without an explicit
         // spacing). Detect which by checking the type.
         let (spacing_d, children_idx) = match args.first() {
-            Some(Expr::Array(_)) | Some(Expr::ArraySpread(_)) => ("8.0".to_string(), 0),
+            Some(Expr::Array(_, _)) | Some(Expr::ArraySpread(_)) => ("8.0".to_string(), 0),
             Some(other) => {
                 // Could be a number (spacing) — lower it. The children
                 // are then in args[1] (if present).
@@ -432,7 +432,7 @@
         ));
         if let Some(children_expr) = args.get(children_idx) {
             let elements_owned: Option<Vec<Expr>> = match children_expr {
-                Expr::Array(elems) => Some(elems.clone()),
+                Expr::Array(elems, _) => Some(elems.clone()),
                 _ => None,
             };
             if let Some(elements) = elements_owned {

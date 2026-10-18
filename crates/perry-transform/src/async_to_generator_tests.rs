@@ -261,7 +261,10 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "array-element",
-            vec![Stmt::Expr(Expr::Array(vec![await_(Expr::Integer(1))]))],
+            vec![Stmt::Expr(Expr::Array(
+                vec![await_(Expr::Integer(1))],
+                None,
+            ))],
         ),
         (
             "object-value",
@@ -282,7 +285,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "index",
             vec![Stmt::Expr(Expr::IndexGet {
-                object: Box::new(Expr::Array(vec![])),
+                object: Box::new(Expr::Array(vec![], None)),
                 index: Box::new(await_(Expr::Integer(1))),
             })],
         ),
@@ -317,7 +320,7 @@ fn async_closure_await_in_every_position_is_rewritten() {
         (
             "for-of-iterable",
             vec![Stmt::Expr(Expr::ForOfToArray(Box::new(await_(
-                Expr::Array(vec![]),
+                Expr::Array(vec![], None),
             ))))],
         ),
     ];

@@ -103,7 +103,7 @@ fn let_arr_ty(id: u32, name: &str, ty: Type) -> Stmt {
         name: name.to_string(),
         ty,
         mutable: false,
-        init: Some(Expr::Array(Vec::new())),
+        init: Some(Expr::Array(Vec::new(), None)),
     }
 }
 
@@ -786,7 +786,7 @@ fn a_non_empty_array_literal_is_not_a_seed() {
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
             mutable: false,
-            init: Some(Expr::Array(vec![Expr::Undefined])),
+            init: Some(Expr::Array(vec![Expr::Undefined], None)),
         },
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
@@ -809,7 +809,7 @@ fn a_reassignable_array_binding_is_not_a_seed() {
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
             mutable: true,
-            init: Some(Expr::Array(Vec::new())),
+            init: Some(Expr::Array(Vec::new(), None)),
         },
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),

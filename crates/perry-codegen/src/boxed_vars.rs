@@ -546,7 +546,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
                 collect_nested_closure_boxed_vars_in_expr(a, out);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 collect_nested_closure_boxed_vars_in_expr(i, out);
             }
@@ -974,7 +974,7 @@ fn collect_closure_refs_and_writes_in_expr(
                 collect_closure_refs_and_writes_in_expr(a, refs, writes);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 collect_closure_refs_and_writes_in_expr(i, refs, writes);
             }
@@ -1230,7 +1230,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
                 collect_outer_writes_in_expr(a, out);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 collect_outer_writes_in_expr(i, out);
             }
@@ -1441,7 +1441,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 collect_write_ids_in_expr(a, out);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 collect_write_ids_in_expr(i, out);
             }
@@ -1764,7 +1764,7 @@ fn collect_closure_let_types_in_expr(
                 collect_closure_let_types_in_expr(a, out);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for i in items {
                 collect_closure_let_types_in_expr(i, out);
             }
@@ -1947,7 +1947,8 @@ mod tests {
         );
         assert_eq!(
             refine_type_from_init_simple(&Expr::ArraySlice {
-                array: Box::new(Expr::Array(vec![])),
+                layout: None,
+                array: Box::new(Expr::Array(vec![], None)),
                 start: Box::new(Expr::Integer(0)),
                 end: None,
             }),
@@ -1955,7 +1956,7 @@ mod tests {
         );
         assert_eq!(
             refine_type_from_init_simple(&Expr::ArrayJoin {
-                array: Box::new(Expr::Array(vec![])),
+                array: Box::new(Expr::Array(vec![], None)),
                 separator: None,
             }),
             Some(Type::String)

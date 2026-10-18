@@ -1572,7 +1572,7 @@ impl ArrayFactCollector {
                     self.collect_expr(item);
                 }
             }
-            Expr::Array(elements) => {
+            Expr::Array(elements, _) => {
                 for element in elements {
                     self.mark_array_identity_exposure(element);
                     self.collect_expr(element);
@@ -2066,16 +2066,16 @@ fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
                 ArrayKindFact::PackedValue
             }
         }
-        Expr::Array(elements) if elements.iter().all(expr_is_literal_i32) => {
+        Expr::Array(elements, _) if elements.iter().all(expr_is_literal_i32) => {
             ArrayKindFact::PackedI32
         }
-        Expr::Array(elements) if elements.iter().all(expr_is_literal_u32) => {
+        Expr::Array(elements, _) if elements.iter().all(expr_is_literal_u32) => {
             ArrayKindFact::PackedU32
         }
-        Expr::Array(elements) if elements.iter().all(expr_is_literal_number) => {
+        Expr::Array(elements, _) if elements.iter().all(expr_is_literal_number) => {
             ArrayKindFact::PackedF64
         }
-        Expr::Array(_) => ArrayKindFact::PackedValue,
+        Expr::Array(_, _) => ArrayKindFact::PackedValue,
         Expr::ArraySpread(elements) => {
             let mut saw_hole = false;
             let mut all_numeric = true;
@@ -2134,7 +2134,7 @@ fn array_kind_from_declared_initializer(declared: ArrayKindFact, init: &Expr) ->
 
 fn initializer_is_literal_u32_array(expr: &Expr) -> bool {
     match expr {
-        Expr::Array(elements) => elements.iter().all(expr_is_literal_u32),
+        Expr::Array(elements, _) => elements.iter().all(expr_is_literal_u32),
         Expr::ArraySpread(elements) => elements.iter().all(|element| {
             matches!(
                 element,
@@ -2308,6 +2308,7 @@ mod tests {
             mutable: true,
             init: Some(Expr::Array(
                 values.iter().copied().map(Expr::Integer).collect(),
+                None,
             )),
         }
     }
@@ -2320,6 +2321,7 @@ mod tests {
             mutable: true,
             init: Some(Expr::Array(
                 values.iter().copied().map(Expr::Integer).collect(),
+                None,
             )),
         }
     }
@@ -2332,6 +2334,7 @@ mod tests {
             mutable: true,
             init: Some(Expr::Array(
                 values.iter().copied().map(Expr::Integer).collect(),
+                None,
             )),
         }
     }
@@ -2560,7 +2563,10 @@ mod tests {
         let ids = known_ids_with_non_objects(
             vec![
                 const_number_let(60, Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(16))))),
-                const_number_let(61, Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)])),
+                const_number_let(
+                    61,
+                    Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
+                ),
                 const_let(62, int32_new(Expr::Integer(4))),
                 const_let(1, int32_new(Expr::LocalGet(60))),
                 const_let(2, int32_new(Expr::LocalGet(61))),
@@ -2706,7 +2712,7 @@ mod tests {
                     name: "fractional".to_string(),
                     ty: Type::Array(Box::new(Type::Int32)),
                     mutable: true,
-                    init: Some(Expr::Array(vec![Expr::Number(1.5)])),
+                    init: Some(Expr::Array(vec![Expr::Number(1.5)], None)),
                 },
             ],
             &HashSet::new(),
@@ -2732,7 +2738,7 @@ mod tests {
                     name: "negative".to_string(),
                     ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
                     mutable: true,
-                    init: Some(Expr::Array(vec![Expr::Integer(-1)])),
+                    init: Some(Expr::Array(vec![Expr::Integer(-1)], None)),
                 },
             ],
             &HashSet::new(),
@@ -2900,7 +2906,7 @@ mod tests {
                     name: "box".to_string(),
                     ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
                     mutable: false,
-                    init: Some(Expr::Array(vec![Expr::LocalGet(1)])),
+                    init: Some(Expr::Array(vec![Expr::LocalGet(1)], None)),
                 },
             ],
             &HashSet::new(),

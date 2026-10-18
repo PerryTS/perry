@@ -93,6 +93,7 @@ fn fixture(records: usize, fields: usize) -> Module {
                     cap_args_appended: 0,
                 })
                 .collect(),
+            None,
         )),
     });
     module
@@ -325,7 +326,7 @@ fn method_fixture() -> Module {
     module.classes[0].constructor.as_mut().unwrap().params[1].ty = Type::Any;
     // An array element escapes scalar replacement; only method `this`
     // supplies capacity evidence for this literal.
-    module.init = vec![Stmt::Expr(Expr::Array(vec![init]))];
+    module.init = vec![Stmt::Expr(Expr::Array(vec![init], None))];
     module
 }
 
@@ -554,7 +555,7 @@ fn born_wide_array_element_evidence() {
             name: "objs".into(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Array(vec![])),
+            init: Some(Expr::Array(vec![], None)),
         },
         Stmt::Expr(Expr::ArrayPush {
             array_id: 1002,
@@ -576,7 +577,7 @@ fn born_wide_array_element_evidence() {
             name: "objs".into(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Array(vec![literal_new()])),
+            init: Some(Expr::Array(vec![literal_new()], None)),
         },
         added_store(
             Expr::IndexGet {

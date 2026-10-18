@@ -215,7 +215,7 @@ pub(super) fn try_imported_array_methods(
                                         let mut args_iter = args.into_iter();
                                         let start = args_iter.next().unwrap();
                                         let end = args_iter.next();
-                                        return Ok(Ok(Expr::ArraySlice {
+                                        return Ok(Ok(Expr::ArraySlice { layout: None,
                                             array: Box::new(extern_ref),
                                             start: Box::new(start),
                                             end: end.map(Box::new),

@@ -402,7 +402,7 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
                     || check_expr(then_expr, target_id)
                     || check_expr(else_expr, target_id)
             }
-            Expr::Array(elements) => elements.iter().any(|e| check_expr(e, target_id)),
+            Expr::Array(elements, _) => elements.iter().any(|e| check_expr(e, target_id)),
             Expr::IndexGet { object, index } => {
                 check_expr(object, target_id) || check_expr(index, target_id)
             }

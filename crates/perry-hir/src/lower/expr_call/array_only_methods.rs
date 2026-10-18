@@ -1067,6 +1067,7 @@ pub(super) fn try_array_only_methods(
                         let start = args_iter.next().unwrap_or(Expr::Number(0.0));
                         let end = args_iter.next();
                         return Ok(Ok(Expr::ArraySlice {
+                            layout: None,
                             array: Box::new(array_expr),
                             start: Box::new(start),
                             end: end.map(Box::new),
@@ -1113,8 +1114,8 @@ pub(super) fn try_array_only_methods(
                         if matches!(
                             &array_expr,
                             Expr::ArrayMap { .. } | Expr::ArrayFilter { .. } | Expr::ArraySort { .. } |
-                                    Expr::ArraySlice { .. } | Expr::Array(_) | Expr::ArraySpread(_) |
-                                    Expr::ArrayFrom(_) | Expr::ArrayFromArrayLikeHoley(_) |
+                                    Expr::ArraySlice { .. } | Expr::Array(_, _) | Expr::ArraySpread(_) |
+                                    Expr::ArrayFrom(_, _) | Expr::ArrayFromArrayLikeHoley(_) |
                                     Expr::ArrayFromMapped { .. } |
                                     Expr::ArrayFlat { .. } | Expr::StringSplit(_, _) |
                                     Expr::ArrayToReversed { .. } | Expr::ArrayToSorted { .. } |
@@ -1133,6 +1134,7 @@ pub(super) fn try_array_only_methods(
                             let start = args_iter.next().unwrap();
                             let end = args_iter.next();
                             return Ok(Ok(Expr::ArraySlice {
+                                layout: None,
                                 array: Box::new(array_expr),
                                 start: Box::new(start),
                                 end: end.map(Box::new),
@@ -1155,13 +1157,13 @@ pub(super) fn try_array_only_methods(
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         let is_array_producing = matches!(
                             &array_expr,
-                            Expr::Array(_)
+                            Expr::Array(_, _)
                                 | Expr::ArrayMap { .. }
                                 | Expr::ArrayFilter { .. }
                                 | Expr::ArraySort { .. }
                                 | Expr::ArraySlice { .. }
                                 | Expr::ArraySpread(_)
-                                | Expr::ArrayFrom(_)
+                                | Expr::ArrayFrom(_, _)
                                 | Expr::ArrayFromArrayLikeHoley(_)
                                 | Expr::ArrayFromMapped { .. }
                                 | Expr::ArrayFlat { .. }
@@ -1226,8 +1228,8 @@ pub(super) fn try_array_only_methods(
                                     | Expr::ArrayFilter { .. }
                                     | Expr::ArraySort { .. }
                                     | Expr::ArraySlice { .. }
-                                    | Expr::Array(_)
-                                    | Expr::ArrayFrom(_)
+                                    | Expr::Array(_, _)
+                                    | Expr::ArrayFrom(_, _)
                                     | Expr::ArrayFromArrayLikeHoley(_)
                                     | Expr::StringSplit(_, _)
                                     | Expr::ObjectKeys(_)
@@ -1262,8 +1264,8 @@ pub(super) fn try_array_only_methods(
                                     | Expr::ArrayFilter { .. }
                                     | Expr::ArraySort { .. }
                                     | Expr::ArraySlice { .. }
-                                    | Expr::Array(_)
-                                    | Expr::ArrayFrom(_)
+                                    | Expr::Array(_, _)
+                                    | Expr::ArrayFrom(_, _)
                                     | Expr::ArrayFromArrayLikeHoley(_)
                                     | Expr::StringSplit(_, _)
                                     | Expr::ObjectKeys(_)

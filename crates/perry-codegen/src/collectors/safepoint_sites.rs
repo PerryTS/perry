@@ -81,7 +81,7 @@ fn is_safepoint(e: &Expr) -> bool {
             | Expr::Object(_)
             | Expr::ObjectSpread { .. }
             | Expr::ObjectAssign { .. }
-            | Expr::Array(_)
+            | Expr::Array(_, _)
             | Expr::ArraySpread(_)
             // #8583 (`__AnonShape_*_constructor`): a property/index STORE lowers
             // to an allocating, collecting runtime call (`js_put_value_set_packed_miss`
@@ -281,9 +281,9 @@ mod tests {
         // (`js_array_from_values` / `js_object_*`) and must count. A minified
         // data table is a giant array-of-arrays with no `Expr::Call` at all —
         // the pre-fix count saw zero safepoints and the function was not spilled.
-        let inner = |a, b| Expr::Array(vec![Expr::Number(a as f64), Expr::Number(b as f64)]);
+        let inner = |a, b| Expr::Array(vec![Expr::Number(a as f64), Expr::Number(b as f64)], None);
         // [[..],[..],[..]] — one outer Array + three inner Arrays = 4 safepoints.
-        let table = Expr::Array(vec![inner(1, 2), inner(3, 4), inner(5, 6)]);
+        let table = Expr::Array(vec![inner(1, 2), inner(3, 4), inner(5, 6)], None);
         assert_eq!(count_safepoint_sites(&[Stmt::Expr(table)]), 4);
 
         // An object literal is also an allocating safepoint.
@@ -295,10 +295,13 @@ mod tests {
     fn nested_array_literals_recurse() {
         // Deeply nested constant arrays count every allocating level — the
         // `__33499` shape (11,104 `js_array_from_values` from one literal).
-        let leaf = || Expr::Array(vec![Expr::Number(0.0)]);
+        let leaf = || Expr::Array(vec![Expr::Number(0.0)], None);
         let rows: Vec<Expr> = (0..10).map(|_| leaf()).collect();
         // 1 outer + 10 inner = 11.
-        assert_eq!(count_safepoint_sites(&[Stmt::Expr(Expr::Array(rows))]), 11);
+        assert_eq!(
+            count_safepoint_sites(&[Stmt::Expr(Expr::Array(rows, None))]),
+            11
+        );
     }
 
     #[test]

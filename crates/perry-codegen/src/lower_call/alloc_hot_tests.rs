@@ -467,22 +467,24 @@ fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
     let mut module = walk_module(true);
     // Whole module: both numeric branches, noted pointer elements, different
     // sizes, and specialized clones. No subject-function filtering is allowed.
-    module.init.push(Stmt::Expr(Expr::Array(vec![])));
+    module.init.push(Stmt::Expr(Expr::Array(vec![], None)));
     module.functions[0].body.insert(
         0,
-        Stmt::Expr(Expr::Array(vec![Expr::LocalGet(N_ID), Expr::Number(3.0)])),
+        Stmt::Expr(Expr::Array(
+            vec![Expr::LocalGet(N_ID), Expr::Number(3.0)],
+            None,
+        )),
     );
     module
         .init
-        .push(Stmt::Expr(Expr::Array(vec![Expr::Number(1.0)])));
+        .push(Stmt::Expr(Expr::Array(vec![Expr::Number(1.0)], None)));
     module
         .init
-        .push(Stmt::Expr(Expr::Array(vec![Expr::Bool(true); 16])));
-    module
-        .init
-        .push(Stmt::Expr(Expr::Array(vec![Expr::Array(vec![
-            Expr::Number(2.0),
-        ])])));
+        .push(Stmt::Expr(Expr::Array(vec![Expr::Bool(true); 16], None)));
+    module.init.push(Stmt::Expr(Expr::Array(
+        vec![Expr::Array(vec![Expr::Number(2.0)], None)],
+        None,
+    )));
     let ir = ir_for(module);
     inline_birth_invariant::check(&ir);
     inline_birth_invariant::sabotage_controls(&ir);
@@ -498,8 +500,8 @@ mod shared_birth_invariant;
 fn birth_initialization_is_shared_and_fast_calls_cannot_collect() {
     let mut module = walk_module(true);
     module.init.extend([
-        Stmt::Expr(Expr::Array(vec![])),
-        Stmt::Expr(Expr::Array(vec![])),
+        Stmt::Expr(Expr::Array(vec![], None)),
+        Stmt::Expr(Expr::Array(vec![], None)),
     ]);
     let ir = ir_for(module);
     for name in ["perry_birth_class", "perry_birth_empty_array"] {

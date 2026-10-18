@@ -380,7 +380,7 @@ pub fn collect_pointer_typed_locals(
             Expr::Sequence(exprs) => exprs.last().and_then(|last| {
                 expr_value_type(last, local_types, local_value_types, non_pointer_locals)
             }),
-            Expr::Array(_) => Some(pointer_analysis_array_type()),
+            Expr::Array(_, _) => Some(pointer_analysis_array_type()),
             Expr::IndexGet { object, index }
             | Expr::Uint8ArrayGet {
                 array: object,
@@ -1781,7 +1781,7 @@ mod tests {
                 name: "a".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::Integer(0)])),
+                init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(1)),
@@ -1822,7 +1822,7 @@ mod tests {
                 name: "owner".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Array(vec![Expr::Undefined])),
+                init: Some(Expr::Array(vec![Expr::Undefined], None)),
             },
             Stmt::Let {
                 id: 2,

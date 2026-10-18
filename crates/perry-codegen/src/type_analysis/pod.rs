@@ -177,7 +177,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
                 collect_pod_numeric_field_read_locals(ctx, arg, out);
             }
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             for item in items {
                 collect_pod_numeric_field_read_locals(ctx, item, out);
             }
@@ -273,7 +273,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
         Expr::New { args, .. } | Expr::NewDynamic { args, .. } => args
             .iter()
             .any(|arg| expr_may_materialize_pod_local(ctx, arg, target_id)),
-        Expr::Array(items) => items
+        Expr::Array(items, _) => items
             .iter()
             .any(|item| expr_may_materialize_pod_local(ctx, item, target_id)),
         Expr::Object(items) => items

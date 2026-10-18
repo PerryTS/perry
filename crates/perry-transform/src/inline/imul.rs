@@ -188,7 +188,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             rewrite_imul_calls_in_expr(index, imul_ids);
             rewrite_imul_calls_in_expr(value, imul_ids);
         }
-        Expr::Array(elems) => {
+        Expr::Array(elems, _) => {
             for el in elems {
                 rewrite_imul_calls_in_expr(el, imul_ids);
             }

@@ -376,7 +376,7 @@ impl Env<'_> {
             | Expr::StringFromCharCode(_)
             | Expr::StringFromCharCodeSpread(_)
             | Expr::StringFromCodePoint(_) => Some(Kind::Str),
-            Expr::Array(_) | Expr::ArraySpread(_) => Some(Kind::Arr),
+            Expr::Array(_, _) | Expr::ArraySpread(_) => Some(Kind::Arr),
             // `s.split(d)` on a proven String: a fresh dense Array.
             Expr::StringSplit(string, _) if rec(string) == Some(Kind::Str) => Some(Kind::Arr),
             Expr::LocalGet(id) => self.local(*id),

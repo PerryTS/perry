@@ -624,7 +624,7 @@ fn try_rewrite_foreach(
             class_name: None,
             object: None,
             method: "VStack".to_string(),
-            args: vec![Expr::Number(0.0), Expr::Array(vec![])],
+            args: vec![Expr::Number(0.0), Expr::Array(vec![], None)],
         }),
     });
     // let __fe_render = <render>; — hoist into a let so the
@@ -731,7 +731,7 @@ fn try_rewrite_navstack(
         }
     };
     let route_array = match route_array_arg {
-        Expr::Array(items) => items,
+        Expr::Array(items, _) => items,
         other => {
             warn_navstack_bail(&format!(
                 "second arg must be a literal array of `{{name, body}}` route entries, got {}",
@@ -917,7 +917,7 @@ fn expr_kind_for_diag(e: &Expr) -> &'static str {
         Expr::Call { .. } | Expr::CallSpread { .. } => "a function call",
         Expr::Closure { .. } => "a closure",
         Expr::PropertyGet { .. } => "a property access (e.g. `routes.HOME`)",
-        Expr::Array(_) | Expr::ArraySpread(_) => "an array literal",
+        Expr::Array(_, _) | Expr::ArraySpread(_) => "an array literal",
         Expr::Object(_) | Expr::ObjectSpread { .. } => "an object literal",
         Expr::New { .. } | Expr::NewDynamic { .. } => "a `new` / object-literal expression",
         Expr::NativeMethodCall { .. } => "a native method call",

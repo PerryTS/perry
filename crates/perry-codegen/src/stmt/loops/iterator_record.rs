@@ -277,7 +277,7 @@ mod tests {
             local(
                 0,
                 ty,
-                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)]),
+                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             ),
             local(
                 1,

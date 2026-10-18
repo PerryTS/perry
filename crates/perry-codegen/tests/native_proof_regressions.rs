@@ -629,7 +629,7 @@ fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
         mutable: true,
-        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+        init: Some(Expr::Array(values.into_iter().map(int).collect(), None)),
     }
 }
 
@@ -639,7 +639,7 @@ fn int32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Int32)),
         mutable: true,
-        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+        init: Some(Expr::Array(values.into_iter().map(int).collect(), None)),
     }
 }
 
@@ -649,7 +649,7 @@ fn u32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
         mutable: true,
-        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+        init: Some(Expr::Array(values.into_iter().map(int).collect(), None)),
     }
 }
 
@@ -911,14 +911,14 @@ fn array_isarray_reassigned_local_uses_runtime_predicate() {
             mutable: true,
             init: Some(int(0)),
         },
-        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)])))),
+        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)], None)))),
         Stmt::Expr(Expr::ArrayIsArray(Box::new(local(1)))),
         Stmt::Let {
             id: 2,
             name: "array_to_number".to_string(),
             ty: Type::Any,
             mutable: true,
-            init: Some(Expr::Array(vec![int(1)])),
+            init: Some(Expr::Array(vec![int(1)], None)),
         },
         Stmt::Expr(Expr::LocalSet(2, Box::new(int(0)))),
         Stmt::Expr(Expr::ArrayIsArray(Box::new(local(2)))),
@@ -927,7 +927,7 @@ fn array_isarray_reassigned_local_uses_runtime_predicate() {
             name: "unchanged_array".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Array(vec![int(1)])),
+            init: Some(Expr::Array(vec![int(1)], None)),
         },
         Stmt::Expr(Expr::ArrayIsArray(Box::new(local(3)))),
         Stmt::Return(Some(int(0))),
@@ -7628,7 +7628,7 @@ fn boxed_local_capture_module(name: &str) -> Module {
                 name: "cell".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Array(Vec::new())),
+                init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Let {
                 id: 11,
@@ -7640,7 +7640,7 @@ fn boxed_local_capture_module(name: &str) -> Module {
                     params: Vec::new(),
                     return_type: Type::Any,
                     body: vec![
-                        Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Array(Vec::new())))),
+                        Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Array(Vec::new(), None)))),
                         Stmt::Return(Some(local(10))),
                     ],
                     captures: vec![10],
@@ -7749,7 +7749,7 @@ fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
     let replacement = abrupt_operand();
     let mut module = boxed_local_storage_module(
         "abrupt_captured_local_set_barrier.ts",
-        Expr::Array(Vec::new()),
+        Expr::Array(Vec::new(), None),
         replacement,
     );
     module.classes = abrupt_derived_classes();
@@ -7871,7 +7871,7 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
         Type::Any,
         vec![Stmt::Return(Some(Expr::New {
             class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
-            args: vec![abrupt_operand(), Expr::Array(Vec::new())],
+            args: vec![abrupt_operand(), Expr::Array(Vec::new(), None)],
             type_args: Vec::new(),
             byte_offset: 0,
             cap_args_appended: 0,
@@ -15572,7 +15572,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
             mutable: false,
-            init: Some(Expr::Array(vec![])),
+            init: Some(Expr::Array(vec![], None)),
         },
         // The array escapes into a call — this is what `const arr = build()`
         // lowers to (the callee fills the array through a return slot). It is
@@ -16003,7 +16003,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
                 name: "objects".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
-                init: Some(Expr::Array(vec![])),
+                init: Some(Expr::Array(vec![], None)),
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
@@ -16288,7 +16288,7 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
             mutable: false,
-            init: Some(Expr::Array(vec![int(1), int(2), int(3)])),
+            init: Some(Expr::Array(vec![int(1), int(2), int(3)], None)),
         },
         array_set(arr, int(0), index_get(arr, int(2))),
     ];

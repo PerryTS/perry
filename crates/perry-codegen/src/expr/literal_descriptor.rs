@@ -136,7 +136,7 @@ impl Descriptor {
                 self.bytes.push(0);
                 self.bytes.extend_from_slice(&(*n as f64).to_le_bytes());
             }
-            Expr::Array(elements) => {
+            Expr::Array(elements, _) => {
                 self.bytes.push(1);
                 self.u32(elements.len())?;
                 for element in elements {
@@ -194,7 +194,7 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> anyhow::Result<Opti
     {
         return lower_enum_image(ctx, class_name, stores, *strict).map(Some);
     }
-    if !matches!(expr, Expr::Array(_) | Expr::New { .. }) {
+    if !matches!(expr, Expr::Array(_, _) | Expr::New { .. }) {
         return Ok(None);
     }
     if ctx.program_has_worker && crate::target_layout::target_is_ilp32(ctx.target_triple) {

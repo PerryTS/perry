@@ -241,7 +241,7 @@ fn hoisted_var_seeds_are_not_writes_but_reads_must_follow_a_real_write() {
 fn a_literal_array_local_stays_an_array_through_in_place_pushes() {
     let body = vec![
         let_(5, Some(Expr::Undefined)),
-        set(5, Expr::Array(Vec::new())),
+        set(5, Expr::Array(Vec::new(), None)),
         Stmt::Expr(Expr::ArrayPush {
             array_id: 5,
             value: Box::new(Expr::String("x".into())),
@@ -295,7 +295,7 @@ fn an_iife_that_always_returns_its_array_local_types_the_binding() {
         60,
         vec![
             let_(61, Some(Expr::Undefined)),
-            set(61, Expr::Array(Vec::new())),
+            set(61, Expr::Array(Vec::new(), None)),
             Stmt::Return(Some(get(61))),
         ],
     );
@@ -310,7 +310,7 @@ fn an_iife_that_always_returns_its_array_local_types_the_binding() {
         62,
         vec![Stmt::If {
             condition: get(7),
-            then_branch: vec![Stmt::Return(Some(Expr::Array(Vec::new())))],
+            then_branch: vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))],
             else_branch: None,
         }],
     );

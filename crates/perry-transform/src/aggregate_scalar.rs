@@ -275,7 +275,7 @@ fn scalarize_stmts(
             Stmt::Let {
                 id,
                 mutable: false,
-                init: Some(Expr::Array(elements)),
+                init: Some(Expr::Array(elements, _)),
                 ..
             } if aggregate_elements_are_plain(elements, anon_shape_fields) => Some(*id),
             _ => None,
@@ -1262,7 +1262,7 @@ fn scalarize_candidate(
     let Some(elements) = stmts.iter().find_map(|stmt| match stmt {
         Stmt::Let {
             id,
-            init: Some(Expr::Array(elements)),
+            init: Some(Expr::Array(elements, _)),
             ..
         } if *id == array_id => Some(elements.clone()),
         _ => None,
@@ -1744,7 +1744,7 @@ mod tests {
                 name: "values".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Array(vec![object(10), object(20)])),
+                init: Some(Expr::Array(vec![object(10), object(20)], None)),
             },
             Stmt::Let {
                 id: 2,
@@ -1778,7 +1778,7 @@ mod tests {
             !matches!(
                 stmt,
                 Stmt::Let {
-                    init: Some(Expr::Array(_) | Expr::Object(_)),
+                    init: Some(Expr::Array(_, _) | Expr::Object(_)),
                     ..
                 }
             )
@@ -1803,7 +1803,7 @@ mod tests {
                 stmt,
                 Stmt::Let {
                     id: 1,
-                    init: Some(Expr::Array(_)),
+                    init: Some(Expr::Array(_, _)),
                     ..
                 }
             )
@@ -1841,7 +1841,7 @@ mod tests {
                     stmt,
                     Stmt::Let {
                         id: 1,
-                        init: Some(Expr::Array(_)),
+                        init: Some(Expr::Array(_, _)),
                         ..
                     }
                 )

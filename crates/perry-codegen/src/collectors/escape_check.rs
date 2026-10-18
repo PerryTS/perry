@@ -505,7 +505,7 @@ pub fn check_escapes_in_expr(
         | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
-        | Expr::ArrayFrom(operand)
+        | Expr::ArrayFrom(operand, _)
         | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
@@ -627,7 +627,7 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(index, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
-        Expr::Array(elements) => {
+        Expr::Array(elements, _) => {
             for el in elements {
                 check_escapes_in_expr(el, candidates, classes, escaped);
             }
@@ -773,7 +773,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(sep, candidates, classes, escaped);
             }
         }
-        Expr::ArraySlice { array, start, end } => {
+        Expr::ArraySlice { array, start, end, .. } => {
             check_escapes_in_expr(array, candidates, classes, escaped);
             check_escapes_in_expr(start, candidates, classes, escaped);
             if let Some(e) = end {

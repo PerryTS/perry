@@ -261,10 +261,10 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
                 mutable: false,
                 init: Some(Expr::Object(vec![("a".to_string(), Expr::Number(1.0))])),
             },
-            Stmt::Return(Some(Expr::Array(vec![
-                Expr::LocalGet(1),
-                Expr::LocalGet(2),
-            ]))),
+            Stmt::Return(Some(Expr::Array(
+                vec![Expr::LocalGet(1), Expr::LocalGet(2)],
+                None,
+            ))),
         ],
         is_async: false,
         is_generator: false,

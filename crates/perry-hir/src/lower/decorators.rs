@@ -42,7 +42,7 @@ pub(crate) fn append_legacy_decorator_init_for_class(
             .collect();
         init.push(Stmt::Expr(Expr::ReflectDefineMetadata {
             key: Box::new(Expr::String("design:paramtypes".to_string())),
-            value: Box::new(Expr::Array(param_types)),
+            value: Box::new(Expr::Array(param_types, None)),
             target: Box::new(Expr::ClassRef(class.name.clone())),
             property_key: None,
         }));
@@ -182,7 +182,7 @@ fn append_method_decorator_init(
             .collect();
         out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
             key: Box::new(Expr::String("design:paramtypes".to_string())),
-            value: Box::new(Expr::Array(param_types)),
+            value: Box::new(Expr::Array(param_types, None)),
             target: Box::new(target.clone()),
             property_key: Some(Box::new(Expr::String(method.name.clone()))),
         }));

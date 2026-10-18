@@ -94,7 +94,7 @@ pub(crate) fn collect_all_pointer_array_locals(
     walk_stmts(stmts, &mut |stmt| {
         if let Stmt::Let {
             id,
-            init: Some(Expr::Array(elements)),
+            init: Some(Expr::Array(elements, _)),
             ..
         } = stmt
         {
@@ -252,7 +252,7 @@ mod tests {
             name: format!("a{id}"),
             ty: Type::Any,
             mutable: true,
-            init: Some(Expr::Array(elements)),
+            init: Some(Expr::Array(elements, None)),
         }
     }
 
@@ -349,7 +349,7 @@ mod tests {
         let stmts = vec![
             let_array(1, vec![]),
             push(1, object_literal()),
-            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![])))),
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![], None)))),
         ];
         assert!(!collect(&stmts).contains(&1));
     }

@@ -153,10 +153,13 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
     assert_eq!(
         hir_inferred_refinable_type_from_locals(
             &local_types,
-            &Expr::MapNewFromArray(Box::new(Expr::Array(vec![Expr::Array(vec![
-                Expr::String("answer".to_string()),
-                Expr::Number(1.0),
-            ])]))),
+            &Expr::MapNewFromArray(Box::new(Expr::Array(
+                vec![Expr::Array(
+                    vec![Expr::String("answer".to_string()), Expr::Number(1.0),],
+                    None
+                )],
+                None
+            ))),
         ),
         Some(HirType::Generic {
             base: "Map".to_string(),

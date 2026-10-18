@@ -35,7 +35,7 @@ pub(crate) fn emit_scrollview(
     let outer_indent = "    ".repeat(depth);
 
     let mut children: Vec<String> = match args.first() {
-        Some(Expr::Array(items)) => items
+        Some(Expr::Array(items, _)) => items
             .iter()
             .map(|c| {
                 emit_widget(
@@ -266,7 +266,7 @@ pub(crate) fn emit_lazy_vstack(
     // as a plain Column. Preserves backwards compat for explicit-list
     // LazyVStack callers.
     let children: Vec<String> = match args.first() {
-        Some(Expr::Array(items)) => items
+        Some(Expr::Array(items, _)) => items
             .iter()
             .map(|c| {
                 emit_widget(
