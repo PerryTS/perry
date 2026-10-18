@@ -60,6 +60,19 @@ pub(crate) fn pre_scan_function_ctor_reach(ast_module: &ast::Module) {
 pub(crate) fn module_reaches_function_ctor_value(ast_module: &ast::Module) -> bool {
     let mut scan = Scan::default();
     ast_module.visit_with(&mut scan);
+    // Aliases may precede their declaration or be assigned later. Keep every
+    // possible function source; a reassignment only makes this conservative.
+    loop {
+        let before = scan.function_names.len();
+        for (binding, source) in &scan.function_aliases {
+            if scan.function_names.contains(source) {
+                scan.function_names.insert(binding.clone());
+            }
+        }
+        if scan.function_names.len() == before {
+            break;
+        }
+    }
     scan.found
         || scan
             .constructor_receivers
@@ -76,6 +89,7 @@ struct Scan {
     /// Identifiers whose `.constructor` is read. Resolved against
     /// `function_names` after the walk, since declarations hoist.
     constructor_receivers: Vec<String>,
+    function_aliases: Vec<(String, String)>,
 }
 
 fn peel(mut e: &ast::Expr) -> &ast::Expr {
@@ -213,11 +227,21 @@ impl Visit for Scan {
             _ => {}
         }
         if let ast::MemberProp::Computed(c) = &m.prop {
-            if !matches!(peel(&c.expr), ast::Expr::Lit(_))
-                && (is_ident(&m.obj, "globalThis") || is_ident(&m.obj, "global"))
-            {
-                self.found = true;
-                return;
+            if !matches!(peel(&c.expr), ast::Expr::Lit(_)) {
+                // An unknown property of a function may be `constructor`.
+                // The interpreter must be installed even when its spelling
+                // is computed; the class run-once boundary also consumes this
+                // existing deferred-code fact.
+                if is_ident(&m.obj, "globalThis")
+                    || is_ident(&m.obj, "global")
+                    || is_function_like(&m.obj)
+                {
+                    self.found = true;
+                    return;
+                }
+                if let ast::Expr::Ident(id) = peel(&m.obj) {
+                    self.constructor_receivers.push(id.sym.to_string());
+                }
             }
         }
         m.visit_children_with(self);
@@ -302,8 +326,27 @@ impl Visit for Scan {
             ) {
                 self.function_names.insert(binding.id.sym.to_string());
             }
+            if let ast::Expr::Ident(source) = peel(init) {
+                self.function_aliases
+                    .push((binding.id.sym.to_string(), source.sym.to_string()));
+            }
         }
         d.visit_children_with(self);
+    }
+
+    fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
+        if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(binding)) = &a.left {
+            match peel(&a.right) {
+                ast::Expr::Fn(_) | ast::Expr::Arrow(_) | ast::Expr::Class(_) => {
+                    self.function_names.insert(binding.id.sym.to_string());
+                }
+                ast::Expr::Ident(source) => self
+                    .function_aliases
+                    .push((binding.id.sym.to_string(), source.sym.to_string())),
+                _ => {}
+            }
+        }
+        a.visit_children_with(self);
     }
 }
 
@@ -342,6 +385,10 @@ mod tests {
             "declare const x: any; x.constructor('return 1');",
             "const F = Function.prototype.constructor;",
             "Function.call.bind(Function);",
+            "const k = ['con','structor'].join(''); (() => 0)[k]('return 1');",
+            "declare const k: string; function f() {} const alias = f; alias[k];",
+            "declare const k: string; const alias = f; function f() {} alias[k];",
+            "declare const k: string; let alias; alias = () => 0; alias[k];",
             "(Function as any)?.bind(null);",
         ] {
             assert!(
@@ -371,6 +418,8 @@ mod tests {
             "const g = globalThis['process'];",
             "declare const self: any, key: string; self[key];",
             "let x: Function = () => 1;",
+            "const f = () => 1; f[0]; f['length'];",
+            "declare const values: number[], key: number; values[key];",
             // Literal constructor sites are recorded by their own lowering.
             "new Function('a', 'return a');",
             "Function('return 1');",

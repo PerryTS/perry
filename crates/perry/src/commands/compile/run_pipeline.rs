@@ -6063,6 +6063,35 @@ pub fn run_with_parse_cache(
         }
     }
     let constructor_contracts = constructor_contracts.resolve();
+    // Object model case 2c: the program's static class families and global
+    // key colouring, one value for every module (its digest keys the object
+    // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
+    // Re-exports have no HIR Import row. Use the driver's resolved graph,
+    // including package/symlink identity, rather than reconstructing paths.
+    let mut layout_reexports = std::collections::BTreeMap::new();
+    for (path, module) in &ctx.native_modules {
+        for export in &module.exports {
+            let source = match export {
+                perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                _ => continue,
+            };
+            if let Some((resolved, _)) = resolve_import_with_context(source, path, &ctx) {
+                layout_reexports.insert(
+                    (path.to_string_lossy().into_owned(), source.clone()),
+                    resolved.to_string_lossy().into_owned(),
+                );
+            }
+        }
+    }
+    let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
+        ctx.native_modules
+            .iter()
+            .map(|(path, m)| (path.to_str().expect("module path"), m)),
+        args.output_type == "executable",
+        &layout_reexports,
+    ));
     // Design step 4 (DESIGN 7.2): link-time ShapeIds. Collect the content of
     // every class birth each module's string pool will mint — from codegen's
     // own derivation, run on the options the module's codegen gets — and
@@ -6089,6 +6118,7 @@ pub fn run_with_parse_cache(
                         hir_module,
                         &mut opts,
                     );
+                    opts.program_layouts = std::sync::Arc::clone(&program_layouts);
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     Ok((path, births))
@@ -6155,35 +6185,6 @@ pub fn run_with_parse_cache(
         &ctx.native_modules,
         super::program_facts::has_stable_classes(&program_facts),
     );
-    // Object model case 2c: the program's static class families and global
-    // key colouring, one value for every module (its digest keys the object
-    // cache). `PERRY_LAYOUT_REPORT=1` prints the colouring's slot cost.
-    // Re-exports have no HIR Import row. Use the driver's resolved graph,
-    // including package/symlink identity, rather than reconstructing paths.
-    let mut layout_reexports = std::collections::BTreeMap::new();
-    for (path, module) in &ctx.native_modules {
-        for export in &module.exports {
-            let source = match export {
-                perry_hir::Export::ReExport { source, .. }
-                | perry_hir::Export::ExportAll { source }
-                | perry_hir::Export::NamespaceReExport { source, .. } => source,
-                _ => continue,
-            };
-            if let Some((resolved, _)) = resolve_import_with_context(source, path, &ctx) {
-                layout_reexports.insert(
-                    (path.to_string_lossy().into_owned(), source.clone()),
-                    resolved.to_string_lossy().into_owned(),
-                );
-            }
-        }
-    }
-    let program_layouts = std::sync::Arc::new(perry_codegen::layout_families::compute(
-        ctx.native_modules
-            .iter()
-            .map(|(path, m)| (path.to_str().expect("module path"), m)),
-        args.output_type == "executable",
-        &layout_reexports,
-    ));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         PathBuf,

@@ -631,6 +631,9 @@ pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) 
 pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
     let hash = super::key_bytes_hash(key.as_ptr(), key.len());
     if table(obj).is_null() {
+        // Class-family births have hole-only placeholders, so an absent
+        // delete preserves their birth proof. Ordinary shapes retain their
+        // existing overflow/order path; this is a typed family operation.
         // A layout key list may hold a spelling that is not yet its atom (a
         // runtime key added by bytes). The table interns every key it
         // orders, so it is established before the atom is looked up.
@@ -639,6 +642,20 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
             if let Some(slot) =
                 super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), key)
             {
+                // A hole is an absent property, including allocator-owned
+                // placeholders before a derived constructor's super call.
+                // Deleting it changes neither membership nor insertion order.
+                // The immutable summary proves solid records have no
+                // holes; avoid building a key view on their ordinary deletes.
+                let hole = super::key_view::summary_may_have_holes(record.summary())
+                    && super::key_view::position_is_hole(
+                        obj,
+                        ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
+                        slot,
+                    );
+                if hole && super::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+                    return true;
+                }
                 // A refused delete changes nothing, so it establishes no
                 // overflow (and leaves the layout word as it was).
                 if super::key_attrs::keys_entry(keys, slot)
@@ -647,14 +664,15 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                 {
                     return false;
                 }
-                super::layout_desc::note_install_cause(
-                    if super::key_view::own_key_bytes_is_hole(obj, key) {
-                        super::layout_desc::install_cause::DELETE_HOLE
-                    } else {
-                        super::layout_desc::install_cause::DELETE
-                    },
-                );
+                super::layout_desc::note_install_cause(if hole {
+                    super::layout_desc::install_cause::DELETE_HOLE
+                } else {
+                    super::layout_desc::install_cause::DELETE
+                });
                 ensure(obj);
+            } else if super::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+                // An absent family spelling has no order entry to retire.
+                return true;
             }
         }
     }

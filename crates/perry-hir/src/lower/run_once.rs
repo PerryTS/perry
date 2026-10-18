@@ -15,7 +15,7 @@
 //! * inside `if`/`switch`/`try`/blocks/labels and expressions of a run-once
 //!   position (each executes at most once);
 //! * the body of a function immediately invoked from a run-once position —
-//!   `(function(){…})()`, `(() => {…})()`, `(function(){…}).call(…)` — or of
+//!   `(function(){…})()`, `(() => {…})()` — or of
 //!   a function DECLARATION whose name occurs exactly twice in the module:
 //!   its declaration and one call from a run-once position. The CJS wrapper's
 //!   `function __perry_cjs_factory(){…} return __perry_cjs_factory();` and
@@ -68,6 +68,63 @@ pub(crate) fn run_once_class_spans(module: &ast::Module) -> HashSet<(u32, u32)> 
     // Did not converge (cannot happen for a finite nesting depth): claim
     // nothing rather than something unproven.
     HashSet::new()
+}
+
+/// Original-source class declarations at structurally run-once positions.
+/// A duplicated spelling is refused: HIR may rename it during lowering.
+pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
+    struct Names {
+        spans: HashSet<(u32, u32)>,
+        counts: HashMap<String, usize>,
+        once: HashSet<String>,
+        named_function_depth: usize,
+    }
+    impl Visit for Names {
+        // A named function may be exported without an extra identifier read
+        // in this module. Its module-local call count is not a whole-program
+        // proof. Direct IIFE expressions still use the existing span proof.
+        fn visit_fn_decl(&mut self, f: &ast::FnDecl) {
+            self.named_function_depth += 1;
+            f.visit_children_with(self);
+            self.named_function_depth -= 1;
+        }
+        fn visit_class_expr(&mut self, c: &ast::ClassExpr) {
+            if let Some(name) = &c.ident {
+                *self.counts.entry(name.sym.to_string()).or_default() += 1;
+            }
+            c.visit_children_with(self);
+        }
+        fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
+            let name = c.ident.sym.to_string();
+            *self.counts.entry(name.clone()).or_default() += 1;
+            if self.named_function_depth == 0
+                && self.spans.contains(&(c.class.span.lo.0, c.class.span.hi.0))
+            {
+                self.once.insert(name);
+            }
+            c.visit_children_with(self);
+        }
+    }
+    // This proof deliberately excludes named function bodies. Their call
+    // graph/fixpoint is unnecessary: one structural walk admits module
+    // positions and direct IIFEs, with the existing escape checks.
+    let mut counts = IdentCounts::default();
+    module.visit_with(&mut counts);
+    let none = HashSet::new();
+    let mut walk = Walk::new(&none, &none, &counts.counts);
+    module.visit_with(&mut walk);
+    let mut names = Names {
+        spans: walk.spans(),
+        counts: HashMap::new(),
+        once: HashSet::new(),
+        named_function_depth: 0,
+    };
+    module.visit_with(&mut names);
+    names
+        .once
+        .into_iter()
+        .filter(|name| names.counts[name] == 1)
+        .collect()
 }
 
 #[derive(Default)]
@@ -176,19 +233,10 @@ impl<'a> Walk<'a> {
         self.run_once = saved;
     }
 
-    /// The function an immediately-invoked callee evaluates, if the callee is
-    /// one: `fn`, `(fn)`, `fn.call`, `(fn).apply`.
+    /// Only direct function syntax proves invocation. `call` and `apply`
+    /// are ordinary properties and can invoke the same body more than once.
     fn iife_target<'e>(&self, callee: &'e ast::Expr) -> Option<Iife<'e>> {
-        let callee = strip_parens(callee);
-        let target = match callee {
-            ast::Expr::Member(member) => match &member.prop {
-                ast::MemberProp::Ident(prop) if &*prop.sym == "call" || &*prop.sym == "apply" => {
-                    strip_parens(&member.obj)
-                }
-                _ => return None,
-            },
-            other => other,
-        };
+        let target = strip_parens(callee);
         match target {
             ast::Expr::Fn(fn_expr) => {
                 let named_once = fn_expr
@@ -352,7 +400,7 @@ mod tests {
                  (function(){ const callee = 1; function g(){ arguments; } class E {} })();
                  const x = (function(){ function f(){ class D {} } return f(); })();"
             ),
-            vec!["A", "B", "C", "D", "E"]
+            vec!["A", "B", "D", "E"]
         );
     }
 
@@ -371,7 +419,9 @@ mod tests {
              (function(){ const a = arguments; class M {} })();
              class K { m(){ (function(){ class I {} })(); } }
              const o = { get p(){ class J {} return 1; } };
-             function once(){ class L {} } [1].map(once);"
+             function once(){ class L {} } [1].map(once);
+             (function(){ class N {} }).call(null);
+             (() => { class O {} }).apply(null, []);"
             ),
             // K itself sits at module top; only its method body repeats.
             vec!["K"]
@@ -383,6 +433,33 @@ mod tests {
         assert_eq!(
             once("class A {} if (x) { class B {} } try { class C {} } catch { class D {} }"),
             vec!["A", "B", "C", "D"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod name_proof_tests {
+    #[test]
+    fn module_and_iife_names_exclude_named_and_exported_function_bodies() {
+        let ast = perry_parser::parse_typescript("class Top {} (() => { class Iife {} })(); export function make() { class Exported {} return Exported; } make(); function one() { class Named {} } one(); function factory() { class Clash {} } (() => { class Clash {} })(); function expr() { return class ClashExpr {}; } (() => { class ClashExpr {} })();", "names.ts").unwrap();
+        assert_eq!(
+            super::class_names(&ast).into_iter().collect::<Vec<_>>(),
+            vec!["Iife", "Top"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod direct_iife_proof_tests {
+    #[test]
+    fn canonical_names_exclude_overridable_call_and_apply() {
+        let ast = perry_parser::parse_typescript(
+            "class Body {} (() => { class Direct {} })(); (function(){ class Call {} }).call(null); (() => { class Apply {} }).apply(null, []);",
+            "direct-iife.ts",
+        ).unwrap();
+        assert_eq!(
+            super::class_names(&ast),
+            ["Body".to_string(), "Direct".to_string()].into()
         );
     }
 }

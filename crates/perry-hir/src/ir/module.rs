@@ -9,6 +9,13 @@ use crate::types::{FuncId, Type};
 /// runtime class/parent/prototype checks still decide layout adoption.
 #[derive(Debug, Clone, Default)]
 pub struct ClassFamilySyntax {
+    /// Class declarations at original-source run-once positions. A CommonJS
+    /// module's body additionally needs whole-program factory non-reentry.
+    pub run_once_classes: std::collections::BTreeSet<String>,
+    /// Original-source uses that can expose a loader/cache or global code.
+    /// Generated CommonJS scaffolding is deliberately outside this census.
+    pub module_capability_uses: u32,
+
     /// Child class name -> (literal require specifier, named export).
     pub parents: std::collections::BTreeMap<String, (String, String)>,
     /// Named export -> locally declared class (one top-level assignment).
