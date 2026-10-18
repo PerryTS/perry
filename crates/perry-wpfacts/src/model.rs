@@ -269,19 +269,63 @@ impl Hard {
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    ForInRead {
+        key: Atom,
+        dst: NodeId,
+    },
+    ForInKey {
+        holder: Tok,
+        key: Atom,
+    },
+    ForIn {
+        dst: NodeId,
+        site: SiteId,
+        accessor: bool,
+        getter: Option<FnIdx>,
+    },
+    ForInProto {
+        origin: Tok,
+        dst: NodeId,
+        site: SiteId,
+        accessor: bool,
+        getter: Option<FnIdx>,
+    },
+    ForInAny {
+        dst: NodeId,
+        site: SiteId,
+        accessor: bool,
+        getter: Option<FnIdx>,
+    },
     /// dst ⊇ read(t, key) for every t in the node.
-    Load { key: Key, dst: NodeId },
+    Load {
+        key: Key,
+        dst: NodeId,
+    },
     /// write(t, key) ⊇ src for every t in the node.
-    Store { key: Key, src: NodeId, site: SiteId },
+    Store {
+        key: Key,
+        src: NodeId,
+        site: SiteId,
+    },
     /// The node is a callee.
-    Call { call: CallId },
+    Call {
+        call: CallId,
+    },
     /// The node is a callee whose `this` is fixed to one receiver token
     /// (a method found on that receiver or its chain).
-    CallThis { call: CallId, this: Tok },
+    CallThis {
+        call: CallId,
+        this: Tok,
+    },
     /// The node is a `new` callee.
-    New { call: CallId },
+    New {
+        call: CallId,
+    },
     /// The node is a method-call receiver (`recv.key(...)`).
-    MCall { key: Key, call: CallId },
+    MCall {
+        key: Key,
+        call: CallId,
+    },
     /// The node is `ProtoNode(cur)`: continue a lookup for `origin`.
     Chain {
         origin: Tok,
@@ -289,38 +333,71 @@ pub enum Cons {
         act: ChainAct,
     },
     /// Every token escapes (goes to ⊤), with the reason.
-    TopSink { reason: u32 },
+    TopSink {
+        reason: u32,
+    },
     /// Every object token reaches a HARD operation.
-    Hard { kind: Hard, reason: u32 },
+    Hard {
+        kind: Hard,
+        reason: u32,
+    },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
     /// Builtin protocol touch: ToPrimitive / iterator / toJSON / then …
-    Implicit { reason: u32 },
+    Implicit {
+        reason: u32,
+    },
     /// The node holds `Object.create` prototype arguments (E10).
-    CreateProto { reason: u32 },
+    CreateProto {
+        reason: u32,
+    },
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
     /// prototype (and further up), shared by every receiver of `t`.
-    ChainUnion { key: Key, dst: NodeId },
+    ChainUnion {
+        key: Key,
+        dst: NodeId,
+    },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
-    ProtoClosure { dst: NodeId },
+    ProtoClosure {
+        dst: NodeId,
+    },
     /// The node is the prototype closure of receiver `origin`: builtin
     /// prototype methods (Object.prototype, native parents) run for it.
-    ProtoMethods { origin: Tok, key: Key, call: CallId },
+    ProtoMethods {
+        origin: Tok,
+        key: Key,
+        call: CallId,
+    },
     /// The node is the prototype closure of `origin`: accessors of every
     /// holder on it run for a computed-key lookup with `origin` as `this`.
-    AnyAccessors { origin: Tok, act: ChainAct },
+    AnyAccessors {
+        origin: Tok,
+        act: ChainAct,
+    },
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
-    StoreTopProto { origin: Tok, src: NodeId },
+    StoreTopProto {
+        origin: Tok,
+        src: NodeId,
+    },
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
-    Super { start: Tok, key: Key, act: ChainAct },
+    Super {
+        start: Tok,
+        key: Key,
+        act: ChainAct,
+    },
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
-    SuperCtor { class: TmplId, call: CallId },
+    SuperCtor {
+        class: TmplId,
+        call: CallId,
+    },
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
-    ThisFrom { recv: NodeId },
+    ThisFrom {
+        recv: NodeId,
+    },
     /// The node holds getter/setter functions installed on the objects of
     /// `holder` under `key`.
     Accessor {
@@ -329,36 +406,63 @@ pub enum Cons {
         setter: bool,
     },
     /// Internal: install accessor `f` on every token of the node.
-    AccessorInstall { key: Atom, f: FnIdx, setter: bool },
+    AccessorInstall {
+        key: Atom,
+        f: FnIdx,
+        setter: bool,
+    },
     /// The node holds objects whose prototype set includes `src`'s values.
-    ProtoFrom { src: NodeId },
+    ProtoFrom {
+        src: NodeId,
+    },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`).
-    ProtoOf { dst: NodeId },
+    ProtoOf {
+        dst: NodeId,
+    },
     /// dst ⊇ the `next` method of each iterator in the node.
-    IterNext { dst: NodeId },
+    IterNext {
+        dst: NodeId,
+    },
     /// The node holds `Reflect.construct` new-targets (E11).
-    NewTargetHard { reason: u32 },
+    NewTargetHard {
+        reason: u32,
+    },
     /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
     /// elements/fields; the full keyed lookup (prototype chain, builtin
     /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
-    IdxLoad { idx: NodeId, dst: NodeId },
+    IdxLoad {
+        idx: NodeId,
+        dst: NodeId,
+    },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup.
-    IdxKey { obj: Tok, dst: NodeId },
+    IdxKey {
+        obj: Tok,
+        dst: NodeId,
+    },
     /// The node is an arithmetic operand: dst ⊇ the kinds its values turn
     /// into (`+` when `add`: strings concatenate).
-    Arith { dst: NodeId, add: bool },
+    Arith {
+        dst: NodeId,
+        add: bool,
+    },
     /// The node holds the source of a typed array `ta`: a buffer or view
     /// there means `ta` shares (and so exposes) that buffer (B1).
-    ShareBuffer { ta: Tok },
+    ShareBuffer {
+        ta: Tok,
+    },
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
-    ThisTo { origin: Tok },
+    ThisTo {
+        origin: Tok,
+    },
     /// The node is call `call`'s callee relay (the union of the method
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
-    CallArgs { call: CallId },
+    CallArgs {
+        call: CallId,
+    },
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
@@ -390,6 +494,11 @@ pub enum Cons {
 impl Cons {
     pub fn kind_name(&self) -> &'static str {
         match self {
+            Cons::ForInRead { .. } => "forinread",
+            Cons::ForInKey { .. } => "forinkey",
+            Cons::ForIn { .. } => "forin",
+            Cons::ForInProto { .. } => "forinproto",
+            Cons::ForInAny { .. } => "forinany",
             Cons::Load { .. } => "load",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
@@ -482,6 +591,8 @@ pub struct FieldWriters {
 
 #[derive(Default)]
 pub struct Model {
+    pub forin: crate::forin::ForIn,
+    pub contexts: crate::context::Contexts,
     pub toks: Vec<TokKind>,
     pub tok_index: FxHashMap<TokKind, Tok>,
     pub tmpls: Vec<Template>,
@@ -519,6 +630,10 @@ pub struct Model {
     pub adds_keys: FxHashMap<TmplId, u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
     pub escaped: FxHashMap<Tok, u32>,
+    /// Explain-only escape provenance; never consumed by proofs.
+    pub escape_via: FxHashMap<Tok, NodeId>,
+    pub cur_sink: Option<NodeId>,
+    pub widen_of: FxHashMap<Tok, NodeId>,
     /// `escaped` as a bitset by token (the hot membership test).
     pub esc_bits: Vec<u64>,
     pub reasons: Vec<String>,
@@ -845,6 +960,9 @@ impl Model {
             return;
         }
         let mut out: Vec<String> = Vec::new();
+        for (&(call, f), &copy) in &self.contexts.bindings {
+            out.push(format!("M context {call} {f} {copy}"));
+        }
         for (i, a) in self.atoms.iter().enumerate() {
             out.push(format!("M atom {i} {}", esc_key(a)));
         }
@@ -888,7 +1006,8 @@ impl Model {
                 TmplKind::BObj { what, .. } => format!("bobj {what}"),
             };
             out.push(format!(
-                "M tmpl {i} {kind} birth={} definite={} parent={} ctor={} native={} acc={} computed={} fieldinit={} pm={} display={}",
+                "M tmpl {i} {kind} literal={} birth={} definite={} parent={} ctor={} native={} acc={} computed={} fieldinit={} pm={} display={}",
+                matches!(t.kind, TmplKind::Class { literal_shape: true, .. }) as u8,
                 join(&t.birth_keys),
                 join(&t.definite),
                 t.parent.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),

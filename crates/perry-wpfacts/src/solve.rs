@@ -23,6 +23,9 @@ impl Model {
             for &t in toks {
                 if t != TOP && !self.is_escaped(t) {
                     self.widen_queue.push(t);
+                    if self.explain {
+                        self.widen_of.entry(t).or_insert(n);
+                    }
                 }
             }
         } else {
@@ -57,6 +60,9 @@ impl Model {
                 for t in node.pts.to_sorted() {
                     if t != TOP {
                         self.widen_queue.push(t);
+                        if self.explain {
+                            self.widen_of.entry(t).or_insert(n);
+                        }
                     }
                 }
                 node.pts = crate::pts::Pts::default();
@@ -346,7 +352,16 @@ impl Model {
         self.rel_phase = b'S';
         loop {
             self.drain_widened();
+            // Emit requested HIR contexts before saturating the remaining
+            // graph. Their results may prevent otherwise irreversible
+            // widening in downstream callers.
+            if !self.contexts.requests.is_empty() {
+                break;
+            }
             let Some(n) = self.wl.pop_front() else {
+                if self.replay_forin_accessors() {
+                    continue;
+                }
                 break;
             };
             self.pops += 1;
@@ -457,8 +472,10 @@ impl Model {
         self.rel(|| format!("fieldnode {n} {t} {a}"));
         let any = self.field_any(t);
         self.edge(any, n);
-        let all = self.all_fields(t);
-        self.edge(n, all);
+        if let Some(&all) = self.all_fields.get(&t) {
+            self.edge(n, all);
+        }
+        self.forin_key(t, a);
         n
     }
 
@@ -469,8 +486,9 @@ impl Model {
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
-        let all = self.all_fields(t);
-        self.edge(n, all);
+        if let Some(&all) = self.all_fields.get(&t) {
+            self.edge(n, all);
+        }
         // Arrays and primitive boxes hold primitives at unknown indices.
         n
     }
@@ -482,6 +500,17 @@ impl Model {
         let n = self.node_named("allfields", || format!("allfields({t})"));
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
+        // A union with no reader must not widen and escape its members.
+        // Install the relay on its first read, replaying existing fields;
+        // field()/field_any() connect fields created after that read.
+        let keys = self.field_keys.get(&t).cloned().unwrap_or_default();
+        for a in keys {
+            let f = self.fields[&(t, a)];
+            self.edge(f, n);
+        }
+        if let Some(&f) = self.field_any.get(&t) {
+            self.edge(f, n);
+        }
         n
     }
 
@@ -560,6 +589,57 @@ impl Model {
 
     fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
         match *c {
+            Cons::ForInRead { key, dst } => {
+                for &src in toks {
+                    self.forin_read(src, key, dst);
+                }
+                if prim != 0 {
+                    self.with_b(|m| builtins::prim_load(m, prim, Key::Named(key), dst));
+                }
+            }
+            Cons::ForInKey { holder, key } => {
+                if !toks.is_empty() || prim != 0 {
+                    self.forin_key_ready(holder, key);
+                }
+            }
+            Cons::ForIn {
+                dst,
+                site,
+                accessor,
+                getter,
+            } => {
+                for &t in toks {
+                    self.forin_source(t, dst, site, accessor, getter);
+                }
+                if prim & prim::STR != 0 {
+                    let value = self.node_l("forin-character");
+                    self.add_prim(value, prim::STR);
+                    self.forin_install(TOP, dst, Key::Any, value, site, accessor, getter);
+                }
+            }
+            Cons::ForInProto {
+                origin,
+                dst,
+                site,
+                accessor,
+                getter,
+            } => {
+                for &t in toks {
+                    self.forin_holder(t, origin, dst, site, accessor, getter);
+                }
+            }
+            Cons::ForInAny {
+                dst,
+                site,
+                accessor,
+                getter,
+            } => {
+                if (!toks.is_empty() || prim != 0)
+                    && self.forin.any_done.insert((n, dst, site, accessor, getter))
+                {
+                    self.forin_install(TOP, dst, Key::Any, n, site, accessor, getter);
+                }
+            }
             Cons::Load { key, dst } => {
                 if prim != 0 {
                     self.with_b(|m| builtins::prim_load(m, prim, key, dst));
@@ -602,9 +682,11 @@ impl Model {
                 }
             }
             Cons::TopSink { reason } => {
+                let saved = self.cur_sink.replace(n);
                 for &t in toks {
                     self.escape(t, reason);
                 }
+                self.cur_sink = saved;
             }
             Cons::Hard { kind, reason } => {
                 for &t in toks {
@@ -767,7 +849,13 @@ impl Model {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
-                    if t == TOP {
+                    if t == TOP || self.is_escaped(t) {
+                        let reason = self
+                            .reason("accessor installed on a value reachable from unmodeled code");
+                        let token = self.funcs[f as usize].token;
+                        self.escape(token, reason);
+                        // The holder's reads already yield TOP, and the
+                        // escaped getter/setter models arbitrary entry.
                         continue;
                     }
                     if key == star {
@@ -804,7 +892,9 @@ impl Model {
                         // off (an accessor on Object.prototype is E23).
                         self.objproto_accessor = true;
                     }
+                    self.resume_forin_reads(t);
                     self.accessor_installed(t, key, f, setter, !objproto);
+                    self.forin_key(t, key);
                 }
             }
             Cons::ProtoFrom { src } => {
@@ -1047,7 +1137,7 @@ impl Model {
     /// Accessors run with the receiver as `this`. Named keys an accessor
     /// may be defined under walk the chain per receiver; computed keys
     /// visit, through the prototype closure, only holders with accessors.
-    fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
+    pub(crate) fn accessor_walk(&mut self, origin: Tok, t: Tok, key: Key, act: ChainAct) {
         if !self.needs_accessor_walk(key) {
             return;
         }
@@ -1813,8 +1903,15 @@ impl Model {
 
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
-    fn bind_args(&mut self, call: CallId, t: Tok) {
+    pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
         let TokKind::Func(f) = self.toks[t as usize] else {
+            return;
+        };
+        if self.bind_done.contains(&(call, t, u32::MAX - 1)) {
+            return;
+        }
+        let original = f;
+        let Some(f) = self.context_target(call, f) else {
             return;
         };
         if !self.bind_done.insert((call, t, u32::MAX - 1)) {
@@ -1822,8 +1919,18 @@ impl Model {
         }
         let f = f as usize;
         let c = call as usize;
+        if f != original as usize && !self.funcs[f].lexical_this {
+            let this = self.funcs[f].this;
+            match self.calls[c].this {
+                ThisArg::Node(n) => self.edge(n, this),
+                ThisArg::Tok(t) => self.add_tok(this, t),
+                ThisArg::Undef => self.add_prim(this, prim::UNDEF),
+            }
+        }
         let rest = self.funcs[f].rest;
-        let args_all = self.funcs[f].has_arguments.then_some(self.funcs[f].args_all);
+        let args_all = self.funcs[f]
+            .has_arguments
+            .then_some(self.funcs[f].args_all);
         let nparams = self.funcs[f].params.len();
         let nargs = self.calls[c].args.len();
         for i in 0..nargs {
@@ -2004,6 +2111,9 @@ impl Model {
 
     /// `new t(args)`.
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        // Constructor-phase writers and instance families belong to the
+        // runtime function, rather than its call-site analysis copies.
+        self.contexts.fresh.remove(&call);
         if !self.construct_done.insert((call, t)) {
             return;
         }
@@ -2201,6 +2311,11 @@ impl Model {
     }
 
     fn mark_escaped(&mut self, t: Tok, reason: u32) {
+        if self.explain && !self.escaped.contains_key(&t) {
+            if let Some(n) = self.cur_sink {
+                self.escape_via.insert(t, n);
+            }
+        }
         self.escaped.insert(t, reason);
         let w = (t >> 6) as usize;
         if self.esc_bits.len() <= w {
@@ -2353,6 +2468,7 @@ impl Model {
             self.with_s(|m| m.resume_stopped(t));
         }
         self.hard.insert(t, (kind, reason));
+        self.resume_forin_reads(t);
         self.rel(|| format!("hardmark {t} {}", kind.code()));
         // Deleting / redefining can move values or install accessors: the
         // object's fields are now written by unknown code as well.
@@ -2396,6 +2512,43 @@ impl Model {
 
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
+            Cons::ForInRead { key, dst } => {
+                format!("forinread {n} {} {dst}", self.key_name(Key::Named(*key)))
+            }
+            Cons::ForInKey { holder, key } => {
+                format!("forinkey {n} {holder} {}", self.key_name(Key::Named(*key)))
+            }
+            Cons::ForIn {
+                dst,
+                site,
+                accessor,
+                getter,
+            } => format!(
+                "forin {n} {dst} {site} {} {}",
+                *accessor as u8,
+                getter.map(|f| f as i64).unwrap_or(-1)
+            ),
+            Cons::ForInProto {
+                origin,
+                dst,
+                site,
+                accessor,
+                getter,
+            } => format!(
+                "forinproto {n} {origin} {dst} {site} {} {}",
+                *accessor as u8,
+                getter.map(|f| f as i64).unwrap_or(-1)
+            ),
+            Cons::ForInAny {
+                dst,
+                site,
+                accessor,
+                getter,
+            } => format!(
+                "forinany {n} {dst} {site} {} {}",
+                *accessor as u8,
+                getter.map(|f| f as i64).unwrap_or(-1)
+            ),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))

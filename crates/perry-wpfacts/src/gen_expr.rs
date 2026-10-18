@@ -37,6 +37,19 @@ impl<'a> Gen<'a> {
     ) -> (CallId, NodeId) {
         let ret = self.tmp("callret");
         let id = self.m.calls.len() as CallId;
+        if let Some(f) = self.current_fn {
+            let info = &self.m.funcs[f as usize];
+            let logical = self
+                .logical_funcs
+                .get(&(info.module, info.func_id))
+                .copied()
+                .unwrap_or(f);
+            self.m.contexts.owners.insert(id, logical);
+            let ordinal = self.call_ordinals.entry(f).or_default();
+            let site = *self.logical_calls.entry((logical, *ordinal)).or_insert(id);
+            *ordinal += 1;
+            self.m.contexts.sites.insert(id, site);
+        }
         self.m.calls.push(CallSite {
             this,
             args,
@@ -220,7 +233,21 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
+        self.mcall_fresh(recv, key, args, spread, false)
+    }
+
+    pub(crate) fn mcall_fresh(
+        &mut self,
+        recv: NodeId,
+        key: Key,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+        fresh: bool,
+    ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Node(recv), args, spread);
+        if fresh {
+            self.m.contexts.fresh.insert(call);
+        }
         self.m.cons(recv, Cons::MCall { key, call });
         ret
     }
@@ -232,7 +259,21 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
+        self.call_value_fresh(callee, this, args, spread, false)
+    }
+
+    pub(crate) fn call_value_fresh(
+        &mut self,
+        callee: NodeId,
+        this: ThisArg,
+        args: Vec<NodeId>,
+        spread: Vec<NodeId>,
+        fresh: bool,
+    ) -> NodeId {
         let (call, ret) = self.new_call(this, args, spread);
+        if fresh {
+            self.m.contexts.fresh.insert(call);
+        }
         self.m.cons(callee, Cons::Call { call });
         ret
     }
@@ -345,6 +386,13 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let prev = self.current_fn.replace(fx.f);
+        let out = self.expr_inner(fx, e);
+        self.current_fn = prev;
+        out
+    }
+
+    fn expr_inner(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),
@@ -884,7 +932,15 @@ impl<'a> Gen<'a> {
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);
-                self.call_with(fx, callee, a, s, 0)
+                self.call_with(
+                    fx,
+                    callee,
+                    a,
+                    s,
+                    0,
+                    args.iter()
+                        .any(|a| matches!(a, CallArg::Expr(e) if crate::context::fresh_arg(e))),
+                )
             }
             Expr::FuncRef(id) => {
                 let f = self.fn_by_id(mi, *id);

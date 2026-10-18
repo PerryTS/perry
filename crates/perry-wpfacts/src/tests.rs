@@ -496,3 +496,258 @@ fn fn_instance_ctor_stores_are_birth_writers() {
     assert!(field(v, "x").readonly, "{}", pf.dump_text());
     assert!(field(v, "y").readonly, "{}", pf.dump_text());
 }
+
+#[test]
+fn selective_contexts_preserve_call_site_pairs() {
+    let pf = facts(
+        r#"
+      class A { a = 1; } class B { b = 2; }
+      function identity(x: any) { return x; }
+      let a = identity(new A()); let b = identity(new B());
+      console.log(a.a, b.b);
+    "#,
+    );
+    for key in ["a", "b"] {
+        let site = pf.sites.iter().find(|s| s.key == key).unwrap();
+        assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+        assert_eq!(site.receivers.len(), 1);
+    }
+}
+
+#[test]
+fn selective_context_budget_falls_back_to_merged() {
+    let mut src = "function helper(x: any) { return x; }\n".to_string();
+    for i in 0..66 {
+        src.push_str(&format!("console.log(helper({{ k{i}: {i} }}));\n"));
+    }
+    let pf = facts_with(
+        &src,
+        FactsConfig {
+            relations: true,
+            ..Default::default()
+        },
+    );
+    let mut copies = std::collections::BTreeSet::new();
+    let mut merged = 0;
+    for line in pf.relations.as_ref().unwrap() {
+        let p: Vec<_> = line.split_whitespace().collect();
+        if p.len() == 5 && p[0] == "M" && p[1] == "context" {
+            if p[3] != p[4] {
+                copies.insert(p[4]);
+            } else {
+                merged += 1;
+            }
+        }
+    }
+    assert_eq!(copies.len(), crate::context::COPY_BUDGET);
+    assert!(merged >= 2);
+}
+
+#[test]
+fn recursive_helpers_use_merged_analysis() {
+    let pf = facts_with(
+        r#"
+      function a(x: any, n: number): any { if (n) return b({}, n - 1); return x; }
+      function b(x: any, n: number): any { if (n) return a({}, n - 1); return x; }
+      console.log(a({v: 1}, 2));
+    "#,
+        FactsConfig {
+            relations: true,
+            ..Default::default()
+        },
+    );
+    for line in pf.relations.as_ref().unwrap() {
+        let p: Vec<_> = line.split_whitespace().collect();
+        if p.len() == 5 && p[0] == "M" && p[1] == "context" {
+            assert_eq!(p[3], p[4], "{line}");
+        }
+    }
+}
+
+#[test]
+fn escaped_helpers_keep_unknown_entry_in_merged_copy() {
+    let pf = facts(
+        r#"
+      class A { a = 1; }
+      function helper(x: any) { return x.a; }
+      (globalThis as any).exposedHelper = helper;
+      console.log(helper(new A()));
+    "#,
+    );
+    let site = pf.sites.iter().find(|s| s.key == "a").unwrap();
+    assert!(matches!(site.verdict, Verdict::No(_)), "{}", pf.dump_text());
+}
+
+#[test]
+fn lazy_allfields_replays_fields_before_and_after_first_read() {
+    use crate::gen::Gen;
+    use crate::model::TokKind;
+    let mut g = Gen::new(vec![], false, false);
+    g.m.widen_k = 2;
+    let holder = g.m.tok(TokKind::ModNs(99));
+    let values: Vec<_> = (0..4).map(|i| g.m.tok(TokKind::ModNs(i))).collect();
+    for (i, &value) in values[..3].iter().enumerate() {
+        let key = g.m.atom(&format!("k{i}"));
+        let field = g.m.field(holder, key);
+        g.m.add_tok(field, value);
+    }
+    g.m.solve();
+    assert!(!g.m.all_fields.contains_key(&holder));
+    assert!(values.iter().all(|t| !g.m.is_escaped(*t)));
+    let all = g.m.all_fields(holder);
+    let key = g.m.atom("later");
+    let field = g.m.field(holder, key);
+    g.m.add_tok(field, values[3]);
+    g.m.solve();
+    assert!(g.m.nodes[all as usize].widened);
+    assert!(values.iter().all(|t| g.m.is_escaped(*t)));
+}
+
+#[test]
+fn correlated_forin_copy_keeps_named_fields_and_call_pairs() {
+    let pf = facts(
+        r#"
+      class A { a = 1; } class B { b = 2; }
+      function copy(t: any, o: any) { for (const k in o) t[k] = o[k]; return t; }
+      let a = copy({}, {first: new A(), second: new B()});
+      console.log(a.first.a, a.second.b);
+    "#,
+    );
+    for key in ["a", "b"] {
+        let site = pf.sites.iter().find(|s| s.key == key).unwrap();
+        assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+        assert_eq!(site.receivers.len(), 1);
+    }
+}
+
+#[test]
+fn correlated_forin_export_getter_and_copyprops_getter() {
+    let pf = facts(
+        r#"
+      class A { a = 1; } class B { b = 2; }
+      const def = Object.defineProperty;
+      function exp(t: any, o: any) { for (const k in o) def(t, k, {get: o[k], enumerable: true}); return t; }
+      function cp(t: any, o: any) { for (const k in o) def(t, k, {get: () => o[k], enumerable: true}); return t; }
+      let a = exp({}, {v: () => new A()}); let b = cp({}, {v: new B()});
+      console.log(a.v.a, b.v.b);
+    "#,
+    );
+    for key in ["a", "b"] {
+        let site = pf.sites.iter().find(|s| s.key == key).unwrap();
+        assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+        assert_eq!(site.receivers.len(), 1);
+    }
+}
+
+#[test]
+fn reassigned_forin_source_and_key_use_unknown_key_fallback() {
+    let pf = facts_with(
+        r#"
+      function copy(t: any, o: any, other: any) { for (let k in o) { o = other; k = 'x'; t[k] = o[k]; } }
+      copy({}, {a: 1}, {x: 2});
+    "#,
+        FactsConfig {
+            relations: true,
+            ..Default::default()
+        },
+    );
+    assert!(!pf
+        .relations
+        .as_ref()
+        .unwrap()
+        .iter()
+        .any(|s| s.split_whitespace().nth(1) == Some("forin")));
+}
+
+#[test]
+fn accessor_on_unknown_holder_escapes_its_getter_result() {
+    let pf = facts(
+        r#"
+      class Exposed { value = 1; }
+      function install(t: any, o: any) { for (const k in o) Object.defineProperty(t, k, {get: o[k]}); }
+      install((globalThis as any).unknownHolder, {a: () => new Exposed()});
+    "#,
+    );
+    assert!(!tmpl(&pf, "Exposed").prefix_stable, "{}", pf.dump_text());
+}
+
+#[test]
+fn primitive_arguments_do_not_request_heap_contexts() {
+    let pf = facts_with(
+        "function f(x: number) { return x + 1; } console.log(f(1), f(2));",
+        FactsConfig {
+            relations: true,
+            ..Default::default()
+        },
+    );
+    assert!(!pf.relations.as_ref().unwrap().iter().any(|line| {
+        let p: Vec<_> = line.split_whitespace().collect();
+        p.len() == 5 && p[0] == "M" && p[1] == "context" && p[3] != p[4]
+    }));
+}
+
+#[test]
+fn forin_key_snapshot_does_not_call_its_values() {
+    let pf = facts(
+        r#"
+      class Hidden { value = 1; }
+      const o = {x: () => new Hidden()};
+      for (const k in o) console.log(k);
+    "#,
+    );
+    assert!(tmpl(&pf, "Hidden").prefix_stable, "{}", pf.dump_text());
+}
+
+#[test]
+fn correlated_read_observes_an_accessor_installed_later_in_solve() {
+    let pf = facts(
+        r#"
+      class LateLeaf { value = 1; }
+      function delay(x: any) { return x; }
+      function install(t: any, o: any) { for (const k in o) Object.defineProperty(t, k, {get: o[k]}); }
+      function copy(t: any, o: any) { for (const k in o) t[k] = o[k]; return t; }
+      const source: any = {a: 0};
+      install(source, delay({a: () => new LateLeaf()}));
+      const target = copy({}, source);
+      console.log(target.a.value);
+    "#,
+    );
+    assert!(
+        pf.templates
+            .iter()
+            .any(|t| t.fields.iter().any(
+                |f| f.key == "a" && f.kind.objs.iter().any(|name| name.ends_with(":LateLeaf"))
+            )),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn rebound_aliases_do_not_establish_forin_key_identity() {
+    for body in [
+        "let a = o; for (const k in o) { a = other; t[k] = a[k]; }",
+        "let a = o; a = other; for (const k in a) t[k] = o[k];",
+        "for (const k in o) { var o = other; t[k] = o[k]; }",
+    ] {
+        let src = format!(
+            "function copy(t:any,o:any,other:any) {{ {body} }} copy({{}}, {{p:1}}, {{q:2}});"
+        );
+        let pf = facts_with(
+            &src,
+            FactsConfig {
+                relations: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            !pf.relations
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|s| s.split_whitespace().nth(1) == Some("forin")),
+            "{}",
+            pf.dump_text()
+        );
+    }
+}

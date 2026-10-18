@@ -54,13 +54,29 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out
 }
 
+fn merge(a: &mut BindingFacts, b: BindingFacts) {
+    a.class_ids.extend(b.class_ids);
+    a.class_ids.sort_unstable();
+    a.class_ids.dedup();
+    a.prims |= b.prims;
+    a.other |= b.other;
+}
+
 pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
     let mut out: Vec<ModuleBindings> = (0..g.mods.len()).map(|_| Default::default()).collect();
     for (mi, info) in g.mods.iter().enumerate() {
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
-            .map(|(&id, &n)| (id, facts_of(g, n)))
+            .map(|(&id, &n)| {
+                let mut facts = facts_of(g, n);
+                if let Some(copies) = g.context_locals.get(&(mi as u32, id)) {
+                    for &n in copies {
+                        merge(&mut facts, facts_of(g, n));
+                    }
+                }
+                (id, facts)
+            })
             .collect();
         v.sort_by_key(|(id, _)| *id);
         out[mi].locals = v;
@@ -74,14 +90,17 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
     }
     for mb in &mut out {
         mb.this_of.sort_by_key(|(id, _)| *id);
-        // A function id registered twice (should not happen) gets no answer.
-        let mut dup = Vec::new();
-        for w in mb.this_of.windows(2) {
-            if w[0].0 == w[1].0 {
-                dup.push(w[0].0);
+        let mut merged: Vec<(u32, BindingFacts)> = Vec::new();
+        for (id, facts) in std::mem::take(&mut mb.this_of) {
+            if let Some((last, value)) = merged.last_mut() {
+                if *last == id {
+                    merge(value, facts);
+                    continue;
+                }
             }
+            merged.push((id, facts));
         }
-        mb.this_of.retain(|(id, _)| !dup.contains(id));
+        mb.this_of = merged;
     }
     out
 }

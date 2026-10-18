@@ -45,7 +45,7 @@ impl<'a> Gen<'a> {
                     self.iife_birth.insert(pn, tm);
                 }
                 let c = self.expr(fx, callee);
-                return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
+                return self.call_value_fresh(c, ThisArg::Undef, vec![lit], vec![], true);
             }
         }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
@@ -61,7 +61,14 @@ impl<'a> Gen<'a> {
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        self.call_with(fx, callee, a, vec![], byte_offset)
+        self.call_with(
+            fx,
+            callee,
+            a,
+            vec![],
+            byte_offset,
+            args.iter().any(crate::context::fresh_arg),
+        )
     }
 
     pub(crate) fn call_with(
@@ -71,6 +78,7 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
         byte_offset: u32,
+        fresh: bool,
     ) -> NodeId {
         match callee {
             Expr::PropertyGet {
@@ -91,7 +99,7 @@ impl<'a> Gen<'a> {
                         func: fx.f,
                     });
                 }
-                self.mcall(o, Key::Named(a), args, spread)
+                self.mcall_fresh(o, Key::Named(a), args, spread, fresh)
             }
             Expr::IndexGet { object, index } => {
                 let o = self.expr(fx, object);
@@ -99,14 +107,14 @@ impl<'a> Gen<'a> {
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(i, Cons::Implicit { reason: r });
                 let key = self.read_key(index);
-                self.mcall(o, key, args, spread)
+                self.mcall_fresh(o, key, args, spread, fresh)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
                 let c = self.expr(fx, callee);
-                self.call_value(c, ThisArg::Undef, args, spread)
+                self.call_value_fresh(c, ThisArg::Undef, args, spread, fresh)
             }
         }
     }
@@ -181,6 +189,9 @@ impl<'a> Gen<'a> {
                     .add_top(info.ret, |_| "async/generator closure result".into());
             }
             self.stmts(&cfx, body);
+            if !*is_async && !*is_generator {
+                self.remember_body(&cfx, params, body);
+            }
             let _: &Vec<Stmt> = body;
         }
         self.tok_node(info.token)

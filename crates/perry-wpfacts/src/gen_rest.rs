@@ -219,6 +219,17 @@ impl<'a> Gen<'a> {
             Expr::EnvGet(_) | Expr::EnvGetDynamic(_) => {
                 self.prim_kids(fx, e, prim::STR | prim::UNDEF, "process.env key")
             }
+            Expr::ForInKeys(o) => {
+                // Enumerating keys does not read values or call their
+                // functions/getters. Proxy traps are already TOP-entered
+                // when a proxy and its handler are handed to the runtime.
+                let _ = self.expr(fx, o);
+                let tm = self.new_arr_template(mi, "for-in keys");
+                let tok = self.m.tok(TokKind::Obj(tm));
+                let values = self.m.field_any(tok);
+                self.m.add_prim(values, prim::STR);
+                self.tok_node(tok)
+            }
             Expr::ProcessEnv
             | Expr::ProcessArgv
             | Expr::ProcessMemoryUsage
@@ -236,7 +247,6 @@ impl<'a> Gen<'a> {
             | Expr::OsLoadavg
             | Expr::RegExpExecGroups
             | Expr::ObjectKeys(..)
-            | Expr::ForInKeys(..)
             | Expr::ObjectGetOwnPropertyNames(..)
             | Expr::ObjectGetOwnPropertySymbols(..)
             | Expr::ReflectOwnKeys(..)

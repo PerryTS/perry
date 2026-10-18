@@ -36,6 +36,16 @@ pub(crate) struct ModInfo {
 }
 
 pub struct Gen<'a> {
+    pub(crate) forin_aliases: FxHashMap<(u32, u32), u32>,
+    pub(crate) forin_keys: FxHashMap<(u32, u32), u32>,
+    pub(crate) forin_active: FxHashMap<(FnIdx, u32), u32>,
+    pub(crate) forin_mutable_captures: crate::pts::FxHashSet<(u32, u32)>,
+    pub(crate) context_bodies: FxHashMap<FnIdx, crate::context::Body>,
+    pub(crate) current_fn: Option<FnIdx>,
+    pub(crate) logical_funcs: FxHashMap<(u32, u32), FnIdx>,
+    pub(crate) call_ordinals: FxHashMap<FnIdx, u32>,
+    pub(crate) logical_calls: FxHashMap<(FnIdx, u32), CallId>,
+    pub(crate) context_locals: FxHashMap<(u32, u32), Vec<NodeId>>,
     pub m: Model,
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
@@ -127,6 +137,16 @@ impl<'a> Gen<'a> {
             path_index.insert(p.to_string(), i as u32);
         }
         Gen {
+            forin_aliases: Default::default(),
+            forin_keys: Default::default(),
+            forin_active: Default::default(),
+            forin_mutable_captures: Default::default(),
+            context_bodies: Default::default(),
+            current_fn: None,
+            logical_funcs: Default::default(),
+            call_ordinals: Default::default(),
+            logical_calls: Default::default(),
+            context_locals: Default::default(),
             m,
             modules,
             mods: Vec::new(),
@@ -185,7 +205,11 @@ impl<'a> Gen<'a> {
                 iterout: FxHashMap::default(),
             });
             for f in &module.functions {
-                self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                let fi = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                if !f.is_async && !f.is_generator && crate::context::small_body(&f.params, &f.body)
+                {
+                    self.m.contexts.eligible.insert(fi);
+                }
             }
             for c in &module.classes {
                 self.register_class(mi, c);
@@ -356,6 +380,8 @@ impl<'a> Gen<'a> {
             lexical_this,
         });
         self.mods[mi as usize].funcs.insert(id, fx);
+        let canonical = *self.logical_funcs.entry((mi, id)).or_insert(fx);
+        self.m.contexts.origins.insert(fx, canonical);
         fx
     }
 
@@ -785,6 +811,7 @@ impl<'a> Gen<'a> {
     // ----------------------------------------------------------- walking
 
     pub fn walk_all(&mut self) {
+        self.prepare_forin_captures();
         let modules = self.modules.clone();
         // Constructor phase analysis first (needs every class).
         for (mi, (_, module)) in modules.iter().enumerate() {
@@ -945,6 +972,9 @@ impl<'a> Gen<'a> {
             });
         }
         self.stmts(&fx, &f.body);
+        if !f.is_async && !f.is_generator {
+            self.remember_body(&fx, &f.params, &f.body);
+        }
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
@@ -1141,6 +1171,9 @@ impl<'a> Gen<'a> {
     fn stmt(&mut self, fx: &Fx, s: &Stmt) {
         match s {
             Stmt::Let { id, init, .. } => {
+                if let Some(e) = init {
+                    self.forin_binding(fx, *id, e);
+                }
                 let n = self.local(fx.module, *id);
                 if let (Some(perry_hir::Expr::ClassMethodHome { .. }), Some(tm)) = (init, fx.class)
                 {
@@ -1155,7 +1188,9 @@ impl<'a> Gen<'a> {
                 }
             }
             Stmt::Expr(e) => {
-                let _ = self.expr(fx, e);
+                if !self.correlated_stmt(fx, e) {
+                    let _ = self.expr(fx, e);
+                }
             }
             Stmt::Return(e) => {
                 if let Some(e) = e {
@@ -1195,7 +1230,9 @@ impl<'a> Gen<'a> {
                 if let Some(u) = update {
                     let _ = self.expr(fx, u);
                 }
+                let saved = self.enter_forin(fx, body);
                 self.stmts(fx, body);
+                self.leave_forin(fx, saved);
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
             Stmt::Break

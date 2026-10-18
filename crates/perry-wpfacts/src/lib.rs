@@ -18,9 +18,11 @@
 
 pub mod bindings;
 mod builtins;
+mod context;
 mod ctor_phase;
 pub mod derive;
 mod dump;
+mod forin;
 mod gen;
 mod gen_call;
 mod gen_expr;
@@ -160,10 +162,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     }
     let t1 = std::time::Instant::now();
     g.m.log_seed_accessors();
-    for s in &g.read_sites {
-        let (m0, o, k, r, c) = (s.module, s.byte_offset, s.key, s.recv, s.is_call as u8);
-        g.m.rel(|| format!("readsite {m0} {o} {k} {r} {c}"));
-    }
     if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
         // Interpreted code can catch what compiled code throws (a compiled
         // function it calls throws into its `try`): thrown values reach the
@@ -172,7 +170,12 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let thrown = g.m.thrown;
         g.m.sink_node(thrown, r);
     }
-    g.m.solve();
+    g.solve_contexts();
+    g.merge_context_sites();
+    for s in &g.read_sites {
+        let (m0, o, k, r, c) = (s.module, s.byte_offset, s.key, s.recv, s.is_call as u8);
+        g.m.rel(|| format!("readsite {m0} {o} {k} {r} {c}"));
+    }
     if cfg.profile {
         let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
         v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
@@ -206,6 +209,48 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 m.key_name(*k)
             );
         }
+    }
+    if cfg.explain {
+        let m = &g.m;
+        let mut owners = std::collections::HashMap::new();
+        for (&(t, _), &n) in &m.fields {
+            owners.insert(n, t);
+        }
+        for (&t, &n) in m.all_fields.iter().chain(m.field_any.iter()) {
+            owners.insert(n, t);
+        }
+        for f in &m.funcs {
+            for n in f.params.iter().copied().chain([f.ret, f.this, f.args_all]) {
+                owners.entry(n).or_insert(f.token);
+            }
+        }
+        let mut escaped: Vec<_> = m.escaped.iter().collect();
+        escaped.sort_by_key(|(&t, _)| t);
+        for (&t, &r) in escaped {
+            let widened = m.reasons[r as usize]
+                .starts_with("context-insensitive merge")
+                .then(|| m.widen_of.get(&t).copied())
+                .flatten();
+            let n = widened.or_else(|| m.escape_via.get(&t).copied());
+            let parent = n
+                .and_then(|n| owners.get(&n))
+                .map_or_else(|| "-".to_string(), |&t| m.tok_name(t));
+            eprintln!(
+                "perry: wpfacts escape {} via={} label={} parent={} widened={} reason={}",
+                m.tok_name(t),
+                n.map_or(-1, |n| n as i64),
+                n.map_or("-", |n| m.labels[n as usize]),
+                parent,
+                widened.is_some() as u8,
+                m.reasons[r as usize]
+            );
+        }
+        eprintln!(
+            "perry: wpfacts contexts copies={} callees={} recursive={}",
+            m.contexts.copies.len(),
+            m.contexts.counts.len(),
+            m.contexts.recursive.len()
+        );
     }
     g.m.dump_meta();
     let solve_ms = t1.elapsed().as_secs_f64() * 1000.0;

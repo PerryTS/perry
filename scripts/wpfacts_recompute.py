@@ -114,6 +114,14 @@ class Solver:
         self.fields = {}
         self.fieldany = {}
         self.allfields = {}
+        self.contexts = {}
+        self.forin_watch = defaultdict(set)
+        self.forin_done = set()
+        self.forin_values = {}
+        self.named_forin_values = {}
+        self.forin_getters = {}
+        self.forin_sources = {}
+        self.forin_stopped = defaultdict(list)
         self.protonode = {}
         self.field_keys = defaultdict(list)
         self.accessors = defaultdict(lambda: ([], []))
@@ -228,7 +236,9 @@ class Solver:
         self.fields[k] = n
         self.field_keys[t].append(a)
         self.edge(self.fany(t), n)
-        self.edge(n, self.fall(t))
+        self.forin_key(t, a)
+        if t in self.allfields:
+            self.edge(n, self.allfields[t])
         return n
 
     def fany(self, t):
@@ -236,7 +246,8 @@ class Solver:
             return self.fieldany[t]
         n = self.named_fieldany.get(t) or self.node()
         self.fieldany[t] = n
-        self.edge(n, self.fall(t))
+        if t in self.allfields:
+            self.edge(n, self.allfields[t])
         return n
 
     def fall(self, t):
@@ -244,7 +255,93 @@ class Solver:
             return self.allfields[t]
         n = self.named_allfields.get(t) or self.node()
         self.allfields[t] = n
+        for a in self.field_keys[t]:
+            self.edge(self.fields[t, a], n)
+        if t in self.fieldany:
+            self.edge(self.fieldany[t], n)
         return n
+
+    def forin_key(self, holder, key):
+        if not self.forin_watch[holder]:
+            return
+        tm = self.tmpl_of(holder)
+        if (tm is not None and key in self.tmpls[tm]["birth"]) or key in self.acc_keys[holder]:
+            self.forin_key_ready(holder, key)
+        if (holder, key) in self.fields:
+            self.addcons(self.fields[holder, key], ("forinkey", holder, key))
+
+    def forin_key_ready(self, holder, key):
+        for origin, dst, site, accessor, getter in list(self.forin_watch[holder]):
+            if holder in self.escaped or origin in self.escaped:
+                continue
+            self.forin_named(origin, dst, key, site, accessor, getter)
+
+    def forin_holder(self, holder, origin, dst, site, accessor, getter):
+        watch = (origin, dst, site, accessor, getter)
+        if watch in self.forin_watch[holder]:
+            return
+        self.forin_watch[holder].add(watch)
+        if holder == TOP or holder in self.escaped:
+            self.forin_install(dst, "*", self.toptok, site, accessor, getter)
+            return
+        for a in sorted(set(self.field_keys[holder] + self.acc_keys[holder])):
+            self.forin_key(holder, a)
+        self.addcons(self.fany(holder), ("forinany", dst, site, accessor, getter))
+
+    def forin_named(self, src, dst, key, site, accessor, getter):
+        work = (src, dst, key, site, accessor, getter)
+        if work in self.forin_done:
+            return
+        self.forin_done.add(work)
+        vk = (src, key, getter)
+        if vk not in self.forin_values:
+            value = self.named_forin_values.get(vk) or self.node()
+            self.forin_values[vk] = value
+            if getter in self.forin_sources:
+                self.addcons(self.forin_sources[getter], ("forinread", key, value))
+            else:
+                self.forin_read(src, key, value)
+        self.forin_install(dst, key, self.forin_values[vk], site, accessor, getter)
+
+    def forin_read(self, src, key, dst):
+        tm = self.tmpl_of(src)
+        template = self.tmpls.get(tm, {})
+        own = ((template.get("kind") == "lit" or template.get("literal", False))
+               and key in template.get("definite", []) and key not in template.get("acc", [])
+               and src not in self.hard and (src, key) not in self.accessors)
+        if own:
+            self.edge(self.field(src, key), dst)
+            self.forin_stopped[src].append((key, dst))
+        else:
+            self.load_from(src, src, key, dst)
+
+    def resume_forin_reads(self, src):
+        for key, dst in self.forin_stopped.pop(src, []):
+            self.load_from(src, src, key, dst)
+
+    def forin_install(self, dst, key, value, site, accessor, getter):
+        if not accessor:
+            self.addcons(dst, ("store", key, value, site))
+            return
+        if getter != -1:
+            copy = self.forin_getters.get((getter, value))
+            if copy is None:
+                # A flow reached only by recomputation: make the same pure
+                # zero-argument getter summary, then derive conservatively.
+                copy = max(self.funcs, default=0) + 1
+                fi = dict(self.funcs[getter])
+                fi.update(tok=self.tok("func", copy), this=self.node(), ret=self.node(), args=self.node())
+                self.funcs[copy] = fi
+                self.forin_getters[getter, value] = copy
+            fi = self.funcs[copy]
+            self.edge(value, fi["ret"])
+            value = self.node()
+            self.add(value, [fi["tok"]])
+        atom = self.atom(STAR) if key == "*" else key
+        self.addcons(value, ("accessor", dst, atom, 0))
+        proto = self.tok("objectproto", "-")
+        self.addcons(self.field(proto, self.atom("set")), ("accessor", dst, atom, 1))
+        self.addcons(dst, ("store", key, self.field(proto, self.atom("value")), site))
 
     def pnode(self, t):
         if t in self.protonode:
@@ -322,6 +419,34 @@ class Solver:
         elif op == "callthis":
             for t in toks:
                 self.call_tok(c[1], t, c[2])
+        elif op == "forinread":
+            for src in toks:
+                self.forin_read(src, c[1], c[2])
+            if prim:
+                self.prim_load(prim, c[1], c[2])
+        elif op == "forinkey":
+            if toks or prim:
+                self.forin_key_ready(c[1], c[2])
+        elif op == "forin":
+            _, dst, site, accessor, getter = c
+            for t in toks:
+                self.forin_holder(t, t, dst, site, accessor, getter)
+                if t != TOP and t not in self.escaped:
+                    self.addcons(self.cp(t), ("forinproto", t, dst, site, accessor, getter))
+            if prim & STR:
+                value = self.node()
+                self.add(value, [], STR)
+                self.forin_install(dst, "*", value, site, accessor, getter)
+        elif op == "forinproto":
+            _, origin, dst, site, accessor, getter = c
+            for t in toks:
+                self.forin_holder(t, origin, dst, site, accessor, getter)
+        elif op == "forinany":
+            _, dst, site, accessor, getter = c
+            work = ("any", n, dst, site, accessor, getter)
+            if (toks or prim) and work not in self.forin_done:
+                self.forin_done.add(work)
+                self.forin_install(dst, "*", n, site, accessor, getter)
         elif op == "new":
             for t in toks:
                 self.construct(c[1], t)
@@ -387,7 +512,8 @@ class Solver:
         elif op == "accinstall":
             _, key, f, setter = c
             for t in toks:
-                if t == TOP:
+                if t == TOP or t in self.escaped:
+                    self.escape(self.funcs[f]["tok"])
                     continue
                 if self.toks[t][0] == "objectproto":
                     self.objproto_accessor = True
@@ -405,6 +531,8 @@ class Solver:
                 lst.append(f)
                 if key not in self.acc_keys[t]:
                     self.acc_keys[t].append(key)
+                self.resume_forin_reads(t)
+                self.forin_key(t, key)
                 for (origin, k2, act) in list(self.visits[t]):
                     self.accessor_hit(origin, t, k2, act)
         elif op == "protofrom":
@@ -692,7 +820,17 @@ class Solver:
                 self.add(s, [th[1]])
             self.add(c["ret"], [TOP], ALL)
         elif kind == "func":
-            fi = self.funcs[arg]
+            selected = self.contexts.get((call, arg), arg)
+            original = self.funcs[arg]
+            if selected != arg and not original["lexical"]:
+                if this_tok is not None:
+                    self.add(original["this"], [this_tok])
+                else:
+                    th = c["this"]
+                    if th[0] == "t": self.add(original["this"], [th[1]])
+                    elif th[0] == "n": self.edge(th[1], original["this"])
+                    else: self.add(original["this"], [], UNDEF)
+            fi = self.funcs[selected]
             for i, a in enumerate(c["args"]):
                 if i < len(fi["params"]):
                     self.edge(a, fi["params"][i])
@@ -888,6 +1026,7 @@ class Solver:
         if code == "E6" and self.toks[t][0] == "objectproto":
             return
         self.hard[t] = code
+        self.resume_forin_reads(t)
         if self.toks[t][0] == "proto":
             self.resume(t)
         self.add(self.fany(t), [], ALL)
@@ -962,7 +1101,7 @@ def load(path):
                     kv = dict(x.split("=", 1) for x in p[5:] if "=" in x)
                     ints = lambda v: [] if v == "-" else [int(x) for x in v.split(",")]
                     opt = lambda v: None if v == "-" else int(v)
-                    d = dict(kind=kind, birth=ints(kv["birth"]), definite=ints(kv["definite"]),
+                    d = dict(kind=kind, literal=kv.get("literal", "0") == "1", birth=ints(kv["birth"]), definite=ints(kv["definite"]),
                              parent=opt(kv["parent"]), ctor=opt(kv["ctor"]),
                              native=None if kv["native"] == "-" else kv["native"],
                              acc=ints(kv["acc"]), computed=int(kv["computed"]),
@@ -986,6 +1125,9 @@ def load(path):
                     kv = dict(x.split("=", 1) for x in p[3:])
                     ints = lambda v: [] if v == "-" else [int(x) for x in v.split(",")]
                     s.fn_birth[int(p[2])] = (ints(kv["birth"]), ints(kv["definite"]))
+                elif what == "context":
+                    call, orig, copy = map(int, p[2:5])
+                    s.contexts[call, orig] = copy
                 elif what == "call":
                     c = int(p[2])
                     kv = dict(x.split("=", 1) for x in p[3:])
@@ -1028,8 +1170,20 @@ def run(s, rel_lines):
             s.named_fieldany[int(p[3])] = int(p[2])
         elif rel == "allfields":
             s.named_allfields[int(p[3])] = int(p[2])
+        elif rel == "forinvalue":
+            n, src, key, getter = int(p[2]), int(p[3]), key_of(s, p[4]), int(p[5])
+            s.named_forin_values[src, key, getter] = n
+        elif rel == "foringettersource":
+            s.forin_sources[int(p[2])] = int(p[3])
+        elif rel == "foringetter":
+            s.forin_getters[int(p[2]), int(p[3])] = int(p[4])
         elif rel == "protonode":
             s.named_protonode[int(p[3])] = int(p[2])
+    # Field declarations are input relations too. A field first read by
+    # the compiler before its holder escaped remains in the facts even
+    # when this solver reaches the escaped summary before that read.
+    for t, a in list(s.named_field):
+        s.field(t, a)
     deferred = []
     for line in rel_lines:
         p = line.split(" ")
@@ -1041,6 +1195,21 @@ def run(s, rel_lines):
             s.add(int(a[0]), [], int(a[1]))
         elif rel == "copy":
             s.edge(int(a[0]), int(a[1]))
+        elif rel == "forinread":
+            deferred.append((int(a[0]), (rel, key_of(s, a[1]), int(a[2]))))
+        elif rel == "forinkey":
+            deferred.append((int(a[0]), (rel, int(a[1]), key_of(s, a[2]))))
+        elif rel in ("forin", "forinproto", "forinany"):
+            deferred.append((int(a[0]), (rel,) + tuple(map(int, a[1:]))))
+        elif rel == "contextmerge":
+            orig, copy = s.funcs[int(a[0])], s.funcs[int(a[1])]
+            for src, dst in zip(copy["params"], orig["params"]):
+                s.edge(src, dst)
+            s.edge(copy["this"], orig["this"])
+            s.edge(copy["args"], orig["args"])
+            if copy["rest"] is not None and orig["rest"] is not None:
+                s.edge(copy["rest"], orig["rest"])
+            s.edge(orig["ret"], copy["ret"])
         elif rel == "load":
             deferred.append((int(a[0]), ("load", key_of(s, a[1]), int(a[2]))))
         elif rel == "store":
