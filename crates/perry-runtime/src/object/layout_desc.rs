@@ -618,13 +618,58 @@ fn declared_kind(code: u8) -> Option<super::shapes::ShapeObjectKind> {
 /// a key that is not an atom). The key sequence is the enumeration order;
 /// each key's slot is its storage.
 pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) -> u32 {
+    register_one_bound(desc, requested, &[])
+}
+
+/// The module-local symbol keys (`ATOM_KIND_BINDING_SYMBOL`) of a
+/// descriptor's key sequence.
+unsafe fn binding_symbol_keys(d: &PerryLayoutDesc) -> usize {
+    if d.key_count == 0 {
+        return 0;
+    }
+    std::slice::from_raw_parts(d.keys, d.key_count as usize)
+        .iter()
+        .filter(|k| (*k.atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL)
+        .count()
+}
+
+/// The key word of key `key` of a descriptor: a string's, a symbol atom's
+/// symbol, or for the `j`-th module-local symbol key, `bound[j]` (`j` counts
+/// those keys before it, `next` the running count).
+unsafe fn layout_key_word(key: &PerryLayoutKey, bound: &[u64], next: &mut usize) -> u64 {
+    if (*key.atom).kind == crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL {
+        let word = bound[*next];
+        *next += 1;
+        return word;
+    }
+    match atom_symbol(key.atom) {
+        // The key word a symbol data property stores.
+        Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
+        None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),
+    }
+}
+
+/// [`register_one`] for a descriptor with module-local symbol keys: `bound`
+/// holds their key words, in key order. Without them (startup) the id is
+/// only reserved: the word names it, but no shape is installed until the
+/// prototype's bind hands the symbols (`perry_bind_family_prototype`), so no
+/// object carries the id before then.
+pub(crate) unsafe fn register_one_bound(
+    desc: *const PerryLayoutDesc,
+    requested: u32,
+    bound: &[u64],
+) -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     let word = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).layout_id).cast_mut());
     let existing = registered_layout_id(word.load(Ordering::Acquire));
+    let local = binding_symbol_keys(&*desc);
     if let Some(id) = existing {
-        if super::shapes::shape_descriptor_by_id(id).is_some() {
+        if (local != 0 && bound.is_empty()) || super::shapes::shape_descriptor_by_id(id).is_some() {
             return id;
         }
+    }
+    if local != 0 && !bound.is_empty() && bound.len() != local {
+        return 0;
     }
     let d = &*desc;
     let Some(kind) = declared_kind(d.kind) else {
@@ -675,6 +720,9 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
                 if super::runtime_layouts::runtime_symbol_of_atom(key.atom).is_some() => {}
             // A registered symbol (`Symbol.for(desc)`) the program names.
             crate::codegen_abi::ATOM_KIND_REGISTERED_SYMBOL if !(*key.atom).string.is_null() => {}
+            // A module-local symbol: a prototype image's, bound at its bind.
+            crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL
+                if d.variant == PROTOTYPE_IMAGE_VARIANT => {}
             _ => return 0,
         }
     }
@@ -688,6 +736,24 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         fam if fam >= LAYOUT_PROTO_TAG_END => proto_family_serial(d.proto),
         _ => return 0,
     };
+    if local != 0 && bound.is_empty() {
+        // Reserve the id the registration would take; the bind installs it.
+        let proposed = if proto_id == super::shapes::PROTO_ID_DEFAULT {
+            requested
+        } else {
+            super::shapes::allocate_declared_layout_id(proto_id)
+        };
+        return match word.compare_exchange(
+            LAYOUT_ID_CARRIED,
+            proposed,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => proposed,
+            Err(other) => registered_layout_id(other)
+                .expect("a carried layout word holds the sentinel or a ShapeId"),
+        };
+    }
     let key_count = keys.len() as u32;
     let slot_count = d.slot_count;
     let rep = d.rep;
@@ -705,13 +771,10 @@ pub(crate) unsafe fn register_one(desc: *const PerryLayoutDesc, requested: u32) 
         );
         let values = crate::array::array_elements_ptr(list);
         let attributes = super::key_attrs::keys_attrs(list);
+        let mut next = 0;
         for (i, key) in keys.iter().enumerate() {
-            // GC_STORE_AUDIT(INIT): unpublished startup list, under suppression.
-            *values.add(i) = match atom_symbol(key.atom) {
-                // The key word a symbol data property stores.
-                Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
-                None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),
-            };
+            // GC_STORE_AUDIT(INIT): unpublished list, under suppression.
+            *values.add(i) = layout_key_word(key, bound, &mut next);
             if !attributes.is_null() {
                 super::key_attrs::attrs_write(attributes, i as u32, key.attrs, &*key.atom);
                 if mapped {
@@ -1055,18 +1118,33 @@ pub unsafe extern "C" fn perry_layout_index_probe(
 /// else (a spread source that changed, a key the compiler did not predict)
 /// leaves `P` as built, on a word no proof names.
 ///
+/// `symbols` holds the values of the module-local symbol bindings the
+/// image's `ATOM_KIND_BINDING_SYMBOL` keys name, `count` of them in key
+/// order: the image's layout registers here, with those symbols as its keys
+/// (its id was reserved at startup).
+///
 /// # Safety
 /// `fam` is a `PerryProtoFamily` of this program; `image` null or one of its
-/// descriptors.
+/// descriptors; `symbols` points at `count` values.
 #[no_mangle]
 pub unsafe extern "C" fn perry_bind_family_prototype(
     fam: *const PerryProtoFamily,
     proto: f64,
     image: *const PerryLayoutDesc,
+    symbols: *const f64,
+    count: u32,
 ) -> f64 {
     let serial = proto_family_serial_registered(fam);
+    let bound: Vec<u64> = if count == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(symbols, count as usize)
+            .iter()
+            .map(|v| v.to_bits())
+            .collect()
+    };
     let proto = match image.as_ref() {
-        Some(d) if serial != 0 => prototype_image(d, proto, serial).unwrap_or(proto),
+        Some(d) if serial != 0 => prototype_image(d, proto, serial, &bound).unwrap_or(proto),
         _ => proto,
     };
     let bits = proto.to_bits();
@@ -1098,11 +1176,27 @@ pub unsafe extern "C" fn perry_bind_family_prototype(
 /// object's word carries no shadow bit: every key on it is one the compiler
 /// named, with the value the initializer stored. `None` leaves `P` as built.
 ///
+/// `bound` holds the key words of `d`'s module-local symbol keys; each must
+/// be a symbol, and `d` registers with them.
+///
 /// # Safety
 /// `d` is a descriptor of this program.
-unsafe fn prototype_image(d: &PerryLayoutDesc, built: f64, serial: u64) -> Option<f64> {
+unsafe fn prototype_image(
+    d: &PerryLayoutDesc,
+    built: f64,
+    serial: u64,
+    bound: &[u64],
+) -> Option<f64> {
     let id = registered_layout_id(d.layout_id)?;
-    if !image_matches(d, built) {
+    if bound.len() != binding_symbol_keys(d)
+        || !bound
+            .iter()
+            .all(|&w| crate::symbol::js_is_symbol(f64::from_bits(w)) != 0)
+        || !image_matches(d, built, bound)
+    {
+        return None;
+    }
+    if !bound.is_empty() && register_one_bound(d, id, bound) != id {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1162,7 +1256,7 @@ const _: () = {
 };
 
 /// Are `built`'s own properties and [[Prototype]] exactly `d`'s?
-unsafe fn image_matches(d: &PerryLayoutDesc, built: f64) -> bool {
+unsafe fn image_matches(d: &PerryLayoutDesc, built: f64, bound: &[u64]) -> bool {
     let bits = built.to_bits();
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         return false;
@@ -1197,15 +1291,10 @@ unsafe fn image_matches(d: &PerryLayoutDesc, built: f64) -> bool {
         return false;
     }
     const FACTS: u8 = super::key_attrs::ENTRY_ATTR_MASK | super::key_attrs::ENTRY_ACCESSOR_MASK;
-    let words = crate::array::array_elements_ptr(keys.arr());
-    for (pos, key) in std::slice::from_raw_parts(d.keys, d.key_count as usize)
-        .iter()
-        .enumerate()
-    {
-        let want = match atom_symbol(key.atom) {
-            Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
-            None => crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits(),
-        };
+    let mut next = 0;
+    for (pos, key) in (0..d.key_count as usize).map(|i| (i, &*d.keys.add(i))) {
+        let words = crate::array::array_elements_ptr(keys.arr());
+        let want = layout_key_word(key, bound, &mut next);
         if *words.add(pos) != want
             || super::key_attrs::keys_entry(keys.arr(), pos as u32) & FACTS != key.attrs & FACTS
         {
@@ -1374,6 +1463,8 @@ static KEEP_PERRY_BIND_FAMILY_PROTOTYPE: unsafe extern "C" fn(
     *const PerryProtoFamily,
     f64,
     *const PerryLayoutDesc,
+    *const f64,
+    u32,
 ) -> f64 = perry_bind_family_prototype;
 // ---------------------------------------------------------------------------
 // Case 2c (OBJECT_MODEL_2026-10-13.md §3.7): static class families.
@@ -2096,7 +2187,11 @@ unsafe fn desc_position_by_bytes(d: &PerryLayoutDesc, bytes: &[u8]) -> Option<u3
 
 /// [`desc_position_by_bytes`] for `bytes` whose hash is `hash`.
 #[inline]
-pub(crate) unsafe fn desc_position_hashed(d: &PerryLayoutDesc, bytes: &[u8], hash: u64) -> Option<u32> {
+pub(crate) unsafe fn desc_position_hashed(
+    d: &PerryLayoutDesc,
+    bytes: &[u8],
+    hash: u64,
+) -> Option<u32> {
     if d.index.is_null() || d.keys.is_null() {
         return None;
     }

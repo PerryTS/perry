@@ -253,13 +253,38 @@ fn atom(
 /// The static atom global of a symbol key of a carried prototype layout
 /// (emitting it once per module) and its index hash: a well-known symbol
 /// (`ATOM_KIND_WELL_KNOWN_SYMBOL`, its number) or a registered one
-/// (`ATOM_KIND_REGISTERED_SYMBOL`, its registry key as an image string).
+/// (`ATOM_KIND_REGISTERED_SYMBOL`, its registry key as an image string), or
+/// a module-local one (`ATOM_KIND_BINDING_SYMBOL`, this module's own record:
+/// the prototype's bind hands its symbol).
 fn symbol_atom(
     llmod: &mut LlModule,
     strings: &mut StringPool,
     emitted: &mut BTreeMap<String, String>,
+    module_prefix: &str,
     key: &create_families::ImageKey,
 ) -> (String, u64) {
+    if let create_families::ImageKey::Local(binding) = key {
+        let spelling = format!("@@local:{module_prefix}:{binding}");
+        let hash = fnv1a(spelling.as_bytes());
+        let spelling = format!("\u{1}{spelling}");
+        if let Some(name) = emitted.get(&spelling) {
+            return (name.clone(), hash);
+        }
+        let name = format!("perry_atom_local_{module_prefix}_{binding}");
+        let sect = section(
+            &llmod.target_triple,
+            "perry_atoms",
+            "__DATA,__perry_atoms",
+            ".perryatm$m",
+        );
+        llmod.add_raw_global(format!(
+            "@{name} = internal global {ATOM_TY} {{ i64 {}, ptr null, i8 {}, [3 x i8] zeroinitializer, i32 0 }}, section \"{sect}\", align 8",
+            hash as i64,
+            crate::runtime_abi::ATOM_KIND_BINDING_SYMBOL,
+        ));
+        emitted.insert(spelling, name.clone());
+        return (name, hash);
+    }
     let (spelling, kind, image, index) = match key {
         create_families::ImageKey::WellKnown(i) => (
             format!("@@wk:{i}"),
@@ -278,6 +303,7 @@ fn symbol_atom(
             )
         }
         create_families::ImageKey::Str(k) => unreachable!("string key {k} is not a symbol atom"),
+        create_families::ImageKey::Local(_) => unreachable!("handled above"),
     };
     let hash = fnv1a(spelling.as_bytes());
     // Not a string key's spelling: string atoms share `emitted`.
@@ -758,7 +784,7 @@ pub(crate) fn emit_module_layouts(
                         .expect("an image key is an atom (`create_families::layout_key`)"),
                     fnv1a(k.as_bytes()),
                 ),
-                key => symbol_atom(llmod, strings, &mut atoms, key),
+                key => symbol_atom(llmod, strings, &mut atoms, module_prefix, key),
             };
             keys.push((name, hash, e.attrs));
         }

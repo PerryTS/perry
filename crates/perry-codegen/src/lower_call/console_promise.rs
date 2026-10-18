@@ -1458,6 +1458,11 @@ pub fn try_lower_native_method_str_dispatch(
             return with_operands_rooted(ctx, &operand_exprs, |ctx, rereads| {
                 let recv_box = rereads[0].clone();
                 let lowered_args: Vec<String> = rereads[1..].to_vec();
+                // §3.6: the method of a create family's object through its
+                // chain's carried layouts (taken by the method site).
+                let holder =
+                    crate::layout_desc::create_families::holder_read(ctx, object, property);
+                let saved = std::mem::replace(&mut ctx.create_families.method_holder, holder);
                 let result = emit_native_method_str_dispatch_lanes(
                     ctx,
                     property,
@@ -1466,6 +1471,7 @@ pub fn try_lower_native_method_str_dispatch(
                     &lowered_args,
                     &lanes,
                 );
+                ctx.create_families.method_holder = saved;
                 // The group is released AFTER the dispatch, not before: the
                 // dispatcher allocates while it reads these values. That is the
                 // combinator's own contract now, not a line a future edit can move.

@@ -150,6 +150,13 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return read;
                 }
+                // §3.6: an inherited read on an `Object.create(P)` family's
+                // object through its chain's carried layouts.
+                if let Some(read) = crate::layout_desc::create_families::lower_holder_read(
+                    ctx, object, property, expr,
+                ) {
+                    return read;
+                }
                 super::property_get::lower(ctx, expr)
             }
         },

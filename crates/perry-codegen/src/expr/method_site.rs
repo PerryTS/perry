@@ -300,9 +300,17 @@ pub(crate) fn emit_method_site(
     let compared: Vec<&crate::codegen::static_constfn::StaticMethodLane> =
         lanes.iter().filter(|lane| lane.own).collect();
     let lanes_idx = (!compared.is_empty()).then(|| ctx.new_block("msite.static"));
-    let first_l = match lanes_idx {
+    let lanes_l = match lanes_idx {
         Some(idx) => ctx.block_label(idx),
         None => probe_l.clone(),
+    };
+    // A create family's object: the method through its chain's carried
+    // layouts (`create_families::HolderRead`), else the lanes and the probe.
+    let holder = ctx.create_families.method_holder.take();
+    let holder_idx = holder.as_ref().map(|_| ctx.new_block("msite.holder"));
+    let first_l = match holder_idx {
+        Some(idx) => ctx.block_label(idx),
+        None => lanes_l.clone(),
     };
     // A primitive, a native handle: the slow call. So is a heap receiver
     // other than an ordinary object (an array, a function, a collection)
@@ -379,6 +387,21 @@ pub(crate) fn emit_method_site(
                 ctx.current_block = n;
             }
         }
+    }
+    if let (Some(idx), Some(read)) = (holder_idx, holder.as_ref()) {
+        ctx.current_block = idx;
+        let value =
+            crate::layout_desc::create_families::emit_holder_load(ctx, read, &biased, &lanes_l);
+        emit_function_value_call(
+            ctx,
+            &value,
+            recv_box,
+            lowered_args,
+            lanes,
+            &slow_l,
+            &merge_l,
+            &mut results,
+        );
     }
     // Static ConstFn lanes: the receiver's completed shape names the body, so
     // the hit is a direct call. The slot value is the callee environment only

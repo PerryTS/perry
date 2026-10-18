@@ -61,6 +61,13 @@ pub const ATOM_KIND_PROGRAM_SYMBOL: u8 = 2;
 /// its registry key, `hash` the compiler's hash of it (a key index position
 /// only: the runtime resolves the symbol through the registry).
 pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
+/// `StaticAtom.kind`: a module-local symbol (a top-level `const k =
+/// Symbol(desc)` of the program) as a key of a carried prototype layout;
+/// `string` is null, `hash` the compiler's hash of the binding (a key index
+/// position only). The symbol exists only once its binding is initialized:
+/// the prototype's bind (`perry_bind_family_prototype`) hands the layout's
+/// such keys in key order, and the layout registers there.
+pub const ATOM_KIND_BINDING_SYMBOL: u8 = 4;
 /// `PerryLayoutDesc.variant` of a carried prototype layout (object model
 /// §3.6): a marked prototype's, registered under its own semantic generation.
 pub const LAYOUT_VARIANT_PROTOTYPE_IMAGE: u16 = 1;
