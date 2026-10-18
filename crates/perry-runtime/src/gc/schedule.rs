@@ -1014,6 +1014,7 @@ mod verdict_tests {
     /// control arm), so `schedule_liveness_report` must return `None` rather
     /// than an `Err` that would turn every sparse sweep seed into a false
     /// failure.
+    #[cfg(perry_gc_instruments)]
     #[test]
     fn sub_endpoint_rates_get_no_verdict() {
         let _g = ScheduleGuard::set(7, rate_threshold(0.05));

@@ -64,7 +64,13 @@ unsafe fn raw_bag(birth: Birth) -> *mut ObjectHeader {
         Birth::BornTenured => {
             crate::arena::arena_alloc_gc_old_born_tenured(total, 8, GC_TYPE_OBJECT)
         }
-        Birth::Old => crate::arena::arena_alloc_gc_old(total, 8, GC_TYPE_OBJECT),
+        Birth::Old => {
+            // Model a promoted old object: the raw allocator initializes only
+            // its allocation header; promotion publishes TENURED before stores.
+            let user = crate::arena::arena_alloc_gc_old(total, 8, GC_TYPE_OBJECT);
+            (*header_of(user)).gc_flags |= GC_FLAG_TENURED;
+            user
+        }
         Birth::Malloc => crate::gc::gc_malloc(total, GC_TYPE_OBJECT),
         Birth::Young => unreachable!(),
     } as *mut ObjectHeader;

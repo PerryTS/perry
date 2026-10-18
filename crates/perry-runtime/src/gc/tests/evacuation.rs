@@ -1022,6 +1022,7 @@ fn test_evacuated_old_parent_re_remembers_young_child_canary() {
 /// A resolved seed is what turns forced evacuation on here because
 /// `ScheduleGuard` is thread-local; an `EnvVarGuard` would set a process-global
 /// every other test in this crate shares.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn explicit_gc_under_forced_evacuation_runs_a_moving_minor() {
     // NB: deliberately NOT `copying_nursery_isolation_lock()`. That guard is

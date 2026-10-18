@@ -394,7 +394,7 @@ fn registry() -> crate::gc::NonCollectingRootRegistryGuard<'static, TypedFeedbac
 /// already compile-gated. Now it produces nothing, which is the same amount of
 /// information and looks far more like success. The trace dump uses this to say
 /// so out loud rather than writing an empty file.
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 pub(crate) fn no_sites_were_instrumented() -> bool {
     registry().sites.is_empty()
 }
@@ -1141,7 +1141,7 @@ pub use guards::{
 #[path = "typed_feedback/trace.rs"]
 mod trace;
 pub use trace::typed_feedback_snapshot;
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 pub use trace::{js_typed_feedback_maybe_dump_trace, typed_feedback_trace_json};
 
 fn hash_bytes(bytes: &[u8]) -> u64 {

@@ -54,6 +54,7 @@ extern "C" fn record_two_args(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(perry_gc_instruments)]
 extern "C" fn record_rest_and_arguments_after_16(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -273,6 +274,7 @@ fn element_by_name(source: &RuntimeHandle<'_>, name: &[u8]) -> u64 {
 /// the first, and the bundler passed the callee the address the first array had
 /// before it moved. From-space is poisoned here so a stale read is visible as a
 /// wrong `rest.length` instead of intact bytes that happen to still be there.
+#[cfg(perry_gc_instruments)]
 #[test]
 fn rest_bundling_roots_the_rest_array_across_the_arguments_array() {
     let _guard = CopyingNurseryTestGuard::new(0);

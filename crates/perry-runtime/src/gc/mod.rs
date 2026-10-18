@@ -193,7 +193,12 @@ use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
 // transitive re-exports the gc submodules reach these through.
 use copying_pointer_set::{plausible_gc_header, CopyingPointer, CopyingPointerKind};
-#[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
+#[cfg(any(
+    test,
+    debug_assertions,
+    feature = "field-rep-assert",
+    perry_gc_instruments
+))]
 pub(crate) use forwarding::field_rep_live_address;
 use forwarding::*;
 use sticky_remembered::*;

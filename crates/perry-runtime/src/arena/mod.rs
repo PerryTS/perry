@@ -121,7 +121,7 @@ pub(crate) use allocators::{
 };
 
 // walk.rs
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 pub(crate) use walk::ArenaRegionTelemetry;
 pub use walk::{
     arena_block_count, arena_in_use_bytes, arena_total_bytes, arena_walk_objects,

@@ -372,15 +372,19 @@ fn name_and_length_are_own_data_of_the_function_object() {
             0,
         )
     };
-    extern "C" fn static_name_entry(_closure: i64) -> f64 {
+    extern "C" fn static_name_entry(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         0.0
     }
+    let entry_info = crate::fn_info!(static_name_entry, 0);
     unsafe {
         crate::object::class_registry::parent_static::js_register_class_static_method_entry(
             cid as i64,
             b"name".as_ptr(),
             4,
-            static_name_entry as *const () as usize as i64,
+            entry_info as i64,
         )
     };
     // node: `class Zed { static name() {} }` -> Zed.name is the method, an
@@ -389,7 +393,7 @@ fn name_and_length_are_own_data_of_the_function_object() {
         .expect("a static method named `name` is the class's own `name`");
     assert_eq!(
         unsafe { static_method_code_of(method) },
-        Some(static_name_entry as *const () as usize),
+        Some(entry_info as usize),
         "its value is the method's function object"
     );
     assert_eq!(

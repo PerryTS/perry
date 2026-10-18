@@ -1,4 +1,4 @@
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -226,7 +226,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
     snapshot
 }
 
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 pub fn typed_feedback_trace_json() -> serde_json::Value {
     let snapshot = typed_feedback_snapshot();
     serde_json::json!({
@@ -285,7 +285,7 @@ pub fn typed_feedback_trace_json() -> serde_json::Value {
     })
 }
 
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 fn typed_feedback_trace_path_from_env() -> Option<PathBuf> {
     let value = std::env::var("PERRY_TYPED_FEEDBACK_TRACE").ok()?;
     if value.is_empty() || value == "0" {
@@ -298,7 +298,7 @@ fn typed_feedback_trace_path_from_env() -> Option<PathBuf> {
     }
 }
 
-#[cfg(perry_diagnostics)]
+#[cfg(any(perry_diagnostics, test))]
 fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -317,7 +317,7 @@ fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
 // binaries).
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_maybe_dump_trace() {
-    #[cfg(perry_diagnostics)]
+    #[cfg(any(perry_diagnostics, test))]
     {
         let Some(path) = typed_feedback_trace_path_from_env() else {
             return;

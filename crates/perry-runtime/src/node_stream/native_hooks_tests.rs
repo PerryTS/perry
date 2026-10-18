@@ -1134,6 +1134,8 @@ fn every_stream_sabotage_makes_its_witness_red() {
         ("hooks_first", "node_stream::native_hooks::tests::z11_subclass_transform_override_wins_and_super_runs_the_codec"),
         ("skip_release_autodestroy", "gc::tests::native_payload_streams::z8_churn_releases_every_codec_at_completion_and_drops_every_payload"),
         ("keep_step_closure", "gc::tests::native_payload_streams::z8_churn_releases_every_codec_at_completion_and_drops_every_payload"),
+        // This fault is detected by the from-space poison instrument.
+        #[cfg(perry_gc_instruments)]
         ("hold_slice_across_push", "gc::tests::native_payload_streams::z9_moving_gc_inside_data_keeps_the_output_correct"),
         ("drain_after_teardown", "gc::tests::native_payload_streams::z10_worker_exit_with_a_step_queued_runs_no_step"),
         ("record_trace", "gc::tests::stream_state_record::stream_record_survives_a_moving_collection"),
