@@ -82,9 +82,22 @@ RUN printf '%s\n' \
       install -y --no-install-recommends ca-certificates \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      bash build-essential cmake curl file git libclang-dev musl-tools \
+      bash build-essential cmake curl file git gnupg libclang-dev musl-tools \
       perl pkg-config python3 \
+    && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+      -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
+    && printf '%s\n' \
+      'deb https://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-22 main' \
+      > /etc/apt/sources.list.d/llvm22.list \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      clang-22 \
     && rm -rf /var/lib/apt/lists/*
+
+# perry-runtime's build script compiles its LLVM IR shim (perry_trap.ll) with
+# clang. The Alpine LLVM tree below ships no clang, so name a glibc clang 22
+# from apt.llvm.org, the release glibc image's source.
+ENV PERRY_TRAP_CLANG=/usr/lib/llvm-22/bin/clang
 
 # llvm-config itself is an Alpine/musl executable. Copy its tiny runtime to a
 # private directory so the glibc host can query it without treating target
@@ -113,7 +126,7 @@ RUN set -eu; \
       echo "Debian libclang-dev installed no libclang.so" >&2; \
       exit 1; \
     fi; \
-    host_stdarg="$(find /usr/lib/llvm-* -path '*/lib/clang/*/include/stdarg.h' -print -quit)"; \
+    host_stdarg="$(find "$(dirname "$host_libclang")/clang" -path '*/include/stdarg.h' -print -quit)"; \
     if [ -z "$host_stdarg" ]; then \
       echo "Debian libclang-dev installed no Clang resource headers" >&2; \
       exit 1; \
@@ -127,5 +140,6 @@ RUN set -eu; \
     test -s "$LLVM_SYS_221_PREFIX/lib/libLLVMCore.a"; \
     test -s /opt/perry-musl/lib/libstdc++.a; \
     test -x /usr/bin/musl-gcc; \
+    "$PERRY_TRAP_CLANG" --version | grep -q 'clang version 22\.'; \
     echo "glibc host libclang: $host_libclang"; \
     echo "musl target LLVM: $LLVM_SYS_221_PREFIX"

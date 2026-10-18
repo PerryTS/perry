@@ -1616,6 +1616,9 @@ jobs:
             echo "CC_${TRIPLE_UNDER}=$CLANG"
             echo "CXX_${TRIPLE_UNDER}=$CLANGXX"
             echo "AR_${TRIPLE_UNDER}=$TOOLCHAIN/llvm-ar"
+            # NDK r23+ ships no <triple>-ranlib, the default cc-rs hands the
+            # vendored OpenSSL's `make install`.
+            echo "RANLIB_${TRIPLE_UNDER}=$TOOLCHAIN/llvm-ranlib"
             echo "CARGO_TARGET_${TRIPLE_UPPER}_LINKER=$CLANG"
             # cc-rs adds `--target=<triple>` (no API level) to every C flag
             # list. Under mbx, CMake gets mbx's compiler shim, not the NDK
@@ -1639,9 +1642,22 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
             # The vendored OpenSSL's Configure needs Locale::Maketext::Simple,
-            # which Git Bash's msys perl lacks; use the Windows perl that the
-            # pwsh steps (the build job's runtime build) resolve.
-            OPENSSL_SRC_PERL=$(pwsh -NoProfile -Command '(Get-Command perl).Source' | tr -d '\r')
+            # which Git Bash's msys perl lacks, and Git's perl comes first on
+            # this shell's PATH (pwsh inherits it). Take the first perl on
+            # PATH, then Strawberry's, that loads the module.
+            OPENSSL_SRC_PERL=
+            while IFS= read -r perl_exe; do
+              perl_exe=${perl_exe%$'\r'}
+              [ -n "$perl_exe" ] || continue
+              if "$(cygpath -u "$perl_exe")" -MLocale::Maketext::Simple -e1 2>/dev/null; then
+                OPENSSL_SRC_PERL=$perl_exe
+                break
+              fi
+            done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+            if [ -z "$OPENSSL_SRC_PERL" ]; then
+              echo "::error::no Windows perl with Locale::Maketext::Simple for the vendored OpenSSL Configure"
+              exit 1
+            fi
             export OPENSSL_SRC_PERL
             echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
           fi
