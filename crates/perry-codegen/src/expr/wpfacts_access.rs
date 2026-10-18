@@ -26,8 +26,9 @@
 //! interpreted code at all (`ElisionFacts::interp_guard`). A guarded read
 //! tests what the proof needs at the site (the runtime's
 //! `PERRY_INTERP_PROTO_WRITTEN` word; the receiver test; the class id
-//! against the set; the receiver's layout word) and its miss arm is the site's complete generic
-//! operation, lowered without the facts; it rejoins the hit arm. Guarded
+//! against the set; the receiver's layout word) and its miss arm is the
+//! site's complete generic operation, lowered without the facts; it rejoins
+//! the hit arm. Guarded
 //! proofs serve reads only; stores, updates, number-context raw reads and
 //! the F6 element proof stay on their checked routes.
 //!
