@@ -95,6 +95,19 @@ impl SH for Expr {
             Expr::ClassMethodHome { class_name, is_static } => { tag(h, 12513); class_name.hash(h); is_static.hash(h); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }
+            Expr::EnumImage { class_name, stores, strict } => {
+                tag(h, 12514);
+                class_name.hash(h);
+                strict.hash(h);
+                stores.len().hash(h);
+                for (key, value) in stores {
+                    key.hash(h);
+                    match value {
+                        crate::ir::EnumValue::Number(n) => { 0u8.hash(h); n.hash(h); }
+                        crate::ir::EnumValue::String(s) => { 1u8.hash(h); s.hash(h); }
+                    }
+                }
+            }
             Expr::StaticFieldGet { class_name, field_name, } => { tag(h, 46); class_name.hash(h); field_name.hash(h); }
             Expr::StaticFieldSet { class_name, field_name, value, } => { tag(h, 47); class_name.hash(h); field_name.hash(h); value.as_ref().hash(h); }
             Expr::ClassStaticSymbolSet { class_name, key, value, } => { tag(h, 48); class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }

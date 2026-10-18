@@ -165,6 +165,75 @@ pub extern "C" fn js_value_from_literal_descriptor_closures(
     materialize(bytes, len, shapes, shape_count, births, sources)
 }
 
+/// A fresh enum object (an enum IIFE over `E || {}`, codegen
+/// `literal_descriptor::lower_enum_image`). The IIFE's stores are ordinary
+/// `[[Set]]`s on a new `{}`; while `%Object.prototype%` is pristine none of
+/// them can reach an accessor or a read-only key (the compiler refused
+/// `__proto__`), so their result is exactly the object the descriptor
+/// births: the stores' keys in first-store order, each with its last value.
+/// Otherwise (or with no shape) the stores run as written on a new object,
+/// in source order and in the IIFE's mode (`strict`), so a program's
+/// accessor sees each of them and a failed store throws where it would.
+#[no_mangle]
+pub extern "C" fn js_enum_from_literal_descriptor(
+    bytes: *const u8,
+    len: u32,
+    shapes: *const LiteralShape,
+    shape_count: u32,
+    stores: *const u8,
+    stores_len: u32,
+    strict: i32,
+) -> f64 {
+    if shape_count != 0
+        && crate::object::builtin_proto::pristine(
+            crate::object::builtin_proto::BuiltinProto::Object,
+        )
+    {
+        let image = js_value_from_literal_descriptor(bytes, len, shapes, shape_count);
+        if image.to_bits() != JSValue::undefined().bits() {
+            return image;
+        }
+    }
+    replay_enum_stores(stores, stores_len, strict)
+}
+
+/// The enum IIFE's stores on a new `{}`, in source order. Each value and
+/// key is built before its store, which may run program code (an accessor
+/// on `%Object.prototype%`) and collect.
+fn replay_enum_stores(stores: *const u8, stores_len: u32, strict: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(0));
+    if stores.is_null() || stores_len == 0 {
+        return crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<u8>() as i64);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(stores, stores_len as usize) };
+    let mut reader = Reader {
+        bytes,
+        shapes: &[],
+        births: &[],
+        sources: unsafe {
+            crate::closure::births::BirthSources::from_raw(std::ptr::null(), 0, std::ptr::null(), 0)
+        },
+        pos: 0,
+    };
+    let count = reader.u32().unwrap_or(0);
+    for _ in 0..count {
+        let Some(key_len) = reader.u32() else { break };
+        let Some(key) = reader.take(key_len as usize) else {
+            break;
+        };
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(key.as_ptr(), key_len));
+        let Some(value) = reader.value(0) else { break };
+        let value = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+        // The `P[k] = v` of the IIFE: PutValue with `P` as the receiver.
+        let target = crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<u8>() as i64);
+        let key =
+            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64);
+        crate::proxy::js_put_value_set(target, key, value.get_nanbox_f64(), target, strict);
+    }
+    crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<u8>() as i64)
+}
+
 fn materialize(
     bytes: *const u8,
     len: u32,

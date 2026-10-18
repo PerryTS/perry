@@ -737,6 +737,35 @@ impl<'a> Gen<'a> {
                 }
                 obj
             }
+            // A fresh enum object: a literal of its stores' keys, each
+            // holding the numbers and strings stored there.
+            Expr::EnumImage { stores, .. } => {
+                let mut seen = std::collections::HashSet::new();
+                let keys: Vec<&str> = stores
+                    .iter()
+                    .map(|(k, _)| k.as_str())
+                    .filter(|k| seen.insert(*k))
+                    .collect();
+                let (tm, t) = self.new_lit(mi, &keys);
+                let obj = self.tok_node(t);
+                for (k, v) in stores {
+                    let vn = self.prim_node(match v {
+                        perry_hir::EnumValue::Number(_) => prim::NUM,
+                        perry_hir::EnumValue::String(_) => prim::STR,
+                    });
+                    let a = self.m.atom(k);
+                    self.store(
+                        fx,
+                        obj,
+                        Key::Named(a),
+                        vn,
+                        format!("enum.{k}"),
+                        Some(tm),
+                        true,
+                    );
+                }
+                obj
+            }
             Expr::ObjectSpread { parts } => {
                 let named: Vec<&str> = parts.iter().filter_map(|(k, _)| k.as_deref()).collect();
                 let has_spread = parts.iter().any(|(k, _)| k.is_none());

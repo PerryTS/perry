@@ -58,6 +58,12 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I32, PTR, I32, PTR, I32, PTR, I32, PTR, I32],
     );
+    // A fresh enum object: its layout image, and its stores for the replay.
+    module.declare_function(
+        "js_enum_from_literal_descriptor",
+        DOUBLE,
+        &[PTR, I32, PTR, I32, PTR, I32, I32],
+    );
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
     module.declare_function(
         "js_array_append_set",

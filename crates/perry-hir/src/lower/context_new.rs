@@ -204,6 +204,7 @@ impl LoweringContext {
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
             run_once_class_spans: HashSet::new(),
+            enum_image_sites: HashMap::new(),
             class_env_classes: HashSet::new(),
             class_env_guarded: HashSet::new(),
             pending_fresh_class_expr: false,

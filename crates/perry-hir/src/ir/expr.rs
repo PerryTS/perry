@@ -445,6 +445,18 @@ pub enum Expr {
         member_name: String,
     },
 
+    /// A fresh enum object written as tsc's / esbuild's IIFE
+    /// (`lower::enum_image`): `stores` are the IIFE's constant stores in
+    /// source order; `class_name` is the literal shape of the keys they leave,
+    /// in first-store order, so codegen births the object from that layout
+    /// with each key's last value. `strict`: the IIFE's code is strict (a
+    /// replayed store that fails throws).
+    EnumImage {
+        class_name: String,
+        stores: Vec<(String, crate::ir::EnumValue)>,
+        strict: bool,
+    },
+
     // Static field access (e.g., Counter.count)
     StaticFieldGet {
         class_name: String,

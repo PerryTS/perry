@@ -78,6 +78,7 @@ mod pre_scan;
 pub(crate) use pre_scan::*;
 mod closure_analysis;
 mod const_fold_fn;
+mod enum_image;
 mod eval_super_scan;
 pub(crate) mod fn_ctor_env;
 mod global_eval_hoist;

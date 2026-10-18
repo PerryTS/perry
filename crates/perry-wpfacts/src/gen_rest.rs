@@ -1566,6 +1566,7 @@ impl<'a> Gen<'a> {
             | Expr::NewTarget
             | Expr::ClassRef(..)
             | Expr::EnumMember { .. }
+            | Expr::EnumImage { .. }
             | Expr::StaticFieldGet { .. }
             | Expr::StaticFieldSet { .. }
             | Expr::ClassStaticSymbolSet { .. }

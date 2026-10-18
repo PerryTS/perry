@@ -4251,6 +4251,7 @@ js_value_concat_string	ptr	f64,ptr
 js_value_from_const_descriptor	f64	ptr,i32u
 js_value_from_literal_descriptor	f64	ptr,i32u,ptr,i32u
 js_value_from_literal_descriptor_closures	f64	ptr,i32u,ptr,i32u,ptr,i32u,ptr,i32u,ptr,i32u
+js_enum_from_literal_descriptor	f64	ptr,i32u,ptr,i32u,ptr,i32u,i32
 js_value_is_closure	i32s	i64
 js_value_is_promise	i32s	f64
 js_value_length_f64	f64	f64

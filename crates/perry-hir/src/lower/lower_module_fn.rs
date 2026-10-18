@@ -995,6 +995,9 @@ pub fn lower_module_full_with_platform_globals(
     // environment with the class (`synthesize_class_captures`).
     ctx.run_once_class_spans = super::run_once::run_once_class_spans(ast_module);
 
+    // Enum IIFEs over a fresh object are born from one image.
+    ctx.enum_image_sites = super::enum_image::enum_image_sites(ast_module).sites;
+
     // Pre-scan for WeakRef/FinalizationRegistry variable declarations so subsequent
     // method-call lowering (`x.deref()`, `x.register(...)`, `x.unregister(...)`) can
     // route via the dedicated HIR variants without relying on type inference.

@@ -186,6 +186,14 @@ impl Descriptor {
 }
 
 pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> anyhow::Result<Option<String>> {
+    if let Expr::EnumImage {
+        class_name,
+        stores,
+        strict,
+    } = expr
+    {
+        return lower_enum_image(ctx, class_name, stores, *strict).map(Some);
+    }
     if !matches!(expr, Expr::Array(_) | Expr::New { .. }) {
         return Ok(None);
     }
@@ -265,6 +273,126 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> anyhow::Result<Opti
         .call(DOUBLE, "js_value_from_literal_descriptor_closures", &args);
     words.release(ctx);
     Ok(Some(value))
+}
+
+/// A fresh enum object (`perry_hir::lower::enum_image`): its literal layout
+/// with each key's last value, as a one-shape descriptor, plus the stores
+/// themselves in source order (`u32` count, then per store the key as
+/// `u32` length and bytes and the value as a descriptor node). The runtime
+/// births the object from the layout when `%Object.prototype%` is pristine
+/// and replays the stores (`[[Set]]`, in the IIFE's mode) otherwise. A program whose shape table
+/// cannot be built (ILP32 with workers) sends no shape: always the replay.
+fn lower_enum_image(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    stores: &[(String, perry_hir::EnumValue)],
+    strict: bool,
+) -> anyhow::Result<String> {
+    let value_expr = |value: &perry_hir::EnumValue| match value {
+        perry_hir::EnumValue::Number(n) => Expr::Number(*n as f64),
+        perry_hir::EnumValue::String(s) => Expr::String(s.clone()),
+    };
+    let mut order: Vec<&str> = Vec::new();
+    let mut last: HashMap<&str, &perry_hir::EnumValue> = HashMap::new();
+    for (key, value) in stores {
+        if last.insert(key, value).is_none() {
+            order.push(key);
+        }
+    }
+    let image = Expr::New {
+        class_name: class_name.to_string(),
+        args: order.iter().map(|key| value_expr(last[key])).collect(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    };
+    let mut descriptor = Descriptor::default();
+    let shaped = !(ctx.program_has_worker
+        && crate::target_layout::target_is_ilp32(ctx.target_triple))
+        && descriptor.value(ctx, &image, 0).is_some();
+    if !shaped {
+        descriptor = Descriptor::default();
+    }
+    let mut replay = Descriptor::default();
+    replay
+        .u32(stores.len())
+        .ok_or_else(|| anyhow::anyhow!("enum image: too many stores"))?;
+    for (key, value) in stores {
+        replay
+            .u32(key.len())
+            .ok_or_else(|| anyhow::anyhow!("enum image: key too long"))?;
+        replay.bytes.extend_from_slice(key.as_bytes());
+        replay
+            .value(ctx, &value_expr(value), 0)
+            .ok_or_else(|| anyhow::anyhow!("enum image: value"))?;
+    }
+    let index = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let function: String = ctx
+        .func
+        .name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let name = format!("perry_enumimg_{function}_{index}");
+    fn rodata(ctx: &mut FnCtx<'_>, global: String, bytes: &[u8]) -> String {
+        let mut text = String::with_capacity(bytes.len() * 3);
+        for byte in bytes {
+            use std::fmt::Write;
+            write!(&mut text, "\\{byte:02X}").unwrap();
+        }
+        ctx.typed_parse_rodata.push(format!(
+            "@{global} = private unnamed_addr constant [{} x i8] c\"{text}\"",
+            bytes.len()
+        ));
+        format!("@{global}")
+    }
+    let replay_ref = rodata(ctx, format!("{name}_stores"), &replay.bytes);
+    let replay_len = replay.bytes.len().to_string();
+    let (bytes_ref, len, shapes_ref, count) = if shaped {
+        let bytes_ref = rodata(ctx, name.clone(), &descriptor.bytes);
+        let shapes_ref = if ctx.program_has_worker {
+            frame_shapes(ctx, &descriptor)
+        } else {
+            let records: Vec<String> = descriptor
+                .shapes
+                .iter()
+                .map(ShapeRecord::constant)
+                .collect();
+            ctx.typed_parse_rodata.push(format!(
+                "@{name}_shapes = private constant [{} x {SHAPE_TYPE}] [{}]",
+                records.len(),
+                records.join(", "),
+            ));
+            format!("@{name}_shapes")
+        };
+        (
+            bytes_ref,
+            descriptor.bytes.len().to_string(),
+            shapes_ref,
+            descriptor.shapes.len().to_string(),
+        )
+    } else {
+        (
+            "null".to_string(),
+            "0".to_string(),
+            "null".to_string(),
+            "0".to_string(),
+        )
+    };
+    Ok(ctx.block().call(
+        DOUBLE,
+        "js_enum_from_literal_descriptor",
+        &[
+            (PTR, bytes_ref.as_str()),
+            (I32, len.as_str()),
+            (PTR, shapes_ref.as_str()),
+            (I32, count.as_str()),
+            (PTR, replay_ref.as_str()),
+            (I32, replay_len.as_str()),
+            (I32, if strict { "1" } else { "0" }),
+        ],
+    ))
 }
 
 /// The shape table of a program that starts workers. Each agent then owns its

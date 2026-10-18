@@ -41,6 +41,7 @@ where
         | Expr::This
         | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
+        | Expr::EnumImage { .. }
         | Expr::StaticFieldGet { .. }
         | Expr::ClassEnvGet { .. }
         | Expr::ClassEnvCurrent { .. }

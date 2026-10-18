@@ -1044,6 +1044,9 @@ pub struct LoweringContext {
     /// Spans of the class definitions evaluated at most once
     /// (`lower::run_once`), computed once per module before lowering.
     pub(crate) run_once_class_spans: HashSet<(u32, u32)>,
+    /// Enum IIFEs whose object is fresh (`lower::enum_image`), keyed by the
+    /// call's span, computed once per module before lowering.
+    pub(crate) enum_image_sites: HashMap<(u32, u32), super::enum_image::EnumImagePlan>,
     /// Classes whose captures live in the class environment
     /// (`Expr::ClassEnvGet`/`ClassEnvSet`) rather than on instances.
     pub(crate) class_env_classes: HashSet<String>,
