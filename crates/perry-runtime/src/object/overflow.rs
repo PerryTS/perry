@@ -631,6 +631,10 @@ pub(crate) unsafe fn store_index(obj: *mut ObjectHeader, slot: u32, value: u64) 
 pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
     let hash = super::key_bytes_hash(key.as_ptr(), key.len());
     if table(obj).is_null() {
+        // Class-family births have hole-only placeholders, so an absent
+        // delete preserves their birth proof. Ordinary shapes retain their
+        // existing overflow/order path; this is a typed family operation.
+        let family = super::layout_desc::is_family_layout_word((*obj).parent_class_id);
         // A layout key list may hold a spelling that is not yet its atom (a
         // runtime key added by bytes). The table interns every key it
         // orders, so it is established before the atom is looked up.
@@ -642,11 +646,13 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
                 // Deleting it changes neither membership nor insertion order.
-                if super::key_view::position_is_hole(
-                    obj,
-                    ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
-                    slot,
-                ) {
+                if family
+                    && super::key_view::position_is_hole(
+                        obj,
+                        ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
+                        slot,
+                    )
+                {
                     return true;
                 }
                 // A refused delete changes nothing, so it establishes no
@@ -659,8 +665,8 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                 }
                 super::layout_desc::note_install_cause(super::layout_desc::install_cause::DELETE);
                 ensure(obj);
-            } else {
-                // An absent spelling has no order entry to retire.
+            } else if family {
+                // An absent family spelling has no order entry to retire.
                 return true;
             }
         }

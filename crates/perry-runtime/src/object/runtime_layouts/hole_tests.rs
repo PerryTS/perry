@@ -91,6 +91,31 @@ runtime_layout!(
     [H_A, H_B, H_C, H_D]
 );
 
+// Same key schema, carried by a compiler-owned class family.
+#[used(linker)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
+#[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_layouts"
+)]
+static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
+    family: 0x41574203,
+    variant: 0,
+    kind: 0,
+    integrity: 0,
+    slot_count: HOLEY::SLOT_COUNT as u32,
+    layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+    rep: 0,
+    proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+    keys: HOLEY::KEYS.as_ptr(),
+    key_count: HOLEY::SLOT_COUNT as u32,
+    index_mask: (HOLEY::INDEX.len() - 1) as u32,
+    index: HOLEY::INDEX.as_ptr(),
+    class_id: 60895,
+    parent_class_id: 0,
+};
+
 const TRUE: u64 = crate::value::TAG_TRUE;
 
 unsafe fn string(value: crate::JSValue) -> String {
@@ -437,10 +462,10 @@ fn solid_layout_has_no_hole_bit() {
 /// A constructor may retire allocator placeholders before evaluating super.
 /// Their absence must not create overflow or revoke the birth layout proof.
 #[test]
-fn deleting_absent_layout_keys_preserves_birth_word() {
+fn deleting_absent_class_family_keys_preserves_birth_word() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY));
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(CLASS_HOLEY));
         let word = (*obj).parent_class_id;
         for name in ["holes_a", "awb2_not_a_layout_key"] {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -460,5 +485,21 @@ fn deleting_absent_layout_keys_preserves_birth_word() {
         );
         assert!(crate::object::overflow::has_overflow(obj));
         assert_ne!((*obj).parent_class_id, word);
+    }
+}
+
+#[test]
+fn ordinary_hole_delete_keeps_the_existing_order_representation() {
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY));
+        assert!(!crate::object::layout_desc::is_family_layout_word(
+            (*obj).parent_class_id
+        ));
+        assert_eq!(
+            crate::object::delete_rest::js_object_delete_field(obj, H_A.string),
+            1
+        );
+        assert!(crate::object::overflow::has_overflow(obj));
     }
 }
