@@ -41,6 +41,25 @@ impl Visit for Uses {
         if matches!(c.callee, ast::Callee::Import(_)) {
             self.0 += 1;
         }
+        // A proven non-loader builtin does not expose module records. An
+        // unknown/computed name still visits the process capability below.
+        if let ast::Callee::Expr(callee) = &c.callee {
+            if let ast::Expr::Member(m) = callee.as_ref() {
+                if matches!(m.obj.as_ref(), ast::Expr::Ident(i) if i.sym == *"process")
+                    && name(m).as_deref() == Some("getBuiltinModule")
+                {
+                    if let [arg] = c.args.as_slice() {
+                        if arg.spread.is_none() {
+                            if let ast::Expr::Lit(ast::Lit::Str(source)) = arg.expr.as_ref() {
+                                if !native_capability(source.value.to_string_lossy().as_ref()) {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // The only unescaped require value: an ordinary literal call. Its
         // module result cannot expose the loader except the module/vm APIs.
         if matches!(&c.callee, ast::Callee::Expr(e) if matches!(e.as_ref(), ast::Expr::Ident(i) if i.sym == *"require"))
@@ -134,6 +153,7 @@ mod tests {
     #[test]
     fn closed_calls_and_cache_or_loader_escape_are_distinct() {
         assert_eq!(uses("const {Base} = require('./base'); class C extends Base {} module.exports = C; console.log(process.argv[2]);"), 0);
+        assert_eq!(uses("const fs = require('node:fs'); const path = require('node:path'); process.getBuiltinModule('fs');"), 0);
         for source in [
             "delete require.cache[require.resolve('./child')];",
             "const r = require; r('./child');",
