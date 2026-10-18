@@ -25,7 +25,7 @@ fn namespace_declared_callee_survives_mutation_and_uses_a_spill_guard() {
     options.static_shape_ids = assign_static_shape_ids(births.iter().map(|b| &b.shape))
         .into_iter()
         .collect();
-    let ir = String::from_utf8(compile_module(&module, options).unwrap()).unwrap();
+    let ir = String::from_utf8(compile_module(&module, options.clone()).unwrap()).unwrap();
     for key in ["level", "enabled", "f"] {
         let spelling: String = key.bytes().map(|b| format!("{b:02x}")).collect();
         assert!(
@@ -44,6 +44,24 @@ fn namespace_declared_callee_survives_mutation_and_uses_a_spill_guard() {
         assert!(
             ir.contains(block),
             "missing guarded namespace call stage {block}"
+        );
+    }
+
+    assert!(!ir.contains("call void @js_set_call_location("));
+    assert!(!ir.contains("invoke void @js_set_call_location("));
+    options.debug_locations = true;
+    options.module_source = Some(source.to_string());
+    let debug_ir = String::from_utf8(compile_module(&module, options).unwrap()).unwrap();
+    let generic_blocks: Vec<_> = debug_ir
+        .split("\ncompleted.generic_call.")
+        .skip(1)
+        .collect();
+    assert!(!generic_blocks.is_empty());
+    for block in generic_blocks {
+        let entry = block.split("\n\n").next().unwrap();
+        assert!(
+            entry.contains("@js_set_call_location("),
+            "a generic call must restore its outer source location after arguments: {entry}"
         );
     }
 }

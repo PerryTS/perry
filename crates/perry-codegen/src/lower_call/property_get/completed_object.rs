@@ -190,6 +190,8 @@ pub(crate) fn try_lower(
     let direct_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
     ctx.current_block = generic_idx;
+    // An argument may have replaced the debug-only pending call location.
+    crate::expr::calls::emit_call_location_at(ctx, offset);
     let selected = crate::expr::method_site::SiteLookup {
         value: value.clone(),
         lanes: Vec::new(),
