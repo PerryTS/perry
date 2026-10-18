@@ -114,7 +114,6 @@ fn module_with_init(init: Vec<Stmt>) -> Module {
         local_source_spans: std::collections::HashMap::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
-        requested_modules: Vec::new(),
     }
 }
 
