@@ -72,6 +72,9 @@ pub struct FactsConfig {
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
+    /// Canonical re-export edges supplied by the driver's existing module
+    /// resolver, shared with program layout parent resolution.
+    pub resolved_reexports: std::collections::BTreeMap<(String, String), String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -156,6 +159,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.widen_k = cfg.widen_k.unwrap_or(0);
+    g.resolved_reexports = cfg.resolved_reexports.clone();
     g.register_all();
     g.link_exports();
     g.walk_all();
