@@ -1064,7 +1064,7 @@ pub(super) fn compile_method(
                 .filter(|p| !p.name.starts_with("__perry_cap_"))
                 .map(|p| perry_hir::Expr::LocalGet(p.id))
                 .collect();
-            crate::expr::super_constructor::call(&mut ctx, class, &forwarded)?;
+            crate::expr::checked_super::default_call(&mut ctx, class, &forwarded)?;
         }
         if class.constructor.is_none()
             && !live_super
