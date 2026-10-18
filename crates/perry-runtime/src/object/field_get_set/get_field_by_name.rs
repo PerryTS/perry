@@ -4,8 +4,8 @@
 
 use super::*;
 
-mod shape_inherited;
 mod class_wtf8;
+mod shape_inherited;
 use class_wtf8::class_value_get_wtf8_field;
 
 /// Wall 10 — read a property a framework attached to a native registry handle
