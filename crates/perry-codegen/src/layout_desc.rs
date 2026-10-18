@@ -691,6 +691,12 @@ pub(crate) fn emit_module_layouts(
     }
     COLOURS.with(|c| *c.borrow_mut() = layouts.colored.clone());
     let mut atoms: BTreeMap<String, String> = BTreeMap::new();
+    // Seeds run before module pools. Use the program's canonical image atoms
+    // even for structural spilled layouts that need no allocation descriptor.
+    for key in crate::codegen::static_shape_ids::module_seed_keys() {
+        atom(llmod, strings, &mut atoms, &key);
+    }
+
     // Step 5 (case 2c): the entry module carries an atom for every coloured
     // key, so the runtime learns every colour from the atom section.
     if is_entry_module {
