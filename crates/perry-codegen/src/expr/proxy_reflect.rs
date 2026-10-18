@@ -487,6 +487,30 @@ pub(crate) fn lower_put_value_dyn_ic_inline(
     v: &str,
     strict_i32: &str,
 ) -> Result<String> {
+    lower_keyed_store(ctx, t, k, v, strict_i32, "js_put_value_set_dynamic")
+}
+
+/// Indexed assignment retains its complete indexed entry on a probe miss.
+/// In particular, admission must not migrate ordinary indexed stores into
+/// the distinct PutValueSet overflow-add policy.
+pub(crate) fn lower_indexed_put_value_inline(
+    ctx: &mut FnCtx<'_>,
+    t: &str,
+    k: &str,
+    v: &str,
+    strict_i32: &str,
+) -> Result<String> {
+    lower_keyed_store(ctx, t, k, v, strict_i32, "js_dyn_index_set_strict")
+}
+
+fn lower_keyed_store(
+    ctx: &mut FnCtx<'_>,
+    t: &str,
+    k: &str,
+    v: &str,
+    strict_i32: &str,
+    complete: &str,
+) -> Result<String> {
     let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
         ctx,
         crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
@@ -512,10 +536,20 @@ pub(crate) fn lower_put_value_dyn_ic_inline(
     let hit_end = ctx.block().label.clone();
     ctx.block().cond_br(&served, &done_l, &slow_l);
     ctx.current_block = slow;
-    let _decision = crate::fallback_diag::decision("computed-key store has no fixed key/slot; runtime layout and ordinary Set dispatch required", "runtime key coercion/layout/presence/store admission");
+    let _decision = if complete == "js_dyn_index_set_strict" {
+        crate::fallback_diag::decision(
+            "keyed layout probe declined; complete indexed assignment required",
+            "runtime key coercion/layout/presence/store admission",
+        )
+    } else {
+        crate::fallback_diag::decision(
+            "computed-key store has no fixed key/slot; runtime layout and ordinary Set dispatch required",
+            "runtime key coercion/layout/presence/store admission",
+        )
+    };
     let result = ctx.block().call(
         DOUBLE,
-        "js_put_value_set_dynamic",
+        complete,
         &[(DOUBLE, t), (DOUBLE, k), (DOUBLE, v), (I32, strict_i32)],
     );
     let slow_end = ctx.block().label.clone();

@@ -56,7 +56,7 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     let done_l = ctx.block_label(done_idx);
     ctx.block().cond_br(&named, &named_l, &numeric_l);
     ctx.current_block = named_idx;
-    let named_value = super::proxy_reflect::lower_put_value_dyn_ic_inline(
+    let named_value = super::proxy_reflect::lower_indexed_put_value_inline(
         ctx,
         obj_box,
         idx_d,

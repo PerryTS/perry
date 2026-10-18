@@ -193,3 +193,34 @@ fn computed_key_add_declines_even_when_the_named_add_edge_is_warm() {
         );
     }
 }
+
+#[test]
+fn computed_store_declines_a_shadowed_prefix_descriptor() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::initialize_runtime_fixture();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = record();
+        let ptr = (obj.to_bits() & POINTER_MASK) as *mut ObjectHeader;
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        let extra = crate::JSValue::try_short_string(b"extra").unwrap();
+        crate::proxy::js_put_value_set_dynamic(obj, f64::from_bits(extra.bits()), 4.0, 1);
+        assert_ne!(
+            (*ptr).parent_class_id & crate::object::overflow::SHADOW_BIT,
+            0
+        );
+        crate::object::set_property_attrs(
+            ptr as usize,
+            "beta".into(),
+            crate::object::PropertyAttrs::new(false, true, true),
+        );
+        let beta = crate::JSValue::try_short_string(b"beta").unwrap().bits();
+        let before = crate::arena::arena_live_allocated_bytes();
+        assert_eq!(perry_probe_set_keyed(dir, obj.to_bits(), beta, 99.0), 0);
+        assert_eq!(crate::arena::arena_live_allocated_bytes(), before);
+        assert_eq!(perry_probe_get_keyed(dir, obj.to_bits(), beta), 2.0);
+        let alpha = crate::JSValue::try_short_string(b"alpha").unwrap().bits();
+        assert_eq!(perry_probe_set_keyed(dir, obj.to_bits(), alpha, 9.0), 0);
+        assert_eq!(crate::object::js_object_get_field(ptr, 0).as_number(), 1.0);
+    }
+}
