@@ -66,7 +66,10 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.writes.hash(h);
-                syntax.run_once_classes.hash(h);
+                (syntax.run_once_classes.len() as u64).hash(h);
+                for class in &syntax.run_once_classes {
+                    class.hash(h);
+                }
                 syntax.module_capability_uses.hash(h);
             }
         }
