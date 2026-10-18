@@ -265,7 +265,9 @@ class Solver:
                 self.add(n, [op])
         elif kind == "proto":
             tp = self.tmpls[arg]
-            if tp["parent"] is not None:
+            if tp.get("evaluated") is not None:
+                pass  # classparent supplies the evaluated prototype edge
+            elif tp["parent"] is not None:
                 self.add(n, [self.tok("proto", tp["parent"])])
             elif tp["native"] is not None:
                 self.add(n, [self.tok("nativeproto", tp["native"])])
@@ -277,7 +279,9 @@ class Solver:
             self.add(n, [op])
         elif kind == "classobj":
             tp = self.tmpls[arg]
-            if tp["parent"] is not None:
+            if tp.get("evaluated") is not None:
+                pass
+            elif tp["parent"] is not None:
                 self.add(n, [self.tok("classobj", tp["parent"])])
             else:
                 self.add(n, [op])
@@ -359,14 +363,47 @@ class Solver:
             _, start, key, act = c
             for t in toks:
                 self.chain_step(t, start, key, act)
+        elif op == "classparent":
+            cls = c[1]
+            cp = self.proto(self.tok("classobj", cls))
+            pp = self.proto(self.tok("proto", cls))
+            for t in toks:
+                if self.toks[t][0] == "classobj":
+                    self.add(cp, [t])
+                    self.edge(self.field(t, self.atom("prototype")), pp)
+                else:
+                    self.escape(t)
+                    inst = self.tok("obj", cls)
+                    self.escape(inst)
+                    self.mark_hard(inst, "E11")
+                    self.add(cp, [TOP]); self.add(pp, [TOP])
+            if prim & NULL:
+                self.add(cp, [self.tok("objectproto", "-")])
+                self.add(pp, [], NULL)
+        elif op == "parentctor":
+            _, call, inst = c
+            for t in toks:
+                if self.toks[t][0] == "classobj":
+                    self.run_ctor_chain(call, self.toks[t][1], inst)
+                else:
+                    self.escape(inst)
+                    for arg in self.calls[call]["args"] + self.calls[call]["spread"]:
+                        self.addcons(arg, ("top",))
+                    self.add(self.calls[call]["ret"], [TOP])
+        elif op == "superfrom":
+            _, recv, key, act = c
+            for start in toks:
+                self.addcons(recv, ("super", start, key, act))
         elif op == "superctor":
             _, cls, call = c
             for t in toks:
                 if t == TOP:
                     continue
-                p = self.tmpls[cls]["parent"]
-                if p is not None:
-                    self.run_ctor_chain(call, p, t)
+                tp = self.tmpls[cls]
+                if tp.get("evaluated") is not None:
+                    self.addcons(tp["evaluated"], ("parentctor", call, t))
+                elif tp["parent"] is not None:
+                    self.run_ctor_chain(call, tp["parent"], t)
         elif op == "thisfrom":
             recv = c[1]
             for t in toks:
@@ -789,6 +826,10 @@ class Solver:
             self.addcons(target, ("new", c2))
 
     def run_ctor_chain(self, call, tm, inst):
+        stamp = ("ctorchain", call, tm, inst)
+        if stamp in self.done:
+            return
+        self.done.add(stamp)
         c = self.calls[call]
         tp = self.tmpls[tm]
         if tp["fieldinit"] is not None:
@@ -797,6 +838,8 @@ class Solver:
             f = tp["ctor"]
             self.call_tok(call, self.funcs[f]["tok"], inst)
             self.edge(self.funcs[f]["ret"], c["ret"])
+        elif tp.get("evaluated") is not None:
+            self.addcons(tp["evaluated"], ("parentctor", call, inst))
         elif tp["parent"] is not None:
             self.run_ctor_chain(call, tp["parent"], inst)
 
@@ -948,6 +991,7 @@ def load(path):
                     d = dict(kind=kind, birth=ints(kv["birth"]), definite=ints(kv["definite"]),
                              parent=opt(kv["parent"]), ctor=opt(kv["ctor"]),
                              native=None if kv["native"] == "-" else kv["native"],
+                             evaluated=opt(kv.get("evaluated", "-")),
                              acc=ints(kv["acc"]), computed=int(kv["computed"]),
                              fieldinit=opt(kv["fieldinit"]), display=unesc(kv["display"]),
                              class_id=int(arg) if kind == "class" else None,
@@ -1045,6 +1089,12 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("createproto",)))
         elif rel == "super":
             deferred.append((int(a[0]), ("super", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
+        elif rel == "classparent":
+            deferred.append((int(a[0]), ("classparent", int(a[1]))))
+        elif rel == "parentctor":
+            deferred.append((int(a[0]), ("parentctor", int(a[1]), int(a[2]))))
+        elif rel == "superfrom":
+            deferred.append((int(a[0]), ("superfrom", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
         elif rel == "superctor":
             deferred.append((int(a[0]), ("superctor", int(a[1]), int(a[2]))))
         elif rel == "thisfrom":
@@ -1180,12 +1230,18 @@ def derive(s, objproto_hard):
             chain_bad = True
         ps = not escape and not hard and not chain_bad
         adds = s.adds.get(tm, 0)
-        fixed = ps and adds == 0
+        dynamic_width = False
+        ancestor = tm
+        while ancestor is not None:
+            at = s.tmpls[ancestor]
+            dynamic_width |= at.get("evaluated") is not None
+            ancestor = at["parent"]
+        fixed = ps and adds == 0 and not dynamic_width
         keys = list(tp["birth"])
         for a in s.field_keys.get(t, []):
             if a not in keys:
                 keys.append(a)
-        slot_ok = True
+        slot_ok = not dynamic_width
         fields = {}
         for i, a in enumerate(keys):
             birth = i < len(tp["birth"])

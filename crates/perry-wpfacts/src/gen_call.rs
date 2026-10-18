@@ -304,13 +304,6 @@ impl<'a> Gen<'a> {
         self.m.tmpls[tm as usize].has_computed_members = true;
     }
 
-    pub(crate) fn super_starts(&mut self, fx: &Fx) -> Vec<Tok> {
-        match fx.class {
-            Some(tm) => self.super_starts_of(tm),
-            None => vec![TOP],
-        }
-    }
-
     pub(crate) fn super_starts_of(&mut self, tm: TmplId) -> Vec<Tok> {
         match self.m.tmpls[tm as usize].parent {
             Some(p) => vec![
@@ -353,16 +346,7 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
         let a = self.m.atom(method);
-        for start in self.super_starts(fx) {
-            self.m.cons(
-                fx.this,
-                Cons::Super {
-                    start,
-                    key: Key::Named(a),
-                    act: ChainAct::Call(call),
-                },
-            );
-        }
+        self.super_access(fx, Key::Named(a), ChainAct::Call(call));
         ret
     }
 

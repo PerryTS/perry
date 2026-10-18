@@ -25,11 +25,16 @@ mod gen;
 mod gen_call;
 mod gen_expr;
 mod gen_rest;
+mod heritage;
 pub mod model;
 pub mod pts;
 mod solve;
+mod solve_calls;
+mod solve_rel;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_heritage;
 
 pub use bindings::{BindingFacts, ModuleBindings};
 pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
