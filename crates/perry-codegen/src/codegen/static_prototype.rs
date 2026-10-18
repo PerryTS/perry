@@ -177,6 +177,10 @@ pub(crate) fn collect(
     births
 }
 
+#[cfg(test)]
+#[path = "static_prototype_tests.rs"]
+mod tests;
+
 /// Every intermediate shape proves absence and the next prototype link.
 /// The final holder shape proves the compiler's body candidate.
 pub(crate) fn chain(
