@@ -143,7 +143,7 @@ fn request(owner: f64, mode: Mode, port: u16, secure: bool, callback: i64) -> Ou
     }
 }
 unsafe extern "C" fn response(closure: *const RawClosureHeader, _: JsThis, value: f64) -> f64 {
-    let incoming = perry_ffi::get_handle::<crate::IncomingMessageHandle>(raw(value)).unwrap();
+    let incoming = perry_ffi::get_handle::<crate::IncomingMessageHandle>((value.to_bits() & 0x0000_ffff_ffff_ffff) as i64).unwrap();
     assert_eq!(incoming.status_code, 200);
     assert_eq!(incoming.body, b"payload");
     assert_eq!(
@@ -297,7 +297,7 @@ unsafe extern "C" fn upgrade(
         socket.value().to_bits()
     );
     assert_eq!(
-        perry_ffi::get_handle::<crate::IncomingMessageHandle>(raw(incoming))
+        perry_ffi::get_handle::<crate::IncomingMessageHandle>((incoming.to_bits() & 0x0000_ffff_ffff_ffff) as i64)
             .unwrap()
             .socket_handle,
         raw(socket.value())
