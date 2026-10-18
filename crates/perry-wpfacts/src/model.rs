@@ -446,6 +446,9 @@ pub struct Node {
     pub call_succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
     pub in_wl: bool,
+    /// Canonical shared-value vertex after a prototype-summary cycle merge.
+    pub prototype_alias: Option<NodeId>,
+    pub prototype_key: Option<Key>,
     /// The set grew past the widening bound: it holds only ⊤ from now on,
     /// and every token that reaches it escapes.
     pub widened: bool,

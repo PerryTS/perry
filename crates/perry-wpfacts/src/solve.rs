@@ -16,6 +16,7 @@ impl Model {
 
     /// Add tokens/prims to a node; schedules it when anything is new.
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
+        let n = self.prototype_root(n);
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
         let mut unknown = false;
@@ -262,7 +263,12 @@ impl Model {
     }
 
     fn edge_impl(&mut self, a: NodeId, b: NodeId, log: bool) {
+        let a = self.prototype_root(a);
+        let b = self.prototype_root(b);
         if a == b {
+            return;
+        }
+        if self.merge_prototype_cycle(a, b, log) {
             return;
         }
         // Dedup against short successor lists only: a duplicate edge costs
@@ -320,6 +326,7 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        let n = self.prototype_root(n);
         self.stats_cons += 1;
         if self.relations.is_some()
             && !matches!(
@@ -362,6 +369,10 @@ impl Model {
                 break;
             };
             self.pops += 1;
+            if self.prototype_root(n) != n {
+                self.nodes[n as usize].in_wl = false;
+                continue;
+            }
             if self.aborted {
                 return;
             }
@@ -598,6 +609,7 @@ impl Model {
     // ---------------------------------------------------------------- rules
 
     pub fn apply(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
+        let n = self.prototype_root(n);
         if self.profile.is_some() {
             let started = std::time::Instant::now();
             self.apply_inner(n, c, toks, prim);
@@ -1582,6 +1594,7 @@ impl Model {
     /// function) through the call relay. Builtin namespaces run once per
     /// (call, receiver), preserving their receiver-dependent summaries.
     pub(crate) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
+        let callee = self.prototype_root(callee);
         if !self.callthis_done.insert((callee, call, origin)) {
             return;
         }

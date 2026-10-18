@@ -32,6 +32,7 @@ mod solve;
 mod solve_calls;
 mod solve_rel;
 mod solve_proto;
+mod solve_proto_scc;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -78,6 +78,11 @@ impl Model {
     /// source delta, then share those tokens across all of its call sites.
     /// relay_done registers each (source, destination) exactly once.
     pub(crate) fn call_edge(&mut self, source: NodeId, dest: NodeId) {
+        let source = self.prototype_root(source);
+        let dest = self.prototype_root(dest);
+        if self.nodes[source as usize].call_succ.contains(&dest) {
+            return;
+        }
         self.nodes[source as usize].call_succ.push(dest);
         self.rel(|| format!("calltargets {source} {dest}"));
         if self.aborted {
@@ -128,9 +133,10 @@ impl Model {
 
     pub(crate) fn prototype_value(&mut self, holder: Tok, key: Key) -> NodeId {
         if let Some(&value) = self.prototype_values.get(&(holder, key)) {
-            return value;
+            return self.prototype_root(value);
         }
         let value = self.node_l("prototype-value");
+        self.nodes[value as usize].prototype_key = Some(key);
         // Install before following parents: evaluated heritage can be cyclic
         // in the context-insensitive graph (e.g. repeated mixin templates).
         self.prototype_values.insert((holder, key), value);
@@ -154,7 +160,7 @@ impl Model {
         } else {
             self.load_from_prototypes(holder, key, value);
         }
-        value
+        self.prototype_root(value)
     }
 }
 #[cfg(test)]

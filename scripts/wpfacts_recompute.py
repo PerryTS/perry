@@ -570,8 +570,6 @@ class Solver:
         if (kind == ("builtin", "Error") and name in
                 ("Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError")):
             return name
-        if kind[0] == "builtinfn" and name == "EventEmitter":
-            return name
         return None
 
     def fixed_class_prototype(self, t, key):

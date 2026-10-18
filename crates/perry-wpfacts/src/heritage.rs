@@ -131,7 +131,6 @@ impl Model {
                 name.as_str(),
                 "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
             ),
-            TokKind::BuiltinFn => name == "EventEmitter",
             _ => false,
         };
         matches.then(|| name.clone())
