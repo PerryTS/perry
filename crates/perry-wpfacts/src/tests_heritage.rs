@@ -372,10 +372,11 @@ fn class_prototype_reference_stays_fixed_when_the_class_escapes_or_is_written() 
 fn evaluated_builtin_parent_keeps_the_existing_native_summary() {
     let pf = facts(
         r#"
-        const C = class NativeChild extends Error {
+        function make() { return class NativeChild extends Error {
             static marker = 1;
             constructor() { super("message"); this.extra = 1; }
-        };
+        }; }
+        const factory = make; const C = factory();
         console.log(new C().message);
     "#,
     );
