@@ -432,7 +432,11 @@ fn builtin_constructors_with_spread_construct_the_global_by_value() {
 fn builtin_constructors_without_spread_keep_their_lowering() {
     for (src, folded) in [
         ("console.log(new Date(2020, 0, 2));", "DateNew"),
-        ("console.log(new Map([[1, 2]]));", "MapNewFromArray"),
+        // Map is reified; the no-spread Set literal retains its intrinsic.
+        (
+            "console.log(new Map([[1, 2]]));",
+            "NewDynamic { callee: PropertyGet { object: GlobalGet(0), property: \"Map\"",
+        ),
         ("console.log(new Set([1]));", "SetNewFromArray"),
     ] {
         let h = hir(src);

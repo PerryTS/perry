@@ -164,8 +164,8 @@ fn an_unproven_source_is_guarded_by_a_runtime_receiver_check() {
 fn a_statically_non_array_source_keeps_the_plain_iterator_protocol() {
     for src in [
         "const s: string = String(12);\nconst [a, b] = s;\nconsole.log(a, b);",
-        "const m = new Map<string, number>();\nconst [a] = m;\nconsole.log(a);",
-        "const st = new Set<number>([1]);\nconst [a] = st;\nconsole.log(a);",
+        "const m: Map<string, number> = new Map<string, number>();\nconst [a] = m;\nconsole.log(a);",
+        "const st: Set<number> = new Set<number>([1]);\nconst [a] = st;\nconsole.log(a);",
     ] {
         let dump = hir(src);
         assert!(
