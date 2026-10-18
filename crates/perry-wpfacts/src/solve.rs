@@ -134,7 +134,7 @@ impl Model {
         let stopped: usize = self.stopped.values().map(|v| v.len()).sum();
         let csites: usize = self.callee_sites.values().map(|v| v.len()).sum();
         format!(
-            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} widenq={} widened={} escaped={} entries={}",
+            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} pv={} cp={} widenq={} widened={} escaped={} entries={}",
             self.walk_nodes.len(),
             self.relays.len(),
             self.pops,
@@ -153,7 +153,7 @@ impl Model {
             self.callthis_done.len(),
             visits,
             self.any_walks.len(),
-            self.cv_nodes.len(),
+            self.prototype_values.len(),
             self.cp_nodes.len(),
             self.widen_queue.len(),
             self.widened_nodes,
@@ -312,7 +312,7 @@ impl Model {
         if self.relations.is_some()
             && !matches!(
                 c,
-                Cons::ThisTo { .. }
+                Cons::ThisGroup { .. }
                     | Cons::CallArgs { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
@@ -697,6 +697,10 @@ impl Model {
                     self.super_lookup(t, start, key, act);
                 }
             }
+            Cons::ProtoCall { origin, key, call } => {
+                self.prototype_call_values(origin, key, call, toks);
+            }
+            Cons::ThisGroup { recv } => self.bind_receiver_group(recv, toks),
             Cons::ClassParent { class, reason } => {
                 self.apply_class_parent(class, reason, toks, prim);
             }
@@ -905,11 +909,6 @@ impl Model {
                     }
                 }
             }
-            Cons::ThisTo { origin } => {
-                for &t in toks {
-                    self.this_to(t, origin);
-                }
-            }
             Cons::CallArgs { call } => {
                 for &t in toks {
                     self.call_args(call, t);
@@ -1019,8 +1018,7 @@ impl Model {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv(t, key);
-        self.edge(cv, dst);
+        self.load_from_prototypes(t, key, dst);
         // Accessors run with the receiver as `this`: walk per receiver, only
         // for keys an accessor may be defined under.
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
@@ -1168,18 +1166,6 @@ impl Model {
         }
     }
 
-    /// The values `key` takes on `t`'s prototypes (transitively).
-    pub fn cv(&mut self, t: Tok, key: Key) -> NodeId {
-        if let Some(&n) = self.cv_nodes.get(&(t, key)) {
-            return n;
-        }
-        let n = self.node_l("chainval");
-        self.cv_nodes.insert((t, key), n);
-        let pn = self.proto_node(t);
-        self.cons(pn, Cons::ChainUnion { key, dst: n });
-        n
-    }
-
     /// Every prototype of `t`, transitively.
     pub fn cp(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.cp_nodes.get(&t) {
@@ -1275,8 +1261,7 @@ impl Model {
                 self.edge(f, dst);
                 self.with_b(|m| builtins::tok_load(m, start, key, dst));
                 if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.edge(up, dst);
+                    self.load_from_prototypes(start, key, dst);
                 }
             }
             ChainAct::Call(call) => {
@@ -1287,8 +1272,7 @@ impl Model {
                 self.bind_via(f, call, origin);
                 self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
                 if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.bind_via(up, call, origin);
+                    self.call_from_prototypes(start, key, call, origin);
                     let cp = self.cp(start);
                     self.cons(cp, Cons::ProtoMethods { origin, key, call });
                 }
@@ -1323,8 +1307,7 @@ impl Model {
         }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst) in v {
-                let up = self.cv(p, key);
-                self.edge(up, dst);
+                self.load_from_prototypes(p, key, dst);
             }
         }
     }
@@ -1540,14 +1523,12 @@ impl Model {
     /// function) through the call's relay node (`CallArgs`). A builtin
     /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
     /// The result is the same as one `CallThis` per (callee, call, origin).
-    fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
+    pub(crate) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
         if !self.callthis_done.insert((callee, call, origin)) {
             return;
         }
         self.rel(|| format!("callthis {callee} {call} {origin}"));
-        if self.this_done.insert((callee, origin)) {
-            self.cons(callee, Cons::ThisTo { origin });
-        }
+        self.add_receiver_group(callee, origin);
         let relay = match self.relays.get(&call) {
             Some(&r) => r,
             None => {
@@ -1576,23 +1557,6 @@ impl Model {
                 }
             }
             self.bufs.push(toks);
-        }
-    }
-
-    /// The `this` half of `call_tok(_, t, Some(origin))`.
-    fn this_to(&mut self, t: Tok, origin: Tok) {
-        match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
-                let r = self.reason("receiver of a call of an unknown function value");
-                self.escape(origin, r);
-            }
-            TokKind::Func(f) => {
-                if !self.funcs[f as usize].lexical_this {
-                    let this = self.funcs[f as usize].this;
-                    self.add_tok(this, origin);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1710,8 +1674,7 @@ impl Model {
         self.with_b(|m| builtins::own_method(m, t, key, call));
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).
-        let cv = self.cv(t, key);
-        self.bind_via(cv, call, t);
+        self.call_from_prototypes(t, key, call, t);
         let cp = self.cp(t);
         self.cons(
             cp,

@@ -146,6 +146,8 @@ class Solver:
         self.named_fieldany = {}
         self.named_allfields = {}
         self.named_protonode = {}
+        self.named_prototype_value = {}
+        self.prototype_values = {}
 
     # ------------------------------------------------------------ basics
     def node(self):
@@ -363,6 +365,15 @@ class Solver:
             _, start, key, act = c
             for t in toks:
                 self.chain_step(t, start, key, act)
+        elif op == "protocall":
+            _, origin, key, call = c
+            for q in toks:
+                if q == TOP:
+                    self.call_tok(call, TOP, origin)
+                    if key == "*" or self.atoms.get(key) == "constructor":
+                        self.call_tok(call, self.tok("builtin", "Function"), origin)
+                else:
+                    self.bind_via(self.prototype_value(q, key), call, origin)
         elif op == "classparent":
             cls = c[1]
             cp = self.pnode(self.tok("classobj", cls))
@@ -512,13 +523,7 @@ class Solver:
                     if key == "*" or self.atoms.get(key) == "constructor":
                         self.add(dst, [self.tok("builtin", "Function")])
                     continue
-                self.edge(self.fall(q) if key == "*" else self.field(q, key), dst)
-                k = self.toks[q]
-                if (key != "*" and k[0] == "proto" and key in self.tmpls[k[1]]["pm"]
-                        and q not in self.hard and q not in self.escaped):
-                    self.stopped_shared[q].append((key, dst))
-                else:
-                    self.edge(self.cv(q, key), dst)
+                self.edge(self.prototype_value(q, key), dst)
         elif op == "protoclosure":
             dst = c[1]
             for q in toks:
@@ -606,6 +611,21 @@ class Solver:
             self.chain_from(origin, p, key, act)
         for (key, dst) in self.stopped_shared.pop(p, []):
             self.edge(self.cv(p, key), dst)
+
+    def prototype_value(self, t, key):
+        k = (t, key)
+        if k in self.prototype_values:
+            return self.prototype_values[k]
+        value = self.named_prototype_value.get(k) or self.node()
+        self.prototype_values[k] = value
+        self.edge(self.fall(t) if key == "*" else self.field(t, key), value)
+        kind = self.toks[t]
+        if (key != "*" and kind[0] == "proto" and key in self.tmpls[kind[1]]["pm"]
+                and t not in self.hard and t not in self.escaped):
+            self.stopped_shared[t].append((key, value))
+        else:
+            self.edge(self.cv(t, key), value)
+        return value
 
     def cv(self, t, key):
         k = (t, key)
@@ -1056,6 +1076,8 @@ def run(s, rel_lines):
             s.named_allfields[int(p[3])] = int(p[2])
         elif rel == "protonode":
             s.named_protonode[int(p[3])] = int(p[2])
+        elif rel == "prototypevalue":
+            s.named_prototype_value[(int(p[3]), key_of(s, p[4]))] = int(p[2])
     deferred = []
     for line in rel_lines:
         p = line.split(" ")
@@ -1089,6 +1111,8 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("createproto",)))
         elif rel == "super":
             deferred.append((int(a[0]), ("super", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
+        elif rel == "protocall":
+            deferred.append((int(a[0]), ("protocall", int(a[1]), key_of(s, a[2]), int(a[3]))))
         elif rel == "classparent":
             deferred.append((int(a[0]), ("classparent", int(a[1]))))
         elif rel == "parentctor":

@@ -291,6 +291,8 @@ pub enum Cons {
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
     /// prototype (and further up), shared by every receiver of `t`.
     ChainUnion { key: Key, dst: NodeId },
+    ProtoCall { origin: Tok, key: Key, call: CallId },
+    ThisGroup { recv: NodeId },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -354,7 +356,6 @@ pub enum Cons {
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
-    ThisTo { origin: Tok },
     /// The node is call `call`'s callee relay (the union of the method
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
@@ -403,6 +404,8 @@ impl Cons {
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::ProtoCall { .. } => "protocall",
+            Cons::ThisGroup { .. } => "thisgroup",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -423,7 +426,6 @@ impl Cons {
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ShareBuffer { .. } => "sharebuffer",
-            Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
@@ -541,7 +543,7 @@ pub struct Model {
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.
-    pub this_done: crate::pts::FxHashSet<(NodeId, Tok)>,
+    pub this_groups: FxHashMap<NodeId, NodeId>,
     pub relays: FxHashMap<CallId, NodeId>,
     pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
     pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,
@@ -572,8 +574,6 @@ pub struct Model {
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
-    /// Shared prototype-chain value nodes: (token, key) → node.
-    pub cv_nodes: FxHashMap<(Tok, Key), NodeId>,
     /// Own plus inherited values at a prototype, shared by its receivers.
     pub prototype_values: FxHashMap<(Tok, Key), NodeId>,
     /// Prototype closure nodes: token → node.
