@@ -149,6 +149,7 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            evaluated_parent_sites: Default::default(),
         }
     }
 
