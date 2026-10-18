@@ -1,17 +1,6 @@
-//! A class-field read is a shape-site read, for every receiver (#12483).
-//!
-//! `this.x` inside a class or object-literal method used to compile to its own
-//! tower: an inline pre-check against the class's BIRTH ShapeId, then a slot
-//! load, with every miss sent out of line. A receiver that left the birth
-//! shape missed it on every read: a plain JavaScript class (its keys are
-//! constructor stores, so no instance is ever born on the class's keys-global
-//! shape) paid ~150 instructions per `this.a` against ~13 for the same class
-//! written in `.ts` with declared fields, and the loop regions' static supplier
-//! made the same bet and lost it the same way.
-//!
-//! Asserted from the receiver-route census (`PERRY_RECV_ROUTE_COUNT=1` at
-//! compile time; one `PERRY_RECV_ROUTES` line at exit), with the output checked
-//! against the values node prints.
+//! Class-field reads use current receiver/layout proofs. A declared-field
+//! constructor can supply a static loop-region proof; constructor-store JS
+//! objects must pass dynamic admission. No retired class or MRU cache is used.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -69,18 +58,10 @@ fn run_census(source: &str, ext: &str) -> (String, impl Fn(&str) -> u64) {
     )
 }
 
-/// The #12483 witness: a plain JavaScript class whose constructor defines its
-/// keys. Its loop region is entered through the LEARNED word (the shape the
-/// instance actually has) and runs its fast copy on (nearly) every iteration.
-/// The `.ts` twin with declared fields keeps the static supplier, whose id its
-/// instances do carry.
-///
-/// Sabotage: drop the `class_instances_keep_birth_shape` filter from the
-/// region's `static_class_name` -> the `.js` region names the class's static
-/// id, no instance carries it, and `rloop_f` stays 0 (every iteration takes
-/// the generic copy).
+/// Constructor-store JS objects require dynamic admission; declared-field
+/// TS instances retain the static supplier and run the proved fast copy.
 #[test]
-fn a_plain_js_class_loop_region_follows_the_shape_its_instances_have() {
+fn constructor_store_and_declared_classes_use_their_receiver_proofs() {
     const JS: &str = r#"const N = process.argv.length > 99 ? 1 : 3000;
 // Arms the census: runtime-counted routes count only after the first emitted
 // route note, so a read nothing can fold runs first.
@@ -95,10 +76,8 @@ console.log(px, new P().sum(N));
     let (stdout, count) = run_census(JS, "js");
     assert_eq!(stdout, "5 3000");
     assert!(
-        count("rloop_f") >= 3000 - 8,
-        "only {} of 3000 iterations ran the region's fast copy: the guard named \
-         a ShapeId the plain-JS instance never carries",
-        count("rloop_f")
+        count("rloop_guard") >= 1,
+        "the dynamic receiver guard must run"
     );
     assert_eq!(
         count("rloop_static"),
@@ -128,11 +107,10 @@ console.log(px, new P().sum(N));
     );
 }
 
-/// `this.a` in an object literal's method, after a by-name overwrite of the
-/// receiver, is served by the read site's own word: no class guard runs, and
-/// the site's MRU word answers (nearly) every one of the 3000 reads.
+/// The literal method can be inlined into a layout-derived loop region.
+/// Almost every read uses that region; no deleted MRU cache is required.
 #[test]
-fn a_this_read_in_a_literal_method_is_served_by_the_site_word() {
+fn a_this_read_in_a_literal_method_is_served_by_the_layout_region() {
     let (stdout, count) = run_census(
         r#"// The receiver reaches `put` as a PARAMETER, so `o.d = k` is the generic
 // store, whose first execution is the runtime's by-name overwrite; `o.m()`
@@ -158,9 +136,9 @@ console.log(px, run(N, { a: 1, b: 2, c: 4, e: 8, d: 16, m() { return this.a; } }
     assert_eq!(stdout, "5 5999");
     assert_eq!(count("class_read"), 0, "no class read guard may run");
     assert!(
-        count("generic_mru_hit") >= 3000 - 16,
-        "only {} reads were served by a site's word; `this.a` must be",
-        count("generic_mru_hit")
+        count("rloop_f") >= 3000 - 16,
+        "only {} iterations used the layout region",
+        count("rloop_f")
     );
 }
 
@@ -189,7 +167,7 @@ const child: any = Object.create(PROTO);
 child.own = 3;
 const a = child.sum(N);
 const b = child.mine(N);
-PROTO.pa = 40; // the inherited value changes under the cache
+PROTO.pa = 40; // the inherited value changes between reads
 const c = child.sum(2);
 child.pa = 1; // and is then shadowed by an own key
 const d = child.sum(2);

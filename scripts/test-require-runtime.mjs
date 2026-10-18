@@ -1,6 +1,5 @@
 // Runtime setup shared by the standalone require regressions. Cargo unifies
-// features per invocation: building a missing wrapper separately can create a
-// second Tokio runtime even when every archive has the same source stamp.
+// features per invocation: use build-perry for one native handle registry.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -15,20 +14,13 @@ export function prepareRequireRuntime(root) {
   }
   // dev and perry-dev keep panic=abort without thin-LTO. Prod/release/dist
   // remain available for fully optimized runtime checks.
-  const profile = process.env.PERRY_TEST_RUNTIME_PROFILE ?? 'perry-dev';
+  const profile = process.env.PERRY_TEST_RUNTIME_PROFILE ?? 'release';
   if (!['dev', 'release', 'prod', 'perry-dev', 'dist'].includes(profile)) {
     throw new Error('Native require tests need a panic=abort runtime profile');
   }
-  const packages = [
-    'perry-runtime', 'perry-stdlib', 'perry-runtime-static', 'perry-stdlib-static',
-    'perry-ext-http', 'perry-ext-net',
-    'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib',
-  ];
-  const args = ['build', '--locked', '--profile', profile,
-    ...packages.flatMap(name => ['-p', name])];
-  if (process.env.PERRY_TEST_WASM === '1') {
-    args.push('-p', 'perry-wasm-host', '--features', 'perry-runtime/wasm-host');
-  }
+  // Match the compiler's supported artifact graph. A separately selected
+  // binding graph can link a second native handle registry into an executable.
+  const args = ['build-perry', '--locked', '--profile', profile, '-j6'];
   const buildEnv = { ...process.env };
   // CI overrides target rustflags to disable lld. Such an override replaces
   // .cargo/config.toml's unwind-table flag rather than extending it.
@@ -42,6 +34,10 @@ export function prepareRequireRuntime(root) {
   if (buildEnv.CARGO_ENCODED_RUSTFLAGS !== undefined) {
     buildEnv.CARGO_ENCODED_RUSTFLAGS += '\x1f-C\x1fforce-unwind-tables=yes';
   }
+  const target = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target');
+  // Cargo names the built-in `dev` profile's output directory `debug`.
+  const profileDir = profile === 'dev' ? 'debug' : profile;
+  const runtime = prepared ? path.resolve(process.env.PERRY_RUNTIME_DIR) : path.join(target, profileDir);
   // CI builds the full graph before entering any bounded fixture. Explicit
   // prepared mode still checks every archive below; compiler/linker source
   // identity and Tokio coherence checks remain responsible for their contents.
@@ -56,13 +52,19 @@ export function prepareRequireRuntime(root) {
         '\n' + (build.stdout ?? '') + (build.stderr ?? ''));
     }
   }
-  const target = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target');
-  // Cargo names the built-in `dev` profile's output directory `debug`.
-  const profileDir = profile === 'dev' ? 'debug' : profile;
-  const runtime = prepared ? path.resolve(process.env.PERRY_RUNTIME_DIR) : path.join(target, profileDir);
+  if (!prepared) {
+    const effects = spawnSync('bash', [path.join(root, 'scripts/gc_call_effects/sidecars.sh'), runtime], {
+      cwd: root, env: buildEnv, encoding: 'utf8',
+      timeout: 600_000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024,
+    });
+    if (effects.error || effects.status !== 0) {
+      throw new Error('Runtime sidecars failed: ' + (effects.error ?? effects.status) +
+        '\n' + (effects.stdout ?? '') + (effects.stderr ?? ''));
+    }
+  }
   // Refuse a misleading successful Cargo invocation (e.g. a cross-target
   // override) rather than falling back to an unrelated installed archive.
-  for (const name of ['runtime', 'stdlib', 'ext_events', 'ext_http', 'ext_net',
+  for (const name of ['runtime', 'stdlib', 'ext_http', 'ext_net',
     'ext_typescript', 'ext_ws', 'ext_zlib']) {
     const filename = process.platform === 'win32' ? 'perry_' + name + '.lib' :
       'libperry_' + name + '.a';
