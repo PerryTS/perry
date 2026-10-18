@@ -81,6 +81,10 @@ impl Visit for Uses {
                     | "binding"
                     | "_linkedBinding"
                     | "constructor"
+                    | "__proto__"
+                    | "getPrototypeOf"
+                    | "getOwnPropertyDescriptor"
+                    | "getOwnPropertyDescriptors"
             )
         ) {
             self.0 += 1;
@@ -129,6 +133,8 @@ mod tests {
             "module.parent.require('./child');",
             "process.getBuiltinModule('module');",
             "globalThis.process;",
+            "Object.getPrototypeOf(function(){});",
+            "({}).__proto__;",
         ] {
             assert!(uses(source) > 0, "{source}");
         }
