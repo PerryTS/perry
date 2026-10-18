@@ -433,6 +433,9 @@ memchr = "2"
 # 0.1.14 adds exact bounded start-anchored literal execution (format 16):
 # immutable program instructions are compared with the original subject,
 # without a DFA cache, matcher scratch, or generated per-pattern native code.
+# Resolved once on 2026-10-18 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
+# before this release clears the 7-day publish-age window. Cargo.lock pins the
+# verified registry artifact; the global window is unchanged.
 perex = "0.1.14"
 # turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
 # stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
