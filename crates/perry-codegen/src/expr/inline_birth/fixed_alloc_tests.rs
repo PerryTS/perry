@@ -96,7 +96,7 @@ fn ilp32_closures_keep_the_runtime_layout_and_allocator() {
 
 #[test]
 fn layout_birth_initializes_exact_capacity_and_checks_registration() {
-    for slots in [2, 12] {
+    for slots in [2u32, 12] {
         let mut module = Module::new("fixed_layout_contract");
         let mut props = vec![("method".into(), literal(0))];
         props.extend((1..slots).map(|i| (format!("key{i}"), Expr::Number(i as f64))));
