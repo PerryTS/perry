@@ -3,3 +3,9 @@ Update CLI regression fixtures to current receiver/layout proofs and the HTTP up
 Use a noServer WebSocketServer and handleUpgrade before registering the echo listener, preserving the deeply nested literal and end-to-end timeout. This fixture also exercises the HTTP native-handle repair. Namespace tests remain unchanged and owned by NS.
 
 Refresh held AsyncResource surface expectations now matching Node, preserve live method-value lookup for aliased native classes, and update standalone runtime preparation to canonical build-perry plus sidecars without the removed events archive. Prepared runtime mode avoids recursive builds during the inventory.
+
+Check compound receiver snapshots at HIR lowering and ConstFn activation through immutable layout entries, replacing obsolete LLVM barrier totals and removed cache counters. Keep capture-cell birth and semantic checks while retiring the outer bulk-mint ABI premise; stress runs select instrumented archives and require actual evacuation.
+
+Refresh runtime-setup protocol fixtures for canonical build-perry and sidecars. Stub external sidecar/instrument preparation in wiring tests, and require successful prepared-mode verification without the deleted events archive.
+
+Retain Node prototype-relink semantics while removing assertions about deleted method-site cache counters. Run their existing GC variant against instrumented archives, and update repeated class declarations to the current guarded environment storage while retaining per-evaluation value checks.

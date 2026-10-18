@@ -19,17 +19,6 @@ const SOURCE: &str = include_str!("../../../tests/fixtures/one_shape_class_relin
 const EXPECTED: &str =
     include_str!("../../../tests/fixtures/one_shape_class_relink_methods/expected.txt");
 
-fn stat(stderr: &str, name: &str) -> u64 {
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with("[method-site]"))
-        .unwrap_or_else(|| panic!("no [method-site] line in:\n{stderr}"));
-    line.split_whitespace()
-        .find_map(|w| w.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("no {name} in {line}"))
-}
-
 fn compile(dir: &Path, source: &str) -> PathBuf {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
@@ -41,6 +30,7 @@ fn compile(dir: &Path, source: &str) -> PathBuf {
         .arg("-o")
         .arg(&output)
         .env("PERRY_NO_CACHE", "1")
+        .env("PERRY_GC_INSTRUMENTS", "1")
         .output()
         .expect("run perry compile");
     assert!(
@@ -78,9 +68,8 @@ fn old_parent_members_leave_a_relinked_class_chain() {
         let run = Command::new(&output)
             .arg(n)
             .current_dir(dir.path())
-            .env("PERRY_METHOD_SITE_STATS", "1")
             .env("PERRY_GC_FORCE_EVACUATE", "1")
-            .env("PERRY_GC_POISON_FROMSPACE", "1")
+            .env("PERRY_GC_VERIFY_EVACUATION", "1")
             .output()
             .expect("run compiled binary");
         let stdout = String::from_utf8_lossy(&run.stdout);
@@ -92,12 +81,6 @@ fn old_parent_members_leave_a_relinked_class_chain() {
         );
         let wrong = mismatches(EXPECTED, &stdout);
         assert!(wrong.is_empty(), "n={n}: stale members {wrong:?}\n{stdout}");
-        // The class read sites must have primed, and hit, before the relinks,
-        // or nothing here tested what they validate.
-        assert!(
-            stat(&stderr, "class_read_primes") > 0 && stat(&stderr, "class_read_hits") > 0,
-            "n={n}: no class read entry primed and hit\n{stderr}"
-        );
     }
 }
 

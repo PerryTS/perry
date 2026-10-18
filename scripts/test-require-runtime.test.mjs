@@ -10,7 +10,7 @@ import test from 'node:test';
 
 const helper = new URL('./test-require-runtime.mjs', import.meta.url).href;
 const root = fileURLToPath(new URL('../', import.meta.url));
-const names = ['runtime', 'stdlib', 'ext_events', 'ext_http', 'ext_net',
+const names = ['runtime', 'stdlib', 'ext_http', 'ext_net',
   'ext_typescript', 'ext_ws', 'ext_zlib'];
 const filename = name => process.platform === 'win32' ? `perry_${name}.lib` : `libperry_${name}.a`;
 
@@ -71,6 +71,8 @@ function ciSetup(suites, cargoExit = 0) {
   const setup = scoped[0].slice(start);
   const script = `set -eu
 cargo() { printf 'cargo:%s\\n' "$*"; return ${cargoExit}; }
+scripts/gc_call_effects/sidecars.sh() { printf 'sidecars:%s\\n' "$*"; }
+scripts/build_instr_runtime.sh() { printf 'instruments:%s\\n' "$*"; }
 ${setup}
 printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\${PERRY_RUNTIME_DIR-unset}"
 `;
@@ -87,14 +89,8 @@ test('scoped CI prepares coherent providers for each standalone native consumer'
     assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
     const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
     assert.equal(calls.length, 1, suite);
-    assert.match(calls[0], /^cargo:build --release /);
-    for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
-      'perry-stdlib-static', 'perry-ext-http', 'perry-ext-net',
-      'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert((calls[0] + " ").includes(`-p ${name} `), name);
-    }
-    assert.doesNotMatch(calls[0], /--features(?:=| )/,
-      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
+    assert.equal(calls[0], 'cargo:build-perry --release');
+    assert.match(result.stdout, /sidecars:target\/release\n/);
   }
 });
 
@@ -135,6 +131,8 @@ function shardSetup(targets, cargoExit = 0) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));
   const script = `set -euo pipefail
 cargo() { printf 'cargo:%s\\n' "$*"; return ${cargoExit}; }
+scripts/gc_call_effects/sidecars.sh() { printf 'sidecars:%s\\n' "$*"; }
+scripts/build_instr_runtime.sh() { printf 'instruments:%s\\n' "$*"; }
 test_targets=(${targets.join(' ')})
 ${setup[0]}
 printf 'prepared:%s\\nruntime:%s\\n' "\${PERRY_TEST_RUNTIME_PREBUILT-unset}" "\${PERRY_RUNTIME_DIR-unset}"
@@ -151,13 +149,8 @@ test('full-tier shards prepare every bounded require consumer before executing f
     assert(result.stdout.includes(`runtime:${root}target/release\n`), result.stdout);
     const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
     assert.equal(calls.length, 1);
-    for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
-      'perry-stdlib-static', 'perry-ext-http', 'perry-ext-net',
-      'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
-      assert((calls[0] + " ").includes(`-p ${name} `), name);
-    }
-    assert.doesNotMatch(calls[0], /--features(?:=| )/,
-      'shared prebuilt stdlib must retain the standalone require helper default feature graph');
+    assert.equal(calls[0], 'cargo:build-perry --release');
+    assert.match(result.stdout, /sidecars:target\/release\n/);
   }
 });
 
