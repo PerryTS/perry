@@ -376,6 +376,11 @@ pub(super) fn prepare_from_raw(
             super::super::cjs_wrap::source_origin::ranges(&source, &origin_markers)
                 .unwrap_or_default(),
         );
+    } else if class.is_json || class.is_text {
+        // The complete module is synthesized from non-executable data.
+        // Its path-registry helper is compiler bookkeeping, not a source
+        // read of a loader capability. JSON strings are still only data.
+        class_family_syntax.as_mut().unwrap().original_source_ranges = Some(Vec::new());
     }
     Ok(PreparedSource {
         class_family_syntax,
@@ -875,5 +880,52 @@ impl SourcePrefetch {
             state.guess_queue.extend(guesses.into_iter().rev());
             self.changed.notify_all();
         }
+    }
+}
+
+#[cfg(test)]
+mod loader_origin_tests {
+    use super::*;
+    #[test]
+    fn synthesized_json_registration_has_compiler_origin() {
+        let packages = HashSet::new();
+        let addons = BTreeMap::new();
+        let prepared = prepare_from_raw(
+            r#"{"Function":"module","value":1}"#.into(),
+            Path::new("/tmp/ro-data.json"),
+            PrepClass {
+                wrap_eligible: true,
+                is_json: true,
+                is_text: false,
+                is_entry: false,
+            },
+            &PrepInputs {
+                target: None,
+                compile_packages: &packages,
+                native_addon_paths: &addons,
+                bunfs_root: None,
+                debug_symbols: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            prepared
+                .class_family_syntax
+                .as_ref()
+                .unwrap()
+                .original_source_ranges,
+            Some(Vec::new())
+        );
+        let ast = perry_parser::parse_typescript(&prepared.source, "/tmp/ro-data.json").unwrap();
+        let ast = crate::commands::compile::cjs_wrap::source_origin::stamp(
+            &ast,
+            &prepared.class_family_syntax,
+        )
+        .unwrap();
+        let mut hir = perry_hir::lower_module(&ast, "ro-data", "/tmp/ro-data.json").unwrap();
+        hir.set_class_family_syntax(prepared.class_family_syntax);
+        let facts =
+            perry_wpfacts::compute(&[("/tmp/ro-data.json".into(), &hir)], &Default::default());
+        assert!(facts.module_reentry.is_none(), "{}", facts.dump_text());
     }
 }
