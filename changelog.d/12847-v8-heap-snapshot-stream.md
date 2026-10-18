@@ -1,0 +1,3 @@
+Fix the native constructor-layout abort when `v8.getHeapSnapshot()` creates a Readable without a `node:stream` import. The producer installs the existing stream attachment before constructor sealing and roots its buffer, chunk array, options and key across allocations; static-layout validation remains intact.
+
+Existing heap-snapshot fixtures independently reproduce three baseline aborts and no candidate aborts. Output and repeated snapshots now pass; semantic-schema still differs by the backend-generated `agent_id`, `pid` and `thread_id` keys. The full V8 node-suite is 20/47 PASS with 27 parity gaps and harness exit 1, not full-module green. All 18 prior PASS cases and three existing Readable controls were preserved. Refs #9202.
