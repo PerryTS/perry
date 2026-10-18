@@ -876,7 +876,15 @@ pub(crate) fn try_lower_instance_method_call(
                     })
                 })
                 .collect();
-            let observes_lookup = crate::expr::method_site::args_may_observe_lookup(ctx, args);
+            // Only a family with a static holder proof enters the new
+            // pre-argument selection. Native-parent and unsupported wide
+            // prototypes keep their existing tower and argument lowering.
+            let family_method_proof = ctx.class_ids.get(&class_name).is_some_and(|cid| {
+                ctx.program_layouts.families.contains_key(cid)
+                    && crate::codegen::static_prototype::chain(ctx, &class_name, property).is_some()
+            });
+            let observes_lookup = family_method_proof
+                && crate::expr::method_site::args_may_observe_lookup(ctx, args);
             // An observable argument needs a selection before it runs even
             // for a single/typed arm. The later layout guard still licenses
             // that arm's representation clone independently.
@@ -892,16 +900,16 @@ pub(crate) fn try_lower_instance_method_call(
             // it. The guarded direct path below tests after evaluating args;
             // use the existing split lookup/call when there is no preselected
             // constant body. This also preserves accessor/Proxy side effects.
-            if !constant_static
+            if family_method_proof
+                && !constant_static
                 && !fallback_fn.starts_with("perry_static_")
                 && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
                 && crate::expr::method_site::args_may_observe_lookup(ctx, args)
             {
                 let mut lanes =
                     crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
-                // Compare the actual function value's code identity. Native-
-                // parent and wide classes need no static prototype proof to
-                // enter their selected callable with its real environment.
+                // Compare the actual selected function's code identity
+                // and pass its real environment on this proved family path.
                 if !fallback_has_rest
                     && !fallback_has_synthetic_arguments
                     && ctx.method_param_counts.contains_key(&fallback_key)
