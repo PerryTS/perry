@@ -147,7 +147,11 @@ fn is_aliasable_native_class(module: &str, method: &str) -> bool {
 /// http dispatcher up front instead of the ordinary call of the bound
 /// export. `https` has no distinct `ServerResponse` in Node.
 fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
-    module == "http" && matches!(method, "ServerResponse" | "OutgoingMessage")
+    module == "http"
+        && matches!(
+            method,
+            "ServerResponse" | "OutgoingMessage" | "IncomingMessage"
+        )
 }
 
 /// Alias `this_arg` to `result` using one traced record on the receiver, when
@@ -275,6 +279,7 @@ pub(crate) unsafe fn maybe_construct_http_class_with_this(
         std::slice::from_raw_parts(rest_ptr, rest_len)
     };
     construct_aliased_native_class(&module, &method, this_arg, args)
+        .map(|_| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 /// Run the node:stream subclass-init shim for the base named `method`
@@ -439,7 +444,10 @@ unsafe fn construct_native_http_class_with_this(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_root = scope.root_nanbox_f64(this_val);
-    if matches!(method, "ServerResponse" | "OutgoingMessage") {
+    if matches!(
+        method,
+        "ServerResponse" | "OutgoingMessage" | "IncomingMessage"
+    ) {
         // node's `ServerResponse.call(this, req)` initializes `this`: the
         // native response is attached to `this` itself and node's fields are
         // stored on it (`node_http_prototypes::js_node_http_server_response_init`),
@@ -450,10 +458,10 @@ unsafe fn construct_native_http_class_with_this(
         let mut with_this = Vec::with_capacity(len + 1);
         with_this.push(this_root.get_nanbox_f64());
         with_this.extend_from_slice(&args[..len]);
-        let attach = if method == "ServerResponse" {
-            "#ServerResponse.call"
-        } else {
-            "#OutgoingMessage.call"
+        let attach = match method {
+            "ServerResponse" => "#ServerResponse.call",
+            "IncomingMessage" => "#IncomingMessage.call",
+            _ => "#OutgoingMessage.call",
         };
         dispatch(
             module.as_ptr(),

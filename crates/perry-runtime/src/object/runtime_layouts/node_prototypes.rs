@@ -237,17 +237,35 @@ runtime_symbol_atom!(NP_SYMBOL_TO_ASYNC_STREAMABLE, "Stream.toAsyncStreamable", 
 runtime_symbol_atom!(NP_SYMBOL_K_ATTACH_ABORT_SIGNAL, "kAttachAbortSignal", 3);
 runtime_symbol_atom!(NP_SYMBOL_K_DETACH_ABORT_SIGNAL, "kDetachAbortSignal", 4);
 
+runtime_symbol_atom!(NP_SYMBOL_K_HEADERS, "kHeaders", 5);
+runtime_symbol_atom!(NP_SYMBOL_K_HEADERS_COUNT, "kHeadersCount", 6);
+runtime_symbol_atom!(NP_SYMBOL_K_TRAILERS, "kTrailers", 7);
+runtime_symbol_atom!(NP_SYMBOL_K_TRAILERS_COUNT, "kTrailersCount", 8);
+runtime_symbol_atom!(NP_SYMBOL_K_ABORT_CONTROLLER, "kAbortController", 9);
+runtime_symbol_atom!(NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, "kAbortSignalSocket", 10);
+runtime_symbol_atom!(NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, "kAbortSignalListener", 11);
+runtime_symbol_atom!(NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, "kAbortSignalDetached", 12);
+
 /// The runtime symbol atoms by number, and whether each is a registry symbol
 /// (`Symbol.for(description)`) rather than a symbol of its own.
-static RUNTIME_SYMBOL_ATOMS: [(&StaticAtom, bool); 5] = [
+static RUNTIME_SYMBOL_ATOMS: [(&StaticAtom, bool); 13] = [
     (&NP_SYMBOL_K_CAPTURE, false),
     (&NP_SYMBOL_NODEJS_REJECTION, true),
     (&NP_SYMBOL_TO_ASYNC_STREAMABLE, true),
     (&NP_SYMBOL_K_ATTACH_ABORT_SIGNAL, false),
     (&NP_SYMBOL_K_DETACH_ABORT_SIGNAL, false),
+    (&NP_SYMBOL_K_HEADERS, false),
+    (&NP_SYMBOL_K_HEADERS_COUNT, false),
+    (&NP_SYMBOL_K_TRAILERS, false),
+    (&NP_SYMBOL_K_TRAILERS_COUNT, false),
+    (&NP_SYMBOL_K_ABORT_CONTROLLER, false),
+    (&NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, false),
+    (&NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, false),
+    (&NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, false),
+
 ];
-static RUNTIME_SYMBOLS: [std::sync::atomic::AtomicUsize; 5] =
-    [const { std::sync::atomic::AtomicUsize::new(0) }; 5];
+static RUNTIME_SYMBOLS: [std::sync::atomic::AtomicUsize; 13] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 13];
 
 /// The symbol runtime symbol atom `atom` names: created once per process, the
 /// same symbol in every agent (registration binds every layout key to it),

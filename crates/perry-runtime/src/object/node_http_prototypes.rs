@@ -536,6 +536,122 @@ pub unsafe extern "C" fn js_node_http_outgoing_message_init(this: f64) {
     message_init(this, None);
 }
 
+/// Node's IncomingMessage constructor on its explicit receiver. Readable owns
+/// stream-state initialization; the remaining stores follow Node's constructor
+/// order and use ordinary [[Get]]/[[Set]] so inherited accessors participate.
+///
+/// # Safety
+/// `this` and `socket` are live JavaScript values.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let socket = scope.root_nanbox_f64(socket);
+    let read = |value, bytes: &'static [u8]| {
+        crate::runtime_state_key::NamedStateKey {
+            bytes,
+            hash: crate::runtime_state_key::const_key_hash(bytes),
+        }
+        .read_value(value)
+    };
+    let put = |name: &'static [u8], value| {
+        crate::runtime_state_key::js_runtime_state_key_set(
+            this.get_nanbox_f64(),
+            name.as_ptr(),
+            name.len(),
+            value,
+        );
+    };
+    let options = if crate::value::js_is_truthy(socket.get_nanbox_f64()) != 0 {
+        let high_water_mark =
+            scope.root_nanbox_f64(read(socket.get_nanbox_f64(), b"readableHighWaterMark"));
+        let options = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 1)));
+        crate::runtime_state_key::js_runtime_state_key_set(
+            options.get_nanbox_f64(),
+            b"highWaterMark".as_ptr(),
+            13,
+            high_water_mark.get_nanbox_f64(),
+        );
+        options.get_nanbox_f64()
+    } else {
+        undefined()
+    };
+    let options = scope.root_nanbox_f64(options);
+    // Reuse the Readable explicit-this path, including its instanceof check:
+    // an unrelated receiver gets a fresh discarded Readable, as in Node.
+    crate::object::native_module_registry::js_nm_install_stream();
+    let readable = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        "stream", "Readable",
+    ));
+    let args = [options.get_nanbox_f64()];
+    let _ = crate::object::native_this_alias::maybe_run_stream_subclass_init_via_this(
+        readable.get_nanbox_f64(),
+        this.get_nanbox_f64(),
+        args.as_ptr(),
+        args.len(),
+    );
+    let state = scope.root_nanbox_f64(read(this.get_nanbox_f64(), b"_readableState"));
+    let state_value = JSValue::from_bits(state.get_nanbox_u64());
+    if state_value.is_undefined() || state_value.is_null() {
+        crate::object::object_ops::throw_object_type_error(if state_value.is_null() {
+            b"Cannot set properties of null (setting 'readingMore')".as_slice()
+        } else {
+            b"Cannot set properties of undefined (setting 'readingMore')".as_slice()
+        });
+    }
+    crate::runtime_state_key::js_runtime_state_key_set(
+        state.get_nanbox_f64(),
+        b"readingMore".as_ptr(),
+        11,
+        bool_value(true),
+    );
+    let null = f64::from_bits(crate::value::TAG_NULL);
+    put(b"socket", socket.get_nanbox_f64());
+    for name in [
+        b"httpVersionMajor".as_slice(),
+        b"httpVersionMinor",
+        b"httpVersion",
+    ] {
+        put(name, null);
+    }
+    put(b"complete", bool_value(false));
+    put(
+        b"rawHeaders",
+        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
+    );
+    put(
+        b"rawTrailers",
+        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
+    );
+    put(b"joinDuplicateHeaders", bool_value(false));
+    put(b"aborted", bool_value(false));
+    put(b"upgrade", null);
+    put(
+        b"url",
+        crate::value::nanbox_string_key(crate::string::js_string_from_bytes(b"".as_ptr(), 0)),
+    );
+    put(b"method", null);
+    put(b"statusCode", null);
+    put(b"statusMessage", null);
+    put(b"client", socket.get_nanbox_f64());
+    put(b"_consuming", bool_value(false));
+    put(b"_dumped", bool_value(false));
+    use layouts as p;
+    for (atom, value) in [
+        (&p::NP_SYMBOL_K_HEADERS, null),
+        (&p::NP_SYMBOL_K_HEADERS_COUNT, 0.0),
+        (&p::NP_SYMBOL_K_TRAILERS, null),
+        (&p::NP_SYMBOL_K_TRAILERS_COUNT, 0.0),
+        (&p::NP_SYMBOL_K_ABORT_CONTROLLER, null),
+        (&p::NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, null),
+        (&p::NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, null),
+        (&p::NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, bool_value(false)),
+    ] {
+        let symbol = p::runtime_symbol_value(atom);
+        crate::symbol::js_object_set_symbol_property(this.get_nanbox_f64(), symbol, value);
+    }
+}
+
 /// [`js_node_http_server_response_init`] with `req`, and its
 /// `OutgoingMessage` part alone without. Inlined into each entry, so the
 /// response's stays specialized to its request.
@@ -819,5 +935,53 @@ mod tests {
             assert_eq!(get(b, "finished"), crate::value::TAG_FALSE);
             assert_eq!(get(b, "statusCode"), 200.0f64.to_bits());
         });
+    }
+}
+
+#[cfg(test)]
+mod incoming_init_tests {
+    use super::*;
+
+    #[test]
+    fn incoming_initializer_fills_readable_state_and_socket_options() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let read = |object, bytes: &'static [u8]| {
+            crate::runtime_state_key::NamedStateKey {
+                bytes,
+                hash: crate::runtime_state_key::const_key_hash(bytes),
+            }
+            .read_value(object)
+        };
+        unsafe {
+            crate::object::native_module_registry::js_nm_install_stream();
+            let receiver = boxed(crate::object::js_object_alloc(0, 0));
+            let proto = crate::node_stream::stream_prototype_value("Readable");
+            crate::object::prototype_chain::object_set_static_prototype(
+                (receiver.to_bits() & crate::value::POINTER_MASK) as usize,
+                proto.to_bits(),
+            );
+            let socket = boxed(crate::object::js_object_alloc(0, 1));
+            crate::runtime_state_key::js_runtime_state_key_set(
+                socket,
+                b"readableHighWaterMark".as_ptr(),
+                21,
+                1234.0,
+            );
+            js_node_http_incoming_message_init(receiver, socket);
+            let state = read(receiver, b"_readableState");
+            assert!(JSValue::from_bits(state.to_bits()).is_pointer());
+            assert_eq!(read(state, b"highWaterMark"), 1234.0);
+            assert_eq!(
+                read(state, b"readingMore").to_bits(),
+                crate::value::TAG_TRUE
+            );
+            assert_eq!(read(receiver, b"socket").to_bits(), socket.to_bits());
+            assert_eq!(read(receiver, b"client").to_bits(), socket.to_bits());
+            assert_eq!(
+                read(receiver, b"complete").to_bits(),
+                crate::value::TAG_FALSE
+            );
+        }
     }
 }

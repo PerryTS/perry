@@ -168,6 +168,15 @@ pub unsafe extern "C" fn js_ext_http_native_dispatch(
         ("http", "#OutgoingMessage.call") => {
             super::response::outgoing_message_construct_this(arg(0))
         }
+        ("http", "#IncomingMessage.call") => {
+            extern "C" {
+                fn js_node_http_incoming_message_init(this: f64, socket: f64);
+            }
+            let scope = perry_ffi::TransientRootScope::enter();
+            let receiver = scope.root_nanbox(arg(0));
+            js_node_http_incoming_message_init(receiver.get(), arg(1));
+            (receiver.get().to_bits() & POINTER_MASK) as i64
+        }
         ("http" | "https", "get" | "request") => client_overload(module, method, args),
         ("http", "Agent") => crate::js_http_agent_new(arg(0)),
         ("https", "Agent") => crate::js_https_agent_new(arg(0)),

@@ -1,0 +1,1 @@
+IncomingMessage.call/apply and subclass super calls initialize Readable state and the IncomingMessage constructor fields on the supplied receiver. Native HTTP constructors called explicitly return undefined while super retains the initialized receiver.
