@@ -43,6 +43,13 @@ pub const WPF_NULLABLE: u32 = 2;
 /// The site reads the slot as a raw double (F64 lane, number-only kind).
 pub const WPF_RAW_F64: u32 = 4;
 
+/// A plain double, not a NaN-boxed tagged value: the tags are exactly the
+/// positive quiet-NaN prefixes 0x7FF9..=0x7FFF. Negative doubles (sign bit set,
+/// -0.0 = 0x8000_0000_0000_0000 included) and the canonical NaN are plain.
+fn is_plain_f64(bits: u64) -> bool {
+    !(SHORT_STRING_TAG..=STRING_TAG | !TAG_MASK).contains(&bits)
+}
+
 /// The kind bit of a NaN-boxed value (compiler `KindFact::mask` layout).
 fn kind_of(bits: u64) -> u32 {
     match bits & TAG_MASK {
@@ -208,9 +215,8 @@ pub extern "C" fn perry_wpfacts_check_field(
     let in_slot = unsafe { *((addr + header + slot as usize * 8) as *const u64) };
     let vbits = value.to_bits();
     if flags & WPF_RAW_F64 != 0 {
-        // A raw-f64 read: the slot must hold a plain double (any NaN is the
-        // canonical one).
-        if vbits & TAG_MASK >= 0x7FF9_0000_0000_0000 && vbits != 0x7FF8_0000_0000_0000 {
+        // A raw-f64 read: the slot must hold a plain double.
+        if !is_plain_f64(vbits) {
             violate(
                 site,
                 "F2 kind (raw f64)",
@@ -234,4 +240,38 @@ pub extern "C" fn perry_wpfacts_check_field(
         );
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_f64_plain_bits() {
+        for v in [
+            0.0,
+            -0.0,
+            1.5,
+            -1.5,
+            -1e300,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            assert!(is_plain_f64(v.to_bits()), "{v} ({:#018x})", v.to_bits());
+        }
+        assert!(is_plain_f64(f64::MIN.to_bits()));
+        for tag in [
+            SHORT_STRING_TAG,
+            BIGINT_TAG,
+            JS_HANDLE_TAG,
+            TAG_MARKER,
+            POINTER_TAG,
+            INT32_TAG,
+            STRING_TAG,
+        ] {
+            assert!(!is_plain_f64(tag | 0x1234), "{tag:#018x}");
+            assert!(!is_plain_f64(tag | POINTER_MASK), "{tag:#018x}");
+        }
+    }
 }
