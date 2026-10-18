@@ -224,7 +224,9 @@ pub(super) unsafe fn probe_set<const ALLOW_ADDS: bool>(
             // in place, in the layout's key order, when nothing on the chain
             // intercepts it and the object takes new keys without an order
             // authority of its own (an overflow, a stable-tombstone record).
-            if *address == TAG_HOLE && !hole_fill_admitted(dir, obj, r, keys, pos, key_bits, hash) {
+            if *address == TAG_HOLE
+                && (!ALLOW_ADDS || !hole_fill_admitted(dir, obj, r, keys, pos, key_bits, hash))
+            {
                 return 0;
             }
             let rep = crate::object::field_rep::slot_rep((*r).rep, slot);

@@ -168,6 +168,19 @@ fn computed_key_add_declines_even_when_the_named_add_edge_is_warm() {
             crate::object::layout_desc::layout_id_of_word(before)
         );
         assert_eq!(perry_probe_get_keyed(dir, boxed.to_bits(), key), 3.0);
+        let hole = record();
+        let hole_ptr = (hole.to_bits() & POINTER_MASK) as *mut ObjectHeader;
+        crate::object::js_object_set_field(hole_ptr, 2, crate::JSValue::from_bits(TAG_HOLE));
+        let hole_name = b"longer_key";
+        let hole_hash = crate::object::key_bytes_hash(hole_name.as_ptr(), hole_name.len());
+        let hole_atom = crate::string::js_string_pool_atom(
+            hole_name.as_ptr(),
+            hole_name.len() as u32,
+            hole_hash,
+            0,
+        );
+        assert_eq!(perry_probe_set_keyed(dir, hole.to_bits(), crate::js_nanbox_string(hole_atom as i64).to_bits(), 6.0), 0,
+            "a hole is an add; computed overwrite admission must not walk later keys or the prototype chain");
         let untouched = blank();
         assert_eq!(
             perry_probe_get_keyed(
