@@ -147,15 +147,24 @@ thread_local! {
     /// Case 2c: the class family descriptors this module's code allocates
     /// from (`lower_call/new_alloc.rs`); [`emit_module_layouts`] declares the
     /// ones another module defines.
-    static FAMILY_DESC_USES: RefCell<std::collections::BTreeSet<u32>> =
+    static FAMILY_DESC_USES: RefCell<std::collections::BTreeSet<(u32, Option<usize>)>> =
         RefCell::new(std::collections::BTreeSet::new());
 }
 
 /// The descriptor global of class `class_id`'s family layout, noted as used
 /// by this module.
 pub(crate) fn note_family_desc_use(class_id: u32) -> String {
-    FAMILY_DESC_USES.with(|u| u.borrow_mut().insert(class_id));
-    format!("@perry_layout_class_{class_id}")
+    note_family_variant_desc_use(class_id, None)
+}
+
+/// The default or creation-variant family descriptor, including a declaration
+/// when this module only reads instances created in another module.
+pub(crate) fn note_family_variant_desc_use(class_id: u32, variant: Option<usize>) -> String {
+    FAMILY_DESC_USES.with(|u| u.borrow_mut().insert((class_id, variant)));
+    match variant {
+        Some(v) => format!("@perry_layout_class_{class_id}_v{v}"),
+        None => format!("@perry_layout_class_{class_id}"),
+    }
 }
 
 /// The i32 alias of a carried descriptor's `layout_id` word.
@@ -931,10 +940,11 @@ pub(crate) fn emit_module_layouts(
         .filter(|c| layouts.families.contains_key(&c.id))
         .map(|c| c.id)
         .collect();
-    for cid in FAMILY_DESC_USES.with(|u| std::mem::take(&mut *u.borrow_mut())) {
+    for (cid, variant) in FAMILY_DESC_USES.with(|u| std::mem::take(&mut *u.borrow_mut())) {
         if !local.contains(&cid) {
+            let suffix = variant.map(|v| format!("_v{v}")).unwrap_or_default();
             llmod.add_raw_global(format!(
-                "@perry_layout_class_{cid} = external global {DESC_TY}"
+                "@perry_layout_class_{cid}{suffix} = external global {DESC_TY}"
             ));
         }
     }

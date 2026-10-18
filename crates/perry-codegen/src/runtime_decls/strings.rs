@@ -1211,13 +1211,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // element-shape loop clone's shape-keyed preheader resolves each tracked
     // property once against the shape the runtime just proved.
     module.declare_function("js_shape_ordinary_inline_slot_for_key", I32, &[I32, I64]);
-    // Step 4b stage 1: pack a read region's guard word (ShapeId + each key's
-    // inline slot) on a region miss. `(shape_id, n, k0..k4) -> word`.
-    module.declare_function(
-        "js_region_guard_prime",
-        I64,
-        &[PTR, I32, I32, I64, I64, I64, I64, I64],
-    );
     // Step 4b loop regions: the store-licensing twin (attribute summary 0).
     module.declare_function(
         "js_region_loop_prime",

@@ -587,6 +587,12 @@ fn lower_module(
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     llmod.program_has_worker = opts.program_has_worker;
+    // Only a complete executable can prove that none of its compiled code
+    // can run under a worker's termination handle. Reusable libraries and
+    // modules lacking this whole-program proof retain interrupt polls.
+    if opts.output_type == "executable" && !opts.program_has_worker {
+        llmod.add_metadata_line("!perry.no_workers = !{!0}".to_string());
+    }
     llmod.set_gc_effects(std::sync::Arc::clone(&opts.gc_effects));
     runtime_decls::declare_phase1(&mut llmod);
 

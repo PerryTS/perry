@@ -1,9 +1,6 @@
-//! Generic monomorphic-IC property-get dispatch extracted from
-//! `property_get.rs`.
-//!
-//! Pure mechanical move — body is the verbatim tail of the general catch-all
-//! arm (the receiver-tag guard + SSO/class-ref/PIC/invalid diamond), lifted
-//! into its own function.
+//! Ordinary property-get dispatch: static family slots, coloured layout
+//! slots, then the receiver layout's probe and complete property semantics.
+//! These read paths allocate no learned per-site state.
 
 use super::*;
 
@@ -276,8 +273,7 @@ pub(crate) fn probe_then_value(
     )
 }
 
-/// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
-/// This is the fall-through tail of the general catch-all arm: all earlier
+/// The ordinary layout-probe dispatch for `obj.property`, after earlier
 /// specializations have been ruled out.
 pub(crate) fn lower_generic_property_get(
     ctx: &mut FnCtx<'_>,
@@ -292,9 +288,8 @@ pub(crate) fn lower_generic_property_get(
 /// predicts (`class_field_predicted_shape`). The site is the property site
 /// with its word replaced by that ShapeId: the receiver test, the receiver's
 /// ShapeId against the class's, one load of the layout's slot. Everything
-/// else, any receiver not on that shape included, is one call of the complete
-/// site operation (`js_object_get_field_ic`, the same helper the outlined
-/// site calls). Inside a class-guard run (`class_guard_memo`) a read of a
+/// else, any receiver not on that shape included, takes the layout probe and
+/// complete property read. Inside a class-guard run (`class_guard_memo`) a read of a
 /// receiver whose proof an earlier site of the run set tests the run's flag
 /// first.
 pub(crate) fn lower_class_field_property_get(
@@ -313,6 +308,23 @@ pub(crate) fn lower_class_field_property_get(
     }
     crate::expr::note_site("case2-class");
     let obj_box = lower_expr(ctx, object)?;
+    let family = crate::expr::class_family_read::begin(ctx, object, property, &obj_box);
+    let value =
+        lower_predicted_class_field_get(ctx, object, property, byte_offset, predicted, obj_box)?;
+    Ok(match family {
+        Some(arm) => crate::expr::class_family_read::finish(ctx, arm, &value),
+        None => value,
+    })
+}
+
+fn lower_predicted_class_field_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    byte_offset: u32,
+    predicted: crate::expr::class_field_inline_guard::PredictedShape,
+    obj_box: String,
+) -> Result<String> {
     // Same location record as the generic site (see `lower_property_site`).
     crate::expr::calls::emit_call_location_at(ctx, byte_offset);
     let key_idx = ctx.strings.intern(property);
@@ -445,7 +457,7 @@ fn lower_property_site(
     let obj_box = lower_expr(ctx, object)?;
     // #5247: record this access's source location right after the receiver is
     // evaluated and before the nullish-receiver throw path (the inline diamond
-    // OR the full-outline `js_object_get_field_ic` helper — both throw "Cannot
+    // OR the outlined property helper — both throw "Cannot
     // read properties of null/undefined"). No-op unless compiled with
     // `--debug-symbols` (the offset resolves to `None` without the debug
     // context) or when `byte_offset` is 0 (a synthesized node). Emitted after
@@ -460,6 +472,10 @@ fn lower_property_site(
     // receiver tests the receiver layout's colour bit and loads the colour
     // slot (`expr/layout_read.rs`); everything else, and every miss, is the
     // site below.
+    let family = global_reference
+        .is_none()
+        .then(|| crate::expr::class_family_read::begin(ctx, object, property, &obj_box))
+        .flatten();
     let arm = if global_reference.is_none() {
         let bits = ctx.block().bitcast_double_to_i64(&obj_box);
         crate::expr::layout_read::begin(ctx, &bits, property)
@@ -473,8 +489,12 @@ fn lower_property_site(
         )
     });
     let value = lower_property_site_tail(ctx, object, property, global_reference, obj_box)?;
-    Ok(match arm {
+    let value = match arm {
         Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
+        None => value,
+    };
+    Ok(match family {
+        Some(arm) => crate::expr::class_family_read::finish(ctx, arm, &value),
         None => value,
     })
 }

@@ -228,6 +228,14 @@ pub(crate) fn prove(
         crate::fallback_diag::refuse("private key requires private-element semantics");
         return None;
     }
+    // Inside an element-shape fast clone a tracked read belongs to its loop
+    // fact (`element_shape_loop_fact_for_property_get`). The clone's element
+    // binding (`const o = a[i]`) is virtual and binds no slot, so a proof here
+    // would lower `o` itself and read undefined. Not a fallback: the loop
+    // fact lowers the read.
+    if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some() {
+        return None;
+    }
     let (mut recv, binding) = receiver(ctx, object).or_else(|| {
         crate::fallback_diag::refuse("receiver has no prefix-stable binding proof");
         None

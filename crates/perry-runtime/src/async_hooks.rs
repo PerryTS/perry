@@ -1381,7 +1381,28 @@ pub(crate) fn gc_destroy_work_pending() -> bool {
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {
-    let notifications: Vec<(u64, bool)> = GC_DESTROY_QUEUE.lock().unwrap().drain(..).collect();
+    let mut active_serials = EXECUTION_STACK.with(|stack| {
+        stack
+            .borrow()
+            .iter()
+            .map(|entry| resource_state::public_id(entry.0))
+            .collect::<Vec<_>>()
+    });
+    active_serials.push(resource_state::public_id(execution_async_id_u64()));
+    let mut notifications = Vec::new();
+    // A checkpoint may run inside a nested job before its ancestors emit after.
+    // Retain those notifications without blocking unrelated ready resources.
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .retain(|&(serial, promise)| {
+            if active_serials.contains(&serial) {
+                true
+            } else {
+                notifications.push((serial, promise));
+                false
+            }
+        });
     let count = notifications.len() as i32;
     for (serial, promise) in notifications {
         emit_destroy_notification(serial, promise);

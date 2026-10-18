@@ -426,9 +426,16 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             }
             let needs_element_note = (*header).obj_type == GC_TYPE_ARRAY
                 && (*header)._reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
-            if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN
-                && !needs_element_note
+            let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
+            if !needs_element_note
+                && (state == GC_LAYOUT_UNKNOWN
+                    || (state == GC_LAYOUT_POINTER_FREE
+                        && !layout_pointer_bearing_bits(value_bits)))
             {
+                // No declaration changes for scalar stores into a pointer-free
+                // payload. Decide that beside UNKNOWN, before the outlined
+                // transition call; arrays with an element-shape proof still
+                // pass through its maintenance funnel.
                 return;
             }
         }

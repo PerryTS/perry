@@ -24,7 +24,8 @@
 //! can run unbounded without a call, and a call that runs forever polls in its
 //! own loops), every back-edge (no counted-loop or "contains a call"
 //! exemption: a runtime callee never polls, so a loop whose only calls are
-//! into the runtime still needs its own), no call safepoints.
+//! into the runtime still needs its own), no call safepoints. Complete
+//! executables proven to have no Worker agents omit this pass entirely.
 
 use anyhow::{anyhow, Result};
 use inkwell::memory_buffer::MemoryBuffer;
@@ -71,6 +72,13 @@ pub(crate) fn polls_enabled_for(effective_target: &str) -> bool {
 
 /// Insert the back-edge polls into every function `module` defines.
 pub(super) fn place(module: &Module<'_>, tm: &TargetMachine) -> Result<()> {
+    // The compiler's whole-program Worker analysis also selects per-agent
+    // globals. Its explicit no-worker proof licenses omitting these polls:
+    // no thread executing this image can acquire a termination handle.
+    // Absence of the proof stays conservative, including reusable libraries.
+    if module.get_global_metadata_size("perry.no_workers") != 0 {
+        return Ok(());
+    }
     let ctx = module.get_context();
     let buffer = MemoryBuffer::create_from_memory_range_copy(POLL_IR.as_bytes(), "perry_loop_poll");
     let poll = ctx
@@ -209,5 +217,43 @@ entry:
             !ir.contains("gc \"statepoint-example\""),
             "a lent strategy is returned:\n{ir}"
         );
+    }
+
+    #[test]
+    fn whole_program_no_worker_proof_omits_interrupt_polls() {
+        let ir = polled(&format!(
+            "{SPIN}\n!perry.no_workers = !{{!0}}\n!0 = !{{}}\n"
+        ));
+        assert!(!ir.contains("PERRY_LOOP_INTERRUPT_ARMED"), "{ir}");
+        assert!(!ir.contains("js_loop_interrupt"), "{ir}");
+        assert!(!ir.contains("gc.safepoint_poll"), "{ir}");
+    }
+
+    #[test]
+    fn only_complete_executables_without_workers_publish_the_proof() {
+        for (output_type, workers, expected) in [
+            ("executable", false, true),
+            ("executable", true, false),
+            ("library", false, false),
+        ] {
+            let module = perry_hir::Module::new("worker_poll_proof");
+            let ir = crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    output_type: output_type.to_string(),
+                    program_has_worker: workers,
+                    emit_ir_only: true,
+                    is_entry_module: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let ir = String::from_utf8(ir).unwrap();
+            assert_eq!(
+                ir.contains("!perry.no_workers ="),
+                expected,
+                "output={output_type}, workers={workers}: {ir}"
+            );
+        }
     }
 }
