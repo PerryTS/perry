@@ -7,6 +7,7 @@ fn literal(captures: u32) -> Expr {
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::Array(
             (0..captures).map(Expr::LocalGet).collect(),
+            None,
         )))],
         captures: (0..captures).collect(),
         mutable_captures: Vec::new(),
@@ -50,7 +51,7 @@ fn compile(captures: u32, target: &str) -> String {
     });
     let options = crate::CompileOptions {
         emit_ir_only: true,
-        target_triple: target.into(),
+        target: Some(target.into()),
         ..Default::default()
     };
     String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap()
