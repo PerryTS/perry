@@ -593,7 +593,9 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
         for i in 0..64 {
             let key = Key::Named(m.atom(&format!("property{i}")));
             for &t in &holders {
-                reads.push(m.cv(t, key));
+                // These are holders with empty own fields, so their full
+                // shared summary equals the inherited union tested here.
+                reads.push(m.prototype_value(t, key));
             }
         }
         m.solve();
