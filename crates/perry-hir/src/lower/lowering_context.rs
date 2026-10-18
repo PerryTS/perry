@@ -517,6 +517,9 @@ pub struct LoweringContext {
     /// Module-level variable names pre-registered in the forward-declaration pass.
     /// Used to avoid duplicate define_local calls when the actual declaration is lowered.
     pub(crate) pre_registered_module_vars: HashSet<String>,
+    /// Module-level enums bound to their runtime object (`enum_value_binding`):
+    /// a later declaration of the same name merges into that local.
+    pub(crate) enum_object_locals: HashMap<String, LocalId>,
     /// Subset of `pre_registered_module_vars` that came from syntactic `var`
     /// declarations. Sloppy assignments before a later `var` need an early
     /// backing slot; `let`/`const` should not use that path.

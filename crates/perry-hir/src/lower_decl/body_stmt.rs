@@ -2413,9 +2413,12 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
             let lowered = lower_enum_decl(ctx, enum_decl, false)?;
             if !enum_decl.declare {
-                if let Some((_, bind)) =
-                    crate::lower_decl::enum_value_binding(ctx, &lowered.name, false)
-                {
+                if let Some((_, bind)) = crate::lower_decl::enum_value_binding(
+                    ctx,
+                    &lowered.name,
+                    false,
+                    &lowered.members,
+                ) {
                     result.push(bind);
                 }
             }

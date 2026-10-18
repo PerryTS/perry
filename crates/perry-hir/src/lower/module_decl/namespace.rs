@@ -603,12 +603,13 @@ pub(crate) fn lower_namespace_as_class(
                     ast::Decl::TsEnum(enum_decl) => {
                         let en = lower_enum_decl(ctx, enum_decl, false)?;
                         let name = en.name.clone();
+                        let own = en.members.clone();
                         module.enums.push(en);
                         if enum_decl.declare {
                             continue;
                         }
                         if let Some((id, bind)) =
-                            crate::lower_decl::enum_value_binding(ctx, &name, true)
+                            crate::lower_decl::enum_value_binding(ctx, &name, true, &own)
                         {
                             module.init.push(bind);
                             ctx.namespace_vars

@@ -639,6 +639,18 @@ impl LoweringContext {
         self.enums.push((name, id, members));
     }
 
+    /// Add the members of a later declaration of the enum `name` that it
+    /// does not hold yet.
+    pub(crate) fn extend_enum(&mut self, name: &str, members: Vec<(String, EnumValue)>) {
+        if let Some((_, _, existing)) = self.enums.iter_mut().find(|(n, _, _)| n == name) {
+            for (member, value) in members {
+                if !existing.iter().any(|(m, _)| *m == member) {
+                    existing.push((member, value));
+                }
+            }
+        }
+    }
+
     pub(crate) fn lookup_enum(&self, name: &str) -> Option<(EnumId, &[(String, EnumValue)])> {
         self.enums
             .iter()

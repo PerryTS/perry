@@ -19,6 +19,16 @@ pub fn lower_enum_decl(
     // minting a fresh one — that avoids a duplicate `ctx.enums` entry and
     // keeps the EnumMember lookups pointing at the same id.
     let enum_id = if let Some((existing_id, _)) = ctx.lookup_enum(&name) {
+        // A later declaration merging into the same enum (`enum E { A }
+        // enum E { B = 1 }`) adds its members; the pre-registration of this
+        // very declaration already holds them.
+        ctx.extend_enum(
+            &name,
+            members
+                .iter()
+                .map(|m| (m.name.clone(), m.value.clone()))
+                .collect(),
+        );
         existing_id
     } else {
         let id = ctx.fresh_enum();
@@ -62,12 +72,40 @@ pub(crate) fn enum_runtime_object(members: &[(String, EnumValue)]) -> Expr {
 /// a value: `const o = E`, `export { E }`, `Debug.formatEnum(v, E)`.
 /// `E.Member` keeps folding to the constant. A module-level enum reuses the
 /// `var`-like local `pre_register_enum` created for forward references; a
-/// function-body enum binds a fresh local.
+/// function-body enum binds a fresh local. A later module-level declaration
+/// merging into an enum already bound in this scope stores its own members
+/// (`own`) and their reverse entries onto that object, as tsc's IIFE over
+/// the existing `E` does.
 pub(crate) fn enum_value_binding(
     ctx: &mut LoweringContext,
     name: &str,
     module_level: bool,
+    own: &[EnumMember],
 ) -> Option<(LocalId, Stmt)> {
+    if module_level {
+        if let Some(&bound) = ctx.enum_object_locals.get(name) {
+            if ctx.lookup_local(name) == Some(bound) {
+                let mut stores = Vec::new();
+                for member in own {
+                    let mut store = |key: String, value: Expr| {
+                        stores.push(Expr::IndexSet {
+                            object: Box::new(Expr::LocalGet(bound)),
+                            index: Box::new(Expr::String(key)),
+                            value: Box::new(value),
+                        })
+                    };
+                    match &member.value {
+                        EnumValue::Number(n) => {
+                            store(member.name.clone(), Expr::Number(*n as f64));
+                            store(n.to_string(), Expr::String(member.name.clone()));
+                        }
+                        EnumValue::String(s) => store(member.name.clone(), Expr::String(s.clone())),
+                    }
+                }
+                return Some((bound, Stmt::Expr(Expr::Sequence(stores))));
+            }
+        }
+    }
     let members = ctx.lookup_enum(name)?.1.to_vec();
     let id = if module_level && ctx.pre_registered_module_vars.remove(name) {
         ctx.pre_registered_module_var_decls.remove(name);
@@ -82,6 +120,9 @@ pub(crate) fn enum_value_binding(
         mutable: true,
         init: Some(enum_runtime_object(&members)),
     };
+    if module_level {
+        ctx.enum_object_locals.insert(name.to_string(), id);
+    }
     Some((id, stmt))
 }
 

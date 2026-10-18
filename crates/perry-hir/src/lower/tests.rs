@@ -1368,3 +1368,91 @@ fn outlined_iterator_close_uses_the_existing_synchronous_protocol_channel() {
 }
 
 mod export_class_declarator;
+
+#[test]
+fn a_merged_enum_declaration_stores_its_members_on_the_first_object() {
+    let source = "enum M { P = 0, Q = 1 }\nenum M { R = 2 }\nconsole.log(M);\n";
+    let module = perry_parser::parse_typescript(source, "merge.ts").expect("source parses");
+    let hir = super::lower_module(&module, "merge", "merge.ts").expect("source lowers");
+    let bound = hir
+        .init
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Let { name, id, .. } if name == "M" => Some(*id),
+            _ => None,
+        })
+        .expect("the first declaration binds M");
+    let lets = hir
+        .init
+        .iter()
+        .filter(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == "M"))
+        .count();
+    assert_eq!(
+        lets, 1,
+        "the second declaration must not rebind M: {:?}",
+        hir.init
+    );
+    let stores = hir
+        .init
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Expr(Expr::Sequence(stores)) => Some(stores),
+            _ => None,
+        })
+        .expect("the second declaration stores onto M");
+    let keys: Vec<&str> = stores
+        .iter()
+        .map(|store| match store {
+            Expr::IndexSet { object, index, .. } => {
+                assert!(matches!(object.as_ref(), Expr::LocalGet(id) if *id == bound));
+                match index.as_ref() {
+                    Expr::String(key) => key.as_str(),
+                    other => panic!("constant key expected: {other:?}"),
+                }
+            }
+            other => panic!("a store expected: {other:?}"),
+        })
+        .collect();
+    assert_eq!(keys, ["R", "2"]);
+}
+
+#[test]
+fn a_fresh_esbuild_enum_iife_lowers_to_an_image() {
+    let source = r#"var K = ((K2) => { K2[K2["A"] = 0] = "A"; K2["S"] = "s"; return K2; })(K || {});
+console.log(K);
+"#;
+    let module = perry_parser::parse_typescript(source, "image.ts").expect("source parses");
+    let hir = super::lower_module(&module, "image", "image.ts").expect("source lowers");
+    let dump = format!("{:?}", hir.init);
+    assert!(dump.contains("EnumImage"), "{dump}");
+    assert!(
+        !dump.contains("Closure"),
+        "no IIFE closure may remain: {dump}"
+    );
+}
+
+#[test]
+fn a_literal_left_operand_short_circuits_without_lowering_the_right() {
+    let source = "var a = 1;\nconst x = 0 && (globalThis.dead = { a, b: () => a });\nconst y = \"s\" || g();\nconst z = 1 ?? g();\nconst w = null ?? 2;\n";
+    let module = perry_parser::parse_typescript(source, "fold.ts").expect("source parses");
+    let hir = super::lower_module(&module, "fold", "fold.ts").expect("source lowers");
+    let init = |name: &str| {
+        hir.init
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::Let { name: n, init, .. } if n == name => init.clone(),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} is bound"))
+    };
+    assert!(matches!(init("x"), Expr::Integer(0)), "{:?}", init("x"));
+    assert!(
+        matches!(init("y"), Expr::String(ref s) if s == "s"),
+        "{:?}",
+        init("y")
+    );
+    assert!(matches!(init("z"), Expr::Integer(1)), "{:?}", init("z"));
+    // `null ?? 2` takes the right operand: not folded.
+    assert!(matches!(init("w"), Expr::Logical { .. }), "{:?}", init("w"));
+    assert!(!format!("{:?}", hir.init).contains("Closure"));
+}
