@@ -291,6 +291,8 @@ pub enum Cons {
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
     /// prototype (and further up), shared by every receiver of `t`.
     ChainUnion { key: Key, dst: NodeId },
+    ProtoCall { origin: Tok, key: Key, call: CallId },
+    ThisGroup { recv: NodeId },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -311,7 +313,7 @@ pub enum Cons {
     /// An evaluated heritage value wires the child's two prototype edges.
     ClassParent { class: TmplId, reason: u32 },
     /// Invoke each known evaluated parent constructor on the child instance.
-    ParentCtor { call: CallId, this: Tok },
+    ParentCtor { class: TmplId, call: CallId, this: Tok },
     /// Continue `super` from every evaluated parent prototype/constructor.
     SuperFrom {
         recv: NodeId,
@@ -354,7 +356,6 @@ pub enum Cons {
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
-    ThisTo { origin: Tok },
     /// The node is call `call`'s callee relay (the union of the method
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
@@ -403,6 +404,8 @@ impl Cons {
             Cons::Implicit { .. } => "implicit",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::ProtoCall { .. } => "protocall",
+            Cons::ThisGroup { .. } => "thisgroup",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -423,7 +426,6 @@ impl Cons {
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ShareBuffer { .. } => "sharebuffer",
-            Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
@@ -440,8 +442,14 @@ pub struct Node {
     pub delta: Vec<Tok>,
     pub dprim: u16,
     pub succ: Vec<NodeId>,
+    /// Typed copies into argument relays; only call_args-domain tokens flow.
+    pub call_succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
     pub in_wl: bool,
+    /// Canonical shared-value vertex after a prototype-summary cycle merge.
+    pub prototype_alias: Option<NodeId>,
+    pub prototype_key: Option<Key>,
+    pub prototype_predecessors: Option<Box<crate::pts::FxHashSet<NodeId>>>,
     /// The set grew past the widening bound: it holds only ⊤ from now on,
     /// and every token that reaches it escapes.
     pub widened: bool,
@@ -449,7 +457,8 @@ pub struct Node {
     /// value: never widened (its members are bound or forwarded exactly as
     /// the per-site rules it replaces would have).
     pub internal: bool,
-    /// Successor set, once the list is long (exact edge dedup for hubs: a
+    /// All logical copy successors, including primitive-only edges, once
+    /// the lists are long (exact edge dedup for hubs: a
     /// function's return node can be offered the same edge millions of
     /// times).
     pub succ_set: Option<Box<crate::pts::FxHashSet<NodeId>>>,
@@ -538,10 +547,10 @@ pub struct Model {
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u8)>,
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
-    /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
+    /// `CallThis` receiver groups (see `Model::bind_via`): one input per method node,
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.
-    pub this_done: crate::pts::FxHashSet<(NodeId, Tok)>,
+    pub this_groups: FxHashMap<NodeId, NodeId>,
     pub relays: FxHashMap<CallId, NodeId>,
     pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
     pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,
@@ -572,8 +581,11 @@ pub struct Model {
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
-    /// Shared prototype-chain value nodes: (token, key) → node.
-    pub cv_nodes: FxHashMap<(Tok, Key), NodeId>,
+    /// Own plus inherited values at a prototype, shared by its receivers.
+    pub prototype_edges_since_scc: usize,
+    pub prototype_scc_interval: usize,
+    pub prototype_merging: bool,
+    pub prototype_values: FxHashMap<(Tok, Key), NodeId>,
     /// Prototype closure nodes: token → node.
     pub cp_nodes: FxHashMap<Tok, NodeId>,
     /// Shared chain unions that stopped at a declared member: resumed when

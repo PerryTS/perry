@@ -31,6 +31,8 @@ pub mod pts;
 mod solve;
 mod solve_calls;
 mod solve_rel;
+mod solve_proto;
+mod solve_proto_scc;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -189,6 +191,19 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
             eprintln!("perry: wpfacts labelwork {k} succ={es} cons={ec} pops={pops}");
         }
         let m = &g.m;
+        let mut pvs: Vec<_> = m.prototype_values.iter().filter_map(|(&(holder, key), &n)| {
+            if m.prototype_root(n) != n { return None; }
+            let node = &m.nodes[n as usize];
+            Some((node.pts.len() * node.succ.len(), holder, key, n))
+        }).collect();
+        pvs.sort_unstable_by(|a,b| b.0.cmp(&a.0));
+        for (_, holder, key, n) in pvs.iter().take(15) {
+            let node = &m.nodes[*n as usize];
+            let mut targets: Vec<_> = node.succ.iter().map(|&d| m.prototype_root(d)).collect();
+            targets.sort_unstable(); targets.dedup();
+            eprintln!("perry: wpfacts prototypefanout {} key={} n={n} pts={} top={} succ={} unique={}",
+                m.tok_name(*holder), m.key_name(*key), node.pts.len(), node.pts.contains_tok(model::TOP), node.succ.len(), targets.len());
+        }
         let mut gs: Vec<_> = m
             .acc_groups
             .iter()

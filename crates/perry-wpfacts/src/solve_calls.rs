@@ -370,7 +370,7 @@ impl Model {
         let t = &self.tmpls[tm as usize];
         if t.ctor.is_none() {
             if let Some(parent) = t.evaluated_parent {
-                self.cons(parent, Cons::ParentCtor { call, this: inst });
+                self.cons(parent, Cons::ParentCtor { class: tm, call, this: inst });
                 return;
             }
         }

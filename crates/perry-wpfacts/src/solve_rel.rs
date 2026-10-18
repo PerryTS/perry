@@ -34,8 +34,12 @@ impl Model {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }
             Cons::SuperCtor { class, call } => format!("superctor {n} {class} {call}"),
+            Cons::ProtoCall { origin, key, call } => {
+                format!("protocall {n} {origin} {} {call}", self.key_name(*key))
+            }
+            Cons::ThisGroup { recv } => format!("thisgroup {n} {recv}"),
             Cons::ClassParent { class, reason } => format!("classparent {n} {class} {reason}"),
-            Cons::ParentCtor { call, this } => format!("parentctor {n} {call} {this}"),
+            Cons::ParentCtor { class, call, this } => format!("parentctor {n} {class} {call} {this}"),
             Cons::SuperFrom { recv, key, act } => {
                 format!("superfrom {n} {recv} {} {act:?}", self.key_name(*key))
             }
@@ -66,7 +70,6 @@ impl Model {
             Cons::Arith { dst, add } => format!("arith {n} {dst} {}", *add as u8),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
-            Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
             Cons::HolderStep { key, pass, stop } => {

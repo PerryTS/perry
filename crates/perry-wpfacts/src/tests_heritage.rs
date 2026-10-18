@@ -325,3 +325,81 @@ fn specialized_class_site_keeps_heritage_after_metadata_resolution() {
         pf.dump_text()
     );
 }
+#[test]
+fn class_prototype_reference_stays_fixed_when_the_class_escapes_or_is_written() {
+    use crate::model::{Key, TokKind};
+    let ast = perry_parser::parse_typescript(
+        r#"
+        class Base { read() { return 1; } }
+        Reflect.set(Base, "prototype", { wrong: true });
+        function make(Parent) { return class Child extends Parent { static x = 1; }; }
+        const factory = make; const C = factory(Base); new C().read();
+    "#,
+        "fixed.ts",
+    )
+    .unwrap();
+    let hir = perry_hir::lower_module(&ast, "fixed", "fixed.ts").unwrap();
+    let mut g = crate::gen::Gen::new(vec![("fixed.ts", &hir)], false, false);
+    g.register_all();
+    g.link_exports();
+    g.walk_all();
+    g.m.solve();
+    let base =
+        g.m.tmpls
+            .iter()
+            .position(|t| t.display.ends_with(":Base"))
+            .unwrap() as u32;
+    let child =
+        g.m.tmpls
+            .iter()
+            .position(|t| t.display.contains(":Child__class_expr_"))
+            .unwrap() as u32;
+    let class = g.m.tok(TokKind::ClassObj(base));
+    let proto = g.m.tok(TokKind::Proto(base));
+    let key = g.m.atom("prototype");
+    let field = g.m.field(class, key);
+    assert!(g.m.fixed_class_prototype(class, Key::Named(key)));
+    assert_eq!(g.m.nodes[field as usize].pts.to_sorted(), vec![proto]);
+    let reason = g.m.reason("class passed to unknown code");
+    g.m.escape(class, reason);
+    g.m.solve();
+    assert_eq!(g.m.nodes[field as usize].pts.to_sorted(), vec![proto]);
+    let child_proto = g.m.tok(TokKind::Proto(child));
+    let parents = g.m.proto_node(child_proto);
+    assert_eq!(g.m.nodes[parents as usize].pts.to_sorted(), vec![proto]);
+}
+#[test]
+fn evaluated_builtin_parent_keeps_the_existing_native_summary() {
+    let pf = facts(
+        r#"
+        function make() { return class NativeChild extends Error {
+            static marker = 1;
+            constructor() { super("message"); this.extra = 1; }
+        }; }
+        const factory = make; const C = factory();
+        console.log(new C().message);
+    "#,
+    );
+    let c = child(&pf, "NativeChild");
+    assert!(c.escape.is_none() && c.hard.is_none(), "{}", pf.dump_text());
+    assert!(
+        c.fields.iter().any(|f| f.key == "message"),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn shadowed_native_parent_keeps_the_unknown_boundary() {
+    let pf = facts(
+        r#"
+        function make(Error) { return class ShadowedChild extends Error { static marker = 1; }; }
+        const factory = make; const C = factory(unknownParent()); new C();
+    "#,
+    );
+    assert!(
+        child(&pf, "ShadowedChild").hard.is_some(),
+        "{}",
+        pf.dump_text()
+    );
+}

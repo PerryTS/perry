@@ -16,8 +16,10 @@ impl Model {
 
     /// Add tokens/prims to a node; schedules it when anything is new.
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
+        let n = self.prototype_root(n);
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
+        let mut unknown = false;
         if node.widened {
             // A widened set is {⊤}: every token reaching it escapes.
             for &t in toks {
@@ -35,6 +37,7 @@ impl Model {
                     top_new |= t == TOP;
                 }
             }
+            unknown = top_new;
             if top_new && self.explain {
                 self.top_pred
                     .entry(n)
@@ -69,6 +72,7 @@ impl Model {
                 node.delta.clear();
                 node.delta.push(TOP);
                 changed = true;
+                unknown = true;
                 self.widened_nodes += 1;
                 if let Some(r) = self.relations.as_mut() {
                     r.push(format!("W widen {n}"));
@@ -82,9 +86,18 @@ impl Model {
             node.dprim |= newp;
             changed = true;
         }
-        if changed && !node.in_wl {
+        if changed {
+            let queued = node.in_wl;
             node.in_wl = true;
-            self.wl.push_back(n);
+            if unknown && (self.labels[n as usize] == "callee-relay"
+                || !node.call_succ.is_empty()) {
+                // Deliver a call boundary before expanding more known
+                // alternatives. A queued node may get one redundant entry;
+                // its already-drained delta makes that entry a no-op.
+                self.wl.push_front(n);
+            } else if !queued {
+                self.wl.push_back(n);
+            }
         }
     }
 
@@ -134,7 +147,7 @@ impl Model {
         let stopped: usize = self.stopped.values().map(|v| v.len()).sum();
         let csites: usize = self.callee_sites.values().map(|v| v.len()).sum();
         format!(
-            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} widenq={} widened={} escaped={} entries={}",
+            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} pv={} cp={} widenq={} widened={} escaped={} entries={}",
             self.walk_nodes.len(),
             self.relays.len(),
             self.pops,
@@ -153,7 +166,7 @@ impl Model {
             self.callthis_done.len(),
             visits,
             self.any_walks.len(),
-            self.cv_nodes.len(),
+            self.prototype_values.len(),
             self.cp_nodes.len(),
             self.widen_queue.len(),
             self.widened_nodes,
@@ -250,9 +263,12 @@ impl Model {
     }
 
     fn edge_impl(&mut self, a: NodeId, b: NodeId, log: bool) {
+        let a = self.prototype_root(a);
+        let b = self.prototype_root(b);
         if a == b {
             return;
         }
+        self.note_prototype_arc(a, b);
         // Dedup against short successor lists only: a duplicate edge costs
         // a little propagation, a global edge set costs gigabytes.
         let b_widened = self.nodes[b as usize].widened;
@@ -265,18 +281,18 @@ impl Model {
                     }
                 }
                 None => {
-                    if node.succ.contains(&b) {
+                    if node.succ.contains(&b) || node.prim_succ.contains(&b) {
                         return;
                     }
-                    if node.succ.len() >= 16 {
+                    if node.succ.len() + node.prim_succ.len() >= 16 {
                         let mut set: crate::pts::FxHashSet<NodeId> =
-                            node.succ.iter().copied().collect();
+                            node.succ.iter().chain(&node.prim_succ).copied().collect();
                         set.insert(b);
                         node.succ_set = Some(Box::new(set));
                     }
                 }
             }
-            if node.widened || !b_widened {
+            if !b_widened {
                 node.succ.push(b);
             } else {
                 // Into a widened node: escape at the source, carry prims.
@@ -308,11 +324,12 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        let n = self.prototype_root(n);
         self.stats_cons += 1;
         if self.relations.is_some()
             && !matches!(
                 c,
-                Cons::ThisTo { .. }
+                Cons::ThisGroup { .. }
                     | Cons::CallArgs { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
@@ -344,12 +361,17 @@ impl Model {
 
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
+        self.collapse_prototype_cycles();
         loop {
-            self.drain_widened();
+            self.drain_prototype_work();
             let Some(n) = self.wl.pop_front() else {
                 break;
             };
             self.pops += 1;
+            if self.prototype_root(n) != n {
+                self.nodes[n as usize].in_wl = false;
+                continue;
+            }
             if self.aborted {
                 return;
             }
@@ -365,7 +387,7 @@ impl Model {
                     return;
                 }
             }
-            let (delta, dprim) = {
+            let (mut delta, dprim) = {
                 let node = &mut self.nodes[n as usize];
                 node.in_wl = false;
                 (
@@ -376,18 +398,50 @@ impl Model {
             if delta.is_empty() && dprim == 0 {
                 continue;
             }
+            if self.labels[n as usize] == "callee-relay"
+                || !self.nodes[n as usize].call_succ.is_empty()
+            {
+                if let Some(top) = delta.iter().position(|&t| t == TOP) {
+                    delta.swap(0, top);
+                }
+            }
             // Index loops (no clone of the lists): successors and
             // constraints appended while this runs already saw the full set.
             self.cur_src = n;
             self.cur_why = u32::MAX;
             let nsucc = self.nodes[n as usize].succ.len();
             let ncons0 = self.nodes[n as usize].cons.len();
-            self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64;
+            let ncalls = self.nodes[n as usize].call_succ.len();
+            let mut callables = Vec::new();
+            if ncalls != 0 {
+                callables = self.bufs.pop().unwrap_or_default();
+                callables.clear();
+                callables.extend(delta.iter().copied().filter(|&t| self.is_call_target(t)));
+            }
+            // Count the filter once, then only the tokens actually copied to
+            // call relays. The ordinary-edge/constraint work units are unchanged.
+            let call_work = if ncalls == 0 { 0 } else {
+                delta.len() as u64 + if callables.is_empty() { 0 } else {
+                    (callables.len() as u64 + 1) * ncalls as u64
+                }
+            };
+            self.work += (delta.len() as u64 + 1) * (nsucc + ncons0) as u64 + call_work;
             if self.profile.is_some() {
-                let e = self.label_work.entry(self.labels[n as usize]).or_default();
-                e.0 += delta.len() as u64 * nsucc as u64;
+                let label = if self.labels[n as usize] == "prototype-value"
+                    && self.nodes[n as usize].widened
+                {
+                    "prototype-value-wide"
+                } else {
+                    self.labels[n as usize]
+                };
+                let e = self.label_work.entry(label).or_default();
+                e.0 += delta.len() as u64 * nsucc as u64
+                    + callables.len() as u64 * ncalls as u64;
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
+            }
+            if self.profile.is_some() {
+                self.profile_prototype_fanout(n, delta.len(), callables.len());
             }
             if self.max_work != 0 && self.work > self.max_work {
                 self.aborted = true;
@@ -409,22 +463,30 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.nodes[s as usize].widened && !self.nodes[n as usize].widened {
+                if self.nodes[s as usize].widened {
                     // A widened successor holds ⊤ and escapes what reaches
                     // it: this node escapes its tokens itself from now on,
                     // and the edge carries only primitive kinds.
                     self.add(s, &delta, dprim);
                     let node = &mut self.nodes[n as usize];
                     node.succ.swap_remove(i);
-                    if let Some(set) = node.succ_set.as_mut() {
-                        set.remove(&s);
-                    }
+                    // The logical copy edge still exists as a primitive
+                    // edge. Keep its identity in the shared dedup set.
                     node.esc_out = true;
                     node.prim_succ.push(s);
                     continue;
                 }
                 self.add(s, &delta, dprim);
                 i += 1;
+            }
+            if !callables.is_empty() {
+                for i in 0..ncalls {
+                    let dst = self.nodes[n as usize].call_succ[i];
+                    self.add(dst, &callables, 0);
+                }
+            }
+            if ncalls != 0 {
+                self.bufs.push(callables);
             }
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
@@ -456,7 +518,9 @@ impl Model {
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
         let any = self.field_any(t);
-        self.edge(any, n);
+        if !self.fixed_class_prototype(t, Key::Named(a)) {
+            self.edge(any, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         n
@@ -544,6 +608,7 @@ impl Model {
     // ---------------------------------------------------------------- rules
 
     pub fn apply(&mut self, n: NodeId, c: &Cons, toks: &[Tok], prim: u16) {
+        let n = self.prototype_root(n);
         if self.profile.is_some() {
             let started = std::time::Instant::now();
             self.apply_inner(n, c, toks, prim);
@@ -646,18 +711,11 @@ impl Model {
                         }
                         continue;
                     }
-                    let f = match key {
-                        Key::Named(a) => self.field(q, a),
-                        Key::Any => self.all_fields(q),
-                    };
-                    self.edge(f, dst);
-                    self.with_b(|m| builtins::tok_load(m, q, key, dst));
-                    if self.stops_at(q, key) {
-                        self.stopped_shared.entry(q).or_default().push((key, dst));
-                    } else {
-                        let up = self.cv(q, key);
-                        self.edge(up, dst);
-                    }
+                    // Summarize the holder once, then let each receiver use
+                    // that value. In particular, widen a broad shared result
+                    // once instead of distributing its whole set per receiver.
+                    let value = self.prototype_value(q, key);
+                    self.edge(value, dst);
                 }
             }
             Cons::ProtoClosure { dst } => {
@@ -704,11 +762,15 @@ impl Model {
                     self.super_lookup(t, start, key, act);
                 }
             }
+            Cons::ProtoCall { origin, key, call } => {
+                self.prototype_call_values(origin, key, call, toks);
+            }
+            Cons::ThisGroup { recv } => self.bind_receiver_group(recv, toks),
             Cons::ClassParent { class, reason } => {
                 self.apply_class_parent(class, reason, toks, prim);
             }
-            Cons::ParentCtor { call, this } => {
-                self.apply_parent_ctor(call, this, toks);
+            Cons::ParentCtor { class, call, this } => {
+                self.apply_parent_ctor(class, call, this, toks);
             }
             Cons::SuperFrom { recv, key, act } => {
                 for &start in toks {
@@ -721,7 +783,7 @@ impl Model {
                         continue;
                     }
                     if let Some(parent) = self.tmpls[class as usize].evaluated_parent {
-                        self.cons(parent, Cons::ParentCtor { call, this: t });
+                        self.cons(parent, Cons::ParentCtor { class, call, this: t });
                         continue;
                     }
                     let parent = self.tmpls[class as usize].parent;
@@ -779,6 +841,9 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    if self.fixed_class_prototype(t, Key::Named(key)) {
+                        continue;
+                    }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
                         continue;
@@ -912,11 +977,6 @@ impl Model {
                     }
                 }
             }
-            Cons::ThisTo { origin } => {
-                for &t in toks {
-                    self.this_to(t, origin);
-                }
-            }
             Cons::CallArgs { call } => {
                 for &t in toks {
                     self.call_args(call, t);
@@ -999,7 +1059,8 @@ impl Model {
         }
         // An absent key reads `undefined`: only a definite birth key of a
         // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
+        let fixed_prototype = self.fixed_class_prototype(t, key);
+        let present = fixed_prototype || match (key, self.tmpl_of(t)) {
             (Key::Named(a), Some(tm)) => {
                 self.tmpls[tm as usize].kind.is_fact_unit()
                     && self.tmpls[tm as usize].definite.contains(&a)
@@ -1020,14 +1081,16 @@ impl Model {
             }
         }
         self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        if fixed_prototype {
+            return;
+        }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
         if key == Key::Any && self.is_array_like(t) {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv(t, key);
-        self.edge(cv, dst);
+        self.load_from_prototypes(t, key, dst);
         // Accessors run with the receiver as `this`: walk per receiver, only
         // for keys an accessor may be defined under.
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
@@ -1175,18 +1238,6 @@ impl Model {
         }
     }
 
-    /// The values `key` takes on `t`'s prototypes (transitively).
-    pub fn cv(&mut self, t: Tok, key: Key) -> NodeId {
-        if let Some(&n) = self.cv_nodes.get(&(t, key)) {
-            return n;
-        }
-        let n = self.node_l("chainval");
-        self.cv_nodes.insert((t, key), n);
-        let pn = self.proto_node(t);
-        self.cons(pn, Cons::ChainUnion { key, dst: n });
-        n
-    }
-
     /// Every prototype of `t`, transitively.
     pub fn cp(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.cp_nodes.get(&t) {
@@ -1200,7 +1251,7 @@ impl Model {
     }
 
     /// Does a lookup of `key` stop at prototype `q` (a declared member)?
-    fn stops_at(&self, q: Tok, key: Key) -> bool {
+    pub(crate) fn stops_at(&self, q: Tok, key: Key) -> bool {
         match (key, &self.toks[q as usize]) {
             (Key::Named(a), TokKind::Proto(tm)) => {
                 self.tmpls[*tm as usize].proto_members.contains(&a)
@@ -1282,8 +1333,7 @@ impl Model {
                 self.edge(f, dst);
                 self.with_b(|m| builtins::tok_load(m, start, key, dst));
                 if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.edge(up, dst);
+                    self.load_from_prototypes(start, key, dst);
                 }
             }
             ChainAct::Call(call) => {
@@ -1294,8 +1344,7 @@ impl Model {
                 self.bind_via(f, call, origin);
                 self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
                 if !self.stops_at(start, key) {
-                    let up = self.cv(start, key);
-                    self.bind_via(up, call, origin);
+                    self.call_from_prototypes(start, key, call, origin);
                     let cp = self.cp(start);
                     self.cons(cp, Cons::ProtoMethods { origin, key, call });
                 }
@@ -1330,8 +1379,7 @@ impl Model {
         }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst) in v {
-                let up = self.cv(p, key);
-                self.edge(up, dst);
+                self.load_from_prototypes(p, key, dst);
             }
         }
     }
@@ -1540,21 +1588,17 @@ impl Model {
     /// Bind `call` to every function that shows up in `callee`, with `this`
     /// fixed to `origin` (the relation `callthis callee call origin`).
     ///
-    /// The rule splits in two so a megamorphic site does not pay
-    /// receivers × methods per call: `this` binds once per (method node,
-    /// receiver), shared by every site that looks the same key up on that
-    /// receiver (`ThisTo`), and arguments/result bind once per (call,
-    /// function) through the call's relay node (`CallArgs`). A builtin
-    /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
-    /// The result is the same as one `CallThis` per (callee, call, origin).
-    fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
+    /// Receivers join a shared input node for the method value; each function
+    /// links that set to its `this`. Arguments/result bind once per (call,
+    /// function) through the call relay. Builtin namespaces run once per
+    /// (call, receiver), preserving their receiver-dependent summaries.
+    pub(crate) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
+        let callee = self.prototype_root(callee);
         if !self.callthis_done.insert((callee, call, origin)) {
             return;
         }
         self.rel(|| format!("callthis {callee} {call} {origin}"));
-        if self.this_done.insert((callee, origin)) {
-            self.cons(callee, Cons::ThisTo { origin });
-        }
+        self.add_receiver_group(callee, origin);
         let relay = match self.relays.get(&call) {
             Some(&r) => r,
             None => {
@@ -1566,7 +1610,7 @@ impl Model {
             }
         };
         if self.relay_done.insert((call, callee)) {
-            self.edge_quiet(callee, relay);
+            self.call_edge(callee, relay);
         }
         let sites = self.callee_sites.entry(callee).or_default();
         let first = sites.is_empty();
@@ -1583,23 +1627,6 @@ impl Model {
                 }
             }
             self.bufs.push(toks);
-        }
-    }
-
-    /// The `this` half of `call_tok(_, t, Some(origin))`.
-    fn this_to(&mut self, t: Tok, origin: Tok) {
-        match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => {
-                let r = self.reason("receiver of a call of an unknown function value");
-                self.escape(origin, r);
-            }
-            TokKind::Func(f) => {
-                if !self.funcs[f as usize].lexical_this {
-                    let this = self.funcs[f as usize].this;
-                    self.add_tok(this, origin);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1623,6 +1650,9 @@ impl Model {
     }
 
     fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        if self.fixed_class_prototype(t, key) {
+            return;
+        }
         self.note_fnproto_write(t, Some(key), "store");
         if t == TOP {
             let r = self.reason("stored into a value from unmodeled code");
@@ -1714,11 +1744,13 @@ impl Model {
             Key::Any => self.all_fields(t),
         };
         self.bind_via(own, call, t);
+        if self.fixed_class_prototype(t, key) {
+            return;
+        }
         self.with_b(|m| builtins::own_method(m, t, key, call));
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).
-        let cv = self.cv(t, key);
-        self.bind_via(cv, call, t);
+        self.call_from_prototypes(t, key, call, t);
         let cp = self.cp(t);
         self.cons(
             cp,

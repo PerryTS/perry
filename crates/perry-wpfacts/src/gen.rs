@@ -516,9 +516,7 @@ impl<'a> Gen<'a> {
 
     fn link_class(&mut self, mi: u32, c: &Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
-        if self.m.tmpls[tm as usize].evaluated_parent.is_some() {
-            return;
-        }
+        let evaluated = self.m.tmpls[tm as usize].evaluated_parent.is_some();
         let parent = c
             .extends_name
             .as_ref()
@@ -527,6 +525,18 @@ impl<'a> Gen<'a> {
             .extends_name
             .as_deref()
             .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
+        if evaluated {
+            // Preserve the existing native-parent resolution, but only a
+            // matching value token may select its summary during solving.
+            if !c.heritage_lexically_shadowed {
+                if let Some(n) = builtin_parent {
+                    self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.into()));
+                }
+            } else {
+                self.m.tmpls[tm as usize].native_parent = None;
+            }
+            return;
+        }
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {

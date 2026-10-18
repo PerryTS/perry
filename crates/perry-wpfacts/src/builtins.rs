@@ -1381,6 +1381,10 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
         .as_ref()
         .map(|(_, c)| c.clone())
         .unwrap_or_default();
+    native_parent_ctor_named(m, &name, call, inst);
+}
+
+pub fn native_parent_ctor_named(m: &mut Model, name: &str, call: CallId, inst: Tok) {
     if !native_parent_summarized(&name) {
         let r = m.reason(&format!("E21 native parent {name} without a summary"));
         m.mark_hard(inst, Hard::E21NativeParent, r);

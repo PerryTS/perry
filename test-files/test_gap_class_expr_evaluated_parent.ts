@@ -56,3 +56,16 @@ function nullChild() {
 }
 const AWENull = nullChild();
 console.log(Object.getPrototypeOf(AWENull.prototype) === null, new AWENull().read());
+
+// A class constructor's prototype reference cannot be replaced. The
+// prototype object's members remain mutable (covered by the re-export gap).
+function immutablePrototypeHeritage() {
+  class Stable { read() { return "stable"; } }
+  const original = Stable.prototype;
+  const changed = Reflect.set(Stable, "prototype", { read() { return "wrong"; } });
+  function make(Parent: any) { return class extends Parent {}; }
+  const factory = make;
+  const Child = factory(Stable);
+  console.log("fixed-prototype", changed, Stable.prototype === original, new Child().read());
+}
+immutablePrototypeHeritage();

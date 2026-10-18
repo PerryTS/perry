@@ -109,6 +109,33 @@ pub(crate) fn evaluated_chain(m: &Model, mut tm: TmplId) -> bool {
 }
 
 impl Model {
+    /// An ES class has a non-writable, non-configurable own `prototype`.
+    /// Its object can mutate; the constructor's reference cannot be replaced.
+    /// Synthetic literal classes and import stubs keep the conservative model.
+    pub(crate) fn fixed_class_prototype(&self, t: Tok, key: Key) -> bool {
+        let (TokKind::ClassObj(tm), Key::Named(a)) = (&self.toks[t as usize], key) else {
+            return false;
+        };
+        self.atoms[a as usize] == "prototype"
+            && matches!(
+                &self.tmpls[*tm as usize].kind,
+                TmplKind::Class { name, class_id, .. }
+                    if *class_id != 0 && !name.starts_with("__AnonShape_")
+            )
+    }
+
+    pub(crate) fn native_parent_value(&self, class: TmplId, token: Tok) -> Option<String> {
+        let name = &self.tmpls[class as usize].native_parent.as_ref()?.1;
+        let matches = match self.toks[token as usize] {
+            TokKind::Builtin(BuiltinNs::Error) => matches!(
+                name.as_str(),
+                "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+            ),
+            _ => false,
+        };
+        matches.then(|| name.clone())
+    }
+
     pub(crate) fn apply_class_parent(
         &mut self,
         class: TmplId,
@@ -122,6 +149,12 @@ impl Model {
         let proto_parent = self.proto_node(proto);
         let prototype = self.atom("prototype");
         for &t in toks {
+            if let Some(name) = self.native_parent_value(class, t) {
+                self.add_tok(ctor_parent, t);
+                let native = crate::builtins::native_proto(self, &name);
+                self.add_tok(proto_parent, native);
+                continue;
+            }
             match self.toks[t as usize] {
                 TokKind::ClassObj(_) => {
                     self.add_tok(ctor_parent, t);
@@ -131,7 +164,11 @@ impl Model {
                     self.edge(parent_proto, proto_parent);
                 }
                 _ => {
-                    self.escape(t, reason);
+                    // Once a heritage set includes unknown code, retain the
+                    // old whole-value escape boundary. This also covers known
+                    // alternatives that may be constructed by that code.
+                    let parent = self.tmpls[class as usize].evaluated_parent.unwrap();
+                    self.sink_node(parent, reason);
                     let inst = self.tok(TokKind::Obj(class));
                     self.escape(inst, reason);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
@@ -150,8 +187,18 @@ impl Model {
         // Other primitive heritage throws before any instance can be born.
     }
 
-    pub(crate) fn apply_parent_ctor(&mut self, call: CallId, this: Tok, toks: &[Tok]) {
+    pub(crate) fn apply_parent_ctor(
+        &mut self,
+        class: TmplId,
+        call: CallId,
+        this: Tok,
+        toks: &[Tok],
+    ) {
         for &t in toks {
+            if let Some(name) = self.native_parent_value(class, t) {
+                self.with_b(|m| crate::builtins::native_parent_ctor_named(m, &name, call, this));
+                continue;
+            }
             match self.toks[t as usize] {
                 TokKind::ClassObj(parent) => self.run_ctor_chain(call, parent, this),
                 _ => {
