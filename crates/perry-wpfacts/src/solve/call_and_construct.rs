@@ -113,6 +113,10 @@ impl Model {
         if !self.bind_done.insert((call, t, u32::MAX - 1)) {
             return;
         }
+        // Binding creates fresh argument/rest storage. These synthetic writes
+        // cannot access named loader properties. Spread still reads the
+        // argument array's numeric entries and can execute its getters.
+        let saved_reach = self.reach_call.take();
         let f = f as usize;
         let c = call as usize;
         let rest = self.funcs[f].rest;
@@ -142,6 +146,10 @@ impl Model {
         let nspread = self.calls[c].spread.len();
         for j in 0..nspread {
             let s = self.calls[c].spread[j];
+            self.reach_call_ops.push((
+                call,
+                crate::loader_reach::Op::Access(s, Key::Any, false, false),
+            ));
             // Spread arrays: their elements may be any parameter.
             let elems = self.node_l("spread-elems");
             self.cons(
@@ -166,6 +174,7 @@ impl Model {
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
         self.edge(fret, cret);
+        self.reach_call = saved_reach;
     }
 
     /// Calling a bound function: its target with the bound this; bound +

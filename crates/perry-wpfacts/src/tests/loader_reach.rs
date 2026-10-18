@@ -179,3 +179,9 @@ fn generated_record_marker_pollution_does_not_make_an_ordinary_object_a_loader()
     let p = crate::compute(&[("private.ts".into(), &module)], &Default::default());
     assert!(p.module_reentry.is_none(), "{}", p.dump_text());
 }
+
+#[test]
+fn source_record_marker_does_not_hide_a_callback_from_unknown_code() {
+    let p=facts("const own={__perry_cjs_record:true, run:()=>process.getBuiltinModule('module')}; console.log(own);");
+    assert!(p.module_reentry.is_some(), "{}", p.dump_text());
+}

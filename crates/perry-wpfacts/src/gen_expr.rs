@@ -372,6 +372,28 @@ impl<'a> Gen<'a> {
         }
         self.note_loader_expr(fx, e);
         let result = self.expr_inner(fx, e);
+        if !self.m.reach_user {
+            let marker = self.m.atom_index.get("__perry_cjs_record").copied();
+            let mut records = Vec::new();
+            if let Expr::New { class_name, .. } = e {
+                if let Some(&tm) = self.mods[fx.module as usize].classes.get(class_name) {
+                    records.push(tm);
+                }
+            }
+            if matches!(e, Expr::Object(_)) {
+                for t in self.m.nodes[result as usize].pts.to_sorted() {
+                    if let Some(tm) = self.m.tmpl_of(t) {
+                        records.push(tm);
+                    }
+                }
+            }
+            for tm in records {
+                if marker.is_some_and(|k| self.m.tmpls[tm as usize].birth_keys.contains(&k)) {
+                    self.m.reach_private_records.insert(tm);
+                }
+            }
+        }
+
         if self.m.reach_user
             && matches!(
                 e,

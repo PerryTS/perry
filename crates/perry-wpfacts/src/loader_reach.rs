@@ -310,13 +310,11 @@ impl<'a> Reach<'a> {
         }
     }
     fn values(&self, n: NodeId) -> Vec<Tok> {
-        let p = &self.g.m.nodes[n as usize].pts;
-        p.to_sorted()
+        self.g.m.nodes[n as usize]
+            .pts
+            .to_sorted()
             .into_iter()
-            .filter(|&t| {
-                !(self.in_top_graph || p.contains_tok(TOP))
-                    || !self.private_token(t, &mut FxHashSet::default())
-            })
+            .filter(|&t| !self.private_token(t, &mut FxHashSet::default()))
             .collect()
     }
     fn prototype(&mut self, f: FnIdx, n: NodeId) {
@@ -385,7 +383,7 @@ impl<'a> Reach<'a> {
         }
     }
     fn touch(&mut self, t: Tok) {
-        if self.in_top_graph && self.private_token(t, &mut FxHashSet::default()) {
+        if self.private_token(t, &mut FxHashSet::default()) {
             return;
         }
         if t == TOP {
@@ -526,9 +524,8 @@ impl<'a> Reach<'a> {
             return;
         }
         let mut seen = FxHashSet::default();
-        let opaque = self.calls[c as usize].contains(&TOP);
         for t in self.calls[c as usize].clone() {
-            if user && opaque && self.private_token(t, &mut FxHashSet::default()) {
+            if user && self.private_token(t, &mut FxHashSet::default()) {
                 continue;
             }
             if user && self.factory_token(t, &mut FxHashSet::default()) {
@@ -630,12 +627,10 @@ impl<'a> Reach<'a> {
         }
     }
     fn module_record(&self, t: Tok) -> bool {
-        let m = &self.g.m;
-        m.tmpl_of(t).is_some_and(|tm| {
-            m.atom_index
-                .get("__perry_cjs_record")
-                .is_some_and(|k| m.tmpls[tm as usize].birth_keys.contains(k))
-        })
+        self.g
+            .m
+            .tmpl_of(t)
+            .is_some_and(|tm| self.g.m.reach_private_records.contains(&tm))
     }
     fn access(&mut self, f: FnIdx, n: NodeId, key: Key, store: bool, loader_names: bool) {
         let m = &self.g.m;
