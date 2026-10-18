@@ -445,7 +445,7 @@ mod tests {
             let child = body(&ir, class);
             assert!(child.contains("super.checked.direct"), "{child}");
             assert!(child.contains("parentBody"), "{child}");
-            assert!(child.contains("@js_class_capture_value("), "{child}");
+            assert!(child.contains("@js_class_capture_value_or("), "{child}");
             assert!(!child.contains("@spx_shared__Base_constructor("), "{child}");
         }
     }
