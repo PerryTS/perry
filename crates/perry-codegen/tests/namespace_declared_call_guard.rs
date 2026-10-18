@@ -47,3 +47,24 @@ fn namespace_declared_callee_survives_mutation_and_uses_a_spill_guard() {
         );
     }
 }
+
+#[test]
+fn exported_namespace_publishes_a_structural_call_capability() {
+    let source = "export namespace Late { export let level=1; export let enabled=false; export function f(v:number) { return level+v; } }";
+    let mut cache = SourceCache::new();
+    let parsed = parse_typescript_with_cache(source, "producer.ts", &mut cache).unwrap();
+    let module = lower_module(&parsed.module, "producer", "producer.ts").unwrap();
+    let (caps, _) = perry_codegen::exported_object_literal_method_facts(&module);
+    let cap = caps
+        .get("Late")
+        .expect("exported namespace has a nominated layout");
+    let shape = cap
+        .final_shape
+        .as_ref()
+        .expect("structural namespace contents");
+    assert_eq!((shape.key_count, shape.live), (3, 2));
+    assert!(cap
+        .methods
+        .iter()
+        .any(|method| method.name == "f" && method.field_index == 2));
+}

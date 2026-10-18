@@ -7,7 +7,7 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 use anyhow::Result;
 use perry_hir::Expr;
 
-pub(super) fn try_lower(
+pub(crate) fn try_lower(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,

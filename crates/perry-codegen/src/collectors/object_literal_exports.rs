@@ -235,9 +235,8 @@ pub(crate) fn object_literal_facts(
     let mut exported_locals: HashSet<&str> = exported_objects.clone();
     for export in &hir.exports {
         if let Export::Named { local, exported } = export {
-            if exported_objects.contains(exported.as_str()) {
-                exported_locals.insert(local.as_str());
-            }
+            let _ = exported;
+            exported_locals.insert(local.as_str());
         }
     }
     // #11826: an importer must not read a binding that can still hold the

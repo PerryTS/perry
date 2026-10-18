@@ -22,7 +22,7 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, I1, I64};
 
 mod builtin_kind_guard;
-mod completed_object;
+pub(crate) mod completed_object;
 mod dynamic_dispatch;
 mod fetch_chain;
 mod helpers;

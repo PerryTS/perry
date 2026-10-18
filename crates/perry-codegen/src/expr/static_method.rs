@@ -160,37 +160,24 @@ fn lower_imported_value_method(
         param_types: vec![],
         return_type: HirType::Any,
     };
-    let mut operands = vec![&receiver];
-    operands.extend(args.iter());
-    crate::rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
-        let (recv_box, lowered_args) = values.split_first().expect("receiver operand");
-        let (args_ptr, args_len) = if lowered_args.is_empty() {
-            ("null".to_string(), "0".to_string())
-        } else {
-            let buf = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
-            let blk = ctx.block();
-            for (i, value) in lowered_args.iter().enumerate() {
-                let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                blk.store(DOUBLE, value, &slot);
-            }
-            (buf, lowered_args.len().to_string())
-        };
-        let method_idx = ctx.strings.intern(method);
-        let entry = ctx.strings.entry(method_idx);
-        let bytes_global = format!("@{}", entry.bytes_global);
-        let name_len = entry.byte_len.to_string();
-        Ok(ctx.block().call(
-            DOUBLE,
-            "js_native_call_method",
-            &[
-                (DOUBLE, recv_box),
-                (PTR, &bytes_global),
-                (I64, &name_len),
-                (PTR, &args_ptr),
-                (I64, &args_len),
-            ],
-        ))
-    })
+    let offset = ctx.strings.pending_call_offset();
+    if let Some(value) = crate::lower_call::property_get::completed_object::try_lower(
+        ctx, &receiver, method, args, offset,
+    )? {
+        return Ok(value);
+    }
+    // An uppercase value import is still an ordinary property reference:
+    // select its method before observable arguments, then call that value.
+    crate::lower_call::lower_split_method_call(
+        ctx,
+        &receiver,
+        method,
+        args,
+        offset,
+        &[],
+        None,
+        None,
+    )
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
