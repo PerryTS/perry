@@ -122,13 +122,11 @@ fn computed_key_add_declines_even_when_the_named_add_edge_is_warm() {
     let _no_gc = crate::gc::GcSuppressScope::new();
     unsafe {
         crate::object::ensure_object_intrinsics();
-        const CLASS: u32 = 0x434b_0001;
-        crate::object::js_register_anon_shape_class_id(CLASS);
         let name = b"__CK_computed_add_keeps_its_overflow_route";
         let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
         let atom = crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0);
         let key = crate::js_nanbox_string(atom as i64).to_bits();
-        let blank = || crate::object::js_object_alloc(CLASS, 8);
+        let blank = || crate::object::js_object_alloc_plain(8);
         let warm = blank();
         crate::object::js_object_set_field_by_name(warm, atom, 1.0);
         let control = blank();
@@ -157,9 +155,27 @@ fn computed_key_add_declines_even_when_the_named_add_edge_is_warm() {
             "computed keys outside the layout retain complete computed Set"
         );
         assert_eq!(crate::object::shapes::object_shape_stamp(target), before);
+        let boxed = crate::js_nanbox_pointer(target as i64);
         assert_eq!(
-            perry_probe_get_keyed(dir, crate::js_nanbox_pointer(target as i64).to_bits(), key)
-                .to_bits(),
+            crate::proxy::js_put_value_set_dynamic(boxed, f64::from_bits(key), 3.0, 1),
+            3.0
+        );
+        assert!(crate::object::overflow::has_overflow(target));
+        assert_eq!(
+            crate::object::layout_desc::layout_id_of_word(
+                crate::object::shapes::object_shape_stamp(target)
+            ),
+            crate::object::layout_desc::layout_id_of_word(before)
+        );
+        assert_eq!(perry_probe_get_keyed(dir, boxed.to_bits(), key), 3.0);
+        let untouched = blank();
+        assert_eq!(
+            perry_probe_get_keyed(
+                dir,
+                crate::js_nanbox_pointer(untouched as i64).to_bits(),
+                key
+            )
+            .to_bits(),
             crate::value::TAG_UNDEFINED
         );
     }

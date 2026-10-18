@@ -137,15 +137,25 @@ fn proven_finite_keys_select_fixed_slots_and_keep_the_exact_miss() {
     for count in [2, 6] {
         let ll = ir(count, true, false);
         assert!(ll.contains("finitekey.slot"), "no finite slot branch: {ll}");
-        assert_eq!(
-            ll.matches("call i32 @js_jsvalue_equals(").count(),
-            count,
-            "one comparison per proven key"
-        );
-        assert!(
-            ll.contains("call double @js_dyn_index_get("),
-            "the key miss keeps full semantics"
-        );
+        let bodies: Vec<_> = ll
+            .split("\ndefine ")
+            .filter_map(|part| part.split("\n}").next())
+            .filter(|body| body.contains("finitekey.slot"))
+            .collect();
+        assert!(!bodies.is_empty());
+        // Ordinary and specialized ABI bodies both consume the same proof.
+        // Each body must compare every candidate once and retain its miss.
+        for body in bodies {
+            assert_eq!(
+                body.matches("call i32 @js_jsvalue_equals(").count(),
+                count,
+                "one comparison per proven key in each emitted body"
+            );
+            assert!(
+                body.contains("call double @js_dyn_index_get("),
+                "the key miss keeps full semantics in each emitted body"
+            );
+        }
         #[cfg(feature = "llvm-inprocess")]
         crate::testing::verify_ir(&ll, "finite_keys").unwrap();
     }
