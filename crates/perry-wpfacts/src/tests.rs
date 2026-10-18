@@ -369,6 +369,44 @@ fn bounds_hold_during_generation() {
     );
 }
 
+/// The widening what-if (`FactsConfig::widen_groups`): 80 functions in one
+/// set widen past k = 64 by default; with the what-if they are one group
+/// (callables) and the set stays exact. The census changes no fact.
+#[test]
+fn widen_groups_what_if_keeps_callables_exact() {
+    let mut src = String::from("const all: any[] = [];\n");
+    for i in 0..80 {
+        src.push_str(&format!("all.push(function f{i}() {{ return {i}; }});\n"));
+    }
+    src.push_str("for (const f of all) console.log(f());\n");
+    let cfg = |g: Option<usize>| FactsConfig {
+        widen_k: Some(64),
+        widen_groups: g,
+        ..Default::default()
+    };
+    let base = facts_with(&src, cfg(None));
+    assert!(base.stats.widened_nodes > 0, "{}", base.dump_text());
+    assert_eq!(base.stats.widen_kept, 0);
+    let census = facts_with(
+        &src,
+        FactsConfig {
+            widen_census: true,
+            ..cfg(None)
+        },
+    );
+    let facts_only = |pf: &ProgramFacts| -> String {
+        pf.dump_text()
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(facts_only(&census), facts_only(&base));
+    let kept = facts_with(&src, cfg(Some(32)));
+    assert!(kept.stats.widen_kept > 0, "{}", kept.dump_text());
+    assert!(kept.stats.widened_nodes < base.stats.widened_nodes);
+}
+
 /// Re-binding a bound function (`f = f.bind(x)` in a loop) and calling or
 /// constructing the result must reach a fixpoint: one bound value per bind
 /// site for bound targets, and one merged call per bound value for the

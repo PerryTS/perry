@@ -507,6 +507,10 @@ pub struct Model {
     pub widen_k: usize,
     pub widen_queue: Vec<Tok>,
     pub widened_nodes: u64,
+    /// `FactsConfig::widen_census` / `widen_groups` (diagnostics).
+    pub widen_census: bool,
+    pub widen_groups: usize,
+    pub widen_kept: u64,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
     pub calls: Vec<CallSite>,
