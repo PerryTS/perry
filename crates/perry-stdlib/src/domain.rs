@@ -320,17 +320,20 @@ pub extern "C" fn js_domain_create() -> f64 {
         perry_runtime::object::js_object_alloc_null_proto(0, 0) as i64,
     ));
     let members = scope.root_nanbox_f64(js_nanbox_pointer(js_array_alloc(0) as i64));
-    native_payload::alloc(
+    let domain = scope.root_nanbox_f64(native_payload::alloc(
         &DOMAIN_FAMILY,
         DomainPayload,
         std::mem::size_of::<DomainPayload>(),
         &[
+            (b"domain", null()),
             (b"_events", events.get_nanbox_f64()),
             (b"_eventsCount", 2.0),
             (b"_maxListeners", undefined()),
             (b"members", members.get_nanbox_f64()),
         ],
-    )
+    ));
+    unsafe { set_member_domain(domain.get_nanbox_f64(), null()) };
+    domain.get_nanbox_f64()
 }
 
 #[no_mangle]
@@ -415,6 +418,7 @@ pub unsafe extern "C" fn js_domain_remove(receiver: i64, member: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let domain = scope.root_nanbox_f64(receiver_value(receiver));
     let member = scope.root_nanbox_f64(member);
+    object_set(member.get_nanbox_f64(), "domain", null());
     if let Some(mut members) = members_array(domain.get_nanbox_f64()) {
         if let Some(index) = (0..js_array_length(members)).position(|i| {
             perry_runtime::array::js_array_get_f64(members, i).to_bits()
@@ -434,9 +438,6 @@ pub unsafe extern "C" fn js_domain_remove(receiver: i64, member: f64) -> f64 {
                 js_nanbox_pointer(members as i64),
             );
         }
-    }
-    if member_domain(member.get_nanbox_f64()).to_bits() == domain.get_nanbox_f64().to_bits() {
-        set_member_domain(member.get_nanbox_f64(), null());
     }
     undefined()
 }
