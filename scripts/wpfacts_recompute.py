@@ -372,7 +372,7 @@ class Solver:
                     self.add(cp, [t])
                     self.edge(self.field(t, self.atom("prototype")), pp)
                 else:
-                    self.escape(t)
+                    self.edge(n, self.sink())
                     inst = self.tok("obj", cls)
                     self.escape(inst)
                     self.mark_hard(inst, "E11")

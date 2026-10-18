@@ -131,7 +131,11 @@ impl Model {
                     self.edge(parent_proto, proto_parent);
                 }
                 _ => {
-                    self.escape(t, reason);
+                    // Once a heritage set includes unknown code, retain the
+                    // old whole-value escape boundary. This also covers known
+                    // alternatives that may be constructed by that code.
+                    let parent = self.tmpls[class as usize].evaluated_parent.unwrap();
+                    self.sink_node(parent, reason);
                     let inst = self.tok(TokKind::Obj(class));
                     self.escape(inst, reason);
                     self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
