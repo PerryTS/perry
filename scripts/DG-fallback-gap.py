@@ -156,7 +156,7 @@ def main():
         sidecar.unlink(missing_ok=True)
         env = dict(os.environ, PERRY_KEEP_SYMBOLS='1')
         env.pop('PERRY_FALLBACK_DIAG', None)
-        command = [str(args.perry.resolve()), 'compile', '--no-auto-optimize', '--no-cache',
+        command = [str(args.perry.resolve()), 'compile', '--no-auto-optimize',
                    '--cache-dir', str(root/'cache'), str(args.fixture.resolve()), '-o', str(binary)]
         def compile(label, value):
             if value is not None:
