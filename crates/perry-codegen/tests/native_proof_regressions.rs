@@ -120,7 +120,6 @@ fn module_with_classes_and_params(
     body: Vec<Stmt>,
 ) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -8773,7 +8772,6 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         Type::Number
     };
     Module {
-        requested_modules: Vec::new(),
         name: "typed_f64_function_abi.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -8958,7 +8956,6 @@ fn typed_i1_clone_test_module() -> Module {
 
 fn typed_i1_clone_test_module_named(name: &str) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9064,7 +9061,6 @@ fn typed_i1_rejected_signature_module(case: &str) -> Module {
 
 fn typed_string_clone_test_module(case: &str) -> Module {
     let mut module = Module {
-        requested_modules: Vec::new(),
         name: "typed_string_function_abi.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9177,7 +9173,6 @@ fn typed_i1_mixed_callsite_module() -> Module {
 
 fn typed_i1_numeric_predicate_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "typed_i1_numeric_predicate.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9274,7 +9269,6 @@ fn typed_i1_numeric_predicate_module() -> Module {
 
 fn typed_i1_i32_predicate_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "typed_i1_i32_predicate.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9411,7 +9405,6 @@ fn typed_i32_return_module(case: &str) -> Module {
     };
 
     Module {
-        requested_modules: Vec::new(),
         name: format!("typed_i32_return_{case}.ts"),
         imports: Vec::new(),
         exports: Vec::new(),

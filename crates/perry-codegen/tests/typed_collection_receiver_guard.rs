@@ -55,7 +55,6 @@ fn set_type() -> Type {
 
 fn module_with(body: Vec<Stmt>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "typed_collection_receiver_guard.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

@@ -109,7 +109,6 @@ fn entry_opts() -> CompileOptions {
 
 fn shadow_hygiene_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -189,7 +188,6 @@ fn shadow_hygiene_module() -> Module {
 
 fn top_level_shadow_module(name: &str) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -306,7 +304,6 @@ fn persistent_index_alias_shadow_module() -> Module {
 
 fn flat_const_row_alias_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: "entry_flat_const_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -326,10 +323,13 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 name: "kernel".to_string(),
                 ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
                 mutable: false,
-                init: Some(Expr::Array(vec![
-                    Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
-                    Expr::Array(vec![Expr::Integer(3), Expr::Integer(4)], None),
-                ])),
+                init: Some(Expr::Array(
+                    vec![
+                        Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None),
+                        Expr::Array(vec![Expr::Integer(3), Expr::Integer(4)], None),
+                    ],
+                    None,
+                )),
             },
             Stmt::Let {
                 id: 31,
@@ -380,7 +380,6 @@ fn flat_const_row_alias_shadow_module() -> Module {
 
 fn reassigned_any_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -447,7 +446,6 @@ fn reassigned_any_shadow_module() -> Module {
 
 fn mixed_any_alias_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -529,7 +527,6 @@ fn mixed_any_alias_shadow_module() -> Module {
 
 fn closure_captured_write_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -1138,7 +1135,6 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
 
 fn canonical_str_shadow_module() -> Module {
     Module {
-        requested_modules: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),

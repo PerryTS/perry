@@ -113,7 +113,6 @@ fn module_with_classes_and_params(
     body: Vec<Stmt>,
 ) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

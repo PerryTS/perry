@@ -82,7 +82,6 @@ fn empty_opts() -> CompileOptions {
 
 fn module(name: &str, body: Vec<Stmt>) -> Module {
     Module {
-        requested_modules: Vec::new(),
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
