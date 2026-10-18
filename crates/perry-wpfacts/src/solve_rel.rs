@@ -39,7 +39,7 @@ impl Model {
             }
             Cons::ThisGroup { recv } => format!("thisgroup {n} {recv}"),
             Cons::ClassParent { class, reason } => format!("classparent {n} {class} {reason}"),
-            Cons::ParentCtor { call, this } => format!("parentctor {n} {call} {this}"),
+            Cons::ParentCtor { class, call, this } => format!("parentctor {n} {class} {call} {this}"),
             Cons::SuperFrom { recv, key, act } => {
                 format!("superfrom {n} {recv} {} {act:?}", self.key_name(*key))
             }

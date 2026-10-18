@@ -383,6 +383,10 @@ class Solver:
             cp = self.pnode(self.tok("classobj", cls))
             pp = self.pnode(self.tok("proto", cls))
             for t in toks:
+                native = self.native_parent_value(cls, t)
+                if native is not None:
+                    self.add(cp, [t]); self.add(pp, [self.tok("nativeproto", native)])
+                    continue
                 if self.toks[t][0] == "classobj":
                     self.add(cp, [t])
                     self.edge(self.field(t, self.atom("prototype")), pp)
@@ -396,8 +400,10 @@ class Solver:
                 self.add(cp, [self.tok("objectproto", "-")])
                 self.add(pp, [], NULL)
         elif op == "parentctor":
-            _, call, inst = c
+            _, cls, call, inst = c
             for t in toks:
+                if self.native_parent_value(cls, t) is not None:
+                    continue  # the existing native summary is recorded as B axioms
                 if self.toks[t][0] == "classobj":
                     self.run_ctor_chain(call, self.toks[t][1], inst)
                 else:
@@ -416,7 +422,7 @@ class Solver:
                     continue
                 tp = self.tmpls[cls]
                 if tp.get("evaluated") is not None:
-                    self.addcons(tp["evaluated"], ("parentctor", call, t))
+                    self.addcons(tp["evaluated"], ("parentctor", cls, call, t))
                 elif tp["parent"] is not None:
                     self.run_ctor_chain(call, tp["parent"], t)
         elif op == "thisfrom":
@@ -555,6 +561,18 @@ class Solver:
                 if t == TOP or (k[0] == "obj" and self.tmpls[k[1]]["kind"] == "bobj"
                                 and self.tmpls[k[1]]["what"] == "TypedArray"):
                     self.mark_hard(ta, "B1")
+
+    def native_parent_value(self, cls, token):
+        if cls is None:
+            return None
+        name = self.tmpls[cls]["native"]
+        kind = self.toks[token]
+        if (kind == ("builtin", "Error") and name in
+                ("Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError")):
+            return name
+        if kind[0] == "builtinfn" and name == "EventEmitter":
+            return name
+        return None
 
     def fixed_class_prototype(self, t, key):
         if self.atoms.get(key) != "prototype" or self.toks[t][0] != "classobj":
@@ -876,7 +894,7 @@ class Solver:
             self.call_tok(call, self.funcs[f]["tok"], inst)
             self.edge(self.funcs[f]["ret"], c["ret"])
         elif tp.get("evaluated") is not None:
-            self.addcons(tp["evaluated"], ("parentctor", call, inst))
+            self.addcons(tp["evaluated"], ("parentctor", tm, call, inst))
         elif tp["parent"] is not None:
             self.run_ctor_chain(call, tp["parent"], inst)
 
@@ -1137,7 +1155,10 @@ def run(s, rel_lines):
         elif rel == "classparent":
             deferred.append((int(a[0]), ("classparent", int(a[1]))))
         elif rel == "parentctor":
-            deferred.append((int(a[0]), ("parentctor", int(a[1]), int(a[2]))))
+            if len(a) == 4:
+                deferred.append((int(a[0]), ("parentctor", int(a[1]), int(a[2]), int(a[3]))))
+            else:
+                deferred.append((int(a[0]), ("parentctor", None, int(a[1]), int(a[2]))))
         elif rel == "superfrom":
             deferred.append((int(a[0]), ("superfrom", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
         elif rel == "superctor":

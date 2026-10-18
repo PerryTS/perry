@@ -124,6 +124,19 @@ impl Model {
             )
     }
 
+    pub(crate) fn native_parent_value(&self, class: TmplId, token: Tok) -> Option<String> {
+        let name = &self.tmpls[class as usize].native_parent.as_ref()?.1;
+        let matches = match self.toks[token as usize] {
+            TokKind::Builtin(BuiltinNs::Error) => matches!(
+                name.as_str(),
+                "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+            ),
+            TokKind::BuiltinFn => name == "EventEmitter",
+            _ => false,
+        };
+        matches.then(|| name.clone())
+    }
+
     pub(crate) fn apply_class_parent(
         &mut self,
         class: TmplId,
@@ -137,6 +150,12 @@ impl Model {
         let proto_parent = self.proto_node(proto);
         let prototype = self.atom("prototype");
         for &t in toks {
+            if let Some(name) = self.native_parent_value(class, t) {
+                self.add_tok(ctor_parent, t);
+                let native = crate::builtins::native_proto(self, &name);
+                self.add_tok(proto_parent, native);
+                continue;
+            }
             match self.toks[t as usize] {
                 TokKind::ClassObj(_) => {
                     self.add_tok(ctor_parent, t);
@@ -169,8 +188,18 @@ impl Model {
         // Other primitive heritage throws before any instance can be born.
     }
 
-    pub(crate) fn apply_parent_ctor(&mut self, call: CallId, this: Tok, toks: &[Tok]) {
+    pub(crate) fn apply_parent_ctor(
+        &mut self,
+        class: TmplId,
+        call: CallId,
+        this: Tok,
+        toks: &[Tok],
+    ) {
         for &t in toks {
+            if let Some(name) = self.native_parent_value(class, t) {
+                self.with_b(|m| crate::builtins::native_parent_ctor_named(m, &name, call, this));
+                continue;
+            }
             match self.toks[t as usize] {
                 TokKind::ClassObj(parent) => self.run_ctor_chain(call, parent, this),
                 _ => {

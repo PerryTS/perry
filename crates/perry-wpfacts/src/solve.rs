@@ -430,6 +430,9 @@ impl Model {
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
             }
+            if self.profile.is_some() {
+                self.profile_prototype_fanout(n, delta.len(), callables.len());
+            }
             if self.max_work != 0 && self.work > self.max_work {
                 self.aborted = true;
                 return;
@@ -755,8 +758,8 @@ impl Model {
             Cons::ClassParent { class, reason } => {
                 self.apply_class_parent(class, reason, toks, prim);
             }
-            Cons::ParentCtor { call, this } => {
-                self.apply_parent_ctor(call, this, toks);
+            Cons::ParentCtor { class, call, this } => {
+                self.apply_parent_ctor(class, call, this, toks);
             }
             Cons::SuperFrom { recv, key, act } => {
                 for &start in toks {
@@ -769,7 +772,7 @@ impl Model {
                         continue;
                     }
                     if let Some(parent) = self.tmpls[class as usize].evaluated_parent {
-                        self.cons(parent, Cons::ParentCtor { call, this: t });
+                        self.cons(parent, Cons::ParentCtor { class, call, this: t });
                         continue;
                     }
                     let parent = self.tmpls[class as usize].parent;

@@ -313,7 +313,7 @@ pub enum Cons {
     /// An evaluated heritage value wires the child's two prototype edges.
     ClassParent { class: TmplId, reason: u32 },
     /// Invoke each known evaluated parent constructor on the child instance.
-    ParentCtor { call: CallId, this: Tok },
+    ParentCtor { class: TmplId, call: CallId, this: Tok },
     /// Continue `super` from every evaluated parent prototype/constructor.
     SuperFrom {
         recv: NodeId,

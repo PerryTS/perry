@@ -44,6 +44,29 @@ impl Model {
         }
     }
 
+    pub(crate) fn profile_prototype_fanout(&mut self, node: NodeId, values: usize, calls: usize) {
+        if self.labels[node as usize] != "prototype-value" {
+            return;
+        }
+        for i in 0..self.nodes[node as usize].succ.len() {
+            let dst = self.nodes[node as usize].succ[i];
+            let label = match self.labels[dst as usize] {
+                "prototype-value" => "pv_to_pv",
+                "load" => "pv_to_load",
+                "local" => "pv_to_local",
+                "field" => "pv_to_field",
+                "ret" => "pv_to_return",
+                "callret" => "pv_to_callreturn",
+                "callee-relay" => "pv_to_callees",
+                "allfields" => "pv_to_fields",
+                _ => "pv_to_other",
+            };
+            self.label_work.entry(label).or_default().0 += values as u64;
+        }
+        self.label_work.entry("pv_to_typed_calls").or_default().0 +=
+            (calls * self.nodes[node as usize].call_succ.len()) as u64;
+    }
+
     pub(crate) fn is_call_target(&self, t: Tok) -> bool {
         matches!(
             self.toks[t as usize],

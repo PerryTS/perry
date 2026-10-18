@@ -368,3 +368,37 @@ fn class_prototype_reference_stays_fixed_when_the_class_escapes_or_is_written() 
     let parents = g.m.proto_node(child_proto);
     assert_eq!(g.m.nodes[parents as usize].pts.to_sorted(), vec![proto]);
 }
+#[test]
+fn evaluated_builtin_parent_keeps_the_existing_native_summary() {
+    let pf = facts(
+        r#"
+        const C = class NativeChild extends Error {
+            static marker = 1;
+            constructor() { super("message"); this.extra = 1; }
+        };
+        console.log(new C().message);
+    "#,
+    );
+    let c = child(&pf, "NativeChild");
+    assert!(c.escape.is_none() && c.hard.is_none(), "{}", pf.dump_text());
+    assert!(
+        c.fields.iter().any(|f| f.key == "message"),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn shadowed_native_parent_keeps_the_unknown_boundary() {
+    let pf = facts(
+        r#"
+        function make(Error) { return class ShadowedChild extends Error { static marker = 1; }; }
+        const factory = make; const C = factory(unknownParent()); new C();
+    "#,
+    );
+    assert!(
+        child(&pf, "ShadowedChild").hard.is_some(),
+        "{}",
+        pf.dump_text()
+    );
+}
