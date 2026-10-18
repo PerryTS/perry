@@ -114,3 +114,53 @@ fn computed_store_uses_the_wide_immutable_key_index() {
         );
     }
 }
+
+#[test]
+fn computed_key_add_declines_even_when_the_named_add_edge_is_warm() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::initialize_runtime_fixture();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        crate::object::ensure_object_intrinsics();
+        const CLASS: u32 = 0x434b_0001;
+        crate::object::js_register_anon_shape_class_id(CLASS);
+        let name = b"__CK_computed_add_keeps_its_overflow_route";
+        let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+        let atom = crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0);
+        let key = crate::js_nanbox_string(atom as i64).to_bits();
+        let blank = || crate::object::js_object_alloc(CLASS, 8);
+        let warm = blank();
+        crate::object::js_object_set_field_by_name(warm, atom, 1.0);
+        let control = blank();
+        let target = blank();
+        let dir = crate::object::shapes::ordinary_dir_addr();
+        assert_eq!(
+            perry_probe_set(
+                dir,
+                crate::js_nanbox_pointer(control as i64).to_bits(),
+                key,
+                hash,
+                2.0
+            ),
+            1,
+            "premise: the existing named key-add edge is warm and admissible"
+        );
+        let before = crate::object::shapes::object_shape_stamp(target);
+        assert_eq!(
+            perry_probe_set_keyed(
+                dir,
+                crate::js_nanbox_pointer(target as i64).to_bits(),
+                key,
+                3.0
+            ),
+            0,
+            "computed keys outside the layout retain complete computed Set"
+        );
+        assert_eq!(crate::object::shapes::object_shape_stamp(target), before);
+        assert_eq!(
+            perry_probe_get_keyed(dir, crate::js_nanbox_pointer(target as i64).to_bits(), key)
+                .to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+}

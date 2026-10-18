@@ -87,7 +87,7 @@ pub unsafe extern "C" fn perry_probe_set_keyed(
     let Some((key, hash)) = computed_key(key_bits) else {
         return 0;
     };
-    perry_probe_set(dir, obj_bits, key, hash, value)
+    super::store::probe_set::<false>(dir, obj_bits, key, hash, value)
 }
 
 #[cfg(test)]

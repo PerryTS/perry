@@ -158,6 +158,20 @@ pub unsafe extern "C" fn perry_probe_set(
     hash: u64,
     value: f64,
 ) -> i32 {
+    probe_set::<true>(dir, obj_bits, key_bits, hash, value)
+}
+
+/// Computed stores may overwrite the immutable layout or overflow, but keys
+/// outside that layout keep their ordinary computed-key overflow admission.
+/// The named store retains its existing canonical key-add operation.
+#[inline(always)]
+pub(super) unsafe fn probe_set<const ALLOW_ADDS: bool>(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> i32 {
     if obj_bits & TAG_MASK != POINTER_TAG {
         return 0;
     }
@@ -249,7 +263,7 @@ pub unsafe extern "C" fn perry_probe_set(
             if meta.is_null() || (*meta).overflow == 0 {
                 // The key is absent from a layout that lists every own key:
                 // a key add, when the chain admits it (§3.7).
-                return i32::from(probe_add(dir, obj, r, key_bits, hash, bits));
+                return i32::from(ALLOW_ADDS && probe_add(dir, obj, r, key_bits, hash, bits));
             }
             let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
             let Some(i) = crate::object::overflow::find_hashed(t, key_bits, hash) else {
