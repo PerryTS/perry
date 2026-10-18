@@ -15,7 +15,7 @@
 //! * inside `if`/`switch`/`try`/blocks/labels and expressions of a run-once
 //!   position (each executes at most once);
 //! * the body of a function immediately invoked from a run-once position —
-//!   `(function(){…})()`, `(() => {…})()`, `(function(){…}).call(…)` — or of
+//!   `(function(){…})()`, `(() => {…})()` — or of
 //!   a function DECLARATION whose name occurs exactly twice in the module:
 //!   its declaration and one call from a run-once position. The CJS wrapper's
 //!   `function __perry_cjs_factory(){…} return __perry_cjs_factory();` and
@@ -112,8 +112,6 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
     module.visit_with(&mut counts);
     let none = HashSet::new();
     let mut walk = Walk::new(&none, &none, &counts.counts);
-    // Only direct syntax proves invocation: call/apply are overridable.
-    walk.direct_iifes_only = true;
     module.visit_with(&mut walk);
     let mut names = Names {
         spans: walk.spans(),
@@ -195,7 +193,6 @@ impl Visit for ArgumentsRef {
 
 struct Walk<'a> {
     run_once: bool,
-    direct_iifes_only: bool,
     once_fns: &'a HashSet<String>,
     candidates: &'a HashSet<String>,
     counts: &'a HashMap<String, u32>,
@@ -212,7 +209,6 @@ impl<'a> Walk<'a> {
     ) -> Self {
         Walk {
             run_once: true,
-            direct_iifes_only: false,
             once_fns,
             candidates,
             counts,
@@ -237,20 +233,10 @@ impl<'a> Walk<'a> {
         self.run_once = saved;
     }
 
-    /// The function an immediately-invoked callee evaluates, if the callee is
-    /// one: `fn`, `(fn)`, `fn.call`, `(fn).apply`.
+    /// Only direct function syntax proves invocation. `call` and `apply`
+    /// are ordinary properties and can invoke the same body more than once.
     fn iife_target<'e>(&self, callee: &'e ast::Expr) -> Option<Iife<'e>> {
-        let callee = strip_parens(callee);
-        let target = match callee {
-            ast::Expr::Member(_) if self.direct_iifes_only => return None,
-            ast::Expr::Member(member) => match &member.prop {
-                ast::MemberProp::Ident(prop) if &*prop.sym == "call" || &*prop.sym == "apply" => {
-                    strip_parens(&member.obj)
-                }
-                _ => return None,
-            },
-            other => other,
-        };
+        let target = strip_parens(callee);
         match target {
             ast::Expr::Fn(fn_expr) => {
                 let named_once = fn_expr
@@ -414,7 +400,7 @@ mod tests {
                  (function(){ const callee = 1; function g(){ arguments; } class E {} })();
                  const x = (function(){ function f(){ class D {} } return f(); })();"
             ),
-            vec!["A", "B", "C", "D", "E"]
+            vec!["A", "B", "D", "E"]
         );
     }
 
@@ -433,7 +419,9 @@ mod tests {
              (function(){ const a = arguments; class M {} })();
              class K { m(){ (function(){ class I {} })(); } }
              const o = { get p(){ class J {} return 1; } };
-             function once(){ class L {} } [1].map(once);"
+             function once(){ class L {} } [1].map(once);
+             (function(){ class N {} }).call(null);
+             (() => { class O {} }).apply(null, []);"
             ),
             // K itself sits at module top; only its method body repeats.
             vec!["K"]

@@ -7,12 +7,15 @@ fnProto.call = function(_receiver) {
   const B = this();
   return [A, B];
 };
+let evaluations = 0;
 const pair = (function() {
-  class Repeated extends Base { own() { return this.value + 2; } run() { return this.own(); } }
+  const tag = ++evaluations;
+  class Repeated extends Base { own() { return this.value + 2; } run() { return this.own(); } capture() { return tag; } }
   return Repeated;
 }).call(null);
 fnProto.call = original;
 console.log('identity', pair[0] !== pair[1], pair[0].prototype !== pair[1].prototype);
+console.log('captures', new pair[0]().capture(), new pair[1]().capture());
 pair[0].prototype.own = () => 71;
 console.log('values', new pair[0]().run(), new pair[1]().run());
 let thisEvaluations = 0;
