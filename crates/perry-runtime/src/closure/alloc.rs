@@ -424,7 +424,7 @@ pub const CLOSURE_SHAPE_OFFSET: usize = std::mem::offset_of!(ClosureHeader, shap
 /// Reject overflow before masking; builtin birth stamps its declaration only
 /// after the same ordinary allocation funnel has initialized the object.
 #[inline(always)]
-fn ordinary_capture_count(word: u32) -> usize {
+pub(crate) fn ordinary_capture_count(word: u32) -> usize {
     assert_eq!(
         word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK,
         0,

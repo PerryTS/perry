@@ -8,6 +8,7 @@ mod array_storage;
 pub mod block;
 pub(crate) mod boxed_vars;
 pub(crate) mod builtin_proto;
+pub(crate) mod closure_births;
 pub mod codegen;
 pub(crate) mod collectors;
 pub(crate) mod concat_site_cache;

@@ -51,6 +51,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I32, PTR, I32],
     );
+    // A literal descriptor whose tree holds fresh closures: their birth
+    // records and the caller's capture source words (`closure_births`).
+    module.declare_function(
+        "js_value_from_literal_descriptor_closures",
+        DOUBLE,
+        &[PTR, I32, PTR, I32, PTR, I32, PTR, I32, PTR, I32],
+    );
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
     module.declare_function(
         "js_array_append_set",

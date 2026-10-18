@@ -6,6 +6,7 @@
 //!   - Followed by captured values (as f64 or i64 pointers)
 
 mod alloc;
+pub(crate) mod births;
 pub(crate) mod body_call;
 mod dispatch;
 pub(crate) use dispatch::bound_intrinsic::try_native_apply;

@@ -934,3 +934,22 @@ fn preserve_most_constructs_on_define_call_and_invoke() {
         "invoke site lost its calling convention:\n{printed}"
     );
 }
+
+/// The forms a birth table (`closure_births`) and a worker program's frame
+/// shape table (`expr::literal_descriptor`) emit construct natively: split
+/// modules take the reader, which no single-unit fixture reaches.
+#[test]
+fn birth_tables_and_frame_shape_tables_round_trip_through_the_reader() {
+    let run = crate::closure_births::tests::function_ir(&(1..=10).collect::<Vec<u32>>());
+    assert!(
+        run.contains("call void @js_closure_births_to_scope("),
+        "{run}"
+    );
+    assert!(roundtrip_ir(&run, "births_roundtrip") > 0);
+    let worker = crate::expr::literal_descriptor_worker_ir();
+    assert!(
+        worker.contains("@llvm.threadlocal.address.p0(ptr @perry_class_keys_"),
+        "{worker}"
+    );
+    assert!(roundtrip_ir(&worker, "frame_shapes_roundtrip") > 0);
+}

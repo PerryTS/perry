@@ -638,3 +638,33 @@ fn section_walked_records_survive_mach_o_dead_strip() {
         }
     }
 }
+
+/// #10399: a program that starts workers keeps its class keys and ShapeId
+/// slots per agent (thread-local), so no rodata may name them. Its descriptor
+/// builds the shape table in the frame from this agent's slot addresses.
+pub(crate) fn worker_program_ir() -> String {
+    let module = fixture(3200, 4);
+    let mut opts = super::super::class_field_barrier_tests::ir_opts();
+    opts.program_has_worker = true;
+    String::from_utf8(crate::compile_module(&module, opts).expect("lowers")).unwrap()
+}
+
+#[test]
+fn worker_program_descriptor_names_this_agents_slots() {
+    let ir = worker_program_ir();
+    assert_eq!(
+        ir.matches("call double @js_value_from_literal_descriptor(")
+            .count(),
+        1,
+        "the descriptor still serves a worker program"
+    );
+    assert!(
+        !ir.lines()
+            .any(|line| line.contains("_shapes = private constant")),
+        "no link-time shape table in a worker program"
+    );
+    assert!(
+        ir.contains("call ptr @llvm.threadlocal.address.p0(ptr @perry_class_keys_"),
+        "the keys slot is this agent's address"
+    );
+}

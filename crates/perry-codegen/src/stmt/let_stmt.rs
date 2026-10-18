@@ -386,6 +386,18 @@ pub(crate) fn lower_let(
     // reuse guard must consider the rep map too, or a redeclaration would
     // re-run the allocation path and leave the local with two slots.
     if ctx.locals.contains_key(&id) || ctx.local_slot_reps.contains_key(&id) {
+        // A birth table already bore this declaration's closure and stored it
+        // in the binding's scope slot (`closure_births`). Record what the
+        // store records; the binding is a preallocated cell, so its type
+        // stays the cell's.
+        if ctx.born_let == Some(id) {
+            ctx.born_let = None;
+            if let Some(init_expr) = init {
+                ctx.tdz_boxes.remove(&id);
+                crate::expr::note_born_local_write(ctx, id, init_expr);
+            }
+            return Ok(());
+        }
         // #10048: materialize a missing continuation cell before its initializer.
         super::boxed_local_init::ensure_reused_box_is_initialized(ctx, id);
         if let Some(init_expr) = init {

@@ -510,6 +510,7 @@ pub(in crate::codegen) fn compile_static_method(
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
+        born_let: None,
         typed_parse_rodata: Vec::new(),
         buffer_data_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),

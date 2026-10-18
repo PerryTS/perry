@@ -217,6 +217,9 @@ fn lower_stmts_list(
 ) -> Result<()> {
     crate::array_record_stack::prepare(ctx, stmts);
     let mut i = 0;
+    // Statements before this index had their closures born by one birth
+    // table (`closure_births::try_lower_let_run`).
+    let mut born_until = 0;
     while i < stmts.len() {
         ctx.ready_cell_roots.discard_notes();
         // A typed array this statement may expose is untrusted from here on,
@@ -227,7 +230,9 @@ fn lower_stmts_list(
         // #11759 (c′): the rest of a function body after `let c = new C()`
         // through a repeatable class declaration's binding tests the
         // declaration's first evaluation once (`class_first_loop`).
-        if version_tails
+        let born = i < born_until;
+        if !born
+            && version_tails
             && limit == stmts.len()
             && class_first_loop::try_lower_versioned_tail(ctx, &stmts[i..], i, emit_shadow_clears)?
         {
@@ -261,7 +266,7 @@ fn lower_stmts_list(
         // Pre-unroll (no constant-foldable k), the manual reduction is
         // still a 10 ms win (817c4b56) so we keep it as the default
         // fallback for non-unrolled functions.
-        if !ctx.was_unrolled {
+        if !born && !ctx.was_unrolled {
             if let Some(reduction) =
                 crate::expr::try_match_channel_reduction(&stmts[..limit], i, ctx.integer_locals)
             {
@@ -285,8 +290,9 @@ fn lower_stmts_list(
         // range-loop tiers to version). Probes the accessed arrays once at
         // region entry and branches into a fast copy whose masked reads are
         // bare inline loads; consumes the whole region on a match.
-        if let Some(region) =
-            masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit])
+        if let Some(region) = (!born)
+            .then(|| masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit]))
+            .flatten()
         {
             let end = i + region.len;
             masked_window_region::lower_masked_window_region(
@@ -306,12 +312,25 @@ fn lower_stmts_list(
         // unrolled loop) proves its indices against the length once, at its
         // top, like a loop region does per loop.
 
+        // A run of closure declarations bound in scope slots is born from one
+        // table; each declaration is then lowered as usual, minus its birth.
+        if !born {
+            born_until = i + crate::closure_births::try_lower_let_run(ctx, &stmts[i..limit])?;
+        }
+        if i < born_until {
+            if let Stmt::Let { id, .. } = &stmts[i] {
+                ctx.born_let = Some(*id);
+            }
+        }
         crate::expr::class_guard_memo::before_stmt(ctx, stmts, i);
         crate::layout_desc::create_families::before_stmt(ctx, stmts, i);
         let lowered = lower_stmt(ctx, &stmts[i]);
         crate::layout_desc::create_families::after_stmt(ctx);
         crate::expr::class_guard_memo::after_stmt(ctx);
         lowered?;
+        if let Some(id) = ctx.born_let.take() {
+            anyhow::bail!("closure birth table: declaration of local {id} was not lowered as born");
+        }
         let declared = binding_cell::declared_cell_roots(ctx, &stmts[i]);
         ctx.ready_cell_roots.settle(declared);
         region_loop::after_stmt(ctx, &stmts[i]);

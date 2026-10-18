@@ -103,6 +103,11 @@ pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 mod literal_descriptor;
+/// A worker program's literal-descriptor IR, for the dialect reader's round trip.
+#[cfg(test)]
+pub(crate) fn literal_descriptor_worker_ir() -> String {
+    literal_descriptor::tests::worker_program_ir()
+}
 #[cfg(test)]
 mod map_entry_at_tests;
 pub(crate) mod stack_guard;
@@ -1733,6 +1738,11 @@ pub(crate) struct FnCtx<'a> {
     /// would collide across those emissions.
     pub typed_parse_rodata: Vec<String>,
 
+    /// The declaration being lowered whose closure a birth table already bore
+    /// and stored (`closure_births::try_lower_let_run`): its `Stmt::Let`
+    /// records every fact as usual but skips the birth and the store.
+    pub born_let: Option<u32>,
+
     /// (Issue #50) Per-function row aliases. When a function declares
     /// `let krow = X[i]` where `X` is in `flat_const_arrays`, this map
     /// records `krow_id → (X_id, <cloned row_index expr>)`. The
@@ -3209,6 +3219,7 @@ pub(crate) mod class_env;
 pub(crate) mod class_field_push;
 pub(crate) mod class_first_evaluation;
 mod closure;
+pub(crate) use closure::{plain_async_step_release_ids, push_capture_word};
 mod compare;
 pub(crate) use compare::ordinary_object_allocation;
 pub(crate) mod region_guard;
@@ -3278,7 +3289,7 @@ mod generator_control_slots;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
-pub(crate) use literals_vars::bind_lowered_value_to_local;
+pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
 pub(crate) mod method_site;

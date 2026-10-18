@@ -1262,6 +1262,14 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
     }
 }
 
+/// The facts `LocalSet(id, value)` records for a write whose value a birth
+/// table already stored in the binding's scope slot (`closure_births`).
+pub(crate) fn note_born_local_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
+    super::invalidate_local_write_facts(ctx, id);
+    super::record_local_value_alias_for_write(ctx, id, value);
+    crate::codegen::arguments::note_arguments_assignment(ctx, id);
+}
+
 /// Bind an already-lowered value to a local — every obligation a
 /// `LocalSet` discharges after its initialiser has been lowered: the alias
 /// addref, closure captures and boxed cells, the canonical-i32 slot, the

@@ -218,6 +218,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_closure_alloc", I64, &[PTR, I32]);
     module.declare_function("js_closure_alloc_empty", I64, &[PTR, I32]);
     module.declare_function("js_closure_alloc_fixed", I64, &[PTR, I64, PTR]);
+    // A run of closure births walked from a rodata table into scope slots
+    // (`closure_births`).
+    module.declare_function(
+        "js_closure_births_to_scope",
+        VOID,
+        &[PTR, I32, PTR, I32, PTR, I32],
+    );
     module.declare_function("js_closure_alloc_init", I64, &[PTR, I32, PTR]);
     module.declare_function("js_closure_alloc_init_boxed", I64, &[PTR, I32, PTR]);
     module.declare_function("js_closure_alloc_small", I64, &[PTR, I64, I64, I64, I64]);

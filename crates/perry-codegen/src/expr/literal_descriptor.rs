@@ -1,25 +1,63 @@
 //! Constant record trees retain their ordinary HIR shapes, but construction is
 //! data-driven. A descriptor references the same rooted keys and typed ShapeId
 //! globals as `new`; it never changes the representation used by property reads.
+//!
+//! A tree may also hold fresh closures (an object literal of arrow getters):
+//! each is a closure node naming a birth record (`crate::closure_births`), and
+//! the runtime bears it in tree order from the caller's capture words.
 
 use std::collections::HashMap;
 
 use perry_hir::Expr;
 
 use super::FnCtx;
-use crate::types::{DOUBLE, I32, PTR};
+use crate::types::{LlvmType, DOUBLE, I32, I64, PTR};
 
 const MIN_NODES: usize = 256;
 const MAX_DEPTH: usize = 128;
 // Must match runtime::array::literal_descriptor::LiteralShape (repr(C)).
 const SHAPE_TYPE: &str = "{ i32, i32, ptr, ptr, ptr, i32, ptr, i32, i32, i64 }";
 
+/// One `LiteralShape` record. `keys` and `shape_id` name the class's keys and
+/// ShapeId slot globals; the masks are constants (or `null`).
+struct ShapeRecord {
+    class_id: u32,
+    field_count: usize,
+    keys: String,
+    shape_id: String,
+    raw_mask: String,
+    raw_mask_len: usize,
+    pointer_mask: String,
+    pointer_mask_len: usize,
+    width: u32,
+    rep: u64,
+}
+
+impl ShapeRecord {
+    fn constant(&self) -> String {
+        format!(
+            "{SHAPE_TYPE} {{ i32 {}, i32 {}, ptr @{}, ptr @{}, ptr {}, i32 {}, ptr {}, i32 {}, i32 {}, i64 {} }}",
+            self.class_id,
+            self.field_count,
+            self.keys,
+            self.shape_id,
+            self.raw_mask,
+            self.raw_mask_len,
+            self.pointer_mask,
+            self.pointer_mask_len,
+            self.width,
+            self.rep,
+        )
+    }
+}
+
 #[derive(Default)]
 struct Descriptor {
     bytes: Vec<u8>,
-    shapes: Vec<String>,
+    shapes: Vec<ShapeRecord>,
     shape_indices: HashMap<String, u32>,
     nodes: usize,
+    closures: Vec<crate::closure_births::PlainBirth>,
 }
 
 impl Descriptor {
@@ -68,12 +106,18 @@ impl Descriptor {
                 &|name| ctx.classes.get(name).copied(),
                 ctx.anon_key_adds,
             );
-        self.shapes.push(format!(
-            "{SHAPE_TYPE} {{ i32 {class_id}, i32 {argc}, ptr @{keys}, ptr @{shape_id}, \
-             ptr {raw_mask}, i32 {}, ptr {pointer_mask}, i32 {}, i32 {width}, i64 {rep} }}",
-            layout.raw_f64_mask_words.len(),
-            layout.pointer_mask_words.len(),
-        ));
+        self.shapes.push(ShapeRecord {
+            class_id: *class_id,
+            field_count: argc,
+            keys: keys.clone(),
+            shape_id,
+            raw_mask,
+            raw_mask_len: layout.raw_f64_mask_words.len(),
+            pointer_mask,
+            pointer_mask_len: layout.pointer_mask_words.len(),
+            width,
+            rep,
+        });
         self.shape_indices.insert(name.to_string(), index);
         Some(index)
     }
@@ -126,6 +170,12 @@ impl Descriptor {
                     self.value(ctx, arg, depth + 1)?;
                 }
             }
+            Expr::Closure { .. } => {
+                let birth = crate::closure_births::plain_birth(ctx, expr)?;
+                self.bytes.push(8);
+                self.u32(self.closures.len())?;
+                self.closures.push(birth);
+            }
             // Calls, spreads, computed properties, captures and user classes
             // all keep ordinary evaluation; no partially serialized expression
             // is ever emitted or evaluated.
@@ -135,33 +185,27 @@ impl Descriptor {
     }
 }
 
-pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
+pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> anyhow::Result<Option<String>> {
     if !matches!(expr, Expr::Array(_) | Expr::New { .. }) {
-        return None;
+        return Ok(None);
     }
-    // #10399: the `@<name>_shapes` table emitted below is a link-time
-    // `constant` whose entries hold the ADDRESS of each class's
-    // `perry_class_keys_*` / `perry_class_shape_id_*` globals. When the
-    // program constructs a Worker those globals are thread-local so that each
-    // thread builds its own module state — and the address of a thread-local
-    // is not a link-time constant. LLVM emits the reference anyway and `ld -r`
-    // rejects the object:
-    //
-    //   ld: perry_class_keys_<mod>____AnonShape_<hash>: TLS definition in
-    //       unit2.o section .tbss mismatches non-TLS reference in unit7.o
-    //
-    // which is how three of prettier's plugins stopped linking. Fall back to
-    // ordinary evaluation for worker-bearing programs; every other program
-    // keeps this fast path untouched.
-    if ctx.program_has_worker {
-        return None;
+    if ctx.program_has_worker && crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        return Ok(None);
     }
     let mut descriptor = Descriptor::default();
-    descriptor.value(ctx, expr, 0)?;
-    if descriptor.nodes < MIN_NODES || descriptor.shapes.is_empty() {
-        return None;
+    if descriptor.value(ctx, expr, 0).is_none() {
+        return Ok(None);
     }
-    let len = u32::try_from(descriptor.bytes.len()).ok()?;
+    // A closure node replaces a whole inline birth, so a run of them pays for
+    // the table on its own.
+    let enough = descriptor.nodes >= MIN_NODES
+        || descriptor.closures.len() >= crate::closure_births::MIN_RUN;
+    if !enough || descriptor.shapes.is_empty() {
+        return Ok(None);
+    }
+    let Ok(len) = u32::try_from(descriptor.bytes.len()) else {
+        return Ok(None);
+    };
     let index = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let function: String = ctx
@@ -172,7 +216,7 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
         .collect();
     let name = format!("perry_literal_{function}_{index}");
     let mut bytes = String::with_capacity(descriptor.bytes.len() * 3);
-    for byte in descriptor.bytes {
+    for byte in &descriptor.bytes {
         use std::fmt::Write;
         write!(&mut bytes, "\\{byte:02X}").unwrap();
     }
@@ -180,21 +224,89 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
         "@{name} = private unnamed_addr constant [{len} x i8] c\"{bytes}\"",
     ));
     let count = descriptor.shapes.len();
-    ctx.typed_parse_rodata.push(format!(
-        "@{name}_shapes = private constant [{count} x {SHAPE_TYPE}] [{}]",
-        descriptor.shapes.join(", "),
-    ));
-    Some(ctx.block().call(
-        DOUBLE,
-        "js_value_from_literal_descriptor",
-        &[
-            (PTR, &format!("@{name}")),
-            (I32, &len.to_string()),
-            (PTR, &format!("@{name}_shapes")),
-            (I32, &count.to_string()),
-        ],
-    ))
+    let bytes_ref = format!("@{name}");
+    let shapes_ref = if ctx.program_has_worker {
+        frame_shapes(ctx, &descriptor)
+    } else {
+        let records: Vec<String> = descriptor
+            .shapes
+            .iter()
+            .map(ShapeRecord::constant)
+            .collect();
+        ctx.typed_parse_rodata.push(format!(
+            "@{name}_shapes = private constant [{count} x {SHAPE_TYPE}] [{}]",
+            records.join(", "),
+        ));
+        format!("@{name}_shapes")
+    };
+    let len = len.to_string();
+    let count = count.to_string();
+    let mut args = vec![
+        (PTR, bytes_ref.as_str()),
+        (I32, len.as_str()),
+        (PTR, shapes_ref.as_str()),
+        (I32, count.as_str()),
+    ];
+    if descriptor.closures.is_empty() {
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_value_from_literal_descriptor",
+            &args,
+        )));
+    }
+    let mut births = crate::closure_births::Births::default();
+    for birth in &descriptor.closures {
+        births.add(ctx, birth, None);
+    }
+    let (operands, words) = births.emit(ctx)?;
+    args.extend(operands.iter().map(|(ty, value)| (*ty, value.as_str())));
+    let value = ctx
+        .block()
+        .call(DOUBLE, "js_value_from_literal_descriptor_closures", &args);
+    words.release(ctx);
+    Ok(Some(value))
+}
+
+/// The shape table of a program that starts workers. Each agent then owns its
+/// class keys and ShapeId slots (thread-local globals), whose addresses are no
+/// link-time constant: a rodata table naming them is rejected by `ld -r`
+/// (#10399: "TLS definition ... mismatches non-TLS reference"). The table is
+/// built in the frame instead, as words at the record's LP64 field offsets
+/// (`runtime::array::literal_descriptor::LiteralShape`), its two slot fields
+/// holding this agent's addresses.
+fn frame_shapes(ctx: &mut FnCtx<'_>, descriptor: &Descriptor) -> String {
+    const RECORD_WORDS: usize = 8;
+    let table = ctx
+        .func
+        .alloca_entry_array(I64, RECORD_WORDS * descriptor.shapes.len());
+    for (i, record) in descriptor.shapes.iter().enumerate() {
+        let keys = ctx.func.entry_tls_address(&record.keys);
+        let shape_id = ctx.func.entry_tls_address(&record.shape_id);
+        let base = 8 * RECORD_WORDS * i;
+        let fields: [(LlvmType, usize, String); 10] = [
+            (I32, 0, record.class_id.to_string()),
+            (I32, 4, record.field_count.to_string()),
+            (PTR, 8, keys),
+            (PTR, 16, shape_id),
+            (PTR, 24, record.raw_mask.clone()),
+            (I32, 32, record.raw_mask_len.to_string()),
+            (PTR, 40, record.pointer_mask.clone()),
+            (I32, 48, record.pointer_mask_len.to_string()),
+            (I32, 52, record.width.to_string()),
+            (I64, 56, record.rep.to_string()),
+        ];
+        let blk = ctx.block();
+        for (ty, offset, value) in &fields {
+            let at = blk.gep(
+                crate::types::I8,
+                &table,
+                &[(I64, &(base + offset).to_string())],
+            );
+            blk.store(ty, value, &at);
+        }
+    }
+    table
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

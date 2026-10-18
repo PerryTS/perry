@@ -26,6 +26,9 @@ pub struct LiteralShape {
 struct Reader<'a> {
     bytes: &'a [u8],
     shapes: &'a [LiteralShape],
+    /// Closure nodes' records and source words (`crate::closure::births`).
+    births: &'a [crate::closure::births::ClosureBirth],
+    sources: crate::closure::births::BirthSources<'a>,
     pos: usize,
 }
 
@@ -102,6 +105,12 @@ impl Reader<'_> {
                 }
                 Some(JSValue::pointer(object as *const u8))
             }
+            8 => {
+                let index = self.u32()? as usize;
+                let birth = self.births.get(index)?;
+                let closure = crate::closure::births::bear(birth, self.sources)?;
+                Some(JSValue::pointer(closure as *const u8))
+            }
             _ => None,
         }
     }
@@ -117,6 +126,53 @@ pub extern "C" fn js_value_from_literal_descriptor(
     shapes: *const LiteralShape,
     shape_count: u32,
 ) -> f64 {
+    let sources = unsafe {
+        crate::closure::births::BirthSources::from_raw(std::ptr::null(), 0, std::ptr::null(), 0)
+    };
+    materialize(bytes, len, shapes, shape_count, &[], sources)
+}
+
+/// A descriptor whose tree also holds fresh closures (node 8): `births` are
+/// their records, `capture_indices`/`words` the caller's capture source words
+/// (`crate::closure::births`). The closures are born in tree order, the order
+/// the inline evaluation of the same literal bears them.
+#[no_mangle]
+pub extern "C" fn js_value_from_literal_descriptor_closures(
+    bytes: *const u8,
+    len: u32,
+    shapes: *const LiteralShape,
+    shape_count: u32,
+    births: *const crate::closure::births::ClosureBirth,
+    birth_count: u32,
+    capture_indices: *const u32,
+    index_count: u32,
+    words: *const u64,
+    word_count: u32,
+) -> f64 {
+    let births = if births.is_null() || birth_count == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(births, birth_count as usize) }
+    };
+    let sources = unsafe {
+        crate::closure::births::BirthSources::from_raw(
+            capture_indices,
+            index_count,
+            words,
+            word_count,
+        )
+    };
+    materialize(bytes, len, shapes, shape_count, births, sources)
+}
+
+fn materialize(
+    bytes: *const u8,
+    len: u32,
+    shapes: *const LiteralShape,
+    shape_count: u32,
+    births: &[crate::closure::births::ClosureBirth],
+    sources: crate::closure::births::BirthSources<'_>,
+) -> f64 {
     if bytes.is_null() || shapes.is_null() || len == 0 || shape_count == 0 {
         return f64::from_bits(JSValue::undefined().bits());
     }
@@ -124,6 +180,8 @@ pub extern "C" fn js_value_from_literal_descriptor(
     let mut reader = Reader {
         bytes: unsafe { std::slice::from_raw_parts(bytes, len as usize) },
         shapes: unsafe { std::slice::from_raw_parts(shapes, shape_count as usize) },
+        births,
+        sources,
         pos: 0,
     };
     f64::from_bits(reader.value(0).unwrap_or_else(JSValue::undefined).bits())

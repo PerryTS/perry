@@ -860,6 +860,7 @@ pub(super) fn compile_method(
         was_unrolled: method.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
+        born_let: None,
         typed_parse_rodata: Vec::new(),
         buffer_data_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),

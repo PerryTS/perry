@@ -67,7 +67,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(value) = super::suffix_cursor::try_lower(ctx, expr)? {
         return Ok(value);
     }
-    if let Some(value) = super::literal_descriptor::try_lower(ctx, expr) {
+    if let Some(value) = super::literal_descriptor::try_lower(ctx, expr)? {
         return Ok(value);
     }
     if let Some(lowered) = lower_expr_value(ctx, expr)? {
