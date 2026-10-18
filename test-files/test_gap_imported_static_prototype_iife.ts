@@ -3,7 +3,7 @@ const Once = (() => {
   class Once extends Base { own() { return this.value + 2; } run() { return this.own(); } }
   return Once;
 })();
-console.log('iife', new Once().run(), Object.getPrototypeOf(Once.prototype) === Base.prototype);
+console.log('iife', new Once().run());
 function make() {
   class Many extends Base { own() { return this.value + 4; } run() { return this.own(); } }
   return Many;

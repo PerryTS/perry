@@ -77,16 +77,23 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
         spans: HashSet<(u32, u32)>,
         counts: HashMap<String, usize>,
         once: HashSet<String>,
+        named_function_depth: usize,
     }
     impl Visit for Names {
         // A named function may be exported without an extra identifier read
         // in this module. Its module-local call count is not a whole-program
         // proof. Direct IIFE expressions still use the existing span proof.
-        fn visit_fn_decl(&mut self, _: &ast::FnDecl) {}
+        fn visit_fn_decl(&mut self, f: &ast::FnDecl) {
+            self.named_function_depth += 1;
+            f.visit_children_with(self);
+            self.named_function_depth -= 1;
+        }
         fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
             let name = c.ident.sym.to_string();
             *self.counts.entry(name.clone()).or_default() += 1;
-            if self.spans.contains(&(c.class.span.lo.0, c.class.span.hi.0)) {
+            if self.named_function_depth == 0
+                && self.spans.contains(&(c.class.span.lo.0, c.class.span.hi.0))
+            {
                 self.once.insert(name);
             }
             c.visit_children_with(self);
@@ -96,6 +103,7 @@ pub fn class_names(module: &ast::Module) -> std::collections::BTreeSet<String> {
         spans: run_once_class_spans(module),
         counts: HashMap::new(),
         once: HashSet::new(),
+        named_function_depth: 0,
     };
     module.visit_with(&mut names);
     names
@@ -426,7 +434,7 @@ mod tests {
 mod name_proof_tests {
     #[test]
     fn module_and_iife_names_exclude_named_and_exported_function_bodies() {
-        let ast = perry_parser::parse_typescript("class Top {} (() => { class Iife {} })(); export function make() { class Exported {} return Exported; } make(); function one() { class Named {} } one();", "names.ts").unwrap();
+        let ast = perry_parser::parse_typescript("class Top {} (() => { class Iife {} })(); export function make() { class Exported {} return Exported; } make(); function one() { class Named {} } one(); function factory() { class Clash {} } (() => { class Clash {} })();", "names.ts").unwrap();
         assert_eq!(
             super::class_names(&ast).into_iter().collect::<Vec<_>>(),
             vec!["Iife", "Top"]
