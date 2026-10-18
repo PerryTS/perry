@@ -1851,6 +1851,10 @@ impl Model {
         let TokKind::Bound(b) = self.toks[t as usize] else {
             return;
         };
+        if self.bound_synth.contains(&call) {
+            self.into_merged(call, b, false);
+            return;
+        }
         let c = self.calls[call as usize].clone();
         let (target, bthis, bargs) = self.bound[b as usize].clone();
         let all_args = self.node_l("bound-args");
@@ -1867,6 +1871,7 @@ impl Model {
             ret: c.ret,
             site: c.site,
         });
+        self.bound_synth.insert(call2);
         self.rel(|| format!("boundcall {call2} {call} {b}"));
         // Positions shift when the bound args are not a prefix of the
         // target's params; the conservative cover: every arg to every
@@ -1878,6 +1883,65 @@ impl Model {
         self.add_tok(arr, holder);
         self.calls[call2 as usize].spread.push(arr);
         self.cons(target, Cons::Call { call: call2 });
+    }
+
+    /// Bound value `b`'s merged call (`new` or not): bound args first, then
+    /// every argument of every call routed here as a spread (the target
+    /// may itself hold bound values, so these calls must not nest).
+    fn bound_merged(&mut self, b: u32, new: bool) -> CallId {
+        if let Some(&c) = self.bound_merged.get(&(b, new)) {
+            return c;
+        }
+        let (target, bthis, bargs) = self.bound[b as usize].clone();
+        let holder = self.tok(TokKind::Bound(b));
+        let arr = self.node_l("bound-arr");
+        self.add_tok(arr, holder);
+        let sp = self.node_l("bound-spread");
+        let ret = self.node_l("bound-ret");
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            this: if new {
+                ThisArg::Undef
+            } else {
+                ThisArg::Node(bthis)
+            },
+            args: bargs,
+            spread: vec![arr, sp],
+            ret,
+            site: 0,
+        });
+        self.bound_merged.insert((b, new), call);
+        self.bound_synth.insert(call);
+        self.rel(|| format!("boundmerged {call} {b} {}", new as u8));
+        self.cons(
+            target,
+            if new {
+                Cons::New { call }
+            } else {
+                Cons::Call { call }
+            },
+        );
+        call
+    }
+
+    /// A solver-made call `call` through bound value `b`: its arguments
+    /// join the merged call's, its result is the merged call's.
+    fn into_merged(&mut self, call: CallId, b: u32, new: bool) {
+        let m = self.bound_merged(b, new);
+        if m == call {
+            return;
+        }
+        let c = self.calls[call as usize].clone();
+        let (sp, ret) = (self.calls[m as usize].spread[1], self.calls[m as usize].ret);
+        let holder = self.tok(TokKind::Bound(b));
+        let fa = self.field_any(holder);
+        for &a in &c.args {
+            self.edge(a, fa);
+        }
+        for &s in &c.spread {
+            self.edge(s, sp);
+        }
+        self.edge(ret, c.ret);
     }
 
     fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
@@ -1948,6 +2012,10 @@ impl Model {
                 }
             }
             TokKind::Bound(b) => {
+                if self.bound_synth.contains(&call) {
+                    self.into_merged(call, b, true);
+                    return;
+                }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
                 let call2 = self.calls.len() as CallId;
                 let mut args = bargs;
@@ -1959,6 +2027,8 @@ impl Model {
                     ret: c.ret,
                     site: c.site,
                 });
+                self.bound_synth.insert(call2);
+                self.rel(|| format!("boundnew {call2} {call} {b}"));
                 self.cons(target, Cons::New { call: call2 });
             }
             TokKind::Builtin(ns) => self.with_b(|m| builtins::new_builtin_ns(m, ns, call)),

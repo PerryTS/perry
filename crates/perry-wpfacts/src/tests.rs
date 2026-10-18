@@ -366,3 +366,25 @@ fn bounds_hold_during_generation() {
         full.stats.nodes
     );
 }
+
+/// Re-binding a bound function (`f = f.bind(x)` in a loop) and calling or
+/// constructing the result must reach a fixpoint: one bound value per bind
+/// site for bound targets, and one merged call per bound value for the
+/// calls the solver itself makes through a bound target.
+#[test]
+fn bind_chains_terminate() {
+    let src = r#"
+        let f: any = function (this: any, a: any) { return a; };
+        let g: any = function (this: any, a: any) { this.a = a; };
+        for (let i = 0; i < 3; i++) { f = f.bind(null, i); g = g.bind(null); }
+        console.log(f(1), new g(2));
+    "#;
+    let pf = facts_with(
+        src,
+        FactsConfig {
+            max_work: Some(2_000_000),
+            ..Default::default()
+        },
+    );
+    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+}

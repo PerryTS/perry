@@ -1012,27 +1012,38 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             m.call_tok(call2, t, None);
         }
         Some("bind") => {
-            let target = m.node_l("bind-target");
-            m.add_tok(target, t);
-            let bthis = match c.args.first() {
-                Some(&n) => n,
-                None => {
-                    let u = m.node_l("undef");
-                    m.add_prim(u, prim::UNDEF);
-                    u
-                }
-            };
-            let bargs: Vec<NodeId> = c.args.iter().skip(1).copied().collect();
-            let key = (call, t);
+            // One bound value per (site, target); every bound target of a
+            // site shares one (`f = f.bind(x)` in a loop rebinds its own
+            // result: per target that would mint a new value each round).
+            let key = (
+                call,
+                if matches!(m.toks[t as usize], TokKind::Bound(_)) {
+                    u32::MAX
+                } else {
+                    t
+                },
+            );
             let b = match m.bound_index.get(&key) {
                 Some(&b) => b,
                 None => {
+                    let target = m.node_l("bind-target");
+                    let bthis = match c.args.first() {
+                        Some(&n) => n,
+                        None => {
+                            let u = m.node_l("undef");
+                            m.add_prim(u, prim::UNDEF);
+                            u
+                        }
+                    };
+                    let bargs: Vec<NodeId> = c.args.iter().skip(1).copied().collect();
                     let b = m.bound.len() as u32;
                     m.bound.push((target, bthis, bargs));
                     m.bound_index.insert(key, b);
                     b
                 }
             };
+            let target = m.bound[b as usize].0;
+            m.add_tok(target, t);
             let bt = m.tok(TokKind::Bound(b));
             m.add_tok(c.ret, bt);
             for &s in &c.spread {

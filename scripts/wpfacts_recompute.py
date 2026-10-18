@@ -136,6 +136,8 @@ class Solver:
         self.stopped = defaultdict(list)
         self.widened = set()
         self.escape_queue = []
+        self.bound_synth = set()
+        self.merged = {}
         self.cv_nodes = {}
         self.cp_nodes = {}
         self.stopped_shared = defaultdict(list)
@@ -705,6 +707,9 @@ class Solver:
                         self.add(fi["this"], [], UNDEF)
             self.edge(fi["ret"], c["ret"])
         elif kind == "bound":
+            if call in self.bound_synth:
+                self.into_merged(call, arg, False)
+                return
             target, bthis, bargs = self.bound[arg]
             allargs = self.node()
             for a in bargs + c["args"] + c["spread"]:
@@ -713,7 +718,37 @@ class Solver:
             arr = self.node()
             self.add(arr, [t])
             c2 = self.new_call(("n", bthis), bargs + c["args"], c["spread"] + [arr], c["ret"])
+            self.bound_synth.add(c2)
             self.addcons(target, ("call", c2))
+
+    def bound_merged(self, b, new):
+        # A bound value's one merged call: what solver-made calls through a
+        # bound target go through (the target may hold bound values).
+        key = (b, new)
+        if key in self.merged:
+            return self.merged[key]
+        target, bthis, bargs = self.bound[b]
+        arr = self.node()
+        self.add(arr, [self.tok("bound", b)])
+        sp = self.node()
+        ret = self.node()
+        m = self.new_call(("u",) if new else ("n", bthis), list(bargs), [arr, sp], ret)
+        self.merged[key] = m
+        self.bound_synth.add(m)
+        self.addcons(target, ("new" if new else "call", m))
+        return m
+
+    def into_merged(self, call, b, new):
+        m = self.bound_merged(b, new)
+        if m == call:
+            return
+        c = self.calls[call]
+        fa = self.fany(self.tok("bound", b))
+        for a in c["args"]:
+            self.edge(a, fa)
+        for sp in c["spread"]:
+            self.edge(sp, self.calls[m]["spread"][1])
+        self.edge(self.calls[m]["ret"], c["ret"])
 
     def elems_into(self, arr_node):
         relay = self.node()
@@ -745,8 +780,12 @@ class Solver:
                 self.edge(a, s)
             self.add(c["ret"], [TOP])
         elif kind == "bound":
+            if call in self.bound_synth:
+                self.into_merged(call, arg, True)
+                return
             target, bthis, bargs = self.bound[arg]
             c2 = self.new_call(("u",), bargs + c["args"], c["spread"], c["ret"])
+            self.bound_synth.add(c2)
             self.addcons(target, ("new", c2))
 
     def run_ctor_chain(self, call, tm, inst):

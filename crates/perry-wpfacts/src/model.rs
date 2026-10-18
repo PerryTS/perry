@@ -582,6 +582,12 @@ pub struct Model {
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
+    /// Calls the solver makes through a bound value's target (`call_bound`,
+    /// `construct`): a bound target reached by one of them goes through
+    /// that bound value's one merged call (`Model::bound_merged`).
+    pub bound_synth: crate::pts::FxHashSet<CallId>,
+    /// (bound value, `new`) → its merged call.
+    pub bound_merged: FxHashMap<(u32, bool), CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,
