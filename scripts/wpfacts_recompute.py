@@ -229,7 +229,8 @@ class Solver:
         n = self.named_field.get(k) or self.node()
         self.fields[k] = n
         self.field_keys[t].append(a)
-        self.edge(self.fany(t), n)
+        if not self.fixed_class_prototype(t, a):
+            self.edge(self.fany(t), n)
         self.edge(n, self.fall(t))
         return n
 
@@ -438,6 +439,8 @@ class Solver:
         elif op == "accinstall":
             _, key, f, setter = c
             for t in toks:
+                if self.fixed_class_prototype(t, key):
+                    continue
                 if t == TOP:
                     continue
                 if self.toks[t][0] == "objectproto":
@@ -553,7 +556,16 @@ class Solver:
                                 and self.tmpls[k[1]]["what"] == "TypedArray"):
                     self.mark_hard(ta, "B1")
 
+    def fixed_class_prototype(self, t, key):
+        if self.atoms.get(key) != "prototype" or self.toks[t][0] != "classobj":
+            return False
+        tp = self.tmpls[self.toks[t][1]]
+        return (tp["kind"] == "class" and tp["class_id"] not in (None, 0)
+                and not tp["display"].rsplit(":", 1)[-1].startswith("__AnonShape_"))
+
     def present(self, t, key):
+        if self.fixed_class_prototype(t, key):
+            return True
         tm = self.tmpl_of(t)
         if key == "*" or tm is None:
             return False
@@ -571,7 +583,7 @@ class Solver:
             self.edge(self.fall(t), dst)
         else:
             self.edge(self.field(t, key), dst)
-        if key == "*" and self.is_array_like(t):
+        if self.fixed_class_prototype(t, key) or (key == "*" and self.is_array_like(t)):
             return
         self.chain_from(origin, t, key, ("load", dst))
 
@@ -677,6 +689,8 @@ class Solver:
         self.addcons(callee, ("callthis", call, origin))
 
     def store_into(self, t, key, src, site):
+        if self.fixed_class_prototype(t, key):
+            return
         if t == TOP:
             self.edge(src, self.sink())
             return
@@ -872,6 +886,8 @@ class Solver:
             return
         own = self.fall(t) if key == "*" else self.field(t, key)
         self.bind_via(own, call, t)
+        if self.fixed_class_prototype(t, key):
+            return
         self.chain_from(t, t, key, ("call", call))
 
     def escape(self, t):

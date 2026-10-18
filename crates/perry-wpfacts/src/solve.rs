@@ -505,7 +505,9 @@ impl Model {
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
         let any = self.field_any(t);
-        self.edge(any, n);
+        if !self.fixed_class_prototype(t, Key::Named(a)) {
+            self.edge(any, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         n
@@ -825,6 +827,9 @@ impl Model {
             Cons::AccessorInstall { key, f, setter } => {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
+                    if self.fixed_class_prototype(t, Key::Named(key)) {
+                        continue;
+                    }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
                         continue;
@@ -1040,7 +1045,8 @@ impl Model {
         }
         // An absent key reads `undefined`: only a definite birth key of a
         // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
+        let fixed_prototype = self.fixed_class_prototype(t, key);
+        let present = fixed_prototype || match (key, self.tmpl_of(t)) {
             (Key::Named(a), Some(tm)) => {
                 self.tmpls[tm as usize].kind.is_fact_unit()
                     && self.tmpls[tm as usize].definite.contains(&a)
@@ -1061,6 +1067,9 @@ impl Model {
             }
         }
         self.with_b(|m| builtins::tok_load(m, t, key, dst));
+        if fixed_prototype {
+            return;
+        }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
         if key == Key::Any && self.is_array_like(t) {
@@ -1626,6 +1635,9 @@ impl Model {
     }
 
     fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        if self.fixed_class_prototype(t, key) {
+            return;
+        }
         self.note_fnproto_write(t, Some(key), "store");
         if t == TOP {
             let r = self.reason("stored into a value from unmodeled code");
@@ -1717,6 +1729,9 @@ impl Model {
             Key::Any => self.all_fields(t),
         };
         self.bind_via(own, call, t);
+        if self.fixed_class_prototype(t, key) {
+            return;
+        }
         self.with_b(|m| builtins::own_method(m, t, key, call));
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).

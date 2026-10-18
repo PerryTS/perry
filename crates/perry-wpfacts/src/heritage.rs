@@ -109,6 +109,21 @@ pub(crate) fn evaluated_chain(m: &Model, mut tm: TmplId) -> bool {
 }
 
 impl Model {
+    /// An ES class has a non-writable, non-configurable own `prototype`.
+    /// Its object can mutate; the constructor's reference cannot be replaced.
+    /// Synthetic literal classes and import stubs keep the conservative model.
+    pub(crate) fn fixed_class_prototype(&self, t: Tok, key: Key) -> bool {
+        let (TokKind::ClassObj(tm), Key::Named(a)) = (&self.toks[t as usize], key) else {
+            return false;
+        };
+        self.atoms[a as usize] == "prototype"
+            && matches!(
+                &self.tmpls[*tm as usize].kind,
+                TmplKind::Class { name, class_id, .. }
+                    if *class_id != 0 && !name.starts_with("__AnonShape_")
+            )
+    }
+
     pub(crate) fn apply_class_parent(
         &mut self,
         class: TmplId,
