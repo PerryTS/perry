@@ -25,3 +25,11 @@ Object.setPrototypeOf(M, null);
 console.log('null-parent', typeof L.value, typeof L.method);
 Object.setPrototypeOf(M, B);
 console.log('restore', L.value, L.method(), L.receiver === L);
+
+class One extends Base {}
+function callOne() { return One.method(); }
+console.log('one-link-warm', callOne());
+Object.setPrototypeOf(One, replacement);
+console.log('one-link-reparent', callOne(), (One as any).method === replacement.method);
+Object.setPrototypeOf(One, B);
+console.log('one-link-restore', callOne());

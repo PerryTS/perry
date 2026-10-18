@@ -1112,7 +1112,7 @@ pub(crate) fn lookup_static_method_owner_bytes(
             StaticMethodProperty::Replaced => return None,
             StaticMethodProperty::Deleted => {}
         }
-        match get_parent_class_id(cid) {
+        match crate::object::class_value::static_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
                 cid = p;
                 depth += 1;
