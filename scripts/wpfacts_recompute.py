@@ -148,6 +148,11 @@ class Solver:
         self.named_fieldany = {}
         self.named_allfields = {}
         self.named_protonode = {}
+        self.named_prototype_value = {}
+        self.prototype_values = {}
+        self.named_method_value = {}
+        self.method_values = {}
+        self.stopped_methods = defaultdict(list)
 
     # ------------------------------------------------------------ basics
     def node(self):
@@ -222,6 +227,23 @@ class Solver:
         return self.tmpls[tm]["kind"] in ("class", "lit", "fninst")
 
     # ------------------------------------------------------------ fields
+    def fixed_class_prototype(self, t, key):
+        if self.atoms.get(key) != "prototype" or self.toks[t][0] != "classobj":
+            return False
+        tp = self.tmpls[self.toks[t][1]]
+        return (tp["kind"] == "class" and tp["class_id"] not in (None, 0)
+                and not tp["display"].rsplit(":", 1)[-1].startswith("__AnonShape_"))
+
+    def native_parent_value(self, cls, token):
+        name = self.tmpls[cls]["native"]
+        kind = self.toks[token]
+        if (kind == ("builtin", "Error") and name in
+                ("Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError")):
+            return name
+        if kind[0] == "builtinfn" and name == "EventEmitter":
+            return name
+        return None
+
     def field(self, t, a):
         k = (t, a)
         if k in self.fields:
@@ -229,7 +251,8 @@ class Solver:
         n = self.named_field.get(k) or self.node()
         self.fields[k] = n
         self.field_keys[t].append(a)
-        self.edge(self.fany(t), n)
+        if not self.fixed_class_prototype(t, a):
+            self.edge(self.fany(t), n)
         self.edge(n, self.fall(t))
         return n
 
@@ -267,7 +290,9 @@ class Solver:
                 self.add(n, [op])
         elif kind == "proto":
             tp = self.tmpls[arg]
-            if tp["parent"] is not None:
+            if tp.get("evaluated") is not None:
+                pass  # classparent supplies the evaluated prototype edge
+            elif tp["parent"] is not None:
                 self.add(n, [self.tok("proto", tp["parent"])])
             elif tp["native"] is not None:
                 self.add(n, [self.tok("nativeproto", tp["native"])])
@@ -279,7 +304,9 @@ class Solver:
             self.add(n, [op])
         elif kind == "classobj":
             tp = self.tmpls[arg]
-            if tp["parent"] is not None:
+            if tp.get("evaluated") is not None:
+                pass
+            elif tp["parent"] is not None:
                 self.add(n, [self.tok("classobj", tp["parent"])])
             else:
                 self.add(n, [op])
@@ -314,6 +341,22 @@ class Solver:
             _, key, dst = c
             for t in toks:
                 self.load_from(t, t, key, dst)
+        elif op == "ownvalues":
+            dst = c[1]
+            self.add(dst, [], prim & STR)
+            for t in toks:
+                k = self.toks[t]
+                opaque = k[0] in ("top", "builtin", "builtinfn", "nativeproto")
+                if k[0] == "obj":
+                    tm = self.tmpls[k[1]]
+                    opaque |= tm["kind"] == "bobj" and tm["what"] != "CjsMain"
+                if opaque:
+                    self.add(dst, [TOP], ALL)
+                if t == TOP:
+                    continue
+                self.edge(self.fall(t), dst)
+                self.visits[t].add((t, "*", ("load", dst)))
+                self.accessor_hit(t, t, "*", ("load", dst))
         elif op == "store":
             _, key, src, site = c
             for t in toks:
@@ -361,6 +404,71 @@ class Solver:
             _, start, key, act = c
             for t in toks:
                 self.chain_step(t, start, key, act)
+        elif op == "protocall":
+            _, origin, key, call = c
+            for q in toks:
+                if q == TOP:
+                    self.call_tok(call, TOP, origin)
+                    if key == "*" or self.atoms.get(key) == "constructor":
+                        self.call_tok(call, self.tok("builtin", "Function"), origin)
+                else:
+                    self.bind_via(self.prototype_method_value(q, key), call, origin)
+        elif op == "calltargets":
+            dst = c[1]
+            self.add(dst, [t for t in toks if self.toks[t][0] in
+                           ("top", "func", "bound", "builtinfn", "builtin")])
+        elif op == "methodunion":
+            _, key, dst = c
+            for t in toks:
+                if t == TOP:
+                    self.add(dst, [TOP])
+                    if key == "*" or self.atoms.get(key) == "constructor":
+                        self.add(dst, [self.tok("builtin", "Function")])
+                else:
+                    self.edge(self.prototype_method_value(t, key), dst)
+        elif op == "thisgroup":
+            recv = c[1]
+            for t in toks:
+                kind, arg = self.toks[t]
+                if kind == "func" and not self.funcs[arg]["lexical"]:
+                    self.edge(recv, self.funcs[arg]["this"])
+                elif kind in ("top", "builtinfn"):
+                    self.edge(recv, self.sink())
+        elif op == "classparent":
+            cls = c[1]
+            ctor = self.tok("classobj", cls)
+            proto = self.tok("proto", cls)
+            for t in toks:
+                kind, arg = self.toks[t]
+                if kind in ("proto", "objectproto", "primbox", "modns"):
+                    continue
+                if kind == "obj":
+                    tp = self.tmpls[arg]
+                    if tp["kind"] != "class" or tp["literal"]:
+                        continue
+                native = self.native_parent_value(cls, t)
+                if native is not None:
+                    self.add(self.pnode(ctor), [t])
+                    self.add(self.pnode(proto), [self.tok("nativeproto", native)])
+                    continue
+                kind, arg = self.toks[t]
+                if kind == "classobj":
+                    self.add(self.pnode(ctor), [t])
+                    self.edge(self.field(t, self.atom("prototype")), self.pnode(proto))
+                else:
+                    self.addcons(self.tmpls[cls]["evaluated"], ("top",))
+                    inst = self.tok("obj", cls)
+                    self.escape(inst)
+                    self.mark_hard(inst, "E11")
+                    self.add(self.pnode(ctor), [TOP])
+                    self.add(self.pnode(proto), [TOP])
+            if prim & NULL:
+                self.add(self.pnode(ctor), [self.tok("objectproto", "-")])
+                self.add(self.pnode(proto), [], NULL)
+        elif op == "superfrom":
+            _, recv, key, act = c
+            for start in toks:
+                self.addcons(recv, ("super", start, key, act))
         elif op == "superctor":
             _, cls, call = c
             for t in toks:
@@ -372,6 +480,9 @@ class Solver:
             if owner in self.super_relink or owner in self.escaped:
                 self.mark_hard(origin, "E6")
             for parent in toks:
+                if (self.tmpls[cls].get("evaluated") is not None
+                        and self.native_parent_value(cls, parent) is not None):
+                    continue  # native summary effects are B axioms
                 kind, arg = self.toks[parent]
                 if kind == "classobj":
                     self.run_ctor_chain(call, arg, origin)
@@ -402,6 +513,7 @@ class Solver:
         elif op == "accinstall":
             _, key, f, setter = c
             for t in toks:
+                if self.fixed_class_prototype(t, key): continue
                 if t == TOP:
                     continue
                 if self.toks[t][0] == "objectproto":
@@ -443,7 +555,7 @@ class Solver:
                     self.add(dst, [TOP])
                 elif k[0] in ("func", "bound"):
                     self.add(dst, [t])
-                elif k[0] == "obj" and self.tmpls[k[1]]["kind"] in ("arr", "bobj"):
+                elif k[0] == "obj" and self.is_array_like(t):
                     pass
                 elif k[0] == "primbox":
                     pass
@@ -474,12 +586,15 @@ class Solver:
             for t in toks:
                 if t == TOP:
                     self.add(dst, [TOP]); continue
-                self.edge(self.fall(t), dst)
                 self.add(dst, [], UNDEF)
                 self.addcons(idx, ("idxkey", t, dst))
         elif op == "idxkey":
             _, obj, dst = c
-            if (prim & (STR | SYMBOL)) or toks:
+            if prim & (ALL & ~(STR | SYMBOL)):
+                self.edge(self.fall(obj), dst)
+            if prim & SYMBOL:
+                self.load_from(obj, obj, self.atom("\x01symbol-key"), dst)
+            if (prim & STR) or toks:
                 key = ("idxfull", obj, dst)
                 if key not in self.done:
                     self.done.add(key)
@@ -492,13 +607,7 @@ class Solver:
                     if key == "*" or self.atoms.get(key) == "constructor":
                         self.add(dst, [self.tok("builtin", "Function")])
                     continue
-                self.edge(self.fall(q) if key == "*" else self.field(q, key), dst)
-                k = self.toks[q]
-                if (key != "*" and k[0] == "proto" and key in self.tmpls[k[1]]["pm"]
-                        and q not in self.hard and q not in self.escaped):
-                    self.stopped_shared[q].append((key, dst))
-                else:
-                    self.edge(self.cv(q, key), dst)
+                self.edge(self.prototype_value(q, key), dst)
         elif op == "protoclosure":
             dst = c[1]
             for q in toks:
@@ -526,6 +635,7 @@ class Solver:
                     self.mark_hard(ta, "B1")
 
     def present(self, t, key):
+        if self.fixed_class_prototype(t, key): return True
         tm = self.tmpl_of(t)
         if key == "*" or tm is None:
             return False
@@ -565,13 +675,13 @@ class Solver:
             self.edge(self.fall(t), dst)
         else:
             self.edge(self.field(t, key), dst)
-        if key == "*" and self.is_array_like(t):
+        if self.fixed_class_prototype(t, key) or (key == "*" and self.is_array_like(t)):
             return
         self.chain_from(origin, t, key, ("load", dst))
 
     def is_array_like(self, t):
         k = self.toks[t]
-        return k[0] == "primbox" or (k[0] == "obj" and self.tmpls[k[1]]["kind"] in ("arr", "bobj"))
+        return k[0] == "primbox" or (k[0] == "obj" and (self.tmpls[k[1]]["kind"] == "arr" or (self.tmpls[k[1]]["kind"] == "bobj" and self.tmpls[k[1]]["what"] != "CjsMain")))
 
     def chain_from(self, origin, t, key, act):
         if self.toks[t][0] != "objectproto":
@@ -604,10 +714,41 @@ class Solver:
         self.chain_from(origin, p, key, act)
 
     def resume(self, p):
+        for key, dst in self.stopped_methods.pop(p, []):
+            self.addcons(self.pnode(p), ("methodunion", key, dst))
         for (origin, key, act) in self.stopped.pop(p, []):
             self.chain_from(origin, p, key, act)
         for (key, dst) in self.stopped_shared.pop(p, []):
             self.edge(self.cv(p, key), dst)
+
+    def prototype_method_value(self, t, key):
+        k = (t, key)
+        if k in self.method_values: return self.method_values[k]
+        value = self.named_method_value.get(k) or self.node()
+        self.method_values[k] = value
+        self.addcons(self.fall(t) if key == "*" else self.field(t, key), ("calltargets", value))
+        kind = self.toks[t]
+        if (key != "*" and kind[0] == "proto" and key in self.tmpls[kind[1]]["pm"]
+                and t not in self.hard and t not in self.escaped):
+            self.stopped_methods[t].append((key, value))
+        else:
+            self.addcons(self.pnode(t), ("methodunion", key, value))
+        return value
+
+    def prototype_value(self, t, key):
+        k = (t, key)
+        if k in self.prototype_values:
+            return self.prototype_values[k]
+        value = self.named_prototype_value.get(k) or self.node()
+        self.prototype_values[k] = value
+        self.edge(self.fall(t) if key == "*" else self.field(t, key), value)
+        kind = self.toks[t]
+        if (key != "*" and kind[0] == "proto" and key in self.tmpls[kind[1]]["pm"]
+                and t not in self.hard and t not in self.escaped):
+            self.stopped_shared[t].append((key, value))
+        else:
+            self.edge(self.cv(t, key), value)
+        return value
 
     def cv(self, t, key):
         k = (t, key)
@@ -656,6 +797,7 @@ class Solver:
         self.addcons(callee, ("callthis", call, origin))
 
     def store_into(self, t, key, src, site):
+        if self.fixed_class_prototype(t, key): return
         if key == "*" or (isinstance(key, int) and self.atoms[key] == "__proto__"):
             self.super_relink.add(t)
             kind, arg = self.toks[t]
@@ -848,7 +990,7 @@ class Solver:
             f = tp["ctor"]
             self.call_tok(call, self.funcs[f]["tok"], inst)
             self.edge(self.funcs[f]["ret"], c["ret"])
-        elif tp["parent"] is not None:
+        elif tp["parent"] is not None or tp.get("evaluated") is not None:
             receiver = self.node()
             self.addcons(receiver, ("superctor", tm, call))
             self.add(receiver, [inst])
@@ -859,6 +1001,7 @@ class Solver:
             return
         own = self.fall(t) if key == "*" else self.field(t, key)
         self.bind_via(own, call, t)
+        if self.fixed_class_prototype(t, key): return
         self.chain_from(t, t, key, ("call", call))
 
     def escape(self, t):
@@ -1003,6 +1146,8 @@ def load(path):
                     d = dict(kind=kind, birth=ints(kv["birth"]), definite=ints(kv["definite"]),
                              parent=opt(kv["parent"]), ctor=opt(kv["ctor"]),
                              native=None if kv["native"] == "-" else kv["native"],
+                             evaluated=opt(kv.get("evaluated", "-")),
+                             literal=kv.get("literal", "1" if unesc(kv["display"]).rsplit(":", 1)[-1].startswith("__AnonShape_") else "0") == "1",
                              acc=ints(kv["acc"]), computed=int(kv["computed"]),
                              fieldinit=opt(kv["fieldinit"]), display=unesc(kv["display"]),
                              class_id=int(arg) if kind == "class" else None,
@@ -1070,6 +1215,10 @@ def run(s, rel_lines):
             s.named_allfields[int(p[3])] = int(p[2])
         elif rel == "protonode":
             s.named_protonode[int(p[3])] = int(p[2])
+        elif rel == "prototypevalue":
+            s.named_prototype_value[(int(p[3]), key_of(s, p[4]))] = int(p[2])
+        elif rel == "prototypemethods":
+            s.named_method_value[(int(p[3]), key_of(s, p[4]))] = int(p[2])
     deferred = []
     for line in rel_lines:
         p = line.split(" ")
@@ -1083,6 +1232,8 @@ def run(s, rel_lines):
             s.edge(int(a[0]), int(a[1]))
         elif rel == "load":
             deferred.append((int(a[0]), ("load", key_of(s, a[1]), int(a[2]))))
+        elif rel == "ownvalues":
+            deferred.append((int(a[0]), ("ownvalues", int(a[1]))))
         elif rel == "store":
             deferred.append((int(a[0]), ("store", key_of(s, a[1]), int(a[2]), int(a[3]))))
         elif rel in ("call", "new"):
@@ -1103,6 +1254,18 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("createproto",)))
         elif rel == "super":
             deferred.append((int(a[0]), ("super", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
+        elif rel == "protocall":
+            deferred.append((int(a[0]), ("protocall", int(a[1]), key_of(s, a[2]), int(a[3]))))
+        elif rel == "calltargets":
+            deferred.append((int(a[0]), ("calltargets", int(a[1]))))
+        elif rel == "methodunion":
+            deferred.append((int(a[0]), ("methodunion", key_of(s, a[1]), int(a[2]))))
+        elif rel == "thisgroup":
+            deferred.append((int(a[0]), ("thisgroup", int(a[1]))))
+        elif rel == "classparent":
+            deferred.append((int(a[0]), ("classparent", int(a[1]))))
+        elif rel == "superfrom":
+            deferred.append((int(a[0]), ("superfrom", int(a[1]), key_of(s, a[2]), parse_act(s, a[3]))))
         elif rel == "superctor":
             deferred.append((int(a[0]), ("superctor", int(a[1]), int(a[2]))))
         elif rel == "superctorparent":
@@ -1240,12 +1403,18 @@ def derive(s, objproto_hard):
             chain_bad = True
         ps = not escape and not hard and not chain_bad
         adds = s.adds.get(tm, 0)
-        fixed = ps and adds == 0
+        dynamic_width = False
+        ancestor = tm
+        while ancestor is not None:
+            at = s.tmpls[ancestor]
+            dynamic_width |= at.get("evaluated") is not None
+            ancestor = at["parent"]
+        fixed = ps and adds == 0 and not dynamic_width
         keys = list(tp["birth"])
         for a in s.field_keys.get(t, []):
             if a not in keys:
                 keys.append(a)
-        slot_ok = True
+        slot_ok = not dynamic_width
         fields = {}
         for i, a in enumerate(keys):
             birth = i < len(tp["birth"])

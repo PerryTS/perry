@@ -6189,6 +6189,7 @@ pub fn run_with_parse_cache(
             || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
+        &layout_reexports,
     );
     // Step 5b: closure class parameters as typed-body receiver proofs, once
     // the facts say some class's layout is stable.

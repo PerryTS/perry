@@ -1,0 +1,1 @@
+Model evaluated class heritage through shared prototype summaries, preserve capture-slot and property-key identities, and check the actual object layout word for guarded field reads. Keep field aggregates outside widening until a program read consumes them and build those unions only when requested.

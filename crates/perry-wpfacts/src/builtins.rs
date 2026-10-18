@@ -148,6 +148,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         birth_keys: vec![],
         definite: vec![],
         parent: None,
+        evaluated_parent: None,
         ctor: None,
         native_parent: None,
         accessor_keys: vec![],
@@ -254,6 +255,11 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     }
 }
 
+fn array_index_name(name: &str) -> bool {
+    name.parse::<u32>()
+        .is_ok_and(|index| index != u32::MAX && index.to_string() == name)
+}
+
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
@@ -341,6 +347,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Obj(tm) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => match name.as_deref() {
                 Some("length") => m.add_prim(dst, prim::NUM),
+                // Numeric data values already flow from the element fields;
+                // an index cannot name an intrinsic array method.
+                Some(n) if array_index_name(n) => m.add_prim(dst, prim::UNDEF),
                 // A computed key may name a builtin method too.
                 _ => {
                     let bf = m.tok(TokKind::BuiltinFn);
@@ -349,6 +358,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
             },
             TmplKind::BObj { what, .. } => match name.as_deref() {
+                // The CJS bootstrap main record starts empty. Its actual
+                // fields are supplied by generated wrapper stores, not by
+                // opaque builtin-method summaries.
+                _ if what == "CjsMain" => m.add_prim(dst, prim::UNDEF),
                 Some("buffer") if what == "TypedArray" => {
                     // B1: the backing buffer is observed (it can be
                     // transferred, detached or wrapped by another view).
@@ -735,7 +748,15 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
         (BuiltinNs::Symbol, _) => {
             implicit_args(m, call, "ToString");
-            ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
+            ret_prim(
+                m,
+                call,
+                if name == "for" {
+                    prim::SYMBOL
+                } else {
+                    prim::SYMBOL | prim::STR | prim::UNDEF
+                },
+            );
         }
         (BuiltinNs::Promise, "resolve" | "reject") => {
             let p = site_tmpl(m, call, "Promise");
@@ -844,7 +865,11 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let e = error_tok(m, call);
             ret_tok(m, call, e);
         }
-        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
+        BuiltinNs::Symbol => {
+            implicit_args(m, call, "symbol description");
+            ret_prim(m, call, prim::SYMBOL);
+        }
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean => {
             implicit_args(m, call, "ToPrimitive");
             ret_prim(m, call, prim::ALL);
         }
@@ -1423,6 +1448,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             ret_tok(m, call, it);
         }
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),
+        Some(n) if array_index_name(n) => {}
         Some(n) => unknown_method(m, call, &format!("argument of unmodeled array method {n}")),
     }
 }
@@ -1431,6 +1457,7 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     match (what, name) {
+        ("CjsMain", _) => {}
         ("Iterator", _) => iterator_method(m, t, name, call),
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
@@ -1591,6 +1618,10 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
         .as_ref()
         .map(|(_, c)| c.clone())
         .unwrap_or_default();
+    native_parent_ctor_named(m, &name, call, inst);
+}
+
+pub fn native_parent_ctor_named(m: &mut Model, name: &str, call: CallId, inst: Tok) {
     if !native_parent_summarized(&name) {
         let r = m.reason(&format!("E21 native parent {name} without a summary"));
         m.mark_hard(inst, Hard::E21NativeParent, r);

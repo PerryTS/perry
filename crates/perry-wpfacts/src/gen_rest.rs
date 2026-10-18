@@ -99,7 +99,7 @@ impl<'a> Gen<'a> {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 if module == "__perry_runtime" {
-                    self.runtime_glue(fx, method, o, a)
+                    self.runtime_glue(fx, method, o, a, args)
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -149,16 +149,7 @@ impl<'a> Gen<'a> {
                     let k = self.key_of(key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Load(dst),
-                            },
-                        );
-                    }
+                    self.super_access_of(Some(tm), r, k, ChainAct::Load(dst));
                     dst
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -175,16 +166,7 @@ impl<'a> Gen<'a> {
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Store(v),
-                            },
-                        );
-                    }
+                    self.super_access_of(Some(tm), r, k, ChainAct::Store(v));
                     v
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -202,16 +184,7 @@ impl<'a> Gen<'a> {
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
                     let (call, ret) = self.new_call(ThisArg::Node(r), a, sp);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Call(call),
-                            },
-                        );
-                    }
+                    self.super_access_of(Some(tm), r, k, ChainAct::Call(call));
                     ret
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -285,6 +258,9 @@ impl<'a> Gen<'a> {
                 self.to_sink(h, "process event handler (called by the runtime)");
                 self.m.top_val("process event registration result")
             }
+            Expr::SymbolNew(..) | Expr::SymbolFor(..) => {
+                self.prim_kids(fx, e, prim::SYMBOL, "symbol description")
+            }
             Expr::ProcessUptime
             | Expr::ProcessCwd
             | Expr::ProcessPid
@@ -338,8 +314,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
-            | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)
@@ -617,8 +591,17 @@ impl<'a> Gen<'a> {
             Expr::ObjectDefineProperties(o, props) => {
                 let on = self.expr(fx, o);
                 let pn = self.expr(fx, props);
-                let r = self.m.reason("E5 Object.defineProperties");
-                let descs = self.load(pn, Key::Any);
+                let why = if self.m.explain {
+                    format!(
+                        "E5 Object.defineProperties at {}::{}",
+                        self.mods[fx.module as usize].path, self.m.funcs[fx.f as usize].name
+                    )
+                } else {
+                    "E5 Object.defineProperties".to_string()
+                };
+                let r = self.m.reason(&why);
+                let descs = self.tmp("own-descriptors");
+                self.m.cons(pn, Cons::OwnValues { dst: descs });
                 self.define_property(fx, on, None, descs, r);
                 on
             }
@@ -651,6 +634,7 @@ impl<'a> Gen<'a> {
                     birth_keys: vec![],
                     definite: vec![],
                     parent: None,
+                    evaluated_parent: None,
                     ctor: None,
                     native_parent: None,
                     accessor_keys: vec![],
@@ -1742,6 +1726,7 @@ impl<'a> Gen<'a> {
         method: &str,
         object: Option<NodeId>,
         args: Vec<NodeId>,
+        source_args: &[Expr],
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
@@ -1803,19 +1788,63 @@ impl<'a> Gen<'a> {
                 }
                 out
             }
-            "registerPathModule" | "registerPathModulePartial" | "linkPathModuleParent" => {
-                for a in &args {
-                    self.m.edge(*a, self.cjs_registry);
+            "registerPathModule" | "registerPathModulePartial" => {
+                if let Some(value) = arg(1) {
+                    let registry = match source_args.first() {
+                        Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
+                            self.cjs_path_node(path)
+                        }
+                        _ => self.cjs_unknown_path,
+                    };
+                    self.m.edge(value, registry);
+                    self.m.edge(value, self.cjs_registry);
                 }
                 self.prim_node(prim::UNDEF)
             }
-            "requirePathModule" | "getCjsMainModule" => {
+            "linkPathModuleParent" => {
+                // The helper links an existing record through require.cache;
+                // it does not publish a new path-module value.
+                // Keep the record in the dynamic loader summary.
+                if let Some(record) = arg(0) {
+                    self.m.edge(record, self.cjs_registry);
+                }
+                self.prim_node(prim::UNDEF)
+            }
+            "requirePathModule" => {
+                let registry = match source_args.first() {
+                    Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
+                        let named = self.cjs_path_node(path);
+                        let r = self.tmp("cjs-path-read");
+                        self.m.edge(named, r);
+                        self.m.edge(self.cjs_unknown_path, r);
+                        // The runtime also accepts directory package-main and
+                        // index paths. Keep those on the summary until their
+                        // resolver is modeled here as well.
+                        if std::path::Path::new(path).is_dir() {
+                            self.m.edge(self.cjs_registry, r);
+                        }
+                        r
+                    }
+                    _ => self.cjs_registry,
+                };
                 let out = self.tmp("require");
-                self.m.edge(self.cjs_registry, out);
+                // Raw publications remain supported; CJS records unwrap their
+                // live exports, including replacements during a cycle.
+                self.m.edge(registry, out);
                 let ea = self.m.atom("exports");
-                let ex = self.load(self.cjs_registry, Key::Named(ea));
+                let ex = self.load(registry, Key::Named(ea));
                 self.m.edge(ex, out);
+                self.m.add_prim(out, prim::UNDEF);
                 out
+            }
+            "getCjsMainModule" => self.cjs_main_value(fx.module),
+            "setCjsMainModule" => {
+                let main = self.cjs_main_value(fx.module);
+                if let Some(record) = arg(0) {
+                    self.m.edge(record, main);
+                    self.to_sink(record, "CJS main record published to process.mainModule");
+                }
+                self.prim_node(prim::UNDEF)
             }
             _ => {
                 let why = format!("argument of runtime glue {method}");

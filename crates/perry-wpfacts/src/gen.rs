@@ -40,10 +40,17 @@ pub struct Gen<'a> {
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
+    pub resolved_reexports: std::collections::BTreeMap<(String, String), String>,
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
     pub thrown: NodeId,
+    /// Registry summary: only dynamic lookups read every publication.
     pub cjs_registry: NodeId,
+    /// Canonical module path -> the publications for that path.
+    pub cjs_paths: FxHashMap<String, NodeId>,
+    /// Nonliteral publications may replace any named path.
+    pub cjs_unknown_path: NodeId,
+    pub cjs_main: Option<NodeId>,
     pub read_sites: Vec<ReadSite>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
@@ -51,7 +58,7 @@ pub struct Gen<'a> {
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
     pub prim_const: [NodeId; 7],
     pub walked: crate::pts::FxHashSet<FnIdx>,
-    pub class_envs: FxHashMap<String, NodeId>,
+    pub class_envs: FxHashMap<(u32, String, u32), NodeId>,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
@@ -60,6 +67,9 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// Templates whose heritage is evaluated by an expression site, rather
+    /// than solely by their hoisted Class metadata.
+    pub evaluated_parent_sites: crate::pts::FxHashSet<TmplId>,
 }
 
 /// Per-function walking context.
@@ -121,6 +131,11 @@ impl<'a> Gen<'a> {
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
         let cjs_registry = m.node_l("CJSREG");
+        // This is a union relation, not a runtime value. Its cardinality
+        // must not itself expose every registered module to unknown code.
+        m.nodes[cjs_registry as usize].internal = true;
+        let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
+        m.nodes[cjs_unknown_path as usize].internal = true;
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -131,10 +146,14 @@ impl<'a> Gen<'a> {
             modules,
             mods: Vec::new(),
             path_index,
+            resolved_reexports: Default::default(),
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
             thrown,
             cjs_registry,
+            cjs_paths: Default::default(),
+            cjs_unknown_path,
+            cjs_main: None,
             read_sites: Vec::new(),
             ctor_phase: FxHashMap::default(),
             fn_inst_of: FxHashMap::default(),
@@ -146,6 +165,7 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            evaluated_parent_sites: Default::default(),
         }
     }
 
@@ -193,6 +213,7 @@ impl<'a> Gen<'a> {
             // Closures are registered when the walker meets them.
             let _ = module;
         }
+        self.prepare_heritage();
         // Class parents and native parents (second pass: names resolve).
         for (mi, (_, module)) in modules.iter().enumerate() {
             for c in &module.classes {
@@ -390,6 +411,7 @@ impl<'a> Gen<'a> {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
@@ -526,6 +548,19 @@ impl<'a> Gen<'a> {
             .extends_name
             .as_deref()
             .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
+        let evaluated = self.m.tmpls[tm as usize].evaluated_parent.is_some();
+        if evaluated {
+            // Preserve the existing native-parent resolution, but only a
+            // matching value token may select its summary during solving.
+            if !c.heritage_lexically_shadowed {
+                if let Some(n) = builtin_parent {
+                    self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.into()));
+                }
+            } else {
+                self.m.tmpls[tm as usize].native_parent = None;
+            }
+            return;
+        }
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
@@ -599,6 +634,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: None,
             accessor_keys: vec![],
@@ -622,6 +658,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             parent: None,
+            evaluated_parent: None,
             ctor: None,
             native_parent: None,
             accessor_keys: vec![],
@@ -675,7 +712,7 @@ impl<'a> Gen<'a> {
                     } => {
                         let a = self.m.atom(exported);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let b = self.m.atom(imported);
                                 let src = self.export_node(t, b);
@@ -688,7 +725,7 @@ impl<'a> Gen<'a> {
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
                     }
-                    Export::ExportAll { source } => match self.resolve_source(module, source) {
+                    Export::ExportAll { source } => match self.resolve_source(mi, module, source) {
                         Some(t) => {
                             // Every export of `t` is visible through `mi`.
                             let tns = self.mods[t as usize].ns_tok;
@@ -706,7 +743,7 @@ impl<'a> Gen<'a> {
                     Export::NamespaceReExport { source, name } => {
                         let a = self.m.atom(name);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let tns = self.mods[t as usize].ns_tok;
                                 self.m.add_tok(en, tns);
@@ -773,7 +810,11 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
+    fn resolve_source(&self, mi: u32, module: &Module, source: &str) -> Option<u32> {
+        let key = (self.mods[mi as usize].path.clone(), source.to_string());
+        if let Some(path) = self.resolved_reexports.get(&key) {
+            return self.path_index.get(path).copied();
+        }
         let imp = module.imports.iter().find(|i| i.source == source)?;
         let p = imp.resolved_path.as_ref()?;
         self.path_index.get(p).copied()
@@ -805,10 +846,12 @@ impl<'a> Gen<'a> {
         // Parent leaks close the child's phase at `super()`.
         let tms: Vec<TmplId> = self.ctor_phase.keys().copied().collect();
         for tm in tms.iter().copied() {
-            let mut leaks = false;
+            let mut leaks = self.m.tmpls[tm as usize].evaluated_parent.is_some();
             let mut cur = self.m.tmpls[tm as usize].parent;
             while let Some(p) = cur {
-                if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks) {
+                if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks)
+                    || self.m.tmpls[p as usize].evaluated_parent.is_some()
+                {
                     leaks = true;
                 }
                 cur = self.m.tmpls[p as usize].parent;
@@ -1069,8 +1112,13 @@ impl<'a> Gen<'a> {
             let r = self.m.reason("class decorator");
             self.m.escape(cobj, r);
         }
-        if let Some(e) = &c.extends_expr {
-            let _ = self.expr(outer, e);
+        // An expression site owns evaluation when present. Some transformed
+        // classes retain only the metadata expression; walk that copy once.
+        if !self.evaluated_parent_sites.contains(&tm) {
+            if let Some(e) = &c.extends_expr {
+                let value = self.expr(outer, e);
+                self.evaluated_parent(mi, &c.name, value);
+            }
         }
         if let Some(ctor) = &c.constructor {
             let f = self.mods[mi as usize].funcs[&ctor.id];
