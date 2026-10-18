@@ -1,1 +1,1 @@
-Remove duplicate `requested_modules` fields from six codegen integration-test fixtures. The duplicates prevented the touched test targets from compiling after the module schema update.
+Repair six codegen integration-test fixtures by removing duplicate `requested_modules` fields. Update the generic-dispatch assertions to name the current method-call slow path, so the restored tests check the current lowering.
