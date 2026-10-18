@@ -416,6 +416,7 @@ pub(crate) static mut READABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     index: READABLE_STATE_PROTO_INDEX.as_ptr(),
     class_id: 0,
     parent_class_id: 0,
+    methods: std::ptr::null(),
 };
 static WRITABLE_STATE_PROTO_KEYS: [PerryLayoutKey; 16] = [
     PerryLayoutKey {
@@ -571,6 +572,7 @@ pub(crate) static mut WRITABLE_STATE_PROTO: PerryLayoutDesc = PerryLayoutDesc {
     index: WRITABLE_STATE_PROTO_INDEX.as_ptr(),
     class_id: 0,
     parent_class_id: 0,
+    methods: std::ptr::null(),
 };
 static EE_ASYNC_RESOURCE_PROTO_KEYS: [PerryLayoutKey; 6] = [
     PerryLayoutKey {
@@ -650,4 +652,5 @@ pub(crate) static mut EE_ASYNC_RESOURCE_PROTO: PerryLayoutDesc = PerryLayoutDesc
     index: EE_ASYNC_RESOURCE_PROTO_INDEX.as_ptr(),
     class_id: 0,
     parent_class_id: 0,
+    methods: std::ptr::null(),
 };

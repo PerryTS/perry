@@ -460,6 +460,46 @@ pub(crate) fn emit_method_site(
     // The probe: the receiver's own layout, then its prototypes'.
     ctx.current_block = probe_idx;
     let (dir, key_bits, hash) = emit_site_key(ctx, property);
+    if !ctx.program_layouts.families.is_empty() {
+        let family_call = ctx.new_block("msite.family_call");
+        let ordinary_probe = ctx.new_block("msite.ordinary_probe");
+        let family_l = ctx.block_label(family_call);
+        let ordinary_l = ctx.block_label(ordinary_probe);
+        let callee = ctx.block().call(
+            I64,
+            "perry_probe_family_method",
+            &[
+                (PTR, &dir),
+                (I64, &biased),
+                (I64, &key_bits),
+                (I64, &hash),
+                (I32, &lowered_args.len().to_string()),
+            ],
+        );
+        let present = ctx.block().icmp_ne(I64, &callee, "0");
+        ctx.block().cond_br(&present, &family_l, &ordinary_l);
+        ctx.current_block = family_call;
+        let recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
+        let ptr = ctx.block().inttoptr(I64, &callee);
+        let ip = ctx.block().gep(
+            crate::types::I8,
+            &ptr,
+            &[(I64, &crate::runtime_abi::CLOSURE_INFO_OFFSET.to_string())],
+        );
+        let info = ctx.block().load(PTR, &ip);
+        let code = ctx.block().load(PTR, &info);
+        let r = crate::expr::body_call::emit_js_body_call(
+            ctx.block(),
+            crate::expr::body_call::JsBody::Pointer(&code),
+            &callee,
+            &recv_bits,
+            lowered_args,
+        );
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        results.push((r, end));
+        ctx.current_block = ordinary_probe;
+    }
     crate::expr::note_site("probe-method");
     let answered = ctx.block().call(
         DOUBLE,

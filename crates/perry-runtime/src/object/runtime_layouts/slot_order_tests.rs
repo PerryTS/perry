@@ -374,6 +374,7 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         index: std::ptr::null(),
         class_id: 0,
         parent_class_id: 0,
+        methods: std::ptr::null(),
     };
     unsafe {
         DESC.keys = std::ptr::addr_of!(KEYS).cast();

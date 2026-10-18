@@ -405,6 +405,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Object model step 5: the unknown-receiver probe (agent directory,
     // receiver payload minus the handle floor, key atom bits, atom hash).
     // A GC leaf; `TAG_HOLE` = declined.
+    module.declare_function("perry_probe_family_method", I64, &[PTR, I64, I64, I64, I32]);
     module.declare_function("perry_probe_get", DOUBLE, &[PTR, I64, I64, I64]);
     // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
     module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);

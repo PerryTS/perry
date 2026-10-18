@@ -2934,7 +2934,7 @@ pub(crate) mod verify {
     }
 
     #[inline(always)]
-    pub(super) fn answer(obj: usize, key_bits: u64, v: f64) -> f64 {
+    pub(crate) fn answer(obj: usize, key_bits: u64, v: f64) -> f64 {
         if ON.load(Relaxed) && v.to_bits() != TAG_HOLE {
             HELD.set((obj, key_bits, v.to_bits()));
             return hole();

@@ -83,8 +83,8 @@ mod shapes_worker_seed;
 #[cfg(test)]
 pub(crate) use shapes_prototype::{clear_class_identity_words, scan_shape_prototype_words_mut};
 pub(crate) use shapes_prototype::{
-    identity_prototype_word, identity_word_slot, note_full_trace_begin, proto_id_carries_word,
-    prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
+    identity_prototype_word, identity_word_slot, identity_word_slot_in, note_full_trace_begin,
+    proto_id_carries_word, prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
 };
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;

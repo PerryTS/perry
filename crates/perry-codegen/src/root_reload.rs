@@ -205,6 +205,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_write_barrier",
     "js_write_barrier_root_nanbox",
     // Object model step 5: the unknown-receiver probe, proven `Leaf`.
+    "perry_probe_family_method",
     "perry_probe_get",
     "perry_probe_get_value",
     "perry_probe_get_binding",

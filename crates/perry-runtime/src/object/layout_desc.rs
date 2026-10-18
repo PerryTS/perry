@@ -29,6 +29,7 @@
 //! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
 use super::ObjectHeader;
+pub(crate) mod methods;
 use crate::string::StringHeader;
 
 /// Bit 30 of the layout word: THE shadow bit (object model §3.6, §6a). One
@@ -288,9 +289,11 @@ pub struct PerryLayoutDesc {
     pub class_id: u32,
     /// The runtime parent class id the layout assumes (0: none).
     pub parent_class_id: u32,
+    /// Immutable layout-owned method index, or null.
+    pub methods: *const methods::PerryFamilyMethods,
 }
 
-const _: () = assert!(std::mem::size_of::<PerryLayoutDesc>() == 64);
+const _: () = assert!(std::mem::size_of::<PerryLayoutDesc>() == 72);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, class_id) == 56);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, layout_id) == 12);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, keys) == 32);
@@ -353,6 +356,7 @@ section_sentinel!(
         index: std::ptr::null(),
         class_id: 0,
         parent_class_id: 0,
+        methods: std::ptr::null(),
     },
     "perry_layouts",
     "__DATA,__perry_layouts",

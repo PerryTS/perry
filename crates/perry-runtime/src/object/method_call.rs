@@ -126,6 +126,18 @@ pub unsafe extern "C-unwind" fn js_method_lookup(
     method_id: i64,
 ) -> f64 {
     if is_site_receiver(recv) {
+        let biased =
+            (recv.to_bits() & crate::value::POINTER_MASK) - perry_abi::RECEIVER_HANDLE_FLOOR as u64;
+        let family = super::layout_desc::methods::perry_probe_family_method(
+            dir,
+            biased as i64,
+            key_bits,
+            hash,
+            u32::MAX,
+        );
+        if family != 0 {
+            return f64::from_bits(crate::value::POINTER_TAG | family as u64);
+        }
         let v = super::layout_probe::perry_probe_get_value(dir, recv.to_bits(), key_bits, hash);
         let vb = v.to_bits();
         if vb != crate::value::TAG_HOLE

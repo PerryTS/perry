@@ -64,6 +64,7 @@ mod tests {
         index: EMPTY_INDEX.as_ptr(),
         class_id: CHILD,
         parent_class_id: PARENT,
+        methods: std::ptr::null(),
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {

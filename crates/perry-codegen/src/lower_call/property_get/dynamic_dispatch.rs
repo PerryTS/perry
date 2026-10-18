@@ -879,6 +879,29 @@ pub(crate) fn try_lower_instance_method_call(
                 && !fallback_has_synthetic_arguments
                 && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
                 && ctx.ptr_shape_receiver_fact(object).is_none();
+            // A mutable method must be read before an argument can replace
+            // it. The guarded direct path below tests after evaluating args;
+            // use the existing split lookup/call when there is no preselected
+            // constant body. This also preserves accessor/Proxy side effects.
+            if !constant_static
+                && !fallback_fn.starts_with("perry_static_")
+                && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+                && crate::expr::method_site::args_may_observe_lookup(ctx, args)
+            {
+                let lanes =
+                    crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
+                return crate::lower_call::lower_split_method_call(
+                    ctx,
+                    object,
+                    property,
+                    args,
+                    call_byte_offset,
+                    &lanes,
+                    None,
+                    None,
+                )
+                .map(Some);
+            }
             let static_split =
                 constant_static && crate::expr::method_site::args_may_observe_lookup(ctx, args);
 

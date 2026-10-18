@@ -154,10 +154,9 @@ pub(super) fn emit_class_method_entry(
         } else {
             None
         };
-        // A declaration's function object has no evaluation capture. Its
-        // instance shapes already carry the private brand, and its body reads
-        // the explicit receiver. Only a per-evaluation method needs to select
-        // the lexical home independently of that receiver.
+        // Declarations and fresh receiver-only bodies use the explicit
+        // receiver. Home-dependent fresh bodies keep their lexical scope;
+        // their function objects retain the same home capture in either case.
         let depth = e.home.then(|| {
             b.call(
                 I64,
@@ -215,6 +214,58 @@ pub(super) fn emit_class_method_entry(
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
     (format!("@{}", entry_name), info_ref)
+}
+
+/// A fresh instance method needs a lexical-home scope only when its own
+/// code can consume that scope. Its closure still retains the home capture;
+/// ordinary receiver-only bodies never read the private/environment stacks.
+pub(super) fn source_needs_home(classes: &[(u32, &perry_hir::Class)], cid: u32, id: u32) -> bool {
+    fn uses_home(e: &perry_hir::Expr) -> bool {
+        use perry_hir::Expr;
+        if matches!(
+            e,
+            Expr::PrivateLexicalBrand(_)
+                | Expr::PrivateLexicalBrandPush(_)
+                | Expr::PrivateLexicalBrandPop
+                | Expr::PrivateGuard { .. }
+                | Expr::PrivateBrandCheck { .. }
+                | Expr::ClassEnvGet { .. }
+                | Expr::ClassEnvSet { .. }
+                | Expr::ClassEnvCurrent { .. }
+                | Expr::ClassEnvStamp { .. }
+                | Expr::ClassMethodHome { .. }
+                | Expr::ClassRef(_)
+                | Expr::ClassExprFresh { .. }
+                | Expr::SuperMethodCall { .. }
+                | Expr::SuperMethodCallSpread { .. }
+                | Expr::SuperPropertyGet { .. }
+                | Expr::SuperPropertySet { .. }
+                | Expr::SuperCall(_)
+                | Expr::SuperCallSpread(_)
+                | Expr::Closure { .. }
+                | Expr::New { .. }
+        ) {
+            return true;
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(e, &mut |child| found |= uses_home(child));
+        found
+    }
+    let Some(f) = classes
+        .iter()
+        .find(|(c, _)| *c == cid)
+        .and_then(|(_, c)| c.methods.iter().find(|f| f.id == id))
+    else {
+        return true;
+    };
+    !f.captures.is_empty()
+        || f.params
+            .iter()
+            .filter_map(|p| p.default.as_ref())
+            .any(uses_home)
+        || f.body
+            .iter()
+            .any(|s| perry_hir::walker::stmt_any_expr(s, &mut uses_home))
 }
 
 /// Source flags of a class member, without another persistent metadata table.
@@ -302,6 +353,26 @@ mod tests {
         assert!(crate::codegen::helpers::body_needs_explicit_method_owner(
             &body, true
         ));
+    }
+
+    #[test]
+    fn fresh_receiver_only_body_does_not_consume_the_lexical_home_scope() {
+        let ast = perry_parser::parse_typescript(
+            "class C { #v = 1; plain(x: number) { return this.value + x; } privateRead() { return this.#v; } nested() { return () => this.value; } }",
+            "home_scope.ts").unwrap();
+        let hir = perry_hir::lower_module(&ast, "home_scope.ts", "home_scope.ts").unwrap();
+        let classes: Vec<_> = hir.classes.iter().map(|c| (c.id, c)).collect();
+        let class = hir.classes.iter().find(|c| c.name == "C").unwrap();
+        let needs = |name: &str| {
+            source_needs_home(
+                &classes,
+                class.id,
+                class.methods.iter().find(|m| m.name == name).unwrap().id,
+            )
+        };
+        assert!(!needs("plain"));
+        assert!(needs("privateRead"));
+        assert!(needs("nested"));
     }
 
     #[test]

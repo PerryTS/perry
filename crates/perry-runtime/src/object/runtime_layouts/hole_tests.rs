@@ -114,6 +114,7 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     index: HOLEY::INDEX.as_ptr(),
     class_id: 60895,
     parent_class_id: 0,
+    methods: std::ptr::null(),
 };
 
 const TRUE: u64 = crate::value::TAG_TRUE;

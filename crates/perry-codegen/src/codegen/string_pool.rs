@@ -1353,7 +1353,7 @@ pub(super) fn emit_string_pool(
             spec_length,
             has_user_rest: has_rest,
             has_synth_args,
-            home,
+            home: home && method_entries::source_needs_home(&local_classes, cid, definition_order),
             is_generator: method_entries::source_is_generator(
                 &local_classes,
                 cid,

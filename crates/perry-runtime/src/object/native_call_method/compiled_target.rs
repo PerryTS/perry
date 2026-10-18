@@ -128,7 +128,7 @@ pub(crate) unsafe fn compiled_target_call(
 /// `closure` is a live closure on `info`, a compiled body; `args_ptr` holds
 /// `n` values.
 #[inline]
-unsafe fn enter_compiled_body(
+pub(crate) unsafe fn enter_compiled_body(
     closure: *const crate::closure::ClosureHeader,
     info: &'static crate::closure::JsFunctionInfo,
     this: crate::closure::JsThis,

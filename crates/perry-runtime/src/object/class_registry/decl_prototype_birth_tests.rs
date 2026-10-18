@@ -322,6 +322,7 @@ static mut CHECKED_LAYOUT: crate::object::layout_desc::PerryLayoutDesc =
         index: EMPTY_INDEX.as_ptr(),
         class_id: CHECKED_CHILD,
         parent_class_id: CHECKED_PARENT,
+        methods: std::ptr::null(),
     };
 static CHECKED_DECLARATION: super::declarations::ClassDeclaration =
     super::declarations::ClassDeclaration {
