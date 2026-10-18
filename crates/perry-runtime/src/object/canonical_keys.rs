@@ -1375,19 +1375,80 @@ pub(crate) unsafe fn rebuild_with_entries(
 /// `keys` is a live keys array (or null) with at least `len` initialized
 /// slots, and the caller has rooted what it holds: this allocates.
 pub(crate) unsafe fn canonicalize(
-    _proof: &SharedLayout,
+    proof: &SharedLayout,
     keys: *const ArrayHeader,
     len: u32,
 ) -> CanonicalKeys {
+    if let Some(hit) = find_canonical(proof, keys, len) {
+        return hit;
+    }
+    let (slots, _) = crate::object::keys_array_dense_slots(keys);
+    let all_ptr =
+        (0..len).all(|i| JSValue::from_bits((*slots.add(i as usize)).to_bits()).is_string());
+    // Exact, not the summary: an owned source edited in place over-reports.
+    let with_attrs = crate::object::key_attrs::keys_have_entries(keys, len);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src = scope.root_raw_const_ptr(keys);
+    #[cfg(test)]
+    try_with_table(|t| t.allocated_slots += u64::from(len));
+    let (fresh, keys) = src.across_const::<ArrayHeader, _>(|| {
+        crate::object::key_attrs::alloc_canonical_key_list(len, all_ptr, with_attrs)
+    });
+    let (slots, available) = crate::object::keys_array_dense_slots(keys);
+    assert!(available >= len as usize);
+    let dst = crate::array::array_elements_ptr(fresh) as *mut f64;
+    // GC_STORE_AUDIT(INIT): fresh is unpublished; publish length only after
+    // all elements are initialized, with no intervening GC allocation.
+    for i in 0..len as usize {
+        dst.add(i).write(*slots.add(i));
+    }
+    if with_attrs {
+        let attrs = crate::object::key_attrs::keys_attrs(fresh);
+        crate::object::key_attrs::copy_entries(keys, 0, attrs, len);
+    }
+    (*fresh).length = len;
+    publish_canonical(fresh, len, all_ptr)
+}
+
+/// Canonicalize a newly constructed stationary key list by transferring its
+/// backing to the trie on a miss. Registration already builds this exact
+/// storage; copying it again only creates an unused old-generation array.
+///
+/// # Safety
+/// `keys` was freshly allocated by `alloc_canonical_key_list`, contains `len`
+/// initialized slots and attributes, and has never been published. The caller
+/// relinquishes it and uses only the returned canonical list afterward.
+pub(crate) unsafe fn canonicalize_owned(
+    proof: &SharedLayout,
+    keys: *mut ArrayHeader,
+    len: u32,
+) -> CanonicalKeys {
+    if let Some(hit) = find_canonical(proof, keys, len) {
+        return hit;
+    }
+    debug_assert!(crate::arena::pointer_in_old_gen(keys as usize));
+    let (slots, available) = crate::object::keys_array_dense_slots(keys);
+    assert!(available >= len as usize);
+    let all_ptr =
+        (0..len).all(|i| JSValue::from_bits((*slots.add(i as usize)).to_bits()).is_string());
+    publish_canonical(keys, len, all_ptr)
+}
+
+/// Probe the content identity without retaining or changing the source list.
+unsafe fn find_canonical(
+    proof: &SharedLayout,
+    keys: *const ArrayHeader,
+    len: u32,
+) -> Option<CanonicalKeys> {
     if keys.is_null() {
-        return CanonicalKeys::EMPTY;
+        return Some(CanonicalKeys::EMPTY);
     }
     if len == 0 {
-        return empty_backing(_proof);
+        return Some(empty_backing(proof));
     }
     let already = with_table_or(false, |t| t.by_addr.contains_key(&(keys as usize, len)));
     if already {
-        return CanonicalKeys::new(keys as *mut ArrayHeader, len);
+        return Some(CanonicalKeys::new(keys as *mut ArrayHeader, len));
     }
 
     // Walk without allocating. Intermediate prefixes have no observable array:
@@ -1413,49 +1474,28 @@ pub(crate) unsafe fn canonicalize(
         }
         hit
     });
-    if let Some(hit) = hit {
-        return hit;
-    }
-    let (slots, _) = crate::object::keys_array_dense_slots(keys);
-    let all_ptr =
-        (0..len).all(|i| JSValue::from_bits((*slots.add(i as usize)).to_bits()).is_string());
-    // Exact, not the summary: an owned source edited in place over-reports.
-    let with_attrs = crate::object::key_attrs::keys_have_entries(keys, len);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let src = scope.root_raw_const_ptr(keys);
-    #[cfg(test)]
-    try_with_table(|t| t.allocated_slots += u64::from(len));
-    let (fresh, keys) = src.across_const::<ArrayHeader, _>(|| {
-        crate::object::key_attrs::alloc_canonical_key_list(len, all_ptr, with_attrs)
-    });
-    let (slots, available) = crate::object::keys_array_dense_slots(keys);
-    assert!(available >= len as usize);
+    hit
+}
+
+/// Normalize and publish an exclusively owned stationary backing. No GC
+/// allocation occurs while its slots and the trie edges are installed.
+unsafe fn publish_canonical(fresh: *mut ArrayHeader, len: u32, all_ptr: bool) -> CanonicalKeys {
     let dst = crate::array::array_elements_ptr(fresh) as *mut f64;
-    // GC_STORE_AUDIT(INIT): fresh is unpublished; publish length only after
-    // all elements are initialized, with no intervening GC allocation.
-    for i in 0..len as usize {
-        dst.add(i).write(*slots.add(i));
-    }
     // Every heap key of the new list is its text's atom where one exists (see
     // `Appended::atomized`). Heap string to heap string, so `all_ptr` holds.
     for i in 0..len as usize {
         let slot = Appended::Slot(JSValue::from_bits((*dst.add(i)).to_bits()));
         if let Appended::Slot(v) = slot {
-            if v.is_string() {
+            if v.is_string() && !crate::string::is_image_string(v.as_string_ptr()) {
                 if let Appended::Slot(atom) = slot.atomized(slot.slot_hash()) {
                     Appended::Slot(atom).prepare_old_parent_key();
                     // GC_STORE_AUDIT(INIT): `fresh` is unpublished; its length
-                    // is set on the next line, after the last slot is written.
+                    // already covers the initialized slots; no GC allocation intervenes.
                     *dst.add(i) = f64::from_bits(atom.bits());
                 }
             }
         }
     }
-    if with_attrs {
-        let attrs = crate::object::key_attrs::keys_attrs(fresh);
-        crate::object::key_attrs::copy_entries(keys, 0, attrs, len);
-    }
-    (*fresh).length = len;
     if !all_ptr {
         crate::object::gc_slots::rebuild_array_layout_from_slots(fresh);
     }

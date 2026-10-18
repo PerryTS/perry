@@ -783,7 +783,7 @@ pub(crate) unsafe fn register_one_bound(
             }
         }
         (*list).length = key_count;
-        super::canonical_keys::canonicalize(
+        super::canonical_keys::canonicalize_owned(
             &super::canonical_keys::SharedLayout::shape_cache_entry(),
             list,
             key_count,

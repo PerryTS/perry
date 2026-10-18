@@ -728,3 +728,80 @@ fn empty_root_backing_is_shared_weak_and_keeps_live_children() {
         );
     }
 }
+
+#[test]
+fn owned_list_is_published_without_copying_and_keeps_key_facts_after_gc() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let string = scope.root_string_ptr(key("owned-layout-key"));
+        let symbol = JSValue::from_bits(crate::symbol::js_symbol_well_known_iterator().to_bits());
+        let source = crate::object::key_attrs::alloc_canonical_key_list(2, true, true);
+        let slots = crate::array::array_elements_ptr(source);
+        let name = JSValue::string_ptr(string.get_raw_mut_ptr());
+        *slots = name.bits();
+        *slots.add(1) = symbol.bits();
+        let attrs = crate::object::key_attrs::keys_attrs(source);
+        crate::object::key_attrs::attrs_write(
+            attrs,
+            0,
+            crate::object::key_attrs::ENTRY_NON_ENUMERABLE,
+            name,
+        );
+        crate::object::key_attrs::attrs_write_slot(attrs, 0, 1);
+        crate::object::key_attrs::attrs_write(
+            attrs,
+            1,
+            crate::object::key_attrs::ENTRY_OPTIONAL,
+            symbol,
+        );
+        crate::object::key_attrs::attrs_write_slot(attrs, 1, 0);
+        (*source).length = 2;
+        let expected = [
+            crate::object::key_attrs::key_word(source, 0),
+            crate::object::key_attrs::key_word(source, 1),
+        ];
+        let adopted = canonicalize_owned(&proof, source, 2);
+        assert_eq!(adopted.as_ptr(), source, "a miss adopts its fresh backing");
+        let root = scope.root_raw_mut_ptr(adopted.as_ptr());
+        let borrowed = raw_list(&["owned-layout-key"]);
+        let prefix = canonicalize(&proof, borrowed, 1);
+        assert_ne!(
+            prefix.as_ptr(),
+            adopted.as_ptr(),
+            "attributes and order are identity"
+        );
+        crate::gc::js_gc_collect();
+        root.with_const_ptr(|keys: *const ArrayHeader| {
+            assert_eq!(canonicalize(&proof, keys, 2).as_ptr(), adopted.as_ptr());
+            for (i, word) in expected.iter().enumerate() {
+                assert_eq!(crate::object::key_attrs::key_word(keys, i as u32), *word);
+            }
+            let (values, len) = crate::object::keys_array_dense_slots(keys);
+            assert!(len >= 2);
+            assert_eq!((*values.add(1)).to_bits(), symbol.bits());
+        });
+        let duplicate = crate::object::key_attrs::alloc_canonical_key_list(2, false, true);
+        let src = root.get_raw_mut_ptr::<ArrayHeader>();
+        std::ptr::copy_nonoverlapping(
+            crate::array::array_elements_ptr(src),
+            crate::array::array_elements_ptr(duplicate),
+            2,
+        );
+        crate::object::key_attrs::copy_entries(
+            src,
+            0,
+            crate::object::key_attrs::keys_attrs(duplicate),
+            2,
+        );
+        (*duplicate).length = 2;
+        assert_eq!(
+            canonicalize_owned(&proof, duplicate, 2),
+            adopted,
+            "a hit keeps one identity"
+        );
+    }
+}
