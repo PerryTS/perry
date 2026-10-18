@@ -81,13 +81,15 @@ jobs:
       mode: ${{ steps.resolve.outputs.mode }}
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
-      # Pinned commit every downstream job must check out. Empty for
-      # release/cut-release/stage (the triggering ref is already correct —
-      # cut-release in particular has NO tag yet to pin to); set to the tag
-      # for republish, so a `main` that has drifted since the tag was cut
-      # cannot silently republish a different version under the old tag's
-      # label (#confirmed republish version-drift finding).
+      # Pinned commit every downstream job must check out: the run's exact
+      # SHA (cut-release: the candidate_sha input, which preflight requires
+      # to equal it); the tag for republish, so a `main` that has drifted
+      # since the tag was cut cannot silently republish a different version
+      # under the old tag's label (#confirmed republish version-drift
+      # finding). checkout-sha is that ref's commit; every downstream
+      # checkout fails unless its tree's HEAD is exactly it.
       checkout-ref: ${{ steps.resolve.outputs.checkout-ref }}
+      checkout-sha: ${{ steps.resolve.outputs.checkout-sha }}
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -220,14 +222,27 @@ jobs:
             MODE=stage
             TAG=""
           fi
+          if [ "$MODE" = cut-release ]; then
+            CHECKOUT_REF="$CANDIDATE_SHA"
+          fi
+          if [ "$MODE" = republish ]; then
+            CHECKOUT_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+          else
+            CHECKOUT_SHA="$CHECKOUT_REF"
+          fi
+          if [[ ! "$CHECKOUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::could not resolve the commit to build (checkout-ref=$CHECKOUT_REF)."
+            exit 1
+          fi
           VERSION="${TAG#v}"
           {
             echo "mode=$MODE"
             echo "tag=$TAG"
             echo "version=$VERSION"
             echo "checkout-ref=$CHECKOUT_REF"
+            echo "checkout-sha=$CHECKOUT_SHA"
           } >> "$GITHUB_OUTPUT"
-          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}  checkout-ref=$CHECKOUT_REF"
+          echo "mode=$MODE  tag=${TAG:-<none — stage-only build>}  checkout-ref=$CHECKOUT_REF  checkout-sha=$CHECKOUT_SHA"
 
   # ---------------------------------------------------------------------------
   # Gate: wait for Tests + Simulator Tests to pass on this commit before we
@@ -683,6 +698,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
           CHECKOUT_DEPTH: "1"
           CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_PERSIST_CREDENTIALS: "true"
@@ -697,6 +713,14 @@ jobs:
           else
             git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
             git checkout --force --detach FETCH_HEAD
+          fi
+          # Build exactly the commit preflight resolved, or nothing.
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          echo "built tree: $built  expected: $EXPECTED_SHA  (ref: $CHECKOUT_REF)"
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to build or publish a different commit."
+            exit 1
           fi
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
@@ -1586,6 +1610,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
           CHECKOUT_DEPTH: "1"
           CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_PERSIST_CREDENTIALS: "true"
@@ -1600,6 +1625,14 @@ jobs:
           else
             git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
             git checkout --force --detach FETCH_HEAD
+          fi
+          # Build exactly the commit preflight resolved, or nothing.
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          echo "built tree: $built  expected: $EXPECTED_SHA  (ref: $CHECKOUT_REF)"
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to build or publish a different commit."
+            exit 1
           fi
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
@@ -1937,7 +1970,8 @@ jobs:
       - name: Checkout repository (inline git)
         shell: bash
         env:
-          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
           CHECKOUT_DEPTH: "1"
           CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_PERSIST_CREDENTIALS: "true"
@@ -1952,6 +1986,14 @@ jobs:
           else
             git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
             git checkout --force --detach FETCH_HEAD
+          fi
+          # Build exactly the commit preflight resolved, or nothing.
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          echo "built tree: $built  expected: $EXPECTED_SHA  (ref: $CHECKOUT_REF)"
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to build or publish a different commit."
+            exit 1
           fi
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
@@ -2082,7 +2124,8 @@ jobs:
       - name: Checkout repository (inline git)
         shell: bash
         env:
-          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
           CHECKOUT_DEPTH: "1"
           CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_PERSIST_CREDENTIALS: "true"
@@ -2097,6 +2140,14 @@ jobs:
           else
             git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
             git checkout --force --detach FETCH_HEAD
+          fi
+          # Build exactly the commit preflight resolved, or nothing.
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          echo "built tree: $built  expected: $EXPECTED_SHA  (ref: $CHECKOUT_REF)"
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to build or publish a different commit."
+            exit 1
           fi
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
@@ -2738,6 +2789,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
           CHECKOUT_DEPTH: "1"
           CHECKOUT_TOKEN: ${{ github.token }}
           CHECKOUT_PERSIST_CREDENTIALS: "true"
@@ -2752,6 +2804,14 @@ jobs:
           else
             git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
             git checkout --force --detach FETCH_HEAD
+          fi
+          # Build exactly the commit preflight resolved, or nothing.
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          echo "built tree: $built  expected: $EXPECTED_SHA  (ref: $CHECKOUT_REF)"
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to build or publish a different commit."
+            exit 1
           fi
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
