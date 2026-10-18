@@ -209,11 +209,10 @@ pub(crate) fn call(
     })
 }
 
-/// A standalone default-derived entry already receives the parent's ABI:
-/// trailing rest/arguments arrays and capture slots are packed by its caller.
-/// Keep the checked direct arm as a call to the shared parent symbol, rather
-/// than expanding that parent's body into every default-derived constructor.
-/// Other super sites still need the ordinary expression argument lowering.
+/// Share large parent bodies at a standalone default-derived entry. Its
+/// caller already packs the parent's rest/arguments ABI. Capturing parents
+/// keep the existing binding path; their snapshots are not plain arguments.
+/// Small parents retain the inline context used by the ordinary lowering.
 pub(crate) fn default_call(ctx: &mut FnCtx<'_>, class: &Class, args: &[Expr]) -> Result<String> {
     let parent = class
         .extends_name
@@ -221,6 +220,16 @@ pub(crate) fn default_call(ctx: &mut FnCtx<'_>, class: &Class, args: &[Expr]) ->
         .and_then(|name| ctx.classes.get(name).copied());
     let target = parent.and_then(|parent| {
         let ctor = parent.constructor.as_ref()?;
+        // Match the ordinary function inliner's eight-statement budget.
+        // Sharing small parents loses context for little code-size benefit.
+        if ctor.body.len() <= 8
+            || ctor
+                .params
+                .iter()
+                .any(|p| p.name.starts_with("__perry_cap_"))
+        {
+            return None;
+        }
         (ctor.params.len() == args.len()).then(|| {
             format!(
                 "{}__{}_constructor",
@@ -337,11 +346,12 @@ pub(crate) fn spread(
 mod tests {
     use crate::{compile_module, CompileOptions};
 
-    fn ir(params: &str) -> String {
+    fn ir(params: &str, statements: usize) -> String {
+        let parent_body = "parentBody(value);".repeat(statements);
         let source = format!(
             "function parentBody(x: any) {{ return x; }}
              export class Base {{
-               constructor({params}) {{ parentBody(value); }}
+               constructor({params}) {{ {parent_body} }}
              }}
              export class First extends Base {{}}
              export class Second extends Base {{}}"
@@ -409,11 +419,34 @@ mod tests {
 
     #[test]
     fn default_derived_entries_share_the_checked_parent_body() {
-        check_shared(&ir("value: any"));
+        check_shared(&ir("value: any", 16));
     }
 
     #[test]
     fn default_derived_entries_forward_the_parents_packed_rest_abi() {
-        check_shared(&ir("value: any, ...rest: any[]"));
+        check_shared(&ir("value: any, ...rest: any[]", 16));
+    }
+    #[test]
+    fn small_parents_keep_the_checked_inline_context() {
+        let ir = ir("value: any", 1);
+        for class in ["First", "Second"] {
+            let child = body(&ir, class);
+            assert!(child.contains("super.checked.direct"), "{child}");
+            assert!(child.contains("super.checked.live"), "{child}");
+            assert!(child.contains("parentBody"), "{child}");
+            assert!(!child.contains("@spx_shared__Base_constructor("), "{child}");
+        }
+    }
+
+    #[test]
+    fn capture_slots_keep_the_existing_snapshot_binding() {
+        let ir = ir("value: any, __perry_cap_77: any", 16);
+        for class in ["First", "Second"] {
+            let child = body(&ir, class);
+            assert!(child.contains("super.checked.direct"), "{child}");
+            assert!(child.contains("parentBody"), "{child}");
+            assert!(child.contains("@js_class_capture_value("), "{child}");
+            assert!(!child.contains("@spx_shared__Base_constructor("), "{child}");
+        }
     }
 }
