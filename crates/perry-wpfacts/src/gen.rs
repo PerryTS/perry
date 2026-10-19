@@ -105,6 +105,7 @@ pub(crate) struct Fx {
 impl<'a> Gen<'a> {
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
         let mut m = Model::default();
+        m.cur_fn = NO_FN;
         m.explain = explain;
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
@@ -346,6 +347,9 @@ impl<'a> Gen<'a> {
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
+        // Parameters and the result belong to the new function's body.
+        let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
+        self.m.own(ret);
         let mut ps = Vec::new();
         let mut rest = None;
         let mut mapped = None;
@@ -373,6 +377,7 @@ impl<'a> Gen<'a> {
                 ps.push(n);
             }
         }
+        self.m.cur_fn = outer_fn;
         if let Some((fa, all)) = mapped {
             // Both directions: a write to `arguments[i]` reaches the
             // parameter, and an assignment to the parameter is read back
@@ -398,6 +403,7 @@ impl<'a> Gen<'a> {
             token: tok,
             ctor_of: None,
             lexical_this,
+            no_summary: false,
         });
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
@@ -514,6 +520,7 @@ impl<'a> Gen<'a> {
                 // the accessor's `this` the whole class (instances).
                 let inst = self.m.tok(TokKind::Obj(tm));
                 self.m.add_tok(this, inst);
+                self.m.funcs[f as usize].no_summary = true;
                 let fa = self.m.field_any(proto);
                 let ret = self.m.funcs[f as usize].ret;
                 self.m.edge(ret, fa);
@@ -548,6 +555,7 @@ impl<'a> Gen<'a> {
             token: tok,
             ctor_of: None,
             lexical_this: false,
+            no_summary: false,
         });
         fx
     }
@@ -625,9 +633,13 @@ impl<'a> Gen<'a> {
             }
         }
         if let Some(&n) = self.mods[mi as usize].locals.get(&id) {
+            if self.m.node_fn[n as usize] != self.m.cur_fn {
+                self.m.node_captured.insert(n);
+            }
             return n;
         }
         let n = self.m.node_named("local", || format!("local({mi},{id})"));
+        self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
         n
     }
@@ -1007,6 +1019,12 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        self.params_inner(fx, params);
+        self.m.cur_fn = prev;
+    }
+
+    fn params_inner(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
         for p in params {
             let n = self.local(fx.module, p.id);
             if let Some(d) = &p.default {
@@ -1198,6 +1216,12 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        self.stmt_inner(fx, s);
+        self.m.cur_fn = prev;
+    }
+
+    fn stmt_inner(&mut self, fx: &Fx, s: &Stmt) {
         match s {
             Stmt::Let { id, init, .. } => {
                 let n = self.local(fx.module, *id);

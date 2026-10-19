@@ -31,6 +31,7 @@ mod gen_rest;
 pub mod model;
 pub mod pts;
 mod solve;
+mod summary;
 #[cfg(test)]
 mod tests;
 
@@ -182,6 +183,10 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let r = g.m.reason("thrown where interpreted code can catch it");
         let thrown = g.m.thrown;
         g.m.sink_node(thrown, r);
+    }
+    g.m.summarize_and_replay();
+    if cfg.profile {
+        eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();
     if cfg.profile {

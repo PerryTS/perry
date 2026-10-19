@@ -17,6 +17,10 @@ impl Model {
         if a == b {
             return;
         }
+        // An observation node feeds only observation nodes.
+        if self.nodes[a as usize].obs && !self.nodes[b as usize].obs {
+            return;
+        }
         // Dedup against short successor lists only: a duplicate edge costs
         // a little propagation, a global edge set costs gigabytes.
         // This value can never change again. Deliver the initial literal

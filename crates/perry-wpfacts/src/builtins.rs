@@ -191,6 +191,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         token: tok,
         ctor_of: None,
         lexical_this: true,
+        no_summary: false,
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);

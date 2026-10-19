@@ -4,6 +4,12 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        let n0 = self.calls.len();
+        self.call_tok_inner(call, t, this_tok);
+        self.inherit_ctx(n0, call);
+    }
+
+    fn call_tok_inner(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         if self.explain
             && self.dyn_eval.is_none()
             && matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
@@ -113,11 +119,24 @@ impl Model {
 
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
-    pub(super) fn bind_args(&mut self, call: CallId, t: Tok) {
+    pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
         let TokKind::Func(f) = self.toks[t as usize] else {
             return;
         };
+        if !self.sum.ready {
+            // Summaries do not exist yet: bind once they do.
+            self.sum.deferred.push(crate::summary::Deferred::Bind(call, t));
+            return;
+        }
+        if self.sum.templates.contains(&call) {
+            // A summary's call: its instances bind.
+            return;
+        }
         if !self.bind_done.insert((call, t, u32::MAX - 1)) {
+            return;
+        }
+        if self.summarized(f) {
+            self.bind_summarized(call, f);
             return;
         }
         let f = f as usize;
@@ -306,6 +325,12 @@ impl Model {
 
     /// `new t(args)`.
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        let n0 = self.calls.len();
+        self.construct_inner(call, t);
+        self.inherit_ctx(n0, call);
+    }
+
+    fn construct_inner(&mut self, call: CallId, t: Tok) {
         if !self.construct_done.insert((call, t)) {
             return;
         }
@@ -320,10 +345,9 @@ impl Model {
                 let tm = self.fn_inst_template(f);
                 let inst = self.tok(TokKind::Obj(tm));
                 self.add_tok(c.ret, inst);
-                let fi = self.funcs[f as usize].clone();
                 self.call_tok(call, t, Some(inst));
                 // E12: a constructor function returning an object.
-                self.ret_objects(fi.ret, c.ret);
+                self.ctor_ret_objects(call, f, c.ret);
             }
             TokKind::Top | TokKind::BuiltinFn => {
                 if t == TOP {
@@ -387,8 +411,7 @@ impl Model {
             (Some(ctor), _, _) => {
                 let ftok = self.funcs[ctor as usize].token;
                 self.call_tok(call, ftok, Some(inst));
-                let ret = self.funcs[ctor as usize].ret;
-                self.ret_objects(ret, c.ret);
+                self.ctor_ret_objects(call, ctor, c.ret);
             }
             (None, Some(p), _) => {
                 // Implicit `constructor(...a) { super(...a) }`.
@@ -401,6 +424,19 @@ impl Model {
                 self.with_b(|m| builtins::native_parent_ctor(m, tm, call, inst))
             }
             (None, None, None) => {}
+        }
+    }
+
+    /// The objects constructor `f` returns for `call` (its instance's
+    /// result when summarized, so known once bindings run).
+    pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: FnIdx, dst: NodeId) {
+        if !self.sum.ready {
+            self.sum.deferred.push(crate::summary::Deferred::RetObjects(call, f, dst));
+            return;
+        }
+        let r = self.ret_for(call, f);
+        if r != NO_NODE {
+            self.ret_objects(r, dst);
         }
     }
 
@@ -531,6 +567,30 @@ impl Model {
         self.esc_bits[w] |= 1 << (t & 63);
     }
 
+    /// Unknown code calls `f`: unknown arguments, the result escapes.
+    pub(crate) fn escape_fn_params(&mut self, f: FnIdx, reason: u32) {
+        if !self.sum.ready {
+            self.sum.deferred.push(crate::summary::Deferred::Escape(f, reason));
+            return;
+        }
+        if self.summarized(f) {
+            self.escape_summarized(f, reason);
+            return;
+        }
+        let fi = self.funcs[f as usize].clone();
+        let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
+        for &p in fi.params.iter().chain(fi.rest.iter()) {
+            self.add_top(p, why);
+            self.add_prim(p, prim::ALL);
+        }
+        if let Some(rest) = fi.rest {
+            let r = self.field_any_node_of_node(rest);
+            self.add_top(r, why);
+        }
+        self.add_top(fi.args_all, why);
+        self.sink_node(fi.ret, reason);
+    }
+
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
         if matches!(self.toks[t as usize], TokKind::Proto(_)) {
             self.mark_escaped(t, reason);
@@ -580,24 +640,13 @@ impl Model {
         match self.toks[t as usize].clone() {
             TokKind::Func(f) => {
                 let fi = self.funcs[f as usize].clone();
-                let why =
-                    |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
-                for &p in fi.params.iter().chain(fi.rest.iter()) {
-                    self.add_top(p, why);
-                    self.add_prim(p, prim::ALL);
-                }
-                if let Some(rest) = fi.rest {
-                    let r = self.field_any_node_of_node(rest);
-                    self.add_top(r, why);
-                }
-                self.add_top(fi.args_all, why);
                 if !fi.lexical_this {
                     self.add_top(fi.this, |m| {
                         format!("this of escaped function: {}", m.reasons[reason as usize])
                     });
                     self.add_prim(fi.this, prim::ALL);
                 }
-                self.sink_node(fi.ret, reason);
+                self.escape_fn_params(f, reason);
             }
             TokKind::ClassObj(tm) => {
                 let p = self.tok(TokKind::Proto(tm));

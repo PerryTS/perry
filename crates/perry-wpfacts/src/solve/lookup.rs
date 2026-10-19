@@ -523,9 +523,7 @@ impl Model {
             if let Some(this) = this {
                 self.edge_quiet(g.st, this);
             }
-            if let Some(&p0) = self.funcs[f as usize].params.first() {
-                self.edge_quiet(g.sp, p0);
-            }
+            self.group_bind(holder, key, f, true);
             self.group_live(holder, key);
             if self.acc_groups.contains_key(&(holder, Key::Any)) {
                 self.group_live(holder, Key::Any);
@@ -534,8 +532,31 @@ impl Model {
             if let Some(this) = this {
                 self.edge_quiet(g.gt, this);
             }
+            self.group_bind(holder, key, f, false);
+        }
+    }
+
+    /// The parameter/result half of `group_connect`.
+    pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, f: FnIdx, setter: bool) {
+        if !self.sum.ready {
+            self.sum.deferred.push(crate::summary::Deferred::Group(holder, key, f, setter));
+            return;
+        }
+        let (sp, ar) = {
+            let g = &self.acc_groups[&(holder, key)];
+            (g.sp, g.ar)
+        };
+        if self.summarized(f) {
+            self.group_summarized(f, sp, ar, setter);
+            return;
+        }
+        if setter {
+            if let Some(&p0) = self.funcs[f as usize].params.first() {
+                self.edge_quiet(sp, p0);
+            }
+        } else {
             let ret = self.funcs[f as usize].ret;
-            self.edge_quiet(ret, g.ar);
+            self.edge_quiet(ret, ar);
         }
     }
 

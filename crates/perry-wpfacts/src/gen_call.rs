@@ -45,6 +45,11 @@ impl<'a> Gen<'a> {
                     self.iife_birth.insert(pn, tm);
                 }
                 let c = self.expr(fx, callee);
+                if let Expr::Closure { func_id, .. } = callee {
+                    // Its parameter is the literal's birth, not a call input.
+                    let f = self.fn_by_id(fx.module, *func_id);
+                    self.m.funcs[f as usize].no_summary = true;
+                }
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }

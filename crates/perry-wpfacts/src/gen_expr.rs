@@ -15,11 +15,14 @@ pub(crate) const UNMODELED_OPERAND: &str = "operand of unmodeled HIR construct";
 
 impl<'a> Gen<'a> {
     pub(crate) fn tmp(&mut self, what: &'static str) -> NodeId {
-        self.m.node_l(what)
+        let n = self.m.node_l(what);
+        self.m.own(n);
+        n
     }
 
     pub(crate) fn tok_node(&mut self, t: Tok) -> NodeId {
         let n = self.m.node_l("tok");
+        self.m.own(n);
         self.m.add_tok(n, t);
         n
     }
@@ -362,7 +365,15 @@ impl<'a> Gen<'a> {
         out
     }
 
+    /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
+        let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
+        let n = self.expr_inner(fx, e);
+        self.m.cur_fn = prev;
+        n
+    }
+
+    fn expr_inner(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),

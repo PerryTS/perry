@@ -200,6 +200,9 @@ pub struct FuncInfo {
     pub ctor_of: Option<TmplId>,
     /// Arrow function / `captures_this` closure: `this` is the enclosing one.
     pub lexical_this: bool,
+    /// Something outside the call protocol writes the parameters (an object
+    /// literal IIFE, a computed accessor): never summarized.
+    pub no_summary: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -488,6 +491,11 @@ pub struct Node {
     /// primitive kinds from then on (`prim_succ`).
     pub esc_out: bool,
     pub prim_succ: Vec<NodeId>,
+    /// An observation node: a parameter-derived node of a summarized
+    /// function's shared body. It holds the union over every call for the
+    /// read sites; only read rules apply to it, it never feeds a node that
+    /// is not an observation node, and widening it escapes nothing.
+    pub obs: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -714,6 +722,15 @@ pub struct Model {
     pub cur_src: NodeId,
     pub cur_why: u32,
     pub top_vals: FxHashMap<String, NodeId>,
+    /// The function whose body generation is walking (`NO_FN` outside).
+    pub cur_fn: FnIdx,
+    /// Owner of each node: the function whose body made it (`Gen::tmp`,
+    /// `Gen::tok_node`, `Gen::local`), `NO_FN` for every other node.
+    pub node_fn: Vec<FnIdx>,
+    /// A local touched by a function other than its owner (a closure
+    /// capture): shared by every activation, never a summary term.
+    pub node_captured: crate::pts::FxHashSet<NodeId>,
+    pub sum: crate::summary::SumState,
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),
@@ -734,6 +751,7 @@ pub struct AccGroup {
 }
 
 pub const NO_NODE: NodeId = u32::MAX;
+pub const NO_FN: FnIdx = u32::MAX;
 
 /// Marks a `super` walk's start in `Model::walk_nodes` keys (it begins with
 /// a stop check at the start prototype, unlike a receiver's own walk).
@@ -855,11 +873,17 @@ impl Model {
             self.aborted = true;
         }
         self.nodes.push(Node::default());
+        self.node_fn.push(NO_FN);
         self.labels.push(label);
         if self.relations.is_some() {
             self.node_names.push(name());
         }
         id
+    }
+
+    /// `n` belongs to the body generation is walking.
+    pub fn own(&mut self, n: NodeId) {
+        self.node_fn[n as usize] = self.cur_fn;
     }
 
     pub fn node_l(&mut self, label: &'static str) -> NodeId {

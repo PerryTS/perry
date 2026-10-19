@@ -34,7 +34,9 @@ impl Model {
         };
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
-        if node.widened {
+        if node.widened && node.obs {
+            // An observation node's ⊤ only leaves its own sites unproven.
+        } else if node.widened {
             // A widened set is {⊤}: every token reaching it escapes.
             for &t in toks {
                 if t != TOP && !self.is_escaped(t) {
@@ -82,9 +84,11 @@ impl Model {
                     eprintln!("perry: wpfacts explain: TEMP widen {} n={} {:?} {:?}", self.labels[n as usize], ts.len(), kinds, some);
                 }
                 let node = &mut self.nodes[n as usize];
-                for t in node.pts.to_sorted() {
-                    if t != TOP {
-                        self.widen_queue.push(t);
+                if !node.obs {
+                    for t in node.pts.to_sorted() {
+                        if t != TOP {
+                            self.widen_queue.push(t);
+                        }
                     }
                 }
                 node.pts = crate::pts::Pts::default();
@@ -358,7 +362,7 @@ impl Model {
                 self.aborted = true;
                 return;
             }
-            if self.nodes[n as usize].esc_out {
+            if self.nodes[n as usize].esc_out && !self.nodes[n as usize].obs {
                 for &t in &delta {
                     if t != TOP && !self.is_escaped(t) {
                         self.widen_queue.push(t);
@@ -379,6 +383,12 @@ impl Model {
             let mut widen_at = None;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
+                if self.nodes[s as usize].widened && self.nodes[s as usize].obs {
+                    // Observation ⊤: nothing escapes through it.
+                    self.add(s, &[], dprim);
+                    i += 1;
+                    continue;
+                }
                 if self.try_copy_delivery(n, s, &delta, dprim) {
                     self.work += 1 + delivery_overhead;
                     if self.max_work != 0 && self.work > self.max_work {
@@ -639,6 +649,9 @@ impl Model {
         self.apply_tokens(n, c, Tokens::Slice(toks), prim);
     }
     fn apply_tokens(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if self.sum_skip(n, c) {
+            return;
+        }
         if self.profile.is_some() {
             let started = std::time::Instant::now();
             self.apply_inner(n, c, toks, prim);
