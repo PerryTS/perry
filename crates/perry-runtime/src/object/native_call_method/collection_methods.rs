@@ -44,6 +44,39 @@ fn is_backed_collection_method(
     }
 }
 
+/// A method the receiver's prototype chain declares in user code (a
+/// `class X extends Map` override) is what `obj.get(k)` calls; the collection
+/// arms below only answer for the inherited builtins.
+unsafe fn call_inherited_user_method(
+    root_scope: &crate::gc::RuntimeHandleScope,
+    object: f64,
+    method_name: &str,
+    args: impl FnOnce() -> Vec<f64>,
+) -> Option<f64> {
+    let addr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    if key.is_null() {
+        return None;
+    }
+    let method = super::super::prototype_chain::resolve_inherited_field(addr, key)?;
+    if !crate::array::value_is_own_user_method(f64::from_bits(method.bits()), method_name) {
+        return None;
+    }
+    let method = root_scope.root_nanbox_f64(f64::from_bits(method.bits()));
+    let receiver = root_scope.root_nanbox_f64(object);
+    let bound = crate::closure::clone_closure_rebind_this(
+        method.get_nanbox_u64(),
+        receiver.get_nanbox_f64(),
+    );
+    let args = args();
+    Some(crate::closure::native_call_value_this(
+        f64::from_bits(bound),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        args.as_ptr(),
+        args.len(),
+    ))
+}
+
 pub(super) unsafe fn dispatch_map_set(
     root_scope: &crate::gc::RuntimeHandleScope,
     object_handle: &crate::gc::RuntimeHandle,
@@ -79,6 +112,11 @@ pub(super) unsafe fn dispatch_map_set(
         // dispatcher resolve it against `Object.prototype` / the class vtable.
         if !is_backed_collection_method(backing, method_name) {
             return None;
+        }
+        if let Some(result) =
+            call_inherited_user_method(root_scope, object, method_name, refreshed_args)
+        {
+            return Some(result);
         }
         let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
         let args = if !args_ptr.is_null() && args_len > 0 {
@@ -155,6 +193,11 @@ pub(super) unsafe fn dispatch_map_set(
         };
         if check_ptr >= 0x10000 {
             if crate::map::is_registered_map(check_ptr) {
+                if let Some(result) =
+                    call_inherited_user_method(root_scope, object, method_name, refreshed_args)
+                {
+                    return Some(result);
+                }
                 let map = check_ptr as *mut crate::map::MapHeader;
                 let args = if !args_ptr.is_null() && args_len > 0 {
                     std::slice::from_raw_parts(args_ptr, args_len)
@@ -223,6 +266,11 @@ pub(super) unsafe fn dispatch_map_set(
                 });
             }
             if crate::set::is_registered_set(check_ptr) {
+                if let Some(result) =
+                    call_inherited_user_method(root_scope, object, method_name, refreshed_args)
+                {
+                    return Some(result);
+                }
                 let set = check_ptr as *mut crate::set::SetHeader;
                 let args = if !args_ptr.is_null() && args_len > 0 {
                     std::slice::from_raw_parts(args_ptr, args_len)
