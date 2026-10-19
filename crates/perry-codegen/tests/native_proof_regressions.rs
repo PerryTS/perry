@@ -1097,7 +1097,7 @@ fn pod_layout_constant_opts() -> CompileOptions {
         ("count", Type::Named("PerryU32".to_string())),
     ]);
     let mut opts = empty_opts();
-    opts.type_aliases.insert("Packet".to_string(), packet_ty);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Packet".to_string(), packet_ty);
     opts
 }
 
@@ -1118,8 +1118,8 @@ fn pod_layout_specialization_opts() -> CompileOptions {
         ("payload", Type::Number),
     ]);
     let mut opts = empty_opts();
-    opts.type_aliases.insert("Tiny".to_string(), tiny_ty);
-    opts.type_aliases.insert("Wide".to_string(), wide_ty);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Tiny".to_string(), tiny_ty);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Wide".to_string(), wide_ty);
     opts
 }
 
