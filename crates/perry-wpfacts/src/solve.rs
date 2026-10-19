@@ -70,6 +70,18 @@ impl Model {
                 // Sound widening: the members escape (unknown code may do
                 // anything with them) and the set becomes ⊤.
                 node.widened = true;
+                if self.explain {
+                    let ts = self.nodes[n as usize].pts.to_sorted();
+                    let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+                    for &t in &ts {
+                        let k = self.tok_name(t);
+                        let k = k.split(':').next().unwrap_or("").to_string();
+                        *kinds.entry(k).or_default() += 1;
+                    }
+                    let some: Vec<String> = ts.iter().take(12).map(|&t| self.tok_name(t)).collect();
+                    eprintln!("perry: wpfacts explain: TEMP widen {} n={} {:?} {:?}", self.labels[n as usize], ts.len(), kinds, some);
+                }
+                let node = &mut self.nodes[n as usize];
                 for t in node.pts.to_sorted() {
                     if t != TOP {
                         self.widen_queue.push(t);
@@ -736,9 +748,13 @@ impl Model {
                     self.escape(t, reason);
                 }
             }
-            Cons::TopIfAny { dst, reason } => {
+            Cons::TopIfAny { dst, from, reason } => {
                 if !toks.is_empty() || prim != 0 {
-                    self.add_top(dst, |m| m.reasons[reason as usize].clone());
+                    if let Some(r) = reason {
+                        self.add_top(dst, |m| m.reasons[r as usize].clone());
+                        self.add_prim(dst, prim::ALL);
+                    }
+                    self.edge(from, dst);
                 }
             }
             Cons::Hard { kind, reason } => {
@@ -939,6 +955,9 @@ impl Model {
                         // it runs as unknown code and every key read through
                         // this holder may yield anything (derive kills the
                         // templates that reach it).
+                        if self.explain && matches!(self.toks[t as usize], TokKind::ObjectProto) {
+                            { let hs: Vec<String> = self.nodes[n as usize].pts.to_sorted().iter().take(8).map(|&x| self.tok_name(x)).collect(); eprintln!("perry: wpfacts explain: TEMP computed accessor on Object.prototype: {} holder {} {:?}", self.funcs[f as usize].name, self.labels[n as usize], hs); }
+                        }
                         let r = self.reason("accessor under a computed key");
                         let ft = self.funcs[f as usize].token;
                         self.escape(ft, r);
@@ -1154,11 +1173,6 @@ impl Model {
                 return;
             }
         }
-        if self.explain && matches!(self.toks[t as usize], TokKind::BuiltinFn) {
-            let d = self.stores.get(site as usize).map(|s| s.desc.clone()).unwrap_or_default();
-            let fname = self.stores.get(site as usize).map(|s| self.funcs[s.func as usize].name.clone()).unwrap_or_default();
-            eprintln!("perry: wpfacts explain: store onto builtin-fn at {d} in {fname} src {}", self.labels[src as usize]);
-        }
         self.note_fnproto_write(t, Some(key), "store");
         builtins::note_native_write(self, t, Some(key), "store");
         if matches!(key, Key::Any)
@@ -1174,6 +1188,11 @@ impl Model {
             }
         }
         if t == TOP {
+            if self.explain && matches!(key, Key::Any) {
+                let d = self.stores.get(site as usize).map(|s| s.desc.clone()).unwrap_or_default();
+                let f = self.stores.get(site as usize).and_then(|s| self.funcs.get(s.func as usize)).map(|f| f.name.clone()).unwrap_or_default();
+                eprintln!("perry: wpfacts explain: TEMP store on TOP {key:?} at {d} in {f}");
+            }
             let r = self.reason("stored into a value from unmodeled code");
             self.sink_node(src, r);
             return;
@@ -1299,7 +1318,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::TopIfAny { dst, reason } => format!("topifany {n} {dst} {reason}"),
+            Cons::TopIfAny { dst, from, reason } => format!("topifany {n} {dst} {from} {}", reason.map_or(-1, |r| r as i64)),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),

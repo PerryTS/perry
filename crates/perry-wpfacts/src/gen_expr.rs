@@ -237,7 +237,25 @@ impl<'a> Gen<'a> {
         ret
     }
 
-    fn new_lit(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
+    fn new_lit(&mut self, mi: u32, e: &Expr, keys: &[&str]) -> (TmplId, Tok) {
+        // One template per literal expression, except inside an instance
+        // that clones births (a constant-specialized one): a small function
+        // instanced at every call shares the shared walk's template.
+        let at = e as *const Expr as usize;
+        let clone = self.frames.last().is_some_and(|f| f.clone_births);
+        if !clone {
+            if let Some(&tt) = self.lit_births.get(&at) {
+                return tt;
+            }
+        }
+        let tt = self.new_lit_tmpl(mi, keys);
+        if !clone {
+            self.lit_births.insert(at, tt);
+        }
+        tt
+    }
+
+    pub(crate) fn new_lit_tmpl(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
         let mut atoms = Vec::new();
@@ -742,7 +760,7 @@ impl<'a> Gen<'a> {
                     .map(|(k, _)| k.as_str())
                     .filter(|k| *k != "__proto__")
                     .collect();
-                let (tm, t) = self.new_lit(mi, &keys);
+                let (tm, t) = self.new_lit(mi, e, &keys);
                 let obj = self.tok_node(t);
                 for (k, v) in props {
                     let vn = self.expr(fx, v);
@@ -774,7 +792,7 @@ impl<'a> Gen<'a> {
                     .map(|(k, _)| k.as_str())
                     .filter(|k| seen.insert(*k))
                     .collect();
-                let (tm, t) = self.new_lit(mi, &keys);
+                let (tm, t) = self.new_lit(mi, e, &keys);
                 let obj = self.tok_node(t);
                 for (k, v) in stores {
                     let vn = self.prim_node(match v {
@@ -799,7 +817,7 @@ impl<'a> Gen<'a> {
             Expr::ObjectSpread { parts } => {
                 let named: Vec<&str> = parts.iter().filter_map(|(k, _)| k.as_deref()).collect();
                 let has_spread = parts.iter().any(|(k, _)| k.is_none());
-                let (tm, t) = self.new_lit(mi, if has_spread { &[] } else { &named });
+                let (tm, t) = self.new_lit(mi, e, if has_spread { &[] } else { &named });
                 let obj = self.tok_node(t);
                 for (k, v) in parts {
                     let vn = self.expr(fx, v);
@@ -837,7 +855,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectRest { object, .. } => {
                 let o = self.expr(fx, object);
-                let (tm, t) = self.new_lit(mi, &[]);
+                let (tm, t) = self.new_lit(mi, e, &[]);
                 let obj = self.tok_node(t);
                 let vals = self.load(o, Key::Any);
                 self.store(fx, obj, Key::Any, vals, "rest".into(), Some(tm), true);

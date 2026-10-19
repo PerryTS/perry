@@ -35,8 +35,11 @@ const MAX_DEPTH: usize = 6;
 /// A body this small is instanced at every static call, constant or not:
 /// its parameters then meet only this call's arguments (per-call summaries).
 /// Instances per such function are bounded by the program's call sites.
-const SMALL_BODY: usize = 48;
+const SMALL_BODY: usize = 24;
 const MAX_SMALL_PER_FN: u32 = 1 << 14;
+/// Small instances nest at most this deep (a call inside a small instance
+/// is instanced again only up to here).
+const SMALL_DEPTH: usize = 2;
 
 /// A compile-time constant argument or condition value.
 #[derive(Clone, Debug, PartialEq)]
@@ -84,6 +87,9 @@ pub(crate) struct Frame<'a> {
     pub consts: FxHashMap<u32, Const>,
     /// Parameters bound to a statically known function at this call.
     pub fns: FxHashMap<u32, StaticFn<'a>>,
+    /// Objects born in this instance get their own templates (an instance
+    /// specialized on a constant or function argument).
+    pub clone_births: bool,
 }
 
 /// What an instance's body must not contain, and the locals it assigns.
@@ -93,6 +99,17 @@ struct Scan {
     closed: bool,
     lets: Vec<u32>,
     assigned: Vec<u32>,
+    /// Locals a constant can decide: read in a condition or as a computed key.
+    decides: Vec<u32>,
+    /// Locals called as functions.
+    called: Vec<u32>,
+}
+
+fn locals_in(e: &Expr, out: &mut Vec<u32>) {
+    if let Expr::LocalGet(id) = e {
+        out.push(*id);
+    }
+    perry_hir::walker::walk_expr_children(e, &mut |c| locals_in(c, out));
 }
 
 impl Scan {
@@ -122,6 +139,7 @@ impl Scan {
                 then_branch,
                 else_branch,
             } => {
+                locals_in(condition, &mut self.decides);
                 self.expr(condition);
                 self.stmts(then_branch);
                 if let Some(e) = else_branch {
@@ -215,6 +233,17 @@ impl Scan {
             }
             Expr::LocalSet(id, _) => self.assigned.push(*id),
             Expr::Update { id, .. } => self.assigned.push(*id),
+            Expr::Conditional { condition, .. } => locals_in(condition, &mut self.decides),
+            Expr::IndexGet { index, .. } | Expr::IndexSet { index, .. } => {
+                if let Expr::LocalGet(id) = &**index {
+                    self.decides.push(*id);
+                }
+            }
+            Expr::Call { callee, .. } => {
+                if let Expr::LocalGet(id) = &**callee {
+                    self.called.push(*id);
+                }
+            }
             _ => {}
         }
         if self.closed {
@@ -262,16 +291,41 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Static call sites naming this callee in its module (an instance
+    /// frame's function parameter counts as many).
+    pub(crate) fn static_call_sites(&mut self, mi: u32, callee: &Expr) -> u32 {
+        if !self.static_locals_built.contains(&mi) {
+            self.build_static_locals(mi);
+        }
+        match callee {
+            Expr::FuncRef(id) => self.static_calls.get(&(mi, true, *id)).copied().unwrap_or(0),
+            Expr::LocalGet(id) => {
+                let in_frame = self
+                    .frames
+                    .last()
+                    .is_some_and(|f| f.module == mi && f.fns.contains_key(id));
+                if in_frame {
+                    u32::MAX
+                } else {
+                    self.static_calls.get(&(mi, false, *id)).copied().unwrap_or(0)
+                }
+            }
+            _ => 0,
+        }
+    }
+
     /// Locals bound once to a closure and never assigned again, per module.
     fn build_static_locals(&mut self, mi: u32) {
         self.static_locals_built.insert(mi);
         let module: &'a perry_hir::Module = self.modules[mi as usize].1;
         let mut binds: FxHashMap<u32, Option<StaticFn<'a>>> = FxHashMap::default();
         let mut assigned: crate::pts::FxHashSet<u32> = Default::default();
+        let mut calls: FxHashMap<(bool, u32), u32> = FxHashMap::default();
         fn visit_stmts<'b>(
             ss: &'b [Stmt],
             binds: &mut FxHashMap<u32, Option<StaticFn<'b>>>,
             assigned: &mut crate::pts::FxHashSet<u32>,
+            calls: &mut FxHashMap<(bool, u32), u32>,
         ) {
             for s in ss {
                 let mut exprs: Vec<&'b Expr> = Vec::new();
@@ -331,14 +385,14 @@ impl<'a> Gen<'a> {
                         body,
                     } => {
                         if let Some(i) = init {
-                            visit_stmts(std::slice::from_ref(&**i), binds, assigned);
+                            visit_stmts(std::slice::from_ref(&**i), binds, assigned, calls);
                         }
                         exprs.extend(condition.iter());
                         exprs.extend(update.iter());
                         kids.push(body);
                     }
                     Stmt::Labeled { body, .. } => {
-                        visit_stmts(std::slice::from_ref(&**body), binds, assigned)
+                        visit_stmts(std::slice::from_ref(&**body), binds, assigned, calls)
                     }
                     Stmt::Try {
                         body,
@@ -366,10 +420,10 @@ impl<'a> Gen<'a> {
                     _ => {}
                 }
                 for e in exprs {
-                    visit_expr(e, binds, assigned);
+                    visit_expr(e, binds, assigned, calls);
                 }
                 for k in kids {
-                    visit_stmts(k, binds, assigned);
+                    visit_stmts(k, binds, assigned, calls);
                 }
             }
         }
@@ -377,7 +431,16 @@ impl<'a> Gen<'a> {
             e: &'b Expr,
             binds: &mut FxHashMap<u32, Option<StaticFn<'b>>>,
             assigned: &mut crate::pts::FxHashSet<u32>,
+            calls: &mut FxHashMap<(bool, u32), u32>,
         ) {
+            match e {
+                Expr::Call { callee, .. } => match &**callee {
+                    Expr::FuncRef(id) => *calls.entry((true, *id)).or_default() += 1,
+                    Expr::LocalGet(id) => *calls.entry((false, *id)).or_default() += 1,
+                    _ => {}
+                },
+                _ => {}
+            }
             match e {
                 Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
                     assigned.insert(*id);
@@ -385,27 +448,30 @@ impl<'a> Gen<'a> {
                 Expr::Closure { body, params, .. } => {
                     for p in params {
                         if let Some(d) = &p.default {
-                            visit_expr(d, binds, assigned);
+                            visit_expr(d, binds, assigned, calls);
                         }
                     }
-                    visit_stmts(body, binds, assigned);
+                    visit_stmts(body, binds, assigned, calls);
                     return;
                 }
                 _ => {}
             }
-            perry_hir::walker::walk_expr_children(e, &mut |c| visit_expr(c, binds, assigned));
+            perry_hir::walker::walk_expr_children(e, &mut |c| visit_expr(c, binds, assigned, calls));
         }
-        visit_stmts(&module.init, &mut binds, &mut assigned);
+        visit_stmts(&module.init, &mut binds, &mut assigned, &mut calls);
         for f in &module.functions {
-            visit_stmts(&f.body, &mut binds, &mut assigned);
+            visit_stmts(&f.body, &mut binds, &mut assigned, &mut calls);
         }
         for c in &module.classes {
             for m in c.methods.iter() {
-                visit_stmts(&m.body, &mut binds, &mut assigned);
+                visit_stmts(&m.body, &mut binds, &mut assigned, &mut calls);
             }
             if let Some(ctor) = &c.constructor {
-                visit_stmts(&ctor.body, &mut binds, &mut assigned);
+                visit_stmts(&ctor.body, &mut binds, &mut assigned, &mut calls);
             }
+        }
+        for ((func, id), n) in calls {
+            self.static_calls.insert((mi, func, id), n);
         }
         for (id, sf) in binds {
             if let Some(sf) = sf {
@@ -492,6 +558,7 @@ impl<'a> Gen<'a> {
                     locals: FxHashMap::default(),
                     consts,
                     fns: FxHashMap::default(),
+                    clone_births: true,
                 });
                 let v = self.const_eval_d(mi, ret, depth + 1);
                 self.frames.pop();
@@ -532,6 +599,7 @@ impl<'a> Gen<'a> {
         args: &[NodeId],
         consts: &[Option<Const>],
         fn_args: &[Option<StaticFn<'a>>],
+        sites: u32,
     ) -> Option<NodeId> {
         let mi = fx.module;
         if self.frames.len() >= MAX_DEPTH || self.m.aborted {
@@ -543,21 +611,43 @@ impl<'a> Gen<'a> {
             ..Default::default()
         };
         scan.stmts(sf.body);
-        let small = scan.size <= SMALL_BODY;
-        let given = consts.iter().any(Option::is_some) || fn_args.iter().any(Option::is_some);
+        // A constant specializes the body only where it decides something.
+        // A known function argument always does: it is what the body calls,
+        // stores or installs, and the call sites differ in it.
+        let given = sf.params.iter().enumerate().any(|(i, p)| {
+            (consts.get(i).is_some_and(Option::is_some) && scan.decides.contains(&p.id))
+                || fn_args.get(i).is_some_and(Option::is_some)
+        });
+        // A function called from one site gains nothing from an instance.
+        let small = scan.size <= SMALL_BODY && self.frames.len() < SMALL_DEPTH && sites >= 2;
         if !small && !given {
+            if self.inst_trace && consts.iter().any(Option::is_some) {
+                eprintln!("perry: wpfacts inst: undecided {}", self.m.funcs[fidx as usize].name);
+            }
             return None;
         }
         let cap = if small { MAX_SMALL_PER_FN } else { MAX_PER_FN };
         if self.inst_count.get(&fidx).copied().unwrap_or(0) >= cap {
+            if self.inst_trace {
+                eprintln!("perry: wpfacts inst: capped {}", self.m.funcs[fidx as usize].name);
+            }
             return None;
         }
         for p in sf.params {
             if p.is_rest || p.default.is_some() || p.arguments_object.is_some() {
+                if self.inst_trace {
+                    eprintln!("perry: wpfacts inst: refused {} params", self.m.funcs[fidx as usize].name);
+                }
                 return None;
             }
         }
         if !scan.closed || scan.size > MAX_BODY {
+            if self.inst_trace {
+                eprintln!(
+                    "perry: wpfacts inst: refused {} closed={} size={}",
+                    self.m.funcs[fidx as usize].name, scan.closed, scan.size
+                );
+            }
             return None;
         }
         *self.inst_count.entry(fidx).or_default() += 1;
@@ -567,6 +657,7 @@ impl<'a> Gen<'a> {
             locals: FxHashMap::default(),
             consts: FxHashMap::default(),
             fns: FxHashMap::default(),
+            clone_births: given,
         };
         for (i, p) in sf.params.iter().enumerate() {
             if let Some(Some(f)) = fn_args.get(i) {

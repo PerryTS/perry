@@ -310,8 +310,10 @@ pub enum Cons {
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
-    /// ⊤: an effect of a call that happens only when the call runs.
-    TopIfAny { dst: NodeId, reason: u32 },
+    /// ⊤ and everything `from` holds: the result of a call that exists only
+    /// when an argument reaches it.
+    /// (`reason` `None`: only `from`, no ⊤.)
+    TopIfAny { dst: NodeId, from: NodeId, reason: Option<u32> },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// Every token gains keys after birth (computed store …).
@@ -666,6 +668,8 @@ pub struct Model {
     /// published under each constant path (`Gen::cjs_path_node`).
     pub cjs_union: NodeId,
     pub cjs_unknown: NodeId,
+    /// Every registered value and record export (`BuiltinNs::Require`).
+    pub cjs_any_exports: Option<NodeId>,
     pub cjs_paths: FxHashMap<Atom, NodeId>,
     /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
     pub require_parts: Option<(Tok, Tok)>,

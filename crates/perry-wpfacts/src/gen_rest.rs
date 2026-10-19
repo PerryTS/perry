@@ -1840,7 +1840,12 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF)
             }
             "requirePathModule" => {
-                let registry = match source_args.first() {
+                // A path an instance knows is as good as a literal.
+                let known = match source_args.first().map(|x| self.const_eval(fx.module, x)) {
+                    Some(Some(crate::gen_inst::Const::Str(s))) => Some(Expr::String(s)),
+                    _ => None,
+                };
+                let registry = match known.as_ref().or(source_args.first()) {
                     Some(Expr::String(path)) if std::path::Path::new(path).is_absolute() => {
                         let named = self.cjs_path_node(path);
                         let r = self.tmp("cjs-path-read");

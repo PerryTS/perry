@@ -931,21 +931,24 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     // specifier resolves to a registered record (its live
                     // exports or a raw publication), a native module
                     // namespace, a manifest addon or parsed JSON. Only the
-                    // last three are opaque. It caches registry records, so
-                    // `require.cache` holds the registry, not unknown values.
+                    // last three are opaque.
+                    // All of it only once a specifier reaches the call: a
+                    // shared loader body no computed specifier reaches
+                    // yields nothing.
                     implicit_args(m, call, "require specifier");
                     let ret = m.calls[call as usize].ret;
-                    let reg = m.cjs_union;
-                    let ea = m.atom("exports");
-                    m.edge(reg, ret);
-                    m.cons(reg, Cons::Load { key: Key::Named(ea), dst: ret });
-                    m.add_top(ret, |_| {
-                        "native namespace, addon or JSON loaded by a computed specifier".to_string()
-                    });
-                    m.add_prim(ret, prim::ALL);
+                    // The registry part stays inside that ⊤ as on main: as
+                    // a points-to union it would widen and escape every
+                    // module's exports at each genuine computed require.
+                    // It caches the registry records it loads.
+                    let r = m.reason("module loaded by a computed specifier");
                     let (cache, _) = require_parts(m);
                     let fa = m.field_any(cache);
+                    let reg = m.cjs_union;
                     m.edge(reg, fa);
+                    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+                        m.cons(a0, Cons::TopIfAny { dst: ret, from: ret, reason: Some(r) });
+                    }
                 }
             }
         }
@@ -1905,6 +1908,23 @@ fn replay_native_missing(m: &mut Model) {
 }
 
 /// The `cache` and `extensions` objects of [`BuiltinNs::Require`].
+/// Every registered value and every record's exports: what a computed
+/// path or specifier may load from the registry.
+pub fn cjs_any_exports(m: &mut Model) -> NodeId {
+    if let Some(n) = m.cjs_any_exports {
+        return n;
+    }
+    let n = m.node_l("CJSANYEXPORTS");
+    // A union relation like CJSREG, not one value.
+    m.nodes[n as usize].internal = true;
+    let reg = m.cjs_union;
+    let ea = m.atom("exports");
+    m.edge(reg, n);
+    m.cons(reg, Cons::Load { key: Key::Named(ea), dst: n });
+    m.cjs_any_exports = Some(n);
+    n
+}
+
 pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     if let Some(p) = m.require_parts {
         return p;

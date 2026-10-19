@@ -54,8 +54,15 @@ impl<'a> Gen<'a> {
             let consts: Vec<Option<crate::gen_inst::Const>> =
                 args.iter().map(|x| self.const_eval(fx.module, x)).collect();
             let fns: Vec<_> = args.iter().map(|x| self.static_callee(fx.module, x)).collect();
-            if let Some(r) = self.instance_call(fx, sf, &a, &consts, &fns) {
+            let sites = self.static_call_sites(fx.module, callee);
+            if let Some(r) = self.instance_call(fx, sf, &a, &consts, &fns, sites) {
                 return r;
+            }
+        }
+        if self.inst_trace {
+            if let (Some(Expr::String(s)), Expr::LocalGet(id)) = (args.first(), callee) {
+                let st = self.static_callee(fx.module, callee).is_some();
+                eprintln!("perry: wpfacts inst: lit call not instanced local {id} static={st} arg {s}");
             }
         }
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
@@ -627,6 +634,28 @@ impl<'a> Gen<'a> {
                     self.m.edge(*a, self.thrown);
                 }
                 self.prim_node(prim::UNDEF)
+            }
+            // The runtime calls the delegate's own `throw` / `return` with
+            // the value (`perry-runtime` `iterator_close.rs`); a delegate
+            // without `throw` is closed through `return` first.
+            "js_iterator_delegate_throw" | "js_iterator_delegate_return" => {
+                let (Some(it), Some(v)) = (arg(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let k = if name == "js_iterator_delegate_throw" { "throw" } else { "return" };
+                let a = self.m.atom(k);
+                let out = self.mcall(it, Key::Named(a), vec![v], vec![]);
+                if k == "throw" {
+                    let ra = self.m.atom("return");
+                    let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);
+                }
+                self.m.add_prim(out, prim::UNDEF);
+                out
+            }
+            // A module-singleton `{}` (`perry-transform` `prototype_birth.rs`).
+            "js_object_literal_prototype_birth" => {
+                let (_, t) = self.new_lit_tmpl(fx.module, &[]);
+                self.tok_node(t)
             }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");

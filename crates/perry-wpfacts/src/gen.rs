@@ -71,6 +71,10 @@ pub struct Gen<'a> {
     /// of a local (its binding facts are the union), instances per function,
     /// and `PERRY_FACTS_INST_TRACE`.
     pub(crate) frames: Vec<crate::gen_inst::Frame<'a>>,
+    /// Literal birth templates by expression (compiler data, `new_lit`).
+    pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// Static call sites per (module, callee is a function decl, id).
+    pub(crate) static_calls: FxHashMap<(u32, bool, u32), u32>,
     pub(crate) static_funcs: FxHashMap<(u32, u32), Option<crate::gen_inst::StaticFn<'a>>>,
     pub(crate) static_locals: FxHashMap<(u32, u32), crate::gen_inst::StaticFn<'a>>,
     pub(crate) static_locals_built: crate::pts::FxHashSet<u32>,
@@ -178,6 +182,8 @@ impl<'a> Gen<'a> {
             class_homes: FxHashMap::default(),
             frames: Vec::new(),
             static_funcs: FxHashMap::default(),
+            static_calls: FxHashMap::default(),
+            lit_births: FxHashMap::default(),
             static_locals: FxHashMap::default(),
             static_locals_built: Default::default(),
             inst_locals: FxHashMap::default(),
