@@ -1387,6 +1387,7 @@ mod response_socket_tests {
 
     #[test]
     fn response_socket_retains_initial_socket_after_request_reassignment() {
+        perry_ffi::initialize_runtime_fixture();
         let scope = perry_ffi::TransientRootScope::enter();
         let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
             0,

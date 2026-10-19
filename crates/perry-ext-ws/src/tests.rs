@@ -446,11 +446,16 @@ fn has_pending_returns_zero_with_no_state() {
 }
 
 #[test]
-fn handle_to_i64_strips_pointer_tag() {
+fn handle_to_i64_decodes_native_handle_tag() {
     let raw_ptr: u64 = 0x1234_5678_9abc;
-    let nan_boxed = f64::from_bits(POINTER_TAG | raw_ptr);
+    let nan_boxed = f64::from_bits(JsValue::from_handle(raw_ptr).bits());
     assert_eq!(js_ws_handle_to_i64(nan_boxed), raw_ptr as i64);
 
+    // A heap object tag is not a native registry id.
+    assert_eq!(
+        js_ws_handle_to_i64(f64::from_bits(POINTER_TAG | raw_ptr)),
+        0
+    );
     let plain = 42.0_f64;
     assert_eq!(js_ws_handle_to_i64(plain), 42);
 }

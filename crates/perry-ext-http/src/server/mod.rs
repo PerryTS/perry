@@ -463,6 +463,7 @@ mod tests {
 
     #[test]
     fn http_server_options_store_keep_alive_timeout_buffer() {
+        perry_ffi::initialize_runtime_fixture();
         let _guard = GcTestGuard::new_with_slots(1);
         let options_json = perry_ffi::alloc_string(
             r#"{"headersTimeout":111,"keepAliveTimeout":222,"keepAliveTimeoutBuffer":321,"requestTimeout":444}"#,
@@ -644,6 +645,7 @@ mod tests {
     /// sanitized value. Pre-fix, both stored the raw `f64` verbatim.
     #[test]
     fn request_timeout_setter_paths_store_sanitized_values() {
+        perry_ffi::initialize_runtime_fixture();
         // Property-setter path: `Infinity` previously stored verbatim.
         let handle = register_handle(HttpServer::with_handler(0));
         let ret =

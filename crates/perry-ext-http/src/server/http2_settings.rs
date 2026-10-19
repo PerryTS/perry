@@ -431,6 +431,7 @@ mod tests {
 
     #[test]
     fn packed_initial_window_size_boundaries() {
+        perry_ffi::initialize_runtime_fixture();
         for value in [0, i32::MAX as u32] {
             let mut expected = Vec::new();
             push_record(&mut expected, ID_INITIAL_WINDOW_SIZE, value);
@@ -463,6 +464,7 @@ mod tests {
 
     #[test]
     fn packed_fractional_values_range_check_raw_then_truncate() {
+        perry_ffi::initialize_runtime_fixture();
         for (name, id, value, packed) in [
             ("headerTableSize", ID_HEADER_TABLE_SIZE, 1.5, 1),
             ("maxConcurrentStreams", ID_MAX_CONCURRENT_STREAMS, 7.25, 7),
@@ -497,6 +499,7 @@ mod tests {
 
     #[test]
     fn packed_nonfinite_values_pack_nan_as_zero_and_reject_infinity() {
+        perry_ffi::initialize_runtime_fixture();
         // JSON.parse cannot produce NaN/Infinity, so build the object directly.
         for (name, id) in [
             ("headerTableSize", ID_HEADER_TABLE_SIZE),
