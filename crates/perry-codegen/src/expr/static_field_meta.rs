@@ -1326,11 +1326,18 @@ pub(crate) fn lower_computed_member_registration(
                         let definition_order_str = definition_order.to_string();
                         // A static one's own function object runs its
                         // closure-convention entry's `JsFunctionInfo` (string pool).
+                        // An instance one names its `__eclo` entry exactly when
+                        // the string pool defines one
+                        // (`emit_computed_generator_entries`): a generator, or a
+                        // home-reading body of a per-evaluation class (`owner`).
+                        // A declaration's super-reading body shares its direct
+                        // body and has no such entry.
                         let generator = ctx.classes.get(class_name).is_some_and(|c| {
                             c.computed_members.iter().any(|m| {
                                 m.function.name == *method_name
-                                    && crate::codegen::helpers::body_needs_method_owner(
+                                    && crate::codegen::helpers::body_needs_explicit_method_owner(
                                         &m.function.body,
+                                        owner.is_some(),
                                     )
                             })
                         });
