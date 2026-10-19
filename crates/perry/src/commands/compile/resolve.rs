@@ -310,9 +310,13 @@ pub(super) fn enumerate_installed_package_roots(
     //
     // Walk every ancestor in Node resolution order. A package-local cache or
     // a workspace member's node_modules must not hide packages further up.
+    // One `visited` set spans the whole enumeration. A `node_modules` reached
+    // twice holds the same packages both times, so skipping the repeat only
+    // drops duplicates the dedupe below would discard anyway.
+    let mut visited = HashSet::new();
     for nm in ancestor_node_modules_dirs(project_root) {
-        collect_packages_in_node_modules(&nm, &mut out);
-        collect_packages_in_bun_store(&nm, &mut out);
+        collect_packages_in_node_modules(&nm, &mut out, &mut visited);
+        collect_packages_in_bun_store(&nm, &mut out, &mut visited);
     }
     // Symlinks and recursively discovered nested packages can expose the same
     // physical root more than once. Keep its first occurrence, preserving the
@@ -332,7 +336,11 @@ pub(super) fn enumerate_installed_package_roots(
 /// ordinary `node_modules` directory, so walk it with the same collector.
 /// `node_modules` need not exist (`fs::read_dir` on the derived `.bun` path
 /// simply fails and returns).
-fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashMap<String, Vec<PathBuf>>) {
+fn collect_packages_in_bun_store(
+    node_modules: &Path,
+    out: &mut HashMap<String, Vec<PathBuf>>,
+    visited: &mut HashSet<PathBuf>,
+) {
     let bun_dir = node_modules.join(".bun");
     let entries = match fs::read_dir(&bun_dir) {
         Ok(e) => e,
@@ -341,14 +349,36 @@ fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashMap<String, 
     for entry in entries.flatten() {
         let nested = entry.path().join("node_modules");
         if nested.is_dir() {
-            collect_packages_in_node_modules(&nested, out);
+            collect_packages_in_node_modules(&nested, out, visited);
         }
     }
 }
 
 /// Walk a single `node_modules` directory, recording each package name and
 /// recursing into any nested `node_modules` it contains.
-fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashMap<String, Vec<PathBuf>>) {
+///
+/// `visited` holds the canonical path of every directory already walked, and
+/// is what makes the recursion terminate. Workspace layouts symlink members
+/// into each other's `node_modules`, so `@scope/a/node_modules/@scope/a/...`
+/// is an infinite directory tree, and every extra outlet per node multiplies
+/// the paths explored. A cycle whose nodes have one outlet each only stops
+/// because the accumulating path hits `ENAMETOOLONG`; with two or more it does
+/// not stop at all. Measured before this guard: 73k `openat` calls in 25s for
+/// two packages, and a 19-package workspace exhausted 32GB without collecting
+/// a single module (#12822).
+fn collect_packages_in_node_modules(
+    node_modules: &Path,
+    out: &mut HashMap<String, Vec<PathBuf>>,
+    visited: &mut HashSet<PathBuf>,
+) {
+    // Canonicalize so the same physical directory reached by different
+    // symlink paths counts as one visit. An un-canonicalizable path (a broken
+    // link, a race with an installer) is walked under its literal path rather
+    // than skipped.
+    let key = fs::canonicalize(node_modules).unwrap_or_else(|_| node_modules.to_path_buf());
+    if !visited.insert(key) {
+        return;
+    }
     let entries = match fs::read_dir(node_modules) {
         Ok(e) => e,
         Err(_) => return,
@@ -382,7 +412,7 @@ fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashMap<Strin
                         .push(sub_path.clone());
                     let nested = sub_path.join("node_modules");
                     if nested.is_dir() {
-                        collect_packages_in_node_modules(&nested, out);
+                        collect_packages_in_node_modules(&nested, out, visited);
                     }
                 }
             }
@@ -391,7 +421,7 @@ fn collect_packages_in_node_modules(node_modules: &Path, out: &mut HashMap<Strin
         out.entry(name.to_string()).or_default().push(path.clone());
         let nested = path.join("node_modules");
         if nested.is_dir() {
-            collect_packages_in_node_modules(&nested, out);
+            collect_packages_in_node_modules(&nested, out, visited);
         }
     }
 }
