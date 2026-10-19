@@ -290,6 +290,7 @@ impl Model {
                 let e = self.label_work.entry(self.labels[n as usize]).or_default();
                 e.1 += delta.len() as u64 * ncons0 as u64;
                 e.2 += 1;
+                *self.cw9_node_work.entry(n).or_default() += delta.len() as u64 * ncons0 as u64;
             }
             if self.max_work != 0 && self.work > self.max_work {
                 self.aborted = true;
@@ -298,6 +299,14 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
+                if self.profile.is_some() && self.cw9_events.len() < 20 {
+                    let valn = |m: &Self, x: u32| !m.nodes[x as usize].obs && matches!(m.labels[x as usize], "inst" | "field" | "fieldany" | "allfields" | "local" | "ret" | "ctx");
+                    if valn(self, s) && !(valn(self, n) && self.labels[n as usize] != "allfields") {
+                        if let Some(t) = delta.iter().copied().find(|&t| matches!(self.toks[t as usize], TokKind::Proto(_))) {
+                            self.cw9_events.push((self.pops, n, s, t));
+                        }
+                    }
+                }
                 if self.try_copy_delivery(n, s, &delta, dprim) {
                     self.work += 1 + delivery_overhead;
                     if self.max_work != 0 && self.work > self.max_work {
@@ -324,6 +333,7 @@ impl Model {
                         .entry(self.labels[n as usize])
                         .or_default()
                         .0 += visits;
+                    *self.cw9_node_work.entry(n).or_default() += visits;
                 }
                 if self.max_work != 0 && self.work > self.max_work {
                     self.aborted = true;
@@ -912,8 +922,10 @@ impl Model {
                 }
             }
             Cons::ThisTo { origin } => {
+                let calls = self.via_calls.get(&(n, origin)).cloned().unwrap_or_default();
                 for &t in toks {
                     self.this_to(t, origin);
+                    self.this_calls(t, origin, &calls);
                 }
             }
             Cons::CallArgs { call } => {

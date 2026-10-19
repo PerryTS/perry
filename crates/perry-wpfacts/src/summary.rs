@@ -407,7 +407,7 @@ impl Model {
         }
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
-                u32::MAX => self.node_named("inst", || format!("inst{inst}.{i}")),
+                u32::MAX => { let n = self.node_named("inst", || format!("inst{inst}.{i}")); self.cw9_inst_fn.insert(n, (f, key.1 | ((key.0 as u32) << 28))); n }
                 _ if ctx == NO_CTX => s.orig[i as usize],
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
@@ -459,7 +459,11 @@ impl Model {
         } else {
             match self.sum.origin.get(&call) {
                 Some(&o) if !in_scc => (6, o, ft),
-                _ => (5, 0, ft),
+                o => {
+                    let tf = t.and_then(|t| self.sum.owner.get(&t).copied()).unwrap_or(u32::MAX);
+                    *self.cw9_shared.entry((f, if o.is_some() { 1 } else if t.is_some() { 2 } else { 3 }, tf)).or_default() += 1;
+                    (5, 0, ft)
+                }
             }
         };
         let inst = self.instance(key);
@@ -695,6 +699,10 @@ impl Model {
         let it = self.sum.insts[inst as usize].this;
         if it != NO_NODE {
             match self.calls[call as usize].this {
+                // A call bound through a method lookup: each receiver whose
+                // lookup found `f` reaches the instance (`this_calls`), never
+                // the whole receiver node.
+                ThisArg::Node(_) if self.relays.contains_key(&call) => {}
                 ThisArg::Node(n) => self.edge(n, it),
                 ThisArg::Tok(x) => self.add_tok(it, x),
                 ThisArg::Undef => self.add_prim(it, prim::UNDEF),

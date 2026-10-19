@@ -591,6 +591,10 @@ pub struct Model {
     pub relays: FxHashMap<CallId, NodeId>,
     pub relay_done: crate::pts::FxHashSet<(CallId, NodeId)>,
     pub callee_sites: FxHashMap<NodeId, Vec<(CallId, Tok)>>,
+    /// The calls bound through each (method node, receiver): a summarized
+    /// target's instance for the call takes exactly the receivers whose
+    /// lookup found it.
+    pub via_calls: FxHashMap<(NodeId, Tok), Vec<CallId>>,
     pub builtin_callee: crate::pts::FxHashSet<NodeId>,
     /// Shared accessor walks: (receiver, start, key, load/store/call) → the
     /// node the walk's accessors feed (load/call) or read from (store).
@@ -723,6 +727,11 @@ pub struct Model {
     /// With the profile: propagation work by source-node label
     /// (delta × successors, delta × constraints).
     pub label_work: FxHashMap<&'static str, (u64, u64, u64)>,
+    /// TEMP CW s9: per-node propagation work (profile only).
+    pub cw9_node_work: FxHashMap<u32, u64>,
+    pub cw9_inst_fn: FxHashMap<u32, (u32, u32)>,
+    pub cw9_events: Vec<(u64, u32, u32, u32)>,
+    pub cw9_shared: FxHashMap<(u32, u8, u32), u32>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Birth keys / definite keys of `new f()` instances, from the
     /// construction-phase analysis of `f`'s body.

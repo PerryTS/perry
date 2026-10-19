@@ -621,8 +621,17 @@ impl Model {
             return;
         }
         self.rel(|| format!("callthis {callee} {call} {origin}"));
+        self.via_calls.entry((callee, origin)).or_default().push(call);
         if self.this_done.insert((callee, origin)) {
             self.cons(callee, Cons::ThisTo { origin });
+        } else {
+            let mut toks = self.bufs.pop().unwrap_or_default();
+            toks.clear();
+            self.nodes[callee as usize].pts.sorted_into(&mut toks);
+            for &t in &toks {
+                self.this_calls(t, origin, &[call]);
+            }
+            self.bufs.push(toks);
         }
         let relay = match self.relays.get(&call) {
             Some(&r) => r,
@@ -667,6 +676,18 @@ impl Model {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The instance half of `this_to`: each call bound through the method
+    /// node binds its instance of `t` with this receiver.
+    pub(super) fn this_calls(&mut self, t: Tok, origin: Tok, calls: &[CallId]) {
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            if !self.funcs[f as usize].lexical_this && self.summarized(f) {
+                for &call in calls {
+                    self.this_into(call, t, Some(origin));
+                }
+            }
         }
     }
 

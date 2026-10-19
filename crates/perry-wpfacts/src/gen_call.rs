@@ -260,15 +260,16 @@ impl<'a> Gen<'a> {
         self.m.top_val(&format!("unresolved class value {name}"))
     }
 
-    /// Captured values of a class body (class expression environments).
-    pub(crate) fn class_env(&mut self, mi: u32, name: &str) -> NodeId {
-        let key = format!("{mi}:{name}");
+    /// One captured value of a class body (a slot of the class's capture
+    /// environment): each slot is its own node, as each is its own binding.
+    pub(crate) fn class_env(&mut self, mi: u32, name: &str, index: usize) -> NodeId {
+        let key = format!("{mi}:{name}:{index}");
         if let Some(&n) = self.class_envs.get(&key) {
             return n;
         }
         let n = self
             .m
-            .node_named("classenv", || format!("classenv({name})"));
+            .node_named("classenv", || format!("classenv({name}.{index})"));
         self.class_envs.insert(key, n);
         n
     }

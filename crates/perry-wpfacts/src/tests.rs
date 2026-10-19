@@ -5,6 +5,7 @@ mod summary;
 mod closed_world;
 mod birth_site;
 mod captured;
+mod receiver_this;
 mod super_heritage;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};

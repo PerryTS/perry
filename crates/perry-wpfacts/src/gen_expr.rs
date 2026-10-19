@@ -1002,9 +1002,9 @@ impl<'a> Gen<'a> {
                 class_name,
                 captures,
             } => {
-                let env = self.class_env(mi, class_name);
-                for c in captures {
+                for (i, c) in captures.iter().enumerate() {
                     let v = self.expr(fx, c);
+                    let env = self.class_env(mi, class_name, i);
                     self.m.edge(v, env);
                 }
                 self.prim_node(prim::UNDEF)
@@ -1016,9 +1016,9 @@ impl<'a> Gen<'a> {
             } => {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
-                let env = self.class_env(mi, &name);
-                for c in captures {
+                for (i, c) in captures.iter().enumerate() {
                     let v = self.expr(fx, c);
+                    let env = self.class_env(mi, &name, i);
                     self.m.edge(v, env);
                     if env_class.is_none() {
                         self.to_sink(v, "class capture of an unnamed class expression");
@@ -1026,12 +1026,15 @@ impl<'a> Gen<'a> {
                 }
                 cv
             }
-            Expr::ClassEnvGet { class_name, .. } => self.class_env(mi, class_name),
+            Expr::ClassEnvGet { class_name, index, .. } => self.class_env(mi, class_name, *index as usize),
             Expr::ClassEnvSet {
-                class_name, value, ..
+                class_name,
+                index,
+                value,
+                ..
             } => {
                 let v = self.expr(fx, value);
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index as usize);
                 self.m.edge(v, env);
                 v
             }
@@ -1047,10 +1050,11 @@ impl<'a> Gen<'a> {
             Expr::ClassEnvCurrent { .. } => self.m.top_val("ClassEnvCurrent"),
             Expr::ClassCaptureValue {
                 class_name,
+                index,
                 fallback,
                 ..
             } => {
-                let env = self.class_env(mi, class_name);
+                let env = self.class_env(mi, class_name, *index as usize);
                 let out = self.tmp("capture");
                 self.m.edge(env, out);
                 if let Some(f) = fallback {
@@ -1131,9 +1135,9 @@ impl<'a> Gen<'a> {
                     let vn = self.expr(fx, v);
                     self.store(fx, cv, Key::Any, vn, "static[k]".into(), None, false);
                 }
-                let env = self.class_env(mi, template);
-                for a in captured_args {
+                for (i, a) in captured_args.iter().enumerate() {
                     let v = self.expr(fx, a);
+                    let env = self.class_env(mi, template, i);
                     self.m.edge(v, env);
                 }
                 if let Some(s) = shared_first_evaluation {

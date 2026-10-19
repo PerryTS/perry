@@ -152,3 +152,33 @@ fn sabotage_closure_through_an_escaped_field() {
     let q = &sites(&pf, "q")[0];
     assert!(q.top, "{:?}\n{}", q.receivers, pf.dump_text());
 }
+
+#[test]
+fn class_capture_slots_stay_apart() {
+    let pf = facts(&format!(
+        "{CLASSES}
+        function mk(a: any, b: any) {{
+            class K {{ ga() {{ return a; }} gb() {{ return b; }} }}
+            return new K();
+        }}
+        const k = mk(new A(), new B());
+        console.log(k.ga().x, k.gb().y);"
+    ));
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
+    lacks(&pf, "x", "B");
+    lacks(&pf, "y", "A");
+}
+
+#[test]
+fn module_class_capture_slots_stay_apart() {
+    let pf = facts(&format!(
+        "{CLASSES}
+        const ONE = new A(); const TWO = new B();
+        class K {{ ga() {{ return ONE; }} gb() {{ return TWO; }} }}
+        const k = new K();
+        console.log(k.ga().x, k.gb().y);"
+    ));
+    lacks(&pf, "x", "B");
+    lacks(&pf, "y", "A");
+}
