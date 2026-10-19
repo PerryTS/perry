@@ -70,13 +70,7 @@ unsafe extern "C" fn check(
     address: f64,
     family: f64,
 ) -> f64 {
-    let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
-    let family = scope.root_nanbox(family);
-    let address = string_arg(&scope, address);
-    let family = string_arg(&scope, family.get());
-    js_net_block_list_check(owner.get(), address.get(), family.get())
+    block_list_check_boxed(this.as_f64(), address, family)
 }
 unsafe extern "C" fn rules(_: *const RawClosureHeader, this: JsThis) -> f64 {
     js_net_block_list_to_json(handle_from_value(this.as_f64()).unwrap_or(0))

@@ -299,9 +299,27 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
             js_net_block_list_add_subnet(handle, address, prefix, family)
         }
         "check" => {
-            let address = args.first().copied().map(str_arg).unwrap_or(0);
-            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_check(handle, address, family)
+            extern "C-unwind" {
+                fn js_native_call_method(
+                    object: f64,
+                    method_name: *const i8,
+                    method_name_len: usize,
+                    args: *const f64,
+                    args_len: usize,
+                ) -> f64;
+            }
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let owner = scope.root_nanbox_f64(nanbox_handle(handle));
+            let rooted_args = scope.root_nanbox_f64_slice(args);
+            let args =
+                perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&rooted_args);
+            js_native_call_method(
+                owner.get_nanbox_f64(),
+                b"check".as_ptr().cast(),
+                5,
+                args.as_ptr(),
+                args.len(),
+            )
         }
         "rules" | "toJSON" => js_net_block_list_to_json(handle),
         "fromJSON" => {

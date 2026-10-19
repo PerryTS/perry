@@ -86,6 +86,7 @@ extern "C" {
     fn js_net_throw_invalid_address() -> !;
     fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i32;
     fn js_net_validate_listen_port(value: f64);
+    fn js_runtime_validate_string_arg(value: f64, name_ptr: *const u8, name_len: u32);
 }
 
 fn undefined() -> f64 {
@@ -359,12 +360,71 @@ pub unsafe extern "C" fn js_net_block_list_check(
 ) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
-    let ip = parse_ip(address_ptr, family_ptr);
-    let contains = block_list(owner.get())
+    let Some(address) = optional_string(address_ptr) else {
+        js_net_throw_invalid_address()
+    };
+    let family = optional_string(family_ptr).map(|s| s.to_ascii_lowercase());
+    let ip = match address.parse::<IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) if matches!(family.as_deref(), None | Some("ipv4") | Some("ipv6")) => {
+            return js_bool(false);
+        }
+        Err(_) => js_net_throw_invalid_address(),
+    };
+    if !family_matches(&ip, family.as_deref()) {
+        js_net_throw_invalid_address();
+    }
+    block_list_check_ip(owner.get(), ip)
+}
+
+unsafe fn block_list_check_ip(handle: i64, ip: IpAddr) -> f64 {
+    let contains = block_list(handle)
         .rules
         .iter()
         .any(|rule| rule_contains(rule, ip));
     js_bool(contains)
+}
+
+unsafe fn block_list_check_boxed(receiver: f64, address: f64, family: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let receiver = scope.root_nanbox(receiver);
+    let address = scope.root_nanbox(address);
+    let family = scope.root_nanbox(family);
+    let ip = if np::lifecycle(address.get(), &SOCKET_ADDRESS).is_ok() {
+        with_socket_address(
+            handle_from_value(address.get()).unwrap_or(0),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            |state| state.address,
+        )
+    } else {
+        js_runtime_validate_string_arg(address.get(), b"address".as_ptr(), 7);
+        let default_family = JsValue::from_bits(family.get().to_bits()).is_undefined();
+        if !default_family {
+            js_runtime_validate_string_arg(family.get(), b"family".as_ptr(), 6);
+        }
+        let Some(address) = crate::jsvalue_to_owned_string(address.get()) else {
+            return js_bool(false);
+        };
+        let family = if default_family {
+            "ipv4".to_owned()
+        } else {
+            let Some(family) = crate::jsvalue_to_owned_string(family.get()) else {
+                return js_bool(false);
+            };
+            family.to_ascii_lowercase()
+        };
+        let Ok(ip) = address.parse::<IpAddr>() else {
+            return js_bool(false);
+        };
+        if !matches!(
+            (family.as_str(), ip),
+            ("ipv4", IpAddr::V4(_)) | ("ipv6", IpAddr::V6(_))
+        ) {
+            return js_bool(false);
+        }
+        ip
+    };
+    block_list_check_ip(handle_from_value(receiver.get()).unwrap_or(0), ip)
 }
 
 #[no_mangle]
