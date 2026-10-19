@@ -956,40 +956,20 @@ pub(super) unsafe fn dispatch_handle(
                                 obj as *const _,
                                 slot,
                             );
-                            // Always try the field as a callable —
-                            // `js_native_call_value` validates
-                            // CLOSURE_MAGIC internally and safely
-                            // returns undefined for non-callables.
-                            // The previous `is_pointer()` gate bailed
-                            // on raw-pointer-bit values (e.g. the
-                            // Promise executor's resolve/reject
-                            // closures — stored as
-                            // `transmute(ptr → f64)` without a
-                            // POINTER_TAG). That turned
-                            // `box.resolve(val)` into a no-op that
-                            // returned the raw pointer bits instead
-                            // of invoking `js_promise_resolve`, so
-                            // the outer `await` hung forever
-                            // (issue #87).
-                            //
-                            // Issue #519: bind `this` to the receiver
-                            // for the call. Non-arrow function bodies
-                            // read `this` from their `this` argument
-                            // (codegen Expr::This fallback when
-                            // this_stack is empty); without passing
-                            // the receiver, the body sees `this = undefined` and any
-                            // `this.foo()` call falls through to the
-                            // issue #510 catch-all "(undefined).foo
-                            // is not a function" TypeError. Hono's
-                            // RegExpRouter.match (imported function
-                            // assigned as a class field) hit this.
-                            let result = crate::closure::native_call_value_this(
-                                f64::from_bits(field_val.bits()),
-                                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
-                                args_ptr,
-                                args_len,
-                            );
-                            return Some(result);
+                            // Optional layout holes are absent, so keep looking
+                            // on the prototype. Preserve the existing boxed and
+                            // legacy raw-closure bridge for present fields.
+                            if field_val.bits() != crate::value::TAG_HOLE {
+                                let result = crate::closure::native_call_value_this(
+                                    f64::from_bits(field_val.bits()),
+                                    crate::closure::JsThis::from_f64(
+                                        object_handle.get_nanbox_f64(),
+                                    ),
+                                    args_ptr,
+                                    args_len,
+                                );
+                                return Some(result);
+                            }
                         }
                     }
                 }

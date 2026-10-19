@@ -479,8 +479,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id(
     if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if let Some(value) = super::layout_desc::methods::call_by_id(
-        object, method_id, args_ptr, args_len) {
+    if let Some(value) =
+        super::layout_desc::methods::call_by_id(object, method_id, args_ptr, args_len)
+    {
         return value;
     }
     js_native_call_method_str_key(object, method_id, args_ptr, args_len)
@@ -2232,20 +2233,11 @@ pub(crate) unsafe fn native_call_method_tower(
             return crate::object::null_stub_value();
         }
 
-        let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
-            return crate::object::null_stub_value();
-        };
-        // A dictionary's shape publishes no keys. The same ordinary own
-        // lookup uses its receiver-owned list before walking the prototype.
-        let (keys, key_count) = if descriptor.keys == 0 {
-            let keys = crate::object::object_keys(obj);
-            (keys.arr(), keys.count() as usize)
-        } else {
-            (
-                descriptor.keys as usize as *mut ArrayHeader,
-                descriptor.logical_key_count as usize,
-            )
-        };
+        // Overflow owns the current key list after a delete or descriptor
+        // change, even while the birth shape still lists the original keys.
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
+        let key_count = keys_view.count() as usize;
 
         if !keys.is_null() {
             // Validate keys_array pointer before dereferencing
@@ -2267,35 +2259,22 @@ pub(crate) unsafe fn native_call_method_tower(
             if let Some(slot) =
                 own_slot::find_method_slot(keys, key_count as u32, method_name.as_bytes())
             {
-                // Found the method — delegate to `js_native_call_value`
-                // which handles both NaN-boxed pointers (POINTER_TAG)
-                // and raw-pointer-bits (e.g. the resolve/reject
-                // closures from `js_promise_new_with_executor`,
-                // transmuted `i64 → f64` so their bits live outside
-                // the NaN range). The earlier `is_pointer()` gate
-                // bailed on the raw-pointer case: `{ resolve }` on a
-                // plain object caused `box.resolve(x)` to land here,
-                // the tag check failed, we fell through to vtable
-                // lookup, and returned NULL_OBJECT_BYTES without
-                // invoking `js_promise_resolve` → the awaiter hung
-                // forever (issue #87). `js_native_call_value`
-                // validates CLOSURE_MAGIC before calling the func
-                // pointer, so non-callable field values (numbers,
-                // strings, booleans) safely return undefined.
-                // An accessor key's slot holds its accessor pair, never a
-                // callable (`accessor_pair.rs`).
+                // An optional layout slot holding the hole is absent. Its
+                // method must be looked up on the prototype, as for [[Get]].
                 let field_val = crate::object::key_attrs::object_slot_data(obj as *const _, slot);
-                let bound = crate::closure::clone_closure_rebind_this(
-                    field_val.bits(),
-                    f64::from_bits(jsval().bits()),
-                );
-                let result = crate::closure::native_call_value_this(
-                    f64::from_bits(bound),
-                    crate::closure::JsThis::from_f64(object()),
-                    args_ptr,
-                    args_len,
-                );
-                return result;
+                if field_val.bits() != crate::value::TAG_HOLE {
+                    // Keep the existing boxed and legacy raw-closure bridge.
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        field_val.bits(),
+                        f64::from_bits(jsval().bits()),
+                    );
+                    return crate::closure::native_call_value_this(
+                        f64::from_bits(bound),
+                        crate::closure::JsThis::from_f64(object()),
+                        args_ptr,
+                        args_len,
+                    );
+                }
             }
         }
 

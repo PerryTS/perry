@@ -379,6 +379,7 @@ mod cjs_default_dispatch_tests {
         "child_process.default",
         "cluster.default",
         "constants.default",
+        "dgram.default",
         "dns.default",
         "dns/promises.default",
         "ffi.default",

@@ -295,14 +295,30 @@ fn object_mode_reads_the_record() {
     let stream = scope.root_nanbox_f64(js_node_stream_duplex_new(
         opts.with_mut_ptr(|p: *mut u8| box_pointer(p)),
     ));
+    // These inherited getters are read-only. Define an own shadow instead
+    // of assigning through them, while the private record remains true.
+    let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let value_key = hidden_key(b"value");
+    descriptor.with_mut_ptr(|ptr| {
+        js_object_set_field_by_name(ptr, value_key, f64::from_bits(TAG_FALSE));
+    });
     for key in [
         b"readableObjectMode".as_slice(),
         b"writableObjectMode".as_slice(),
     ] {
-        js_object_set_field_by_name(
-            raw_ptr_from_value(stream.get_nanbox_f64()) as *mut ObjectHeader,
-            hidden_key(key),
-            f64::from_bits(TAG_FALSE),
+        crate::object::js_object_define_property(
+            stream.get_nanbox_f64(),
+            f64::from_bits(JSValue::string_ptr(hidden_key(key)).bits()),
+            descriptor.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+        );
+        assert_eq!(
+            js_object_get_field_by_name_f64(
+                raw_ptr_from_value(stream.get_nanbox_f64()) as *const ObjectHeader,
+                hidden_key(key),
+            )
+            .to_bits(),
+            TAG_FALSE,
+            "the fixture must shadow the public getter"
         );
     }
     let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;

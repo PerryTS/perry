@@ -2,7 +2,7 @@
 //! `construct` traps, their default-forwarding paths, and the
 //! callable/constructor classification helpers shared by the Reflect trap
 //! validators. Extracted from `proxy.rs` to keep it under the 2000-line gate
-//! (split-large-files recipe). Pure relocation; behavior is unchanged.
+//! (split-large-files recipe). Proxy calls preserve creation-time callability.
 
 use super::{
     closure_from, create_list_from_array_like, entry, handler_trap, lookup,
@@ -184,6 +184,11 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
+    // A Proxy has [[Call]] only when its target was callable at creation.
+    // An apply trap cannot make an ordinary object callable.
+    if !super::proxy_wraps_callable(proxy_boxed) {
+        return throw_type_error("value is not a function");
+    }
     let (target, handler, revoked) = entry(id)
         .map(|e| (e.target, e.handler, e.revoked))
         .unwrap_or((
@@ -368,4 +373,80 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
         ));
     }
     result
+}
+
+#[cfg(test)]
+mod callability_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn apply_trap(
+        _: *const crate::closure::ClosureHeader,
+        _: crate::closure::JsThis,
+        _: f64,
+        _: f64,
+        _: f64,
+    ) -> f64 {
+        APPLY_CALLS.fetch_add(1, Ordering::Relaxed);
+        999.0
+    }
+
+    #[test]
+    fn value_call_bridges_reject_a_noncallable_proxy_before_invoking_its_apply_trap() {
+        crate::gc::initialize_runtime_fixture();
+        APPLY_CALLS.store(0, Ordering::Relaxed);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_u64(
+            crate::value::JSValue::pointer(crate::object::js_object_alloc(0, 0).cast()).bits(),
+        );
+        let handler = scope.root_nanbox_u64(
+            crate::value::JSValue::pointer(crate::object::js_object_alloc(0, 0).cast()).bits(),
+        );
+        let trap = scope.root_nanbox_u64(
+            crate::value::JSValue::pointer(crate::closure::js_closure_alloc(
+                crate::fn_info!(apply_trap, 3),
+                0,
+            ) as *const u8)
+            .bits(),
+        );
+        let key = scope.root_nanbox_u64(
+            crate::value::STRING_TAG
+                | (crate::string::js_string_from_bytes(b"apply".as_ptr(), 5) as u64
+                    & crate::value::POINTER_MASK),
+        );
+        crate::object::js_object_set_field_by_name(
+            (handler.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut crate::ObjectHeader,
+            (key.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::StringHeader,
+            trap.get_nanbox_f64(),
+        );
+        assert_eq!(
+            handler_trap(handler.get_nanbox_f64(), "apply").to_bits(),
+            trap.get_nanbox_u64(),
+            "the fixture must install its callable apply trap",
+        );
+        let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            target.get_nanbox_f64(),
+            handler.get_nanbox_f64(),
+        ));
+        assert!(!crate::proxy::proxy_wraps_callable(proxy.get_nanbox_f64()));
+        let result = crate::exception::catch_js_throw(|| {
+            call_proxy_value_with_this(proxy.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED), &[])
+        });
+        assert!(result.is_err(), "an object Proxy must throw when called");
+        let result = crate::exception::catch_js_throw(|| unsafe {
+            crate::closure::native_call_value_this(
+                proxy.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(f64::from_bits(TAG_UNDEFINED)),
+                std::ptr::null(),
+                0,
+            )
+        });
+        assert!(
+            result.is_err(),
+            "generic calls must also reject an object Proxy"
+        );
+        assert_eq!(APPLY_CALLS.load(Ordering::Relaxed), 0);
+    }
 }

@@ -378,6 +378,15 @@ fn declaring_a_numeric_layout_clears_the_invariant() {
 #[test]
 fn prototype_writes_keep_proofs_and_an_instance_relink_retires_them() {
     let _serialized = test_serialize();
+    // Class registration precedes birth; the operation under test below is
+    // the subsequent prototype write, not registration of a live class.
+    unsafe {
+        crate::object::js_register_class_name(CLASS_A, b"ElementShapeA".as_ptr(), 13);
+    }
+    // First materialization installs the prototype identity. Establish that
+    // identity before the arrays acquire their element-field proofs.
+    let prototype = crate::object::class_decl_prototype_value(CLASS_A);
+    assert!(crate::value::JSValue::from_bits(prototype.to_bits()).is_pointer());
     let a = built_from_pushes(CLASS_A, 2);
     let b = built_from_pushes(CLASS_B, 2);
     assert!(proof(a).is_some());
@@ -387,7 +396,6 @@ fn prototype_writes_keep_proofs_and_an_instance_relink_retires_them() {
     // can shadow: writing a method onto the class prototype retires nothing.
     let name = b"patched";
     unsafe {
-        crate::object::js_register_class_name(CLASS_A, b"ElementShapeA".as_ptr(), 13);
         crate::object::js_register_prototype_method(
             CLASS_A,
             name.as_ptr(),

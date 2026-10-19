@@ -504,3 +504,103 @@ fn ordinary_hole_delete_keeps_the_existing_order_representation() {
         assert!(crate::object::overflow::has_overflow(obj));
     }
 }
+
+#[test]
+fn absent_layout_methods_throw_or_resolve_an_inherited_method() {
+    extern "C" fn return_receiver(
+        _: *const crate::closure::ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        this.as_f64()
+    }
+    crate::gc::initialize_runtime_fixture();
+    for descriptor in [
+        std::ptr::addr_of!(HOLEY),
+        std::ptr::addr_of!(HOLEY_PERMUTED),
+    ] {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let object = unsafe { born(descriptor, &scope) };
+        let receiver =
+            || object.with_mut_ptr(|ptr: *mut ObjectHeader| crate::js_nanbox_pointer(ptr as i64));
+        let missing = crate::exception::catch_js_throw(|| unsafe {
+            crate::object::js_native_call_method(
+                receiver(),
+                b"holes_a".as_ptr().cast(),
+                7,
+                std::ptr::null(),
+                0,
+            )
+        });
+        assert!(
+            missing.is_err(),
+            "an absent method must throw rather than call the hole"
+        );
+        // A present method deleted into overflow must stop shadowing the
+        // prototype, even though the immutable birth shape still names it.
+        let own_method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(return_receiver, 0),
+            0,
+        ) as *mut crate::closure::ClosureHeader);
+        object.with_mut_ptr(|obj| {
+            js_object_set_field_by_name(
+                obj,
+                H_A.string,
+                own_method.with_mut_ptr(|ptr: *mut crate::closure::ClosureHeader| {
+                    crate::js_nanbox_pointer(ptr as i64)
+                }),
+            );
+        });
+        // Setting a field can allocate; reload the receiver for the delete.
+        object.with_mut_ptr(|obj| {
+            assert_eq!(
+                crate::object::delete_rest::js_object_delete_field(obj, H_A.string),
+                1
+            );
+        });
+        let deleted = crate::exception::catch_js_throw(|| unsafe {
+            crate::object::js_native_call_method(
+                receiver(),
+                b"holes_a".as_ptr().cast(),
+                7,
+                std::ptr::null(),
+                0,
+            )
+        });
+        assert!(
+            deleted.is_err(),
+            "a deleted method must throw rather than call an obsolete shape slot"
+        );
+        let prototype = scope.root_raw_mut_ptr(js_object_alloc_plain(0));
+        let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(return_receiver, 0),
+            0,
+        ) as *mut crate::closure::ClosureHeader);
+        prototype.with_mut_ptr(|ptr| {
+            js_object_set_field_by_name(
+                ptr,
+                H_A.string,
+                method.with_mut_ptr(|ptr: *mut crate::closure::ClosureHeader| {
+                    crate::js_nanbox_pointer(ptr as i64)
+                }),
+            );
+        });
+        crate::object::js_object_set_prototype_of(
+            receiver(),
+            prototype.with_mut_ptr(|ptr: *mut ObjectHeader| crate::js_nanbox_pointer(ptr as i64)),
+        );
+        let inherited = unsafe {
+            crate::object::js_native_call_method(
+                receiver(),
+                b"holes_a".as_ptr().cast(),
+                7,
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(
+            inherited.to_bits(),
+            receiver().to_bits(),
+            "inherited method receives the original this"
+        );
+    }
+}

@@ -714,16 +714,47 @@ fn stream_promises_finished_rejects_later_destroy_error() {
     );
 }
 
-fn set_stream_bool_property(stream: f64, name: &[u8], value: bool) {
-    let obj = object_ptr_from_value(stream).expect("stream object");
-    js_object_set_field_by_name(
-        obj,
-        js_string_from_bytes(name.as_ptr(), name.len() as u32),
-        f64::from_bits(if value {
+fn define_stream_bool_property(stream: f64, name: &[u8], value: bool) {
+    // Lifecycle flags are inherited read-only getters. These fixtures install
+    // their own status values before emitting the corresponding events.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let descriptor = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    for (key, value) in [
+        (b"value".as_slice(), value),
+        (b"writable".as_slice(), true),
+        (b"enumerable".as_slice(), true),
+        (b"configurable".as_slice(), true),
+    ] {
+        let key = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        descriptor.with_mut_ptr(|ptr| {
+            js_object_set_field_by_name(
+                ptr,
+                key,
+                f64::from_bits(if value {
+                    crate::value::TAG_TRUE
+                } else {
+                    crate::value::TAG_FALSE
+                }),
+            );
+        });
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_define_property(
+        stream.get_nanbox_f64(),
+        f64::from_bits(crate::value::JSValue::string_ptr(key).bits()),
+        descriptor.with_mut_ptr(|p: *mut u8| boxed_ptr(p)),
+    );
+    let obj = object_ptr_from_value(stream.get_nanbox_f64()).expect("stream object");
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(obj, key).bits(),
+        if value {
             crate::value::TAG_TRUE
         } else {
             crate::value::TAG_FALSE
-        }),
+        },
+        "fixture must expose its own lifecycle flag"
     );
 }
 
@@ -793,12 +824,12 @@ fn stream_promises_finished_duplex_default_waits_after_writable_finish_only() {
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
-    set_stream_bool_property(stream, b"writableFinished", true);
+    define_stream_bool_property(stream, b"writableFinished", true);
     emit_stream_lifecycle_event(stream, "finish");
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
-    set_stream_bool_property(stream, b"readableEnded", true);
+    define_stream_bool_property(stream, b"readableEnded", true);
     emit_stream_lifecycle_event(stream, "end");
 
     assert_promise_resolved_undefined(promise);
@@ -817,12 +848,12 @@ fn stream_promises_finished_duplex_default_waits_after_readable_end_only() {
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
-    set_stream_bool_property(stream, b"readableEnded", true);
+    define_stream_bool_property(stream, b"readableEnded", true);
     emit_stream_lifecycle_event(stream, "end");
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
-    set_stream_bool_property(stream, b"writableFinished", true);
+    define_stream_bool_property(stream, b"writableFinished", true);
     emit_stream_lifecycle_event(stream, "finish");
 
     assert_promise_resolved_undefined(promise);
@@ -842,7 +873,7 @@ fn stream_promises_finished_duplex_readable_false_resolves_after_writable_finish
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
-    set_stream_bool_property(stream, b"writableFinished", true);
+    define_stream_bool_property(stream, b"writableFinished", true);
     emit_stream_lifecycle_event(stream, "finish");
 
     assert_promise_resolved_undefined(promise);
@@ -862,7 +893,7 @@ fn stream_promises_finished_duplex_writable_false_resolves_after_readable_end() 
 
     assert_eq!(crate::promise::js_promise_state(promise), 0);
 
-    set_stream_bool_property(stream, b"readableEnded", true);
+    define_stream_bool_property(stream, b"readableEnded", true);
     emit_stream_lifecycle_event(stream, "end");
 
     assert_promise_resolved_undefined(promise);
