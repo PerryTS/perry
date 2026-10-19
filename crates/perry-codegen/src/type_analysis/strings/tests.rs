@@ -119,7 +119,7 @@ fn concat_probe_ir(property: &str) -> String {
         emit_ir_only: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
-        type_aliases: rec_alias(),
+        type_aliases: std::sync::Arc::new(rec_alias()),
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8")

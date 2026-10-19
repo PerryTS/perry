@@ -54,7 +54,7 @@ fn ir_opts() -> CompileOptions {
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
-        type_aliases: std::collections::HashMap::new(),
+        type_aliases: Default::default(),
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
@@ -80,7 +80,7 @@ fn ir_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
         debug_locations: false,
@@ -345,10 +345,12 @@ fn emit(m: &Module) -> String {
 /// [`emit`] with module-level `type X = …` aliases in scope.
 fn emit_with_aliases(m: &Module, aliases: &[(&str, Type)]) -> String {
     let mut opts = ir_opts();
-    opts.type_aliases = aliases
-        .iter()
-        .map(|(name, ty)| ((*name).to_string(), ty.clone()))
-        .collect();
+    opts.type_aliases = std::sync::Arc::new(
+        aliases
+            .iter()
+            .map(|(name, ty)| ((*name).to_string(), ty.clone()))
+            .collect(),
+    );
     String::from_utf8(compile_module(m, opts).unwrap()).expect("LLVM IR should be UTF-8")
 }
 

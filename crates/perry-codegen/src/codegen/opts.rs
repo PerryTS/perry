@@ -521,7 +521,7 @@ pub struct CompileOptions {
     /// module's `main` filters this set out of `non_entry_module_prefixes`
     /// when emitting the eager init call sequence. Empty when no module
     /// in the program is deferred.
-    pub deferred_module_prefixes: std::collections::HashSet<String>,
+    pub deferred_module_prefixes: std::sync::Arc<std::collections::HashSet<String>>,
 
     /// Issue #753: sanitized prefixes of THIS module's static-import +
     /// re-export source modules (non-entry only — the entry has no
@@ -1408,7 +1408,7 @@ pub(crate) struct CrossModuleCtx {
     /// dynamic `import()` edges. Their `<prefix>__init` is excluded
     /// from the entry-main eager init call sequence and fires lazily
     /// from each `Expr::DynamicImport` dispatch site.
-    pub deferred_module_prefixes: std::collections::HashSet<String>,
+    pub deferred_module_prefixes: std::sync::Arc<std::collections::HashSet<String>>,
     /// Issue #753: this module's static-import + re-export source
     /// prefixes (non-entry only). Consumed by `compile_module_entry`
     /// when emitting the wrapper for `<prefix>__init` so dep init

@@ -60,7 +60,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
-        deferred_module_prefixes: std::collections::HashSet::new(),
+        deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
         debug_locations: false,
@@ -125,7 +125,7 @@ fn emitted_process_entry_ir(output_type: &str) -> String {
 fn emitted_path_init_ir(output_type: &str) -> String {
     let mut opts = entry_opts(output_type);
     opts.non_entry_module_prefixes = vec!["lazy_chunk_js".to_string()];
-    opts.deferred_module_prefixes
+    std::sync::Arc::make_mut(&mut opts.deferred_module_prefixes)
         .insert("lazy_chunk_js".to_string());
     opts.nextjs_path_init_modules = vec![(
         "/fixture/.next/server/chunks/lazy.js".to_string(),
@@ -659,7 +659,7 @@ fn set_bun_platform_marker_lowers_to_the_runtime_flag_setter() {
 fn eager_literal_pools_precede_all_bodies_but_deferred_pools_stay_lazy() {
     let mut opts = entry_opts("executable");
     opts.non_entry_module_prefixes = vec!["first_ts".into(), "later_ts".into(), "lazy_ts".into()];
-    opts.deferred_module_prefixes.insert("lazy_ts".into());
+    std::sync::Arc::make_mut(&mut opts.deferred_module_prefixes).insert("lazy_ts".into());
     let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
     let first_body = ir.find("call void @first_ts__init()").unwrap();
     let later_body = ir.find("call void @later_ts__init()").unwrap();

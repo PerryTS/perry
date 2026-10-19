@@ -3711,6 +3711,15 @@ pub fn run_with_parse_cache(
         .thread_name(|index| format!("perry-module-{index}"))
         .build()
         .map_err(|error| anyhow!("failed to create module codegen pool: {error}"))?;
+    // One set for the program; every module's options share it.
+    let program_deferred_module_prefixes: std::sync::Arc<std::collections::HashSet<String>> =
+        std::sync::Arc::new(
+            ctx.native_modules
+                .iter()
+                .filter(|(_, m)| m.init_kind == perry_hir::ModuleInitKind::Deferred)
+                .map(|(_, m)| sanitize_name(&m.name))
+                .collect(),
+        );
     // Reuse the exact import-route preparation in both passes. The contract
     // pass releases each module's metadata before visiting the next module;
     // the second pass prepares owned options before releasing the HIR graph.
@@ -3756,12 +3765,7 @@ pub fn run_with_parse_cache(
         // out of its eager init call sequence; non-entry modules
         // ignore it. Empty when no module in the program is
         // Deferred (i.e. no dynamic `import()` sites).
-        let deferred_module_prefixes: std::collections::HashSet<String> = ctx
-            .native_modules
-            .iter()
-            .filter(|(_, m)| m.init_kind == perry_hir::ModuleInitKind::Deferred)
-            .map(|(_, m)| sanitize_name(&m.name))
-            .collect();
+        let deferred_module_prefixes = std::sync::Arc::clone(&program_deferred_module_prefixes);
         // Next.js wall 54 (part 2): `(absolute_path, prefix)` for every
         // `.next/server/**` runtime module so the entry's `main` can record
         // its `__init` address by path (`js_register_path_init`). Only the
@@ -6289,6 +6293,30 @@ pub fn run_with_parse_cache(
     // before LLVM starts. The link phase needs only names and export metadata.
     let options_started = Instant::now();
     program_step("module options", None);
+    // A module's static shape ids and class shape slice are taken when its
+    // job starts, not here: the slice includes the producer classes of every
+    // short-spread candidate, so prepared for all modules at once it held
+    // the program's class shapes once per module.
+    let slice_shape_ids = |path: &PathBuf, opts: &mut perry_codegen::CompileOptions| {
+        if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
+            opts.static_shape_ids = ids.clone();
+            let foreign: BTreeSet<u32> = opts
+                .short_spread_method_candidates
+                .values()
+                .flatten()
+                .map(|c| c.class_id)
+                .collect();
+            for cid in class_ids.iter().chain(foreign.iter()) {
+                if let Some(finals) = class_final_shapes.get(cid) {
+                    opts.static_shape_ids.extend(finals.iter().cloned());
+                }
+            }
+            opts.static_shape_ids.sort();
+            opts.static_shape_ids.dedup();
+            opts.program_class_shape_ids =
+                program_class_shape_ids.restricted_to(class_ids.iter().copied().chain(foreign));
+        }
+    };
     let prepared_options: Vec<_> = module_pool.install(|| {
         codegen_modules
             .par_iter()
@@ -6300,24 +6328,6 @@ pub fn run_with_parse_cache(
                     hir_module,
                     &mut opts,
                 );
-                if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
-                    opts.static_shape_ids = ids.clone();
-                    let foreign: BTreeSet<u32> = opts
-                        .short_spread_method_candidates
-                        .values()
-                        .flatten()
-                        .map(|c| c.class_id)
-                        .collect();
-                    for cid in class_ids.iter().chain(foreign.iter()) {
-                        if let Some(finals) = class_final_shapes.get(cid) {
-                            opts.static_shape_ids.extend(finals.iter().cloned());
-                        }
-                    }
-                    opts.static_shape_ids.sort();
-                    opts.static_shape_ids.dedup();
-                    opts.program_class_shape_ids = program_class_shape_ids
-                        .restricted_to(class_ids.iter().copied().chain(foreign));
-                }
                 opts.program_facts =
                     super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
                 opts.program_facts.dynamic_code_reach =
@@ -6341,9 +6351,6 @@ pub fn run_with_parse_cache(
         receiver_params,
         program_layouts,
         constructor_contracts,
-        static_shape_ids_by_module,
-        class_final_shapes,
-        program_class_shape_ids,
         static_shape_ids,
         short_spread_method_candidates,
         program_class_accessor_names,
@@ -6677,11 +6684,14 @@ pub fn run_with_parse_cache(
             &module_memory_estimates,
             |index| {
                 let path = &codegen_modules[index];
-                let (hir_module, opts) = module_inputs[index]
+                let (hir_module, mut opts) = module_inputs[index]
                     .lock()
                     .expect("module input poisoned")
                     .take()
                     .expect("module job runs exactly once");
+                if let Ok(opts) = &mut opts {
+                    slice_shape_ids(path, opts);
+                }
                 let module_name = hir_module.name.clone();
                 let callable_count = module_codegen_callable_count(&hir_module);
                 let memory_trace = perry_codegen::workers::memory_trace_enabled();
