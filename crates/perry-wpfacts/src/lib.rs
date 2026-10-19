@@ -61,8 +61,6 @@ pub struct FactsConfig {
     /// into constraints); past it, no facts. Unlike the wall budget it
     /// gives the same answer on every machine.
     pub max_work: Option<u64>,
-    /// Widening bound on one points-to set (escape + ⊤ beyond it).
-    pub widen_k: Option<usize>,
     /// The driver knows the program can run interpreted code (a deferred
     /// `new Function`/`eval` site or `node:vm`). Not a kill (decision 150):
     /// interpreted code is the ⊤ summary node; see
@@ -94,7 +92,6 @@ pub struct Stats {
     /// (constraint kind, applications, ms), most expensive first.
     pub profile: Vec<(String, u64, f64)>,
     pub pts_entries: u64,
-    pub widened_nodes: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
 }
@@ -156,7 +153,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
-    g.m.widen_k = cfg.widen_k.unwrap_or(0);
     if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
         // Interpreted code reads and writes any global (E20); the
         // prototype-write guard does not cover it.
@@ -300,7 +296,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         work: g.m.work,
         aborted: g.m.aborted,
         pts_entries: g.m.pts_entries,
-        widened_nodes: g.m.widened_nodes,
         big_nodes: big_nodes(&g.m),
         top_calls: g.m.top_calls,
         profile: {

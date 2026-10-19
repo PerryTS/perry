@@ -34,8 +34,7 @@ use std::sync::Arc;
 
 /// Solve-work bound (see `perry_wpfacts::FactsConfig::max_work`), sized so
 /// the whole pass costs a few seconds at most. With `this` bound per
-/// (receiver, key), shared accessor walks and groups, and edges into
-/// widened sets cut at the source, tsc needs 45M, fastify 59M, Effect 27M,
+/// (receiver, key), shared accessor walks and groups, tsc needed 45M, fastify 59M, Effect 27M,
 /// zod 3.9M, commander 1.8M; the Next.js server (~3G) still stops at the
 /// bound and gets no facts.
 const DEFAULT_MAX_WORK: u64 = 200_000_000;
@@ -75,14 +74,6 @@ pub(crate) fn run(
                 .unwrap_or(DEFAULT_MAX_WORK),
         ),
         profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
-        // Widening: a points-to set past this many tokens becomes ⊤ and its
-        // members escape (sound; bounds memory on merged generic helpers).
-        widen_k: Some(
-            std::env::var("PERRY_FACTS_WIDEN")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(64),
-        ),
         // Points-to entries bound (memory); past it the program gets no facts.
         max_pts: Some(
             std::env::var("PERRY_FACTS_MAX_PTS")

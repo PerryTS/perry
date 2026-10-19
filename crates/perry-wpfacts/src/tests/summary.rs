@@ -199,7 +199,7 @@ fn sabotage_user_write_to_a_builtin_through_a_helper() {
 fn debug_file() {
     let path = std::env::var("CW_SRC").expect("CW_SRC");
     let src = std::fs::read_to_string(&path).expect("read");
-    let pf = facts_with(&src, FactsConfig { explain: true, widen_k: Some(64), ..Default::default() });
+    let pf = facts_with(&src, FactsConfig { explain: true, ..Default::default() });
     let proven = pf.sites.iter().filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)).count();
     eprintln!("proven {proven} of {} work {}", pf.sites.len(), pf.stats.work);
     if let Ok(out) = std::env::var("CW_DUMP") {

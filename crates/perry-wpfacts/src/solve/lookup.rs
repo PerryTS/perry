@@ -124,16 +124,8 @@ impl Model {
             Some(&n) => (n, false),
             None => {
                 let n = self.node_l(["walk-load", "walk-store", "walk-call"][kind as usize]);
-                // A call walk relays getter results to calls: never widened.
-                // A load walk's members all reach every site's result, and a
-                // store walk's every setter's parameter, which would widen
-                // past the bound anyway: those widen like any value node.
-                match kind {
-                    1 => {
-                        self.walk_store_pending.insert(n, Vec::new());
-                    }
-                    2 => self.nodes[n as usize].internal = true,
-                    _ => {}
+                if kind == 1 {
+                    self.walk_store_pending.insert(n, Vec::new());
                 }
                 self.walk_nodes.insert((origin, t, key, kind), n);
                 (n, true)
@@ -163,8 +155,6 @@ impl Model {
         }
         let p = self.node_l("holders");
         let s = self.node_l("holders-stop");
-        self.nodes[p as usize].internal = true;
-        self.nodes[s as usize].internal = true;
         self.holder_nodes.insert((t, key), (p, s));
         self.add(p, &[t], 0);
         let pn = self.proto_node(t);
@@ -194,8 +184,6 @@ impl Model {
         let (p, s) = if at_start {
             let p = self.node_l("holders");
             let s = self.node_l("holders-stop");
-            self.nodes[p as usize].internal = true;
-            self.nodes[s as usize].internal = true;
             let x = self.node_l("holders-start");
             self.add(x, &[t], 0);
             self.cons(
@@ -450,11 +438,7 @@ impl Model {
         let gt = self.node_l("acc-this");
         let ar = self.node_l("acc-ret");
         let st = self.node_l("acc-setthis");
-        // The setter parameter source widens like the parameter it feeds.
         let sp = self.node_l("acc-setarg");
-        for n in [gt, ar, st] {
-            self.nodes[n as usize].internal = true;
-        }
         self.acc_groups.insert(
             (holder, key),
             AccGroup {
@@ -643,7 +627,6 @@ impl Model {
             Some(&r) => r,
             None => {
                 let r = self.node_l("callee-relay");
-                self.nodes[r as usize].internal = true;
                 self.relays.insert(call, r);
                 self.cons(r, Cons::CallArgs { call });
                 r

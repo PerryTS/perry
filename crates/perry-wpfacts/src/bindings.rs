@@ -36,9 +36,8 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     let node = &m.nodes[n as usize];
     let mut out = BindingFacts {
         prims: node.prim,
-        other: node.widened,
-        top: m.explain && (node.widened || node.pts.to_sorted().contains(&TOP)),
-        top_cause: (m.explain && (node.widened || node.pts.to_sorted().contains(&TOP)))
+        top: m.explain && node.pts.contains_tok(TOP),
+        top_cause: (m.explain && node.pts.contains_tok(TOP))
             .then(|| m.top_origin(n)),
         ..Default::default()
     };

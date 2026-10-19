@@ -507,7 +507,7 @@ fn build_index(m: &Model) -> Index {
     }
     for (a, node) in m.nodes.iter().enumerate() {
         let a = a as NodeId;
-        for &b in node.succ.iter().chain(node.prim_succ.iter()) {
+        for &b in node.succ.iter() {
             if owned(b) {
                 ix.preds.entry(b).or_default().push(a);
             }
@@ -559,7 +559,7 @@ fn slice(m: &Model, ix: &Index, f: FnIdx) -> Vec<NodeId> {
             }
         };
         let node = &m.nodes[x as usize];
-        for &y in node.succ.iter().chain(node.prim_succ.iter()) {
+        for &y in node.succ.iter() {
             add(y, &mut d);
         }
         for c in &node.cons {
@@ -663,7 +663,7 @@ fn build_summaries(m: &mut Model) {
                     }
                 }
             }
-            for &y in m.nodes[x as usize].succ.iter().chain(m.nodes[x as usize].prim_succ.iter()) {
+            for &y in m.nodes[x as usize].succ.iter() {
                 other(y, &mut bad, &mut refused);
             }
             if let Some(ps) = ix.preds.get(&x) {
@@ -750,7 +750,7 @@ fn build_summaries(m: &mut Model) {
             if !node.pts.is_empty() || node.prim != 0 {
                 s.seeds.push((slot[&x], node.pts.to_sorted(), node.prim));
             }
-            for &y in node.succ.iter().chain(node.prim_succ.iter()) {
+            for &y in node.succ.iter() {
                 s.edges.push((enc(x), enc(y)));
             }
             if let Some(ps) = ix.preds.get(&x) {
@@ -793,18 +793,12 @@ fn build_summaries(m: &mut Model) {
                 let node = &m.nodes[x as usize];
                 node.succ.iter().map(|&y| m.nodes[y as usize].obs).collect()
             };
-            let pkeep: Vec<bool> = {
-                let node = &m.nodes[x as usize];
-                node.prim_succ.iter().map(|&y| m.nodes[y as usize].obs).collect()
-            };
             let node = &mut m.nodes[x as usize];
             let mut it = keep.iter();
             node.succ.retain(|_| *it.next().unwrap());
-            let mut it = pkeep.iter();
-            node.prim_succ.retain(|_| *it.next().unwrap());
             if node.succ_set.is_some() {
                 let set: crate::pts::FxHashSet<NodeId> =
-                    node.succ.iter().chain(node.prim_succ.iter()).copied().collect();
+                    node.succ.iter().copied().collect();
                 node.succ_set = Some(Rc::new(set));
             }
         }

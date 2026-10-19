@@ -192,8 +192,7 @@ pub struct FuncInfo {
     /// Holds every argument (the `arguments` object's elements + extra args).
     pub args_all: NodeId,
     /// The body has an `arguments` object, the only reader of `args_all`:
-    /// calls feed `args_all` only then (a node nobody reads must not widen
-    /// and escape the arguments of a helper called with many objects).
+    /// calls feed `args_all` only then (nobody else reads it).
     pub has_arguments: bool,
     pub token: Tok,
     /// This function is the constructor of that class template.
@@ -475,26 +474,14 @@ pub struct Node {
     pub succ: Vec<NodeId>,
     pub cons: Vec<Cons>,
     pub in_wl: bool,
-    /// The set grew past the widening bound: it holds only ⊤ from now on,
-    /// and every token that reaches it escapes.
-    pub widened: bool,
-    /// A solver relay (callee relay, shared accessor walk), not a program
-    /// value: never widened (its members are bound or forwarded exactly as
-    /// the per-site rules it replaces would have).
-    pub internal: bool,
     /// Successor set, once the list is long (exact edge dedup for hubs: a
     /// function's return node can be offered the same edge millions of
     /// times).
     pub succ_set: Option<std::rc::Rc<crate::pts::FxHashSet<NodeId>>>,
-    /// Some successor was widened: every token reaching this node escapes
-    /// (what that successor did with it), and the edge to it carries only
-    /// primitive kinds from then on (`prim_succ`).
-    pub esc_out: bool,
-    pub prim_succ: Vec<NodeId>,
     /// An observation node: a parameter-derived node of a summarized
     /// function's shared body. It holds the union over every call for the
     /// read sites; only read rules apply to it, it never feeds a node that
-    /// is not an observation node, and widening it escapes nothing.
+    /// is not an observation node, and its effects are skipped.
     pub obs: bool,
 }
 
@@ -537,10 +524,6 @@ pub struct Model {
     pub work: u64,
     pub max_work: u64,
     pub max_nodes: usize,
-    /// Widening bound on one points-to set (0 = none).
-    pub widen_k: usize,
-    pub widen_queue: Vec<Tok>,
-    pub widened_nodes: u64,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
     pub calls: Vec<CallSite>,

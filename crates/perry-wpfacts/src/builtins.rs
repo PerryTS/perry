@@ -934,9 +934,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     // yields nothing.
                     implicit_args(m, call, "require specifier");
                     let ret = m.calls[call as usize].ret;
-                    // The registry part stays inside that ⊤ as on main: as
-                    // a points-to union it would widen and escape every
-                    // module's exports at each genuine computed require.
+                    // The registry part stays inside that ⊤ as on main.
                     // It caches the registry records it loads.
                     let r = m.reason("module loaded by a computed specifier");
                     let (cache, _) = require_parts(m);

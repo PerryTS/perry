@@ -133,11 +133,7 @@ impl<'a> Gen<'a> {
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
         let cjs_registry = m.node_l("CJSREG");
-        // This is a union relation, not a runtime value. Its cardinality
-        // must not itself expose every registered module to unknown code.
-        m.nodes[cjs_registry as usize].internal = true;
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
-        m.nodes[cjs_unknown_path as usize].internal = true;
         m.cjs_union = cjs_registry;
         m.cjs_unknown = cjs_unknown_path;
         let _ = m.tok(TokKind::ObjectProto);

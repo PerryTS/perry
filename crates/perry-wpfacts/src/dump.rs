@@ -116,8 +116,8 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
     out.push_str(&format!(
-        "# pts_entries {} widened_nodes {}\n",
-        s.pts_entries, s.widened_nodes
+        "# pts_entries {}\n",
+        s.pts_entries
     ));
     for (l, n, mix) in &s.big_nodes {
         out.push_str(&format!("# bignode {l} {n} {mix}\n"));

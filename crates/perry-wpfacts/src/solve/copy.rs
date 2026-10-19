@@ -23,55 +23,27 @@ impl Model {
         }
         // Dedup against short successor lists only: a duplicate edge costs
         // a little propagation, a global edge set costs gigabytes.
-        // This value can never change again. Deliver the initial literal
-        // below, but do not retain an edge waiting for impossible updates.
-        if !(self.nodes[a as usize].widened && self.nodes[a as usize].prim == prim::ALL) {
-            let b_widened = self.nodes[b as usize].widened;
-            // An observation target's ⊤ leaves only its own sites unproven:
-            // nothing escapes at the source.
-            let b_obs_wide = b_widened && self.nodes[b as usize].obs;
-            {
-                let node = &mut self.nodes[a as usize];
-                match &mut node.succ_set {
-                    Some(set) => {
-                        if !std::rc::Rc::make_mut(set).insert(b) {
-                            return;
-                        }
-                    }
-                    None => {
-                        if node.succ.contains(&b) || (node.widened && node.prim_succ.contains(&b)) {
-                            return;
-                        }
-                        if node.succ.len()
-                            + if node.widened {
-                                node.prim_succ.len()
-                            } else {
-                                0
-                            }
-                            >= 16
-                        {
-                            let mut set: crate::pts::FxHashSet<NodeId> =
-                                node.succ.iter().copied().collect();
-                            if node.widened {
-                                set.extend(node.prim_succ.iter().copied());
-                            }
-                            set.insert(b);
-                            node.succ_set = Some(std::rc::Rc::new(set));
-                        }
+        {
+            let node = &mut self.nodes[a as usize];
+            match &mut node.succ_set {
+                Some(set) => {
+                    if !std::rc::Rc::make_mut(set).insert(b) {
+                        return;
                     }
                 }
-                if (!node.widened && !b_widened) || (node.widened && !node.succ.is_empty()) {
-                    node.succ.push(b);
-                } else {
-                    // A widened source has only TOP forever; the initial copy below
-                    // delivers it. A widened target escapes values at the source.
-                    // Both kinds of edge carry only future primitive changes.
-                    if node.widened || !b_obs_wide {
-                        node.esc_out = true;
+                None => {
+                    if node.succ.contains(&b) {
+                        return;
                     }
-                    node.prim_succ.push(b);
+                    if node.succ.len() >= 16 {
+                        let mut set: crate::pts::FxHashSet<NodeId> =
+                            node.succ.iter().copied().collect();
+                        set.insert(b);
+                        node.succ_set = Some(std::rc::Rc::new(set));
+                    }
                 }
             }
+            node.succ.push(b);
         }
         if log {
             self.rel(|| format!("copy {a} {b}"));
@@ -101,8 +73,7 @@ impl Model {
 
     pub(super) fn copy_to(&mut self, src: NodeId, dst: NodeId, toks: Tokens<'_>, prim: u16) -> u64 {
         self.add_tokens(dst, toks, prim);
-        if !self.nodes[dst as usize].widened
-            && self.nodes[src as usize].pts.len() > 1
+        if self.nodes[src as usize].pts.len() > 1
             && self.nodes[src as usize].pts.len() == self.nodes[dst as usize].pts.len()
         {
             let a = self.nodes[src as usize].pts.shared_owners();
@@ -138,10 +109,7 @@ impl Model {
         let target = &self.nodes[dst as usize];
         let len = source.pts.len();
         if count == 0
-            || source.widened
-            || target.widened
             || len.checked_sub(count) != Some(target.pts.len())
-            || (!target.internal && !target.obs && self.widen_k != 0 && len > self.widen_k)
         {
             return false;
         }

@@ -24,7 +24,7 @@ impl Model {
         self.add_tokens(n, Tokens::Slice(toks), prim);
     }
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
-        let targets = if self.nodes[n as usize].widened || toks.is_empty() {
+        let targets = if toks.is_empty() {
             Targets::Empty
         } else {
             Targets::capture(
@@ -34,75 +34,27 @@ impl Model {
         };
         let node = &mut self.nodes[n as usize];
         let mut changed = false;
-        if node.widened && node.obs {
-            // An observation node's ⊤ only leaves its own sites unproven.
-        } else if node.widened {
-            // A widened set is {⊤}: every token reaching it escapes.
-            for &t in toks {
-                if t != TOP && !self.is_escaped(t) {
-                    self.widen_queue.push(t);
-                }
-            }
-        } else {
-            let mut top_new = false;
-            for &t in toks {
-                if node.pts.insert(t) {
-                    node.delta.push_to(t, &targets);
-                    changed = true;
-                    self.pts_entries += 1;
-                    top_new |= t == TOP;
-                }
-            }
-            if top_new && self.explain {
-                self.top_pred
-                    .entry(n)
-                    .or_insert((self.cur_src, self.cur_why));
-            }
-            let node = &mut self.nodes[n as usize];
-            if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
-                if self
-                    .budget
-                    .is_some_and(|(start, limit)| start.elapsed() > limit)
-                    || (self.max_pts != 0 && self.pts_entries > self.max_pts)
-                {
-                    self.aborted = true;
-                }
-            }
-            // An observation node is never widened: its set is a closed set of
-            // program values (the read sites' facts), and nothing escapes
-            // from it.
-            if self.widen_k != 0 && node.pts.len() > self.widen_k && !node.internal && !node.obs {
-                // Sound widening: the members escape (unknown code may do
-                // anything with them) and the set becomes ⊤.
-                node.widened = true;
-                let node = &mut self.nodes[n as usize];
-                if !node.obs {
-                    for t in node.pts.to_sorted() {
-                        if t != TOP {
-                            self.widen_queue.push(t);
-                        }
-                    }
-                }
-                node.pts = crate::pts::Pts::default();
-                node.pts.insert(TOP);
-                if self.explain {
-                    let obs = self.nodes[n as usize].obs;
-                    eprintln!(
-                        "perry: wpfacts explain: widened {} node {n}{}",
-                        self.labels[n as usize],
-                        if obs { " (observation)" } else { "" }
-                    );
-                    let r = self.reason("widened (context-insensitive merge)");
-                    self.top_pred.entry(n).or_insert((NO_NODE, r));
-                }
-                let node = &mut self.nodes[n as usize];
-                node.delta.clear();
-                node.delta.push_to(TOP, &targets);
+        let mut top_new = false;
+        for &t in toks {
+            if node.pts.insert(t) {
+                node.delta.push_to(t, &targets);
                 changed = true;
-                self.widened_nodes += 1;
-                if let Some(r) = self.relations.as_mut() {
-                    r.push(format!("W widen {n}"));
-                }
+                self.pts_entries += 1;
+                top_new |= t == TOP;
+            }
+        }
+        if top_new && self.explain {
+            self.top_pred
+                .entry(n)
+                .or_insert((self.cur_src, self.cur_why));
+        }
+        if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
+            if self
+                .budget
+                .is_some_and(|(start, limit)| start.elapsed() > limit)
+                || (self.max_pts != 0 && self.pts_entries > self.max_pts)
+            {
+                self.aborted = true;
             }
         }
         let node = &mut self.nodes[n as usize];
@@ -151,9 +103,8 @@ impl Model {
             .map(|&(l, i)| {
                 let n = &self.nodes[i];
                 format!(
-                    "{}#{i}:{l}:w{}:p{}:n{}:top{}",
+                    "{}#{i}:{l}:p{}:n{}:top{}",
                     self.labels[i],
-                    n.widened as u8,
                     n.prim,
                     n.pts.len(),
                     n.pts.contains_tok(TOP) as u8
@@ -164,7 +115,7 @@ impl Model {
         let stopped: usize = self.stopped.values().map(|v| v.len()).sum();
         let csites: usize = self.callee_sites.values().map(|v| v.len()).sum();
         format!(
-            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} widenq={} widened={} escaped={} entries={}",
+            "rss_mb={rss_mb} succ_cap={succ_cap} delta_cap={delta_cap} big={big} max_succ={max_succ} stopped={stopped} csites={csites} walks={} relays={} pops={} wl={} nodes={} cons={} succ={} pts={} delta={} calls={} stores={} toks={} tmpls={} bind={} chain={} callthis={} visits={} anywalks={} cv={} cp={} escaped={} entries={}",
             self.walk_nodes.len(),
             self.relays.len(),
             self.pops,
@@ -185,23 +136,9 @@ impl Model {
             self.any_walks.len(),
             self.cv_nodes.len(),
             self.cp_nodes.len(),
-            self.widen_queue.len(),
-            self.widened_nodes,
             self.escaped.len(),
             self.pts_entries
         )
-    }
-
-    /// Escape the tokens that reached widened sets.
-    pub fn drain_widened(&mut self) {
-        if self.widen_queue.is_empty() {
-            return;
-        }
-        let r =
-            self.reason("context-insensitive merge: a points-to set grew past the widening bound");
-        while let Some(t) = self.widen_queue.pop() {
-            self.escape(t, r);
-        }
     }
 
     /// Seed a token (an input fact outside the solver rules: logged).
@@ -285,12 +222,7 @@ impl Model {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
-        // A widened node with every primitive kind is a closed value.
-        // Applying the rule now is complete; there is no future input to
-        // watch, and later concrete arrivals escape directly in `add`.
-        if !(self.nodes[n as usize].widened && self.nodes[n as usize].prim == prim::ALL) {
-            self.nodes[n as usize].cons.push(c);
-        }
+        self.nodes[n as usize].cons.push(c);
         if self.aborted {
             return;
         }
@@ -313,7 +245,6 @@ impl Model {
         self.rel_phase = b'S';
         loop {
             self.fill_instances();
-            self.drain_widened();
             let Some(n) = self.wl.pop_front() else {
                 if self.sum.pending.is_empty() {
                     break;
@@ -364,33 +295,9 @@ impl Model {
                 self.aborted = true;
                 return;
             }
-            if self.nodes[n as usize].esc_out && !self.nodes[n as usize].obs {
-                for &t in &delta {
-                    if t != TOP && !self.is_escaped(t) {
-                        self.widen_queue.push(t);
-                    }
-                }
-                if dprim != 0 {
-                    for i in 0..self.nodes[n as usize].prim_succ.len() {
-                        let s = self.nodes[n as usize].prim_succ[i];
-                        self.add(s, &[], dprim);
-                    }
-                }
-            }
             let mut i = 0;
-            // Escape state cannot change during this copy loop (`add`
-            // only queues escapes). Keep the meaningful widening transfer
-            // in original delta order; normal destinations see all tokens.
-            let mut escape_delta: Option<Vec<Tok>> = None;
-            let mut widen_at = None;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.nodes[s as usize].widened && self.nodes[s as usize].obs {
-                    // Observation ⊤: nothing escapes through it.
-                    self.add(s, &[], dprim);
-                    i += 1;
-                    continue;
-                }
                 if self.try_copy_delivery(n, s, &delta, dprim) {
                     self.work += 1 + delivery_overhead;
                     if self.max_work != 0 && self.work > self.max_work {
@@ -405,42 +312,13 @@ impl Model {
                 } else {
                     self.copy_coverage(n, s)
                 };
-                let checks = checks
-                    + if self.nodes[s as usize].widened {
-                        0
-                    } else {
-                        delivery_overhead
-                    };
                 let toks = if covered {
                     Tokens::Slice(&[])
-                } else if self.nodes[s as usize].widened {
-                    Tokens::Slice(
-                        escape_delta
-                            .get_or_insert_with(|| {
-                                let mut out = self.bufs.pop().unwrap_or_default();
-                                out.clear();
-                                self.work += delta.len() as u64;
-                                out.extend(delta.iter().copied().filter(|&t| {
-                                    t != TOP
-                                        && !self.is_escaped(t)
-                                        && !matches!(
-                                            self.toks[t as usize],
-                                            TokKind::ObjectProto
-                                                | TokKind::BuiltinFn
-                                                | TokKind::Builtin(_)
-                                                | TokKind::NativeProto(_)
-                                        )
-                                }));
-                                out
-                            })
-                            .as_slice(),
-                    )
                 } else {
                     Tokens::Delivery(&delta, s)
                 };
-                let wide = self.nodes[s as usize].widened;
-                let visits = if wide { 0 } else { toks.len() as u64 };
-                self.work += visits + checks;
+                let visits = toks.len() as u64;
+                self.work += visits + checks + delivery_overhead;
                 if self.profile.is_some() {
                     self.label_work
                         .entry(self.labels[n as usize])
@@ -450,25 +328,6 @@ impl Model {
                 if self.max_work != 0 && self.work > self.max_work {
                     self.aborted = true;
                     return;
-                }
-                if wide {
-                    // Earlier identical batches are shadowed by the last
-                    // one before the LIFO drain can observe them. Preserve
-                    // that last position among other widening requests.
-                    widen_at = Some(self.widen_queue.len());
-                    self.add(s, &[], dprim);
-                    if !self.nodes[n as usize].widened {
-                        let node = &mut self.nodes[n as usize];
-                        node.succ.swap_remove(i);
-                        if let Some(set) = node.succ_set.as_mut() {
-                            std::rc::Rc::make_mut(set).remove(&s);
-                        }
-                        node.esc_out = true;
-                        node.prim_succ.push(s);
-                        continue;
-                    }
-                    i += 1;
-                    continue;
                 }
                 if covered {
                     self.add_tokens(s, toks, dprim);
@@ -482,58 +341,12 @@ impl Model {
                 }
                 i += 1;
             }
-            if let Some(mut out) = escape_delta {
-                if !out.is_empty() {
-                    if let Some(at) = widen_at {
-                        self.work += (out.len() + self.widen_queue.len() - at) as u64;
-                        if self.max_work != 0 && self.work > self.max_work {
-                            self.aborted = true;
-                            return;
-                        }
-                        self.widen_queue.splice(at..at, out.drain(..));
-                    }
-                }
-                out.clear();
-                self.bufs.push(out);
-            }
-            // Once widened, this source never acquires another token. Every
-            // surviving edge has received TOP, so retain its primitive flow
-            // in the existing projection rather than revisiting token sets.
-            if self.nodes[n as usize].widened && self.nodes[n as usize].prim == prim::ALL {
-                let node = &mut self.nodes[n as usize];
-                node.succ.clear();
-                node.prim_succ.clear();
-                node.succ_set = None;
-            } else if self.nodes[n as usize].widened && !self.nodes[n as usize].succ.is_empty() {
-                let node = &mut self.nodes[n as usize];
-                if !node.prim_succ.is_empty() {
-                    self.work += node.succ.len() as u64;
-                    if self.max_work != 0 && self.work > self.max_work {
-                        self.aborted = true;
-                        return;
-                    }
-                }
-                node.esc_out = true;
-                if let Some(set) = node.succ_set.as_mut() {
-                    std::rc::Rc::make_mut(set).extend(node.prim_succ.iter().copied());
-                }
-                if node.prim_succ.is_empty() {
-                    std::mem::swap(&mut node.prim_succ, &mut node.succ);
-                } else {
-                    node.prim_succ.append(&mut node.succ);
-                }
-            }
             let ncons = self.nodes[n as usize].cons.len();
             for i in 0..ncons {
                 let c = self.nodes[n as usize].cons[i];
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), dprim);
-            }
-            // Existing rules saw the final input in this pass. New rules
-            // on a closed value are applied immediately by `cons`.
-            if self.nodes[n as usize].widened && self.nodes[n as usize].prim == prim::ALL {
-                self.nodes[n as usize].cons.clear();
             }
             // Hand the delta's storage back to the node (no reallocation).
             let mut delta = delta;
