@@ -96,7 +96,7 @@ RUN printf '%s\n' \
       > /etc/apt/sources.list.d/llvm22.list \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      clang-22 llvm-22-dev libxml2-dev libzstd-dev zlib1g-dev \
+      clang-22 libpolly-22-dev llvm-22-dev libxml2-dev libzstd-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # perry-runtime's build script compiles its LLVM IR shim (perry_trap.ll) with
@@ -129,7 +129,9 @@ RUN set -eu; \
     musl_arch="${musl_loader#ld-musl-}"; \
     musl_arch="${musl_arch%.so.1}"; \
     printf '%s\n' /opt/perry-musl-runtime > "/etc/ld-musl-$musl_arch.path"; \
-    host_libclang="$(find -L /usr/lib -path '*/llvm-*/lib/libclang.so' -print -quit)"; \
+    # A glob, not find -L: llvm-22-dev's build/ links loop. Only Debian's
+    # libclang-dev (LLVM 11) ships an unversioned libclang.so.
+    host_libclang="$(ls /usr/lib/llvm-*/lib/libclang.so 2>/dev/null | head -n 1)"; \
     if [ -z "$host_libclang" ]; then \
       echo "Debian libclang-dev installed no libclang.so" >&2; \
       exit 1; \
