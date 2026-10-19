@@ -172,6 +172,7 @@ impl<'a> Gen<'a> {
             // Captured `this` (arrow semantics, or a slot the runtime
             // patches): the enclosing `this` flows in.
             self.m.edge(fx.this, info.this);
+            self.m.captures.insert((fx.this, f));
         }
         let fn_ctor = !*is_arrow;
         let cfx = Fx {

@@ -436,7 +436,7 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
                 TokKind::Obj(tm, _) if m.tmpls[*tm as usize].kind.is_fact_unit() => {
                     objs.push(m.tmpls[*tm as usize].display.clone())
                 }
-                TokKind::Func(_) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
+                TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => k.funcs += 1,
                 _ => k.builtin_objs += 1,
             }
         }
@@ -637,10 +637,10 @@ fn resolve_method(m: &Model, t: Tok, key: Atom) -> Option<(FnIdx, String)> {
             }
         }
         if !found.is_empty() {
-            if found.len() == 1 {
-                if let TokKind::Func(f) = m.toks[found[0] as usize] {
-                    return Some((f, m.funcs[f as usize].name.clone()));
-                }
+            // One function, whatever closure contexts its tokens carry.
+            let f = m.tok_fn(found[0]);
+            if f != NO_FN && found.iter().all(|&x| m.tok_fn(x) == f) {
+                return Some((f, m.funcs[f as usize].name.clone()));
             }
             return None;
         }

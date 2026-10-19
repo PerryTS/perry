@@ -176,7 +176,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         return t;
     }
     let fx = m.funcs.len() as FnIdx;
-    let tok = m.tok(TokKind::Func(fx));
+    let tok = m.tok(TokKind::Func(fx, NO_CTX));
     let this = m.node_l("this(resolver)");
     let ret = m.node_l("ret(resolver)");
     let args_all = m.node_l("args(resolver)");
@@ -196,6 +196,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         ctor_of: None,
         lexical_this: true,
         no_summary: false,
+        parent: NO_FN,
     });
     m.add_prim(ret, prim::UNDEF);
     m.resolvers.insert(dst, tok);
@@ -364,7 +365,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_prim(dst, prim::ALL);
             }
         },
-        TokKind::Func(f) => match name.as_deref() {
+        TokKind::Func(f, _) => match name.as_deref() {
             Some("constructor") => {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
                 m.add_tok(dst, fc);
@@ -540,7 +541,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     };
     match m.toks[t as usize].clone() {
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
-        TokKind::Func(_) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
+        TokKind::Func(_, _) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
         TokKind::BuiltinFn => match name.as_deref() {
             None => {}
             Some(n) => unknown_method(

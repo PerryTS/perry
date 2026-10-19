@@ -497,11 +497,11 @@ impl Model {
     }
 
     /// Accessor `f` hangs off group (holder, key).
-    pub(super) fn group_connect(&mut self, holder: Tok, key: Key, f: FnIdx, setter: bool) {
+    pub(super) fn group_connect(&mut self, holder: Tok, key: Key, f: Tok, setter: bool) {
         let g = self.acc_groups[&(holder, key)].clone();
         // An accessor with a lexical `this` (arrow) never sees the
         // receiver, as for a call (`call_tok`).
-        let this = (!self.funcs[f as usize].lexical_this).then(|| self.this_any(f));
+        let this = (!self.funcs[self.tok_fn(f) as usize].lexical_this).then(|| self.this_any(f));
         if setter {
             if let Some(this) = this {
                 self.edge_quiet(g.st, this);
@@ -520,9 +520,10 @@ impl Model {
     }
 
     /// The parameter/result half of `group_connect`.
-    pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, f: FnIdx, setter: bool) {
+    pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, ft: Tok, setter: bool) {
+        let f = self.tok_fn(ft);
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::Group(holder, key, f, setter));
+            self.sum.deferred.push(crate::summary::Deferred::Group(holder, key, ft, setter));
             return;
         }
         let (sp, ar) = {
@@ -530,7 +531,7 @@ impl Model {
             (g.sp, g.ar)
         };
         if self.summarized(f) {
-            self.group_summarized(f, sp, ar, setter);
+            self.group_summarized(ft, sp, ar, setter);
             return;
         }
         if setter {
@@ -565,7 +566,7 @@ impl Model {
         &mut self,
         holder: Tok,
         key: Atom,
-        f: FnIdx,
+        f: Tok,
         setter: bool,
         replay: bool,
     ) {
@@ -660,9 +661,9 @@ impl Model {
                 let r = self.reason("receiver of a call of an unknown function value");
                 self.escape(origin, r);
             }
-            TokKind::Func(f) => {
+            TokKind::Func(f, _) => {
                 if !self.funcs[f as usize].lexical_this {
-                    self.this_lookup(f, origin);
+                    self.this_lookup(t, origin);
                 }
             }
             _ => {}
@@ -678,7 +679,7 @@ impl Model {
                     self.unknown_callee_args(call, t, false);
                 }
             }
-            TokKind::Func(_) => self.bind_args(call, t),
+            TokKind::Func(_, _) => self.bind_args(call, t),
             TokKind::Bound(_) => {
                 if self.bind_done.insert((call, t, u32::MAX)) {
                     self.call_bound(call, t);

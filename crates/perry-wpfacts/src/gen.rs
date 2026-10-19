@@ -312,13 +312,13 @@ impl<'a> Gen<'a> {
         name: &str,
         params: &[perry_hir::Param],
         lexical_this: bool,
-        _is_closure: bool,
+        is_closure: bool,
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
         }
         let fx = self.m.funcs.len() as FnIdx;
-        let tok = self.m.tok(TokKind::Func(fx));
+        let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
@@ -381,6 +381,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this,
             no_summary: false,
+            parent: if is_closure { outer_fn } else { NO_FN },
         });
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
@@ -463,14 +464,16 @@ impl<'a> Gen<'a> {
             let f = self.register_fn(mi, g.id, &g.name, &g.params, false, false);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
-            self.m.accessors.entry((proto, a)).or_default().0.push(f);
+            let ft = self.m.funcs[f as usize].token;
+            self.m.accessors.entry((proto, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
         for (name, s) in &c.setters {
             let f = self.register_fn(mi, s.id, &s.name, &s.params, false, false);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
-            self.m.accessors.entry((proto, a)).or_default().1.push(f);
+            let ft = self.m.funcs[f as usize].token;
+            self.m.accessors.entry((proto, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
         for cm in &c.computed_members {
@@ -515,7 +518,7 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn synthetic_fn(&mut self, mi: u32, name: &str) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
-        let tok = self.m.tok(TokKind::Func(fx));
+        let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
@@ -533,6 +536,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
+            parent: NO_FN,
         });
         fx
     }
@@ -604,7 +608,10 @@ impl<'a> Gen<'a> {
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
         if let Some(&n) = self.mods[mi as usize].locals.get(&id) {
             if self.m.node_fn[n as usize] != self.m.cur_fn {
-                self.m.node_captured.insert(n);
+                if self.m.cur_fn != NO_FN {
+                    let f = self.m.cur_fn;
+                    self.m.captures.insert((n, f));
+                }
             }
             return n;
         }
@@ -626,6 +633,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         self.m.tmpls.push(Template {
             kind: TmplKind::Arr { module: mi, site },
             display: format!("{}:[{what}#{site}]", self.mods[mi as usize].path_short()),
@@ -642,9 +650,18 @@ impl<'a> Gen<'a> {
         tm
     }
 
+    /// A generation-time birth template belongs to the body making it.
+    pub(crate) fn note_birth_fn(&mut self, tm: TmplId) {
+        if self.m.cur_fn != NO_FN {
+            let f = self.m.cur_fn;
+            self.m.tmpl_fn.insert(tm, f);
+        }
+    }
+
     pub(crate) fn new_bobj_template(&mut self, mi: u32, what: &'static str) -> TmplId {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         self.m.tmpls.push(Template {
             kind: TmplKind::BObj {
                 module: mi,

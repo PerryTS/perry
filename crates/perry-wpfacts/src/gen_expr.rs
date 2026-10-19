@@ -254,6 +254,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn new_lit_tmpl(&mut self, mi: u32, keys: &[&str]) -> (TmplId, Tok) {
         let site = self.next_site(mi);
         let tm = self.m.tmpls.len() as TmplId;
+        self.note_birth_fn(tm);
         let mut atoms = Vec::new();
         for k in keys {
             let a = self.m.atom(k);

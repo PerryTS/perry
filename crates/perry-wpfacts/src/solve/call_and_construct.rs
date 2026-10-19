@@ -29,10 +29,10 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn => unreachable!(),
-            TokKind::Func(f) => {
+            TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
-                    self.this_into(call, f, this_tok);
+                    self.this_into(call, t, this_tok);
                 }
             }
             TokKind::Bound(_) => self.call_bound(call, t),
@@ -101,7 +101,7 @@ impl Model {
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
     pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
-        let TokKind::Func(f) = self.toks[t as usize] else {
+        let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
         if !self.sum.ready {
@@ -117,7 +117,7 @@ impl Model {
             return;
         }
         if self.summarized(f) {
-            self.bind_summarized(call, f);
+            self.bind_summarized(call, t);
             return;
         }
         let f = f as usize;
@@ -369,14 +369,14 @@ impl Model {
                 self.add_tok(c.ret, inst);
                 self.run_ctor_chain(call, tm, inst);
             }
-            TokKind::Func(f) => {
+            TokKind::Func(f, _) => {
                 let tm = self.fn_inst_template(f);
                 let ctx = self.birth_ctx(call);
                 let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.call_tok(call, t, Some(inst));
                 // E12: a constructor function returning an object.
-                self.ctor_ret_objects(call, f, c.ret);
+                self.ctor_ret_objects(call, t, c.ret);
             }
             TokKind::Top | TokKind::BuiltinFn => {
                 if t == TOP {
@@ -433,14 +433,15 @@ impl Model {
         let c = self.calls[call as usize].clone();
         if let Some(fi) = self.tmpls[tm as usize].field_init {
             // The field initializers run for this `new`, on its instance.
-            self.this_into(call, fi, Some(inst));
+            let ft = self.funcs[fi as usize].token;
+            self.this_into(call, ft, Some(inst));
         }
         let t = &self.tmpls[tm as usize];
         match (t.ctor, t.parent, t.native_parent.clone()) {
             (Some(ctor), _, _) => {
                 let ftok = self.funcs[ctor as usize].token;
                 self.call_tok(call, ftok, Some(inst));
-                self.ctor_ret_objects(call, ctor, c.ret);
+                self.ctor_ret_objects(call, ftok, c.ret);
             }
             (None, Some(p), _) => {
                 // Implicit `constructor(...a) { super(...a) }`.
@@ -458,7 +459,7 @@ impl Model {
 
     /// The objects constructor `f` returns for `call` (its instance's
     /// result when summarized, so known once bindings run).
-    pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: FnIdx, dst: NodeId) {
+    pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: Tok, dst: NodeId) {
         if !self.sum.ready {
             self.sum.deferred.push(crate::summary::Deferred::RetObjects(call, f, dst));
             return;
@@ -597,13 +598,14 @@ impl Model {
     }
 
     /// Unknown code calls `f`: unknown arguments, the result escapes.
-    pub(crate) fn escape_fn_params(&mut self, f: FnIdx, reason: u32) {
+    pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
-            self.sum.deferred.push(crate::summary::Deferred::Escape(f, reason));
+            self.sum.deferred.push(crate::summary::Deferred::Escape(ft, reason));
             return;
         }
+        let f = self.tok_fn(ft);
         if self.summarized(f) {
-            self.escape_summarized(f, reason);
+            self.escape_summarized(ft, reason);
             return;
         }
         let fi = self.funcs[f as usize].clone();
@@ -667,12 +669,12 @@ impl Model {
         self.sink_node(r, reason);
         self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
         match self.toks[t as usize].clone() {
-            TokKind::Func(f) => {
+            TokKind::Func(f, _) => {
                 let fi = self.funcs[f as usize].clone();
                 if !fi.lexical_this {
-                    self.escape_this(f, reason);
+                    self.escape_this(t, reason);
                 }
-                self.escape_fn_params(f, reason);
+                self.escape_fn_params(t, reason);
             }
             TokKind::ClassObj(tm) => {
                 let p = self.tok(TokKind::Proto(tm));

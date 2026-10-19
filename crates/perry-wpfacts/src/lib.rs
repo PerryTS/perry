@@ -207,114 +207,19 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
             g.m.calls.len()
         );
     }
+    // TEMP CW s8 debug: every node with tokens.
+    if std::env::var_os("CW_DBG").is_some() {
+        let m = &g.m;
+        for (n, node) in m.nodes.iter().enumerate() {
+            if node.pts.is_empty() { continue; }
+            let f = m.node_fn[n];
+            let names: Vec<String> = node.pts.to_sorted().iter().map(|&t| format!("{}{}", m.tok_name(t), match m.toks[t as usize] { model::TokKind::Obj(_, c) | model::TokKind::Func(_, c) if c != model::NO_CTX => format!("@{c}"), _ => String::new() })).collect();
+            let succ: Vec<u32> = node.succ.iter().copied().collect();
+            eprintln!("DBG {}#{n} fn={} obs={} pts={:?} succ={:?} cons={:?}", m.labels[n], if f == model::NO_FN { "-".into() } else { m.funcs[f as usize].name.clone() }, node.obs, names, succ, node.cons.iter().map(|c| c.kind_name()).collect::<Vec<_>>());
+        }
+        eprintln!("DBG stats {}", m.sum.stats);
+    }
     if cfg.profile {
-        // TEMP CW s7: kind-6 instances by callee and by source call.
-        let mut by_f: std::collections::HashMap<u32, usize> = Default::default();
-        let mut by_o: std::collections::HashMap<u32, usize> = Default::default();
-        for &(k, o, f) in g.m.sum.inst_key.keys() {
-            if k == 6 {
-                *by_f.entry(f).or_default() += 1;
-                *by_o.entry(o).or_default() += 1;
-            }
-        }
-        let mut vf: Vec<_> = by_f.into_iter().collect();
-        vf.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        for (f, n) in vf.iter().take(15) {
-            eprintln!("perry: wpfacts TEMP k6 callee {n} {}", g.m.funcs[*f as usize].name);
-        }
-        let mut vo: Vec<_> = by_o.into_iter().collect();
-        vo.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        eprintln!("perry: wpfacts TEMP k6 origins {} (prog {})", vo.len(), vo.iter().filter(|x| (x.0 as usize) < g.m.sum.n_prog).count());
-        for (o, n) in vo.iter().take(15) {
-            let owner = g.m.sum.owner.get(o).map(|f| g.m.funcs[*f as usize].name.clone()).unwrap_or_default();
-            let c = &g.m.calls[*o as usize];
-            let this = match c.this { model::ThisArg::Node(x) => format!("{}#{}", g.m.labels[x as usize], g.m.nodes[x as usize].pts.len()), _ => "-".into() };
-            eprintln!("perry: wpfacts TEMP k6 origin {n} call {o} prog={} owner={owner} this={this}", (*o as usize) < g.m.sum.n_prog);
-        }
-        // TEMP CW s7: biggest instance interface terms, tokens vs templates.
-        {
-            let mut v: Vec<(usize, usize, String)> = Vec::new();
-            let mut big = 0usize;
-            let mut sum_inst = 0usize;
-            for (i, inst) in g.m.sum.insts.iter().enumerate() {
-                let fname = g.m.funcs[inst.f as usize].name.clone();
-                let terms = inst.params.iter().enumerate().map(|(k, &p)| (format!("p{k}"), p)).chain([("this".to_string(), inst.this), ("ret".to_string(), inst.ret)]);
-                for (what, n) in terms {
-                    if n == model::NO_NODE || (n as usize) >= g.m.nodes.len() { continue; }
-                    let toks = g.m.nodes[n as usize].pts.to_sorted();
-                    sum_inst += toks.len();
-                    if toks.len() > 64 { big += 1; }
-                    let mut tms: std::collections::HashSet<u32> = Default::default();
-                    for &t in &toks { if let Some(tm) = g.m.tmpl_of(t) { tms.insert(tm); } }
-                    v.push((toks.len(), tms.len(), format!("inst{i}({}) {fname}.{what}", match inst.host { Some(h) => format!("host {h}"), None => "-".into() })));
-                }
-            }
-            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
-            eprintln!("perry: wpfacts TEMP instterms total_toks={sum_inst} terms>64={big} of {}", v.len());
-            for (n, nt, w) in v.iter().take(4) {
-                eprintln!("perry: wpfacts TEMP instterm {n} toks {nt} tmpls {w}");
-            }
-            // Feeders of the biggest term: preds with label and size.
-            let mut best: Option<(usize, u32)> = None;
-            for inst in g.m.sum.insts.iter() {
-                for &p in inst.params.iter() {
-                    if p == model::NO_NODE || (p as usize) >= g.m.nodes.len() { continue; }
-                    let l = g.m.nodes[p as usize].pts.len();
-                    if best.map_or(true, |b| l > b.0) { best = Some((l, p)); }
-                }
-            }
-            if let Some((_, x)) = best {
-                // Calls whose argument edges reach the biggest term directly.
-                let owner = g.m.node_fn[x as usize];
-                eprintln!("perry: wpfacts TEMP bigterm {}#{} of {}", g.m.labels[x as usize], g.m.nodes[x as usize].pts.len(), if owner == model::NO_FN { "-".to_string() } else { g.m.funcs[owner as usize].name.clone() });
-                let mut shown = 0;
-                for (ci, c) in g.m.calls.iter().enumerate() {
-                    if shown >= 3 { break; }
-                    if c.args.iter().any(|&a| g.m.nodes[a as usize].succ.iter().any(|&b| b == x)) {
-                        shown += 1;
-                        let this = match c.this { model::ThisArg::Node(n) => {
-                            let toks = g.m.nodes[n as usize].pts.to_sorted();
-                            let mut tms: std::collections::HashSet<u32> = Default::default();
-                            for &t in &toks { if let Some(tm) = g.m.tmpl_of(t) { tms.insert(tm); } }
-                            let nf = g.m.node_fn[n as usize];
-                            format!("{}#{} tmpls {} top={} in {}", g.m.labels[n as usize], toks.len(), tms.len(), toks.contains(&model::TOP), if nf == model::NO_FN { "-".to_string() } else { g.m.funcs[nf as usize].name.clone() })
-                        }, _ => "-".into() };
-                        for (h, node) in g.m.nodes.iter().enumerate() {
-                            for c2 in node.cons.iter() {
-                                let names = match c2 { model::Cons::Call { call } | model::Cons::MCall { call, .. } | model::Cons::CallThis { call, .. } | model::Cons::CallArgs { call } => *call == ci as u32, _ => false };
-                                if names {
-                                    let toks = node.pts.to_sorted();
-                                    let nf = g.m.node_fn[h];
-                                    let funcs: Vec<String> = toks.iter().take(4).map(|&t| g.m.tok_name(t)).collect();
-                                    eprintln!("perry: wpfacts TEMP bigcallee {ci} {} {}#{} in {} e.g. {:?}", c2.kind_name(), g.m.labels[h], toks.len(), if nf == model::NO_FN { "-".to_string() } else { g.m.funcs[nf as usize].name.clone() }, funcs);
-                                }
-                            }
-                        }
-                        eprintln!("perry: wpfacts TEMP bigcall {ci} prog={} tmpl={:?} site={} this={this}", ci < g.m.sum.n_prog, g.m.sum.tmpl_of.get(&(ci as u32)), c.site);
-                    }
-                }
-                let mut stack = vec![(x, 0u32)];
-                let mut seen: std::collections::HashSet<u32> = Default::default();
-                while let Some((y, depth)) = stack.pop() {
-                    if depth > 4 || !seen.insert(y) { continue; }
-                    for (a, node) in g.m.nodes.iter().enumerate() {
-                        if node.succ.iter().any(|&b| b == y) {
-                            let fname = { let f = g.m.node_fn[a]; if f == model::NO_FN { "-".to_string() } else { g.m.funcs[f as usize].name.clone() } };
-                            eprintln!("perry: wpfacts TEMP feed d{depth} {}#{} <- {}#{} ({}) obs={}", g.m.labels[y as usize], y, g.m.labels[a], g.m.nodes[a].pts.len(), fname, node.obs);
-                            if seen.len() < 40 { stack.push((a as u32, depth + 1)); }
-                        }
-                    }
-                }
-            }
-            let mut site = 0usize;
-            for k in g.m.toks.iter() { if matches!(k, model::TokKind::Obj(_, c) if *c != model::NO_CTX) { site += 1; } }
-            eprintln!("perry: wpfacts TEMP tokens {} site-obj {} ctx-ids {}", g.m.toks.len(), site, g.m.sum.ctx_ids.len());
-        }
-        let mut vw: Vec<_> = g.m.sum.temp_why.iter().collect();
-        vw.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        for (w, n) in vw.iter().take(12) {
-            eprintln!("perry: wpfacts TEMP factory-why {n} {w}");
-        }
         let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
         v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));
         for (k, (es, ec, pops)) in v.iter().take(25) {
@@ -547,7 +452,7 @@ fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
                         model::TmplKind::Arr { .. } => "arr",
                         _ => "bobj",
                     },
-                    model::TokKind::Func(_) => "func",
+                    model::TokKind::Func(_, _) => "func",
                     model::TokKind::Bound(_) => "bound",
                     model::TokKind::ClassObj(_) => "classobj",
                     model::TokKind::Proto(_) => "proto",

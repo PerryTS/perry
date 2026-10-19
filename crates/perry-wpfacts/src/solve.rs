@@ -367,6 +367,7 @@ impl Model {
             return n;
         }
         let n = self.node_named("field", || format!("field({t},{a})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
         self.rel(|| format!("fieldnode {n} {t} {a}"));
@@ -382,6 +383,7 @@ impl Model {
             return n;
         }
         let n = self.node_named("fieldany", || format!("fieldany({t})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
         let all = self.all_fields(t);
@@ -395,6 +397,7 @@ impl Model {
             return n;
         }
         let n = self.node_named("allfields", || format!("allfields({t})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
         n
@@ -406,6 +409,7 @@ impl Model {
             return n;
         }
         let n = self.node_named("protos", || format!("protos({t})"));
+        self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
         self.rel(|| format!("protonode {n} {t}"));
         // Seed the static part of the chain.
@@ -441,7 +445,7 @@ impl Model {
                 (None, None) => self.add_tok(n, objproto),
             },
             TokKind::NativeProto(_) => self.add_tok(n, objproto),
-            TokKind::Func(_) | TokKind::Bound(_) | TokKind::BuiltinFn => self.add_tok(n, objproto),
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn => self.add_tok(n, objproto),
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
                     let pc = self.tok(TokKind::ClassObj(p));
@@ -586,7 +590,7 @@ impl Model {
                     match self.toks[t as usize] {
                         // A function handed to the runtime: it may be
                         // called back with anything.
-                        TokKind::Func(_) | TokKind::Bound(_) => self.escape(t, reason),
+                        TokKind::Func(_, _) | TokKind::Bound(_) => self.escape(t, reason),
                         _ => self.implicit(t, reason),
                     }
                 }
@@ -701,7 +705,7 @@ impl Model {
                 for &parent in toks {
                     match self.toks[parent as usize] {
                         TokKind::ClassObj(tm) => self.run_ctor_chain_this(call, tm, origin),
-                        TokKind::Func(_) => self.call_tok(call, parent, Some(origin)),
+                        TokKind::Func(_, _) => self.call_tok(call, parent, Some(origin)),
                         TokKind::Bound(_) => self.construct(call, parent),
                         TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => {
                             self.call_tok(call, parent, Some(origin));
@@ -712,11 +716,23 @@ impl Model {
                     }
                 }
             }
+            Cons::BirthField { key, src } => {
+                for &t in toks {
+                    if t == TOP {
+                        continue;
+                    }
+                    let f = match key {
+                        Key::Named(a) => self.field(t, a),
+                        Key::Any => self.field_any(t),
+                    };
+                    self.edge(src, f);
+                }
+            }
             Cons::ThisFrom { recv } => {
                 for &t in toks {
-                    if let TokKind::Func(f) = self.toks[t as usize] {
+                    if let TokKind::Func(f, _) = self.toks[t as usize] {
                         if !self.funcs[f as usize].lexical_this {
-                            let this = self.this_any(f);
+                            let this = self.this_any(t);
                             self.edge(recv, this);
                         }
                     }
@@ -729,8 +745,8 @@ impl Model {
             } => {
                 for &t in toks {
                     match self.toks[t as usize] {
-                        TokKind::Func(f) => {
-                            self.cons(holder, Cons::AccessorInstall { key, f, setter });
+                        TokKind::Func(_, _) => {
+                            self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                         }
                         TokKind::Top | TokKind::BuiltinFn | TokKind::Bound(_) => {
                             // An unknown accessor: reads of any key on the
@@ -767,8 +783,7 @@ impl Model {
                         // this holder may yield anything (derive kills the
                         // templates that reach it).
                         let r = self.reason("accessor under a computed key");
-                        let ft = self.funcs[f as usize].token;
-                        self.escape(ft, r);
+                        self.escape(f, r);
                         let fa = self.field_any(t);
                         self.add_top(fa, |_| "accessor under a computed key".into());
                         self.add_prim(fa, prim::ALL);
@@ -830,7 +845,7 @@ impl Model {
                 for &t in toks {
                     match self.toks[t as usize].clone() {
                         TokKind::Top => self.add_tok(dst, TOP),
-                        TokKind::Func(_) | TokKind::Bound(_) => self.add_tok(dst, t),
+                        TokKind::Func(_, _) | TokKind::Bound(_) => self.add_tok(dst, t),
                         TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                             _ if self.is_array_like(t) => {}
                             _ => {
@@ -958,7 +973,7 @@ impl Model {
                             let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                             self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                         }
-                        TokKind::Func(f) => {
+                        TokKind::Func(f, _) => {
                             let tm = self.fn_inst_template(f);
                             let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                             self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
@@ -1159,12 +1174,14 @@ impl Model {
             }
             Cons::AccessorInstall { key, f, setter } => {
                 format!(
-                    "accinstall {n} {} {f} {}",
+                    "accinstall {n} {} {} {}",
                     self.key_name(Key::Named(*key)),
+                    self.tok_fn(*f),
                     *setter as u8
                 )
             }
             Cons::ProtoFrom { src } => format!("protofrom {n} {src}"),
+            Cons::BirthField { key, src } => format!("birthfield {n} {} {src}", self.key_name(*key)),
             Cons::ProtoOf { dst } => format!("protoof {n} {dst}"),
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
@@ -1198,7 +1215,7 @@ impl Model {
                 TmplKind::ObjCreate { .. } => "Object.create object",
                 TmplKind::BObj { .. } => "builtin object",
             },
-            TokKind::Func(_) => "function",
+            TokKind::Func(_, _) => "function",
             TokKind::Bound(_) => "bound function",
             TokKind::ClassObj(_) => "class",
             TokKind::Proto(_) => "prototype",

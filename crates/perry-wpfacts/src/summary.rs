@@ -19,20 +19,25 @@ use std::rc::Rc;
 pub const SLOT: u32 = 1 << 31;
 /// A call template reference inside a summary's constraints.
 pub const CALL: u32 = 1 << 31;
+/// Marks a literal template (not a call) as a birth context's source.
+const LIT: u32 = 1 << 31;
+/// The host of instances no call site is behind (shared, unknown-code and
+/// accessor instances): one context for all of them.
+const NO_HOST: CallId = u32::MAX;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Deferred {
     Bind(CallId, Tok),
-    Escape(FnIdx, u32),
-    Group(Tok, Key, FnIdx, bool),
-    RetObjects(CallId, FnIdx, NodeId),
-    /// `this` of `call` into `f` (`call_tok`): the call's own operand, or
-    /// the given token.
-    This(CallId, FnIdx, Option<Tok>),
+    Escape(Tok, u32),
+    Group(Tok, Key, Tok, bool),
+    RetObjects(CallId, Tok, NodeId),
+    /// `this` of `call` into function token `t` (`call_tok`): the call's
+    /// own operand, or the given token.
+    This(CallId, Tok, Option<Tok>),
     /// `this` from a method lookup on a receiver token (`this_to`).
-    ThisTo(FnIdx, Tok),
-    /// Unknown code calls `f`: its `this` is ⊤.
-    EscapeThis(FnIdx, u32),
+    ThisTo(Tok, Tok),
+    /// Unknown code calls the function: its `this` is ⊤.
+    EscapeThis(Tok, u32),
     /// A birth: `new` of callee token at a call, or of a builtin by name.
     /// Births wait for summaries so a summary's call is born per instance,
     /// never once into the shared body (whose nodes seed every instance).
@@ -58,11 +63,25 @@ pub struct Summary {
     pub cons: Vec<(NodeId, Cons)>,
     /// (template call, the call with terms in place of nodes).
     pub calls: Vec<(CallId, CallSite)>,
+    /// The slots of the function's outer terms (`SumState::outer_of`
+    /// order): nodes of enclosing summaries it captured. An instance takes
+    /// them from its closure context, never fresh.
+    pub outer: Vec<u32>,
+    /// Closures this body creates with outer terms: (slot of the closure
+    /// value, closure, its outer terms as terms of this summary). Each
+    /// instance seeds the slot with the closure token of its own context.
+    pub closures: Vec<(u32, FnIdx, Vec<NodeId>)>,
+    /// Literals this body births: (slot of the birth node, template). Each
+    /// instance seeds its own site token there; the template token stays
+    /// on the observation nodes.
+    pub births: Vec<(u32, TmplId)>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Inst {
     pub f: FnIdx,
+    /// The function token bound (its closure context included).
+    pub tok: Tok,
     /// The call site this instance is for (a program call, or the source
     /// site of a call an instance made): what the instance allocates is
     /// born in that context. Shared, unknown-code and accessor instances
@@ -87,7 +106,7 @@ pub struct SumState {
     /// 3 setter group, 4 getter group, 5 shared (a call inside the callee's
     /// SCC, or a call no call site is behind). An instance never keys on another
     /// instance, so the count is fixed by the program.
-    pub inst_key: FxHashMap<(u8, u32, FnIdx), u32>,
+    pub inst_key: FxHashMap<(u8, u32, Tok), u32>,
     /// Calls that exist when summaries are built: the program's calls.
     pub n_prog: usize,
     /// A call an instance made: the summary call (template) it renames.
@@ -108,7 +127,7 @@ pub struct SumState {
     pub owner: FxHashMap<CallId, FnIdx>,
     /// Summarized function -> its SCC in the static call graph.
     pub scc: FxHashMap<FnIdx, u32>,
-    pub call_inst: FxHashMap<(CallId, FnIdx), u32>,
+    pub call_inst: FxHashMap<(CallId, Tok), u32>,
     /// Calls that belong to a summary: the shared body never runs them.
     pub templates: FxHashSet<CallId>,
     pub stats: String,
@@ -118,11 +137,17 @@ pub struct SumState {
     pub pending: Vec<(u32, Vec<NodeId>)>,
     /// Summarized function -> the node of its `this` values no call is
     /// behind (literal methods, accessor groups): feeds every instance.
-    pub this_any: FxHashMap<FnIdx, NodeId>,
-    /// Summarized function -> its instances.
-    pub insts_of: FxHashMap<FnIdx, Vec<u32>>,
-    /// TEMP CW s7: what made the kind-6 instances of module factories.
-    pub temp_why: FxHashMap<String, usize>,
+    pub this_any: FxHashMap<Tok, NodeId>,
+    /// Function token -> its instances.
+    pub insts_of: FxHashMap<Tok, Vec<u32>>,
+    /// Summarized closure -> its outer terms (nodes of enclosing slices).
+    pub outer_of: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// Closure context id -> the nodes of the closure's outer terms.
+    pub ctx_nodes: Vec<Vec<NodeId>>,
+    /// (closure, host site of the instance that made it) -> context id. A
+    /// context is fixed by the program (closures x host sites), never by an
+    /// instance, so closure tokens never multiply through instances.
+    pub ctx_of: FxHashMap<(FnIdx, CallId), CallId>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -169,6 +194,7 @@ pub fn map_cons(
         SuperCtor { class, call } => SuperCtor { class, call: k(call) },
         SuperCtorParent { class, call, origin } => SuperCtorParent { class, call: k(call), origin },
         ThisFrom { recv } => ThisFrom { recv: n(recv) },
+        BirthField { key, src } => BirthField { key, src: n(src) },
         Accessor { holder, key, setter } => Accessor { holder: n(holder), key, setter },
         AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
         ProtoFrom { src } => ProtoFrom { src: n(src) },
@@ -249,6 +275,7 @@ fn gen_kind(c: &Cons) -> bool {
             | IterNext { .. }
             | ProtoOf { .. }
             | ThisFrom { .. }
+            | BirthField { .. }
             | CreateProto { .. }
             | NewTargetHard { .. }
             | ShareBuffer { .. }
@@ -343,13 +370,6 @@ impl Model {
     /// allocations are per `new` site, not one for every instance. Calls
     /// made while solving another take that call's context.
     pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
-        // TEMP CW s7 toggles: T2 = template tokens only, T1 = no host.
-        if std::env::var_os("CW_T2").is_some() {
-            return NO_CTX;
-        }
-        if std::env::var_os("CW_T1").is_some() && (call as usize) >= self.sum.n_prog && self.sum.ready {
-            return self.sum.tmpl_of.get(&call).copied().unwrap_or_else(|| self.origin_of(call).unwrap_or(call));
-        }
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
         }
@@ -370,32 +390,42 @@ impl Model {
     }
 
     /// The instance for key, made on first use.
-    fn instance(&mut self, key: (u8, u32, FnIdx)) -> u32 {
+    fn instance(&mut self, key: (u8, u32, Tok)) -> u32 {
         if let Some(&i) = self.sum.inst_key.get(&key) {
             return i;
         }
-        let f = key.2;
+        let TokKind::Func(f, ctx) = self.toks[key.2 as usize] else {
+            unreachable!("instance of a non-function token")
+        };
         let s = self.sum.of[&f].clone();
         let inst = self.sum.insts.len() as u32;
+        // Outer slots are the context's nodes (the enclosing instance's);
+        // a token without a context observes through the shared nodes.
+        let mut outer_at = vec![u32::MAX; s.nslots as usize];
+        for (j, &sl) in s.outer.iter().enumerate() {
+            outer_at[sl as usize] = j as u32;
+        }
         let base: Vec<NodeId> = (0..s.nslots)
-            .map(|i| {
-                let n = self.node_named("inst", || format!("inst{inst}.{i}"));
-                n
+            .map(|i| match outer_at[i as usize] {
+                u32::MAX => self.node_named("inst", || format!("inst{inst}.{i}")),
+                _ if ctx == NO_CTX => s.orig[i as usize],
+                j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
             .collect();
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         let this = tr(s.this);
         self.sum.insts.push(Inst {
             f,
+            tok: key.2,
             host: matches!(key.0, 0 | 6).then_some(key.1),
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
             this,
         });
         self.sum.inst_key.insert(key, inst);
-        self.sum.insts_of.entry(f).or_default().push(inst);
+        self.sum.insts_of.entry(key.2).or_default().push(inst);
         self.sum.pending.push((inst, base));
-        if let Some(&u) = self.sum.this_any.get(&f) {
+        if let Some(&u) = self.sum.this_any.get(&key.2) {
             if this != NO_NODE {
                 self.edge(u, this);
             }
@@ -405,10 +435,11 @@ impl Model {
 
     /// The instance `call` binds for summarized `f` (None: the template call
     /// was expanded into the caller's summary).
-    fn inst_for(&mut self, call: CallId, f: FnIdx) -> Option<u32> {
-        if let Some(&i) = self.sum.call_inst.get(&(call, f)) {
+    fn inst_for(&mut self, call: CallId, ft: Tok) -> Option<u32> {
+        if let Some(&i) = self.sum.call_inst.get(&(call, ft)) {
             return Some(i);
         }
+        let f = self.tok_fn(ft);
         // A call an instance made from a template expanded into the
         // summary: the instance already holds `f`'s effect.
         let t = self.sum.tmpl_of.get(&call).copied();
@@ -424,31 +455,15 @@ impl Model {
             self.sum.owner.get(&t).and_then(|o| self.sum.scc.get(o)) == self.sum.scc.get(&f)
         });
         let key = if (call as usize) < self.sum.n_prog {
-            (0, call, f)
+            (0, call, ft)
         } else {
             match self.sum.origin.get(&call) {
-                Some(&o) if !in_scc => {
-                    if !self.sum.inst_key.contains_key(&(6, o, f)) && self.funcs[f as usize].name.contains("__perry_cjs_factory") {
-                        let tt = t.map(|t| {
-                            let ow = self.sum.owner.get(&t).map(|g| self.funcs[*g as usize].name.clone()).unwrap_or_default();
-                            let tc = &self.calls[t as usize];
-                            format!("tmpl owner={ow} site={} args={}", tc.site, tc.args.len())
-                        });
-                        let w = format!(
-                            "{} bsynth={} proto={}",
-                            tt.unwrap_or_else(|| format!("derived site={} args={}", self.calls[call as usize].site, self.calls[call as usize].args.len())),
-                            self.bound_synth.contains(&call),
-                            self.protocol_calls.contains(&call)
-                        );
-                        *self.sum.temp_why.entry(w).or_default() += 1;
-                    }
-                    (6, o, f)
-                }
-                _ => (5, 0, f),
+                Some(&o) if !in_scc => (6, o, ft),
+                _ => (5, 0, ft),
             }
         };
         let inst = self.instance(key);
-        self.sum.call_inst.insert((call, f), inst);
+        self.sum.call_inst.insert((call, ft), inst);
         Some(inst)
     }
 
@@ -460,11 +475,12 @@ impl Model {
     /// `this` of `call` into `f`: the shared node observes it; `f`'s
     /// instance for the call gets the explicit token (the call's own
     /// operand reaches it in `bind_summarized`).
-    pub(crate) fn this_into(&mut self, call: CallId, f: FnIdx, this_tok: Option<Tok>) {
+    pub(crate) fn this_into(&mut self, call: CallId, ft: Tok, this_tok: Option<Tok>) {
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::This(call, f, this_tok));
+            self.sum.deferred.push(Deferred::This(call, ft, this_tok));
             return;
         }
+        let f = self.tok_fn(ft);
         let fthis = self.funcs[f as usize].this;
         match (this_tok, &self.calls[call as usize].this) {
             (Some(x), _) => self.add_tok(fthis, x),
@@ -474,7 +490,7 @@ impl Model {
         }
         if let Some(x) = this_tok {
             if self.has_this_term(f) && !self.sum.templates.contains(&call) {
-                if let Some(i) = self.inst_for(call, f) {
+                if let Some(i) = self.inst_for(call, ft) {
                     let it = self.sum.insts[i as usize].this;
                     self.add_tok(it, x);
                 }
@@ -484,11 +500,12 @@ impl Model {
 
     /// `this` of `f` from a method lookup on receiver `origin`: the shared
     /// node observes it; the instances get the call's receiver operand.
-    pub(crate) fn this_lookup(&mut self, f: FnIdx, origin: Tok) {
+    pub(crate) fn this_lookup(&mut self, ft: Tok, origin: Tok) {
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::ThisTo(f, origin));
+            self.sum.deferred.push(Deferred::ThisTo(ft, origin));
             return;
         }
+        let f = self.tok_fn(ft);
         let this = self.funcs[f as usize].this;
         self.add_tok(this, origin);
     }
@@ -496,36 +513,51 @@ impl Model {
     /// The node that takes `this` values of `f` no call is behind: every
     /// instance of `f` (and its shared instance, so the effect runs even
     /// if no call ever does) sees them.
-    pub(crate) fn this_any(&mut self, f: FnIdx) -> NodeId {
+    pub(crate) fn this_any(&mut self, ft: Tok) -> NodeId {
+        let f = self.tok_fn(ft);
         let fthis = self.funcs[f as usize].this;
         if !self.sum.ready || !self.has_this_term(f) {
             return fthis;
         }
-        if let Some(&u) = self.sum.this_any.get(&f) {
+        if let Some(&u) = self.sum.this_any.get(&ft) {
             return u;
         }
         let u = self.node_named("this-any", || format!("this-any({f})"));
-        self.sum.this_any.insert(f, u);
+        self.sum.this_any.insert(ft, u);
         self.edge(u, fthis);
-        for i in self.sum.insts_of.get(&f).cloned().unwrap_or_default() {
+        for i in self.sum.insts_of.get(&ft).cloned().unwrap_or_default() {
             let it = self.sum.insts[i as usize].this;
             self.edge(u, it);
         }
-        self.instance((5, 0, f));
+        if self.instantiable(ft) {
+            self.instance((5, 0, ft));
+        }
         u
+    }
+
+    /// An instance of `ft` has its outer terms: a closure with outer terms
+    /// is instantiated only through a context (the token without one lives
+    /// on observation nodes only, which never run effects).
+    fn instantiable(&self, ft: Tok) -> bool {
+        match self.toks[ft as usize] {
+            TokKind::Func(f, NO_CTX) => self.sum.of.get(&f).is_some_and(|s| s.outer.is_empty()),
+            TokKind::Func(_, _) => true,
+            _ => false,
+        }
     }
 
     /// Unknown code calls `f`: its `this` is ⊤ (the unknown-code instance's
     /// and the shared node).
-    pub(crate) fn escape_this(&mut self, f: FnIdx, reason: u32) {
+    pub(crate) fn escape_this(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::EscapeThis(f, reason));
+            self.sum.deferred.push(Deferred::EscapeThis(ft, reason));
             return;
         }
+        let f = self.tok_fn(ft);
         let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
         let mut dsts = vec![self.funcs[f as usize].this];
         if self.has_this_term(f) {
-            let inst = self.instance((2, 0, f));
+            let inst = self.instance((2, 0, ft));
             dsts.push(self.sum.insts[inst as usize].this);
         }
         for d in dsts {
@@ -553,7 +585,14 @@ impl Model {
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         // Calls whose callee or receiver is an input term (a parameter or
         // `this`): what they bind is what the caller passed.
-        let inputs: FxHashSet<NodeId> = s.params.iter().chain([&s.this]).copied().filter(|&x| is_slot(x)).collect();
+        let inputs: FxHashSet<NodeId> = s
+            .params
+            .iter()
+            .chain([&s.this])
+            .copied()
+            .chain(s.outer.iter().map(|&o| SLOT | o))
+            .filter(|&x| is_slot(x))
+            .collect();
         let mut by_input: FxHashSet<u32> = FxHashSet::default();
         for (h, c) in &s.cons {
             if inputs.contains(h) {
@@ -590,6 +629,22 @@ impl Model {
         for &(slot, ref toks, prim) in &s.seeds {
             self.add(base[slot as usize], toks, prim);
         }
+        // Closures born here carry this instance's nodes for their outer
+        // terms.
+        for (slot, g, terms) in &s.closures {
+            let nodes: Vec<NodeId> = terms.iter().map(|&x| tr(x)).collect();
+            let t = self.closure_tok(*g, host.unwrap_or(NO_HOST), &nodes);
+            self.add_tok(base[*slot as usize], t);
+        }
+        // Literals born here: one token per (literal, host site); one for
+        // every instance no call site is behind.
+        for &(slot, tm) in &s.births {
+            let h = host.unwrap_or(NO_HOST);
+            let n = self.sum.ctx_ids.len() as CallId;
+            let ctx = *self.sum.ctx_ids.entry((LIT | tm, h)).or_insert(NO_CTX - 1 - n);
+            let t = self.site_tok(tm, ctx);
+            self.add_tok(base[slot as usize], t);
+        }
         for &(a, b) in &s.edges {
             self.edge(tr(a), tr(b));
         }
@@ -607,9 +662,34 @@ impl Model {
         }
     }
 
-    /// Arguments and result of `call` into summarized `f`: its instance.
-    pub(crate) fn bind_summarized(&mut self, call: CallId, f: FnIdx) {
-        let Some(inst) = self.inst_for(call, f) else {
+    /// The token of closure `g` made by an instance for `host`, whose nodes
+    /// for `g`'s outer terms are `nodes`. The context's own nodes are those
+    /// terms for every instance of that host, both ways: what the closure
+    /// writes into a captured local reaches the instance that made it.
+    pub(crate) fn closure_tok(&mut self, g: FnIdx, host: CallId, nodes: &[NodeId]) -> Tok {
+        let ctx = match self.sum.ctx_of.get(&(g, host)) {
+            Some(&c) => c,
+            None => {
+                let c = self.sum.ctx_nodes.len() as CallId;
+                let cn: Vec<NodeId> = (0..nodes.len()).map(|j| self.node_named("ctx", || format!("ctx{c}.{j}"))).collect();
+                self.sum.ctx_of.insert((g, host), c);
+                self.sum.ctx_nodes.push(cn);
+                c
+            }
+        };
+        let cn = self.sum.ctx_nodes[ctx as usize].clone();
+        for (&x, &c) in nodes.iter().zip(cn.iter()) {
+            self.edge(x, c);
+            self.edge(c, x);
+        }
+        self.tok(TokKind::Func(g, ctx))
+    }
+
+    /// Arguments and result of `call` into summarized function token `ft`:
+    /// its instance.
+    pub(crate) fn bind_summarized(&mut self, call: CallId, ft: Tok) {
+        let f = self.tok_fn(ft);
+        let Some(inst) = self.inst_for(call, ft) else {
             return;
         };
         let it = self.sum.insts[inst as usize].this;
@@ -662,16 +742,17 @@ impl Model {
     }
 
     /// The result node `call` sees from `f` (its instance's, if summarized).
-    pub(crate) fn ret_for(&self, call: CallId, f: FnIdx) -> NodeId {
-        match self.sum.call_inst.get(&(call, f)) {
+    pub(crate) fn ret_for(&self, call: CallId, ft: Tok) -> NodeId {
+        match self.sum.call_inst.get(&(call, ft)) {
             Some(&i) => self.sum.insts[i as usize].ret,
-            None => self.funcs[f as usize].ret,
+            None => self.funcs[self.tok_fn(ft) as usize].ret,
         }
     }
 
     /// Unknown code calls summarized `f`: unknown arguments, the result escapes.
-    pub(crate) fn escape_summarized(&mut self, f: FnIdx, reason: u32) {
-        let inst = self.instance((2, 0, f));
+    pub(crate) fn escape_summarized(&mut self, ft: Tok, reason: u32) {
+        let f = self.tok_fn(ft);
+        let inst = self.instance((2, 0, ft));
         let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
@@ -691,9 +772,10 @@ impl Model {
 
     /// Accessor group binding of summarized `f`: the group's setter value
     /// into the first parameter, or the getter result into the group's.
-    pub(crate) fn group_summarized(&mut self, f: FnIdx, sp: NodeId, ar: NodeId, setter: bool) {
+    pub(crate) fn group_summarized(&mut self, ft: Tok, sp: NodeId, ar: NodeId, setter: bool) {
+        let f = self.tok_fn(ft);
         if setter {
-            let inst = self.instance((3, sp, f));
+            let inst = self.instance((3, sp, ft));
             if let Some(&p0) = self.funcs[f as usize].params.first() {
                 let t = self.sum.insts[inst as usize].params[0];
                 if t != NO_NODE {
@@ -704,7 +786,7 @@ impl Model {
                 }
             }
         } else {
-            let inst = self.instance((4, ar, f));
+            let inst = self.instance((4, ar, ft));
             let r = self.sum.insts[inst as usize].ret;
             if r != NO_NODE {
                 self.edge(r, ar);
@@ -746,8 +828,10 @@ impl Model {
             let s = self.sum.of[&f].clone();
             if is_slot(s.this) {
                 let sl = s.this & !SLOT;
-                if s.seeds.iter().any(|x| x.0 == sl) || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0)) {
-                    self.instance((5, 0, f));
+                let ft = self.funcs[f as usize].token;
+                let fed = s.seeds.iter().any(|x| x.0 == sl) || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
+                if fed && self.instantiable(ft) {
+                    self.instance((5, 0, ft));
                 }
             }
         }
@@ -815,206 +899,619 @@ fn build_index(m: &Model) -> Index {
     ix
 }
 
-/// The parameter-derived nodes of `f`: what its parameters reach by copy,
-/// every field of a rule on such a node, and the results of calls with such
-/// an operand. Only nodes `f` owns and no closure captured.
-fn slice(m: &Model, ix: &Index, f: FnIdx) -> Vec<NodeId> {
+/// Lexical nesting of closures.
+struct Lex {
+    parent: Vec<FnIdx>,
+    depth: Vec<u32>,
+    children: Vec<Vec<FnIdx>>,
+}
+
+impl Lex {
+    fn new(m: &Model) -> Lex {
+        let parent: Vec<FnIdx> = m.funcs.iter().map(|f| f.parent).collect();
+        let mut depth = vec![0u32; parent.len()];
+        let mut children = vec![Vec::new(); parent.len()];
+        // A closure is registered while its parent's body is walked, so the
+        // parent's index is smaller.
+        for f in 0..parent.len() {
+            let p = parent[f];
+            if p != NO_FN {
+                debug_assert!((p as usize) < f);
+                depth[f] = depth[p as usize] + 1;
+                children[p as usize].push(f as FnIdx);
+            }
+        }
+        Lex { parent, depth, children }
+    }
+
+    /// `a` lexically encloses `g` (strictly).
+    fn encloses(&self, a: FnIdx, g: FnIdx) -> bool {
+        let mut p = self.parent[g as usize];
+        while p != NO_FN {
+            if p == a {
+                return true;
+            }
+            p = self.parent[p as usize];
+        }
+        false
+    }
+}
+
+/// The parameter-derived nodes of `f`: what its parameters, its `this`, the
+/// closure values in `roots` and the outer terms in `through` (walked, not
+/// members) reach by copy, every field of a rule on such a node, and the
+/// results of calls with such an operand. Only nodes `f` owns and no
+/// unsummarizable function captured.
+fn slice(
+    m: &Model,
+    ix: &Index,
+    f: FnIdx,
+    roots: &[NodeId],
+    through: &[NodeId],
+    pinned: &FxHashSet<NodeId>,
+) -> Vec<NodeId> {
     let fi = &m.funcs[f as usize];
     let ok = |y: NodeId| {
-        y != NO_NODE
-            && m.node_fn[y as usize] == f
-            && (y != fi.this || !fi.lexical_this)
-            && y != fi.args_all
-            && !m.node_captured.contains(&y)
+        y != NO_NODE && m.node_fn[y as usize] == f && y != fi.args_all && !pinned.contains(&y)
     };
     let mut seen: FxHashSet<NodeId> = FxHashSet::default();
     let mut d = Vec::new();
+    let mut work: Vec<NodeId> = through.to_vec();
     let this = (!fi.lexical_this).then_some(fi.this);
-    for &p in fi.params.iter().chain(this.iter()) {
+    for &p in fi.params.iter().chain(this.iter()).chain(roots) {
         if ok(p) && seen.insert(p) {
             d.push(p);
+            work.push(p);
         }
     }
     let mut i = 0;
-    while i < d.len() {
-        let x = d[i];
+    while i < work.len() {
+        let x = work[i];
         i += 1;
-        let mut add = |y: NodeId, d: &mut Vec<NodeId>| {
+        let mut add = |y: NodeId, d: &mut Vec<NodeId>, work: &mut Vec<NodeId>| {
             if ok(y) && seen.insert(y) {
                 d.push(y);
+                work.push(y);
             }
         };
         let node = &m.nodes[x as usize];
         for &y in node.succ.iter() {
-            add(y, &mut d);
+            add(y, &mut d, &mut work);
         }
         for c in &node.cons {
             let (ns, ks) = cons_fields(c);
             for y in ns {
-                add(y, &mut d);
+                add(y, &mut d, &mut work);
             }
             for k in ks {
-                add(m.calls[k as usize].ret, &mut d);
+                add(m.calls[k as usize].ret, &mut d, &mut work);
             }
         }
         if let Some(rs) = ix.refs.get(&x) {
             for &(h, ci) in rs {
                 let (ns, ks) = cons_fields(&m.nodes[h as usize].cons[ci as usize]);
                 for y in ns {
-                    add(y, &mut d);
+                    add(y, &mut d, &mut work);
                 }
                 for k in ks {
-                    add(m.calls[k as usize].ret, &mut d);
+                    add(m.calls[k as usize].ret, &mut d, &mut work);
                 }
             }
         }
         if let Some(cs) = ix.calls_of.get(&x) {
             for &k in cs {
-                add(m.calls[k as usize].ret, &mut d);
+                add(m.calls[k as usize].ret, &mut d, &mut work);
             }
         }
     }
     d
 }
 
-fn build_summaries(m: &mut Model) {
-    let ix = build_index(m);
-    // 1. Slices of every candidate.
-    let mut slices: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
-    for f in 0..m.funcs.len() as FnIdx {
-        let fi = &m.funcs[f as usize];
-        if fi.no_summary || fi.rest.is_some() || fi.has_arguments || (fi.params.is_empty() && fi.lexical_this) {
+struct Entries {
+    cons: Vec<(NodeId, u32)>,
+    calls: Vec<CallId>,
+}
+
+/// A literal a body births at generation: its template token, the body's
+/// nodes holding it, and its own field nodes with what generation wrote
+/// into them directly.
+struct Birth {
+    tok: Tok,
+    tm: TmplId,
+    holders: Vec<NodeId>,
+    /// (key, field node, writers, generation prims).
+    fields: Vec<(Key, NodeId, Vec<NodeId>, u16)>,
+    own: Vec<NodeId>,
+}
+
+/// Literals each function births whose template token only its own body
+/// holds, with fields only generation's direct writes fill: per instance.
+fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
+    let mut holders: FxHashMap<Tok, Vec<NodeId>> = FxHashMap::default();
+    for (n, node) in m.nodes.iter().enumerate() {
+        if node.pts.is_empty() {
             continue;
         }
-        let d = slice(m, &ix, f);
+        for t in node.pts.to_sorted() {
+            if let TokKind::Obj(tm, NO_CTX) = m.toks[t as usize] {
+                if m.tmpl_fn.contains_key(&tm) {
+                    holders.entry(t).or_default().push(n as NodeId);
+                }
+            }
+        }
+    }
+    let mut fields_of: FxHashMap<Tok, Vec<(Key, NodeId)>> = FxHashMap::default();
+    for (&(t, a), &n) in &m.fields {
+        if holders.contains_key(&t) {
+            fields_of.entry(t).or_default().push((Key::Named(a), n));
+        }
+    }
+    for (&t, &n) in &m.field_any {
+        if holders.contains_key(&t) {
+            fields_of.entry(t).or_default().push((Key::Any, n));
+        }
+    }
+    let mut own_of: FxHashMap<NodeId, Tok> = FxHashMap::default();
+    for (&t, v) in &fields_of {
+        for &(_, n) in v {
+            own_of.insert(n, t);
+        }
+    }
+    for t in holders.keys() {
+        for map in [&m.all_fields, &m.proto_node] {
+            if let Some(&n) = map.get(t) {
+                own_of.insert(n, *t);
+            }
+        }
+    }
+    let mut preds: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+    for (a, node) in m.nodes.iter().enumerate() {
+        for &b in node.succ.iter() {
+            if own_of.contains_key(&b) {
+                preds.entry(b).or_default().push(a as NodeId);
+            }
+        }
+    }
+    let mut out: FxHashMap<FnIdx, Vec<Birth>> = FxHashMap::default();
+    let mut ts: Vec<Tok> = holders.keys().copied().collect();
+    ts.sort_unstable();
+    for t in ts {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else { continue };
+        let f = m.tmpl_fn[&tm];
+        if !cand[f as usize] {
+            continue;
+        }
+        let hs = &holders[&t];
+        if hs.iter().any(|&h| m.node_fn[h as usize] != f) {
+            continue;
+        }
+        let mut own: Vec<NodeId> = own_of.iter().filter(|(_, &x)| x == t).map(|(&n, _)| n).collect();
+        own.sort_unstable();
+        let is_own = |n: NodeId| own_of.get(&n) == Some(&t);
+        let mut ok = own.iter().all(|&n| m.nodes[n as usize].cons.is_empty());
+        let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
+        let mut fl = fields_of.get(&t).cloned().unwrap_or_default();
+        fl.sort_unstable_by_key(|x| x.1);
+        for (k, n) in fl {
+            let mut ws = Vec::new();
+            for &p in preds.get(&n).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if is_own(p) {
+                    continue;
+                }
+                let pf = m.node_fn[p as usize];
+                if pf != f && pf != NO_FN {
+                    ok = false;
+                }
+                ws.push(p);
+            }
+            fields.push((k, n, ws, m.nodes[n as usize].prim));
+        }
+        // Only the template's own nodes reach its other nodes.
+        for map in [&m.all_fields, &m.proto_node] {
+            if let Some(&n) = map.get(&t) {
+                if preds.get(&n).is_some_and(|v| v.iter().any(|&p| !is_own(p))) {
+                    ok = false;
+                }
+            }
+        }
+        if ok {
+            out.entry(f).or_default().push(Birth { tok: t, tm, holders: hs.clone(), fields, own });
+        }
+    }
+    out
+}
+
+/// Slices, outer terms and entries of every summarizable function under
+/// one set of pinned (shared) captured nodes.
+struct Plan {
+    slices: FxHashMap<FnIdx, Vec<NodeId>>,
+    /// Slice node -> its function, live (not refused) functions only.
+    dof: FxHashMap<NodeId, FnIdx>,
+    outer: FxHashMap<FnIdx, Vec<NodeId>>,
+    refused: FxHashSet<FnIdx>,
+    why: FxHashMap<FnIdx, String>,
+    entries: FxHashMap<FnIdx, Entries>,
+}
+
+/// Where node `y` sits for the summary of `f`.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Own,
+    /// A slice of a closure nested in `f`: that closure's summary owns it.
+    Inner,
+    /// An outer term of `f`: an enclosing slice's node `f` captured.
+    Outer,
+    Abs,
+    Other(FnIdx),
+}
+
+fn role(lex: &Lex, dof: &FxHashMap<NodeId, FnIdx>, outer: &FxHashSet<NodeId>, f: FnIdx, y: NodeId) -> Role {
+    match dof.get(&y) {
+        None => Role::Abs,
+        Some(&a) if a == f => Role::Own,
+        Some(&a) if lex.encloses(f, a) => Role::Inner,
+        Some(_) if outer.contains(&y) => Role::Outer,
+        Some(&a) => Role::Other(a),
+    }
+}
+
+/// A rule touching `f`'s slice: `Ok(true)` it is `f`'s, `Ok(false)` a nested
+/// closure's (the innermost slice it touches owns it), `Err(a)` it also
+/// touches an unrelated slice of `a`.
+fn disposition(
+    m: &Model,
+    lex: &Lex,
+    dof: &FxHashMap<NodeId, FnIdx>,
+    outer: &FxHashSet<NodeId>,
+    f: FnIdx,
+    h: NodeId,
+    c: &Cons,
+) -> Result<bool, FnIdx> {
+    let (ns, ks) = cons_fields(c);
+    let mut nodes: Vec<NodeId> = std::iter::once(h).chain(ns).collect();
+    for k in ks {
+        nodes.extend(call_nodes(&m.calls[k as usize]));
+    }
+    let roles: Vec<Role> = nodes.iter().map(|&y| role(lex, dof, outer, f, y)).collect();
+    if roles.contains(&Role::Inner) {
+        return Ok(false);
+    }
+    for r in roles {
+        if let Role::Other(a) = r {
+            return Err(a);
+        }
+    }
+    Ok(true)
+}
+
+fn plan(
+    m: &Model,
+    ix: &Index,
+    lex: &Lex,
+    cand: &[bool],
+    cvs: &FxHashMap<FnIdx, Vec<NodeId>>,
+    caps: &[(NodeId, Vec<FnIdx>)],
+    births: &FxHashMap<FnIdx, Vec<Birth>>,
+    pinned: &FxHashSet<NodeId>,
+) -> Plan {
+    // Captured nodes each function carries (its own captures and those of
+    // closures nested in it), owned by an enclosing function.
+    let mut capt: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
+    for (x, chain) in caps {
+        if pinned.contains(x) {
+            continue;
+        }
+        for &p in chain {
+            capt.entry(p).or_default().push(*x);
+        }
+    }
+    for v in capt.values_mut() {
+        v.sort_unstable();
+        v.dedup();
+    }
+    let none: Vec<NodeId> = Vec::new();
+    // 1. Slices, enclosing functions first (outer terms are their nodes).
+    let mut order: Vec<FnIdx> = (0..m.funcs.len() as FnIdx).filter(|&f| cand[f as usize]).collect();
+    order.sort_by_key(|&f| (lex.depth[f as usize], f));
+    let mut slices: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
+    let mut all_dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
+    for &f in &order {
+        let through: Vec<NodeId> =
+            capt.get(&f).unwrap_or(&none).iter().copied().filter(|x| all_dof.contains_key(x)).collect();
+        // A body with no interface term is never instanced (module and
+        // initializer bodies run once, unattributed): it keeps no slice.
+        if slice(m, ix, f, &[], &through, pinned).is_empty() {
+            continue;
+        }
+        // A literal this body births is a value of the slice.
+        let mut roots: Vec<NodeId> = Vec::new();
+        for b in births.get(&f).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if !b.holders.iter().any(|x| pinned.contains(x)) {
+                roots.extend(b.holders.iter().copied());
+            }
+        }
+        let d = loop {
+            let d = slice(m, ix, f, &roots, &through, pinned);
+            let dset: FxHashSet<NodeId> = d.iter().copied().collect();
+            // A closure with an outer term in this slice (or one this
+            // function carries) is a value of the slice: each instance
+            // makes its own.
+            let mut more = false;
+            for &g in &lex.children[f as usize] {
+                let has_outer = capt
+                    .get(&g)
+                    .is_some_and(|v| v.iter().any(|x| dset.contains(x) || all_dof.contains_key(x)));
+                if !has_outer {
+                    continue;
+                }
+                for &cv in cvs.get(&g).unwrap_or(&none) {
+                    if !roots.contains(&cv) {
+                        roots.push(cv);
+                        more = true;
+                    }
+                }
+            }
+            if !more {
+                break d;
+            }
+        };
         if !d.is_empty() {
+            for &x in &d {
+                all_dof.insert(x, f);
+            }
             slices.insert(f, d);
         }
     }
-    let mut dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
-    for (&f, d) in &slices {
-        for &x in d {
-            dof.insert(x, f);
-        }
-    }
-    // 2. Entries; a slice touching another function's slice, a solver rule
-    //    on a slice node, or a call with a slice operand that no rule runs
-    //    keeps the function's shared binding.
-    let mut refused: FxHashSet<FnIdx> = FxHashSet::default();
-    let mut why: FxHashMap<FnIdx, String> = FxHashMap::default();
-    struct Entries {
-        cons: Vec<(NodeId, u32)>,
-        calls: Vec<CallId>,
-    }
-    let mut entries: FxHashMap<FnIdx, Entries> = FxHashMap::default();
     let mut fs: Vec<FnIdx> = slices.keys().copied().collect();
     fs.sort_unstable();
-    for &f in &fs {
-        let d = &slices[&f];
-        let mut bad = false;
-        let other = |x: NodeId, bad: &mut bool, refused: &mut FxHashSet<FnIdx>| {
-            if let Some(&g) = dof.get(&x) {
-                if g != f {
-                    *bad = true;
-                    refused.insert(g);
+    // 2. Entries; refusals until none are new (a refused function's slice
+    //    is plain nodes for every other summary).
+    let mut refused: FxHashSet<FnIdx> = FxHashSet::default();
+    let mut why: FxHashMap<FnIdx, String> = FxHashMap::default();
+    loop {
+        let mut dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
+        for &f in &fs {
+            if !refused.contains(&f) {
+                for &x in &slices[&f] {
+                    dof.insert(x, f);
                 }
             }
-        };
-        let mut cons: Vec<(NodeId, u32)> = Vec::new();
-        let mut cons_seen: FxHashSet<(NodeId, u32)> = FxHashSet::default();
-        let mut calls: Vec<CallId> = Vec::new();
-        let mut calls_seen: FxHashSet<CallId> = FxHashSet::default();
-        let mut run_calls: FxHashSet<CallId> = FxHashSet::default();
-        let mut take = |h: NodeId, i: u32, m: &Model, cons: &mut Vec<(NodeId, u32)>| {
-            if cons_seen.insert((h, i)) {
-                cons.push((h, i));
+        }
+        let mut outer: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
+        for &f in &fs {
+            if refused.contains(&f) {
+                continue;
             }
-            let _ = m;
-        };
-        for &x in d {
-            for (i, c) in m.nodes[x as usize].cons.iter().enumerate() {
-                if !gen_kind(c) {
-                    bad = true;
-                    why.entry(f).or_insert_with(|| format!("solver rule {} on {}", c.kind_name(), m.labels[x as usize]));
+            let v: Vec<NodeId> = capt
+                .get(&f)
+                .unwrap_or(&none)
+                .iter()
+                .copied()
+                .filter(|x| dof.get(x).is_some_and(|&o| o != f && lex.encloses(o, f)))
+                .collect();
+            outer.insert(f, v);
+        }
+        let mut entries: FxHashMap<FnIdx, Entries> = FxHashMap::default();
+        let mut bad_now: FxHashSet<FnIdx> = FxHashSet::default();
+        for &f in &fs {
+            if refused.contains(&f) {
+                continue;
+            }
+            let d = &slices[&f];
+            let oset: FxHashSet<NodeId> = outer[&f].iter().copied().collect();
+            let mut bad = false;
+            let note = |w: String, bad: &mut bool, why: &mut FxHashMap<FnIdx, String>| {
+                *bad = true;
+                why.entry(f).or_insert(w);
+            };
+            let mut cons: Vec<(NodeId, u32)> = Vec::new();
+            let mut cons_seen: FxHashSet<(NodeId, u32)> = FxHashSet::default();
+            let mut calls: Vec<CallId> = Vec::new();
+            let mut calls_seen: FxHashSet<CallId> = FxHashSet::default();
+            let mut run_calls: FxHashSet<CallId> = FxHashSet::default();
+            let mut inner_calls: FxHashSet<CallId> = FxHashSet::default();
+            let mut consider = |h: NodeId,
+                                i: u32,
+                                held: bool,
+                                bad: &mut bool,
+                                why: &mut FxHashMap<FnIdx, String>,
+                                bad_now: &mut FxHashSet<FnIdx>,
+                                cons: &mut Vec<(NodeId, u32)>| {
+                let c = &m.nodes[h as usize].cons[i as usize];
+                if !held && !gen_kind(c) {
+                    return;
                 }
-                take(x, i as u32, m, &mut cons);
-            }
-            if let Some(rs) = ix.refs.get(&x) {
-                for &(h, i) in rs {
-                    if dof.get(&h) == Some(&f) {
-                        continue;
+                match disposition(m, lex, &dof, &oset, f, h, c) {
+                    Ok(true) => {
+                        if !gen_kind(c) {
+                            *bad = true;
+                            why.entry(f)
+                                .or_insert_with(|| format!("solver rule {} on {}", c.kind_name(), m.labels[h as usize]));
+                        }
+                        if cons_seen.insert((h, i)) {
+                            cons.push((h, i));
+                        }
+                        let (_, ks) = cons_fields(c);
+                        run_calls.extend(ks);
                     }
-                    if gen_kind(&m.nodes[h as usize].cons[i as usize]) {
-                        take(h, i, m, &mut cons);
+                    Ok(false) => {
+                        let (_, ks) = cons_fields(c);
+                        inner_calls.extend(ks);
+                    }
+                    Err(a) => {
+                        *bad = true;
+                        why.entry(f).or_insert_with(|| "touches another summarized slice".into());
+                        bad_now.insert(a);
                     }
                 }
-            }
-            for &y in m.nodes[x as usize].succ.iter() {
-                other(y, &mut bad, &mut refused);
-            }
-            if let Some(ps) = ix.preds.get(&x) {
-                for &p in ps {
-                    other(p, &mut bad, &mut refused);
+            };
+            for &x in d {
+                for i in 0..m.nodes[x as usize].cons.len() {
+                    consider(x, i as u32, true, &mut bad, &mut why, &mut bad_now, &mut cons);
                 }
-            }
-            if let Some(cs) = ix.calls_of.get(&x) {
-                for &k in cs {
-                    if calls_seen.insert(k) {
-                        calls.push(k);
+                if let Some(rs) = ix.refs.get(&x) {
+                    for &(h, i) in rs {
+                        if dof.get(&h) == Some(&f) {
+                            continue;
+                        }
+                        consider(h, i, false, &mut bad, &mut why, &mut bad_now, &mut cons);
                     }
-                    if let Some(rs) = ix.call_refs.get(&k) {
-                        for &(h, i) in rs {
-                            if dof.get(&h) == Some(&f) {
-                                continue;
-                            }
-                            if gen_kind(&m.nodes[h as usize].cons[i as usize]) {
-                                take(h, i, m, &mut cons);
+                }
+                let node = &m.nodes[x as usize];
+                let preds = ix.preds.get(&x).map(|v| v.as_slice()).unwrap_or(&[]);
+                for &y in node.succ.iter().chain(preds) {
+                    if let Role::Other(a) = role(lex, &dof, &oset, f, y) {
+                        note("touches another summarized slice".into(), &mut bad, &mut why);
+                        bad_now.insert(a);
+                    }
+                }
+                if let Some(cs) = ix.calls_of.get(&x) {
+                    for &k in cs {
+                        if calls_seen.insert(k) {
+                            calls.push(k);
+                        }
+                        if let Some(rs) = ix.call_refs.get(&k) {
+                            for &(h, i) in rs {
+                                if dof.get(&h) == Some(&f) {
+                                    continue;
+                                }
+                                consider(h, i, false, &mut bad, &mut why, &mut bad_now, &mut cons);
                             }
                         }
                     }
                 }
             }
-        }
-        // Every node and call the entries mention.
-        for &(h, i) in &cons {
-            other(h, &mut bad, &mut refused);
-            let (ns, ks) = cons_fields(&m.nodes[h as usize].cons[i as usize]);
-            for y in ns {
-                other(y, &mut bad, &mut refused);
+            for &(h, i) in &cons {
+                let (_, ks) = cons_fields(&m.nodes[h as usize].cons[i as usize]);
+                for k in ks {
+                    if calls_seen.insert(k) {
+                        calls.push(k);
+                    }
+                }
             }
-            for k in ks {
-                run_calls.insert(k);
-                if calls_seen.insert(k) {
-                    calls.push(k);
+            // A call only a nested closure's rule runs is that closure's.
+            calls.retain(|k| run_calls.contains(k) || !inner_calls.contains(k));
+            for &k in &calls {
+                for y in call_nodes(&m.calls[k as usize]) {
+                    if let Role::Other(a) = role(lex, &dof, &oset, f, y) {
+                        note("touches another summarized slice".into(), &mut bad, &mut why);
+                        bad_now.insert(a);
+                    }
+                }
+                if !run_calls.contains(&k) {
+                    note(format!("call {k} run by no rule"), &mut bad, &mut why);
+                }
+            }
+            if bad {
+                bad_now.insert(f);
+            }
+            entries.insert(f, Entries { cons, calls });
+        }
+        let before = refused.len();
+        for f in bad_now {
+            if slices.contains_key(&f) {
+                refused.insert(f);
+            }
+        }
+        if refused.len() == before {
+            return Plan { slices, dof, outer, refused, why, entries };
+        }
+    }
+}
+
+fn build_summaries(m: &mut Model) {
+    let ix = build_index(m);
+    let lex = Lex::new(m);
+    let cand: Vec<bool> =
+        m.funcs.iter().map(|fi| !fi.no_summary && fi.rest.is_none() && !fi.has_arguments).collect();
+    // Closure values: the generation node holding a closure's token in its
+    // parent's body.
+    let mut cvs: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
+    for n in 0..m.nodes.len() {
+        let o = m.node_fn[n];
+        if o == NO_FN || m.nodes[n].pts.is_empty() {
+            continue;
+        }
+        for t in m.nodes[n].pts.to_sorted() {
+            if let TokKind::Func(g, _) = m.toks[t as usize] {
+                if lex.parent[g as usize] == o {
+                    cvs.entry(g).or_default().push(n as NodeId);
                 }
             }
         }
-        for &k in &calls {
-            for y in call_nodes(&m.calls[k as usize]) {
-                other(y, &mut bad, &mut refused);
-            }
-            if !run_calls.contains(&k) {
-                bad = true;
-                why.entry(f).or_insert_with(|| format!("call {k} run by no rule"));
-            }
-        }
-        if bad {
-            why.entry(f).or_insert_with(|| "touches another summarized slice".into());
-            refused.insert(f);
-        }
-        entries.insert(f, Entries { cons, calls });
     }
+    let births = literal_births(m, &cand);
+    // Capture chains: the capturing function up to (not including) the
+    // node's owner. A node whose chain leaves the owner's nesting, or runs
+    // through a function that cannot be summarized, stays shared.
+    let mut capv: Vec<(NodeId, FnIdx)> = m.captures.iter().copied().collect();
+    capv.sort_unstable();
+    let mut caps: Vec<(NodeId, Vec<FnIdx>)> = Vec::new();
+    let mut pinned: FxHashSet<NodeId> = FxHashSet::default();
+    for (x, h) in capv {
+        let o = m.node_fn[x as usize];
+        if o == NO_FN {
+            continue;
+        }
+        let mut chain = Vec::new();
+        let mut p = h;
+        let mut nested = true;
+        while p != o {
+            if p == NO_FN {
+                nested = false;
+                break;
+            }
+            chain.push(p);
+            p = lex.parent[p as usize];
+        }
+        if !nested || chain.iter().any(|&p| !cand[p as usize]) {
+            pinned.insert(x);
+        }
+        caps.push((x, chain));
+    }
+    // A captured node whose chain holds a refused function stays shared
+    // too (that function's rules run in the shared body): re-plan.
+    let mut rounds = 0;
+    let pl = loop {
+        rounds += 1;
+        let pl = plan(m, &ix, &lex, &cand, &cvs, &caps, &births, &pinned);
+        let mut add = Vec::new();
+        for (x, chain) in &caps {
+            if pinned.contains(x) || !pl.dof.contains_key(x) {
+                continue;
+            }
+            let h = chain.first().copied();
+            let broken = chain.iter().any(|&p| {
+                pl.refused.contains(&p) || (Some(p) != h && !pl.slices.contains_key(&p))
+            });
+            if broken {
+                add.push(*x);
+            }
+        }
+        if add.is_empty() {
+            break pl;
+        }
+        pinned.extend(add);
+    };
+    let Plan { slices, dof, outer, refused, why, entries } = pl;
+    let mut fs: Vec<FnIdx> = slices.keys().copied().collect();
+    fs.sort_unstable();
     // 3. Summaries.
     let mut nsum = 0usize;
     let mut size = 0usize;
+    let mut nouter = 0usize;
+    let mut nclos = 0usize;
+    let mut obs_toks: Vec<(Tok, Vec<NodeId>)> = Vec::new();
     for &f in &fs {
         if refused.contains(&f) {
             continue;
         }
         let d = &slices[&f];
+        let of = &outer[&f];
+        let oset: FxHashSet<NodeId> = of.iter().copied().collect();
         let e = &entries[&f];
         let mut slot: FxHashMap<NodeId, u32> = FxHashMap::default();
-        for (i, &x) in d.iter().enumerate() {
+        for (i, &x) in d.iter().chain(of.iter()).enumerate() {
             slot.insert(x, i as u32);
         }
         let enc = |x: NodeId| match slot.get(&x) {
@@ -1022,7 +1519,12 @@ fn build_summaries(m: &mut Model) {
             None => x,
         };
         let mut callix: FxHashMap<CallId, u32> = FxHashMap::default();
-        let mut s = Summary { nslots: d.len() as u32, orig: d.clone(), ..Default::default() };
+        let mut s = Summary {
+            nslots: (d.len() + of.len()) as u32,
+            orig: d.iter().chain(of.iter()).copied().collect(),
+            outer: (d.len() as u32..(d.len() + of.len()) as u32).collect(),
+            ..Default::default()
+        };
         for (i, &k) in e.calls.iter().enumerate() {
             callix.insert(k, i as u32);
             s.calls.push((k, map_call(&m.calls[k as usize], enc)));
@@ -1031,18 +1533,75 @@ fn build_summaries(m: &mut Model) {
             Some(&i) => CALL | i,
             None => k,
         };
+        // Closures born in this body with outer terms, and its literals:
+        // per instance. Their generation tokens stay on the observation
+        // nodes (seeds never copy them: they reached slots by
+        // generation's online copies).
+        let mut strip: FxHashSet<Tok> = FxHashSet::default();
+        // The template token's own nodes: observation, never an instance's.
+        let mut lit_own: FxHashSet<NodeId> = FxHashSet::default();
+        let dset: FxHashSet<NodeId> = d.iter().copied().collect();
+        for b in births.get(&f).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if !b.holders.iter().all(|x| dset.contains(x)) {
+                continue;
+            }
+            strip.insert(b.tok);
+            lit_own.extend(b.own.iter().copied());
+            obs_toks.push((b.tok, b.own.clone()));
+            let roots: Vec<NodeId> = b
+                .holders
+                .iter()
+                .copied()
+                .filter(|&h| !ix.preds.get(&h).is_some_and(|ps| ps.iter().any(|p| b.holders.contains(p))))
+                .collect();
+            for &h in &roots {
+                s.births.push((slot[&h], b.tm));
+            }
+            for (k, _, ws, prim) in &b.fields {
+                let mut srcs: Vec<NodeId> = ws.iter().map(|&w| enc(w)).collect();
+                if *prim != 0 {
+                    let sl = s.nslots;
+                    s.nslots += 1;
+                    s.orig.push(NO_NODE);
+                    s.seeds.push((sl, Vec::new(), *prim));
+                    srcs.push(SLOT | sl);
+                }
+                for &h in &roots {
+                    for &src in &srcs {
+                        s.cons.push((enc(h), Cons::BirthField { key: *k, src }));
+                    }
+                }
+            }
+        }
+        for &g in &lex.children[f as usize] {
+            let Some(og) = outer.get(&g) else { continue };
+            if og.is_empty() || refused.contains(&g) || !slices.contains_key(&g) {
+                continue;
+            }
+            for &cv in cvs.get(&g).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if let Some(&sl) = slot.get(&cv) {
+                    s.closures.push((sl, g, og.iter().map(|&x| enc(x)).collect()));
+                    strip.insert(m.funcs[g as usize].token);
+                }
+            }
+        }
         for &x in d {
             let node = &m.nodes[x as usize];
-            if !node.pts.is_empty() || node.prim != 0 {
-                s.seeds.push((slot[&x], node.pts.to_sorted(), node.prim));
+            let toks: Vec<Tok> = node.pts.to_sorted().into_iter().filter(|t| !strip.contains(t)).collect();
+            if !toks.is_empty() || node.prim != 0 {
+                s.seeds.push((slot[&x], toks, node.prim));
             }
             for &y in node.succ.iter() {
-                s.edges.push((enc(x), enc(y)));
+                if !lit_own.contains(&y) && role(&lex, &dof, &oset, f, y) != Role::Inner {
+                    s.edges.push((enc(x), enc(y)));
+                }
             }
             if let Some(ps) = ix.preds.get(&x) {
-                for &p in ps {
-                    if !slot.contains_key(&p) {
-                        s.edges.push((p, enc(x)));
+                for &p in ps.iter().filter(|p| !lit_own.contains(p)) {
+                    match role(&lex, &dof, &oset, f, p) {
+                        Role::Own | Role::Inner | Role::Other(_) => {}
+                        Role::Outer => s.edges.push((enc(p), enc(x))),
+                        Role::Abs => s.edges.push((p, enc(x))),
                     }
                 }
             }
@@ -1060,9 +1619,14 @@ fn build_summaries(m: &mut Model) {
         compress(&mut s);
         size += s.edges.len() + s.cons.len() + s.calls.len() + s.seeds.len();
         nsum += 1;
+        nouter += s.outer.len();
+        nclos += s.closures.len();
         for &k in &e.calls {
             m.sum.templates.insert(k);
             m.sum.owner.insert(k, f);
+        }
+        if !of.is_empty() {
+            m.sum.outer_of.insert(f, of.clone());
         }
         m.sum.of.insert(f, Rc::new(s));
     }
@@ -1082,7 +1646,15 @@ fn build_summaries(m: &mut Model) {
         .values()
         .map(|s| s.edges.len() + s.cons.len() + s.calls.len() + s.seeds.len())
         .sum();
-    // 4. Observation layer: the slice nodes of summarized functions.
+    // 4. Observation layer: the slice nodes of summarized functions, and the
+    //    nodes of literal template tokens born per instance.
+    let nlit = obs_toks.len();
+    for (t, own) in obs_toks {
+        m.obs_toks.insert(t);
+        for n in own {
+            m.nodes[n as usize].obs = true;
+        }
+    }
     for &f in &fs {
         if refused.contains(&f) {
             continue;
@@ -1119,11 +1691,16 @@ fn build_summaries(m: &mut Model) {
         }
     }
     m.sum.stats = format!(
-        "summaries {} of {} candidates ({} refused), size {}, composed {} calls over {} SCCs, size {}",
+        "summaries {} of {} candidates ({} refused), size {}, outer terms {}, closure values {}, literal births {}, shared captures {}, plans {}, composed {} calls over {} SCCs, size {}",
         nsum,
         fs.len(),
         refused.len(),
         size,
+        nouter,
+        nclos,
+        nlit,
+        pinned.len(),
+        rounds,
         ncomposed,
         nsccs,
         size_after
@@ -1144,7 +1721,9 @@ fn static_callees(m: &Model, s: &Summary) -> Vec<(usize, Vec<FnIdx>)> {
             .to_sorted()
             .into_iter()
             .filter_map(|t| match m.toks[t as usize] {
-                TokKind::Func(g) if m.sum.of.contains_key(&g) => Some(g),
+                // A closure with outer terms is bound per context, never
+                // expanded into a caller.
+                TokKind::Func(g, _) if m.sum.of.get(&g).is_some_and(|s| s.outer.is_empty()) => Some(g),
                 _ => None,
             })
             .collect();
@@ -1286,6 +1865,12 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
     for (t, cs) in &g.calls {
         s.calls.push((*t, map_call(cs, tr)));
     }
+    for (c, h, terms) in &g.closures {
+        s.closures.push((off + c, *h, terms.iter().map(|&x| tr(x)).collect()));
+    }
+    for &(b, tm) in &g.births {
+        s.births.push((off + b, tm));
+    }
     let call = s.calls[ci].1.clone();
     let fresh = |s: &mut Summary| {
         let i = s.nslots;
@@ -1364,6 +1949,22 @@ pub fn compress(s: &mut Summary) {
     for &p in s.params.iter().chain([&s.ret, &s.this]) {
         if let Some(i) = sl(p) {
             pinned[i] = true;
+        }
+    }
+    // Outer slots are the context's nodes; closure values and their terms
+    // are read when an instance is filled.
+    for &o in &s.outer {
+        pinned[o as usize] = true;
+    }
+    for &(b, _) in &s.births {
+        pinned[b as usize] = true;
+    }
+    for (c, _, terms) in &s.closures {
+        pinned[*c as usize] = true;
+        for &x in terms {
+            if let Some(i) = sl(x) {
+                pinned[i] = true;
+            }
         }
     }
     let mut seeded = vec![false; n];
@@ -1519,6 +2120,16 @@ pub fn compress(s: &mut Summary) {
     s.params = s.params.iter().map(|&p| rn(p)).collect();
     s.ret = rn(s.ret);
     s.this = rn(s.this);
+    s.outer = s.outer.iter().map(|&o| map[o as usize]).collect();
+    for (b, _) in s.births.iter_mut() {
+        *b = map[*b as usize];
+    }
+    for (c, _, terms) in s.closures.iter_mut() {
+        *c = map[*c as usize];
+        for x in terms.iter_mut() {
+            *x = rn(*x);
+        }
+    }
     s.nslots = orig.len() as u32;
     s.orig = orig;
 }

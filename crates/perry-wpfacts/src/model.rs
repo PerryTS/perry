@@ -97,8 +97,11 @@ pub enum TokKind {
     /// else the `new` call that made it (one token per birth site; a call
     /// an instance made is that instance's own call).
     Obj(TmplId, CallId),
-    /// A function value (closure, function declaration, method body).
-    Func(FnIdx),
+    /// A function value (closure, function declaration, method body), with
+    /// its closure context: `NO_CTX`, or the context a closure created
+    /// inside a summary instance carries (`Model::clo_ctx`: the instance's
+    /// nodes for the closure's outer terms).
+    Func(FnIdx, CallId),
     /// `f.bind(t, ...)` result: index into `Model::bound`.
     Bound(u32),
     /// The class constructor value of a class template.
@@ -208,6 +211,9 @@ pub struct FuncInfo {
     /// Something outside the call protocol writes the parameters (an object
     /// literal IIFE, a computed accessor): never summarized.
     pub no_summary: bool,
+    /// The function whose body creates this closure (`NO_FN` for
+    /// declarations, methods and builtins).
+    pub parent: FnIdx,
 }
 
 #[derive(Clone, Debug)]
@@ -363,6 +369,10 @@ pub enum Cons {
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
     ThisFrom { recv: NodeId },
+    /// A literal's own content: every token here gets `src` in field `key`
+    /// (no store: a birth, as generation's direct field edges are). A
+    /// summary's form of a literal born in its body.
+    BirthField { key: Key, src: NodeId },
     /// The node holds getter/setter functions installed on the objects of
     /// `holder` under `key`.
     Accessor {
@@ -371,7 +381,8 @@ pub enum Cons {
         setter: bool,
     },
     /// Internal: install accessor `f` on every token of the node.
-    AccessorInstall { key: Atom, f: FnIdx, setter: bool },
+    /// `f`: the accessor's function token (its closure context included).
+    AccessorInstall { key: Atom, f: Tok, setter: bool },
     /// The node holds objects whose prototype set includes `src`'s values.
     ProtoFrom { src: NodeId },
     /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`).
@@ -456,6 +467,7 @@ impl Cons {
             Cons::SuperCtor { .. } => "superctor",
             Cons::SuperCtorParent { .. } => "superctorparent",
             Cons::ThisFrom { .. } => "thisfrom",
+            Cons::BirthField { .. } => "birthfield",
             Cons::Accessor { .. } => "accessor",
             Cons::AccessorInstall { .. } => "accinstall",
             Cons::ProtoFrom { .. } => "protofrom",
@@ -549,7 +561,7 @@ pub struct Model {
     pub proto_node: FxHashMap<Tok, NodeId>,
     pub field_keys: FxHashMap<Tok, Vec<Atom>>,
     /// accessors[(proto-or-object tok, key)] = (getter fns, setter fns)
-    pub accessors: FxHashMap<(Tok, Atom), (Vec<FnIdx>, Vec<FnIdx>)>,
+    pub accessors: FxHashMap<(Tok, Atom), (Vec<Tok>, Vec<Tok>)>,
     pub accessor_keys: FxHashMap<Tok, Vec<Atom>>,
     pub writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
@@ -624,6 +636,12 @@ pub struct Model {
     pub rel_phase: u8,
     pub stats_cons: u64,
     pub site_tmpls: FxHashMap<(CallId, &'static str), Tok>,
+    /// Generation-time birth templates (literals, arrays, builtin objects)
+    /// -> the function whose body makes them.
+    pub tmpl_fn: FxHashMap<TmplId, FnIdx>,
+    /// Template tokens of literals a summary births per instance: they live
+    /// on observation nodes only, so their own nodes observe too.
+    pub obs_toks: crate::pts::FxHashSet<Tok>,
     /// Typed-array owner templates born by `TypedArrayNew` with a known
     /// element kind (`perry_hir::TYPED_ARRAY_KIND_*`).
     pub ta_elem: FxHashMap<TmplId, u8>,
@@ -721,9 +739,9 @@ pub struct Model {
     /// Owner of each node: the function whose body made it (`Gen::tmp`,
     /// `Gen::tok_node`, `Gen::local`), `NO_FN` for every other node.
     pub node_fn: Vec<FnIdx>,
-    /// A local touched by a function other than its owner (a closure
-    /// capture): shared by every activation, never a summary term.
-    pub node_captured: crate::pts::FxHashSet<NodeId>,
+    /// (node, function): a function references a node another function
+    /// owns (a local, a parameter, or the enclosing `this` of an arrow).
+    pub captures: crate::pts::FxHashSet<(NodeId, FnIdx)>,
     pub sum: crate::summary::SumState,
 }
 
@@ -906,11 +924,19 @@ impl Model {
         }
     }
 
+    /// The function of a function token (`NO_FN` for any other token).
+    pub fn tok_fn(&self, t: Tok) -> FnIdx {
+        match self.toks[t as usize] {
+            TokKind::Func(f, _) => f,
+            _ => NO_FN,
+        }
+    }
+
     pub fn tok_name(&self, t: Tok) -> String {
         match &self.toks[t as usize] {
             TokKind::Top => "TOP".into(),
             TokKind::Obj(tm, _) => format!("obj:{}", self.tmpls[*tm as usize].display),
-            TokKind::Func(f) => format!("fn:{}", self.funcs[*f as usize].name),
+            TokKind::Func(f, _) => format!("fn:{}", self.funcs[*f as usize].name),
             TokKind::Bound(b) => format!("bound:{b}"),
             TokKind::ClassObj(tm) => format!("class:{}", self.tmpls[*tm as usize].display),
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
@@ -967,7 +993,8 @@ impl Model {
                 TokKind::Top => "top -".to_string(),
                 TokKind::Obj(t, NO_CTX) => format!("obj {t}"),
                 TokKind::Obj(t, c) => format!("obj {t}@{c}"),
-                TokKind::Func(f) => format!("func {f}"),
+                TokKind::Func(f, NO_CTX) => format!("func {f}"),
+                TokKind::Func(f, c) => format!("func {f}@{c}"),
                 TokKind::Bound(b) => format!("bound {b}"),
                 TokKind::ClassObj(t) => format!("classobj {t}"),
                 TokKind::Proto(t) => format!("proto {t}"),
@@ -1079,11 +1106,11 @@ impl Model {
         }
         let mut v: Vec<String> = Vec::new();
         for ((h, k), (g, s)) in &self.accessors {
-            for f in g {
-                v.push(format!("G accseed {h} {k} {f} 0"));
+            for &t in g {
+                v.push(format!("G accseed {h} {k} {} 0", self.tok_fn(t)));
             }
-            for f in s {
-                v.push(format!("G accseed {h} {k} {f} 1"));
+            for &t in s {
+                v.push(format!("G accseed {h} {k} {} 1", self.tok_fn(t)));
             }
         }
         v.sort();

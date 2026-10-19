@@ -4,6 +4,7 @@ mod native_proto;
 mod summary;
 mod closed_world;
 mod birth_site;
+mod captured;
 mod super_heritage;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
