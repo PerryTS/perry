@@ -58,6 +58,7 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
+        note_native_write(m, TOP, None, why);
     }
 }
 
@@ -392,6 +393,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ModNs(_) | TokKind::ObjectProto | TokKind::Proto(_) => {
             m.add_prim(dst, prim::UNDEF)
         }
+        // A key the native prototype does not define: the chain goes on.
+        TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
         TokKind::NativeProto(_) | TokKind::BuiltinFn | TokKind::Bound(_) => {
             let bf = m.tok(TokKind::BuiltinFn);
             m.add_tok(dst, bf);
@@ -526,7 +529,7 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
             }
             _ => {}
         },
-        TokKind::NativeProto(name_of) => native_method(m, &name_of, origin, &name, call),
+        TokKind::NativeProto(name_of) => native_method(m, p, &name_of, origin, &name, call),
         _ => {}
     }
 }
@@ -1623,7 +1626,141 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
     }
 }
 
-fn native_method(m: &mut Model, native: &str, origin: Tok, name: &str, call: CallId) {
+/// The own keys of a summarized native parent's prototypes below
+/// `Object.prototype` (node's `Reflect.ownKeys`; the runtime builds the same
+/// sealed static layouts, e.g. `EVENT_EMITTER_PROTOTYPE`). The model's chain
+/// goes from the native prototype straight to `Object.prototype`, so an
+/// `Error` subclass's list holds `Error.prototype`'s keys too.
+pub fn native_proto_keys(name: &str) -> &'static [&'static str] {
+    match name {
+        "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" => {
+            &["constructor", "name", "message", "toString"]
+        }
+        "EventEmitter" => &[
+            "constructor",
+            "_events",
+            "_eventsCount",
+            "_maxListeners",
+            "setMaxListeners",
+            "getMaxListeners",
+            "emit",
+            "addListener",
+            "on",
+            "prependListener",
+            "once",
+            "prependOnceListener",
+            "removeListener",
+            "off",
+            "removeAllListeners",
+            "listeners",
+            "rawListeners",
+            "listenerCount",
+            "eventNames",
+        ],
+        _ => &[],
+    }
+}
+
+/// May native prototype `np`'s key `a` be written ([`Model::native_writes`])?
+pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let hit = |t: Tok| {
+        m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, Some(a)))
+    };
+    let global = matches!(&m.toks[np as usize], TokKind::NativeProto(n) if ns_by_name(n).is_some());
+    hit(TOP)
+        || hit(np)
+        || (global
+            && m.tok_index
+                .get(&TokKind::ObjectProto)
+                .is_some_and(|&op| hit(op)))
+}
+
+/// Does a lookup of `key` pass native prototype `np` (a key it does not
+/// define, no write may have added it)? Then it is recorded, to run as an
+/// opaque member if the key turns out written.
+fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -> bool {
+    let Key::Named(a) = key else {
+        return false;
+    };
+    let TokKind::NativeProto(native) = &m.toks[np as usize] else {
+        return false;
+    };
+    let name = m.atoms[a as usize].as_str();
+    if !native_parent_summarized(native)
+        || name.starts_with(WK_PREFIX)
+        || name == crate::STAR_KEY
+        || native_proto_keys(native).contains(&name)
+        || native_written(m, np, a)
+    {
+        return false;
+    }
+    m.native_missing.push((np, a, miss));
+    true
+}
+
+/// A write that may reach a native prototype: `t` is ⊤, `ObjectProto` or the
+/// prototype itself; `key` `None` (or computed): every key. Lookups that
+/// passed it under a now-written key run as opaque members.
+pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
+    if t != TOP
+        && !matches!(
+            m.toks[t as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(_)
+        )
+    {
+        return;
+    }
+    let star = m.atom(crate::STAR_KEY);
+    let k = match key {
+        Some(Key::Named(a)) if a != star => Some(a),
+        _ => None,
+    };
+    if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
+        return;
+    }
+    let on = if t == TOP {
+        "⊤".to_string()
+    } else {
+        m.tok_name(t)
+    };
+    let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
+    m.native_writes.insert((t, k), r);
+    if m.native_missing.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut m.native_missing);
+    let mut keep = Vec::with_capacity(pending.len());
+    m.with_b(|m| {
+        for (np, a, miss) in pending {
+            if !native_written(m, np, a) {
+                keep.push((np, a, miss));
+                continue;
+            }
+            match miss {
+                NativeMiss::Load(dst) => {
+                    let bf = m.tok(TokKind::BuiltinFn);
+                    m.add_tok(dst, bf);
+                    m.add_prim(dst, prim::ALL);
+                }
+                NativeMiss::Call(origin, call) => {
+                    let native = m.tok_name(np);
+                    let name = m.atoms[a as usize].clone();
+                    let prev = m.cur_this.replace(origin);
+                    unknown_method(m, call, &format!("argument of native {native}.{name}"));
+                    m.cur_this = prev;
+                }
+            }
+        }
+    });
+    keep.append(&mut m.native_missing);
+    m.native_missing = keep;
+}
+
+fn native_method(m: &mut Model, np: Tok, native: &str, origin: Tok, name: &str, call: CallId) {
+    let a = m.atom(name);
+    if native_skips(m, np, Key::Named(a), NativeMiss::Call(origin, call)) {
+        return;
+    }
     let c = m.calls[call as usize].clone();
     match (native, name) {
         (

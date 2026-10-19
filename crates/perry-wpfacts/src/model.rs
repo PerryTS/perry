@@ -221,6 +221,15 @@ pub enum Key {
     Any,
 }
 
+/// A lookup that passed a native prototype not defining its key.
+#[derive(Clone, Copy, Debug)]
+pub enum NativeMiss {
+    /// A value read into this node.
+    Load(NodeId),
+    /// A method call with this receiver.
+    Call(Tok, CallId),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
     Load(NodeId),
@@ -622,6 +631,18 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
+    /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
+    /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),
+    /// so a lookup of a key one does not define continues up the chain
+    /// instead of running an opaque member. Why one may be written anyway,
+    /// per (target, key): the target is the prototype's own token,
+    /// `ObjectProto` (a global native's prototype collapses into it) or ⊤ (a
+    /// native module's values, interpreted code); key `None`: every key.
+    pub native_writes: FxHashMap<(Tok, Option<Atom>), u32>,
+    /// Lookups of a key their native prototype does not define: they run
+    /// today's opaque member once that key may be written there.
+    pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
     /// Source constructor of a type-specialized instance layout (compiler data).
