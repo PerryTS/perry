@@ -189,6 +189,21 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();
+    if cfg.profile || cfg.explain {
+        let mut kinds = [0usize; 5];
+        for &(k, _, _) in g.m.sum.inst_key.keys() {
+            kinds[k as usize] += 1;
+        }
+        eprintln!(
+            "perry: wpfacts instances {} (call {} template {} entry {} group {}), calls {}",
+            g.m.sum.insts.len(),
+            kinds[0],
+            kinds[1],
+            kinds[2],
+            kinds[3] + kinds[4],
+            g.m.calls.len()
+        );
+    }
     if cfg.profile {
         let mut v: Vec<_> = g.m.label_work.iter().map(|(k, v)| (*k, *v)).collect();
         v.sort_by(|a, b| (b.1 .0 + b.1 .1).cmp(&(a.1 .0 + a.1 .1)));

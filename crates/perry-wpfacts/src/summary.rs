@@ -19,7 +19,6 @@ use std::rc::Rc;
 pub const SLOT: u32 = 1 << 31;
 /// A call template reference inside a summary's constraints.
 pub const CALL: u32 = 1 << 31;
-pub const NO_INST: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Deferred {
@@ -49,7 +48,6 @@ pub struct Summary {
 #[derive(Clone, Debug)]
 pub struct Inst {
     pub f: FnIdx,
-    pub parent: u32,
     pub params: Vec<NodeId>,
     pub ret: NodeId,
 }
@@ -61,17 +59,23 @@ pub struct SumState {
     pub deferred: Vec<Deferred>,
     pub of: FxHashMap<FnIdx, Rc<Summary>>,
     pub insts: Vec<Inst>,
-    /// (kind, call/site/node, function) -> instance. Kinds: 0 call, 1 site
-    /// (recursion through an instance), 2 unknown-code entry, 3 setter
-    /// group, 4 getter group.
+    /// (kind, call/template/node, function) -> instance. Kinds: 0 a call
+    /// of the program or into a leaf summary, 1 a call an instance made into
+    /// a summary that makes calls (shared by every instance of its template:
+    /// finite, and recursion through instances terminates),
+    /// 2 unknown-code entry, 3 setter group, 4 getter group.
     pub inst_key: FxHashMap<(u8, u32, FnIdx), u32>,
     /// Calls an instance made (renamed templates, and calls solving them
-    /// created): the instance.
-    pub call_ctx: FxHashMap<CallId, u32>,
+    /// created): their template call.
+    pub call_ctx: FxHashMap<CallId, CallId>,
     pub call_inst: FxHashMap<(CallId, FnIdx), u32>,
     /// Calls that belong to a summary: the shared body never runs them.
     pub templates: FxHashSet<CallId>,
     pub stats: String,
+    /// Instances whose interface exists but whose entries are not applied
+    /// yet: filled from the solver's top level (`fill_instances`), never
+    /// nested inside the rule application that asked for them.
+    pub pending: Vec<(u32, Vec<NodeId>)>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -271,18 +275,8 @@ impl Model {
         self.sum.of.contains_key(&f)
     }
 
-    fn ancestry_has(&self, mut i: u32, f: FnIdx) -> bool {
-        while i != NO_INST {
-            if self.sum.insts[i as usize].f == f {
-                return true;
-            }
-            i = self.sum.insts[i as usize].parent;
-        }
-        false
-    }
-
     /// The instance for key, made on first use.
-    fn instance(&mut self, key: (u8, u32, FnIdx), parent: u32) -> u32 {
+    fn instance(&mut self, key: (u8, u32, FnIdx)) -> u32 {
         if let Some(&i) = self.sum.inst_key.get(&key) {
             return i;
         }
@@ -298,16 +292,35 @@ impl Model {
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         self.sum.insts.push(Inst {
             f,
-            parent,
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
         });
         self.sum.inst_key.insert(key, inst);
+        self.sum.pending.push((inst, base));
+        inst
+    }
+
+    /// Apply the entries of every pending instance (a worklist: instances
+    /// these entries ask for are queued behind, never built recursively).
+    pub(crate) fn fill_instances(&mut self) {
+        let mut i = 0;
+        while i < self.sum.pending.len() {
+            let (inst, base) = std::mem::take(&mut self.sum.pending[i]);
+            i += 1;
+            self.fill_instance(inst, &base);
+        }
+        self.sum.pending.clear();
+    }
+
+    fn fill_instance(&mut self, inst: u32, base: &[NodeId]) {
+        let f = self.sum.insts[inst as usize].f;
+        let s = self.sum.of[&f].clone();
+        let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         let mut kmap = Vec::with_capacity(s.calls.len());
         for (t, cs) in &s.calls {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
-            self.sum.call_ctx.insert(id, inst);
+            self.sum.call_ctx.insert(id, *t);
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
             }
@@ -331,17 +344,19 @@ impl Model {
             let c2 = map_cons(c, tr, |k| if k != NO_NODE && k & CALL != 0 { kmap[(k & !CALL) as usize] } else { k });
             self.cons(tr(*h), c2);
         }
-        inst
     }
 
     /// Arguments and result of `call` into summarized `f`: its instance.
     pub(crate) fn bind_summarized(&mut self, call: CallId, f: FnIdx) {
-        let (key, parent) = match self.sum.call_ctx.get(&call).copied() {
-            Some(cx) if self.ancestry_has(cx, f) => ((1, self.calls[call as usize].site, f), NO_INST),
-            Some(cx) => ((0, call, f), cx),
-            None => ((0, call, f), NO_INST),
+        // A call of the program, or of a leaf summary (it makes no calls,
+        // so its instances never cascade): its own instance. A call an
+        // instance made into a summary that makes calls: one instance per
+        // template call.
+        let key = match self.sum.call_ctx.get(&call).copied() {
+            Some(t) if !self.sum.of[&f].calls.is_empty() => (1, t, f),
+            _ => (0, call, f),
         };
-        let inst = self.instance(key, parent);
+        let inst = self.instance(key);
         self.sum.call_inst.insert((call, f), inst);
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
@@ -394,7 +409,7 @@ impl Model {
 
     /// Unknown code calls summarized `f`: unknown arguments, the result escapes.
     pub(crate) fn escape_summarized(&mut self, f: FnIdx, reason: u32) {
-        let inst = self.instance((2, 0, f), NO_INST);
+        let inst = self.instance((2, 0, f));
         let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
@@ -416,7 +431,7 @@ impl Model {
     /// into the first parameter, or the getter result into the group's.
     pub(crate) fn group_summarized(&mut self, f: FnIdx, sp: NodeId, ar: NodeId, setter: bool) {
         if setter {
-            let inst = self.instance((3, sp, f), NO_INST);
+            let inst = self.instance((3, sp, f));
             if let Some(&p0) = self.funcs[f as usize].params.first() {
                 let t = self.sum.insts[inst as usize].params[0];
                 if t != NO_NODE {
@@ -427,7 +442,7 @@ impl Model {
                 }
             }
         } else {
-            let inst = self.instance((4, ar, f), NO_INST);
+            let inst = self.instance((4, ar, f));
             let r = self.sum.insts[inst as usize].ret;
             if r != NO_NODE {
                 self.edge(r, ar);
@@ -451,6 +466,7 @@ impl Model {
                 Deferred::RetObjects(call, f, dst) => self.ctor_ret_objects(call, f, dst),
             }
         }
+        self.fill_instances();
         self.sum.stats = format!(
             "{} replayed {} in {:.1} ms",
             self.sum.stats,

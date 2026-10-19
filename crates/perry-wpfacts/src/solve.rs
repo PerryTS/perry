@@ -312,9 +312,13 @@ impl Model {
     pub fn solve(&mut self) {
         self.rel_phase = b'S';
         loop {
+            self.fill_instances();
             self.drain_widened();
             let Some(n) = self.wl.pop_front() else {
-                break;
+                if self.sum.pending.is_empty() {
+                    break;
+                }
+                continue;
             };
             self.pops += 1;
             if self.aborted {

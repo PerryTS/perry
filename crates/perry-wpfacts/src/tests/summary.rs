@@ -22,6 +22,14 @@ fn exact(pf: &ProgramFacts, key: &str, n: usize) {
     }
 }
 
+/// Every read of `key` sees `class` among its receivers (or ⊤).
+fn sees(pf: &ProgramFacts, key: &str, class: &str) {
+    for s in sites(pf, key) {
+        let hit = s.receivers.iter().any(|r| r.ends_with(&format!(":{class}")));
+        assert!(s.top || hit, "{key}: {:?} lacks {class}\n{}", s.receivers, pf.dump_text());
+    }
+}
+
 #[test]
 fn identity_callers_keep_their_own_class() {
     let pf = facts(&format!(
@@ -87,8 +95,25 @@ fn callback_result_per_call() {
         const a = apply(id, new A()); const b = apply(id, new B());
         console.log(a.x, b.y);"
     ));
+    // `id` is a leaf summary: each call `apply`'s instances make gets its own.
     exact(&pf, "x", 1);
     exact(&pf, "y", 1);
+}
+
+/// A callee that itself calls: the calls instances make share one instance
+/// per template call (sound, merged).
+#[test]
+fn nested_non_leaf_callee_stays_sound() {
+    let pf = facts(&format!(
+        "{CLASSES}
+        function id(o: any) {{ return o; }}
+        function wrap(o: any) {{ return id(o); }}
+        function apply(cb: any, v: any) {{ return cb(v); }}
+        const a = apply(wrap, new A()); const b = apply(wrap, new B());
+        console.log(a.x, b.y);"
+    ));
+    sees(&pf, "x", "A");
+    sees(&pf, "y", "B");
 }
 
 #[test]
