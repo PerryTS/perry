@@ -118,7 +118,6 @@ pub(crate) fn call_live(ctx: &mut FnCtx<'_>, class: &Class, args: &[Expr]) -> Re
             &[(I32, &lexical_id.to_string())],
         );
         let parent = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &parent, true);
-        crate::lower_call::defer_dynamic_derived_fields(ctx, class);
         // Preparation can collect: only now reread and pack rooted arguments.
         let values = ids
             .into_iter()

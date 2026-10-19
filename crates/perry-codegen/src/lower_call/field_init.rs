@@ -33,55 +33,6 @@ fn private_element_class_id(ctx: &FnCtx<'_>, class_name: &str) -> u32 {
     ctx.class_ids.get(declaring_name).copied().unwrap_or(0)
 }
 
-/// A runtime parent can create arbitrary properties before derived fields run.
-/// Retire the allocator's public-field placeholders before entering that parent,
-/// so DefineField later creates them in source order. Deletion revokes the old
-/// shape; subsequent stores use their existing guarded/by-name fallback. Keep
-/// capture/private slots intact: parent methods rely on their inherited layout.
-pub(crate) fn defer_dynamic_derived_fields(ctx: &mut FnCtx, class: &perry_hir::Class) {
-    if (class.extends_expr.is_none() && !crate::expr::super_constructor::requires_live(ctx, class))
-        || !ctx.scalar_ctor_target.is_empty()
-    {
-        return;
-    }
-    let Some(this_slot) = ctx.this_stack.last().cloned() else {
-        return;
-    };
-    // A later super() must not delete the already initialized receiver's fields.
-    let after = ctx.super_called_stack.last().cloned().map(|slot| {
-        let initialized = ctx.block().load(I1, &slot);
-        let prepare = ctx.new_block("derived.fields.prepare");
-        let after = ctx.new_block("derived.fields.after");
-        let pl = ctx.block_label(prepare);
-        let al = ctx.block_label(after);
-        ctx.block().cond_br(&initialized, &al, &pl);
-        ctx.current_block = prepare;
-        after
-    });
-    for field in &class.fields {
-        if field.is_private || field.key_expr.is_some() || field.name.starts_with("__perry_cap_") {
-            continue;
-        }
-        let key_idx = ctx.strings.intern(&field.name);
-        let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let key = blk.load(DOUBLE, &key_global);
-        // This is compiler-owned allocation state, before the user-visible
-        // derived-this binding becomes initialized at super().
-        let this = blk.load(DOUBLE, &this_slot);
-        blk.call(
-            I32,
-            "js_object_delete_dynamic_value",
-            &[(DOUBLE, &this), (DOUBLE, &key)],
-        );
-    }
-    if let Some(after) = after {
-        let al = ctx.block_label(after);
-        ctx.block().br(&al);
-        ctx.current_block = after;
-    }
-}
-
 /// The field name a constructor-prologue statement assigns from a plain
 /// parameter, or `None` if the statement is not of that shape.
 ///

@@ -317,7 +317,6 @@ pub(crate) fn spread(
                 Ok(ctx.block().load(DOUBLE, &slot))
             },
             |ctx| {
-                crate::lower_call::defer_dynamic_derived_fields(ctx, class);
                 let cid = super::super_constructor::lexical_class_id(ctx, class);
                 let parent =
                     ctx.block()

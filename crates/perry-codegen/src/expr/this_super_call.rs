@@ -347,7 +347,6 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                         return Ok(result);
                     }
                 }
-                crate::lower_call::defer_dynamic_derived_fields(ctx, class);
                 let lexical_id = super::super_constructor::lexical_class_id(ctx, class);
                 let parent = ctx.block().call(
                     DOUBLE,
