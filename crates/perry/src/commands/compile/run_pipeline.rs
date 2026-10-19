@@ -6180,8 +6180,28 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
+    // HIR lists no import for an `export ... from` source, so the facts get
+    // the driver's resolution of each one.
+    let mut export_sources: BTreeMap<(String, String), String> = BTreeMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        for export in &hir_module.exports {
+            let source = match export {
+                perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                perry_hir::Export::Named { .. } => continue,
+            };
+            if let Some((resolved, _)) = resolve_import_with_context(source, path, &ctx) {
+                export_sources.insert(
+                    (path.display().to_string(), source.clone()),
+                    resolved.to_string_lossy().into_owned(),
+                );
+            }
+        }
+    }
     let program_facts = super::program_facts::run(
         &ctx.native_modules,
+        export_sources,
         // The dyn-eval interpreter is installed (E14 possible): the same
         // condition that selects `perry-runtime/dyn-eval` for the installer.
         perry_hir::has_deferred_dynamic_code_sites()
