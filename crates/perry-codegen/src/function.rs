@@ -1036,6 +1036,15 @@ impl LlFunction {
         )
     }
 
+    /// The linkage word a codegen-unit definition carries, empty when the
+    /// definition is promoted to plain external.
+    pub(crate) fn split_unit_linkage(linkage: &str) -> String {
+        match linkage {
+            "linkonce_odr" => "weak_odr ".to_string(),
+            _ => String::new(),
+        }
+    }
+
     fn define_header_with_size_attrs(&self, force_external: bool, size_attrs: &str) -> String {
         let param_str = self
             .params
@@ -1044,8 +1053,17 @@ impl LlFunction {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let linkage = if self.linkage.is_empty() || force_external {
+        let linkage = if self.linkage.is_empty() {
             String::new()
+        } else if force_external {
+            // Unit splitting promotes local definitions, but a shared helper
+            // (`linkonce_odr`: the birth routines, the index normalizer) is
+            // emitted by every module that uses it and must keep folding at
+            // link time. Mach-O has no ELF-style COMDAT fallback: a strong
+            // copy per module is a duplicate symbol. `weak_odr` folds and,
+            // unlike `linkonce_odr`, is not dropped from a unit that only
+            // defines it for another unit's calls.
+            Self::split_unit_linkage(&self.linkage)
         } else {
             format!("{} ", self.linkage)
         };
@@ -1644,6 +1662,18 @@ mod define_header_tests {
                  pass over IR that has no addrspace(1) roots to rewrite"
             );
         }
+    }
+
+    /// A shared helper (`linkonce_odr`) must stay foldable across modules when
+    /// its unit is split: plain external made one strong copy per module, a
+    /// duplicate-symbol link error on Mach-O.
+    #[test]
+    fn force_external_keeps_shared_helpers_foldable() {
+        let mut f = probe();
+        f.linkage = "linkonce_odr".to_string();
+        let header = f.define_header(true);
+        assert!(header.starts_with("define weak_odr "), "{header}");
+        assert_eq!(f.define_header(false).replacen("linkonce_odr ", "weak_odr ", 1), header);
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path

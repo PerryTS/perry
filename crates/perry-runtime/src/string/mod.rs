@@ -406,11 +406,11 @@ pub struct PerryStringRef {
 /// descriptor instead of a `StringHeader*`, because the latter belongs to the
 /// main thread's moving GC arena and is not valid in `perry/thread` workers.
 #[repr(C)]
-struct StaticDispatchString {
-    byte_len: u32,
-    flags: u32,
-    hash: u64,
-    bytes: *const u8,
+pub(crate) struct StaticDispatchString {
+    pub(crate) byte_len: u32,
+    pub(crate) flags: u32,
+    pub(crate) hash: u64,
+    pub(crate) bytes: *const u8,
 }
 
 pub(crate) const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;

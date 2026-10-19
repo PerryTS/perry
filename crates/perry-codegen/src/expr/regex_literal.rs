@@ -1,7 +1,7 @@
 //! A RegExp literal's evaluation: a fresh ordinary RegExp around the site's
 //! immutable matcher data (`perry-runtime/src/regex/literal.rs`).
 //!
-//! The site is a static descriptor: source/flags global addresses and matcher
+//! The site is a static descriptor: source/flags string descriptors and matcher
 //! data, registered as a global root on the first evaluation. Every evaluation is one
 //! call to the shared entry `js_regexp_literal(site)`, whose
 //! birth is the runtime's ordinary RegExp birth (`regex/instance.rs`); the
@@ -30,8 +30,11 @@ fn emit_regexp_site(ctx: &mut FnCtx<'_>, pattern_global: &str, flags_global: &st
 pub(crate) fn lower_regexp_literal(ctx: &mut FnCtx<'_>, pattern: &str, flags: &str) -> String {
     let pattern_idx = ctx.strings.intern(pattern);
     let flags_idx = ctx.strings.intern(flags);
-    let pattern_global = format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
-    let flags_global = format!("@{}", ctx.strings.entry(flags_idx).handle_global);
+    // The site is static data: it names the immutable dispatch descriptors,
+    // never a string handle (thread-local under agents, and a thread-local's
+    // address is not a pointer to its value on Mach-O).
+    let pattern_global = format!("@{}", ctx.strings.static_dispatch_global(pattern_idx));
+    let flags_global = format!("@{}", ctx.strings.static_dispatch_global(flags_idx));
     let site = emit_regexp_site(ctx, &pattern_global, &flags_global);
     let blk = ctx.block();
     let site_key = blk.ptrtoint(&site, I64);

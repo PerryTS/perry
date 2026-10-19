@@ -319,14 +319,16 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
     let site = std::ptr::addr_of_mut!(descriptor.data);
     let old = {
         let scope = RuntimeHandleScope::new();
-        let source = text(&scope, "site-only-root");
-        let flags = text(&scope, "g");
-        let source_word =
-            source.with_const_ptr::<StringHeader, _>(|s| crate::value::js_nanbox_string(s as i64));
-        let flags_word =
-            flags.with_const_ptr::<StringHeader, _>(|f| crate::value::js_nanbox_string(f as i64));
-        descriptor.pattern = &source_word;
-        descriptor.flags = &flags_word;
+        let static_text = |bytes: &'static [u8]| {
+            &*Box::leak(Box::new(crate::string::StaticDispatchString {
+                byte_len: bytes.len() as u32,
+                flags: 0,
+                hash: 0,
+                bytes: bytes.as_ptr(),
+            })) as *const crate::string::StaticDispatchString
+        };
+        descriptor.pattern = static_text(b"site-only-root");
+        descriptor.flags = static_text(b"g");
         let re = scope.root_raw_mut_ptr(crate::regex::js_regexp_literal(
             descriptor as *mut crate::regex::LiteralSite as i64,
         ));

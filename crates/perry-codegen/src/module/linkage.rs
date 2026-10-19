@@ -558,7 +558,11 @@ pub(crate) fn force_external_linkage(f: &LlFunction, ir: String) -> String {
         || f.linkage == "private"
         || (crate::fallback_diag::enabled() && !f.linkage.is_empty())
     {
-        return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
+        return ir.replacen(
+            &format!("define {} ", f.linkage),
+            &format!("define {}", LlFunction::split_unit_linkage(&f.linkage)),
+            1,
+        );
     }
     ir
 }

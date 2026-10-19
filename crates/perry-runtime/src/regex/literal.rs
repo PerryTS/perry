@@ -4,15 +4,18 @@
 //! RegExpData edge and the data's string/program edges survive evacuation.
 use super::{RegExpData, RegExpHeader};
 use crate::gc::RuntimeHandleScope;
-use crate::string::StringHeader;
+use crate::string::{StaticDispatchString, StringHeader};
 
-/// Immortal codegen descriptor. The source/flags addresses name existing
-/// rooted string globals; only `data` is mutable, through the global-root
-/// store contract. No source/flags loads belong to a repeated evaluation.
+/// Immortal codegen descriptor. The source/flags addresses name the module's
+/// immutable static string descriptors (read-only data, valid in every agent
+/// and on every object format; a string handle global may be thread-local,
+/// and a thread-local's address cannot sit in static data). Only `data` is
+/// mutable, through the global-root store contract. No source/flags loads
+/// belong to a repeated evaluation.
 #[repr(C)]
 pub(crate) struct LiteralSite {
-    pub(crate) pattern: *const f64,
-    pub(crate) flags: *const f64,
+    pub(crate) pattern: *const StaticDispatchString,
+    pub(crate) flags: *const StaticDispatchString,
     pub(crate) data: u64,
 }
 
@@ -31,13 +34,17 @@ pub extern "C" fn js_regexp_literal(site: i64) -> *mut RegExpHeader {
 #[cold]
 #[inline(never)]
 fn literal_cold(site: *mut LiteralSite, word: *mut u64) -> *mut RegExpHeader {
+    let scope = RuntimeHandleScope::new();
     let (pattern, flags) = unsafe {
-        (
-            crate::value::js_nanbox_get_pointer((*site).pattern.read()) as *const StringHeader,
-            crate::value::js_nanbox_get_pointer((*site).flags.read()) as *const StringHeader,
-        )
+        let born = |text: *const StaticDispatchString| {
+            crate::string::js_string_from_wtf8_bytes((*text).bytes, (*text).byte_len)
+        };
+        let pattern = scope.root_string_ptr(born((*site).pattern));
+        (pattern, scope.root_string_ptr(born((*site).flags)))
     };
-    from_parts(pattern, flags, word as i64)
+    pattern.with_const_ptr(|pattern| {
+        flags.with_const_ptr(|flags| from_parts(pattern, flags, word as i64))
+    })
 }
 
 // The cold miss and runtime fixtures share exactly the same publication and
