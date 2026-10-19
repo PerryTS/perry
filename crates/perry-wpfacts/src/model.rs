@@ -78,6 +78,11 @@ pub enum BuiltinNs {
     Map,
     /// `Set` / `WeakSet`: `new` builds a collection of the values.
     Set,
+    /// The program's `require` from `module.createRequire` (one per
+    /// program: every CommonJS wrapper shares it). A call resolves its
+    /// constant specifier ([`Model::call_lit`]): a compiled module's path
+    /// gives that module's exports; anything else is the unknown loader.
+    Require,
     Other,
 }
 
@@ -228,6 +233,9 @@ pub enum NativeMiss {
     Load(NodeId),
     /// A method call with this receiver.
     Call(Tok, CallId),
+    /// A program-owned global (`builtins::global_user_key`) read into the
+    /// first node; the second is the global's field.
+    Global(NodeId, NodeId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -646,6 +654,23 @@ pub struct Model {
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
+    /// A call's constant first argument (a string), for callees whose
+    /// result depends on it (`BuiltinNs::Require`). Compiler data.
+    pub call_lit: FxHashMap<CallId, Atom>,
+    /// The CommonJS registry: every published record (`CJSREG`), the
+    /// records under an unknown path (`CJSUNKNOWNPATH`), and the records
+    /// published under each constant path (`Gen::cjs_path_node`).
+    pub cjs_union: NodeId,
+    pub cjs_unknown: NodeId,
+    pub cjs_paths: FxHashMap<Atom, NodeId>,
+    /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
+    pub require_parts: Option<(Tok, Tok)>,
+    /// Fields of the global object under program-owned keys.
+    pub global_fields: Vec<(Atom, NodeId)>,
+    /// A ⊤ value may be the global object: it reached unmodeled code, or
+    /// dynamic code may hand it out (`Function('return this')()`). Until
+    /// then a store into ⊤ cannot write a global.
+    pub global_in_top: bool,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
     /// Source constructor of a type-specialized instance layout (compiler data).

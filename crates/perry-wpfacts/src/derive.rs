@@ -434,9 +434,34 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
-    for s in &g.read_sites {
-        let node = &m.nodes[s.recv as usize];
-        let toks = node.pts.to_sorted();
+    // An instance (`gen_inst`) walks a read site again: the site's receivers
+    // are the union over the shared walk and every instance.
+    let mut first: FxHashMap<(u32, u32, u32, bool), usize> = FxHashMap::default();
+    let mut groups: Vec<(usize, Vec<u32>)> = Vec::new();
+    for (i, s) in g.read_sites.iter().enumerate() {
+        let k = (s.module, s.byte_offset, s.key, s.is_call);
+        match first.get(&k) {
+            Some(&gi) => groups[gi].1.push(s.recv),
+            None => {
+                first.insert(k, groups.len());
+                groups.push((i, vec![s.recv]));
+            }
+        }
+    }
+    for (i, recvs) in &groups {
+        let s = &g.read_sites[*i];
+        let mut toks: Vec<Tok> = recvs
+            .iter()
+            .flat_map(|&r| m.nodes[r as usize].pts.to_sorted())
+            .collect();
+        toks.sort_unstable();
+        toks.dedup();
+        let prim = recvs.iter().fold(0, |p, &r| p | m.nodes[r as usize].prim);
+        let top_recv = recvs
+            .iter()
+            .copied()
+            .find(|&r| m.nodes[r as usize].pts.to_sorted().contains(&TOP))
+            .unwrap_or(s.recv);
         let key = m.atoms[s.key as usize].clone();
         let mut receivers = Vec::new();
         let mut top = false;
@@ -453,7 +478,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                         if m.explain {
                             Verdict::No(format!(
                                 "receiver from unmodeled code (TOP) <- {}",
-                                m.top_origin(s.recv)
+                                m.top_origin(top_recv)
                             ))
                         } else {
                             Verdict::No("receiver from unmodeled code (TOP)".into())
@@ -520,10 +545,10 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                 }
             }
         }
-        if toks.is_empty() && node.prim == 0 {
+        if toks.is_empty() && prim == 0 {
             verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
         }
-        if toks.is_empty() && node.prim != 0 {
+        if toks.is_empty() && prim != 0 {
             verdict.get_or_insert(Verdict::No("primitive receiver".into()));
         }
         let verdict = match verdict {

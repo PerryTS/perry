@@ -58,7 +58,10 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
-        note_native_write(m, TOP, None, why);
+        if m.explain {
+            eprintln!("perry: wpfacts explain: dynamic code reachable: {why}");
+        }
+        note_global_in_top(m);
     }
 }
 
@@ -279,6 +282,30 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         },
         TokKind::Builtin(BuiltinNs::GlobalThis) => match name.as_deref() {
+            Some(n) if global_user_key(n) => {
+                let Key::Named(a) = key else { unreachable!() };
+                let f = global_field(m, t, a);
+                if native_written(m, t, a) {
+                    if m.explain {
+                        let op = m.tok_index.get(&TokKind::ObjectProto).copied();
+                        let hits: Vec<String> = m
+                            .native_writes
+                            .iter()
+                            .filter(|((w, k), _)| {
+                                (*w == TOP || *w == t || Some(*w) == op) && (k.is_none() || *k == Some(a))
+                            })
+                            .map(|((w, k), r)| format!("{}/{:?}: {}", m.tok_name(*w), k.map(|x| m.atoms[x as usize].clone()), m.reasons[*r as usize]))
+                            .collect();
+                        eprintln!("perry: wpfacts explain: globalThis.{n} written (in_top {}): {hits:?}", m.global_in_top);
+                    }
+                    m.add_top(dst, |_| format!("globalThis.{n} written by unmodeled code"));
+                    m.add_prim(dst, prim::ALL);
+                } else {
+                    m.native_missing.push((t, a, NativeMiss::Global(dst, f)));
+                }
+                m.edge(f, dst);
+                m.add_prim(dst, prim::UNDEF);
+            }
             Some(n) if ns_by_name(n).is_some() => {
                 let bt = m.tok(TokKind::Builtin(ns_by_name(n).unwrap()));
                 m.add_tok(dst, bt);
@@ -286,9 +313,30 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             _ => {
                 // Any global, the Function constructor included (E14).
                 let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:315"); }
                 m.add_tok(dst, f);
                 m.add_top(dst, |_| {
                     format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
+                });
+                m.add_prim(dst, prim::ALL);
+            }
+        },
+        TokKind::Builtin(BuiltinNs::Require) => match name.as_deref() {
+            Some("cache") | Some("extensions") => {
+                let (cache, ext) = require_parts(m);
+                let p = if name.as_deref() == Some("cache") { cache } else { ext };
+                m.add_tok(dst, p);
+            }
+            Some("main") => {
+                let u = m.cjs_union;
+                m.edge(u, dst);
+                m.add_prim(dst, prim::UNDEF | prim::NULL);
+            }
+            _ => {
+                let bf = m.tok(TokKind::BuiltinFn);
+                m.add_tok(dst, bf);
+                m.add_top(dst, |_| {
+                    format!("require.{}", name.as_deref().unwrap_or("[computed]"))
                 });
                 m.add_prim(dst, prim::ALL);
             }
@@ -313,6 +361,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Func(f) => match name.as_deref() {
             Some("constructor") => {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:362"); }
                 m.add_tok(dst, fc);
             }
             Some("prototype") => {
@@ -333,6 +382,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ClassObj(_) => match name.as_deref() {
             Some("constructor") => {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:382"); }
                 m.add_tok(dst, fc);
             }
             Some("name") => m.add_prim(dst, prim::STR),
@@ -405,6 +455,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             m.add_prim(dst, prim::ALL);
             if matches!(name.as_deref(), Some("constructor") | None) {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:450"); }
                 m.add_tok(dst, fc);
             }
         }
@@ -422,6 +473,10 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
         | TokKind::ModNs(_)
         | TokKind::NativeProto(_) => {
             // E20: stored where the runtime / unmodeled code reads it.
+            if m.explain {
+                let kn = match _key { Key::Named(a) => m.atoms[a as usize].clone(), Key::Any => "[computed]".into() };
+                eprintln!("perry: wpfacts explain: E20 store on {} key {kn}", m.tok_name(t));
+            }
             let r = m.reason("E20 stored on a builtin/global object");
             m.sink_node(src, r);
         }
@@ -842,6 +897,24 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     match ns {
+        BuiltinNs::Require => {
+            // A compiled module named by a constant path: its exports (the
+            // registry record's `exports`, as `require.cache[path]` holds).
+            let rec = m.call_lit.get(&call).and_then(|a| m.cjs_paths.get(a)).copied();
+            match rec {
+                Some(rec) => {
+                    let ret = m.calls[call as usize].ret;
+                    let ea = m.atom("exports");
+                    // As requirePathModule: the named path, or a record the
+                    // runtime published under a path it computed.
+                    let unknown = m.cjs_unknown;
+                    m.cons(rec, Cons::Load { key: Key::Named(ea), dst: ret });
+                    m.cons(unknown, Cons::Load { key: Key::Named(ea), dst: ret });
+                    m.add_prim(ret, prim::UNDEF);
+                }
+                None => unknown_method(m, call, "argument of require of an unknown or native module"),
+            }
+        }
         BuiltinNs::Function => {
             set_dyn_eval(m, "E14 Function(...) call");
             unknown_method(m, call, "E14 dynamic code");
@@ -1671,8 +1744,13 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
     let hit = |t: Tok| {
         m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, Some(a)))
     };
-    let global = matches!(&m.toks[np as usize], TokKind::NativeProto(n) if ns_by_name(n).is_some());
-    hit(TOP)
+    let global = match &m.toks[np as usize] {
+        TokKind::NativeProto(n) => ns_by_name(n).is_some(),
+        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
+        _ => false,
+    };
+    let is_global = matches!(m.toks[np as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+    (hit(TOP) && (!is_global || m.global_in_top))
         || hit(np)
         || (global
             && m.tok_index
@@ -1710,7 +1788,9 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
     if t != TOP
         && !matches!(
             m.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
+            TokKind::ObjectProto
+                | TokKind::NativeProto(_)
+                | TokKind::Builtin(BuiltinNs::GlobalThis)
         )
     {
         return;
@@ -1728,8 +1808,25 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
     } else {
         m.tok_name(t)
     };
+    if m.explain {
+        eprintln!("perry: wpfacts explain: may be written: {what} on {on} key {:?}", k.map(|a| m.atoms[a as usize].clone()));
+    }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
     m.native_writes.insert((t, k), r);
+    replay_native_missing(m);
+}
+
+/// The global object may now be ⊤: stores into ⊤ may have written globals.
+pub fn note_global_in_top(m: &mut Model) {
+    if !m.global_in_top {
+        m.global_in_top = true;
+        replay_native_missing(m);
+    }
+}
+
+/// Lookups that passed a native prototype (or read a program-owned global)
+/// under a key that may now be written: they take the opaque member.
+fn replay_native_missing(m: &mut Model) {
     if m.native_missing.is_empty() {
         return;
     }
@@ -1747,6 +1844,18 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
                     m.add_tok(dst, bf);
                     m.add_prim(dst, prim::ALL);
                 }
+                NativeMiss::Global(dst, f) => {
+                    let name = m.atoms[a as usize].clone();
+                    if m.explain {
+                        let ws: Vec<String> = m.native_writes.iter().map(|((w, k), r)| format!("{}/{:?}: {}", m.tok_name(*w), k.map(|x| m.atoms[x as usize].clone()), m.reasons[*r as usize])).collect();
+                        eprintln!("perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}", m.global_in_top);
+                    }
+                    m.add_top(dst, |_| format!("globalThis.{name} written by unmodeled code"));
+                    m.add_prim(dst, prim::ALL);
+                    // Unmodeled code may also read what the program stored.
+                    let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
+                    m.sink_node(f, r);
+                }
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
                     let name = m.atoms[a as usize].clone();
@@ -1759,6 +1868,80 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
     });
     keep.append(&mut m.native_missing);
     m.native_missing = keep;
+}
+
+/// The `cache` and `extensions` objects of [`BuiltinNs::Require`].
+pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
+    if let Some(p) = m.require_parts {
+        return p;
+    }
+    let c = anon_tmpl(m, "require.cache");
+    let e = anon_tmpl(m, "require.extensions");
+    m.require_parts = Some((c, e));
+    (c, e)
+}
+
+fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
+    let site = m.anon_birth_site(what);
+    let tm = m.tmpls.len() as TmplId;
+    m.tmpls.push(Template {
+        kind: TmplKind::BObj {
+            module: u32::MAX,
+            site,
+            what,
+        },
+        display: what.to_string(),
+        birth_keys: vec![],
+        definite: vec![],
+        parent: None,
+        ctor: None,
+        native_parent: None,
+        accessor_keys: vec![],
+        has_computed_members: false,
+        field_init: None,
+        proto_members: vec![],
+    });
+    m.tok(TokKind::Obj(tm))
+}
+
+/// Node's `module.isBuiltin` (prefix-only builtins need `node:`).
+pub fn is_builtin_module(s: &str) -> bool {
+    match s.strip_prefix("node:") {
+        Some(rest) => perry_hir::is_node_builtin_module(rest),
+        None => {
+            !perry_hir::is_bare_prefix_only_builtin(s) && perry_hir::is_node_builtin_module(s)
+        }
+    }
+}
+
+/// Object.prototype's legacy members: the only `__` names the global object
+/// inherits.
+pub const OBJECT_PROTO_DUNDER: [&str; 5] = [
+    "__proto__",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+];
+
+/// A global-object key the program owns: the host defines no global whose
+/// name starts with `__` beyond `Object.prototype`'s legacy members (the
+/// test `host_defines_no_dunder_global` reads the runtime's global-object
+/// sources). Such a global holds what the program stored, plus ⊤ once
+/// something unmodeled may write it (`native_written`, as for native
+/// prototypes).
+pub fn global_user_key(name: &str) -> bool {
+    name.starts_with("__") && !OBJECT_PROTO_DUNDER.contains(&name) && name != crate::STAR_KEY
+}
+
+/// The global object's field under program-owned key `a`.
+pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
+    if let Some(&(_, n)) = m.global_fields.iter().find(|(k, _)| *k == a) {
+        return n;
+    }
+    let n = m.field(g, a);
+    m.global_fields.push((a, n));
+    n
 }
 
 fn native_method(m: &mut Model, np: Tok, native: &str, origin: Tok, name: &str, call: CallId) {

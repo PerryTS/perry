@@ -54,13 +54,12 @@ fn written_native_prototype_keeps_the_escape() {
 }
 
 #[test]
-fn interpreted_code_may_write_native_prototypes() {
-    assert!(d_escape("c.absent?.(d);", interp_cfg()).is_some());
-    let mut reach = perry_hir::dynamic_code::DynamicCodeReach::default();
-    reach.record_global("eval(...) @ t.ts:9".into());
-    let cfg = FactsConfig {
-        dynamic_code_reach: reach,
-        ..Default::default()
-    };
-    assert!(d_escape("c.absent?.(d);", cfg).is_some());
+fn interpreted_code_is_the_guard_not_a_kill() {
+    // Decision 150: interpreted code that may write a native prototype is
+    // the runtime's PERRY_INTERP_PROTO_WRITTEN guard on every proof, not a
+    // static escape of everything that passes one.
+    let src = format!("{PRELUDE}c.absent?.(d); new Function(k)();\nconsole.log(d.y);");
+    let pf = facts_with(&src, interp_cfg());
+    assert!(pf.interp_guard.is_some());
+    assert_eq!(tmpl(&pf, "D").escape, None);
 }

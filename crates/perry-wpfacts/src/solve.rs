@@ -684,11 +684,32 @@ impl Model {
             }
             Cons::Call { call } => {
                 for &t in toks {
+                    if self.explain
+                        && self.dyn_eval.is_none()
+                        && matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+                    {
+                        eprintln!(
+                            "perry: wpfacts explain: Function reaches callee {} <- {}",
+                            self.labels[n as usize],
+                            self.top_origin(n)
+                        );
+                    }
                     self.call_tok(call, t, None);
                 }
             }
             Cons::CallThis { call, this } => {
                 for &t in toks {
+                    if self.explain
+                        && self.dyn_eval.is_none()
+                        && matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+                    {
+                        eprintln!(
+                            "perry: wpfacts explain: Function reaches method callee {} this {} <- {}",
+                            self.labels[n as usize],
+                            self.tok_name(this),
+                            self.top_origin(n)
+                        );
+                    }
                     self.call_tok(call, t, Some(this));
                 }
             }
@@ -753,6 +774,7 @@ impl Model {
                         self.add_tok(dst, TOP);
                         if self.is_constructor_key(key) {
                             let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
+                            if self.explain && self.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at solve.rs:748"); }
                             self.add_tok(dst, f);
                         }
                         continue;
@@ -1117,6 +1139,16 @@ impl Model {
     }
 
     fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A program-owned global: an ordinary field of the global object.
+        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) = (&self.toks[t as usize], key) {
+            if builtins::global_user_key(&self.atoms[a as usize])
+                && !builtins::native_written(self, t, a)
+            {
+                let f = builtins::global_field(self, t, a);
+                self.edge(src, f);
+                return;
+            }
+        }
         self.note_fnproto_write(t, Some(key), "store");
         builtins::note_native_write(self, t, Some(key), "store");
         if matches!(key, Key::Any)

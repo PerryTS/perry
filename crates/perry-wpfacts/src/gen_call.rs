@@ -49,6 +49,20 @@ impl<'a> Gen<'a> {
             }
         }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // A statically known callee given a constant: its own instance.
+        if let Some(sf) = self.static_callee(fx.module, callee) {
+            let consts: Vec<Option<crate::gen_inst::Const>> =
+                args.iter().map(|x| self.const_eval(fx.module, x)).collect();
+            if consts.iter().any(Option::is_some) {
+                if let Some(r) = self.instance_call(fx, sf, &a, &consts) {
+                    return r;
+                }
+            }
+        }
+        self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
+            Some(Some(crate::gen_inst::Const::Str(s))) => Some(self.m.atom(&s)),
+            _ => None,
+        };
         if let Expr::ExternFuncRef { name, .. } = callee {
             if self.is_runtime_extern(fx.module, name) {
                 let lits: Vec<Option<String>> = args
@@ -72,6 +86,7 @@ impl<'a> Gen<'a> {
         spread: Vec<NodeId>,
         byte_offset: u32,
     ) -> NodeId {
+        let lit = self.call_lit_arg.take();
         match callee {
             Expr::PropertyGet {
                 object,
@@ -106,7 +121,12 @@ impl<'a> Gen<'a> {
             }
             _ => {
                 let c = self.expr(fx, callee);
-                self.call_value(c, ThisArg::Undef, args, spread)
+                let r = self.call_value(c, ThisArg::Undef, args, spread);
+                if let Some(a) = lit {
+                    let call = self.m.calls.len() as CallId - 1;
+                    self.m.call_lit.insert(call, a);
+                }
+                r
             }
         }
     }
@@ -609,9 +629,16 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
-            "js_vm_module_call" | "js_module_create_require_devirt" => {
-                crate::builtins::set_dyn_eval(&mut self.m, "E14 vm / createRequire");
+            "js_vm_module_call" => {
+                crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
                 self.extern_fail(name, &args, &spread)
+            }
+            // `module.createRequire` as a value call: the program's require.
+            // Its loader resolves compiled modules, builtins, addons and JSON;
+            // it never interprets code (`perry-runtime` `module_require.rs`).
+            "js_module_create_require_devirt" => {
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
+                self.tok_node(t)
             }
             _ => self.extern_fail(name, &args, &spread),
         }

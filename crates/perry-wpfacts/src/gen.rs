@@ -66,6 +66,19 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// Per-call-site instances (`gen_inst`): the instance frames being
+    /// walked, the statically bound closures per module, every instance node
+    /// of a local (its binding facts are the union), instances per function,
+    /// and `PERRY_FACTS_INST_TRACE`.
+    pub(crate) frames: Vec<crate::gen_inst::Frame>,
+    pub(crate) static_locals: FxHashMap<(u32, u32), crate::gen_inst::StaticFn<'a>>,
+    pub(crate) static_locals_built: crate::pts::FxHashSet<u32>,
+    pub inst_locals: FxHashMap<(u32, u32), Vec<NodeId>>,
+    pub(crate) inst_count: FxHashMap<FnIdx, u32>,
+    pub(crate) inst_trace: bool,
+    /// The constant first argument of the call `call_expr` is lowering,
+    /// taken by `call_with` (`Model::call_lit`).
+    pub(crate) call_lit_arg: Option<Atom>,
 }
 
 /// Per-function walking context.
@@ -132,6 +145,8 @@ impl<'a> Gen<'a> {
         m.nodes[cjs_registry as usize].internal = true;
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
         m.nodes[cjs_unknown_path as usize].internal = true;
+        m.cjs_union = cjs_registry;
+        m.cjs_unknown = cjs_unknown_path;
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -160,6 +175,13 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            frames: Vec::new(),
+            static_locals: FxHashMap::default(),
+            static_locals_built: Default::default(),
+            inst_locals: FxHashMap::default(),
+            inst_count: FxHashMap::default(),
+            inst_trace: std::env::var("PERRY_FACTS_INST_TRACE").is_ok_and(|v| v == "1"),
+            call_lit_arg: None,
         }
     }
 
@@ -587,6 +609,13 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
+        if let Some(fr) = self.frames.last() {
+            if fr.module == mi {
+                if let Some(&n) = fr.locals.get(&id) {
+                    return n;
+                }
+            }
+        }
         if let Some(&n) = self.mods[mi as usize].locals.get(&id) {
             return n;
         }
@@ -1160,7 +1189,7 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn stmt(&mut self, fx: &Fx, s: &Stmt) {
+    pub(crate) fn stmt(&mut self, fx: &Fx, s: &Stmt) {
         match s {
             Stmt::Let { id, init, .. } => {
                 let n = self.local(fx.module, *id);

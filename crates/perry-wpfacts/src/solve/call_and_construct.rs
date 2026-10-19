@@ -4,6 +4,19 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        if self.explain
+            && self.dyn_eval.is_none()
+            && matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+        {
+            let c = &self.calls[call as usize];
+            let args: Vec<String> = c.args.iter().map(|&a| format!("{}<-{}", self.labels[a as usize], if self.top_pred.contains_key(&a) { self.top_origin(a) } else { "-".into() })).collect();
+            eprintln!(
+                "perry: wpfacts explain: Function called: ret {} this {:?} args {:?}",
+                self.labels[c.ret as usize],
+                this_tok.map(|x| self.tok_name(x)),
+                args
+            );
+        }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
@@ -483,6 +496,12 @@ impl Model {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             crate::builtins::note_native_write(self, t, None, &what);
         }
+        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis)) {
+            if self.explain && !self.global_in_top {
+                eprintln!("perry: wpfacts explain: global object may be TOP: {}", self.reasons[reason as usize]);
+            }
+            crate::builtins::note_global_in_top(self);
+        }
         // Runtime-owned objects do not "escape": unknown code already holds
         // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
         // operations) or E14 (interpreted code), never a side effect of some
@@ -587,7 +606,9 @@ impl Model {
                 let inst = self.tok(TokKind::Obj(tm));
                 let ret = self.node_l("top-new");
                 let args_n = self.node_l("top-args");
-                self.add_top(args_n, |_| "constructor args from unknown code".into());
+                self.add_top(args_n, |m| {
+                    format!("constructor args from unknown code: {}", m.reasons[reason as usize])
+                });
                 self.add_prim(args_n, prim::ALL);
                 let call = self.calls.len() as CallId;
                 self.calls.push(CallSite {

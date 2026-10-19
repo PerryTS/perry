@@ -26,6 +26,10 @@ impl Gen<'_> {
             return node;
         }
         let node = self.m.node_named("cjs-path", || format!("cjs-path({key})"));
+        let spelled = self.m.atom(path);
+        let canon = self.m.atom(&key);
+        self.m.cjs_paths.insert(spelled, node);
+        self.m.cjs_paths.insert(canon, node);
         self.cjs_paths.insert(key, node);
         node
     }

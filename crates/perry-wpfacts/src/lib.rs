@@ -26,6 +26,7 @@ mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_expr;
+mod gen_inst;
 mod gen_rest;
 pub mod model;
 pub mod pts;
@@ -156,8 +157,10 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.widen_k = cfg.widen_k.unwrap_or(0);
     if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
-        // Interpreted code may write any native prototype.
-        builtins::note_native_write(&mut g.m, model::TOP, None, "interpreted code may run");
+        // Interpreted code reads and writes any global (E20); the
+        // prototype-write guard does not cover it.
+        let gt = g.m.tok(model::TokKind::Builtin(model::BuiltinNs::GlobalThis));
+        builtins::note_native_write(&mut g.m, gt, None, "interpreted code may run");
     }
     g.register_all();
     g.link_exports();
