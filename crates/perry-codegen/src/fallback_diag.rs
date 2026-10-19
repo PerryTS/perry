@@ -86,6 +86,7 @@ struct Session {
     contexts: Vec<Context>,
     symbol: String,
     records: Vec<Record>,
+    callee_cause: Option<String>,
 }
 
 thread_local! {
@@ -159,6 +160,7 @@ pub(crate) fn begin(
             contexts: Vec::new(),
             symbol: String::new(),
             records: Vec::new(),
+            callee_cause: None,
         })
     });
     Some(ModuleGuard)
@@ -348,11 +350,18 @@ pub(crate) fn enter_expr(ctx: &crate::expr::FnCtx<'_>, expr: &Expr) -> Option<Ex
                     .and_then(|(_, fid)| s.facts.this_of.get(fid)),
                 _ => None,
             };
+            let had_binding = binding.is_some();
             c.receiver = binding.cloned().unwrap_or_else(|| Receiver {
                 other: true,
                 cause: Some("receiver expression has no binding fact".into()),
                 ..Default::default()
             });
+            if !had_binding {
+                let dbg = format!("{receiver:?}");
+                let end = dbg.find([' ', '(', '{']).unwrap_or(dbg.len());
+                c.receiver_refusals
+                    .push(format!("receiver expression kind: {}", &dbg[..end]));
+            }
             for cid in &c.receiver.classes {
                 if let Some(reason) = s.facts.class_refusals.get(cid) {
                     c.receiver_refusals.push(reason.clone());
@@ -464,6 +473,65 @@ pub(crate) fn refuse(reason: &str) {
             }
         }
     });
+}
+
+/// Why a call's callee value reaches `js_closure_call*`: the shape of the callee
+/// and which binding fact it lacks. Scoped around the call's lowering; recorded
+/// as a proof refusal on the closure-call records it emits.
+pub(crate) struct CalleeGuard(Option<Option<String>>);
+pub(crate) fn callee_cause(ctx: &crate::expr::FnCtx<'_>, callee: &Expr) -> CalleeGuard {
+    if !enabled() {
+        return CalleeGuard(None);
+    }
+    let cause = match callee {
+        Expr::LocalGet(id) => {
+            let place = if ctx.module_globals.contains_key(id) {
+                "module-global"
+            } else if ctx.closure_captures.contains_key(id) {
+                "captured"
+            } else {
+                "plain"
+            };
+            let proof = if ctx.guard_free_closure_bindings.contains(id) {
+                "single-binding guard-free"
+            } else if ctx.local_closure_func_ids.contains_key(id) {
+                "closure entry known, identity-guarded"
+            } else if ctx.local_func_ref_ids.contains_key(id) {
+                "function alias"
+            } else if ctx
+                .resolved_plain_callback_targets
+                .keys()
+                .any(|(local, _)| local == id)
+            {
+                "entry-resolved"
+            } else {
+                "no single-binding closure proof"
+            };
+            format!("callee local ({place}): {proof}")
+        }
+        other => {
+            let dbg = format!("{other:?}");
+            let end = dbg.find([' ', '(', '{']).unwrap_or(dbg.len());
+            format!("callee expression: {}", &dbg[..end])
+        }
+    };
+    let old = SESSION.with(|s| {
+        s.borrow_mut()
+            .as_mut()
+            .map(|s| s.callee_cause.replace(cause))
+    });
+    CalleeGuard(old)
+}
+impl Drop for CalleeGuard {
+    fn drop(&mut self) {
+        if let Some(old) = self.0.take() {
+            SESSION.with(|s| {
+                if let Some(s) = s.borrow_mut().as_mut() {
+                    s.callee_cause = old;
+                }
+            });
+        }
+    }
 }
 
 /// Explicitly selected generic edge, scoped around its emission.
@@ -600,6 +668,9 @@ pub(crate) fn record(block: &str, helper: &str) -> Option<(u64, u64)> {
             c.guard = "own-layout presence or inherited property lookup".into();
         }
         if helper.starts_with("js_closure_call") || helper.starts_with("js_bm_call") {
+            if let Some(cause) = &s.callee_cause {
+                c.refusals.push(cause.clone());
+            }
             if c.reason.is_empty() {
                 c.reason = "callee value is not resolved to a direct entry on this path".into();
             }
@@ -725,6 +796,7 @@ mod tests {
                 contexts: Vec::new(),
                 symbol: "wrapper".into(),
                 records: Vec::new(),
+                callee_cause: None,
             })
         });
         for helper in [

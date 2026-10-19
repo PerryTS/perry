@@ -484,7 +484,7 @@ pub(super) fn compile_closure(
     module_reassigned_locals: &HashSet<u32>,
     // Module-wide `immutable binding -> (closure func_id, param count)` facts;
     // already filtered by the reassignment oracle at the collection site.
-    immutable_closure_bindings: &HashMap<u32, (u32, usize)>,
+    immutable_closure_bindings: &HashMap<u32, (u32, usize, bool)>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
     trusted_box_captures: bool,
@@ -1555,7 +1555,7 @@ pub(super) fn compile_closure(
         .copied()
         .collect::<Vec<u32>>()
     {
-        if let Some((func_id, param_count)) = immutable_closure_bindings.get(&id) {
+        if let Some((func_id, param_count, single_binding)) = immutable_closure_bindings.get(&id) {
             ctx.local_closure_func_ids.entry(id).or_insert(*func_id);
             ctx.local_closure_param_counts
                 .entry(id)
@@ -1570,7 +1570,7 @@ pub(super) fn compile_closure(
             // still holds the TDZ sentinel, so globals keep the inline
             // identity probe (whose magic check fails on the sentinel and
             // falls back to the full dispatcher's correct error path).
-            if ctx.closure_captures.contains_key(&id) {
+            if *single_binding && ctx.closure_captures.contains_key(&id) {
                 ctx.guard_free_closure_bindings.insert(id);
             }
         }

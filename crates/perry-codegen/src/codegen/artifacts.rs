@@ -142,7 +142,7 @@ pub(super) fn emit_module_artifacts(
         std::env::var("PERRY_CALL_DEVIRT").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     );
-    let immutable_closure_bindings: std::collections::HashMap<u32, (u32, usize)> =
+    let immutable_closure_bindings: std::collections::HashMap<u32, (u32, usize, bool)> =
         crate::collectors::spec_abi_sites::single_binding_closure_locals(hir)
             .into_iter()
             // A closure with a trusted-box clone is better served by the
@@ -157,9 +157,24 @@ pub(super) fn emit_module_artifacts(
             .filter_map(|(id, func_id)| {
                 closure_param_counts
                     .get(&func_id)
-                    .map(|count| (id, (func_id, *count)))
+                    .map(|count| (id, (func_id, *count, true)))
             })
             .collect();
+    // `var f = function () {}` bindings: the same known entry, but the binding
+    // can still hold `undefined` when called early, so the identity check stays.
+    let mut immutable_closure_bindings = immutable_closure_bindings;
+    if call_devirt_enabled {
+        for (id, func_id) in crate::collectors::spec_abi_sites::hoisted_var_closure_locals(hir) {
+            if trusted_box_closures.contains_key(&func_id) {
+                continue;
+            }
+            if let Some(count) = closure_param_counts.get(&func_id) {
+                immutable_closure_bindings
+                    .entry(id)
+                    .or_insert((func_id, *count, false));
+            }
+        }
+    }
     progress.checkpoint("reassigned-local analysis");
 
     // Step 5d: fninfer's parameter types for this module's closures,

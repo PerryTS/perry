@@ -298,6 +298,34 @@ pub(crate) fn single_binding_closure_locals(hir: &Module) -> HashMap<u32, u32> {
         .collect()
 }
 
+/// Module-wide: locals declared with `var` whose only value is ONE closure
+/// literal, mapped to that closure's `FuncId`.
+///
+/// `var f = function () {}` lowers to a hoisted `Let { id, init: Undefined }`
+/// followed by the declaration's own `Let { id, init: Closure }`, so
+/// [`single_binding_closure_locals`] (exactly one `Let`) never holds for it.
+/// Here the binding must have exactly one non-placeholder `Let`, whose init is
+/// the closure literal, no writes at any depth and no parameter/catch binding.
+///
+/// This is weaker than the single-binding fact: until the declaration runs the
+/// binding holds `undefined` (no TDZ), so a call may reach it too early. Calls
+/// through it therefore keep the entry identity check; they do not skip it.
+pub(crate) fn hoisted_var_closure_locals(hir: &Module) -> HashMap<u32, u32> {
+    let scan = scan_whole_module(hir);
+    scan.let_closures
+        .iter()
+        .filter(|(id, _)| {
+            let hoists = scan.let_hoists.get(*id).copied().unwrap_or(0);
+            let lets = scan.let_counts.get(*id).copied().unwrap_or(0);
+            hoists >= 1
+                && lets == hoists + 1
+                && !scan.writes.contains(*id)
+                && !scan.other_bindings.contains(*id)
+        })
+        .map(|(id, func_id)| (*id, *func_id))
+        .collect()
+}
+
 /// Object model step 3, `single_binding_families`: `const` bindings whose value is EXACTLY an instance
 /// of a module class: bound by one `Stmt::Let { mutable: false, init: new C(…) }`
 /// and nothing else, never written, and `C`'s constructor chain cannot return
@@ -423,6 +451,10 @@ struct ModuleScan {
     closure_refs: HashSet<u32>,
     /// `Stmt::Let` occurrence count per id (a sound binding must be unique).
     let_counts: HashMap<u32, u32>,
+    /// `Stmt::Let { init: None | Some(Undefined) }` count per id: the `var`
+    /// hoisting placeholder that precedes the declaration's own `Let` (both
+    /// carry the binding's id, so `let_counts` is 2 for `var f = function(){}`).
+    let_hoists: HashMap<u32, u32>,
     /// Uses of a local in any position other than `x[i]` read/write receiver
     /// or `new TypedArray(x)` constructor-argument. Such a use can't reassign
     /// the binding, but CAN change an array's length (`x.push(...)`,
@@ -691,6 +723,9 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             id, init, mutable, ..
         } => {
             *scan.let_counts.entry(*id).or_insert(0) += 1;
+            if matches!(init, None | Some(Expr::Undefined)) {
+                *scan.let_hoists.entry(*id).or_insert(0) += 1;
+            }
             if depth > 0 {
                 scan.closure_refs.insert(*id);
             }
