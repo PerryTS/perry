@@ -244,6 +244,10 @@ unsafe fn seed_flagless_colour(a: *const crate::StringHeader, hash: u64, bit: u3
     {
         return;
     }
+    if COLOUR_ATOMS[bit as usize].get() == a as usize && COLOUR_SLOTS[bit as usize].get() != 0 {
+        // Seeded already: the index is built once per agent and never grows.
+        return;
+    }
     COLOUR_ATOMS[bit as usize].set(a as usize);
     COLOUR_SLOTS[bit as usize].set(slot + 1);
     let mut at = (hash & 255) as usize;
