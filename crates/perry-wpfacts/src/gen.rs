@@ -66,6 +66,37 @@ pub struct Gen<'a> {
     /// (module, local) → the class. `super` through such a home starts at
     /// that class's parent, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
+    /// (importing module path, specifier) → resolved module path, for the
+    /// re-export sources HIR keeps out of `imports`.
+    pub export_sources: FxHashMap<(String, String), String>,
+    /// Per module: how `export *` supplies names (see [`StarInfo`]).
+    pub(crate) stars: Vec<StarInfo>,
+}
+
+/// A name a module exports by its own declaration.
+pub(crate) enum Explicit {
+    /// Declared here (or re-exported from a source we cannot see).
+    Own,
+    /// `export { imported as <name> } from <module>`.
+    Via(u32, String),
+}
+
+/// The `export *` surface of one module.
+#[derive(Default)]
+pub(crate) struct StarInfo {
+    pub explicit: FxHashMap<String, Explicit>,
+    pub targets: Vec<u32>,
+    /// Some `export *` source did not resolve: any other name may come
+    /// from it.
+    pub unresolved: bool,
+}
+
+/// What `export *` makes of one name.
+enum StarRes {
+    None,
+    One(u32, String),
+    Ambiguous,
+    Unknown,
 }
 
 /// Per-function walking context.
@@ -160,6 +191,8 @@ impl<'a> Gen<'a> {
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
+            export_sources: FxHashMap::default(),
+            stars: Vec::new(),
         }
     }
 
@@ -255,6 +288,7 @@ impl<'a> Gen<'a> {
                     .or_insert(n);
             }
         }
+        self.build_star_info();
         // Imports bind to the exporting module's export nodes.
         for (mi, (_, module)) in modules.iter().enumerate() {
             let mi = mi as u32;
@@ -663,7 +697,141 @@ impl<'a> Gen<'a> {
             .m
             .node_named("export", || format!("export({mi},{name})"));
         self.exports.insert((mi, name), n);
+        self.link_star_name(mi, name, n);
         n
+    }
+
+    /// `export *` supplies `name` to `mi` unless `mi` declares it: bind the
+    /// export node to the star sources that provide it. A name two stars
+    /// provide from different bindings is not exported (ES spec), a
+    /// star source we cannot see could provide anything.
+    fn link_star_name(&mut self, mi: u32, name: Atom, n: NodeId) {
+        let Some(info) = self.stars.get(mi as usize) else {
+            return;
+        };
+        if info.targets.is_empty() && !info.unresolved {
+            return;
+        }
+        let text = self.m.atoms[name as usize].clone();
+        if text == "default" || info.explicit.contains_key(&text) {
+            return;
+        }
+        let targets = info.targets.clone();
+        let unresolved = info.unresolved;
+        let mut found: Vec<(u32, String)> = Vec::new();
+        for t in targets {
+            let mut vis = vec![(mi, text.clone())];
+            match self.star_res(t, &text, &mut vis) {
+                StarRes::One(o, on) => {
+                    if !found.contains(&(o, on.clone())) {
+                        found.push((o, on));
+                    }
+                    let src = self.export_node(t, name);
+                    self.m.edge(src, n);
+                }
+                StarRes::Unknown => {
+                    let src = self.export_node(t, name);
+                    self.m.edge(src, n);
+                }
+                StarRes::None | StarRes::Ambiguous => {}
+            }
+        }
+        if found.len() > 1 {
+            self.m.add_top(n, |_| format!("ambiguous export * name {text}"));
+        }
+        if unresolved {
+            self.m
+                .add_top(n, |_| format!("name {text} may come from an unresolved export * source"));
+        }
+    }
+
+    /// What module `m` exports as `name`, following re-exports and stars.
+    fn star_res(&self, m: u32, name: &str, vis: &mut Vec<(u32, String)>) -> StarRes {
+        if vis.iter().any(|(vm, vn)| *vm == m && vn == name) {
+            return StarRes::None;
+        }
+        let info = &self.stars[m as usize];
+        if let Some(e) = info.explicit.get(name) {
+            return match e {
+                Explicit::Own => StarRes::One(m, name.to_string()),
+                Explicit::Via(t, imported) => {
+                    vis.push((m, name.to_string()));
+                    let r = self.star_res(*t, imported, vis);
+                    vis.pop();
+                    r
+                }
+            };
+        }
+        if name == "default" {
+            return StarRes::None;
+        }
+        vis.push((m, name.to_string()));
+        let mut found: Vec<(u32, String)> = Vec::new();
+        let mut unknown = info.unresolved;
+        for &t in &info.targets {
+            match self.star_res(t, name, vis) {
+                StarRes::One(o, on) => {
+                    if !found.contains(&(o, on.clone())) {
+                        found.push((o, on));
+                    }
+                }
+                StarRes::Unknown => unknown = true,
+                StarRes::None | StarRes::Ambiguous => {}
+            }
+        }
+        vis.pop();
+        if found.len() > 1 {
+            StarRes::Ambiguous
+        } else if unknown {
+            StarRes::Unknown
+        } else if let Some((o, on)) = found.pop() {
+            StarRes::One(o, on)
+        } else {
+            StarRes::None
+        }
+    }
+
+    fn build_star_info(&mut self) {
+        let mut all = Vec::with_capacity(self.modules.len());
+        for (mi, (_, module)) in self.modules.iter().enumerate() {
+            let mut info = StarInfo::default();
+            for e in &module.exports {
+                match e {
+                    Export::Named { exported, .. } => {
+                        info.explicit.insert(exported.clone(), Explicit::Own);
+                    }
+                    Export::NamespaceReExport { name, .. } => {
+                        info.explicit.insert(name.clone(), Explicit::Own);
+                    }
+                    Export::ReExport {
+                        source,
+                        imported,
+                        exported,
+                    } => {
+                        let how = match self.resolve_source(mi as u32, module, source) {
+                            Some(t) => Explicit::Via(t, imported.clone()),
+                            None => Explicit::Own,
+                        };
+                        info.explicit.insert(exported.clone(), how);
+                    }
+                    Export::ExportAll { source } => {
+                        match self.resolve_source(mi as u32, module, source) {
+                            Some(t) => {
+                                if !info.targets.contains(&t) {
+                                    info.targets.push(t);
+                                }
+                            }
+                            None => info.unresolved = true,
+                        }
+                    }
+                }
+            }
+            for (name, _) in &module.exported_functions {
+                info.explicit.entry(name.clone()).or_insert(Explicit::Own);
+            }
+            all.push(info);
+        }
+        self.stars = all;
     }
 
     /// Connect every module's export declarations to their export nodes.
@@ -689,7 +857,7 @@ impl<'a> Gen<'a> {
                     } => {
                         let a = self.m.atom(exported);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let b = self.m.atom(imported);
                                 let src = self.export_node(t, b);
@@ -702,7 +870,7 @@ impl<'a> Gen<'a> {
                         let f = self.m.field(ns, a);
                         self.m.edge(en, f);
                     }
-                    Export::ExportAll { source } => match self.resolve_source(module, source) {
+                    Export::ExportAll { source } => match self.resolve_source(mi, module, source) {
                         Some(t) => {
                             // Every export of `t` is visible through `mi`.
                             let tns = self.mods[t as usize].ns_tok;
@@ -720,7 +888,7 @@ impl<'a> Gen<'a> {
                     Export::NamespaceReExport { source, name } => {
                         let a = self.m.atom(name);
                         let en = self.export_node(mi, a);
-                        match self.resolve_source(module, source) {
+                        match self.resolve_source(mi, module, source) {
                             Some(t) => {
                                 let tns = self.mods[t as usize].ns_tok;
                                 self.m.add_tok(en, tns);
@@ -787,9 +955,18 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
-        let imp = module.imports.iter().find(|i| i.source == source)?;
-        let p = imp.resolved_path.as_ref()?;
+    fn resolve_source(&self, mi: u32, module: &Module, source: &str) -> Option<u32> {
+        if let Some(p) = module
+            .imports
+            .iter()
+            .find(|i| i.source == source)
+            .and_then(|i| i.resolved_path.as_ref())
+        {
+            return self.path_index.get(p).copied();
+        }
+        // Re-export sources are not in `imports`: the driver resolved them.
+        let key = (self.modules[mi as usize].0.to_string(), source.to_string());
+        let p = self.export_sources.get(&key)?;
         self.path_index.get(p).copied()
     }
 

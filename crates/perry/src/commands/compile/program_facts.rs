@@ -47,6 +47,7 @@ pub(crate) fn contracts_requested() -> bool {
 
 pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    export_sources: BTreeMap<(String, String), String>,
     dynamic_code: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
@@ -90,6 +91,7 @@ pub(crate) fn run(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(400_000_000),
         ),
+        export_sources,
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
