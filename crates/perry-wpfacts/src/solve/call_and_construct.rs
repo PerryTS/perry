@@ -37,11 +37,12 @@ impl Model {
                         (None, &ThisArg::Tok(x)) => self.add_tok(fthis, x),
                         (None, &ThisArg::Node(n)) => {
                             self.edge(n, fthis);
-                            // A node can later receive null/undefined. Sloppy
-                            // calls substitute the global receiver in that case.
-                            if !self.funcs[f as usize].strict_this {
-                                let global = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-                                self.add_tok(fthis, global);
+                            if !self.funcs[f as usize].strict_this
+                                && !self.nodes[n as usize].cons.iter().any(
+                                    |c| matches!(c,Cons::GlobalThisIfNullish{dst} if *dst==fthis),
+                                )
+                            {
+                                self.cons(n, Cons::GlobalThisIfNullish { dst: fthis });
                             }
                         }
                         (None, ThisArg::Undef) => {

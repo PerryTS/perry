@@ -276,6 +276,8 @@ impl Hard {
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// Sloppy calls substitute globalThis only for nullish/unknown receivers.
+    GlobalThisIfNullish { dst: NodeId },
     /// dst ⊇ read(t, key) for every t in the node.
     Load { key: Key, dst: NodeId },
     /// write(t, key) ⊇ src for every t in the node.
@@ -414,6 +416,7 @@ impl Cons {
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
             Cons::Implicit { .. } => "implicit",
+            Cons::GlobalThisIfNullish { .. } => "global_this_if_nullish",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoClosure { .. } => "protoclosure",
@@ -944,7 +947,7 @@ impl Model {
         }
         for (i, f) in self.funcs.iter().enumerate() {
             out.push(format!(
-                "M func {i} tok={} this={} ret={} args={} arguments={} rest={} lexical={} ctor_of={} params={}",
+                "M func {i} tok={} this={} ret={} args={} arguments={} rest={} lexical={} strict={} ctor_of={} params={}",
                 f.token,
                 f.this,
                 f.ret,
@@ -952,6 +955,7 @@ impl Model {
                 f.has_arguments as u8,
                 f.rest.map(|r| r.to_string()).unwrap_or_else(|| "-".into()),
                 f.lexical_this as u8,
+                f.strict_this as u8,
                 f.ctor_of
                     .map(|r| r.to_string())
                     .unwrap_or_else(|| "-".into()),

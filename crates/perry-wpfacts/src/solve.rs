@@ -652,6 +652,12 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
+            Cons::GlobalThisIfNullish { dst } => {
+                if prim & (prim::NULL | prim::UNDEF) != 0 || toks.contains(&TOP) {
+                    let global = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    self.add_tok(dst, global);
+                }
+            }
             Cons::TopSink { reason } => {
                 for &t in toks {
                     self.escape(t, reason);
@@ -1869,6 +1875,7 @@ impl Model {
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),
+            Cons::GlobalThisIfNullish { dst } => format!("global_this_if_nullish {n} {dst}"),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion { key, dst } => {
                 format!("chainunion {n} {} {dst}", self.key_name(*key))

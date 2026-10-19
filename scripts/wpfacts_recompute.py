@@ -314,6 +314,9 @@ class Solver:
             _, key, dst = c
             for t in toks:
                 self.load_from(t, t, key, dst)
+        elif op == "global_this_if_nullish":
+            if prim & (NULL | UNDEF) or TOP in toks:
+                self.add(c[1], [self.tok("builtin", "GlobalThis")])
         elif op == "store":
             _, key, src, site = c
             for t in toks:
@@ -750,8 +753,12 @@ class Solver:
                         self.add(fi["this"], [th[1]])
                     elif th[0] == "n":
                         self.edge(th[1], fi["this"])
-                    else:
+                        if not fi.get("strict", True):
+                            self.addcons(th[1], ("global_this_if_nullish", fi["this"]))
+                    elif fi.get("strict", True):
                         self.add(fi["this"], [], UNDEF)
+                    else:
+                        self.add(fi["this"], [self.tok("builtin", "GlobalThis")])
             self.edge(fi["ret"], c["ret"])
         elif kind == "bound":
             if call in self.bound_synth:
@@ -1018,7 +1025,7 @@ def load(path):
                                       args=int(kv["args"]),
                                       arguments=kv.get("arguments", "1") == "1",
                                       rest=None if kv["rest"] == "-" else int(kv["rest"]),
-                                      lexical=kv["lexical"] == "1", params=ints(kv["params"]))
+                                      lexical=kv["lexical"] == "1", strict=kv.get("strict", "1") == "1", params=ints(kv["params"]))
                     s.func_by_tok[int(kv["tok"])] = f
                 elif what == "fnbirth":
                     kv = dict(x.split("=", 1) for x in p[3:])
@@ -1083,6 +1090,8 @@ def run(s, rel_lines):
             s.edge(int(a[0]), int(a[1]))
         elif rel == "load":
             deferred.append((int(a[0]), ("load", key_of(s, a[1]), int(a[2]))))
+        elif rel == "global_this_if_nullish":
+            deferred.append((int(a[0]), ("global_this_if_nullish", int(a[1]))))
         elif rel == "store":
             deferred.append((int(a[0]), ("store", key_of(s, a[1]), int(a[2]), int(a[3]))))
         elif rel in ("call", "new"):

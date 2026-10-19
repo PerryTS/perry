@@ -235,3 +235,11 @@ fn strict_undefined_receivers_do_not_become_global_loader_paths() {
     let p = facts("function root(){'use strict';return this;} root().Function;");
     assert!(p.module_reentry.is_none(), "{}", p.dump_text());
 }
+
+#[test]
+fn sloppy_calls_preserve_known_objects_and_substitute_null() {
+    let safe = facts("function value(){return this.Function;} value.call({Function:7});");
+    assert!(safe.module_reentry.is_none(), "{}", safe.dump_text());
+    let loader = facts("function value(){return this.Function;} value.call(null);");
+    assert!(loader.module_reentry.is_some(), "{}", loader.dump_text());
+}
