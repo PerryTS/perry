@@ -532,6 +532,22 @@ pub(super) unsafe fn dispatch_primitive(
         }
     }
 
+    // A method the `class … extends Promise` instance's class declares
+    // (`async withResponse() {…}`): the prototype chain answers it, not the
+    // intrinsic promise methods below.
+    if !matches!(method_name, "then" | "catch" | "finally")
+        && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
+    {
+        if let Some(result) = super::collection_methods::call_inherited_user_method(
+            root_scope,
+            object_handle.get_nanbox_f64(),
+            method_name,
+            refreshed_args,
+        ) {
+            return Some(result);
+        }
+    }
+
     // Issue #489 followup: Promise's `then` / `catch` / `finally` are
     // intrinsic — when the dynamic dispatch path lands a `.then(cb)` on
     // a Promise (drizzle's `mysql-proxy/session.js`:
