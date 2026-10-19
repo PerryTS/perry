@@ -475,6 +475,14 @@ impl Model {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             self.note_fnproto_write(t, None, &what);
         }
+        if matches!(
+            self.toks[t as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(_)
+        ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            crate::builtins::note_native_write(self, t, None, &what);
+        }
         // Runtime-owned objects do not "escape": unknown code already holds
         // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
         // operations) or E14 (interpreted code), never a side effect of some
@@ -630,6 +638,12 @@ impl Model {
             Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
         ) {
             self.note_fnproto_write(t, None, kind.code());
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete | Hard::E15With
+        ) {
+            crate::builtins::note_native_write(self, t, None, kind.code());
         }
         if t == TOP {
             return;

@@ -903,6 +903,7 @@ impl Model {
                 let star = self.atom(crate::STAR_KEY);
                 for &t in toks {
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
+                    builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
                     if t == TOP {
                         continue;
                     }
@@ -1117,6 +1118,7 @@ impl Model {
 
     fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         self.note_fnproto_write(t, Some(key), "store");
+        builtins::note_native_write(self, t, Some(key), "store");
         if matches!(key, Key::Any)
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {

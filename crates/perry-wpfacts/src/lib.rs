@@ -155,6 +155,10 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.widen_k = cfg.widen_k.unwrap_or(0);
+    if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
+        // Interpreted code may write any native prototype.
+        builtins::note_native_write(&mut g.m, model::TOP, None, "interpreted code may run");
+    }
     g.register_all();
     g.link_exports();
     g.walk_all();
