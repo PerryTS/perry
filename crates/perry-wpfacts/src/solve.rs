@@ -256,6 +256,12 @@ impl Model {
 
     /// Attach a complex constraint and apply it to what the node holds now.
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        // Coercion has no context-specific arguments or observable result.
+        // Ordinary graph inclusion provides both sharing and cycle handling.
+        if matches!(c, Cons::Coerce { .. }) && n != self.coercions {
+            self.edge(n, self.coercions);
+            return;
+        }
         self.stats_cons += 1;
         if self.relations.is_some()
             && !matches!(
@@ -563,6 +569,14 @@ impl Model {
         n
     }
 
+    /// Enumeration reads only own fields and own getters, including later installs.
+    pub fn own_values(&mut self, t: Tok, dst: NodeId) {
+        let all = self.all_fields(t);
+        self.edge(all, dst);
+        self.acc_group(t, Key::Any);
+        self.group_hit(t, t, Key::Any, ChainAct::Load(dst));
+    }
+
     /// The node holding the prototype objects of `t`.
     pub fn proto_node(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.proto_node.get(&t) {
@@ -604,7 +618,10 @@ impl Model {
                 (None, None) => self.add_tok(n, objproto),
             },
             TokKind::NativeProto(_) => self.add_tok(n, objproto),
-            TokKind::Func(_) | TokKind::Bound(_) | TokKind::BuiltinFn => self.add_tok(n, objproto),
+            TokKind::Func(_)
+            | TokKind::Bound(_)
+            | TokKind::BuiltinFn
+            | TokKind::BuiltinMethod(..) => self.add_tok(n, objproto),
             TokKind::ClassObj(tm) => match self.tmpls[tm as usize].parent {
                 Some(p) => {
                     let pc = self.tok(TokKind::ClassObj(p));
@@ -737,6 +754,26 @@ impl Model {
                     }
                 }
             }
+            Cons::BuiltinOverride { call } => {
+                if !toks.is_empty() || prim != 0 {
+                    self.with_b(|m| builtins::overwritten(m, call));
+                }
+            }
+            Cons::OwnValues { dst, json } => {
+                if prim & prim::STR != 0 {
+                    self.add_prim(dst, prim::STR);
+                }
+                for &t in toks {
+                    builtins::own_values(self, t, dst, json);
+                }
+            }
+            Cons::Coerce { reason } => {
+                for &t in toks {
+                    // The only user code called by conversion is a protocol
+                    // method, not the converted function's own body.
+                    self.with_b(|m| builtins::coerce(m, t, reason));
+                }
+            }
             Cons::CreateProto { reason } => {
                 for &t in toks {
                     // E10: every template whose prototype this is can now
@@ -849,7 +886,10 @@ impl Model {
                         TokKind::ClassObj(tm) => self.run_ctor_chain_this(call, tm, origin),
                         TokKind::Func(_) => self.call_tok(call, parent, Some(origin)),
                         TokKind::Bound(_) => self.construct(call, parent),
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => {
+                        TokKind::Top
+                        | TokKind::BuiltinFn
+                        | TokKind::BuiltinMethod(..)
+                        | TokKind::Builtin(_) => {
                             self.call_tok(call, parent, Some(origin));
                             let ret = self.calls[call as usize].ret;
                             self.add_tok(ret, TOP);
@@ -878,7 +918,10 @@ impl Model {
                         TokKind::Func(f) => {
                             self.cons(holder, Cons::AccessorInstall { key, f, setter });
                         }
-                        TokKind::Top | TokKind::BuiltinFn | TokKind::Bound(_) => {
+                        TokKind::Top
+                        | TokKind::BuiltinFn
+                        | TokKind::BuiltinMethod(..)
+                        | TokKind::Bound(_) => {
                             // An unknown accessor: reads of any key on the
                             // holder return ⊤ and stores escape.
                             let r = self.reason("accessor of unknown function value");
@@ -1258,6 +1301,9 @@ impl Model {
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),
+            Cons::Coerce { reason } => format!("coerce {n} {reason}"),
+            Cons::BuiltinOverride { call } => format!("builtinoverride {n} {call}"),
+            Cons::OwnValues { dst, json } => format!("ownvalues {n} {dst} {}", *json as u8),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
             Cons::ChainUnion { key, dst } => {
                 format!("chainunion {n} {} {dst}", self.key_name(*key))

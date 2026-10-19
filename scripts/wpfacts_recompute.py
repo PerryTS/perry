@@ -275,7 +275,7 @@ class Solver:
                 self.add(n, [op])
         elif kind == "nativeproto":
             self.add(n, [op])
-        elif kind in ("func", "bound", "builtinfn"):
+        elif kind in ("func", "bound", "builtinfn", "builtinmethod"):
             self.add(n, [op])
         elif kind == "classobj":
             tp = self.tmpls[arg]
@@ -368,6 +368,37 @@ class Solver:
                     self.escape(t)
                 else:
                     self.implicit(t)
+        elif op == "builtinoverride":
+            if toks or prim:
+                self.call_tok(c[1], TOP, None)
+        elif op == "ownvalues":
+            _, dst, json = c
+            if prim & STR:
+                self.add(dst, [], STR)
+            constructors = ("Object", "Array", "Promise", "Error", "Symbol", "Number",
+                            "String", "Boolean", "Function", "Map", "Set")
+            for t in toks:
+                k = self.toks[t]
+                if t == TOP:
+                    self.add(dst, [TOP], ALL)
+                elif not (json and (k[0] in ("func", "bound", "classobj", "builtinfn", "builtinmethod")
+                          or (k[0] == "builtin" and k[1] in constructors))):
+                    self.edge(self.fall(t), dst)
+                    self.visits[t].add((t, "*", ("load", dst)))
+                    self.accessor_hit(t, t, "*", ("load", dst))
+        elif op == "coerce":
+            # Synthetic named calls are present in the relations dump too.
+            for t in toks:
+                if t == TOP or t in self.escaped:
+                    continue
+                hint = self.node()
+                self.add(hint, [], STR)
+                for name in ("toString", "valueOf", "@@__perry_wk_toPrimitive"):
+                    ret = self.node()
+                    call = self.new_call(("t", t), [hint] if name.endswith("toPrimitive") else [], [], ret)
+                    key = next((a for a, text in self.atoms.items() if text == name), None)
+                    if key is not None:
+                        self.method_on(t, key, call)
         elif op == "createproto":
             for t in toks:
                 k = self.toks[t]
@@ -410,7 +441,7 @@ class Solver:
                 k = self.toks[t]
                 if k[0] == "func":
                     self.addcons(holder, ("accinstall", key, k[1], setter))
-                elif k[0] in ("top", "builtinfn", "bound"):
+                elif k[0] in ("top", "builtinfn", "builtinmethod", "bound"):
                     fa = self.node()
                     self.add(fa, [TOP])
                     self.addcons(holder, ("store", "*", fa, -1))
@@ -418,6 +449,7 @@ class Solver:
         elif op == "accinstall":
             _, key, f, setter = c
             for t in toks:
+                self.note_builtin_write(t, key)
                 if t == TOP:
                     continue
                 if self.toks[t][0] == "objectproto":
@@ -671,7 +703,13 @@ class Solver:
     def bind_via(self, callee, call, origin):
         self.addcons(callee, ("callthis", call, origin))
 
+    def note_builtin_write(self, t, key=None):
+        if t == TOP or self.toks[t][0] in ("objectproto", "builtin"):
+            written = self.field(TOP, key) if key not in (None, "*") and self.atoms.get(key) not in (STAR, "__proto__") else self.fany(TOP)
+            self.add(written, [TOP])
+
     def store_into(self, t, key, src, site):
+        self.note_builtin_write(t, key)
         if key == "*" or (isinstance(key, int) and self.atoms[key] == "__proto__"):
             self.super_relink.add(t)
             kind, arg = self.toks[t]
@@ -880,7 +918,7 @@ class Solver:
     def escape(self, t):
         if t == TOP or t in self.escaped:
             return
-        if self.toks[t][0] in ("objectproto", "builtinfn", "builtin", "nativeproto"):
+        if self.toks[t][0] in ("objectproto", "builtinfn", "builtinmethod", "builtin", "nativeproto"):
             return
         self.escaped.add(t)
         if self.toks[t][0] == "proto":
@@ -935,6 +973,8 @@ class Solver:
                 self.edge(n, self.sink())
 
     def mark_hard(self, t, code):
+        if code in ("E5", "E6", "E7", "E15"):
+            self.note_builtin_write(t)
         if code == "E6":
             self.super_relink.add(t)
         if t == TOP or t in self.hard:
@@ -1008,6 +1048,8 @@ def load(path):
                     s.reasons[int(p[2])] = " ".join(p[3:])
                 elif what == "tok":
                     t = int(p[2]); k = (p[3], p[4] if len(p) > 4 else "-")
+                    if k[0] == "builtinmethod":
+                        k = (k[0], (p[4], int(p[5])))
                     if k[0] in ("obj", "func", "bound", "classobj", "proto", "modns"):
                         k = (k[0], int(k[1]))
                     s.toks[t] = k; s.tok_of[k] = t
@@ -1115,6 +1157,12 @@ def run(s, rel_lines):
             deferred.append((int(a[0]), ("hard", a[1])))
         elif rel == "addskeys":
             deferred.append((int(a[0]), ("addskeys",)))
+        elif rel == "builtinoverride":
+            deferred.append((int(a[0]), ("builtinoverride", int(a[1]))))
+        elif rel == "ownvalues":
+            deferred.append((int(a[0]), ("ownvalues", int(a[1]), bool(int(a[2])))))
+        elif rel == "coerce":
+            deferred.append((int(a[0]), ("coerce",)))
         elif rel == "implicit":
             deferred.append((int(a[0]), ("implicit",)))
         elif rel == "createproto":
@@ -1304,7 +1352,7 @@ def field_kind(s, t, a, definite):
                 top = True
             elif k[0] == "obj" and s.tmpls[k[1]]["kind"] in ("class", "lit", "fninst"):
                 objs.add(s.tmpls[k[1]]["display"])
-            elif k[0] in ("func", "bound", "builtinfn"):
+            elif k[0] in ("func", "bound", "builtinfn", "builtinmethod"):
                 funcs += 1
             else:
                 bobjs += 1

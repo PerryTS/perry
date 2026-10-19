@@ -1,0 +1,1 @@
+Improve builtin argument and callback facts for primitive methods, array operations, JSON and static builtin aliases. Preserve callback element and thisArg flow, model conversion hooks without invoking converted functions, ignore unused arguments, and retain conservative facts for written builtins. HIR intrinsics share the same summaries.

@@ -126,6 +126,14 @@ impl<'a> Gen<'a> {
         m.add_top(thrown, |_| "thrown value (runtime errors)".into());
         m.add_prim(thrown, prim::ALL);
         m.thrown = thrown;
+        let results = m.node_l("COERCION_RESULTS");
+        m.coercion_results = results;
+        m.nodes[results as usize].internal = true;
+        let coercions = m.node_l("COERCIONS");
+        m.coercions = coercions;
+        m.nodes[coercions as usize].internal = true;
+        let reason = m.reason("builtin conversion protocols");
+        m.cons(coercions, Cons::Coerce { reason });
         let cjs_registry = m.node_l("CJSREG");
         // This is a union relation, not a runtime value. Its cardinality
         // must not itself expose every registered module to unknown code.

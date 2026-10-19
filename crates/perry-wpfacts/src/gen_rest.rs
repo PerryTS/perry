@@ -85,6 +85,25 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// HIR intrinsics use the same summaries as method calls, so lowering
+    /// a builtin early cannot silently change its argument roles.
+    fn summary(&mut self, ns: BuiltinNs, name: &str, args: Vec<NodeId>) -> NodeId {
+        let ret = self.tmp("builtin-summary");
+        let call = self.m.calls.len() as CallId;
+        let t = self.m.tok(TokKind::Builtin(ns));
+        self.m.calls.push(CallSite {
+            this: ThisArg::Tok(t),
+            args,
+            spread: vec![],
+            ret,
+            site: call,
+        });
+        let key = Key::Named(self.m.atom(name));
+        self.m
+            .with_b(|m| crate::builtins::own_method(m, t, key, call));
+        ret
+    }
+
     pub(crate) fn expr_rest(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -235,10 +254,7 @@ impl<'a> Gen<'a> {
             | Expr::OsUserInfoBuffer
             | Expr::OsLoadavg
             | Expr::RegExpExecGroups
-            | Expr::ObjectKeys(..)
             | Expr::ForInKeys(..)
-            | Expr::ObjectGetOwnPropertyNames(..)
-            | Expr::ObjectGetOwnPropertySymbols(..)
             | Expr::ReflectOwnKeys(..)
             | Expr::StringSplit(..)
             | Expr::StringMatch { .. }
@@ -346,43 +362,6 @@ impl<'a> Gen<'a> {
             | Expr::SymbolToString(..)
             | Expr::FileURLToPath(..)
             | Expr::RegExpExecIndex
-            | Expr::JsonIsRawJson(..)
-            | Expr::MathFloor(..)
-            | Expr::MathCeil(..)
-            | Expr::MathRound(..)
-            | Expr::MathTrunc(..)
-            | Expr::MathSign(..)
-            | Expr::MathAbs(..)
-            | Expr::MathSqrt(..)
-            | Expr::MathLog(..)
-            | Expr::MathLog2(..)
-            | Expr::MathLog10(..)
-            | Expr::MathPow(..)
-            | Expr::MathMin(..)
-            | Expr::MathMax(..)
-            | Expr::MathImul(..)
-            | Expr::MathRandom
-            | Expr::MathSin(..)
-            | Expr::MathCos(..)
-            | Expr::MathTan(..)
-            | Expr::MathAsin(..)
-            | Expr::MathAcos(..)
-            | Expr::MathAtan(..)
-            | Expr::MathAtan2(..)
-            | Expr::MathCbrt(..)
-            | Expr::MathHypot(..)
-            | Expr::MathFround(..)
-            | Expr::MathF16round(..)
-            | Expr::MathClz32(..)
-            | Expr::MathExpm1(..)
-            | Expr::MathLog1p(..)
-            | Expr::MathSinh(..)
-            | Expr::MathCosh(..)
-            | Expr::MathTanh(..)
-            | Expr::MathAsinh(..)
-            | Expr::MathAcosh(..)
-            | Expr::MathAtanh(..)
-            | Expr::MathExp(..)
             | Expr::PerformanceNow
             | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
@@ -528,24 +507,12 @@ impl<'a> Gen<'a> {
             | Expr::UrlSearchParamsDelete { .. }
             | Expr::UrlSearchParamsToString(..)
             | Expr::UrlSearchParamsSort(..)
-            | Expr::ObjectIs(..)
-            | Expr::ObjectHasOwn(..)
-            | Expr::ArrayIsArray(..)
             | Expr::ArrayIterationPatched
             | Expr::ParseInt { .. }
             | Expr::ParseFloat(..)
-            | Expr::NumberCoerce(..)
-            | Expr::BigIntCoerce(..)
-            | Expr::StringCoerce(..)
-            | Expr::TemplateStringCoerce(..)
-            | Expr::BooleanCoerce(..)
             | Expr::IsNaN(..)
             | Expr::IsUndefinedOrBareNan(..)
             | Expr::IsFinite(..)
-            | Expr::NumberIsNaN(..)
-            | Expr::NumberIsFinite(..)
-            | Expr::NumberIsInteger(..)
-            | Expr::NumberIsSafeInteger(..)
             | Expr::ImportMetaUrl(..)
             | Expr::ProxyRevoke(..)
             | Expr::ReflectHas { .. }
@@ -553,6 +520,125 @@ impl<'a> Gen<'a> {
             | Expr::MathMinSpread(..)
             | Expr::MathMaxSpread(..) => {
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand")
+            }
+
+            Expr::NumberCoerce(..)
+            | Expr::BigIntCoerce(..)
+            | Expr::StringCoerce(..)
+            | Expr::TemplateStringCoerce(..) => {
+                let reason = self.m.reason("primitive builtin conversion");
+                for child in kids(e) {
+                    let n = self.expr(fx, child);
+                    self.m.cons(n, Cons::Coerce { reason });
+                }
+                self.prim_node(prim::ALL)
+            }
+            Expr::JsonIsRawJson(..) | Expr::BooleanCoerce(..) | Expr::NumberIsSafeInteger(..) => {
+                for child in kids(e) {
+                    let _ = self.expr(fx, child);
+                }
+                self.prim_node(prim::BOOL)
+            }
+
+            Expr::ObjectKeys(..)
+            | Expr::ObjectGetOwnPropertyNames(..)
+            | Expr::ObjectGetOwnPropertySymbols(..)
+            | Expr::ObjectHasOwn(..)
+            | Expr::ObjectIs(..)
+            | Expr::ArrayIsArray(..)
+            | Expr::NumberIsNaN(..)
+            | Expr::NumberIsFinite(..)
+            | Expr::NumberIsInteger(..)
+            | Expr::MathFloor(..)
+            | Expr::MathCeil(..)
+            | Expr::MathRound(..)
+            | Expr::MathTrunc(..)
+            | Expr::MathSign(..)
+            | Expr::MathAbs(..)
+            | Expr::MathSqrt(..)
+            | Expr::MathLog(..)
+            | Expr::MathLog2(..)
+            | Expr::MathLog10(..)
+            | Expr::MathPow(..)
+            | Expr::MathMin(..)
+            | Expr::MathMax(..)
+            | Expr::MathImul(..)
+            | Expr::MathRandom
+            | Expr::MathSin(..)
+            | Expr::MathCos(..)
+            | Expr::MathTan(..)
+            | Expr::MathAsin(..)
+            | Expr::MathAcos(..)
+            | Expr::MathAtan(..)
+            | Expr::MathAtan2(..)
+            | Expr::MathCbrt(..)
+            | Expr::MathHypot(..)
+            | Expr::MathFround(..)
+            | Expr::MathF16round(..)
+            | Expr::MathClz32(..)
+            | Expr::MathExpm1(..)
+            | Expr::MathLog1p(..)
+            | Expr::MathSinh(..)
+            | Expr::MathCosh(..)
+            | Expr::MathTanh(..)
+            | Expr::MathAsinh(..)
+            | Expr::MathAcosh(..)
+            | Expr::MathAtanh(..)
+            | Expr::MathExp(..) => {
+                let (ns, name) = match e {
+                    Expr::ObjectKeys(..) => (BuiltinNs::Object, "keys"),
+                    Expr::ObjectGetOwnPropertyNames(..) => {
+                        (BuiltinNs::Object, "getOwnPropertyNames")
+                    }
+                    Expr::ObjectGetOwnPropertySymbols(..) => {
+                        (BuiltinNs::Object, "getOwnPropertySymbols")
+                    }
+                    Expr::ObjectHasOwn(..) => (BuiltinNs::Object, "hasOwn"),
+                    Expr::ObjectIs(..) => (BuiltinNs::Object, "is"),
+                    Expr::ArrayIsArray(..) => (BuiltinNs::Array, "isArray"),
+                    Expr::NumberIsNaN(..) => (BuiltinNs::Number, "isNaN"),
+                    Expr::NumberIsFinite(..) => (BuiltinNs::Number, "isFinite"),
+                    Expr::NumberIsInteger(..) => (BuiltinNs::Number, "isInteger"),
+                    Expr::MathFloor(..) => (BuiltinNs::Math, "floor"),
+                    Expr::MathCeil(..) => (BuiltinNs::Math, "ceil"),
+                    Expr::MathRound(..) => (BuiltinNs::Math, "round"),
+                    Expr::MathTrunc(..) => (BuiltinNs::Math, "trunc"),
+                    Expr::MathSign(..) => (BuiltinNs::Math, "sign"),
+                    Expr::MathAbs(..) => (BuiltinNs::Math, "abs"),
+                    Expr::MathSqrt(..) => (BuiltinNs::Math, "sqrt"),
+                    Expr::MathLog(..) => (BuiltinNs::Math, "log"),
+                    Expr::MathLog2(..) => (BuiltinNs::Math, "log2"),
+                    Expr::MathLog10(..) => (BuiltinNs::Math, "log10"),
+                    Expr::MathPow(..) => (BuiltinNs::Math, "pow"),
+                    Expr::MathMin(..) => (BuiltinNs::Math, "min"),
+                    Expr::MathMax(..) => (BuiltinNs::Math, "max"),
+                    Expr::MathImul(..) => (BuiltinNs::Math, "imul"),
+                    Expr::MathRandom => (BuiltinNs::Math, "random"),
+                    Expr::MathSin(..) => (BuiltinNs::Math, "sin"),
+                    Expr::MathCos(..) => (BuiltinNs::Math, "cos"),
+                    Expr::MathTan(..) => (BuiltinNs::Math, "tan"),
+                    Expr::MathAsin(..) => (BuiltinNs::Math, "asin"),
+                    Expr::MathAcos(..) => (BuiltinNs::Math, "acos"),
+                    Expr::MathAtan(..) => (BuiltinNs::Math, "atan"),
+                    Expr::MathAtan2(..) => (BuiltinNs::Math, "atan2"),
+                    Expr::MathCbrt(..) => (BuiltinNs::Math, "cbrt"),
+                    Expr::MathHypot(..) => (BuiltinNs::Math, "hypot"),
+                    Expr::MathFround(..) => (BuiltinNs::Math, "fround"),
+                    Expr::MathF16round(..) => (BuiltinNs::Math, "f16round"),
+                    Expr::MathClz32(..) => (BuiltinNs::Math, "clz32"),
+                    Expr::MathExpm1(..) => (BuiltinNs::Math, "expm1"),
+                    Expr::MathLog1p(..) => (BuiltinNs::Math, "log1p"),
+                    Expr::MathSinh(..) => (BuiltinNs::Math, "sinh"),
+                    Expr::MathCosh(..) => (BuiltinNs::Math, "cosh"),
+                    Expr::MathTanh(..) => (BuiltinNs::Math, "tanh"),
+                    Expr::MathAsinh(..) => (BuiltinNs::Math, "asinh"),
+                    Expr::MathAcosh(..) => (BuiltinNs::Math, "acosh"),
+                    Expr::MathAtanh(..) => (BuiltinNs::Math, "atanh"),
+                    Expr::MathExp(..) => (BuiltinNs::Math, "exp"),
+                    _ => unreachable!("summary arm"),
+                };
+                let args = kids(e).into_iter().map(|x| self.expr(fx, x)).collect();
+                self.summary(ns, name, args)
             }
 
             // ------------------------------------------- builtin objects
@@ -727,34 +813,42 @@ impl<'a> Gen<'a> {
                 self.m.cons(on, Cons::ProtoFrom { src: pn });
                 on
             }
-            Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
-                let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text");
+            Expr::JsonParse(text) | Expr::JsonParseTyped { text, .. } => {
+                let text = self.expr(fx, text);
+                self.summary(BuiltinNs::Json, "parse", vec![text])
+            }
+            Expr::JsonRawJson(..) => {
+                let _ = self.prim_kids(fx, e, prim::STR, "JSON.rawJSON text");
                 self.json_value(mi)
             }
             Expr::JsonParseReviver { text, reviver }
             | Expr::JsonParseWithReviver(text, reviver) => {
-                let _ = self.prim_op(fx, &[text], prim::STR, "JSON.parse text");
+                let text = self.expr(fx, text);
                 let rv = self.expr(fx, reviver);
-                let v = self.json_value(mi);
-                let s = self.prim_node(prim::STR);
-                let vals = self.load(v, Key::Any);
-                let holder = v;
-                let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
-                // The reviver's results replace values in the parsed tree.
-                let tmp = self.tmp("revived");
-                self.m.edge(ret, tmp);
-                self.elem_store(fx, v, tmp, "reviver");
-                let out = self.tmp("json-out");
-                self.m.edge(v, out);
-                self.m.edge(ret, out);
-                out
+                self.summary(BuiltinNs::Json, "parse", vec![text, rv])
             }
-            Expr::JsonStringify(..)
-            | Expr::JsonStringifyFull(..)
-            | Expr::JsonStringifyPretty { .. } => {
-                // toJSON / getters run; replacer functions are called by
-                // the runtime with runtime values.
-                self.prim_kids(fx, e, prim::STR | prim::UNDEF, "JSON.stringify value")
+            Expr::JsonStringify(value) => {
+                let value = self.expr(fx, value);
+                self.summary(BuiltinNs::Json, "stringify", vec![value])
+            }
+            Expr::JsonStringifyFull(value, replacer, space) => {
+                let value = self.expr(fx, value);
+                let replacer = self.expr(fx, replacer);
+                let space = self.expr(fx, space);
+                self.summary(BuiltinNs::Json, "stringify", vec![value, replacer, space])
+            }
+            Expr::JsonStringifyPretty {
+                value,
+                replacer,
+                space,
+            } => {
+                let value = self.expr(fx, value);
+                let replacer = replacer
+                    .as_ref()
+                    .map(|x| self.expr(fx, x))
+                    .unwrap_or_else(|| self.prim_node(prim::UNDEF));
+                let space = self.expr(fx, space);
+                self.summary(BuiltinNs::Json, "stringify", vec![value, replacer, space])
             }
             Expr::WebAssemblyCompile(..)
             | Expr::WebAssemblyModuleNew(..)
@@ -1036,15 +1130,24 @@ impl<'a> Gen<'a> {
                 pattern,
                 replacement,
             } => {
-                let _ = self.prim_op(fx, &[string, pattern], prim::STR, "String.replace");
-                let r = self.expr(fx, replacement);
-                let s = self.prim_node(prim::STR);
-                let ret = self.callback(r, vec![s; 4]);
-                let why = self.m.reason("replace callback result ToString");
-                self.m.cons(ret, Cons::Implicit { reason: why });
-                let rc = self.m.reason("replacement ToString");
-                self.m.cons(r, Cons::Implicit { reason: rc });
-                self.prim_node(prim::STR)
+                let string = self.expr(fx, string);
+                let pattern = self.expr(fx, pattern);
+                let replacement = self.expr(fx, replacement);
+                let reason = self.m.reason("String.replace receiver conversion");
+                self.m.cons(string, Cons::Coerce { reason });
+                let ret = self.tmp("replace");
+                let call = self.m.calls.len() as CallId;
+                self.m.calls.push(CallSite {
+                    this: ThisArg::Node(string),
+                    args: vec![pattern, replacement],
+                    spread: vec![],
+                    ret,
+                    site: call,
+                });
+                let key = Key::Named(self.m.atom("replace"));
+                self.m
+                    .with_b(|m| crate::builtins::prim_method(m, prim::STR, key, call));
+                ret
             }
 
             // ------------------------------------------------------ arrays
@@ -1360,17 +1463,17 @@ impl<'a> Gen<'a> {
                 self.m.edge(inner, fa);
                 n
             }
-            Expr::ObjectValues(x) => {
-                let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
-                self.new_arr_from(mi, "values", &[el])
-            }
-            Expr::ObjectEntries(x) => {
-                let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
-                let s = self.prim_node(prim::STR);
-                let pair = self.new_arr_from(mi, "entry", &[el, s]);
-                self.new_arr_from(mi, "entries", &[pair])
+            Expr::ObjectValues(x) | Expr::ObjectEntries(x) => {
+                let value = self.expr(fx, x);
+                self.summary(
+                    BuiltinNs::Object,
+                    if matches!(e, Expr::ObjectValues(_)) {
+                        "values"
+                    } else {
+                        "entries"
+                    },
+                    vec![value],
+                )
             }
             Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
                 let v = self.expr(fx, items);
@@ -1387,7 +1490,11 @@ impl<'a> Gen<'a> {
                 self.m.edge(k, fa);
                 n
             }
-            Expr::ArrayFrom(x, _) | Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
+            Expr::ArrayFrom(x, _) => {
+                let value = self.expr(fx, x);
+                self.summary(BuiltinNs::Array, "from", vec![value])
+            }
+            Expr::IteratorToArray(x) | Expr::ForOfToArray(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
                 self.new_arr_from(mi, "from", &[it])
@@ -1410,16 +1517,13 @@ impl<'a> Gen<'a> {
                 map_fn,
                 this_arg,
             } => {
-                let v = self.expr(fx, iterable);
-                let it = self.iterate(v);
-                let f = self.expr(fx, map_fn);
-                let this = match this_arg {
-                    Some(t) => ThisArg::Node(self.expr(fx, t)),
-                    None => ThisArg::Undef,
-                };
-                let num = self.prim_node(prim::NUM);
-                let ret = self.call_value(f, this, vec![it, num], vec![]);
-                self.new_arr_from(mi, "fromMapped", &[ret])
+                let value = self.expr(fx, iterable);
+                let cb = self.expr(fx, map_fn);
+                let this = this_arg
+                    .as_ref()
+                    .map(|x| self.expr(fx, x))
+                    .unwrap_or_else(|| self.prim_node(prim::UNDEF));
+                self.summary(BuiltinNs::Array, "from", vec![value, cb, this])
             }
             Expr::IteratorFrom(x) | Expr::GetIterator(x) | Expr::GetAsyncIterator(x) => {
                 let v = self.expr(fx, x);

@@ -100,6 +100,8 @@ pub enum TokKind {
     Builtin(BuiltinNs),
     /// An opaque runtime function value (a builtin method read as a value).
     BuiltinFn,
+    /// Identity of a summarized static builtin read as a function value.
+    BuiltinMethod(BuiltinNs, Atom),
     /// A runtime-created container that holds only primitives (split/match
     /// results, `Object.keys` arrays …). Shared by every such container.
     PrimBox,
@@ -298,6 +300,12 @@ pub enum Cons {
     AddsKeys,
     /// Builtin protocol touch: ToPrimitive / iterator / toJSON / then …
     Implicit { reason: u32 },
+    /// ToPrimitive/ToString only: functions are objects, never callbacks.
+    Coerce { reason: u32 },
+    /// A written builtin method retains the complete opaque-call fallback.
+    BuiltinOverride { call: CallId },
+    /// Own property values; JSON skips function-valued objects.
+    OwnValues { dst: NodeId, json: bool },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(t)`: dst ⊇ the values of `key` on each
@@ -410,6 +418,9 @@ impl Cons {
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
             Cons::Implicit { .. } => "implicit",
+            Cons::Coerce { .. } => "coerce",
+            Cons::BuiltinOverride { .. } => "builtinoverride",
+            Cons::OwnValues { .. } => "ownvalues",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoClosure { .. } => "protoclosure",
@@ -602,6 +613,14 @@ pub struct Model {
     pub ta_elem: FxHashMap<TmplId, u8>,
     pub resolvers: FxHashMap<NodeId, Tok>,
     pub thrown: NodeId,
+    /// Conversion operands joined in the inclusion graph. Hook arguments
+    /// depend only on the converted token, so each token's conversion edges
+    /// are generated once by this node's ordinary delta propagation.
+    pub coercions: NodeId,
+    /// Hook results are inspected only for primitive-ness by conversion;
+    /// object results do not escape. One internal result node avoids
+    /// copying the same method return set into unused per-call collectors.
+    pub coercion_results: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
     pub bound_index: FxHashMap<(CallId, Tok), u32>,
@@ -691,6 +710,26 @@ impl Model {
     /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
+        // These existing write sites also provide a monotone dependency
+        // for argument-role summaries. TOP can hold an intrinsic prototype;
+        // a named write revokes only that key, an unknown key revokes all.
+        if t == TOP
+            || matches!(
+                self.toks[t as usize],
+                TokKind::ObjectProto | TokKind::Builtin(_)
+            )
+        {
+            let written = match key {
+                Some(Key::Named(a))
+                    if self.atoms[a as usize] != crate::STAR_KEY
+                        && self.atoms[a as usize] != "__proto__" =>
+                {
+                    self.field(TOP, a)
+                }
+                _ => self.field_any(TOP),
+            };
+            self.add_tok(written, TOP);
+        }
         if self.fnproto_write.is_some()
             || !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto))
         {
@@ -831,6 +870,9 @@ impl Model {
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
             TokKind::BuiltinFn => "builtin-fn".into(),
+            TokKind::BuiltinMethod(ns, key) => {
+                format!("builtin-method:{ns:?}.{}", self.atoms[*key as usize])
+            }
             TokKind::PrimBox => "primbox".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
@@ -887,6 +929,7 @@ impl Model {
                 TokKind::ObjectProto => "objectproto -".into(),
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
                 TokKind::BuiltinFn => "builtinfn -".into(),
+                TokKind::BuiltinMethod(ns, key) => format!("builtinmethod {ns:?} {key}"),
                 TokKind::PrimBox => "primbox -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n) => format!("nativeproto {n}"),
