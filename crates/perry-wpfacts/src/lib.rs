@@ -185,7 +185,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         g.m.sink_node(thrown, r);
     }
     g.m.summarize_and_replay();
-    if cfg.profile {
+    if cfg.profile || cfg.explain {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
     g.m.solve();

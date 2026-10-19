@@ -27,6 +27,9 @@ impl Model {
         // below, but do not retain an edge waiting for impossible updates.
         if !(self.nodes[a as usize].widened && self.nodes[a as usize].prim == prim::ALL) {
             let b_widened = self.nodes[b as usize].widened;
+            // An observation target's ⊤ leaves only its own sites unproven:
+            // nothing escapes at the source.
+            let b_obs_wide = b_widened && self.nodes[b as usize].obs;
             {
                 let node = &mut self.nodes[a as usize];
                 match &mut node.succ_set {
@@ -63,7 +66,9 @@ impl Model {
                     // A widened source has only TOP forever; the initial copy below
                     // delivers it. A widened target escapes values at the source.
                     // Both kinds of edge carry only future primitive changes.
-                    node.esc_out = true;
+                    if node.widened || !b_obs_wide {
+                        node.esc_out = true;
+                    }
                     node.prim_succ.push(b);
                 }
             }
@@ -136,7 +141,7 @@ impl Model {
             || source.widened
             || target.widened
             || len.checked_sub(count) != Some(target.pts.len())
-            || (!target.internal && self.widen_k != 0 && len > self.widen_k)
+            || (!target.internal && !target.obs && self.widen_k != 0 && len > self.widen_k)
         {
             return false;
         }

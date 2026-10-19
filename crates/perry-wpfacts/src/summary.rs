@@ -599,6 +599,7 @@ fn build_summaries(m: &mut Model) {
     //    on a slice node, or a call with a slice operand that no rule runs
     //    keeps the function's shared binding.
     let mut refused: FxHashSet<FnIdx> = FxHashSet::default();
+    let mut why: FxHashMap<FnIdx, String> = FxHashMap::default();
     struct Entries {
         cons: Vec<(NodeId, u32)>,
         calls: Vec<CallId>,
@@ -632,6 +633,7 @@ fn build_summaries(m: &mut Model) {
             for (i, c) in m.nodes[x as usize].cons.iter().enumerate() {
                 if !gen_kind(c) {
                     bad = true;
+                    why.entry(f).or_insert_with(|| format!("solver rule {} on {}", c.kind_name(), m.labels[x as usize]));
                 }
                 take(x, i as u32, m, &mut cons);
             }
@@ -691,9 +693,11 @@ fn build_summaries(m: &mut Model) {
             }
             if !run_calls.contains(&k) {
                 bad = true;
+                why.entry(f).or_insert_with(|| format!("call {k} run by no rule"));
             }
         }
         if bad {
+            why.entry(f).or_insert_with(|| "touches another summarized slice".into());
             refused.insert(f);
         }
         entries.insert(f, Entries { cons, calls });
@@ -787,6 +791,14 @@ fn build_summaries(m: &mut Model) {
                     node.succ.iter().chain(node.prim_succ.iter()).copied().collect();
                 node.succ_set = Some(Rc::new(set));
             }
+        }
+    }
+    if m.explain {
+        let mut v: Vec<_> = refused.iter().copied().collect();
+        v.sort_unstable();
+        for f in v {
+            let w = why.get(&f).map_or("touched by another summarized slice", |s| s.as_str());
+            eprintln!("perry: wpfacts explain: summary refused {}: {w}", m.funcs[f as usize].name);
         }
     }
     m.sum.stats = format!(

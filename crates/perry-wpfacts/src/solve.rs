@@ -68,7 +68,10 @@ impl Model {
                     self.aborted = true;
                 }
             }
-            if self.widen_k != 0 && node.pts.len() > self.widen_k && !node.internal {
+            // An observation node is never widened: its set is a closed set of
+            // program values (the read sites' facts), and nothing escapes
+            // from it.
+            if self.widen_k != 0 && node.pts.len() > self.widen_k && !node.internal && !node.obs {
                 // Sound widening: the members escape (unknown code may do
                 // anything with them) and the set becomes ⊤.
                 node.widened = true;
@@ -83,6 +86,12 @@ impl Model {
                 node.pts = crate::pts::Pts::default();
                 node.pts.insert(TOP);
                 if self.explain {
+                    let obs = self.nodes[n as usize].obs;
+                    eprintln!(
+                        "perry: wpfacts explain: widened {} node {n}{}",
+                        self.labels[n as usize],
+                        if obs { " (observation)" } else { "" }
+                    );
                     let r = self.reason("widened (context-insensitive merge)");
                     self.top_pred.entry(n).or_insert((NO_NODE, r));
                 }
