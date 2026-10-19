@@ -167,7 +167,7 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
         disable_constfn_shapes: false,
         ..Default::default()
     };
-    opts.type_aliases.insert("Payload".to_string(), payload);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Payload".to_string(), payload);
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
         .expect("LLVM IR is UTF-8");
 
@@ -734,7 +734,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         disable_constfn_shapes: false,
         ..Default::default()
     };
-    opts.type_aliases.insert("Payload".to_string(), payload);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("Payload".to_string(), payload);
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
         .expect("LLVM IR is UTF-8");
     let public = function_ir(&ir, "@perry_fn_ordinary_param_guard_async_ts__renderAsync(");
@@ -972,7 +972,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         disable_constfn_shapes: false,
         ..Default::default()
     };
-    opts.type_aliases.insert("FlatNode".to_string(), flat_node);
+    std::sync::Arc::make_mut(&mut opts.type_aliases).insert("FlatNode".to_string(), flat_node);
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
         .expect("LLVM IR is UTF-8");
     let public = function_ir(&ir, "@perry_fn_recursive_guard_narrowing_ts__evalNode(");

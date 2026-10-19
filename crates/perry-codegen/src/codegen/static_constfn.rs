@@ -162,26 +162,110 @@ pub(crate) fn collect_literal_finals(
         }
         if let Expr::Call { callee, args, .. } = e {
             if let Expr::Closure { params, body, .. } = callee.as_ref() {
-                let mut seeded: Vec<Stmt> = params
+                // An IIFE binds its parameters to its arguments and runs its
+                // body once: walk that body once, with the bindings, then the
+                // arguments and parameter defaults. Visiting the callee as a
+                // child would walk the body (and the arguments) a second
+                // time, which doubles per nesting level.
+                let seeds: Vec<(u32, &Expr)> = params
                     .iter()
                     .zip(args)
-                    .map(|(param, arg)| Stmt::Let {
-                        id: param.id,
-                        name: param.name.clone(),
-                        ty: param.ty.clone(),
-                        mutable: false,
-                        init: Some(arg.clone()),
-                    })
+                    .map(|(param, arg)| (param.id, arg))
                     .collect();
-                seeded.extend(body.iter().cloned());
-                stmts(&seeded, module, prefix, reps, widths, out);
+                block(&seeds, body, module, prefix, reps, widths, out);
+                for default in params.iter().filter_map(|param| param.default.as_ref()) {
+                    expr(default, module, prefix, reps, widths, out);
+                }
+                for arg in args {
+                    expr(arg, module, prefix, reps, widths, out);
+                }
+                return;
             }
         }
         perry_hir::walker::walk_expr_children(e, &mut |child| {
             expr(child, module, prefix, reps, widths, out)
         });
     }
+    type Builders = HashMap<u32, (Vec<(String, Expr)>, u32, u32, bool)>;
     fn stmts(
+        body: &[Stmt],
+        m: &Module,
+        p: &str,
+        r: &HashMap<String, u64>,
+        w: &HashMap<String, u32>,
+        out: &mut LiteralFinals,
+    ) {
+        block(&[], body, m, p, r, w, out);
+    }
+    /// One local bound to its initializer: a `let`, or an IIFE parameter
+    /// bound to its argument.
+    fn bind(id: u32, seed: &Expr, m: &Module, builders: &mut Builders, out: &mut LiteralFinals) {
+        let props = match seed {
+            Expr::Object(props) => Some(props.clone()),
+            Expr::New {
+                class_name, args, ..
+            } => m
+                .classes
+                .iter()
+                .find(|c| c.name == *class_name)
+                .and_then(|c| anon_props(c, args)),
+            Expr::PropertyGet {
+                object, property, ..
+            } => match object.as_ref() {
+                Expr::LocalGet(owner) => builders
+                    .get(owner)
+                    .and_then(|(props, _, _, _)| {
+                        props.iter().find(|(key, _)| key == property)
+                    })
+                    .and_then(|(_, value)| match value {
+                        Expr::Object(props) => Some(props.clone()),
+                        Expr::New {
+                            class_name, args, ..
+                        } => m
+                            .classes
+                            .iter()
+                            .find(|c| c.name == *class_name)
+                            .and_then(|c| anon_props(c, args)),
+                        _ => None,
+                    }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(source) = ObjectSource::of(seed) {
+            out.sources.insert(id, source);
+        }
+        let returned = match seed {
+            Expr::Closure { body, .. } => ObjectSource::returned(body),
+            Expr::FuncRef(fid) => m
+                .functions
+                .iter()
+                .find(|f| f.id == *fid)
+                .and_then(|f| ObjectSource::returned(&f.body)),
+            _ => None,
+        };
+        if let Some(source) = returned {
+            out.callables.insert(id, source);
+        }
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = seed
+        {
+            if let Expr::LocalGet(owner) = object.as_ref() {
+                out.properties.insert((*owner, property.clone()), id);
+            }
+        }
+        if let Some(props) = props {
+            let capacity =
+                (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
+            let birth_keys = props.len() as u32;
+            builders.insert(id, (props, capacity, birth_keys, false));
+        }
+    }
+    /// `body` with `seeds` bound first (an IIFE's parameters). Seed values
+    /// are bound, not walked: the caller walks them as the call's arguments.
+    fn block(
+        seeds: &[(u32, &Expr)],
         body: &[Stmt],
         m: &Module,
         p: &str,
@@ -192,7 +276,10 @@ pub(crate) fn collect_literal_finals(
         // Follow the very same source-ordered construction as literal births.
         // These are candidate contents, not a proof that no code adds a key.
         // The call's full layout comparison is the authority.
-        let mut builders: HashMap<u32, (Vec<(String, Expr)>, u32, u32, bool)> = HashMap::new();
+        let mut builders: Builders = HashMap::new();
+        for &(id, seed) in seeds {
+            bind(id, seed, m, &mut builders, out);
+        }
         for stmt in body {
             if let Stmt::Let {
                 id,
@@ -200,67 +287,7 @@ pub(crate) fn collect_literal_finals(
                 ..
             } = stmt
             {
-                let props = match seed {
-                    Expr::Object(props) => Some(props.clone()),
-                    Expr::New {
-                        class_name, args, ..
-                    } => m
-                        .classes
-                        .iter()
-                        .find(|c| c.name == *class_name)
-                        .and_then(|c| anon_props(c, args)),
-                    Expr::PropertyGet {
-                        object, property, ..
-                    } => match object.as_ref() {
-                        Expr::LocalGet(owner) => builders
-                            .get(owner)
-                            .and_then(|(props, _, _, _)| {
-                                props.iter().find(|(key, _)| key == property)
-                            })
-                            .and_then(|(_, value)| match value {
-                                Expr::Object(props) => Some(props.clone()),
-                                Expr::New {
-                                    class_name, args, ..
-                                } => m
-                                    .classes
-                                    .iter()
-                                    .find(|c| c.name == *class_name)
-                                    .and_then(|c| anon_props(c, args)),
-                                _ => None,
-                            }),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                if let Some(source) = ObjectSource::of(seed) {
-                    out.sources.insert(*id, source);
-                }
-                let returned = match seed {
-                    Expr::Closure { body, .. } => ObjectSource::returned(body),
-                    Expr::FuncRef(fid) => m
-                        .functions
-                        .iter()
-                        .find(|f| f.id == *fid)
-                        .and_then(|f| ObjectSource::returned(&f.body)),
-                    _ => None,
-                };
-                if let Some(source) = returned {
-                    out.callables.insert(*id, source);
-                }
-                if let Expr::PropertyGet {
-                    object, property, ..
-                } = seed
-                {
-                    if let Expr::LocalGet(owner) = object.as_ref() {
-                        out.properties.insert((*owner, property.clone()), *id);
-                    }
-                }
-                if let Some(props) = props {
-                    let capacity =
-                        (props.len() as u32).max(crate::target_layout::INLINE_SLOT_FLOOR as u32);
-                    let birth_keys = props.len() as u32;
-                    builders.insert(*id, (props, capacity, birth_keys, false));
-                }
+                bind(*id, seed, m, &mut builders, out);
             }
             if let Stmt::Expr(e) = stmt {
                 let store = match e {

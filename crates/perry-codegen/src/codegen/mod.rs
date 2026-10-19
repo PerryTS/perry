@@ -31,8 +31,8 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -48,59 +48,94 @@ pub(super) struct CompileProgress {
     started: Instant,
     last_checkpoint: Cell<Instant>,
     phase: Arc<AtomicU8>,
-    stop: Arc<AtomicBool>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    /// This module's row in the heartbeat's in-flight list.
+    ticket: Option<u64>,
     module: String,
+    stage: &'static str,
+}
+
+/// Every module in a codegen stage right now, for the one heartbeat thread.
+/// A stage that runs long names itself even when its module is too small for
+/// detailed progress: a births pre-pass once ran for an hour with no output.
+struct InFlight {
+    next: u64,
+    modules: Vec<(u64, String, &'static str, Instant, Arc<AtomicU8>)>,
+}
+
+static IN_FLIGHT: Mutex<InFlight> = Mutex::new(InFlight {
+    next: 0,
+    modules: Vec::new(),
+});
+static HEARTBEAT: Once = Once::new();
+
+const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+
+fn start_heartbeat() {
+    HEARTBEAT.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("perry-progress".into())
+            .spawn(|| loop {
+                std::thread::sleep(HEARTBEAT_EVERY);
+                let in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+                for (_, module, stage, started, phase) in &in_flight.modules {
+                    let elapsed = started.elapsed();
+                    if elapsed < HEARTBEAT_EVERY {
+                        continue;
+                    }
+                    let label = match phase.load(Ordering::Relaxed) {
+                        0 => "lowering HIR",
+                        1 => "finalizing generated IR",
+                        2 => "partitioning/freezing/LLVM codegen",
+                        3 => "releasing generated IR",
+                        _ => "LLVM optimization and object emission",
+                    };
+                    eprintln!(
+                        "[perry] codegen: {module}: {stage}: {label}, elapsed {:.1} min",
+                        elapsed.as_secs_f64() / 60.0
+                    );
+                }
+            });
+        // Progress is diagnostic: a compile without a heartbeat still compiles.
+        drop(spawned);
+    });
 }
 
 impl CompileProgress {
-    fn new(module: &str, callables: usize) -> Self {
+    fn new(module: &str, callables: usize, births: bool) -> Self {
         let progress_mode = std::env::var("PERRY_CODEGEN_PROGRESS").unwrap_or_default();
         // Avoid three status lines for every tiny module in dependency-heavy
         // projects. Long modules get automatic reporting; `=all` is the
         // diagnostic override when per-module detail is wanted regardless.
+        // The heartbeat covers every module whenever progress is on.
         let enabled = progress_mode == "all" || (progress_mode == "1" && callables >= 1_000);
+        let stage = if births { "births pre-pass" } else { "lowering" };
         let started = Instant::now();
         let phase = Arc::new(AtomicU8::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
         if enabled {
-            eprintln!("[perry] codegen: lowering {module} ({callables} callables)");
+            eprintln!("[perry] codegen: {stage} {module} ({callables} callables)");
         }
-        let worker = enabled.then(|| {
-            let phase = Arc::clone(&phase);
-            let stop = Arc::clone(&stop);
-            let module = module.to_string();
-            std::thread::Builder::new()
-                .name("perry-progress".into())
-                .spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        std::thread::park_timeout(Duration::from_secs(30));
-                        if stop.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        let label = match phase.load(Ordering::Relaxed) {
-                            0 => "lowering HIR",
-                            1 => "finalizing generated IR",
-                            2 => "partitioning/freezing/LLVM codegen",
-                            3 => "releasing generated IR",
-                            _ => "LLVM optimization and object emission",
-                        };
-                        eprintln!(
-                            "[perry] codegen: {module}: {label}, elapsed {:.1} min",
-                            started.elapsed().as_secs_f64() / 60.0
-                        );
-                    }
-                })
-                .expect("spawn Perry progress reporter")
+        let ticket = matches!(progress_mode.as_str(), "1" | "all").then(|| {
+            start_heartbeat();
+            let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+            let ticket = in_flight.next;
+            in_flight.next += 1;
+            in_flight.modules.push((
+                ticket,
+                module.to_string(),
+                stage,
+                started,
+                Arc::clone(&phase),
+            ));
+            ticket
         });
         Self {
             enabled,
             started,
             last_checkpoint: Cell::new(started),
             phase,
-            stop,
-            worker,
+            ticket,
             module: module.to_string(),
+            stage,
         }
     }
 
@@ -159,15 +194,18 @@ impl CompileProgress {
 
 impl Drop for CompileProgress {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(worker) = self.worker.take() {
-            worker.thread().unpark();
-            let _ = worker.join();
+        if let Some(ticket) = self.ticket {
+            IN_FLIGHT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .modules
+                .retain(|(t, ..)| *t != ticket);
         }
         if self.enabled {
             eprintln!(
-                "[perry] codegen: {}: stage finished in {:.1}s",
+                "[perry] codegen: {}: {} finished in {:.1}s",
                 self.module,
+                self.stage,
                 self.started.elapsed().as_secs_f64()
             );
         }
@@ -535,7 +573,7 @@ fn lower_module(
         || !opts.thread_literal_module_prefixes.is_empty()
         || local_thread_use;
     let agent_strings_tls = opts.program_has_worker || thread_agents;
-    let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
+    let progress = CompileProgress::new(&hir.name, module_callable_count(hir), collect_births);
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     // ConstFn lanes are one decision for the whole compile, from its options.
     let constfn_enabled = static_constfn::enabled(&opts);

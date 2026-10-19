@@ -1687,6 +1687,12 @@ pub fn run_with_parse_cache(
             }
         }
     }
+    // One map for the program, shared by every module's options: all modules'
+    // options are prepared before codegen starts, so a copy per module held
+    // the whole program's aliases once per module.
+    let all_type_aliases: std::sync::Arc<
+        std::collections::HashMap<String, perry_hir::types::Type>,
+    > = std::sync::Arc::new(all_type_aliases.into_iter().collect());
 
     // Build a map of all exported classes from all modules
     // Key: (resolved_path, class_name) -> Class reference
@@ -5874,11 +5880,7 @@ pub fn run_with_parse_cache(
         }
 
         // Type aliases from all modules
-        let type_alias_map: std::collections::HashMap<String, perry_hir::types::Type> =
-            all_type_aliases
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+        let type_alias_map = std::sync::Arc::clone(&all_type_aliases);
 
         // Resolve the CLI's short target name (ios/android/etc.) to
         // an LLVM triple. `None` falls through to the host default
@@ -6110,6 +6112,26 @@ pub fn run_with_parse_cache(
     // collision. A module then embeds the ids of its own contents; nothing
     // is keyed by class name.
     let static_shape_started = Instant::now();
+    // The whole-program steps between the front end and module codegen can
+    // run for minutes on a large graph. Each names itself when it starts and
+    // ends, with its time and resident memory, so a stalled or growing step
+    // shows in the log.
+    let program_step = |label: &str, started: Option<Instant>| {
+        if !codegen_progress_enabled {
+            return;
+        }
+        let resident = perry_codegen::workers::resident_bytes()
+            .map(|(rss, _)| format!(" (resident {:.0} MiB)", rss as f64 / 1_048_576.0))
+            .unwrap_or_default();
+        match started {
+            None => eprintln!("[perry] codegen: {label}{resident}"),
+            Some(started) => eprintln!(
+                "[perry] codegen: {label} done in {:.1}s{resident}",
+                started.elapsed().as_secs_f64()
+            ),
+        }
+    };
+    program_step("births pre-pass", None);
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
         .install(|| {
             ctx.native_modules
@@ -6137,6 +6159,7 @@ pub fn run_with_parse_cache(
                 .collect::<Result<Vec<_>, String>>()
         })
         .map_err(|error| anyhow!(error))?;
+    program_step("births pre-pass", Some(static_shape_started));
     let static_shape_ids = perry_codegen::assign_static_shape_ids(
         module_births
             .iter()
@@ -6180,6 +6203,8 @@ pub fn run_with_parse_cache(
     // each module's codegen gets only the digest of the facts it can observe
     // (object-cache key) and, in a contract build, the claims section the
     // runtime checks. See `program_facts.rs` for the knobs.
+    let facts_started = Instant::now();
+    program_step("whole-program facts", None);
     let program_facts = super::program_facts::run(
         &ctx.native_modules,
         // The dyn-eval interpreter is installed (E14 possible): the same
@@ -6196,6 +6221,7 @@ pub fn run_with_parse_cache(
         &ctx.native_modules,
         super::program_facts::has_stable_classes(&program_facts),
     );
+    program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         PathBuf,
@@ -6261,6 +6287,8 @@ pub fn run_with_parse_cache(
     // Finish cross-module option preparation while the complete HIR graph is
     // available. Jobs then own their input, so lowering can release each HIR
     // before LLVM starts. The link phase needs only names and export metadata.
+    let options_started = Instant::now();
+    program_step("module options", None);
     let prepared_options: Vec<_> = module_pool.install(|| {
         codegen_modules
             .par_iter()
@@ -6301,6 +6329,7 @@ pub fn run_with_parse_cache(
             })
             .collect::<Vec<_>>()
     });
+    program_step("module options", Some(options_started));
     // Per-module options now own the facts needed by lowering. Release the
     // program's preparation inputs before any LLVM worker starts.
     drop((

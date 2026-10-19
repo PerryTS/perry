@@ -361,7 +361,7 @@ pub struct CompileOptions {
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// Type alias map (name → Type) aggregated from all modules. Codegen
     /// uses this to resolve `Named` types in function signatures.
-    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
+    pub type_aliases: std::sync::Arc<std::collections::HashMap<String, perry_hir::types::Type>>,
     /// Imported function parameter counts, keyed by function name.
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #608 — imported function names whose source-side signature
@@ -1000,7 +1000,7 @@ pub(crate) struct CrossModuleCtx {
     /// class for `this` in that method body (see
     /// `collectors::literal_method_home_classes`), never a receiver proof.
     pub literal_method_home_classes: std::collections::HashMap<u32, String>,
-    pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
+    pub type_aliases: std::sync::Arc<std::collections::HashMap<String, perry_hir::types::Type>>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.
     /// Cloned from the same field so codegen helpers reachable via
