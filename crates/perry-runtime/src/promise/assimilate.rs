@@ -118,7 +118,10 @@ fn promise_own_then(value: f64) -> OwnThen {
         )
     };
     match then {
-        None => OwnThen::None,
+        None => match super::then::promise_inherited_user_then(addr) {
+            Some(t) => OwnThen::Callable(t),
+            None => OwnThen::None,
+        },
         Some(t) if callable_closure_value(t).is_some() => OwnThen::Callable(t),
         Some(_) => OwnThen::NonCallable,
     }

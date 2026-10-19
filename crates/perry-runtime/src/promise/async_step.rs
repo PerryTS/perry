@@ -208,7 +208,11 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
             // before its identity short-cut.  An own accessor can throw, and
             // an own non-intrinsic constructor prevents returning x itself.
             let addr = inner as usize;
-            let same_intrinsic_constructor = if super::promise_has_own_constructor(addr) {
+            let same_intrinsic_constructor = if super::then::promise_inherited_user_then(addr)
+                .is_some()
+            {
+                false
+            } else if super::promise_has_own_constructor(addr) {
                 let ctor = unsafe {
                     crate::object::exotic_expando::exotic_get_own_property(
                         addr,
@@ -348,6 +352,7 @@ pub extern "C" fn js_promise_resolved_then(
             let inner_addr = inner as usize;
             if super::promise_has_own_property(inner_addr, "then")
                 || super::promise_has_own_constructor(inner_addr)
+                || super::then::promise_inherited_user_then(inner_addr).is_some()
             {
                 bump(&MT_FAST_PATH_MISS);
                 let promise_val = box_promise_ptr(inner);
@@ -547,7 +552,12 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             false,
             awaited_async_id,
         )
-    } else if js_value_is_promise(value) != 0 {
+    } else if js_value_is_promise(value) != 0
+        && super::then::promise_inherited_user_then(
+            (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+        )
+        .is_none()
+    {
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() {
             let inner_state = unsafe { (*inner).state };

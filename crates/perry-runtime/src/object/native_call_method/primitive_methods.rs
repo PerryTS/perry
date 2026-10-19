@@ -546,6 +546,16 @@ pub(super) unsafe fn dispatch_primitive(
         && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
     {
         let promise_val = object_handle.get_nanbox_f64();
+        // A `class X extends Promise` override of then/catch/finally is what
+        // `x.then(...)` calls, not the intrinsic.
+        if let Some(result) = super::collection_methods::call_inherited_user_method(
+            root_scope,
+            promise_val,
+            method_name,
+            refreshed_args,
+        ) {
+            return Some(result);
+        }
         let promise_ptr = (promise_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::Promise;
         let promise_handle = root_scope.root_raw_mut_ptr(promise_ptr);
 

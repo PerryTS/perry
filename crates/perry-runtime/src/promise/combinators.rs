@@ -1268,9 +1268,23 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     use crate::value::JSValue;
 
     bump(&MT_THENABLE_PROBE_COUNT);
-    // Real Promise — caller's await loop already handles it.
+    // Real Promise — caller's await loop already handles it, unless a
+    // `class X extends Promise` declares its own `then`: PromiseResolve only
+    // keeps a promise whose constructor is %Promise%, and otherwise the
+    // thenable job calls that `then`.
     if js_value_is_promise(value) != 0 {
-        return value;
+        let addr = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
+        let user_then = !key.is_null()
+            && crate::object::prototype_chain::resolve_inherited_field(addr, key)
+                .is_some_and(|then| {
+                    crate::array::value_is_own_user_method(f64::from_bits(then.bits()), "then")
+                });
+        return if user_then {
+            assimilate_via_then_property(value)
+        } else {
+            value
+        };
     }
 
     let bits = value.to_bits();

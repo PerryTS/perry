@@ -1130,6 +1130,21 @@ pub(crate) fn promise_has_own_constructor(promise_addr: usize) -> bool {
     )
 }
 
+/// A `then` that a `class X extends Promise` declares (or inherits from a
+/// user ancestor). PromiseResolve keeps a promise only when its constructor is
+/// %Promise%, and `await`/`resolve` otherwise call this `then` as a thenable.
+/// A promise with no recorded prototype is a plain intrinsic one: one load.
+pub(crate) fn promise_inherited_user_then(promise_addr: usize) -> Option<f64> {
+    crate::object::prototype_chain::object_static_prototype(promise_addr)?;
+    let key = crate::string::js_string_from_bytes(b"then".as_ptr(), 4);
+    if key.is_null() {
+        return None;
+    }
+    let then = crate::object::prototype_chain::resolve_inherited_field(promise_addr, key)?;
+    let then = f64::from_bits(then.bits());
+    crate::array::value_is_own_user_method(then, "then").then_some(then)
+}
+
 /// True iff the given promise has an own property with the given name.
 /// Used by primitive_methods.rs to decide whether to bypass the fast path.
 pub(crate) fn promise_has_own_property(promise_addr: usize, name: &str) -> bool {

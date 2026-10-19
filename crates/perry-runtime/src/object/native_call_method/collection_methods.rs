@@ -47,7 +47,7 @@ fn is_backed_collection_method(
 /// A method the receiver's prototype chain declares in user code (a
 /// `class X extends Map` override) is what `obj.get(k)` calls; the collection
 /// arms below only answer for the inherited builtins.
-unsafe fn call_inherited_user_method(
+pub(super) unsafe fn call_inherited_user_method(
     root_scope: &crate::gc::RuntimeHandleScope,
     object: f64,
     method_name: &str,
