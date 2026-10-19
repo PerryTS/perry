@@ -1,0 +1,1 @@
+Keep constructor identities separate from unrelated class capture slots in whole-program value flow. Model Date, RegExp, typed-array, ArrayBuffer and AggregateError constructor values with known builtin summaries, including spread argument flow, while preserving unknown alternatives.

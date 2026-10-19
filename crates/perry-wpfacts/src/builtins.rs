@@ -20,7 +20,14 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "globalThis" | "global" | "window" | "self" => BuiltinNs::GlobalThis,
         "process" => BuiltinNs::Process,
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" | "EvalError"
-        | "URIError" | "AggregateError" => BuiltinNs::Error,
+        | "URIError" => BuiltinNs::Error,
+        "AggregateError" => BuiltinNs::AggregateError,
+        "Date" => BuiltinNs::Date,
+        "RegExp" => BuiltinNs::RegExp,
+        "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
+        | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
+        | "BigUint64Array" | "Uint8ClampedArray" | "DataView" => BuiltinNs::TypedArray,
+        "ArrayBuffer" | "SharedArrayBuffer" => BuiltinNs::ArrayBuffer,
         "Symbol" => BuiltinNs::Symbol,
         "Number" | "BigInt" => BuiltinNs::Number,
         "String" => BuiltinNs::String,
@@ -843,11 +850,17 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             set_dyn_eval(m, "E14 Function(...) call");
             unknown_method(m, call, "E14 dynamic code");
         }
-        BuiltinNs::Error => {
-            implicit_args(m, call, "Error message");
-            let e = error_tok(m, call);
-            ret_tok(m, call, e);
+        BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
+            new_builtin_ns(m, ns, call);
+            if ns == BuiltinNs::RegExp {
+                // RegExp(re) can return the existing regexp object.
+                if let Some(src) = arg(m, call, 0) {
+                    let ret = m.calls[call as usize].ret;
+                    m.edge(src, ret);
+                }
+            }
         }
+        BuiltinNs::Date => ret_prim(m, call, prim::STR),
         BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
             implicit_args(m, call, "ToPrimitive");
             ret_prim(m, call, prim::ALL);
@@ -882,6 +895,21 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 }
 
 pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    if !c.spread.is_empty() && ns != BuiltinNs::Array {
+        // A spread shifts argument positions. Every fixed/spread value can
+        // occupy each position a constructor summary consumes (at most three).
+        let vals = all_arg_values(m, call);
+        let c2 = m.calls.len() as CallId;
+        m.calls.push(CallSite {
+            this: ThisArg::Undef,
+            args: vec![vals; c.args.len().max(3)],
+            spread: vec![],
+            ret: c.ret,
+            site: c.site,
+        });
+        return new_builtin_ns(m, ns, c2);
+    }
     match ns {
         BuiltinNs::Map | BuiltinNs::Set => {
             let c = site_tmpl(m, call, "Collection");
@@ -922,10 +950,24 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
             ret_tok(m, call, p);
         }
-        BuiltinNs::Error => {
+        BuiltinNs::Error | BuiltinNs::AggregateError => {
             implicit_args(m, call, "Error message");
             let e = error_tok(m, call);
-            if let Some(o) = arg(m, call, 1) {
+            let options = if ns == BuiltinNs::AggregateError {
+                if let Some(src) = arg(m, call, 0) {
+                    let vals = iterate(m, call, src);
+                    let arr = site_tmpl(m, call, "Array");
+                    let elems = m.field_any(arr);
+                    m.edge(vals, elems);
+                    let errors = m.atom("errors");
+                    let f = m.field(e, errors);
+                    m.add_tok(f, arr);
+                }
+                2
+            } else {
+                1
+            };
+            if let Some(o) = arg(m, call, options) {
                 let ca = m.atom("cause");
                 let f = m.field(e, ca);
                 m.cons(
@@ -937,6 +979,30 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 );
             }
             ret_tok(m, call, e);
+        }
+        BuiltinNs::Date | BuiltinNs::RegExp => {
+            implicit_args(m, call, "builtin constructor argument");
+            let what = if ns == BuiltinNs::Date {
+                "Date"
+            } else {
+                "RegExp"
+            };
+            let o = site_tmpl(m, call, what);
+            ret_tok(m, call, o);
+        }
+        BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer => {
+            implicit_args(m, call, "typed array source");
+            let o = site_tmpl(m, call, "TypedArray");
+            let fa = m.field_any(o);
+            m.add_prim(fa, prim::NUM | prim::BIGINT);
+            if let Some(src) = arg(m, call, 0) {
+                m.cons(src, Cons::ShareBuffer { ta: o });
+            }
+            if ns == BuiltinNs::ArrayBuffer && c.args.len() > 1 {
+                let r = m.reason("B4 resizable ArrayBuffer");
+                m.mark_hard(o, Hard::B4Resizable, r);
+            }
+            ret_tok(m, call, o);
         }
         BuiltinNs::Function => {
             set_dyn_eval(m, "E14 new Function(...)");
@@ -961,28 +1027,10 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
         return new_builtin_ns(m, ns, call);
     }
     match name {
-        "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder"
-        | "AbortController" | "Headers" => {
+        "URL" | "URLSearchParams" | "TextEncoder" | "TextDecoder" | "AbortController"
+        | "Headers" => {
             implicit_args(m, call, "builtin constructor argument");
             let o = site_tmpl(m, call, "builtin");
-            ret_tok(m, call, o);
-        }
-        "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
-        | "Int32Array" | "Float32Array" | "Float64Array" | "BigInt64Array" | "BigUint64Array"
-        | "Uint8ClampedArray" | "ArrayBuffer" | "DataView" => {
-            implicit_args(m, call, "typed array source");
-            let o = site_tmpl(m, call, "TypedArray");
-            let fa = m.field_any(o);
-            m.add_prim(fa, prim::NUM | prim::BIGINT);
-            let c = m.calls[call as usize].clone();
-            if let Some(&src) = c.args.first() {
-                m.cons(src, Cons::ShareBuffer { ta: o });
-            }
-            if name == "ArrayBuffer" && c.args.len() > 1 {
-                // B4: `new ArrayBuffer(n, { maxByteLength })` is resizable.
-                let r = m.reason("B4 resizable ArrayBuffer");
-                m.mark_hard(o, Hard::B4Resizable, r);
-            }
             ret_tok(m, call, o);
         }
         "Proxy" => {
