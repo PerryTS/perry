@@ -262,6 +262,25 @@ entry:
     assert_eq!(roundtrip_ir(ir, "acquire_load"), 2);
 }
 
+/// A layout descriptor's `_id` word is an alias of the descriptor, and a
+/// function in the unit that defines the alias loads it by name. inkwell's
+/// global lookup misses aliases: opencode's babel-plugin-jsx-dom-expressions
+/// failed with "reference to unknown global".
+#[test]
+fn load_of_an_alias_defined_in_the_unit_round_trips_through_the_reader() {
+    let ir = r#"
+@desc = global { i32, i32 } { i32 7, i32 9 }
+@desc_id = alias i32, getelementptr (i8, ptr @desc, i64 4)
+
+define i32 @load_id() {
+entry:
+  %id = load i32, ptr @desc_id, align 4
+  ret i32 %id
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "alias_load"), 2);
+}
+
 /// `blk.freeze` (typed-array element indices, `expr/typed_element.rs`) is a
 /// typed instruction, but a function body can also reach the reader as
 /// rendered text (Claude Code's `indexPath$generic`). Without a `freeze` arm

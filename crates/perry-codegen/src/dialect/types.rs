@@ -186,6 +186,25 @@ pub(super) fn indirect_fn_type<'ctx>(
     }
 }
 
+/// An alias defined in this unit (a layout descriptor's `_id` word): a global
+/// symbol, but inkwell's lookups return only variables and functions. Units
+/// that do not define it declare it as an external global instead.
+fn named_global_alias<'ctx>(
+    module: &Module<'ctx>,
+    name: &str,
+) -> Option<inkwell::values::PointerValue<'ctx>> {
+    // SAFETY: the module is live for 'ctx, and LLVM returns null when it has
+    // no alias of this name; a non-null result is that alias, a pointer value.
+    unsafe {
+        let raw = llvm_sys::core::LLVMGetNamedGlobalAlias(
+            module.as_mut_ptr(),
+            name.as_ptr().cast(),
+            name.len(),
+        );
+        (!raw.is_null()).then(|| inkwell::values::PointerValue::new(raw))
+    }
+}
+
 pub(super) fn constant<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
@@ -199,6 +218,9 @@ pub(super) fn constant<'ctx>(
         }
         if let Some(gv) = module.get_global(&name) {
             return Ok(gv.as_pointer_value().into());
+        }
+        if let Some(alias) = named_global_alias(module, &name) {
+            return Ok(alias.into());
         }
         bail!("reference to unknown global @{name}");
     }
