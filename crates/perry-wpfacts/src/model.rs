@@ -309,6 +309,9 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// Once anything (a token or a primitive) reaches the node, `dst` holds
+    /// ⊤: an effect of a call that happens only when the call runs.
+    TopIfAny { dst: NodeId, reason: u32 },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// Every token gains keys after birth (computed store …).
@@ -424,6 +427,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
+            Cons::TopIfAny { .. } => "topifany",
             Cons::Hard { .. } => "hard",
             Cons::AddsKeys => "addskeys",
             Cons::Implicit { .. } => "implicit",

@@ -61,7 +61,9 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
         if m.explain {
             eprintln!("perry: wpfacts explain: dynamic code reachable: {why}");
         }
-        note_global_in_top(m);
+        // Not the global object's concern: code runs only with a linked
+        // interpreter, whose global reads and writes `compute` records up
+        // front; without one the Function constructor throws.
     }
 }
 
@@ -419,6 +421,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some("size" | "length" | "byteLength" | "byteOffset") => m.add_prim(dst, prim::NUM),
                 // An iterator result's own fields hold all it has.
                 Some("value" | "done") if what == "IterResult" => {}
+                // `require.cache` / `require.extensions` are plain objects:
+                // their fields hold what was stored (by compiled code, or ⊤
+                // from the loader, `call_builtin_ns`); an absent key reads
+                // `undefined`.
+                _ if what == "require.cache" || what == "require.extensions" => {
+                    m.add_prim(dst, prim::UNDEF)
+                }
                 // Builtin iterator / iterator result: a prototype method or
                 // `undefined`.
                 Some(_) if what == "Iterator" || what == "IterResult" => {
@@ -901,6 +910,11 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             // A compiled module named by a constant path: its exports (the
             // registry record's `exports`, as `require.cache[path]` holds).
             let rec = m.call_lit.get(&call).and_then(|a| m.cjs_paths.get(a)).copied();
+            if m.explain && rec.is_none() {
+                let lit = m.call_lit.get(&call).map(|a| m.atoms[*a as usize].clone());
+                let known: Vec<String> = m.cjs_paths.keys().map(|a| m.atoms[*a as usize].clone()).collect();
+                eprintln!("perry: wpfacts explain: require call lit {lit:?} not in {known:?}");
+            }
             match rec {
                 Some(rec) => {
                     let ret = m.calls[call as usize].ret;
@@ -912,7 +926,18 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     m.cons(unknown, Cons::Load { key: Key::Named(ea), dst: ret });
                     m.add_prim(ret, prim::UNDEF);
                 }
-                None => unknown_method(m, call, "argument of require of an unknown or native module"),
+                None => {
+                    unknown_method(m, call, "argument of require of an unknown or native module");
+                    // The loader may publish what it loaded in the cache:
+                    // once this call runs (a specifier reaches it).
+                    let (cache, _) = require_parts(m);
+                    let fa = m.field_any(cache);
+                    let r = m.reason("record the loader put in require.cache");
+                    match m.calls[call as usize].args.first().copied() {
+                        Some(a0) => m.cons(a0, Cons::TopIfAny { dst: fa, reason: r }),
+                        None => m.add_top(fa, |m| m.reasons[r as usize].clone()),
+                    }
+                }
             }
         }
         BuiltinNs::Function => {

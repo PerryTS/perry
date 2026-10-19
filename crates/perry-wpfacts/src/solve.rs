@@ -736,6 +736,11 @@ impl Model {
                     self.escape(t, reason);
                 }
             }
+            Cons::TopIfAny { dst, reason } => {
+                if !toks.is_empty() || prim != 0 {
+                    self.add_top(dst, |m| m.reasons[reason as usize].clone());
+                }
+            }
             Cons::Hard { kind, reason } => {
                 for &t in toks {
                     self.mark_hard(t, kind, reason);
@@ -1149,6 +1154,11 @@ impl Model {
                 return;
             }
         }
+        if self.explain && matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+            let d = self.stores.get(site as usize).map(|s| s.desc.clone()).unwrap_or_default();
+            let fname = self.stores.get(site as usize).map(|s| self.funcs[s.func as usize].name.clone()).unwrap_or_default();
+            eprintln!("perry: wpfacts explain: store onto builtin-fn at {d} in {fname} src {}", self.labels[src as usize]);
+        }
         self.note_fnproto_write(t, Some(key), "store");
         builtins::note_native_write(self, t, Some(key), "store");
         if matches!(key, Key::Any)
@@ -1289,6 +1299,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::TopIfAny { dst, reason } => format!("topifany {n} {dst} {reason}"),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),
             Cons::Implicit { reason } => format!("implicit {n} {reason}"),
