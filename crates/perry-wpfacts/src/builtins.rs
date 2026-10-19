@@ -316,7 +316,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             _ => {
                 // Any global, the Function constructor included (E14).
                 let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:315"); }
                 m.add_tok(dst, f);
                 m.add_top(dst, |_| {
                     format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
@@ -364,7 +363,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::Func(f) => match name.as_deref() {
             Some("constructor") => {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:362"); }
                 m.add_tok(dst, fc);
             }
             Some("prototype") => {
@@ -385,7 +383,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ClassObj(_) => match name.as_deref() {
             Some("constructor") => {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:382"); }
                 m.add_tok(dst, fc);
             }
             Some("name") => m.add_prim(dst, prim::STR),
@@ -465,7 +462,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             m.add_prim(dst, prim::ALL);
             if matches!(name.as_deref(), Some("constructor") | None) {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                if m.explain && m.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at builtins.rs:450"); }
                 m.add_tok(dst, fc);
             }
         }
@@ -1234,7 +1230,7 @@ fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let out = m.node_l("b-iterated");
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
-    let mut sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
+    let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
         let ret = m.node_l("b-iter-ret");
         let c2 = m.calls.len() as CallId;
         m.calls.push(CallSite {
@@ -1909,23 +1905,6 @@ fn replay_native_missing(m: &mut Model) {
 }
 
 /// The `cache` and `extensions` objects of [`BuiltinNs::Require`].
-/// Every registered value and every record's exports: what a computed
-/// path or specifier may load from the registry.
-pub fn cjs_any_exports(m: &mut Model) -> NodeId {
-    if let Some(n) = m.cjs_any_exports {
-        return n;
-    }
-    let n = m.node_l("CJSANYEXPORTS");
-    // A union relation like CJSREG, not one value.
-    m.nodes[n as usize].internal = true;
-    let reg = m.cjs_union;
-    let ea = m.atom("exports");
-    m.edge(reg, n);
-    m.cons(reg, Cons::Load { key: Key::Named(ea), dst: n });
-    m.cjs_any_exports = Some(n);
-    n
-}
-
 pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     if let Some(p) = m.require_parts {
         return p;

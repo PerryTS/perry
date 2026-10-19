@@ -67,22 +67,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
             .locals
             .iter()
             .map(|(&id, &n)| {
-                let mut b = facts_of(g, n);
-                // Instances of the local's function (`gen_inst`) run the same
-                // compiled body: the binding holds the union.
-                for &i in g.inst_locals.get(&(mi as u32, id)).into_iter().flatten() {
-                    let o = facts_of(g, i);
-                    b.prims |= o.prims;
-                    b.other |= o.other;
-                    b.top |= o.top;
-                    if b.top_cause.is_none() {
-                        b.top_cause = o.top_cause;
-                    }
-                    b.class_ids.extend(o.class_ids);
-                }
-                b.class_ids.sort_unstable();
-                b.class_ids.dedup();
-                (id, b)
+                (id, facts_of(g, n))
             })
             .collect();
         v.sort_by_key(|(id, _)| *id);

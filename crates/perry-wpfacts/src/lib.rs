@@ -26,7 +26,7 @@ mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_expr;
-mod gen_inst;
+mod gen_const;
 mod gen_rest;
 pub mod model;
 pub mod pts;

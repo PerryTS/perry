@@ -434,8 +434,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
     let by_id: crate::pts::FxHashMap<TmplId, &TemplateFacts> =
         tfs.iter().map(|t| (t.id, t)).collect();
     let mut out = Vec::new();
-    // An instance (`gen_inst`) walks a read site again: the site's receivers
-    // are the union over the shared walk and every instance.
+    // One fact per read site: records of the same site (a body walked
+    // twice) unite their receivers.
     let mut first: FxHashMap<(u32, u32, u32, bool), usize> = FxHashMap::default();
     let mut groups: Vec<(usize, Vec<u32>)> = Vec::new();
     for (i, s) in g.read_sites.iter().enumerate() {

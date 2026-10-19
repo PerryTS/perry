@@ -35,7 +35,6 @@ impl Model {
             // Any function's `.constructor` is the Function constructor (E14).
             if self.is_constructor_key(key) {
                 let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
-                if self.explain && self.dyn_eval.is_none() { eprintln!("perry: wpfacts explain: Function token at solve/lookup.rs:37"); }
                 self.add_tok(dst, f);
             }
             return;

@@ -676,8 +676,6 @@ pub struct Model {
     /// published under each constant path (`Gen::cjs_path_node`).
     pub cjs_union: NodeId,
     pub cjs_unknown: NodeId,
-    /// Every registered value and record export (`BuiltinNs::Require`).
-    pub cjs_any_exports: Option<NodeId>,
     pub cjs_paths: FxHashMap<Atom, NodeId>,
     /// `require.cache` / `require.extensions` of [`BuiltinNs::Require`].
     pub require_parts: Option<(Tok, Tok)>,

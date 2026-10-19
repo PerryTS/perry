@@ -241,20 +241,13 @@ impl<'a> Gen<'a> {
     }
 
     fn new_lit(&mut self, mi: u32, e: &Expr, keys: &[&str]) -> (TmplId, Tok) {
-        // One template per literal expression, except inside an instance
-        // that clones births (a constant-specialized one): a small function
-        // instanced at every call shares the shared walk's template.
+        // One template per literal expression.
         let at = e as *const Expr as usize;
-        let clone = self.frames.last().is_some_and(|f| f.clone_births);
-        if !clone {
-            if let Some(&tt) = self.lit_births.get(&at) {
-                return tt;
-            }
+        if let Some(&tt) = self.lit_births.get(&at) {
+            return tt;
         }
         let tt = self.new_lit_tmpl(mi, keys);
-        if !clone {
-            self.lit_births.insert(at, tt);
-        }
+        self.lit_births.insert(at, tt);
         tt
     }
 

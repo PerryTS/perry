@@ -1842,7 +1842,7 @@ impl<'a> Gen<'a> {
             "requirePathModule" => {
                 // A path an instance knows is as good as a literal.
                 let known = match source_args.first().map(|x| self.const_eval(fx.module, x)) {
-                    Some(Some(crate::gen_inst::Const::Str(s))) => Some(Expr::String(s)),
+                    Some(Some(crate::gen_const::Const::Str(s))) => Some(Expr::String(s)),
                     _ => None,
                 };
                 let registry = match known.as_ref().or(source_args.first()) {

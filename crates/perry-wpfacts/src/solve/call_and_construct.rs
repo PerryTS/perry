@@ -10,19 +10,6 @@ impl Model {
     }
 
     fn call_tok_inner(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
-        if self.explain
-            && self.dyn_eval.is_none()
-            && matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
-        {
-            let c = &self.calls[call as usize];
-            let args: Vec<String> = c.args.iter().map(|&a| format!("{}<-{}", self.labels[a as usize], if self.top_pred.contains_key(&a) { self.top_origin(a) } else { "-".into() })).collect();
-            eprintln!(
-                "perry: wpfacts explain: Function called: ret {} this {:?} args {:?}",
-                self.labels[c.ret as usize],
-                this_tok.map(|x| self.tok_name(x)),
-                args
-            );
-        }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
@@ -533,9 +520,6 @@ impl Model {
             crate::builtins::note_native_write(self, t, None, &what);
         }
         if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis)) {
-            if self.explain && !self.global_in_top {
-                eprintln!("perry: wpfacts explain: global object may be TOP: {}", self.reasons[reason as usize]);
-            }
             crate::builtins::note_global_in_top(self);
         }
         // Runtime-owned objects do not "escape": unknown code already holds

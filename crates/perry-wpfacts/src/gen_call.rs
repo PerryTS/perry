@@ -54,24 +54,8 @@ impl<'a> Gen<'a> {
             }
         }
         let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
-        // A statically known callee given a constant: its own instance.
-        if let Some(sf) = self.static_callee(fx.module, callee) {
-            let consts: Vec<Option<crate::gen_inst::Const>> =
-                args.iter().map(|x| self.const_eval(fx.module, x)).collect();
-            let fns: Vec<_> = args.iter().map(|x| self.static_callee(fx.module, x)).collect();
-            let sites = self.static_call_sites(fx.module, callee);
-            if let Some(r) = self.instance_call(fx, sf, &a, &consts, &fns, sites) {
-                return r;
-            }
-        }
-        if self.inst_trace {
-            if let (Some(Expr::String(s)), Expr::LocalGet(id)) = (args.first(), callee) {
-                let st = self.static_callee(fx.module, callee).is_some();
-                eprintln!("perry: wpfacts inst: lit call not instanced local {id} static={st} arg {s}");
-            }
-        }
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
-            Some(Some(crate::gen_inst::Const::Str(s))) => Some(self.m.atom(&s)),
+            Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
             _ => None,
         };
         if let Expr::ExternFuncRef { name, .. } = callee {
