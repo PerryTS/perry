@@ -32,6 +32,11 @@ const MAX_BODY: usize = 2000;
 /// Instances per function, and nested instance depth.
 const MAX_PER_FN: u32 = 64;
 const MAX_DEPTH: usize = 6;
+/// A body this small is instanced at every static call, constant or not:
+/// its parameters then meet only this call's arguments (per-call summaries).
+/// Instances per such function are bounded by the program's call sites.
+const SMALL_BODY: usize = 48;
+const MAX_SMALL_PER_FN: u32 = 1 << 14;
 
 /// A compile-time constant argument or condition value.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,10 +78,12 @@ pub(crate) struct StaticFn<'a> {
 }
 
 /// One instance being walked: its locals and its constant parameters.
-pub(crate) struct Frame {
+pub(crate) struct Frame<'a> {
     pub module: u32,
     pub locals: FxHashMap<u32, NodeId>,
     pub consts: FxHashMap<u32, Const>,
+    /// Parameters bound to a statically known function at this call.
+    pub fns: FxHashMap<u32, StaticFn<'a>>,
 }
 
 /// What an instance's body must not contain, and the locals it assigns.
@@ -221,14 +228,31 @@ impl<'a> Gen<'a> {
     pub(crate) fn static_callee(&mut self, mi: u32, callee: &Expr) -> Option<StaticFn<'a>> {
         let module: &'a perry_hir::Module = self.modules[mi as usize].1;
         match callee {
-            Expr::FuncRef(id) => module.functions.iter().find(|f| f.id == *id).and_then(|f| {
-                (!f.is_async && !f.is_generator).then_some(StaticFn {
-                    func_id: f.id,
-                    params: &f.params,
-                    body: &f.body,
-                })
-            }),
+            Expr::FuncRef(id) => {
+                if !self.static_funcs.contains_key(&(mi, u32::MAX)) {
+                    self.static_funcs.insert((mi, u32::MAX), None);
+                    for f in &module.functions {
+                        let sf = (!f.is_async && !f.is_generator).then_some(StaticFn {
+                            func_id: f.id,
+                            params: &f.params,
+                            body: &f.body,
+                        });
+                        self.static_funcs.insert((mi, f.id), sf);
+                    }
+                }
+                self.static_funcs.get(&(mi, *id)).copied().flatten()
+            }
             Expr::LocalGet(id) => {
+                if let Some(fr) = self.frames.last() {
+                    if fr.module == mi {
+                        if let Some(&sf) = fr.fns.get(id) {
+                            return Some(sf);
+                        }
+                        if fr.locals.contains_key(id) {
+                            return None;
+                        }
+                    }
+                }
                 if !self.static_locals_built.contains(&mi) {
                     self.build_static_locals(mi);
                 }
@@ -467,6 +491,7 @@ impl<'a> Gen<'a> {
                     module: mi,
                     locals: FxHashMap::default(),
                     consts,
+                    fns: FxHashMap::default(),
                 });
                 let v = self.const_eval_d(mi, ret, depth + 1);
                 self.frames.pop();
@@ -506,20 +531,27 @@ impl<'a> Gen<'a> {
         sf: StaticFn<'a>,
         args: &[NodeId],
         consts: &[Option<Const>],
+        fn_args: &[Option<StaticFn<'a>>],
     ) -> Option<NodeId> {
         let mi = fx.module;
         if self.frames.len() >= MAX_DEPTH || self.m.aborted {
             return None;
         }
         let fidx = *self.mods[mi as usize].funcs.get(&sf.func_id)?;
-        if self.inst_count.get(&fidx).copied().unwrap_or(0) >= MAX_PER_FN {
-            return None;
-        }
         let mut scan = Scan {
             closed: true,
             ..Default::default()
         };
         scan.stmts(sf.body);
+        let small = scan.size <= SMALL_BODY;
+        let given = consts.iter().any(Option::is_some) || fn_args.iter().any(Option::is_some);
+        if !small && !given {
+            return None;
+        }
+        let cap = if small { MAX_SMALL_PER_FN } else { MAX_PER_FN };
+        if self.inst_count.get(&fidx).copied().unwrap_or(0) >= cap {
+            return None;
+        }
         for p in sf.params {
             if p.is_rest || p.default.is_some() || p.arguments_object.is_some() {
                 return None;
@@ -534,8 +566,14 @@ impl<'a> Gen<'a> {
             module: mi,
             locals: FxHashMap::default(),
             consts: FxHashMap::default(),
+            fns: FxHashMap::default(),
         };
         for (i, p) in sf.params.iter().enumerate() {
+            if let Some(Some(f)) = fn_args.get(i) {
+                if !scan.assigned.contains(&p.id) {
+                    fr.fns.insert(p.id, *f);
+                }
+            }
             let n = self.m.node_l("inst-param");
             match args.get(i) {
                 Some(&a) => self.m.edge(a, n),

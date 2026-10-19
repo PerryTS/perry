@@ -70,7 +70,8 @@ pub struct Gen<'a> {
     /// walked, the statically bound closures per module, every instance node
     /// of a local (its binding facts are the union), instances per function,
     /// and `PERRY_FACTS_INST_TRACE`.
-    pub(crate) frames: Vec<crate::gen_inst::Frame>,
+    pub(crate) frames: Vec<crate::gen_inst::Frame<'a>>,
+    pub(crate) static_funcs: FxHashMap<(u32, u32), Option<crate::gen_inst::StaticFn<'a>>>,
     pub(crate) static_locals: FxHashMap<(u32, u32), crate::gen_inst::StaticFn<'a>>,
     pub(crate) static_locals_built: crate::pts::FxHashSet<u32>,
     pub inst_locals: FxHashMap<(u32, u32), Vec<NodeId>>,
@@ -176,6 +177,7 @@ impl<'a> Gen<'a> {
             fn_phase: FxHashMap::default(),
             class_homes: FxHashMap::default(),
             frames: Vec::new(),
+            static_funcs: FxHashMap::default(),
             static_locals: FxHashMap::default(),
             static_locals_built: Default::default(),
             inst_locals: FxHashMap::default(),

@@ -53,10 +53,9 @@ impl<'a> Gen<'a> {
         if let Some(sf) = self.static_callee(fx.module, callee) {
             let consts: Vec<Option<crate::gen_inst::Const>> =
                 args.iter().map(|x| self.const_eval(fx.module, x)).collect();
-            if consts.iter().any(Option::is_some) {
-                if let Some(r) = self.instance_call(fx, sf, &a, &consts) {
-                    return r;
-                }
+            let fns: Vec<_> = args.iter().map(|x| self.static_callee(fx.module, x)).collect();
+            if let Some(r) = self.instance_call(fx, sf, &a, &consts, &fns) {
+                return r;
             }
         }
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
