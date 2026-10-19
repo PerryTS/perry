@@ -962,6 +962,13 @@ pub(crate) fn emit_module_layouts(
                 None => continue 'class,
             }
         }
+        // Sabotage for the slot witness (`perry_family_slot_verify`): the
+        // descriptor disagrees with the slots compiled code uses.
+        if named.len() >= 2 && std::env::var("PERRY_FAMILY_SLOT_SABOTAGE").as_deref() == Ok("1") {
+            let s0 = named[0].2;
+            named[0].2 = named[1].2;
+            named[1].2 = s0;
+        }
         let family =
             (fnv1a(format!("{}#class#{}", hir.name, class.name).as_bytes()) as u32) & 0x7FFF_FFFF;
         // The creation split's layouts first (all or none: the table names

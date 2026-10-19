@@ -1927,7 +1927,7 @@ pub(crate) fn family_diag_init() {
 /// `PERRY_FAMILY_DIAG=2`: count out-of-order fills by (family, key written,
 /// first later key present) and print the most frequent at exit (measurement
 /// only: which key orders the census gets wrong).
-fn family_diag_pairs_on() -> bool {
+pub(crate) fn family_diag_pairs_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PERRY_FAMILY_DIAG").as_deref() == Ok("2"))
 }
@@ -1937,7 +1937,7 @@ static OUT_OF_ORDER_PAIRS: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 
 #[cold]
-unsafe fn note_out_of_order_pair(obj: *const ObjectHeader, pos: u32) {
+pub(crate) unsafe fn note_out_of_order_pair(obj: *const ObjectHeader, pos: u32) {
     let Some(d) = family_desc_of(obj) else {
         return;
     };

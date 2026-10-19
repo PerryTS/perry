@@ -1122,7 +1122,7 @@ fn run_class(
     let later = if order_known {
         Vec::new()
     } else {
-        family.keys[pos as usize + 1..]
+        family.keys[pos as usize..]
             .iter()
             .map(|(_, slot)| *slot)
             .collect()
@@ -1145,8 +1145,8 @@ fn run_class(
 ///       layout word == C's family layout id (no shadow bit, so no
 ///       overflow), no meta record (not a prototype)
 ///   no integrity flag (frozen, sealed, non-extensible, stable tombstones)
-///   C's slots inline, and every key after `pos` still the hole (unless
-///       `order_known`)
+///   C's slots inline, and from `pos` on no key present after a hole
+///       (unless `order_known`)
 ///   each prototype of C's static chain materialized and on its static
 ///       shape, none of which holds an accessor, a non-writable or a private
 ///       property named like a family key (checked at compile time), and
@@ -1287,18 +1287,26 @@ pub(crate) fn emit_family_run_proof(
             blk.cond_br(&inline, &scan_l, &refused_l);
         }
         ctx.current_block = scan;
-        for &slot in &group.class.later {
+        if !group.class.later.is_empty() {
             let next = ctx.new_block("crun.scan");
             let next_l = ctx.block_label(next);
             let blk = ctx.block();
-            let sp = crate::expr::receiver_range::emit_field_ptr(
-                blk,
-                &biased,
-                header + 8 * i64::from(slot),
-            );
-            let v = blk.load(I64, &sp);
-            let hole = blk.icmp_eq(I64, &v, crate::nanbox::TAG_HOLE_I64);
-            blk.cond_br(&hole, &next_l, &refused_l);
+            let mut hole_seen = "false".to_string();
+            let mut disordered = "false".to_string();
+            for &slot in &group.class.later {
+                let sp = crate::expr::receiver_range::emit_field_ptr(
+                    blk,
+                    &biased,
+                    header + 8 * i64::from(slot),
+                );
+                let v = blk.load(I64, &sp);
+                let present = blk.icmp_ne(I64, &v, crate::nanbox::TAG_HOLE_I64);
+                let after_hole = blk.and(I1, &present, &hole_seen);
+                disordered = blk.or(I1, &disordered, &after_hole);
+                let hole = blk.xor(I1, &present, "true");
+                hole_seen = blk.or(I1, &hole_seen, &hole);
+            }
+            blk.cond_br(&disordered, &refused_l, &next_l);
             ctx.current_block = next;
         }
         let cdir = emit_class_value_dir(ctx);

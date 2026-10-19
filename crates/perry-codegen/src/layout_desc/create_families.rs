@@ -548,7 +548,7 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
             }
             continue;
         }
-        if let Some(k @ KeyConst::Symbol(Some(_))) = a.imported(init).and_then(|f| match f {
+        if let Some(k) = a.imported(init).and_then(|f| match f {
             ExportFact::Key(ImageKey::Str(s)) => Some(KeyConst::Str(s.clone())),
             ExportFact::Key(k) => Some(KeyConst::Symbol(Some(k.clone()))),
             ExportFact::Image(_) => None,
@@ -571,6 +571,50 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
         }
     }
     a
+}
+
+/// A class field whose computed key names a string constant (`[K] = …`,
+/// `K` a string constant of the module or one it imports, read with no TDZ
+/// check) is the field named by that string: its key, evaluated once at the
+/// class definition, is that string. Rename each such field of `hir`, so
+/// every consumer of class keys (field definition order, class layouts,
+/// families, slot indexes) sees one named field at its declared position.
+/// Driver, after [`set_program_proto_exports`] and before stubs and codegen.
+pub fn name_computed_class_fields(hir: &mut Module) {
+    let exports = program_exports();
+    let mut named: Vec<(u32, usize, String)> = Vec::new();
+    {
+        let a = analyze(hir, &exports);
+        for c in &hir.classes {
+            for (i, f) in c.fields.iter().enumerate() {
+                if !f.decorators.is_empty() || f.is_private {
+                    continue;
+                }
+                if let Some(KeyConst::Str(k)) = f.key_expr.as_ref().and_then(|e| a.key_const(e)) {
+                    // An index key is an element; `constructor` and
+                    // `__proto__` are no plain field names.
+                    if !k.is_empty()
+                        && !k.bytes().all(|b| b.is_ascii_digit())
+                        && k != "constructor"
+                        && k != "__proto__"
+                    {
+                        named.push((c.id, i, k));
+                    }
+                }
+            }
+        }
+    }
+    for (class_id, index, key) in named {
+        if let Some(f) = hir
+            .classes
+            .iter_mut()
+            .find(|c| c.id == class_id)
+            .and_then(|c| c.fields.get_mut(index))
+        {
+            f.name = key;
+            f.key_expr = None;
+        }
+    }
 }
 
 /// Derive the module's prototype facts (`codegen/mod.rs`, executables with

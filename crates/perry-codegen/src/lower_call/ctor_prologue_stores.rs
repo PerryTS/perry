@@ -92,6 +92,9 @@ pub(super) struct PrologueStore {
     /// The slot is read as a raw `f64`, so its argument must be a plain finite
     /// number before the direct store is allowed.
     pub(super) requires_raw_f64: bool,
+    /// The stored key, when the slot is a family layout's (its
+    /// `PERRY_PROBE_VERIFY` witness).
+    pub(super) family_key: Option<String>,
 }
 
 /// Can `new <class_name>(…)` skip its constructor call and store the fields
@@ -223,6 +226,7 @@ pub(super) fn prologue_store_plan(
             arg_index,
             numeric_addend,
             requires_raw_f64,
+            family_key: family.map(|_| property.to_owned()),
         });
     }
     // Every declared field written, exactly once — see the doc comment.

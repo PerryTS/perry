@@ -132,7 +132,8 @@ pub use collectors::segview::{
 };
 // Object model step 3: the program-wide prototype-write census.
 pub use layout_desc::create_families::{
-    program_proto_exports, program_proto_exports_key, set_program_proto_exports,
+    name_computed_class_fields, program_proto_exports, program_proto_exports_key,
+    set_program_proto_exports,
 };
 pub use proto_constants::{program_proto_census_key, set_program_proto_census};
 // #11394: whole-program set of methods written onto a builtin prototype.

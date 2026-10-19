@@ -353,6 +353,8 @@ fn family_stores_enabled(ctx: &FnCtx<'_>) -> bool {
 pub(crate) struct RunArm {
     pub ok: String,
     pub slot: u32,
+    /// The stored key (its `PERRY_PROBE_VERIFY` slot witness).
+    pub key: String,
 }
 
 /// A constructor run in flight in the innermost constructor body
@@ -649,6 +651,33 @@ fn run_arm(
             if let Some((_, refused)) = proof {
                 ctx.current_block = refused;
             }
+            // Only an object at a static layout (a family's) can be admitted:
+            // any other receiver (an instance of a subclass without a family
+            // running its parent's constructor) is refused here, unasked.
+            let band = ctx.new_block("crun.band");
+            let ask = ctx.new_block("crun.ask");
+            let asked_join = ctx.new_block("crun.asked");
+            let band_l = ctx.block_label(band);
+            let ask_l = ctx.block_label(ask);
+            let asked_l = ctx.block_label(asked_join);
+            let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), this_bits);
+            let from_entry = ctx.block().label.clone();
+            ctx.block().cond_br(&recv.is_object_pointer, &band_l, &asked_l);
+            ctx.current_block = band;
+            let blk = ctx.block();
+            let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+            let word = blk.load(crate::types::I32, &word_ptr);
+            let base =
+                crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
+            let rel = blk.sub(crate::types::I32, &word, &(base as i32).to_string());
+            let in_band = blk.icmp_ult(
+                crate::types::I32,
+                &rel,
+                &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
+            );
+            let from_band = blk.label.clone();
+            blk.cond_br(&in_band, &ask_l, &asked_l);
+            ctx.current_block = ask;
             let c = ctx.block().call(
                 crate::types::I32,
                 "perry_family_run_admits",
@@ -660,6 +689,13 @@ fn run_arm(
                     (crate::types::I32, if plan.order_known { "1" } else { "0" }),
                     (crate::types::I32, &plan.class_id.to_string()),
                 ],
+            );
+            let from_ask = ctx.block().label.clone();
+            ctx.block().br(&asked_l);
+            ctx.current_block = asked_join;
+            let c = ctx.block().phi(
+                crate::types::I32,
+                &[("0", &from_entry), ("0", &from_band), (&c, &from_ask)],
             );
             let asked = ctx.block().icmp_ne(crate::types::I32, &c, "0");
             let ok = match proof {
@@ -691,6 +727,7 @@ fn run_arm(
     let out = arm.then(|| RunArm {
         ok: run.ok.clone(),
         slot: plan.slot,
+        key: property.to_owned(),
     });
     (out, run)
 }
@@ -700,10 +737,11 @@ fn run_arm(
 /// slot store when the run's check holds, the receiver is at one of the
 /// family layouts of the constructor's class or of a family descendant
 /// (their class ids, and a static layout word without the shadow bit: no
-/// overflow orders it) and the key's slot still holds the hole its birth
-/// (`perry_alloc_layout`) wrote. The check proved the add plain (nothing on
-/// the chain intercepts a family key) and in order (no later key present),
-/// and the run's stores go in key order with no user code between them.
+/// overflow orders it). The check proved the store plain (nothing on the
+/// chain intercepts a family key) and ordered (from the run's first key on,
+/// no key present after a hole), and the run's stores go in key order with no
+/// user code between them: a present key's store overwrites its own data, a
+/// hole's adds the key with every later key still a hole.
 /// Every other case is the site below. The returned arm is joined by
 /// [`finish_store`].
 pub(crate) fn begin_family_init_store(
@@ -761,15 +799,14 @@ pub(crate) fn begin_family_init_store(
     blk.cond_br(&in_band, &load_label, &miss_label);
 
     ctx.current_block = load_idx;
+    super::class_family_read::emit_slot_verify(ctx, receiver_bits, &arm.key, slot);
     let blk = ctx.block();
     let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
         blk,
         &recv.biased,
         (header + 8 * slot as u64) as i64,
     );
-    let current = blk.load(I64, &slot_ptr);
-    let hole = blk.icmp_eq(I64, &current, TAG_HOLE_I64);
-    blk.cond_br(&hole, &hit_label, &miss_label);
+    blk.br(&hit_label);
 
     ctx.current_block = hit_idx;
     // GC_STORE_AUDIT(BARRIERED): the bookkeeping below classifies the stored

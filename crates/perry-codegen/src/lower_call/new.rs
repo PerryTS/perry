@@ -757,6 +757,16 @@ fn lower_new_impl_inner<'a>(
             let merge_label = ctx.block_label(merge_idx);
             ctx.block().cond_br(written, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
+            for store in prologue_plan.iter().flatten() {
+                if let Some(key) = &store.family_key {
+                    crate::expr::class_family_read::emit_slot_verify(
+                        ctx,
+                        &obj_handle,
+                        key,
+                        store.slot,
+                    );
+                }
+            }
             ctx.block().br(&merge_label);
             prologue_merge = Some((merge_idx, fast_label));
             ctx.current_block = slow_idx;
@@ -813,6 +823,11 @@ fn lower_new_impl_inner<'a>(
             };
             let parent_bits = ctx.block().bitcast_double_to_i64(&obj_box);
             for (store_index, store) in plan.iter().enumerate() {
+                if let Some(key) = &store.family_key {
+                    crate::expr::class_family_read::emit_slot_verify(
+                        ctx, &obj_handle, key, store.slot,
+                    );
+                }
                 let (field_addr, child_bits) = {
                     let blk = ctx.block();
                     let field_ptr =

@@ -52,6 +52,35 @@ fn candidates(layouts: &ProgramLayouts, class_id: u32, property: &str) -> Vec<Ca
     arms
 }
 
+/// `PERRY_PROBE_VERIFY=1` while compiling: each compiled family slot access
+/// also asks the runtime whether the receiver's record holds `property` at
+/// `slot` (`perry_family_slot_verify`, counted by the run's
+/// `PERRY_PROBE_VERIFY=1` summary). `receiver_bits` is the receiver as an
+/// `i64` (a NaN-boxed pointer or a raw address).
+pub(crate) fn emit_slot_verify(
+    ctx: &mut FnCtx<'_>,
+    receiver_bits: &str,
+    property: &str,
+    slot: u32,
+) {
+    if std::env::var("PERRY_PROBE_VERIFY").as_deref() != Ok("1") {
+        return;
+    }
+    let key_idx = ctx.strings.intern(property);
+    let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    blk.call_void(
+        "perry_family_slot_verify",
+        &[
+            (I64, receiver_bits),
+            (I64, &key_bits),
+            (I32, &slot.to_string()),
+        ],
+    );
+}
+
 pub(crate) struct FamilyRead {
     hits: Vec<(String, String)>,
     merge: usize,
@@ -131,6 +160,7 @@ pub(crate) fn begin(
         }
         ctx.block().cond_br(&accepted, &load_label, &next_label);
         ctx.current_block = load;
+        emit_slot_verify(ctx, &bits, property, slot);
         let ptr = super::receiver_range::emit_field_ptr(
             ctx.block(),
             &recv.biased,

@@ -71,14 +71,23 @@ const ALIAS_ENTRY: u32 = 1 << 30;
 /// A fact of the record's immutable list, its attributes and its inline
 /// slot count, derived with the index.
 const DIRECT_ENTRY: u32 = 1 << 29;
+/// A bucket entry whose key is a data property stored at an inline slot of
+/// every receiver of the record other than its position (a layout that
+/// separates key order from storage, #12637: a family's coloured key): the
+/// slot is the position's index word, and the hit is one load. Never with
+/// [`TEXT_ENTRY`] or [`ALIAS_ENTRY`], whose index words hold a hash or atom.
+const SLOT_ENTRY: u32 = 1 << 28;
 /// The position bits of a bucket entry.
-const POS_BITS: u32 = DIRECT_ENTRY - 1;
+const POS_BITS: u32 = SLOT_ENTRY - 1;
+/// [`hit_value`]'s slot when the hit is no single load.
+const NO_LOAD: u32 = u32::MAX;
 /// The bits of a probe word that are not the position table's address.
 const PROBE_FLAGS: u64 = 7 | PROBE_CHECKED | PROBE_ATTRS;
 
 /// A derived key index: `count` alias words, then `mask + 1` buckets of key
 /// positions, `u32::MAX` = empty, open addressing from `hash & mask`. The
-/// alias word of a [`TEXT_ENTRY`] position holds its text's hash.
+/// alias word of a [`TEXT_ENTRY`] position holds its text's hash, of a
+/// [`SLOT_ENTRY`] position its inline slot.
 ///
 /// A bucket compares the site key against the list's own word at its
 /// position, which the collector keeps current (a symbol or a plain string
@@ -471,8 +480,20 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
     }
     let flags = PROBE_READY | checked | if atoms { PROBE_ATOMS } else { 0 };
     // A list with accessor or private entries is always indexed: its
-    // entries carry which positions a hit may read with one load.
-    if count <= SCAN_KEYS && !aliased && checked == 0 {
+    // entries carry which positions a hit may read with one load. So is one
+    // that reads a key with one load the unindexed scan cannot
+    // (`POSBOUND` is 0 for a list with optional keys, which the probe reads as holes): a
+    // key stored at another slot than its position, or at its position past
+    // the bound.
+    let slotted = |i: usize| match canon[i] {
+        (w, Some(_), false) if w == *words.add(i) => inline_slot(rec, keys, i as u32),
+        _ => None,
+    };
+    let unbounded = |i: usize| {
+        i as u32 >= rec.position_bound_raw()
+            && (direct_position(rec, keys, i as u32) || slotted(i).is_some())
+    };
+    if count <= SCAN_KEYS && !aliased && checked == 0 && !(0..count as usize).any(unbounded) {
         return flags;
     }
     let buckets = (count as usize * 2).next_power_of_two();
@@ -528,7 +549,7 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         *out.add(i) = match canon[i] {
             (_, Some(h), true) => h,
             (w, _, _) if w != *words.add(i) => w,
-            _ => 0,
+            _ => slotted(i).map_or(0, u64::from),
         };
     }
     let slots = KeyIndex::buckets(table) as *mut u32;
@@ -549,6 +570,8 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             | if alias { ALIAS_ENTRY } else { 0 }
             | if direct_position(rec, keys, i as u32) {
                 DIRECT_ENTRY
+            } else if slotted(i).is_some() {
+                SLOT_ENTRY
             } else {
                 0
             };
@@ -574,6 +597,27 @@ unsafe fn direct_position(
         return false;
     }
     key_storage_slot(keys, pos) == pos && pos < rec.live_inline_slot_count
+}
+
+/// The inline slot of a data key (no accessor, not private) at position
+/// `pos` of `rec`'s list `keys` that is stored at another slot than its
+/// position ([`SLOT_ENTRY`]), or `None`.
+unsafe fn inline_slot(
+    rec: &ShapeRecord,
+    keys: *const crate::array::ArrayHeader,
+    pos: u32,
+) -> Option<u32> {
+    use crate::object::key_attrs::{
+        key_storage_slot, keys_entry, ENTRY_ACCESSOR_MASK, ENTRY_PRIVATE, SUMMARY_ACCESSOR,
+        SUMMARY_PRIVATE,
+    };
+    if rec.summary() & (SUMMARY_ACCESSOR | SUMMARY_PRIVATE) != 0
+        && keys_entry(keys, pos) & (ENTRY_ACCESSOR_MASK | ENTRY_PRIVATE) != 0
+    {
+        return None;
+    }
+    let slot = key_storage_slot(keys, pos);
+    (slot != pos && slot < rec.live_inline_slot_count && slot != NO_LOAD).then_some(slot)
 }
 
 /// May a TEXT entry of `rec`'s list prove absence (see `derive_word`)?
@@ -725,23 +769,31 @@ unsafe fn value_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) ->
         .unwrap_or_else(hole)
 }
 
-/// The data value at key position `pos` of `obj` (record `r`): one load when
-/// the record's facts make the position its inline slot (`direct`: the
-/// entry's [`DIRECT_ENTRY`] bit, or `POSBOUND` for an unindexed list), else
-/// [`value_at`]. A hole is the slot's value either way, which the site treats
-/// as a decline.
+/// The data value at key position `pos` of `obj` (record `r`): one load of
+/// inline slot `load` when the record's facts name it (the position for a
+/// [`DIRECT_ENTRY`] or below `POSBOUND` in an unindexed list, the index word
+/// of a [`SLOT_ENTRY`]), else ([`NO_LOAD`]) [`value_at`]. A hole is the
+/// slot's value either way, which the site treats as a decline.
 #[inline(always)]
-unsafe fn hit_value(
-    obj: *const ObjectHeader,
-    r: *const ShapeRecord,
-    pos: u32,
-    direct: bool,
-) -> f64 {
-    if direct {
-        return *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pos as usize * 8)
+unsafe fn hit_value(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32, load: u32) -> f64 {
+    if load != NO_LOAD {
+        return *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + load as usize * 8)
             as *const f64);
     }
     value_at(obj, r, pos)
+}
+
+/// The slot [`hit_value`] loads for bucket entry `entry` (position `i`) of
+/// `table`.
+#[inline(always)]
+unsafe fn entry_load(table: *const KeyIndex, entry: u32, i: u32) -> u32 {
+    if entry & DIRECT_ENTRY != 0 {
+        i
+    } else if entry & SLOT_ENTRY != 0 {
+        KeyIndex::word(table, i) as u32
+    } else {
+        NO_LOAD
+    }
 }
 
 /// The value of key `key_bits` (atom hash `hash`) read from the object at
@@ -837,13 +889,20 @@ unsafe fn probe_get<const ABSENT: bool>(
         return absent_from::<ABSENT>(dir, obj, key_bits, hash);
     }
     let table = (probe & !PROBE_FLAGS) as *const KeyIndex;
-    let (pos, direct) = if table.is_null() {
+    let (pos, load) = if table.is_null() {
         // An unindexed list has no accessor or private entry.
         let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
         let mut i = 0u32;
         loop {
             if *words.add(i as usize) == key_bits {
-                break (i, i < (*r).position_bound_raw());
+                break (
+                    i,
+                    if i < (*r).position_bound_raw() {
+                        i
+                    } else {
+                        NO_LOAD
+                    },
+                );
             }
             i += 1;
             if i == count {
@@ -877,12 +936,12 @@ unsafe fn probe_get<const ABSENT: bool>(
                 *list.add(i as usize)
             };
             if w == key_bits {
-                break (i, pos & DIRECT_ENTRY != 0);
+                break (i, entry_load(table, pos, i));
             }
             b = (b + 1) & mask;
         }
     };
-    let v = hit_value(obj, r, pos, direct);
+    let v = hit_value(obj, r, pos, load);
     // A hole slot: the key is absent (the key view), and the answer
     // continues as for an absent key.
     if v.to_bits() != TAG_HOLE {
@@ -1094,7 +1153,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
                 return hole();
             }
             match list_position(rn, pw, key_bits, hash) {
-                Ok((pos, direct)) => return hit_value(p, rn, pos, direct),
+                Ok((pos, load)) => return hit_value(p, rn, pos, load),
                 Err(true) => {}
                 Err(false) => return hole(),
             }
@@ -1526,8 +1585,8 @@ unsafe fn chain_from<const ABSENT: bool>(
             return walk(cur, rc);
         }
         match list_position(rn, pw, key_bits, hash) {
-            Ok((pos, direct)) => {
-                let v = hit_value(next, rn, pos, direct);
+            Ok((pos, load)) => {
+                let v = hit_value(next, rn, pos, load);
                 if v.to_bits() != TAG_HOLE {
                     return v;
                 }
@@ -1573,7 +1632,7 @@ fn chain_absent<const ABSENT: bool>() -> f64 {
 
 /// Position of `key_bits` in record `r`'s derived list (`pw` its ready probe
 /// word with `PROBE_ATOMS`) and whether a hit there is one load
-/// ([`hit_value`]): `Ok((pos, direct))`, `Err(true)` for proven absence,
+/// ([`hit_value`]'s slot): `Ok((pos, load))`, `Err(true)` for proven absence,
 /// `Err(false)` for a TEXT entry the complete walk compares by text.
 #[inline(always)]
 unsafe fn list_position(
@@ -1581,7 +1640,7 @@ unsafe fn list_position(
     pw: u64,
     key_bits: u64,
     hash: u64,
-) -> Result<(u32, bool), bool> {
+) -> Result<(u32, u32), bool> {
     let count = (*r).logical_key_count;
     if count == 0 {
         return Err(true);
@@ -1592,7 +1651,14 @@ unsafe fn list_position(
         let mut i = 0;
         while i < count {
             if *list.add(i as usize) == key_bits {
-                return Ok((i, i < (*r).position_bound_raw()));
+                return Ok((
+                    i,
+                    if i < (*r).position_bound_raw() {
+                        i
+                    } else {
+                        NO_LOAD
+                    },
+                ));
             }
             i += 1;
         }
@@ -1622,7 +1688,7 @@ unsafe fn list_position(
             *list.add(i as usize)
         };
         if wd == key_bits {
-            return Ok((i, pos & DIRECT_ENTRY != 0));
+            return Ok((i, entry_load(table, pos, i)));
         }
         b = (b + 1) & mask;
     }
@@ -2457,9 +2523,11 @@ pub unsafe extern "C" fn perry_probe_get_value(
         ///   (no overflow), extensible, not a prototype, and its key at `pos` is the
         ///   store's (codegen gives every such layout the run's keys at the same
         ///   positions and slots);
-        /// * no key after `pos` is present (an add at `pos` is then in key order,
-        ///   and so is every later add of the run); `order_known` (nonzero) when
-        ///   codegen proves it: no code since the birth could have stored a key;
+        /// * from `pos` on, no key is present after a hole (a present key's store
+        ///   overwrites it; a hole's is an add with every later key a hole, so in
+        ///   key order, and so is every later add of the run); `order_known`
+        ///   (nonzero) when codegen proves it: no code since the birth could have
+        ///   stored a key;
         /// * no prototype of `obj` intercepts an add of any of the family's keys
         ///   ([`chain_admits_family`]): one record read per hop.
         ///
@@ -2528,18 +2596,26 @@ pub unsafe extern "C" fn perry_probe_get_value(
                 note_run(4);
                 return 0;
             }
-            // The order: every key after `pos` still holds its birth's hole. A run
-            // that starts before any code since the birth could run (`order_known`,
-            // the constructors' inert prologue) knows it.
+            // The order: from `pos` on, no key is present after a hole. The run's
+            // store of a present key overwrites it; of a hole, adds it while
+            // every later key is a hole, in key order. A run that starts before
+            // any code since the birth could run (`order_known`, the
+            // constructors' inert prologue) knows it.
             if order_known == 0 {
                 let fields =
                     (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
                 let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
-                if keys[pos as usize + 1..]
-                    .iter()
-                    .any(|k| *fields.add(k.slot as usize) != TAG_HOLE)
-                {
+                let mut hole = false;
+                if keys[pos as usize..].iter().any(|k| {
+                    let present = *fields.add(k.slot as usize) != TAG_HOLE;
+                    let after_hole = present && hole;
+                    hole |= !present;
+                    after_hole
+                }) {
                     note_run(5);
+                    if crate::object::layout_desc::family_diag_pairs_on() {
+                        crate::object::layout_desc::note_out_of_order_pair(obj, pos);
+                    }
                     return 0;
                 }
             }
@@ -2551,6 +2627,19 @@ pub unsafe extern "C" fn perry_probe_get_value(
             let admits = chain_admits_family(dir, obj, r, d);
             note_run(if admits { 0 } else { 6 });
             i32::from(admits)
+        }
+
+        /// `PERRY_PROBE_VERIFY`: the witness of a compiled family slot access
+        /// ([`verify::slot`]), emitted only by a compile with the knob set.
+        /// GC leaf.
+        ///
+        /// # Safety
+        /// `obj_bits` is the address (or NaN-boxed pointer) of a live object
+        /// whose layout word the site just tested.
+        #[no_mangle]
+        #[inline(never)]
+        pub unsafe extern "C" fn perry_family_slot_verify(obj_bits: u64, key_bits: u64, slot: u32) {
+            verify::slot(obj_bits, key_bits, slot);
         }
 
         /// Does any prototype of `obj` (record `r`, a family object of descriptor
@@ -3033,6 +3122,48 @@ pub(crate) mod verify {
                 "PROBE_VERIFY_BAD #{bad} (of {n}) key={} probe={a:#x} get={reference:#x} chain={}",
                 key_text(key_bits),
                 chain(obj as *const ObjectHeader, key_bits)
+            );
+        }
+    }
+
+    /// A compiled family slot access (codegen emits `perry_family_slot_verify`
+    /// at each one when `PERRY_PROBE_VERIFY=1` while compiling): the
+    /// receiver's record must hold `key_bits` at storage slot `slot`. The
+    /// site's slot is the compiler's family layout (`ProgramLayouts`); the
+    /// record is what the runtime built from the registered descriptor and
+    /// what the probe and `[[Get]]` both read, so a descriptor or record that
+    /// disagrees with the code that births and reads its objects shows here,
+    /// where the probe-against-`[[Get]]` check above sees one record twice.
+    #[cold]
+    pub(crate) unsafe fn slot(obj_bits: u64, key_bits: u64, slot: u32) {
+        if !ON.load(Relaxed) {
+            return;
+        }
+        let obj = (obj_bits & POINTER_MASK) as *const ObjectHeader;
+        let word = (*obj).parent_class_id;
+        let r = record_of(super::super::ordinary_dir_addr(), word);
+        let found = if r.is_null() {
+            None
+        } else {
+            let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
+            let list = crate::array::array_elements_ptr(keys) as *const u64;
+            (0..(*r).logical_key_count)
+                .find(|&i| {
+                    let w = *list.add(i as usize);
+                    w == key_bits || text_entry_matches(w, key_bits)
+                })
+                .map(|pos| crate::object::key_attrs::key_storage_slot(keys, pos))
+        };
+        let n = CHECKED.fetch_add(1, Relaxed) + 1;
+        if found == Some(slot) {
+            return;
+        }
+        let bad = BAD.fetch_add(1, Relaxed) + 1;
+        if bad <= 40 {
+            eprintln!(
+                "PROBE_VERIFY_BAD #{bad} (of {n}) family slot key={} compiled={slot} record={} word={word:#x}",
+                key_text(key_bits),
+                found.map_or("absent".into(), |s| s.to_string())
             );
         }
     }

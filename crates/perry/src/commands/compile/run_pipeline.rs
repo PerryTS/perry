@@ -1249,6 +1249,11 @@ pub fn run_with_parse_cache(
             &modules,
         )));
     }
+    // A class field whose computed key names a string constant is that named
+    // field (one key list for every consumer of class keys).
+    for hir_module in ctx.native_modules.values_mut() {
+        perry_codegen::name_computed_class_fields(hir_module);
+    }
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     for site in &ctx.patched_builtins.dynamic_code_reach.sites {

@@ -414,6 +414,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[PTR, I64, I64, I32, I32, I32],
     );
+    // `PERRY_PROBE_VERIFY` compiles: a family slot access's witness
+    // (object, key atom bits, compiled slot). A GC leaf.
+    module.declare_function("perry_family_slot_verify", VOID, &[I64, I64, I32]);
     // `Function.prototype.bind` (`expr/function_bind.rs`).
     module.declare_function("js_function_bind", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
