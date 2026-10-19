@@ -927,16 +927,25 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     m.add_prim(ret, prim::UNDEF);
                 }
                 None => {
-                    unknown_method(m, call, "argument of require of an unknown or native module");
-                    // The loader may publish what it loaded in the cache:
-                    // once this call runs (a specifier reaches it).
+                    // The runtime loader never interprets code: a computed
+                    // specifier resolves to a registered record (its live
+                    // exports or a raw publication), a native module
+                    // namespace, a manifest addon or parsed JSON. Only the
+                    // last three are opaque. It caches registry records, so
+                    // `require.cache` holds the registry, not unknown values.
+                    implicit_args(m, call, "require specifier");
+                    let ret = m.calls[call as usize].ret;
+                    let reg = m.cjs_union;
+                    let ea = m.atom("exports");
+                    m.edge(reg, ret);
+                    m.cons(reg, Cons::Load { key: Key::Named(ea), dst: ret });
+                    m.add_top(ret, |_| {
+                        "native namespace, addon or JSON loaded by a computed specifier".to_string()
+                    });
+                    m.add_prim(ret, prim::ALL);
                     let (cache, _) = require_parts(m);
                     let fa = m.field_any(cache);
-                    let r = m.reason("record the loader put in require.cache");
-                    match m.calls[call as usize].args.first().copied() {
-                        Some(a0) => m.cons(a0, Cons::TopIfAny { dst: fa, reason: r }),
-                        None => m.add_top(fa, |m| m.reasons[r as usize].clone()),
-                    }
+                    m.edge(reg, fa);
                 }
             }
         }
