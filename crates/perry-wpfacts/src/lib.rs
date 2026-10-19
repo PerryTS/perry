@@ -84,6 +84,11 @@ pub struct Stats {
     pub solve_ms: f64,
     pub derive_ms: f64,
     pub pops: u64,
+    /// Summary instances, the shared ones among them, and calls expanded
+    /// into their caller's summary.
+    pub instances: u64,
+    pub shared_instances: u64,
+    pub composed: u64,
     /// Solve work done (see `FactsConfig::max_work`).
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
@@ -186,17 +191,19 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     }
     g.m.solve();
     if cfg.profile || cfg.explain {
-        let mut kinds = [0usize; 5];
+        let mut kinds = [0usize; 7];
         for &(k, _, _) in g.m.sum.inst_key.keys() {
             kinds[k as usize] += 1;
         }
         eprintln!(
-            "perry: wpfacts instances {} (call {} template {} entry {} group {}), calls {}",
+            "perry: wpfacts instances {} (call {} site {} shared {} entry {} group {}), program calls {}, calls {}",
             g.m.sum.insts.len(),
             kinds[0],
-            kinds[1],
+            kinds[6],
+            kinds[5],
             kinds[2],
             kinds[3] + kinds[4],
+            g.m.sum.n_prog,
             g.m.calls.len()
         );
     }
@@ -293,6 +300,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         solve_ms,
         derive_ms,
         pops: g.m.pops,
+        instances: g.m.sum.insts.len() as u64,
+        shared_instances: g.m.sum.inst_key.keys().filter(|k| k.0 == 5).count() as u64,
+        composed: g.m.sum.composed.len() as u64,
         work: g.m.work,
         aborted: g.m.aborted,
         pts_entries: g.m.pts_entries,
@@ -439,8 +449,18 @@ fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
                 *mix.entry(k).or_default() += 1;
             }
             let label = m.labels.get(i).copied().unwrap_or("?");
+            // A field node names its holder and key; any node its function.
+            let mut owner = m
+                .fields
+                .iter()
+                .find(|(_, &n)| n as usize == i)
+                .map(|(&(t, a), _)| format!("({}.{})", m.tok_name(t), m.atoms[a as usize]))
+                .unwrap_or_default();
+            if let Some(&f) = m.node_fn.get(i).filter(|&&f| f != model::NO_FN) {
+                owner.push_str(&format!("@{}", m.funcs[f as usize].name));
+            }
             (
-                format!("{label}#{i}"),
+                format!("{label}#{i}{owner}"),
                 len,
                 mix.iter()
                     .map(|(k, v)| format!("{k}:{v}"))

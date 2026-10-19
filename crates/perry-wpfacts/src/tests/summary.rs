@@ -193,6 +193,40 @@ fn sabotage_user_write_to_a_builtin_through_a_helper() {
     assert!(pf.fnproto_bind_written.is_some(), "{}", pf.dump_text());
 }
 
+#[test]
+fn composed_pipe_makes_no_callee_instances() {
+    let pf = facts(&format!(
+        "{CLASSES}
+        class H1 {{ f = new A(); }}
+        class H2 {{ f = new B(); }}
+        function h(o: any) {{ return o.f; }}
+        function g(o: any) {{ return o; }}
+        function f(x: any) {{ return g(h(x)); }}
+        const a = f(new H1()); const b = f(new H2());
+        console.log(a.a, b.b);"
+    ));
+    exact(&pf, "a", 1);
+    exact(&pf, "b", 1);
+    // `g` and `h` are expanded into `f`'s summary: only `f`'s two program
+    // calls make instances.
+    assert_eq!(pf.stats.composed, 2, "{}", pf.dump_text());
+    assert_eq!(pf.stats.instances, 2, "{}", pf.dump_text());
+}
+
+#[test]
+fn callback_instance_per_passing_call() {
+    let pf = facts(&format!(
+        "{CLASSES}
+        function id(o: any) {{ return o; }}
+        const r1 = [new A()].map(id); const r2 = [new B()].map(id);
+        console.log(r1[0].x, r2[0].y);"
+    ));
+    // One instance of `id` per `map` call that passes it.
+    assert_eq!(pf.stats.instances, 2, "{}", pf.dump_text());
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
+}
+
 /// Diagnostics on a file: `CW_SRC=<file> cargo test -- --ignored debug_file --nocapture`.
 #[test]
 #[ignore]

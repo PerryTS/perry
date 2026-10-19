@@ -6,7 +6,7 @@ impl Model {
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         let n0 = self.calls.len();
         self.call_tok_inner(call, t, this_tok);
-        self.inherit_ctx(n0, call);
+        self.note_origin(n0, call);
     }
 
     fn call_tok_inner(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
@@ -314,7 +314,7 @@ impl Model {
     pub fn construct(&mut self, call: CallId, t: Tok) {
         let n0 = self.calls.len();
         self.construct_inner(call, t);
-        self.inherit_ctx(n0, call);
+        self.note_origin(n0, call);
     }
 
     fn construct_inner(&mut self, call: CallId, t: Tok) {

@@ -48,6 +48,10 @@ pub struct Summary {
 #[derive(Clone, Debug)]
 pub struct Inst {
     pub f: FnIdx,
+    /// The program call this instance is for (kind 0): the calls it makes
+    /// are made for that call. Other instances' calls are made for their
+    /// own template call.
+    pub origin: Option<CallId>,
     pub params: Vec<NodeId>,
     pub ret: NodeId,
 }
@@ -59,15 +63,29 @@ pub struct SumState {
     pub deferred: Vec<Deferred>,
     pub of: FxHashMap<FnIdx, Rc<Summary>>,
     pub insts: Vec<Inst>,
-    /// (kind, call/template/node, function) -> instance. Kinds: 0 a call
-    /// of the program or into a leaf summary, 1 a call an instance made into
-    /// a summary that makes calls (shared by every instance of its template:
-    /// finite, and recursion through instances terminates),
-    /// 2 unknown-code entry, 3 setter group, 4 getter group.
+    /// (kind, call site/node, function) -> instance. Kinds: 0 a program
+    /// call, 6 a call made for a source call site (a callback called inside
+    /// the instance of the program call that passed it, a builtin calling
+    /// one, or a template call of any other instance), 2 unknown-code entry,
+    /// 3 setter group, 4 getter group, 5 shared (a call inside the callee's
+    /// SCC, or a call no call site is behind). An instance never keys on another
+    /// instance, so the count is fixed by the program.
     pub inst_key: FxHashMap<(u8, u32, FnIdx), u32>,
-    /// Calls an instance made (renamed templates, and calls solving them
-    /// created): their template call.
-    pub call_ctx: FxHashMap<CallId, CallId>,
+    /// Calls that exist when summaries are built: the program's calls.
+    pub n_prog: usize,
+    /// A call an instance made: the summary call (template) it renames.
+    pub tmpl_of: FxHashMap<CallId, CallId>,
+    /// A call made after summaries exist: the source call site behind it
+    /// (the template it renames, or the site of the call whose solving
+    /// made it).
+    pub origin: FxHashMap<CallId, CallId>,
+    /// (template call, callee): expanded into every summary that holds the
+    /// template; its instances never bind it again.
+    pub composed: FxHashSet<(CallId, FnIdx)>,
+    /// Template call -> the summarized function whose body makes it.
+    pub owner: FxHashMap<CallId, FnIdx>,
+    /// Summarized function -> its SCC in the static call graph.
+    pub scc: FxHashMap<FnIdx, u32>,
     pub call_inst: FxHashMap<(CallId, FnIdx), u32>,
     /// Calls that belong to a summary: the shared body never runs them.
     pub templates: FxHashSet<CallId>,
@@ -259,14 +277,24 @@ impl Model {
         self.sum.templates.contains(&call)
     }
 
-    /// Calls made while solving `call` belong to the same instance.
-    pub(crate) fn inherit_ctx(&mut self, n0: usize, call: CallId) {
-        if self.calls.len() == n0 {
+    /// The source call site behind `call`: itself for a call of the program.
+    fn origin_of(&self, call: CallId) -> Option<CallId> {
+        if (call as usize) < self.sum.n_prog {
+            Some(call)
+        } else {
+            self.sum.origin.get(&call).copied()
+        }
+    }
+
+    /// Calls made while solving `call` have the same call site behind them
+    /// (a builtin calling a callback for it).
+    pub(crate) fn note_origin(&mut self, n0: usize, call: CallId) {
+        if !self.sum.ready || self.calls.len() == n0 {
             return;
         }
-        if let Some(&cx) = self.sum.call_ctx.get(&call) {
+        if let Some(o) = self.origin_of(call) {
             for i in n0..self.calls.len() {
-                self.sum.call_ctx.entry(i as CallId).or_insert(cx);
+                self.sum.origin.entry(i as CallId).or_insert(o);
             }
         }
     }
@@ -292,6 +320,7 @@ impl Model {
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         self.sum.insts.push(Inst {
             f,
+            origin: (key.0 == 0).then_some(key.1),
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
         });
@@ -315,12 +344,14 @@ impl Model {
     fn fill_instance(&mut self, inst: u32, base: &[NodeId]) {
         let f = self.sum.insts[inst as usize].f;
         let s = self.sum.of[&f].clone();
+        let origin = self.sum.insts[inst as usize].origin;
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         let mut kmap = Vec::with_capacity(s.calls.len());
         for (t, cs) in &s.calls {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
-            self.sum.call_ctx.insert(id, *t);
+            self.sum.tmpl_of.insert(id, *t);
+            self.sum.origin.insert(id, origin.unwrap_or(*t));
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
             }
@@ -348,13 +379,27 @@ impl Model {
 
     /// Arguments and result of `call` into summarized `f`: its instance.
     pub(crate) fn bind_summarized(&mut self, call: CallId, f: FnIdx) {
-        // A call of the program, or of a leaf summary (it makes no calls,
-        // so its instances never cascade): its own instance. A call an
-        // instance made into a summary that makes calls: one instance per
-        // template call.
-        let key = match self.sum.call_ctx.get(&call).copied() {
-            Some(t) if !self.sum.of[&f].calls.is_empty() => (1, t, f),
-            _ => (0, call, f),
+        // A call an instance made from a template expanded into the
+        // summary: the instance already holds `f`'s effect.
+        let t = self.sum.tmpl_of.get(&call).copied();
+        if t.is_some_and(|t| self.sum.composed.contains(&(t, f))) {
+            return;
+        }
+        // A call inside `f`'s SCC (recursion), or one no program call is
+        // behind (protocol touch, bound merge, timer, implicit call): the
+        // shared instance. Every other call: the instance for the source call
+        // site behind it, so the count is sites x targets, fixed by the
+        // program.
+        let in_scc = t.is_some_and(|t| {
+            self.sum.owner.get(&t).and_then(|o| self.sum.scc.get(o)) == self.sum.scc.get(&f)
+        });
+        let key = if (call as usize) < self.sum.n_prog {
+            (0, call, f)
+        } else {
+            match self.sum.origin.get(&call) {
+                Some(&o) if !in_scc => (6, o, f),
+                _ => (5, 0, f),
+            }
         };
         let inst = self.instance(key);
         self.sum.call_inst.insert((call, f), inst);
@@ -454,6 +499,7 @@ impl Model {
     /// binding.
     pub fn summarize_and_replay(&mut self) {
         let t0 = std::time::Instant::now();
+        self.sum.n_prog = self.calls.len();
         build_summaries(self);
         self.sum.ready = true;
         let deferred = std::mem::take(&mut self.sum.deferred);
@@ -772,9 +818,25 @@ fn build_summaries(m: &mut Model) {
         nsum += 1;
         for &k in &e.calls {
             m.sum.templates.insert(k);
+            m.sum.owner.insert(k, f);
         }
         m.sum.of.insert(f, Rc::new(s));
     }
+    // 3b. Composition over the static call graph, callee SCCs first.
+    let obs_of = |g: FnIdx, m: &Model| -> Vec<NodeId> {
+        m.funcs[g as usize]
+            .params
+            .iter()
+            .map(|&p| if dof.get(&p) == Some(&g) { p } else { NO_NODE })
+            .collect()
+    };
+    let (ncomposed, nsccs) = compose(m, &obs_of);
+    let size_after: usize = m
+        .sum
+        .of
+        .values()
+        .map(|s| s.edges.len() + s.cons.len() + s.calls.len() + s.seeds.len())
+        .sum();
     // 4. Observation layer: the slice nodes of summarized functions.
     for &f in &fs {
         if refused.contains(&f) {
@@ -812,12 +874,217 @@ fn build_summaries(m: &mut Model) {
         }
     }
     m.sum.stats = format!(
-        "summaries {} of {} candidates ({} refused), size {}",
+        "summaries {} of {} candidates ({} refused), size {}, composed {} calls over {} SCCs, size {}",
         nsum,
         fs.len(),
         refused.len(),
-        size
+        size,
+        ncomposed,
+        nsccs,
+        size_after
     );
+}
+
+/// The summarized functions a summary's call `i` reaches through a callee
+/// node that is not a slot: `(i, functions)` for its own calls.
+fn static_callees(m: &Model, s: &Summary) -> Vec<(usize, Vec<FnIdx>)> {
+    let mut out: Vec<(usize, Vec<FnIdx>)> = Vec::new();
+    for (h, c) in &s.cons {
+        let Cons::Call { call } = *c else { continue };
+        if call == NO_NODE || call & CALL == 0 || is_slot(*h) || *h == NO_NODE {
+            continue;
+        }
+        let mut gs: Vec<FnIdx> = m.nodes[*h as usize]
+            .pts
+            .to_sorted()
+            .into_iter()
+            .filter_map(|t| match m.toks[t as usize] {
+                TokKind::Func(g) if m.sum.of.contains_key(&g) => Some(g),
+                _ => None,
+            })
+            .collect();
+        gs.sort_unstable();
+        gs.dedup();
+        if !gs.is_empty() {
+            out.push(((call & !CALL) as usize, gs));
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Expand every call to a summarized function outside the caller's SCC
+/// into the caller's summary (design CW2 3.2). SCCs come out of Tarjan's
+/// walk callees first, so a callee's summary is final when it is copied.
+/// Returns (expanded calls, SCCs).
+fn compose(m: &mut Model, obs_of: &dyn Fn(FnIdx, &Model) -> Vec<NodeId>) -> (usize, usize) {
+    let mut fs: Vec<FnIdx> = m.sum.of.keys().copied().collect();
+    fs.sort_unstable();
+    let direct: FxHashMap<FnIdx, Vec<(usize, Vec<FnIdx>)>> =
+        fs.iter().map(|&f| (f, static_callees(m, &m.sum.of[&f]))).collect();
+    // Tarjan, iterative.
+    let mut index: FxHashMap<FnIdx, u32> = FxHashMap::default();
+    let mut low: FxHashMap<FnIdx, u32> = FxHashMap::default();
+    let mut on: FxHashSet<FnIdx> = FxHashSet::default();
+    let mut stack: Vec<FnIdx> = Vec::new();
+    let mut order: Vec<Vec<FnIdx>> = Vec::new();
+    let mut next = 0u32;
+    for &root in &fs {
+        if index.contains_key(&root) {
+            continue;
+        }
+        let succ = |f: FnIdx| -> Vec<FnIdx> {
+            let mut v: Vec<FnIdx> = direct[&f].iter().flat_map(|(_, gs)| gs.iter().copied()).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let mut work: Vec<(FnIdx, Vec<FnIdx>, usize)> = vec![(root, succ(root), 0)];
+        index.insert(root, next);
+        low.insert(root, next);
+        next += 1;
+        stack.push(root);
+        on.insert(root);
+        while let Some((f, ss, i)) = work.last_mut() {
+            let f = *f;
+            if *i < ss.len() {
+                let g = ss[*i];
+                *i += 1;
+                if !index.contains_key(&g) {
+                    index.insert(g, next);
+                    low.insert(g, next);
+                    next += 1;
+                    stack.push(g);
+                    on.insert(g);
+                    let sg = succ(g);
+                    work.push((g, sg, 0));
+                } else if on.contains(&g) {
+                    let l = low[&f].min(index[&g]);
+                    low.insert(f, l);
+                }
+                continue;
+            }
+            work.pop();
+            if let Some((p, _, _)) = work.last() {
+                let l = low[p].min(low[&f]);
+                low.insert(*p, l);
+            }
+            if low[&f] == index[&f] {
+                let mut c = Vec::new();
+                loop {
+                    let x = stack.pop().unwrap();
+                    on.remove(&x);
+                    c.push(x);
+                    if x == f {
+                        break;
+                    }
+                }
+                c.sort_unstable();
+                order.push(c);
+            }
+        }
+    }
+    for (i, c) in order.iter().enumerate() {
+        for &f in c {
+            m.sum.scc.insert(f, i as u32);
+        }
+    }
+    let mut n = 0usize;
+    for c in &order {
+        for &f in c {
+            let mut s: Summary = (*m.sum.of[&f]).clone();
+            let mut any = false;
+            for (ci, gs) in &direct[&f] {
+                for &g in gs {
+                    if m.sum.scc[&g] == m.sum.scc[&f] {
+                        continue;
+                    }
+                    let t = s.calls[*ci].0;
+                    if !m.sum.composed.insert((t, g)) {
+                        continue;
+                    }
+                    let sg = m.sum.of[&g].clone();
+                    expand(&mut s, *ci, &sg, &obs_of(g, m));
+                    any = true;
+                    n += 1;
+                }
+            }
+            if any {
+                compress(&mut s);
+                m.sum.of.insert(f, Rc::new(s));
+            }
+        }
+    }
+    (n, order.len())
+}
+
+/// Copy `g`'s summary into `s` over fresh slots and wire call `ci`'s
+/// operands to it the way a binding would: arguments into the parameters
+/// (and into `g`'s observation parameters `gobs`), missing ones undefined,
+/// spread elements into every parameter, `g`'s result into the call's.
+fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
+    let off = s.nslots;
+    let coff = s.calls.len() as u32;
+    let tr = |x: NodeId| if is_slot(x) { SLOT | (off + (x & !SLOT)) } else { x };
+    let kr = |k: CallId| if k != NO_NODE && k & CALL != 0 { CALL | (coff + (k & !CALL)) } else { k };
+    s.nslots += g.nslots;
+    s.orig.extend_from_slice(&g.orig);
+    for (i, t, p) in &g.seeds {
+        s.seeds.push((off + i, t.clone(), *p));
+    }
+    for &(a, b) in &g.edges {
+        s.edges.push((tr(a), tr(b)));
+    }
+    for (h, c) in &g.cons {
+        s.cons.push((tr(*h), map_cons(c, tr, kr)));
+    }
+    for (t, cs) in &g.calls {
+        s.calls.push((*t, map_call(cs, tr)));
+    }
+    let call = s.calls[ci].1.clone();
+    let fresh = |s: &mut Summary| {
+        let i = s.nslots;
+        s.nslots += 1;
+        s.orig.push(NO_NODE);
+        SLOT | i
+    };
+    let dsts: Vec<Vec<NodeId>> = (0..g.params.len())
+        .map(|i| {
+            [tr(g.params[i]), gobs.get(i).copied().unwrap_or(NO_NODE)]
+                .into_iter()
+                .filter(|&d| d != NO_NODE)
+                .collect()
+        })
+        .collect();
+    let mut undef = NO_NODE;
+    for (i, ds) in dsts.iter().enumerate() {
+        for &d in ds {
+            if i < call.args.len() {
+                if call.args[i] != NO_NODE {
+                    s.edges.push((call.args[i], d));
+                }
+            } else {
+                if undef == NO_NODE {
+                    undef = fresh(s);
+                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF));
+                }
+                s.edges.push((undef, d));
+            }
+        }
+    }
+    for &sp in &call.spread {
+        let elems = fresh(s);
+        s.cons.push((sp, Cons::Load { key: Key::Any, dst: elems }));
+        for ds in &dsts {
+            for &d in ds {
+                s.edges.push((elems, d));
+            }
+        }
+    }
+    let r = tr(g.ret);
+    if r != NO_NODE && call.ret != NO_NODE {
+        s.edges.push((r, call.ret));
+    }
 }
 
 /// Remove what an instance does not need: relays inside the slice become
