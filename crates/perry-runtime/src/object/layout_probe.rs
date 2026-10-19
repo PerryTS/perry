@@ -204,6 +204,19 @@ unsafe fn derive(r: *mut ShapeRecord) -> u64 {
 #[thread_local]
 static COLOUR_ATOMS: [std::cell::Cell<usize>; 127] = [const { std::cell::Cell::new(0) }; 127];
 
+/// The colour slot (plus one) of a coloured key whose atom is an immutable
+/// runtime image that cannot carry the colour in its flags (a spelling the
+/// runtime also names: its strong image wins the link over the program's
+/// coloured weak one), by mask bit. Zero for every other bit.
+#[thread_local]
+static COLOUR_SLOTS: [std::cell::Cell<u32>; 127] = [const { std::cell::Cell::new(0) }; 127];
+
+/// Open-addressed index (mask bit plus one, 0 empty) of the flagless
+/// coloured atoms by their creation hash: [`COLOUR_ATOMS`] and
+/// [`COLOUR_SLOTS`] inverted, so the mint finds a key's colour from its atom.
+#[thread_local]
+static COLOUR_BY_HASH: [std::cell::Cell<u8>; 256] = [const { std::cell::Cell::new(0) }; 256];
+
 /// Colour this agent's atoms of the program's coloured keys (object model
 /// step 5, case 2c). Runs once per agent with the static atom seeds, before
 /// any key list is built from user code.
@@ -214,8 +227,57 @@ pub(crate) fn seed_colours() {
         // SAFETY: the agent's atom table is live; `bytes` is image data.
         if let Some(a) = unsafe { crate::string::set_atom_colour(bytes, hash, bit, slot) } {
             COLOUR_ATOMS[bit as usize].set(a as usize);
+        } else if let Some(a) = crate::string::atom_lookup(bytes, hash) {
+            // SAFETY: `a` is a live atom of this agent.
+            unsafe { seed_flagless_colour(a, hash, bit, slot) };
         }
     }
+}
+
+/// Give the coloured key `bit` the immutable atom `a` that cannot carry its
+/// colour in its flags: the atom, its slot and its place in the index.
+unsafe fn seed_flagless_colour(a: *const crate::StringHeader, hash: u64, bit: u32, slot: u32) {
+    if bit >= 127
+        || slot >= 256
+        || !crate::string::is_program_atom(a)
+        || crate::string::atom_colour(a).is_some()
+    {
+        return;
+    }
+    COLOUR_ATOMS[bit as usize].set(a as usize);
+    COLOUR_SLOTS[bit as usize].set(slot + 1);
+    let mut at = (hash & 255) as usize;
+    for _ in 0..256 {
+        if COLOUR_BY_HASH[at].get() == 0 {
+            COLOUR_BY_HASH[at].set(bit as u8 + 1);
+            return;
+        }
+        at = (at + 1) & 255;
+    }
+}
+
+/// The (bit, slot) colour of a program atom `a` that carries none in its
+/// flags: the one [`seed_flagless_colour`] gave it, if any.
+unsafe fn flagless_colour(a: *const crate::StringHeader) -> Option<(u32, u32)> {
+    if !crate::string::is_program_atom(a) {
+        return None;
+    }
+    let mut at = (crate::string::property_atom_hash(a) & 255) as usize;
+    for _ in 0..256 {
+        let b = COLOUR_BY_HASH[at].get();
+        if b == 0 {
+            return None;
+        }
+        let bit = b as u32 - 1;
+        if COLOUR_ATOMS[bit as usize].get() == a as usize {
+            return COLOUR_SLOTS[bit as usize]
+                .get()
+                .checked_sub(1)
+                .map(|slot| (bit, slot));
+        }
+        at = (at + 1) & 255;
+    }
+    None
 }
 
 /// Set record `rec`'s colour masks at its mint (slab insert): the record is
@@ -275,7 +337,7 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
         if a.is_null() {
             continue;
         }
-        let Some((bit, slot)) = crate::string::atom_colour(a) else {
+        let Some((bit, slot)) = crate::string::atom_colour(a).or_else(|| flagless_colour(a)) else {
             continue;
         };
         // The colour names this agent's atom of the key, stored at the
@@ -306,7 +368,7 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
             && entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0
             && (storage >= crate::object::field_rep::REP_SLOTS
                 || crate::object::field_rep::slot_rep(rec.rep, storage)
-                    == crate::object::field_rep::REP_ANY)
+                    != crate::object::field_rep::REP_SPECIAL)
         {
             store[(bit / 64) as usize] |= 1u64 << (bit % 64);
         }

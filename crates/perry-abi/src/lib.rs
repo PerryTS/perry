@@ -170,8 +170,15 @@ pub const SHAPE_RECORD_SIZE: usize = 120;
 /// data at its colour slot).
 pub const SHAPE_RECORD_COLOUR_MASK: usize = 88;
 /// Offset of a record's two-word coloured-key store mask (the key is also a
-/// plain writable `Any`-lane slot of a store-admitted, non-frozen layout).
+/// plain writable `Any`- or `F64`-lane slot of a store-admitted, non-frozen
+/// layout; an `F64` lane takes only a plain double, so a site tests the lane
+/// when its value may be anything else).
 pub const SHAPE_RECORD_COLOUR_STORE_MASK: usize = 104;
+/// Offset of a record's per-slot representation word (two bits per inline
+/// slot 0..32, `Any` = 0; a slot at or past 32 is `Any`).
+pub const SHAPE_RECORD_REP: usize = 48;
+/// The number of inline slots a record's `rep` word describes.
+pub const SHAPE_REP_SLOTS: u32 = 32;
 /// Offset of the flat record base in the agent's shape directory.
 pub const SHAPE_DIR_FLAT_BASE: usize = 24;
 /// The layout word's shadow bit (`perry-runtime` `layout_desc.rs`).

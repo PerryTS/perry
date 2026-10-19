@@ -63,6 +63,18 @@ fn emit_mask_test(
     miss_label: &str,
     mask_offset: usize,
 ) -> String {
+    emit_mask_test_record(ctx, biased, bit, miss_label, mask_offset).0
+}
+
+/// [`emit_mask_test`], also returning the record's address (valid in the
+/// block it leaves).
+fn emit_mask_test_record(
+    ctx: &mut FnCtx<'_>,
+    biased: &str,
+    bit: u32,
+    miss_label: &str,
+    mask_offset: usize,
+) -> (String, String) {
     let blk = ctx.block();
     let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, biased, 4);
     let word = blk.load(I32, &word_ptr);
@@ -117,7 +129,7 @@ fn emit_mask_test(
     );
     let mask_word = blk.load(I64, &mask_at);
     let bit_value = blk.and(I64, &mask_word, &((1u64 << (bit % 64)) as i64).to_string());
-    blk.icmp_ne(I64, &bit_value, "0")
+    (blk.icmp_ne(I64, &bit_value, "0"), rec)
 }
 
 /// Emit the 2c arm for `receiver_bits.property` if the key is coloured.
@@ -240,14 +252,48 @@ pub(crate) fn begin_store(
         .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
 
     ctx.current_block = word_idx;
-    let holds = emit_mask_test(
+    let (holds, rec) = emit_mask_test_record(
         ctx,
         &recv.biased,
         bit,
         &miss_label,
         crate::runtime_abi::SHAPE_RECORD_COLOUR_STORE_MASK,
     );
-    ctx.block().cond_br(&holds, &meta_label, &miss_label);
+    if slot >= crate::runtime_abi::SHAPE_REP_SLOTS {
+        // A slot past the lane word is `Any`: the mask is the whole proof.
+        ctx.block().cond_br(&holds, &meta_label, &miss_label);
+    } else {
+        // The mask admits an `Any` or an `F64` lane. A plain double fits
+        // either; anything else needs the record's lane for this slot to be
+        // `Any` (`rep` bits 2*slot..2*slot+1 are zero).
+        let lane_idx = ctx.new_block("l2s.lane");
+        let rep_idx = ctx.new_block("l2s.rep");
+        let lane_label = ctx.block_label(lane_idx);
+        let rep_label = ctx.block_label(rep_idx);
+        ctx.block().cond_br(&holds, &lane_label, &miss_label);
+
+        ctx.current_block = lane_idx;
+        let blk = ctx.block();
+        let stored_bits = blk.bitcast_double_to_i64(value_double);
+        let plain = crate::expr::class_field_inline_guard::emit_plain_finite_number_check(
+            blk,
+            &stored_bits,
+        );
+        blk.cond_br(&plain, &meta_label, &rep_label);
+
+        ctx.current_block = rep_idx;
+        let blk = ctx.block();
+        let rep_ptr = blk.gep(
+            I8,
+            &rec,
+            &[(I64, &crate::runtime_abi::SHAPE_RECORD_REP.to_string())],
+        );
+        let rep = blk.load(I64, &rep_ptr);
+        let lane = blk.lshr(I64, &rep, &(2 * slot).to_string());
+        let lane = blk.and(I64, &lane, "3");
+        let any = blk.icmp_eq(I64, &lane, "0");
+        blk.cond_br(&any, &meta_label, &miss_label);
+    }
 
     // `ObjectHeader.meta` is the header's last word.
     ctx.current_block = meta_idx;

@@ -176,8 +176,10 @@ pub(crate) struct ShapeRecord {
     /// site of a coloured key tests its bit and loads the slot. Offset 88.
     pub(crate) colour_mask: [u64; 2],
     /// The coloured keys a store may write at their colour slot: the read
-    /// bit, plus a writable `Any`-lane key of a store-admitted layout with no
-    /// integrity level. Offset 104.
+    /// bit, plus a writable `Any`- or `F64`-lane key of a store-admitted
+    /// layout with no integrity level (never a `Special` lane). A store into
+    /// an `F64` lane must be a plain double: the site tests the lane (`rep`,
+    /// offset 48) unless it is. Offset 104.
     pub(crate) colour_store_mask: [u64; 2],
 }
 
@@ -257,6 +259,9 @@ const _: () = assert!(
     std::mem::offset_of!(ShapeRecord, colour_store_mask)
         == crate::codegen_abi::SHAPE_RECORD_COLOUR_STORE_MASK
 );
+const _: () =
+    assert!(std::mem::offset_of!(ShapeRecord, rep) == crate::codegen_abi::SHAPE_RECORD_REP);
+const _: () = assert!(crate::object::field_rep::REP_SLOTS == crate::codegen_abi::SHAPE_REP_SLOTS);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, special_constfn_mask) == 44);
