@@ -282,14 +282,14 @@ mod tests {
     fn create_transport_with_null_returns_handle() {
         // Null/undefined config falls back to the SmtpConfig::default()
         // — `js_nodemailer_create_transport` always returns a non-zero
-        // pointer-tagged handle so methods remain dispatchable (and fail
+        // native registry handle so methods remain dispatchable (and fail
         // asynchronously at SMTP-connect time when no local SMTP server is
         // available).
         let h_f =
             unsafe { js_nodemailer_create_transport(f64::from_bits(JsValue::UNDEFINED.bits())) };
         assert_ne!(h_f, 0.0);
         let bits = h_f.to_bits();
-        assert_eq!(bits >> 48, 0x7FFD);
+        assert!(JsValue::from_bits(bits).is_handle());
         let handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         let stored = get_handle::<SmtpTransportHandle>(handle).expect("registered");
         assert_eq!(stored.config.host, "localhost");

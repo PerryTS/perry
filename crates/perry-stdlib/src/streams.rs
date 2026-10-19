@@ -2786,6 +2786,7 @@ mod handle_boundary_tests {
 
     #[test]
     fn raw_and_tagged_typed_receivers_store_stream_expandos() {
+        crate::test_runtime::initialize();
         unsafe {
             let stream = js_readable_stream_new(
                 f64::from_bits(TAG_UNDEFINED),
@@ -2803,11 +2804,17 @@ mod handle_boundary_tests {
             {
                 let key =
                     perry_runtime::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
-                perry_runtime::object::js_object_set_field_by_name(
-                    receiver as *mut perry_runtime::object::ObjectHeader,
-                    key,
-                    value,
-                );
+                if receiver == id as u64 {
+                    perry_runtime::object::js_object_set_field_by_name(
+                        receiver as *mut perry_runtime::object::ObjectHeader,
+                        key,
+                        value,
+                    );
+                } else {
+                    let object = f64::from_bits(receiver);
+                    let property = perry_runtime::value::js_nanbox_string(key as i64);
+                    perry_runtime::proxy::js_put_value_set(object, property, value, object, 0);
+                }
                 assert_eq!(stream_expando_get(id, key_name), Some(value));
             }
         }

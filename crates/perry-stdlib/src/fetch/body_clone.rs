@@ -187,6 +187,7 @@ mod storage_tests {
     use super::*;
     #[test]
     fn clone_after_body_transfer_drives_both_tee_branches() {
+        crate::test_runtime::initialize();
         let expected = vec![9; 65536];
         let id = alloc_response(
             200,
@@ -220,6 +221,7 @@ mod storage_tests {
     }
     #[test]
     fn body_stream_becomes_the_owner_and_body_methods_drain_it() {
+        crate::test_runtime::initialize();
         let expected = vec![8; 65536];
         let id = alloc_response(
             200,

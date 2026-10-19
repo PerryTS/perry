@@ -494,6 +494,7 @@ mod tests {
     /// reintroducing the bug while widening the string branch.
     #[test]
     fn socket_bytes_rejects_non_buffer_object() {
+        perry_ffi::initialize_runtime_fixture();
         let obj_f64 = unsafe { build_error_object("boom") };
         assert!(JsValue::from_bits(obj_f64.to_bits()).is_pointer());
         let bytes = unsafe { jsvalue_to_socket_bytes(obj_f64) };

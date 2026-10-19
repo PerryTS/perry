@@ -32,8 +32,9 @@ mod tests {
 
     #[test]
     fn parse_round_trip() {
+        perry_ffi::initialize_runtime_fixture();
         let buf = alloc_buffer(b"hello");
-        let nan_boxed = (0x7FFD_u64 << 48) | (buf as u64 & 0x0000_FFFF_FFFF_FFFF);
+        let nan_boxed = perry_ffi::JsValue::from_object_ptr(buf).bits();
         let out_ptr = unsafe { js_pdf_parse(nan_boxed as i64) };
         let out = read_string(unsafe { JsString::from_raw(out_ptr) }).expect("non-null");
         assert_eq!(out, "stub: 5 bytes");
@@ -41,6 +42,7 @@ mod tests {
 
     #[test]
     fn parse_null_buffer() {
+        perry_ffi::initialize_runtime_fixture();
         let out_ptr = unsafe { js_pdf_parse(0) };
         let out = read_string(unsafe { JsString::from_raw(out_ptr) }).expect("non-null");
         assert_eq!(out, "stub: 0 bytes");

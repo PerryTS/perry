@@ -655,10 +655,12 @@ unsafe extern "C" fn saw_close_in_resource(
         perry_runtime::async_hooks::js_async_hooks_execution_async_resource().to_bits(),
         expected.get().to_bits()
     );
-    let expected_id = super::payload_provider::id(expected.get());
+    // The provider token names its GC state; JavaScript exposes a separate serial.
+    let expected_id =
+        perry_runtime::async_hooks::js_async_resource_async_id(p::raw_owner(expected.get()));
     assert_eq!(
         perry_runtime::async_hooks::js_async_hooks_execution_async_id(),
-        expected_id as f64
+        expected_id
     );
     CLOSES.with(|closes| closes.set(closes.get() + 1));
     p::undefined()
