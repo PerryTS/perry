@@ -177,6 +177,11 @@ pub(super) fn prologue_store_plan(
         return None;
     }
 
+    let family = ctx
+        .class_ids
+        .get(class_name)
+        .filter(|&&cid| super::new_alloc::class_born_on_family(ctx, class, cid))
+        .and_then(|cid| ctx.program_layouts.families.get(cid));
     let mut plan: Vec<PrologueStore> = Vec::with_capacity(ctor.body.len());
     let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for stmt in &ctor.body {
@@ -197,14 +202,22 @@ pub(super) fn prologue_store_plan(
         {
             return None;
         }
-        let slot = crate::type_analysis::class_field_global_index(ctx, class_name, property)?;
-        // Refuse an unresolved field type rather than guessing boxed: missing
-        // a raw-f64 slot here would store NaN-box bits into a slot readers
-        // reinterpret as a plain double.
-        crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
-        // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
-        let requires_raw_f64 =
-            crate::expr::class_field_inline_guard::class_birth_slot_is_f64(ctx, class_name, slot);
+        // A family-born instance (object model step 2c) stores into its
+        // family layout's slots, whose lanes are boxed values.
+        let (slot, requires_raw_f64) = if let Some(fam) = family {
+            (fam.keys.iter().find(|(k, _)| k == property)?.1, false)
+        } else {
+            let slot = crate::type_analysis::class_field_global_index(ctx, class_name, property)?;
+            // Refuse an unresolved field type rather than guessing boxed: missing
+            // a raw-f64 slot here would store NaN-box bits into a slot readers
+            // reinterpret as a plain double.
+            crate::type_analysis::class_field_declared_type(ctx, class_name, property)?;
+            // Charter step 5, P4: raw exactly for an `F64` lane of the birth rep.
+            let requires_raw_f64 = crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+                ctx, class_name, slot,
+            );
+            (slot, requires_raw_f64)
+        };
         plan.push(PrologueStore {
             slot,
             arg_index,

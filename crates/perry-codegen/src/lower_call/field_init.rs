@@ -988,6 +988,8 @@ pub(crate) fn apply_field_initializers_recursive(
                 &[(DOUBLE, &this_val), (I32, &private_class_id)],
             );
         }
+        // The run of this class's field definitions (`layout_read::field_run_plan`).
+        let mut field_run = None;
         for (prop, init_expr, is_private) in init_pairs {
             // A scalar-replaced `new C()` has no heap receiver. Its fields are
             // represented by the allocas in `ctx.scalar_replaced`, and the
@@ -1012,6 +1014,8 @@ pub(crate) fn apply_field_initializers_recursive(
                 }
             }
             if is_private {
+                // A private add changes the receiver: the run ends here.
+                field_run = None;
                 let value = lower_expr(ctx, &init_expr)?;
                 let this_val = ctx
                     .this_stack
@@ -1053,6 +1057,7 @@ pub(crate) fn apply_field_initializers_recursive(
                 ..
             } = &init_expr
             {
+                field_run = None;
                 let auto_caps =
                     crate::type_analysis::compute_auto_captures(ctx, cparams, cbody, ccaps);
                 let this_idx = auto_caps.len() as u32;
@@ -1105,6 +1110,16 @@ pub(crate) fn apply_field_initializers_recursive(
             // including an undefined initializer. DefineField bypasses inherited
             // setters and observes a replacement receiver's defineProperty trap.
             // The runtime's ordinary field-definition path owns the key-add.
+            // On a family-born instance the field's key is a family key, and
+            // its definition joins the constructor's run of family stores
+            // (`layout_read::family_run_plan`, object model step 2c): while
+            // the run's check holds and the key's slot still holds the hole
+            // its birth wrote, DefineField is that slot's plain fill. The
+            // check also proves the chain does not intercept the key, which
+            // DefineField never consults: a refusal only costs the runtime's
+            // definition below.
+            let plan =
+                crate::expr::layout_read::field_run_plan(ctx, &prop, &init_expr, &mut field_run);
             let value = lower_expr(ctx, &init_expr)?;
             let this_val = ctx
                 .this_stack
@@ -1112,14 +1127,36 @@ pub(crate) fn apply_field_initializers_recursive(
                 .cloned()
                 .map(|slot| ctx.block().load(DOUBLE, &slot))
                 .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            let fill = plan.and_then(|plan| {
+                let this_bits = ctx.block().bitcast_double_to_i64(&this_val);
+                let run = crate::expr::layout_read::field_run_arm(
+                    ctx,
+                    plan,
+                    &this_bits,
+                    &prop,
+                    &mut field_run,
+                );
+                let value_bits = ctx.block().bitcast_double_to_i64(&value);
+                crate::expr::layout_read::begin_family_init_store(
+                    ctx,
+                    &this_bits,
+                    &value,
+                    &value_bits,
+                    false,
+                    run.as_ref(),
+                )
+            });
             let key_idx = ctx.strings.intern(&prop);
             let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let key = ctx.block().load(DOUBLE, &key_global);
-            ctx.block().call(
+            let defined = ctx.block().call(
                 DOUBLE,
                 "js_class_field_add",
                 &[(DOUBLE, &this_val), (DOUBLE, &key), (DOUBLE, &value)],
             );
+            if let Some(fill) = fill {
+                crate::expr::layout_read::finish_store(ctx, fill, &value, &defined);
+            }
         }
 
         // Computed-key fields reuse the PropertyKey resolved once during

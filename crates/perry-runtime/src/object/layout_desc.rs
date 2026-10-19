@@ -29,8 +29,10 @@
 //! which no ShapeId carries (object model §3.6; set by `object::shadow`).
 
 use super::ObjectHeader;
+mod define_field;
 pub(crate) mod methods;
 use crate::string::StringHeader;
+pub(crate) use define_field::family_define_field;
 
 /// Bit 30 of the layout word: THE shadow bit (object model §3.6, §6a). One
 /// bit, one meaning, one stamping rule, shared by step 3 and step 4.

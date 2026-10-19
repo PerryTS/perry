@@ -453,23 +453,53 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
     {
         return Err("native heritage, decorators or literal shape".into());
     }
-    // No declared fields: a declared field is defined before (base) or right
-    // after `super()` (derived) by the field-initialisation phase, which this
-    // analysis does not model.
-    if class.fields.iter().any(|f| {
-        f.origin != ClassFieldOrigin::ConstructorStore
-            || f.init.is_some()
-            || f.key_expr.is_some()
-            || f.is_private
-            || !f.decorators.is_empty()
-    }) {
-        return Err("declared field".into());
+    // A public field with a plain name is defined before (base) or right
+    // after `super()` (derived) by the field-initialisation phase, in source
+    // order and ahead of every constructor-body store: a key of the family
+    // like a prologue store. Anything else the phase can do (a computed key,
+    // a private name, a decorator, a reservation that carries an
+    // initializer) is not modelled.
+    let mut defined: Vec<(String, bool)> = Vec::new();
+    let mut defined_open = true;
+    for f in &class.fields {
+        let plain = f.key_expr.is_none()
+            && !f.is_private
+            && f.decorators.is_empty()
+            && !f.name.starts_with("__perry_cap_");
+        match f.origin {
+            ClassFieldOrigin::ConstructorStore if plain && f.init.is_none() => {}
+            ClassFieldOrigin::Definition if plain => {
+                if f.name == "__proto__" || f.name == "constructor" {
+                    return Err("reserved key".into());
+                }
+                // The value is evaluated before the key is defined: a value
+                // that may run code ends the initialization at this key.
+                defined_open &= f.init.as_ref().is_none_or(|e| inert(e, &BTreeSet::new()));
+                if !defined.iter().any(|(x, _)| *x == f.name) {
+                    defined.push((f.name.clone(), defined_open));
+                }
+            }
+            _ => {
+                let why = if f.key_expr.is_some() {
+                    "computed key"
+                } else if f.is_private {
+                    "private name"
+                } else if !f.decorators.is_empty() {
+                    "decorator"
+                } else if f.name.starts_with("__perry_cap_") {
+                    "class capture"
+                } else {
+                    "reservation with an initializer"
+                };
+                return Err(format!("declared field: {why}"));
+            }
+        }
     }
     let Some(ctor) = class.constructor.as_ref() else {
-        // A base class without a constructor stores nothing; a derived one
-        // forwards to its parent.
+        // A base class without a constructor stores only its fields; a
+        // derived one forwards to its parent.
         return Ok(OwnKeys {
-            keys: Vec::new(),
+            keys: defined,
             super_inert: true,
         });
     };
@@ -498,7 +528,11 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
             _ => return Err("derived constructor does not open with super(...)".into()),
         }
     }
-    let mut keys: Vec<(String, bool)> = Vec::new();
+    let mut keys: Vec<(String, bool)> = defined
+        .into_iter()
+        .map(|(k, eligible)| (k, eligible && open))
+        .collect();
+    open &= defined_open;
     for s in body {
         // A statement that never names the receiver (the class-capture
         // reloads the compiler puts first, a static counter bump) cannot
@@ -812,10 +846,9 @@ fn program_families(
                 }
             }
         }
-        if keys.is_empty() {
-            refuse(c, "no-keys");
-            continue;
-        }
+        // A class whose chain stores no key of its own may still be filled
+        // by the stores that follow its creation sites (late keys); `compute`
+        // drops it when none does.
         if keys.iter().any(|k| chain.iter().any(|x| accessor(x, k))) {
             refuse(c, "accessor-key");
             continue;
@@ -1227,7 +1260,7 @@ pub fn compute<'a>(
     if families && !families_disabled() {
         fams = program_families(&program, reexports, &mut refused);
     }
-    let owns: Vec<usize> = fams.iter().map(|f| f.keys.len()).collect();
+    let mut owns: Vec<usize> = fams.iter().map(|f| f.keys.len()).collect();
     let late = if fams.is_empty() || late_budget() == 0 {
         0
     } else {
@@ -1238,6 +1271,29 @@ pub fn compute<'a>(
         add_late_keys(&mut fams, &groups);
         fams.iter().map(|f| f.keys.len()).sum::<usize>() - before
     };
+    // A family that neither stores nor receives a key, and is nobody's
+    // parent, has nothing to lay out: the class keeps its empty birth.
+    let parents: BTreeSet<u32> = fams.iter().map(|f| f.parent).collect();
+    let mut at = 0;
+    fams.retain(|f| {
+        let keep = !f.keys.is_empty() || parents.contains(&f.class_id);
+        if !keep {
+            crate::fallback_diag::family_refused(f.class_id, "no-keys");
+            *refused.entry("no-keys".to_string()).or_default() += 1;
+            if explain() {
+                let name = modules
+                    .iter()
+                    .flat_map(|m| &m.classes)
+                    .find(|c| c.id == f.class_id)
+                    .map_or("?", |c| c.name.as_str());
+                eprintln!("perry: layout family refused: {name}: no-keys");
+            }
+            owns.remove(at);
+        } else {
+            at += 1;
+        }
+        keep
+    });
     let variants: HashMap<u32, (u32, Vec<(f64, Vec<String>)>)> = fams
         .iter_mut()
         .filter(|f| !f.variants.is_empty())

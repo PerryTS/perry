@@ -388,7 +388,9 @@ impl Census {
                             .or_default()
                             .push(init.clone());
                     }
-                    if let Expr::Call { .. } = init {
+                    // A call or a `new` names the classes the local's object
+                    // is a fresh instance of (`Factories::instance_classes`).
+                    if let Expr::Call { .. } | Expr::New { .. } = init {
                         self.init_expr.borrow_mut().insert(*id, init.clone());
                     }
                     match init {

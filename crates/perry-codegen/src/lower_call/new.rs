@@ -600,8 +600,13 @@ fn lower_new_impl_inner<'a>(
     // A literal's allocation supplies its complete shape contract. The store
     // plan below proves constructor elision independently of whether old GC
     // masks would have been worth declaring (boolean-only literals have none).
-    let constructor_layout_ready =
-        alloc.constructor_stores_ready && (declared_layout || literal_constant_image);
+    let constructor_layout_ready = alloc.constructor_stores_ready
+        && (declared_layout
+            || literal_constant_image
+            || ctx
+                .class_ids
+                .get(class_name)
+                .is_some_and(|&cid| super::new_alloc::class_born_on_family(ctx, class, cid)));
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {

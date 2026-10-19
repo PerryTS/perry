@@ -893,10 +893,33 @@ pub extern "C" fn js_private_field_add(
 /// receivers observe `defineProperty`, not `set`.
 #[no_mangle]
 pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64 {
+    if unsafe { crate::object::layout_desc::family_define_field(receiver, key, value) } {
+        return family_holder_built(receiver, value);
+    }
     if unsafe { class_field_chain::try_define(receiver, key, value) } {
         return value;
     }
     class_field_add_slow(receiver, key, value)
+}
+
+/// After a family object's field definition: a family constructor's run
+/// proves its stores from the prototype chain's holders
+/// (`layout_probe::perry_family_run_admits`), and a declared class's holder
+/// is built on its first ordinary lookup, which a `[[Set]]` makes and
+/// DefineField never does. Build the receiver's class holder when its word
+/// still names the unbuilt surface, once per class, so the next run's chain
+/// is readable. Returns `value`, which the build may move.
+fn family_holder_built(receiver: f64, value: f64) -> f64 {
+    let obj = (receiver.to_bits() & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+    // SAFETY: `family_define_field` admitted `receiver` as a live family object.
+    let class_id = unsafe { (*obj).class_id };
+    if crate::object::class_registry::class_holder_word(class_id) != crate::value::TAG_UNDEFINED {
+        return value;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    crate::object::class_registry::class_decl_prototype_value(class_id);
+    value.get_nanbox_f64()
 }
 
 #[inline(never)]

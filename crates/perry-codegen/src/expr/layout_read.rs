@@ -472,7 +472,39 @@ pub(crate) fn family_run_plan(
     property: &str,
     value: &Expr,
 ) -> Option<RunPlan> {
-    if ctx.inline_ctor_return.is_empty() || !family_stores_enabled(ctx) {
+    if ctx.inline_ctor_return.is_empty() {
+        return None;
+    }
+    let mut plan = run_target(ctx, property, value)?;
+    let body = ctx.inline_ctor_return.last_mut()?;
+    plan.run_in = body.family_run.take();
+    body.bind_watch = (plan.value == RunValue::Bind && plan.run_in.is_some()).then_some(None);
+    Some(plan)
+}
+
+/// [`family_run_plan`] for a field definition (`lower_call::field_init`).
+/// A base class's fields are defined at its constructor's entry, before the
+/// body exists: their run is the phase's own, kept in `local`, and ends with
+/// the phase. Inside a body (a derived class's fields, at its `super()`) it
+/// is the body's run.
+pub(crate) fn field_run_plan(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    value: &Expr,
+    local: &mut Option<FamilyRun>,
+) -> Option<RunPlan> {
+    if !ctx.inline_ctor_return.is_empty() {
+        return family_run_plan(ctx, property, value);
+    }
+    let mut plan = run_target(ctx, property, value)?;
+    plan.run_in = local.take();
+    Some(plan)
+}
+
+/// The key position, slot and value class of a run store of `property`
+/// (see [`family_run_plan`]), with no run taken yet.
+fn run_target(ctx: &mut FnCtx<'_>, property: &str, value: &Expr) -> Option<RunPlan> {
+    if !family_stores_enabled(ctx) {
         return None;
     }
     let class_name = ctx.class_stack.last()?.clone();
@@ -518,16 +550,13 @@ pub(crate) fn family_run_plan(
             return None;
         }
     }
-    let body = ctx.inline_ctor_return.last_mut()?;
-    let run_in = body.family_run.take();
-    body.bind_watch = (value == RunValue::Bind && run_in.is_some()).then_some(None);
     Some(RunPlan {
         pos: pos as u32,
         order_known,
         class_id,
         slot,
         value,
-        run_in,
+        run_in: None,
     })
 }
 
@@ -542,6 +571,36 @@ pub(crate) fn family_run_arm(
     this_bits: &str,
     property: &str,
 ) -> Option<RunArm> {
+    let (out, run) = run_arm(ctx, plan, this_bits, property);
+    if let Some(body) = ctx.inline_ctor_return.last_mut() {
+        body.family_run = Some(run);
+    }
+    out
+}
+
+/// [`family_run_arm`] for a field definition planned by [`field_run_plan`]:
+/// the run that follows it goes back where the plan took it from.
+pub(crate) fn field_run_arm(
+    ctx: &mut FnCtx<'_>,
+    plan: RunPlan,
+    this_bits: &str,
+    property: &str,
+    local: &mut Option<FamilyRun>,
+) -> Option<RunArm> {
+    if !ctx.inline_ctor_return.is_empty() {
+        return family_run_arm(ctx, plan, this_bits, property);
+    }
+    let (out, run) = run_arm(ctx, plan, this_bits, property);
+    *local = Some(run);
+    out
+}
+
+fn run_arm(
+    ctx: &mut FnCtx<'_>,
+    plan: RunPlan,
+    this_bits: &str,
+    property: &str,
+) -> (Option<RunArm>, FamilyRun) {
     let watched = ctx
         .inline_ctor_return
         .last_mut()
@@ -633,10 +692,7 @@ pub(crate) fn family_run_arm(
         ok: run.ok.clone(),
         slot: plan.slot,
     });
-    if let Some(body) = ctx.inline_ctor_return.last_mut() {
-        body.family_run = Some(run);
-    }
-    out
+    (out, run)
 }
 
 /// Object model step 2c (A): a constructor key's store through `this` in a

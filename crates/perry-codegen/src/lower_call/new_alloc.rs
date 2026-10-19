@@ -527,6 +527,10 @@ fn emit_instance_alloc_inner(
     if class_born_on_family(ctx, class, cid) {
         let desc = crate::layout_desc::note_family_desc_use(cid);
         let slots = ctx.program_layouts.families[&cid].slot_count;
+        // The family layout is the instance's own from birth: a complete
+        // constructor prologue stores straight into its slots
+        // (`ctor_prologue_stores::prologue_store_plan`).
+        *constructor_stores_ready = true;
         return crate::expr::inline_birth::layout(ctx, &desc, slots, cid);
     }
     // Imported heritage can have a proven family while its parent identity
