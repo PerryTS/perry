@@ -245,6 +245,7 @@ struct Reach<'a> {
     top_reached: bool,
     in_top_graph: bool,
     private_arguments: FxHashSet<Tok>,
+    private_values: Vec<bool>,
 }
 fn possible_loader_member(name: Option<&str>) -> bool {
     name.is_none_or(|n| {
@@ -280,22 +281,8 @@ impl<'a> Reach<'a> {
     // TOP is shared with compiler bookkeeping in the invariance solve.
     // Private loader state is acquired only through the guarded original
     // source references/property paths, not by that summary pollution.
-    fn private_token(&self, t: Tok, seen: &mut FxHashSet<Tok>) -> bool {
-        if !seen.insert(t) {
-            return true;
-        }
-        match self.g.m.toks[t as usize] {
-            TokKind::Func(f) => self.g.m.funcs[f as usize].compiler_owned,
-            TokKind::Bound(b) => {
-                let p = &self.g.m.nodes[self.g.m.bound[b as usize].0 as usize].pts;
-                !p.is_empty()
-                    && !p.contains_tok(TOP)
-                    && p.to_sorted()
-                        .into_iter()
-                        .all(|t| self.private_token(t, seen))
-            }
-            _ => self.module_record(t),
-        }
+    fn private_token(&self, t: Tok, _seen: &mut FxHashSet<Tok>) -> bool {
+        self.private_values[t as usize]
     }
     fn factory_token(&self, t: Tok, seen: &mut FxHashSet<Tok>) -> bool {
         if !seen.insert(t) {
@@ -826,6 +813,41 @@ impl<'a> Reach<'a> {
     }
 }
 
+// Close immutable compiler ownership through solved bound-function targets.
+// Propagating public roots backwards handles cycles and visits each edge once.
+fn private_values(g: &Gen<'_>) -> Vec<bool> {
+    let m = &g.m;
+    let mut public = vec![false; m.toks.len()];
+    let mut parents = vec![Vec::new(); m.toks.len()];
+    let mut queue = std::collections::VecDeque::new();
+    for (t, kind) in m.toks.iter().enumerate() {
+        public[t] = match kind {
+            TokKind::Func(f) => !m.funcs[*f as usize].compiler_owned,
+            TokKind::Obj(tm) => !m.reach_private_records.contains(tm),
+            TokKind::Bound(b) => {
+                let pts = &m.nodes[m.bound[*b as usize].0 as usize].pts;
+                for target in pts.to_sorted() {
+                    parents[target as usize].push(t);
+                }
+                pts.is_empty() || pts.contains_tok(TOP)
+            }
+            _ => true,
+        };
+        if public[t] {
+            queue.push_back(t);
+        }
+    }
+    while let Some(t) = queue.pop_front() {
+        for &parent in &parents[t] {
+            if !public[parent] {
+                public[parent] = true;
+                queue.push_back(parent);
+            }
+        }
+    }
+    public.into_iter().map(|p| !p).collect()
+}
+
 pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String> {
     if g.m.aborted {
         return Some("whole-program solve aborted".into());
@@ -849,6 +871,7 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
         top_reached: false,
         in_top_graph: false,
         private_arguments: Default::default(),
+        private_values: private_values(g),
     };
     for f in &g.m.funcs {
         if f.compiler_owned && !f.compiler_body && f.has_arguments {
@@ -984,9 +1007,18 @@ pub(crate) fn refusal<'a>(g: &'a Gen<'a>, entry: Option<&str>) -> Option<String>
                 Op::Access(n, k, store, user) => r.access(f, n, k, store, user),
                 Op::Index(n, idx, user, store) => {
                     let key = &g.m.nodes[idx as usize];
-                    let names = user
-                        && (key.prim & !(prim::NUM | prim::SYMBOL) != 0 || !key.pts.is_empty());
+                    let names = user && (key.prim & prim::STR != 0 || !key.pts.is_empty());
+                    let before = r.refusal.is_some();
                     r.access(f, n, Key::Any, store, names);
+                    if !before {
+                        if let Some(reason) = r.refusal.as_mut() {
+                            reason.push_str(&format!(
+                                " [index {idx}, primitive bits {}, objects {}]",
+                                key.prim,
+                                key.pts.len()
+                            ));
+                        }
+                    }
                 }
                 Op::Capability(ref s) => r.reason(f, s.clone()),
             }

@@ -506,6 +506,7 @@ pub struct Model {
     pub(crate) reach_loader_literal: bool,
     pub(crate) reach_ops: Vec<(FnIdx, crate::loader_reach::Op)>,
     pub(crate) reach_private_records: crate::pts::FxHashSet<TmplId>,
+    pub(crate) reach_public_records: crate::pts::FxHashSet<TmplId>,
     pub toks: Vec<TokKind>,
     pub tok_index: FxHashMap<TokKind, Tok>,
     pub tmpls: Vec<Template>,

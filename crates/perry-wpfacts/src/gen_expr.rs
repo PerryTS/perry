@@ -372,7 +372,7 @@ impl<'a> Gen<'a> {
         }
         self.note_loader_expr(fx, e);
         let result = self.expr_inner(fx, e);
-        if !self.m.reach_user {
+        {
             let marker = self.m.atom_index.get("__perry_cjs_record").copied();
             let mut records = Vec::new();
             if let Expr::New { class_name, .. } = e {
@@ -389,7 +389,12 @@ impl<'a> Gen<'a> {
             }
             for tm in records {
                 if marker.is_some_and(|k| self.m.tmpls[tm as usize].birth_keys.contains(&k)) {
-                    self.m.reach_private_records.insert(tm);
+                    if self.m.reach_user {
+                        self.m.reach_public_records.insert(tm);
+                        self.m.reach_private_records.remove(&tm);
+                    } else if !self.m.reach_public_records.contains(&tm) {
+                        self.m.reach_private_records.insert(tm);
+                    }
                 }
             }
         }

@@ -186,3 +186,46 @@ fn source_record_marker_does_not_hide_a_callback_from_unknown_code() {
     let p=facts("const own={__perry_cjs_record:true, run:()=>process.getBuiltinModule('module')}; console.log(own);");
     assert!(p.module_reentry.is_some(), "{}", p.dump_text());
 }
+
+#[test]
+fn non_string_primitive_keys_cannot_name_loader_properties() {
+    let p =
+        facts("const receiver:any=undefined; const index:undefined=undefined; receiver[index];");
+    assert!(p.module_reentry.is_none(), "{}", p.dump_text());
+}
+
+#[test]
+fn a_user_allocation_sharing_a_generated_record_shape_is_public() {
+    let ast=perry_parser::parse_typescript("const own={__perry_cjs_record:true,run:()=>process.getBuiltinModule('module')}; console.log(own);","shared.ts").unwrap();
+    let mut module = perry_hir::lower_module(&ast, "shared", "shared.ts").unwrap();
+    let name = module
+        .classes
+        .iter()
+        .find(|c| c.fields.iter().any(|f| f.name == "__perry_cjs_record"))
+        .unwrap()
+        .name
+        .clone();
+    module.init.insert(
+        0,
+        perry_hir::Stmt::Expr(perry_hir::Expr::CompilerOwned(Box::new(
+            perry_hir::Expr::Call {
+                callee: Box::new(perry_hir::Expr::ExternFuncRef {
+                    name: "external_opaque".into(),
+                    param_types: vec![],
+                    return_type: perry_hir::types::Type::Any,
+                }),
+                args: vec![perry_hir::Expr::New {
+                    class_name: name,
+                    args: vec![perry_hir::Expr::Bool(true), perry_hir::Expr::Number(0.0)],
+                    type_args: vec![],
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }],
+                type_args: vec![],
+                byte_offset: 0,
+            },
+        ))),
+    );
+    let p = crate::compute(&[("shared.ts".into(), &module)], &Default::default());
+    assert!(p.module_reentry.is_some(), "{}", p.dump_text());
+}
