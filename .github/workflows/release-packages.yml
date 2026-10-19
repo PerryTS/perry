@@ -2138,7 +2138,7 @@ jobs:
           # created, which is the worst place for it to fail.
           LIMIT=120000
           if [ "$(wc -c < /tmp/release-notes-full.md)" -gt "$LIMIT" ]; then
-            frags=$(find changelog.d -name '*.md' ! -name 'README.md' | wc -l | tr -d ' ')
+            frags=$(find changelog.d -name '*.md' ! -name 'README.md' ! -name 'HIGHLIGHTS.md' | wc -l | tr -d ' ')
             # Cut on a line boundary so the body never ends mid-sentence.
             head -c "$LIMIT" /tmp/release-notes-full.md | sed '$d' > /tmp/release-notes.md
             {

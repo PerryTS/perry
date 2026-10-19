@@ -10,7 +10,8 @@
 #       fragment removal — push that commit via the normal PR/bypass flow.
 #
 #   cut_release_notes.sh --notes-only
-#       Print the concatenated fragment notes to stdout and change nothing.
+#       Print changelog.d/HIGHLIGHTS.md, then "## All changes" and the
+#       concatenated fragment notes, to stdout and change nothing.
 #       Used by release-packages.yml's create-release job (tag-last flow) to
 #       build the release body from the fragments at the release SHA.
 #
@@ -23,14 +24,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Fragments are root-level regular files named <PR>-<slug>.md; README.md is
-# documentation, not an entry. Sort by PR number descending (newest change
+# documentation, not an entry, and so is HIGHLIGHTS.md (the hand-written
+# summary printed above the entries). Sort by PR number descending (newest change
 # first in the notes). Contract matches the changeset-gate job in test.yml
 # and the create-release job in release-packages.yml. A fragment that landed
 # without its PR number (<slug>.md) is still an entry: it follows the
 # numbered ones, by name.
 list_fragments() {
   find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | sort -t/ -k2 -rn
-  find changelog.d -maxdepth 1 -type f -name '*.md' ! -name '[0-9]*' ! -name README.md | sort
+  find changelog.d -maxdepth 1 -type f -name '*.md' ! -name '[0-9]*' ! -name README.md ! -name HIGHLIGHTS.md | sort
 }
 
 concat_fragments() {
@@ -39,6 +41,16 @@ concat_fragments() {
     cat "$f" >> "$out"
     printf '\n\n' >> "$out"
   done <<< "$2"
+}
+
+# Highlights (hand-written summary) first, then every fragment.
+write_notes() {
+  local out="$1"
+  if [ -f changelog.d/HIGHLIGHTS.md ]; then
+    cat changelog.d/HIGHLIGHTS.md >> "$out"
+    printf '\n\n## All changes\n\n' >> "$out"
+  fi
+  concat_fragments "$out" "$2"
 }
 
 mode="release"
@@ -51,7 +63,7 @@ if [ "$mode" = "notes-only" ]; then
   frags=$(list_fragments)
   [ -n "$frags" ] || { echo "ERROR: no fragments in changelog.d/ — nothing to release." >&2; exit 1; }
   notes=$(mktemp)
-  concat_fragments "$notes" "$frags"
+  write_notes "$notes" "$frags"
   cat "$notes"
   exit 0
 fi
@@ -62,6 +74,7 @@ if [ "$mode" = "fold" ]; then
   # Only the fragments that existed at the release SHA were folded into the
   # release notes — remove exactly those.
   frags=$(git ls-tree --name-only "$tag" -- changelog.d/ | grep -E '^changelog\.d/[^/]+\.md$' | grep -vx 'changelog.d/README.md' || true)
+  # HIGHLIGHTS.md was printed above the entries; it goes with them.
   [ -n "$frags" ] || { echo "ERROR: no fragments recorded at $tag — nothing to fold." >&2; exit 1; }
   removed=0
   while IFS= read -r f; do
@@ -80,7 +93,7 @@ frags=$(list_fragments)
 [ -n "$frags" ] || { echo "ERROR: no fragments in changelog.d/ — nothing to release." >&2; exit 1; }
 
 notes=$(mktemp)
-concat_fragments "$notes" "$frags"
+write_notes "$notes" "$frags"
 
 # --target pins the tag to the checked-out commit; gh's default is the tip
 # of the default branch, which may have moved past HEAD.
@@ -88,5 +101,6 @@ gh release create "$tag" --target "$(git rev-parse HEAD)" --title "$tag" --notes
 while IFS= read -r f; do
   git rm -q -- "$f"
 done <<< "$frags"
+[ ! -f changelog.d/HIGHLIGHTS.md ] || git rm -q -- changelog.d/HIGHLIGHTS.md
 git commit -m "chore(release): fold changesets into $tag release notes"
 echo "Release $tag created ($(echo "$frags" | wc -l | tr -d ' ') fragments folded). Push the removal commit."
