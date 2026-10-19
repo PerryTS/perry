@@ -35,8 +35,23 @@ impl Model {
                     match (this_tok, &self.calls[call as usize].this) {
                         (Some(x), _) => self.add_tok(fthis, x),
                         (None, &ThisArg::Tok(x)) => self.add_tok(fthis, x),
-                        (None, &ThisArg::Node(n)) => self.edge(n, fthis),
-                        (None, ThisArg::Undef) => self.add_prim(fthis, prim::UNDEF),
+                        (None, &ThisArg::Node(n)) => {
+                            self.edge(n, fthis);
+                            // A node can later receive null/undefined. Sloppy
+                            // calls substitute the global receiver in that case.
+                            if !self.funcs[f as usize].strict_this {
+                                let global = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                                self.add_tok(fthis, global);
+                            }
+                        }
+                        (None, ThisArg::Undef) => {
+                            if self.funcs[f as usize].strict_this {
+                                self.add_prim(fthis, prim::UNDEF);
+                            } else {
+                                let global = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                                self.add_tok(fthis, global);
+                            }
+                        }
                     }
                 }
                 self.bind_args(call, t);

@@ -143,6 +143,7 @@ impl<'a> Gen<'a> {
             body,
             captures_this,
             is_arrow,
+            is_strict,
             is_async,
             is_generator,
             ..
@@ -157,7 +158,7 @@ impl<'a> Gen<'a> {
             .get(func_id)
             .cloned()
             .unwrap_or_else(|| format!("closure{func_id}"));
-        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
+        let f = self.register_fn(mi, *func_id, &name, params, *is_strict, *is_arrow, true);
         let info = self.m.funcs[f as usize].clone();
         if *captures_this || *is_arrow {
             // Captured `this` (arrow semantics, or a slot the runtime

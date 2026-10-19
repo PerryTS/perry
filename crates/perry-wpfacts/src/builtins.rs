@@ -173,6 +173,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
     let p = m.node_l("resolver-param");
     m.edge(p, dst);
     m.funcs.push(FuncInfo {
+        strict_this: true,
         compiler_owned: true,
         compiler_body: true,
         module: 0,

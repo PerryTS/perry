@@ -188,7 +188,7 @@ impl<'a> Gen<'a> {
                 iterout: FxHashMap::default(),
             });
             for f in &module.functions {
-                self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                self.register_fn(mi, f.id, &f.name, &f.params, f.is_strict, false, false);
             }
             for c in &module.classes {
                 self.register_class(mi, c);
@@ -294,6 +294,7 @@ impl<'a> Gen<'a> {
         id: u32,
         name: &str,
         params: &[perry_hir::Param],
+        strict_this: bool,
         lexical_this: bool,
         _is_closure: bool,
     ) -> FnIdx {
@@ -345,6 +346,7 @@ impl<'a> Gen<'a> {
             }
         }
         self.m.funcs.push(FuncInfo {
+            strict_this,
             compiler_owned: self.modules[mi as usize]
                 .1
                 .class_family_syntax
@@ -419,7 +421,15 @@ impl<'a> Gen<'a> {
         }
         // Functions of the class.
         if let Some(ctor) = &c.constructor {
-            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false);
+            let f = self.register_fn(
+                mi,
+                ctor.id,
+                &ctor.name,
+                &ctor.params,
+                ctor.is_strict,
+                false,
+                false,
+            );
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.tmpls[tm as usize].ctor = Some(f);
         }
@@ -432,28 +442,44 @@ impl<'a> Gen<'a> {
         let cf = self.m.field(proto, ca);
         self.m.add_tok(cf, cobj);
         for meth in &c.methods {
-            let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &meth.name,
+                &meth.params,
+                meth.is_strict,
+                false,
+                false,
+            );
             let a = self.m.atom(&meth.name);
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
             self.m.add_tok(n, t);
         }
         for meth in &c.static_methods {
-            let f = self.register_fn(mi, meth.id, &meth.name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &meth.name,
+                &meth.params,
+                meth.is_strict,
+                false,
+                false,
+            );
             let a = self.m.atom(&meth.name);
             let n = self.m.field(cobj, a);
             let t = self.m.funcs[f as usize].token;
             self.m.add_tok(n, t);
         }
         for (name, g) in &c.getters {
-            let f = self.register_fn(mi, g.id, &g.name, &g.params, false, false);
+            let f = self.register_fn(mi, g.id, &g.name, &g.params, g.is_strict, false, false);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
             self.m.accessors.entry((proto, a)).or_default().0.push(f);
             push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
         }
         for (name, s) in &c.setters {
-            let f = self.register_fn(mi, s.id, &s.name, &s.params, false, false);
+            let f = self.register_fn(mi, s.id, &s.name, &s.params, s.is_strict, false, false);
             let a = self.m.atom(name);
             self.m.accessor_atoms.insert(a);
             self.m.accessors.entry((proto, a)).or_default().1.push(f);
@@ -465,6 +491,7 @@ impl<'a> Gen<'a> {
                 cm.function.id,
                 &cm.function.name,
                 &cm.function.params,
+                cm.function.is_strict,
                 false,
                 false,
             );
@@ -505,6 +532,7 @@ impl<'a> Gen<'a> {
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
         self.m.funcs.push(FuncInfo {
+            strict_this: true,
             compiler_owned: true,
             compiler_body: false,
             module: mi,
@@ -856,6 +884,11 @@ impl<'a> Gen<'a> {
             // Module top-level `this`: CJS `module.exports`-like object or
             // undefined in ESM; ⊤-free: a fresh literal-ish object.
             self.m.add_prim(this, prim::UNDEF);
+            if !module.init_is_strict {
+                let global = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                self.m.add_tok(this, global);
+            }
+
             let fx = Fx {
                 module: mi,
                 f: init_fn,

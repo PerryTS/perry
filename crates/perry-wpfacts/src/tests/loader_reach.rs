@@ -229,3 +229,9 @@ fn a_user_allocation_sharing_a_generated_record_shape_is_public() {
     let p = crate::compute(&[("shared.ts".into(), &module)], &Default::default());
     assert!(p.module_reentry.is_some(), "{}", p.dump_text());
 }
+
+#[test]
+fn strict_undefined_receivers_do_not_become_global_loader_paths() {
+    let p = facts("function root(){'use strict';return this;} root().Function;");
+    assert!(p.module_reentry.is_none(), "{}", p.dump_text());
+}

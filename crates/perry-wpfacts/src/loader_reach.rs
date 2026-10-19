@@ -639,15 +639,14 @@ impl<'a> Reach<'a> {
             Key::Named(a) => Some(m.atoms[a as usize].as_str()),
             Key::Any => None,
         };
-        // The invariance model binds an unbound ordinary function receiver
-        // to undefined; the runtime supplies globalThis for sloppy calls.
-        // Its aliases/returns retain that primitive bit. A missing receiver
-        // cannot prove a loader-name access absent, even alongside known objects.
+        // Missing model values cannot establish absence of a loader path.
+        // Null/undefined themselves throw on member access; sloppy `this`
+        // substitution is represented explicitly in the solved graph.
         let receiver = &m.nodes[n as usize];
         if loader_names
             && possible_loader_member(name)
-            && (receiver.prim & (prim::NULL | prim::UNDEF) != 0
-                || (receiver.prim == 0 && receiver.pts.is_empty()))
+            && receiver.prim == 0
+            && receiver.pts.is_empty()
         {
             self.reason(
                 f,

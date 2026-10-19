@@ -176,6 +176,7 @@ pub struct Template {
 
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
+    pub strict_this: bool,
     pub compiler_owned: bool,
     pub compiler_body: bool,
     pub module: u32,
