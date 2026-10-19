@@ -26,6 +26,18 @@ pub enum Deferred {
     Escape(FnIdx, u32),
     Group(Tok, Key, FnIdx, bool),
     RetObjects(CallId, FnIdx, NodeId),
+    /// `this` of `call` into `f` (`call_tok`): the call's own operand, or
+    /// the given token.
+    This(CallId, FnIdx, Option<Tok>),
+    /// `this` from a method lookup on a receiver token (`this_to`).
+    ThisTo(FnIdx, Tok),
+    /// Unknown code calls `f`: its `this` is ⊤.
+    EscapeThis(FnIdx, u32),
+    /// A birth: `new` of callee token at a call, or of a builtin by name.
+    /// Births wait for summaries so a summary's call is born per instance,
+    /// never once into the shared body (whose nodes seed every instance).
+    Construct(CallId, Tok),
+    NewNamed(Atom, CallId),
 }
 
 #[derive(Default, Clone, Debug)]
@@ -38,6 +50,9 @@ pub struct Summary {
     pub params: Vec<NodeId>,
     /// The result term (slot, absolute node or `NO_NODE`).
     pub ret: NodeId,
+    /// The `this` term (slot, absolute node or `NO_NODE`: an arrow, or a
+    /// `this` a closure captured, keeps the shared node).
+    pub this: NodeId,
     pub seeds: Vec<(u32, Vec<Tok>, u16)>,
     pub edges: Vec<(NodeId, NodeId)>,
     pub cons: Vec<(NodeId, Cons)>,
@@ -48,12 +63,14 @@ pub struct Summary {
 #[derive(Clone, Debug)]
 pub struct Inst {
     pub f: FnIdx,
-    /// The program call this instance is for (kind 0): the calls it makes
-    /// are made for that call. Other instances' calls are made for their
-    /// own template call.
-    pub origin: Option<CallId>,
+    /// The call site this instance is for (a program call, or the source
+    /// site of a call an instance made): what the instance allocates is
+    /// born in that context. Shared, unknown-code and accessor instances
+    /// have none.
+    pub host: Option<CallId>,
     pub params: Vec<NodeId>,
     pub ret: NodeId,
+    pub this: NodeId,
 }
 
 #[derive(Default)]
@@ -79,6 +96,11 @@ pub struct SumState {
     /// (the template it renames, or the site of the call whose solving
     /// made it).
     pub origin: FxHashMap<CallId, CallId>,
+    /// A call an instance made (or one made while solving such a call):
+    /// the host site of that instance (`Inst::host`).
+    pub host: FxHashMap<CallId, CallId>,
+    /// (source site, host site) -> birth context id (`TokKind::Obj`).
+    pub ctx_ids: FxHashMap<(CallId, CallId), CallId>,
     /// (template call, callee): expanded into every summary that holds the
     /// template; its instances never bind it again.
     pub composed: FxHashSet<(CallId, FnIdx)>,
@@ -94,6 +116,13 @@ pub struct SumState {
     /// yet: filled from the solver's top level (`fill_instances`), never
     /// nested inside the rule application that asked for them.
     pub pending: Vec<(u32, Vec<NodeId>)>,
+    /// Summarized function -> the node of its `this` values no call is
+    /// behind (literal methods, accessor groups): feeds every instance.
+    pub this_any: FxHashMap<FnIdx, NodeId>,
+    /// Summarized function -> its instances.
+    pub insts_of: FxHashMap<FnIdx, Vec<u32>>,
+    /// TEMP CW s7: what made the kind-6 instances of module factories.
+    pub temp_why: FxHashMap<String, usize>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -122,6 +151,7 @@ pub fn map_cons(
         Call { call } => Call { call: k(call) },
         CallThis { call, this } => CallThis { call: k(call), this },
         New { call } => New { call: k(call) },
+        NewNamed { name, call } => NewNamed { name, call: k(call) },
         MCall { key, call } => MCall { key, call: k(call) },
         Chain { origin, key, act } => Chain { origin, key, act: act_map(act, &mut n, &mut k) },
         TopSink { reason } => TopSink { reason },
@@ -205,6 +235,8 @@ fn gen_kind(c: &Cons) -> bool {
             | Store { .. }
             | Call { .. }
             | New { .. }
+            | NewNamed { .. }
+            | SuperCtor { .. }
             | MCall { .. }
             | TopSink { .. }
             | TopIfAny { .. }
@@ -262,6 +294,7 @@ impl Model {
             Cons::Call { call }
             | Cons::CallThis { call, .. }
             | Cons::New { call }
+            | Cons::NewNamed { call, .. }
             | Cons::MCall { call, .. }
             | Cons::ProtoMethods { call, .. }
             | Cons::SuperCtor { call, .. }
@@ -297,6 +330,39 @@ impl Model {
                 self.sum.origin.entry(i as CallId).or_insert(o);
             }
         }
+        if let Some(&h) = self.sum.host.get(&call) {
+            for i in n0..self.calls.len() {
+                self.sum.host.entry(i as CallId).or_insert(h);
+            }
+        }
+    }
+
+    /// The birth context of an object `call` makes: a program call is its
+    /// own (one token per birth site). A call an instance made is its
+    /// source site within the instance's host site, so a constructor's
+    /// allocations are per `new` site, not one for every instance. Calls
+    /// made while solving another take that call's context.
+    pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
+        // TEMP CW s7 toggles: T2 = template tokens only, T1 = no host.
+        if std::env::var_os("CW_T2").is_some() {
+            return NO_CTX;
+        }
+        if std::env::var_os("CW_T1").is_some() && (call as usize) >= self.sum.n_prog && self.sum.ready {
+            return self.sum.tmpl_of.get(&call).copied().unwrap_or_else(|| self.origin_of(call).unwrap_or(call));
+        }
+        if (call as usize) < self.sum.n_prog || !self.sum.ready {
+            return call;
+        }
+        let src = match self.sum.tmpl_of.get(&call) {
+            Some(&t) => t,
+            None => self.origin_of(call).unwrap_or(call),
+        };
+        let Some(&h) = self.sum.host.get(&call) else {
+            return src;
+        };
+        let n = self.sum.ctx_ids.len() as CallId;
+        // Context ids count down from below `NO_CTX`: never a call id.
+        *self.sum.ctx_ids.entry((src, h)).or_insert(NO_CTX - 1 - n)
     }
 
     pub(crate) fn summarized(&self, f: FnIdx) -> bool {
@@ -318,15 +384,154 @@ impl Model {
             })
             .collect();
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
+        let this = tr(s.this);
         self.sum.insts.push(Inst {
             f,
-            origin: (key.0 == 0).then_some(key.1),
+            host: matches!(key.0, 0 | 6).then_some(key.1),
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
+            this,
         });
         self.sum.inst_key.insert(key, inst);
+        self.sum.insts_of.entry(f).or_default().push(inst);
         self.sum.pending.push((inst, base));
+        if let Some(&u) = self.sum.this_any.get(&f) {
+            if this != NO_NODE {
+                self.edge(u, this);
+            }
+        }
         inst
+    }
+
+    /// The instance `call` binds for summarized `f` (None: the template call
+    /// was expanded into the caller's summary).
+    fn inst_for(&mut self, call: CallId, f: FnIdx) -> Option<u32> {
+        if let Some(&i) = self.sum.call_inst.get(&(call, f)) {
+            return Some(i);
+        }
+        // A call an instance made from a template expanded into the
+        // summary: the instance already holds `f`'s effect.
+        let t = self.sum.tmpl_of.get(&call).copied();
+        if t.is_some_and(|t| self.sum.composed.contains(&(t, f))) {
+            return None;
+        }
+        // A call inside `f`'s SCC (recursion), or one no program call is
+        // behind (protocol touch, bound merge, timer, implicit call): the
+        // shared instance. Every other call: the instance for the source call
+        // site behind it, so the count is sites x targets, fixed by the
+        // program.
+        let in_scc = t.is_some_and(|t| {
+            self.sum.owner.get(&t).and_then(|o| self.sum.scc.get(o)) == self.sum.scc.get(&f)
+        });
+        let key = if (call as usize) < self.sum.n_prog {
+            (0, call, f)
+        } else {
+            match self.sum.origin.get(&call) {
+                Some(&o) if !in_scc => {
+                    if !self.sum.inst_key.contains_key(&(6, o, f)) && self.funcs[f as usize].name.contains("__perry_cjs_factory") {
+                        let tt = t.map(|t| {
+                            let ow = self.sum.owner.get(&t).map(|g| self.funcs[*g as usize].name.clone()).unwrap_or_default();
+                            let tc = &self.calls[t as usize];
+                            format!("tmpl owner={ow} site={} args={}", tc.site, tc.args.len())
+                        });
+                        let w = format!(
+                            "{} bsynth={} proto={}",
+                            tt.unwrap_or_else(|| format!("derived site={} args={}", self.calls[call as usize].site, self.calls[call as usize].args.len())),
+                            self.bound_synth.contains(&call),
+                            self.protocol_calls.contains(&call)
+                        );
+                        *self.sum.temp_why.entry(w).or_default() += 1;
+                    }
+                    (6, o, f)
+                }
+                _ => (5, 0, f),
+            }
+        };
+        let inst = self.instance(key);
+        self.sum.call_inst.insert((call, f), inst);
+        Some(inst)
+    }
+
+    /// The `this` term of summarized `f`'s instances, if it has one.
+    fn has_this_term(&self, f: FnIdx) -> bool {
+        self.sum.of.get(&f).is_some_and(|s| s.this != NO_NODE)
+    }
+
+    /// `this` of `call` into `f`: the shared node observes it; `f`'s
+    /// instance for the call gets the explicit token (the call's own
+    /// operand reaches it in `bind_summarized`).
+    pub(crate) fn this_into(&mut self, call: CallId, f: FnIdx, this_tok: Option<Tok>) {
+        if !self.sum.ready {
+            self.sum.deferred.push(Deferred::This(call, f, this_tok));
+            return;
+        }
+        let fthis = self.funcs[f as usize].this;
+        match (this_tok, &self.calls[call as usize].this) {
+            (Some(x), _) => self.add_tok(fthis, x),
+            (None, &ThisArg::Tok(x)) => self.add_tok(fthis, x),
+            (None, &ThisArg::Node(n)) => self.edge(n, fthis),
+            (None, ThisArg::Undef) => self.add_prim(fthis, prim::UNDEF),
+        }
+        if let Some(x) = this_tok {
+            if self.has_this_term(f) && !self.sum.templates.contains(&call) {
+                if let Some(i) = self.inst_for(call, f) {
+                    let it = self.sum.insts[i as usize].this;
+                    self.add_tok(it, x);
+                }
+            }
+        }
+    }
+
+    /// `this` of `f` from a method lookup on receiver `origin`: the shared
+    /// node observes it; the instances get the call's receiver operand.
+    pub(crate) fn this_lookup(&mut self, f: FnIdx, origin: Tok) {
+        if !self.sum.ready {
+            self.sum.deferred.push(Deferred::ThisTo(f, origin));
+            return;
+        }
+        let this = self.funcs[f as usize].this;
+        self.add_tok(this, origin);
+    }
+
+    /// The node that takes `this` values of `f` no call is behind: every
+    /// instance of `f` (and its shared instance, so the effect runs even
+    /// if no call ever does) sees them.
+    pub(crate) fn this_any(&mut self, f: FnIdx) -> NodeId {
+        let fthis = self.funcs[f as usize].this;
+        if !self.sum.ready || !self.has_this_term(f) {
+            return fthis;
+        }
+        if let Some(&u) = self.sum.this_any.get(&f) {
+            return u;
+        }
+        let u = self.node_named("this-any", || format!("this-any({f})"));
+        self.sum.this_any.insert(f, u);
+        self.edge(u, fthis);
+        for i in self.sum.insts_of.get(&f).cloned().unwrap_or_default() {
+            let it = self.sum.insts[i as usize].this;
+            self.edge(u, it);
+        }
+        self.instance((5, 0, f));
+        u
+    }
+
+    /// Unknown code calls `f`: its `this` is ⊤ (the unknown-code instance's
+    /// and the shared node).
+    pub(crate) fn escape_this(&mut self, f: FnIdx, reason: u32) {
+        if !self.sum.ready {
+            self.sum.deferred.push(Deferred::EscapeThis(f, reason));
+            return;
+        }
+        let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
+        let mut dsts = vec![self.funcs[f as usize].this];
+        if self.has_this_term(f) {
+            let inst = self.instance((2, 0, f));
+            dsts.push(self.sum.insts[inst as usize].this);
+        }
+        for d in dsts {
+            self.add_top(d, why);
+            self.add_prim(d, prim::ALL);
+        }
     }
 
     /// Apply the entries of every pending instance (a worklist: instances
@@ -344,14 +549,39 @@ impl Model {
     fn fill_instance(&mut self, inst: u32, base: &[NodeId]) {
         let f = self.sum.insts[inst as usize].f;
         let s = self.sum.of[&f].clone();
-        let origin = self.sum.insts[inst as usize].origin;
+        let host = self.sum.insts[inst as usize].host;
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
+        // Calls whose callee or receiver is an input term (a parameter or
+        // `this`): what they bind is what the caller passed.
+        let inputs: FxHashSet<NodeId> = s.params.iter().chain([&s.this]).copied().filter(|&x| is_slot(x)).collect();
+        let mut by_input: FxHashSet<u32> = FxHashSet::default();
+        for (h, c) in &s.cons {
+            if inputs.contains(h) {
+                let (_, ks) = cons_fields(c);
+                for k in ks {
+                    if k != NO_NODE && k & CALL != 0 {
+                        by_input.insert(k & !CALL);
+                    }
+                }
+            }
+        }
         let mut kmap = Vec::with_capacity(s.calls.len());
-        for (t, cs) in &s.calls {
+        for (ci, (t, cs)) in s.calls.iter().enumerate() {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
-            self.sum.origin.insert(id, origin.unwrap_or(*t));
+            // Keyed by the instance's host when it calls an input (the
+            // callback or receiver the caller passed), else by its own
+            // source site: one level of call-site context either way, so
+            // instances never multiply through instances.
+            let key_site = match host {
+                Some(h) if by_input.contains(&(ci as u32)) => h,
+                _ => *t,
+            };
+            self.sum.origin.insert(id, key_site);
+            if let Some(h) = host {
+                self.sum.host.insert(id, h);
+            }
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
             }
@@ -379,30 +609,17 @@ impl Model {
 
     /// Arguments and result of `call` into summarized `f`: its instance.
     pub(crate) fn bind_summarized(&mut self, call: CallId, f: FnIdx) {
-        // A call an instance made from a template expanded into the
-        // summary: the instance already holds `f`'s effect.
-        let t = self.sum.tmpl_of.get(&call).copied();
-        if t.is_some_and(|t| self.sum.composed.contains(&(t, f))) {
+        let Some(inst) = self.inst_for(call, f) else {
             return;
-        }
-        // A call inside `f`'s SCC (recursion), or one no program call is
-        // behind (protocol touch, bound merge, timer, implicit call): the
-        // shared instance. Every other call: the instance for the source call
-        // site behind it, so the count is sites x targets, fixed by the
-        // program.
-        let in_scc = t.is_some_and(|t| {
-            self.sum.owner.get(&t).and_then(|o| self.sum.scc.get(o)) == self.sum.scc.get(&f)
-        });
-        let key = if (call as usize) < self.sum.n_prog {
-            (0, call, f)
-        } else {
-            match self.sum.origin.get(&call) {
-                Some(&o) if !in_scc => (6, o, f),
-                _ => (5, 0, f),
-            }
         };
-        let inst = self.instance(key);
-        self.sum.call_inst.insert((call, f), inst);
+        let it = self.sum.insts[inst as usize].this;
+        if it != NO_NODE {
+            match self.calls[call as usize].this {
+                ThisArg::Node(n) => self.edge(n, it),
+                ThisArg::Tok(x) => self.add_tok(it, x),
+                ThisArg::Undef => self.add_prim(it, prim::UNDEF),
+            }
+        }
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
         let c = call as usize;
@@ -510,6 +727,28 @@ impl Model {
                 Deferred::Escape(f, reason) => self.escape_fn_params(f, reason),
                 Deferred::Group(holder, key, f, setter) => self.group_bind(holder, key, f, setter),
                 Deferred::RetObjects(call, f, dst) => self.ctor_ret_objects(call, f, dst),
+                Deferred::This(call, f, x) => self.this_into(call, f, x),
+                Deferred::ThisTo(f, origin) => self.this_lookup(f, origin),
+                Deferred::EscapeThis(f, reason) => self.escape_this(f, reason),
+                // A summary's call: its instances construct.
+                Deferred::Construct(call, _) | Deferred::NewNamed(_, call)
+                    if self.sum.templates.contains(&call) => {}
+                Deferred::Construct(call, t) => self.construct(call, t),
+                Deferred::NewNamed(name, call) => self.new_named(name, call),
+            }
+        }
+        // A `this` with values from generation (static blocks, field
+        // initializers, literal methods): the shared instance runs the
+        // effect even when no call does.
+        let mut fs: Vec<FnIdx> = self.sum.of.keys().copied().collect();
+        fs.sort_unstable();
+        for f in fs {
+            let s = self.sum.of[&f].clone();
+            if is_slot(s.this) {
+                let sl = s.this & !SLOT;
+                if s.seeds.iter().any(|x| x.0 == sl) || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0)) {
+                    self.instance((5, 0, f));
+                }
             }
         }
         self.fill_instances();
@@ -584,13 +823,14 @@ fn slice(m: &Model, ix: &Index, f: FnIdx) -> Vec<NodeId> {
     let ok = |y: NodeId| {
         y != NO_NODE
             && m.node_fn[y as usize] == f
-            && y != fi.this
+            && (y != fi.this || !fi.lexical_this)
             && y != fi.args_all
             && !m.node_captured.contains(&y)
     };
     let mut seen: FxHashSet<NodeId> = FxHashSet::default();
     let mut d = Vec::new();
-    for &p in &fi.params {
+    let this = (!fi.lexical_this).then_some(fi.this);
+    for &p in fi.params.iter().chain(this.iter()) {
         if ok(p) && seen.insert(p) {
             d.push(p);
         }
@@ -643,7 +883,7 @@ fn build_summaries(m: &mut Model) {
     let mut slices: FxHashMap<FnIdx, Vec<NodeId>> = FxHashMap::default();
     for f in 0..m.funcs.len() as FnIdx {
         let fi = &m.funcs[f as usize];
-        if fi.no_summary || fi.rest.is_some() || fi.has_arguments || fi.params.is_empty() {
+        if fi.no_summary || fi.rest.is_some() || fi.has_arguments || (fi.params.is_empty() && fi.lexical_this) {
             continue;
         }
         let d = slice(m, &ix, f);
@@ -813,6 +1053,10 @@ fn build_summaries(m: &mut Model) {
         }
         s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
         s.ret = enc(m.funcs[f as usize].ret);
+        s.this = if m.funcs[f as usize].lexical_this { NO_NODE } else { enc(m.funcs[f as usize].this) };
+        if !is_slot(s.this) {
+            s.this = NO_NODE;
+        }
         compress(&mut s);
         size += s.edges.len() + s.cons.len() + s.calls.len() + s.seeds.len();
         nsum += 1;
@@ -827,6 +1071,7 @@ fn build_summaries(m: &mut Model) {
         m.funcs[g as usize]
             .params
             .iter()
+            .chain(std::iter::once(&m.funcs[g as usize].this))
             .map(|&p| if dof.get(&p) == Some(&g) { p } else { NO_NODE })
             .collect()
     };
@@ -1081,6 +1326,28 @@ fn expand(s: &mut Summary, ci: usize, g: &Summary, gobs: &[NodeId]) {
             }
         }
     }
+    let tdsts: Vec<NodeId> = [tr(g.this), gobs.get(g.params.len()).copied().unwrap_or(NO_NODE)]
+        .into_iter()
+        .filter(|&d| d != NO_NODE)
+        .collect();
+    if !tdsts.is_empty() {
+        let src = match call.this {
+            ThisArg::Node(n) => n,
+            ThisArg::Tok(x) => {
+                let n = fresh(s);
+                s.seeds.push((n & !SLOT, vec![x], 0));
+                n
+            }
+            ThisArg::Undef => {
+                let n = fresh(s);
+                s.seeds.push((n & !SLOT, Vec::new(), prim::UNDEF));
+                n
+            }
+        };
+        for d in tdsts {
+            s.edges.push((src, d));
+        }
+    }
     let r = tr(g.ret);
     if r != NO_NODE && call.ret != NO_NODE {
         s.edges.push((r, call.ret));
@@ -1094,7 +1361,7 @@ pub fn compress(s: &mut Summary) {
     let n = s.nslots as usize;
     let sl = |x: NodeId| if is_slot(x) { Some((x & !SLOT) as usize) } else { None };
     let mut pinned = vec![false; n];
-    for &p in s.params.iter().chain(std::iter::once(&s.ret)) {
+    for &p in s.params.iter().chain([&s.ret, &s.this]) {
         if let Some(i) = sl(p) {
             pinned[i] = true;
         }
@@ -1251,6 +1518,7 @@ pub fn compress(s: &mut Summary) {
         .collect();
     s.params = s.params.iter().map(|&p| rn(p)).collect();
     s.ret = rn(s.ret);
+    s.this = rn(s.this);
     s.nslots = orig.len() as u32;
     s.orig = orig;
 }

@@ -237,7 +237,11 @@ impl<'a> Gen<'a> {
         spread: Vec<NodeId>,
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
-        crate::builtins::construct_named(&mut self.m, name, call);
+        let h = self.m.node_l("new-named");
+        let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
+        self.m.add_tok(h, mark);
+        let name = self.m.atom(name);
+        self.m.cons(h, Cons::NewNamed { name, call });
         ret
     }
 

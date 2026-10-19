@@ -47,7 +47,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
             continue;
         }
         match &m.toks[t as usize] {
-            TokKind::Obj(tm) => match m.tmpls[*tm as usize].kind {
+            TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
                 TmplKind::Class { class_id, .. } => out.class_ids.push(class_id),
                 _ => out.other = true,
             },

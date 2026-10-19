@@ -30,16 +30,10 @@ impl Model {
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn => unreachable!(),
             TokKind::Func(f) => {
-                if !self.funcs[f as usize].lexical_this {
-                    let fthis = self.funcs[f as usize].this;
-                    match (this_tok, &self.calls[call as usize].this) {
-                        (Some(x), _) => self.add_tok(fthis, x),
-                        (None, &ThisArg::Tok(x)) => self.add_tok(fthis, x),
-                        (None, &ThisArg::Node(n)) => self.edge(n, fthis),
-                        (None, ThisArg::Undef) => self.add_prim(fthis, prim::UNDEF),
-                    }
-                }
                 self.bind_args(call, t);
+                if !self.funcs[f as usize].lexical_this {
+                    self.this_into(call, f, this_tok);
+                }
             }
             TokKind::Bound(_) => self.call_bound(call, t),
             TokKind::ClassObj(_) => {
@@ -54,7 +48,7 @@ impl Model {
                 builtins::call_builtin_ns(m, ns, call);
                 m.cur_this = prev;
             }),
-            TokKind::Obj(_)
+            TokKind::Obj(_, _)
             | TokKind::Proto(_)
             | TokKind::ObjectProto
             | TokKind::PrimBox
@@ -311,7 +305,53 @@ impl Model {
     }
 
     /// `new t(args)`.
+    /// `new Name(...)` of a builtin constructor, once per call.
+    pub(crate) fn new_named(&mut self, name: Atom, call: CallId) {
+        if !self.sum.ready {
+            self.sum.deferred.push(crate::summary::Deferred::NewNamed(name, call));
+            return;
+        }
+        if !self.construct_done.insert((call, TOP)) {
+            return;
+        }
+        let n0 = self.calls.len();
+        let name = self.atoms[name as usize].clone();
+        self.with_b(|m| builtins::construct_named(m, &name, call));
+        self.note_origin(n0, call);
+    }
+
+    /// The token `new` at `call` gives template `tm`: one per birth site. A
+    /// template-wide mark already on the template's own token holds for it.
+    pub(crate) fn site_tok(&mut self, tm: TmplId, call: CallId) -> Tok {
+        let k = TokKind::Obj(tm, call);
+        if let Some(&t) = self.tok_index.get(&k) {
+            return t;
+        }
+        let t = self.tok(k);
+        if let Some(&w) = self.tok_index.get(&TokKind::Obj(tm, NO_CTX)) {
+            if let Some(&r) = self.escaped.get(&w) {
+                self.escape(t, r);
+            }
+            if let Some(&(kind, r)) = self.hard.get(&w) {
+                self.mark_hard(t, kind, r);
+            }
+        }
+        t
+    }
+
+    /// Birth-site tokens a template-wide mark on `t` also holds for.
+    fn wide_sites(&self, t: Tok) -> Vec<Tok> {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, NO_CTX) => self.site_toks.get(&tm).cloned().unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        if !self.sum.ready {
+            self.sum.deferred.push(crate::summary::Deferred::Construct(call, t));
+            return;
+        }
         let n0 = self.calls.len();
         self.construct_inner(call, t);
         self.note_origin(n0, call);
@@ -324,13 +364,15 @@ impl Model {
         let c = self.calls[call as usize].clone();
         match self.toks[t as usize].clone() {
             TokKind::ClassObj(tm) => {
-                let inst = self.tok(TokKind::Obj(tm));
+                let ctx = self.birth_ctx(call);
+                let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.run_ctor_chain(call, tm, inst);
             }
             TokKind::Func(f) => {
                 let tm = self.fn_inst_template(f);
-                let inst = self.tok(TokKind::Obj(tm));
+                let ctx = self.birth_ctx(call);
+                let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.call_tok(call, t, Some(inst));
                 // E12: a constructor function returning an object.
@@ -390,8 +432,8 @@ impl Model {
         }
         let c = self.calls[call as usize].clone();
         if let Some(fi) = self.tmpls[tm as usize].field_init {
-            let this = self.funcs[fi as usize].this;
-            self.add_tok(this, inst);
+            // The field initializers run for this `new`, on its instance.
+            self.this_into(call, fi, Some(inst));
         }
         let t = &self.tmpls[tm as usize];
         match (t.ctor, t.parent, t.native_parent.clone()) {
@@ -540,6 +582,9 @@ impl Model {
             self.rel(|| format!("escapeseed {t} {reason}"));
         }
         self.with_s(|m| m.escape_inner(t, reason));
+        for s in self.wide_sites(t) {
+            self.escape(s, reason);
+        }
     }
 
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
@@ -625,10 +670,7 @@ impl Model {
             TokKind::Func(f) => {
                 let fi = self.funcs[f as usize].clone();
                 if !fi.lexical_this {
-                    self.add_top(fi.this, |m| {
-                        format!("this of escaped function: {}", m.reasons[reason as usize])
-                    });
-                    self.add_prim(fi.this, prim::ALL);
+                    self.escape_this(f, reason);
                 }
                 self.escape_fn_params(f, reason);
             }
@@ -636,7 +678,7 @@ impl Model {
                 let p = self.tok(TokKind::Proto(tm));
                 self.escape(p, reason);
                 // Unknown code may construct it with unknown arguments.
-                let inst = self.tok(TokKind::Obj(tm));
+                let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                 let ret = self.node_l("top-new");
                 let args_n = self.node_l("top-args");
                 self.add_top(args_n, |m| {
@@ -655,7 +697,7 @@ impl Model {
                 self.sink_node(ret, reason);
                 self.escape(inst, reason);
             }
-            TokKind::Obj(tm) => {
+            TokKind::Obj(tm, _) => {
                 // `.constructor` reaches the class value.
                 if let TmplKind::Class { .. } = self.tmpls[tm as usize].kind {
                     let c = self.tok(TokKind::ClassObj(tm));
@@ -726,6 +768,9 @@ impl Model {
         self.add_prim(any, prim::ALL);
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
+        }
+        for s in self.wide_sites(t) {
+            self.mark_hard(s, kind, reason);
         }
     }
 }

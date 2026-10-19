@@ -24,6 +24,9 @@ pub const ITER_ELEM: &str = "#iter";
 /// model. Its presence in a node means "any escaped object or anything else".
 pub const TOP: Tok = 0;
 
+/// The context of a template's own token (`TokKind::Obj`).
+pub const NO_CTX: CallId = u32::MAX;
+
 /// Primitive kind bits carried next to the object tokens of a node.
 pub mod prim {
     pub const NUM: u16 = 1 << 0;
@@ -89,8 +92,11 @@ pub enum BuiltinNs {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TokKind {
     Top,
-    /// An instance of a birth template.
-    Obj(TmplId),
+    /// An instance of a birth template, born at a context: `NO_CTX` for the
+    /// template's own token (generation-time births, template-wide marks),
+    /// else the `new` call that made it (one token per birth site; a call
+    /// an instance made is that instance's own call).
+    Obj(TmplId, CallId),
     /// A function value (closure, function declaration, method body).
     Func(FnIdx),
     /// `f.bind(t, ...)` result: index into `Model::bound`.
@@ -301,6 +307,10 @@ pub enum Cons {
     CallThis { call: CallId, this: Tok },
     /// The node is a `new` callee.
     New { call: CallId },
+    /// `new Name(...)` of a builtin constructor named in the source: runs
+    /// once per call (the holder holds one marker token), so an instance
+    /// that renames the call constructs its own object.
+    NewNamed { name: Atom, call: CallId },
     /// The node is a method-call receiver (`recv.key(...)`).
     MCall { key: Key, call: CallId },
     /// The node is `ProtoNode(cur)`: continue a lookup for `origin`.
@@ -428,6 +438,7 @@ impl Cons {
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
             Cons::New { .. } => "new",
+            Cons::NewNamed { .. } => "newnamed",
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } => "top",
@@ -512,6 +523,8 @@ pub struct FieldWriters {
 pub struct Model {
     pub toks: Vec<TokKind>,
     pub tok_index: FxHashMap<TokKind, Tok>,
+    /// Template -> its birth-site tokens (`Obj(tm, ctx)`, ctx != NO_CTX).
+    pub site_toks: FxHashMap<TmplId, Vec<Tok>>,
     pub tmpls: Vec<Template>,
     pub funcs: Vec<FuncInfo>,
     pub nodes: Vec<Node>,
@@ -836,9 +849,23 @@ impl Model {
             return t;
         }
         let t = self.toks.len() as Tok;
+        if let TokKind::Obj(tm, ctx) = k {
+            if ctx != NO_CTX {
+                self.site_toks.entry(tm).or_default().push(t);
+            }
+        }
         self.toks.push(k.clone());
         self.tok_index.insert(k, t);
         t
+    }
+
+    /// The template token of `tm` and every birth-site token of it.
+    pub fn tmpl_toks(&self, tm: TmplId) -> Vec<Tok> {
+        let mut v: Vec<Tok> = self.tok_index.get(&TokKind::Obj(tm, NO_CTX)).copied().into_iter().collect();
+        if let Some(s) = self.site_toks.get(&tm) {
+            v.extend_from_slice(s);
+        }
+        v
     }
 
     pub fn node(&mut self, name: impl FnOnce() -> String) -> NodeId {
@@ -882,7 +909,7 @@ impl Model {
     pub fn tok_name(&self, t: Tok) -> String {
         match &self.toks[t as usize] {
             TokKind::Top => "TOP".into(),
-            TokKind::Obj(tm) => format!("obj:{}", self.tmpls[*tm as usize].display),
+            TokKind::Obj(tm, _) => format!("obj:{}", self.tmpls[*tm as usize].display),
             TokKind::Func(f) => format!("fn:{}", self.funcs[*f as usize].name),
             TokKind::Bound(b) => format!("bound:{b}"),
             TokKind::ClassObj(tm) => format!("class:{}", self.tmpls[*tm as usize].display),
@@ -938,7 +965,8 @@ impl Model {
         for (i, k) in self.toks.iter().enumerate() {
             let d = match k {
                 TokKind::Top => "top -".to_string(),
-                TokKind::Obj(t) => format!("obj {t}"),
+                TokKind::Obj(t, NO_CTX) => format!("obj {t}"),
+                TokKind::Obj(t, c) => format!("obj {t}@{c}"),
                 TokKind::Func(f) => format!("func {f}"),
                 TokKind::Bound(b) => format!("bound {b}"),
                 TokKind::ClassObj(t) => format!("classobj {t}"),
@@ -1097,7 +1125,7 @@ impl Model {
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
         match self.toks[t as usize] {
-            TokKind::Obj(tm) => Some(tm),
+            TokKind::Obj(tm, _) => Some(tm),
             _ => None,
         }
     }

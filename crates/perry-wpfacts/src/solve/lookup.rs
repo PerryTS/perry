@@ -13,7 +13,7 @@ impl Model {
                 | TokKind::BuiltinFn
                 | TokKind::NativeProto(_)
                 | TokKind::PrimBox => {}
-                TokKind::Obj(_) if self.is_array_like(t) => {}
+                TokKind::Obj(_, _) if self.is_array_like(t) => {}
                 // A program object/function iterates only through its
                 // protocol, which `Gen::iterate` follows separately.
                 _ => return,
@@ -257,7 +257,7 @@ impl Model {
     pub fn is_array_like(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::PrimBox => true,
-            TokKind::Obj(tm) => match self.tmpls[tm as usize].kind {
+            TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                 TmplKind::Arr { .. } => true,
                 TmplKind::BObj { what, .. } => what != "CjsMain",
                 _ => false,
@@ -501,7 +501,7 @@ impl Model {
         let g = self.acc_groups[&(holder, key)].clone();
         // An accessor with a lexical `this` (arrow) never sees the
         // receiver, as for a call (`call_tok`).
-        let this = (!self.funcs[f as usize].lexical_this).then(|| self.funcs[f as usize].this);
+        let this = (!self.funcs[f as usize].lexical_this).then(|| self.this_any(f));
         if setter {
             if let Some(this) = this {
                 self.edge_quiet(g.st, this);
@@ -662,8 +662,7 @@ impl Model {
             }
             TokKind::Func(f) => {
                 if !self.funcs[f as usize].lexical_this {
-                    let this = self.funcs[f as usize].this;
-                    self.add_tok(this, origin);
+                    self.this_lookup(f, origin);
                 }
             }
             _ => {}

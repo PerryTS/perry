@@ -30,14 +30,14 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn bobj(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
         let tm = self.new_bobj_template(mi, what);
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let n = self.tok_node(t);
         (t, n)
     }
 
     pub(crate) fn new_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
         let tm = self.new_arr_template(mi, what);
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {
             self.m.edge(e, fa);
@@ -671,7 +671,7 @@ impl<'a> Gen<'a> {
                     field_init: None,
                     proto_members: vec![],
                 });
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
                 self.m.edge(p, pn);
                 let n = self.tok_node(t);
@@ -784,7 +784,7 @@ impl<'a> Gen<'a> {
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
                 if let Expr::TypedArrayNew { kind, .. } = e {
-                    if let TokKind::Obj(tm) = self.m.toks[t as usize] {
+                    if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                         self.m.ta_elem.insert(tm, *kind);
                     }
                 }
@@ -1719,7 +1719,7 @@ impl<'a> Gen<'a> {
         self.m.add_prim(fa, prim::ALL);
         self.m.add_tok(fa, t);
         let arr = self.new_arr_template(mi, "json");
-        let at = self.m.tok(TokKind::Obj(arr));
+        let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
         let afa = self.m.field_any(at);
         self.m.add_prim(afa, prim::ALL);
         self.m.add_tok(afa, t);

@@ -133,7 +133,9 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
     let site = m.calls[call as usize].site;
     let key = (site, what);
     if let Some(&t) = m.site_tmpls.get(&key) {
-        return t;
+        let tm = m.tmpl_of(t).expect("site template");
+        let ctx = m.birth_ctx(call);
+        return m.site_tok(tm, ctx);
     }
     let tm = m.tmpls.len() as TmplId;
     let kind = if what == "Array" {
@@ -161,8 +163,10 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         field_init: None,
         proto_members: vec![],
     });
-    let t = m.tok(TokKind::Obj(tm));
+    let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
+    let ctx = m.birth_ctx(call);
+    let t = m.site_tok(tm, ctx);
     t
 }
 
@@ -389,7 +393,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             Some("length") => m.add_prim(dst, prim::NUM),
             _ => m.add_prim(dst, prim::UNDEF),
         },
-        TokKind::Obj(tm) => match m.tmpls[tm as usize].kind.clone() {
+        TokKind::Obj(tm, _) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => match name.as_deref() {
                 Some("length") => m.add_prim(dst, prim::NUM),
                 // A computed key may name a builtin method too.
@@ -520,7 +524,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // iteration protocol of the builtin iterables, which is modeled.
     let iterable = match &m.toks[t as usize] {
         TokKind::PrimBox => true,
-        TokKind::Obj(tm) => matches!(
+        TokKind::Obj(tm, _) => matches!(
             m.tmpls[*tm as usize].kind,
             TmplKind::Arr { .. }
                 | TmplKind::BObj {
@@ -547,7 +551,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         },
         TokKind::PrimBox => array_method(m, t, name.as_deref(), call),
         TokKind::NativeProto(_) => {}
-        TokKind::Obj(tm) => match m.tmpls[tm as usize].kind.clone() {
+        TokKind::Obj(tm, _) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => array_method(m, t, name.as_deref(), call),
             TmplKind::BObj { what, .. } => bobj_method(m, t, what, name.as_deref(), call),
             _ => {}
@@ -1933,7 +1937,7 @@ fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         field_init: None,
         proto_members: vec![],
     });
-    m.tok(TokKind::Obj(tm))
+    m.tok(TokKind::Obj(tm, NO_CTX))
 }
 
 /// Node's `module.isBuiltin` (prefix-only builtins need `node:`).

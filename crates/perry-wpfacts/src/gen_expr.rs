@@ -75,7 +75,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn prim_box_op(&mut self, fx: &Fx, operands: &[&Expr], why: &str) -> NodeId {
         let out = self.prim_op(fx, operands, prim::ALL, why);
         let tm = self.new_bobj_template(fx.module, "primbox");
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
         let pt = self.m.tok(TokKind::PrimBox);
@@ -272,7 +272,7 @@ impl<'a> Gen<'a> {
             field_init: None,
             proto_members: vec![],
         });
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
     }
 
@@ -316,7 +316,7 @@ impl<'a> Gen<'a> {
     /// A fresh promise template whose settled value is `value`.
     pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
         let tm = self.new_bobj_template(mi, "Promise");
-        let t = self.m.tok(TokKind::Obj(tm));
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let a = self.m.atom("#value");
         let f = self.m.field(t, a);
         let aw = self.awaited(value);
@@ -867,7 +867,7 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_template(mi, "lit");
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
                     let v = self.expr(fx, el);
@@ -877,7 +877,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArraySpread(elems) => {
                 let tm = self.new_arr_template(mi, "spread");
-                let t = self.m.tok(TokKind::Obj(tm));
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
                 for el in elems {
                     match el {
@@ -990,7 +990,7 @@ impl<'a> Gen<'a> {
                 let p = self.expr(fx, parent_expr);
                 self.to_sink(p, "E11 dynamic class parent");
                 if let Some(tm) = self.resolve_class_name(mi, class_name) {
-                    let inst = self.m.tok(TokKind::Obj(tm));
+                    let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                     let r = self.m.reason("E11 dynamic class parent");
                     self.m.mark_hard(inst, Hard::E11ReflectConstruct, r);
                     self.m.escape(inst, r);
@@ -1142,7 +1142,7 @@ impl<'a> Gen<'a> {
                     let pv = self.expr(fx, p);
                     self.to_sink(pv, "E11 class expression with an evaluated parent");
                     if let Some(tm) = self.resolve_class_name(mi, template) {
-                        let inst = self.m.tok(TokKind::Obj(tm));
+                        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                         let r = self
                             .m
                             .reason("E11 class expression with an evaluated parent");

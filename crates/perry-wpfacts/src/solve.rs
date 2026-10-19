@@ -411,7 +411,7 @@ impl Model {
         // Seed the static part of the chain.
         let objproto = self.tok(TokKind::ObjectProto);
         match self.toks[t as usize].clone() {
-            TokKind::Obj(tm) => match self.tmpls[tm as usize].kind.clone() {
+            TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind.clone() {
                 TmplKind::Class { .. } => {
                     let p = self.tok(TokKind::Proto(tm));
                     self.add_tok(n, p);
@@ -497,7 +497,7 @@ impl Model {
                         | TokKind::Builtin(_)
                         | TokKind::BuiltinFn
                         | TokKind::NativeProto(_) => true,
-                        TokKind::Obj(tm) => matches!(self.tmpls[*tm as usize].kind,
+                        TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
                             TmplKind::BObj { what, .. } if what != "CjsMain"),
                         _ => false,
                     };
@@ -535,6 +535,11 @@ impl Model {
             Cons::New { call } => {
                 for &t in toks {
                     self.construct(call, t);
+                }
+            }
+            Cons::NewNamed { name, call } => {
+                if !toks.is_empty() {
+                    self.new_named(name, call);
                 }
             }
             Cons::MCall { key, call } => {
@@ -591,7 +596,7 @@ impl Model {
                     // E10: every template whose prototype this is can now
                     // have instances born without its constructor.
                     if let TokKind::Proto(tm) = self.toks[t as usize] {
-                        let inst = self.tok(TokKind::Obj(tm));
+                        let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                         self.mark_hard(inst, Hard::E10ObjectCreate, reason);
                     }
                 }
@@ -711,7 +716,7 @@ impl Model {
                 for &t in toks {
                     if let TokKind::Func(f) = self.toks[t as usize] {
                         if !self.funcs[f as usize].lexical_this {
-                            let this = self.funcs[f as usize].this;
+                            let this = self.this_any(f);
                             self.edge(recv, this);
                         }
                     }
@@ -804,7 +809,7 @@ impl Model {
                     let pn = self.proto_node(t);
                     self.edge(src, pn);
                     if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                        let instance = self.tok(TokKind::Obj(tm));
+                        let instance = self.tok(TokKind::Obj(tm, NO_CTX));
                         let reason =
                             self.reason("E6 live superclass may change constructor birth fields");
                         self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
@@ -826,7 +831,7 @@ impl Model {
                     match self.toks[t as usize].clone() {
                         TokKind::Top => self.add_tok(dst, TOP),
                         TokKind::Func(_) | TokKind::Bound(_) => self.add_tok(dst, t),
-                        TokKind::Obj(tm) => match self.tmpls[tm as usize].kind {
+                        TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                             _ if self.is_array_like(t) => {}
                             _ => {
                                 let a = self.atom("next");
@@ -883,7 +888,7 @@ impl Model {
             Cons::ShareBuffer { ta } => {
                 for &t in toks {
                     let shared = t == TOP
-                        || matches!(self.toks[t as usize], TokKind::Obj(tm)
+                        || matches!(self.toks[t as usize], TokKind::Obj(tm, _)
                             if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "TypedArray", .. }));
                     if shared {
                         let r = self.reason("B1 typed array over a shared buffer");
@@ -950,12 +955,12 @@ impl Model {
                 for &t in toks {
                     match self.toks[t as usize] {
                         TokKind::ClassObj(tm) => {
-                            let inst = self.tok(TokKind::Obj(tm));
+                            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                             self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                         }
                         TokKind::Func(f) => {
                             let tm = self.fn_inst_template(f);
-                            let inst = self.tok(TokKind::Obj(tm));
+                            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
                             self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                         }
                         _ => {}
@@ -985,7 +990,7 @@ impl Model {
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
                 let parent = self.proto_node(t);
                 self.edge(src, parent);
-                let instance = self.tok(TokKind::Obj(tm));
+                let instance = self.tok(TokKind::Obj(tm, NO_CTX));
                 let reason = self.reason("E6 possible computed superclass write");
                 self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
             }
@@ -1111,6 +1116,7 @@ impl Model {
             Cons::Call { call } => format!("call {n} {call}"),
             Cons::CallThis { call, this } => format!("callthis {n} {call} {this}"),
             Cons::New { call } => format!("new {n} {call}"),
+            Cons::NewNamed { name, call } => format!("newnamed {n} {} {call}", esc_key(&self.atoms[*name as usize])),
             Cons::MCall { key, call } => format!("mcall {n} {} {call}", self.key_name(*key)),
             Cons::Chain { origin, key, act } => {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
@@ -1184,7 +1190,7 @@ impl Model {
     /// One word for a token's kind (diagnostics).
     pub fn tok_kind_word(&self, t: Tok) -> &'static str {
         match &self.toks[t as usize] {
-            TokKind::Obj(tm) => match self.tmpls[*tm as usize].kind {
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::Class { .. } => "class instance",
                 TmplKind::Lit { .. } => "literal",
                 TmplKind::FnInst { .. } => "fn instance",

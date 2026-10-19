@@ -325,6 +325,8 @@ impl<'a> Gen<'a> {
         // Parameters and the result belong to the new function's body.
         let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
         self.m.own(ret);
+        // `this` is the function's own interface term, like a parameter.
+        self.m.own(this);
         let mut ps = Vec::new();
         let mut rest = None;
         let mut mapped = None;
@@ -334,7 +336,7 @@ impl<'a> Gen<'a> {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = self.new_arr_template(mi, "rest");
-                let at = self.m.tok(TokKind::Obj(arr));
+                let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
                 if p.arguments_object.is_some() {
@@ -493,7 +495,7 @@ impl<'a> Gen<'a> {
                 let _ = pn;
                 // Instances reaching any key read: approximate by making
                 // the accessor's `this` the whole class (instances).
-                let inst = self.m.tok(TokKind::Obj(tm));
+                let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 self.m.add_tok(this, inst);
                 self.m.funcs[f as usize].no_summary = true;
                 let fa = self.m.field_any(proto);
@@ -564,7 +566,7 @@ impl<'a> Gen<'a> {
         {
             // Dynamic `extends <expr>` / unresolved parent: E11-like — the
             // parent constructor is unknown code.
-            let inst = self.m.tok(TokKind::Obj(tm));
+            let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
             let r = self
                 .m
                 .reason("E11 class with a dynamic/unresolved `extends`");
@@ -1017,7 +1019,7 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor: false,
         };
-        let inst = self.m.tok(TokKind::Obj(tm));
+        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let ctor_definite: Vec<String> = self
             .ctor_phase
             .get(&tm)
