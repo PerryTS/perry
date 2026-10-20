@@ -651,8 +651,10 @@ fn run_arm(
             if let Some((_, refused)) = proof {
                 ctx.current_block = refused;
             }
-            // Only an object at a static layout (a family's) can be admitted:
-            // any other receiver (an instance of a subclass without a family
+            // Only an object at a family layout can be admitted: a static
+            // layout (a family's), or an unshadowed linked one (a class
+            // evaluation's copy of a family's, `layout_desc::family_desc_of`).
+            // Any other receiver (an instance of a subclass without a family
             // running its parent's constructor) is refused here, unasked.
             let band = ctx.new_block("crun.band");
             let ask = ctx.new_block("crun.ask");
@@ -667,14 +669,7 @@ fn run_arm(
             let blk = ctx.block();
             let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
             let word = blk.load(crate::types::I32, &word_ptr);
-            let base =
-                crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
-            let rel = blk.sub(crate::types::I32, &word, &(base as i32).to_string());
-            let in_band = blk.icmp_ult(
-                crate::types::I32,
-                &rel,
-                &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
-            );
+            let in_band = emit_family_word_test(blk, &word);
             let from_band = blk.label.clone();
             blk.cond_br(&in_band, &ask_l, &asked_l);
             ctx.current_block = ask;
@@ -730,6 +725,42 @@ fn run_arm(
         key: property.to_owned(),
     });
     (out, run)
+}
+
+/// A layout word a family object without an overflow can carry: a static
+/// layout (a family's own, `[LAYOUT_BASE, +STATIC_SHAPE_ID_COUNT / 2)`), or an
+/// unshadowed linked one (a class evaluation's copy of a family's layout,
+/// `perry-runtime` `layout_desc::family_desc_of`: an ordinary ShapeId below
+/// `UNSHADOWED_WORD_END` whose kind bits name a linked identity). Which family
+/// is the runtime's answer (`perry_family_run_admits`); a word outside both
+/// never names one.
+fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
+    let base = crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
+    let rel = blk.sub(I32, word, &(base as i32).to_string());
+    let in_static = blk.icmp_ult(
+        I32,
+        &rel,
+        &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
+    );
+    let kind = blk.and(
+        I32,
+        word,
+        &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
+    );
+    let linked = blk.icmp_ne(I32, &kind, "0");
+    let ordinary_rel = blk.sub(
+        I32,
+        word,
+        &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+    );
+    let unshadowed = blk.icmp_ult(
+        I32,
+        &ordinary_rel,
+        &((crate::runtime_abi::UNSHADOWED_WORD_END - crate::runtime_abi::SHAPE_ID_BASE) as i32)
+            .to_string(),
+    );
+    let copy = blk.and(crate::types::I1, &linked, &unshadowed);
+    blk.or(crate::types::I1, &in_static, &copy)
 }
 
 /// Object model step 2c (A): a constructor key's store through `this` in a
@@ -789,13 +820,7 @@ pub(crate) fn begin_family_init_store(
     let blk = ctx.block();
     let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
     let word = blk.load(I32, &word_ptr);
-    let base = crate::runtime_abi::SHAPE_ID_BASE + crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2;
-    let rel = blk.sub(I32, &word, &(base as i32).to_string());
-    let in_band = blk.icmp_ult(
-        I32,
-        &rel,
-        &(crate::runtime_abi::STATIC_SHAPE_ID_COUNT / 2).to_string(),
-    );
+    let in_band = emit_family_word_test(blk, &word);
     blk.cond_br(&in_band, &load_label, &miss_label);
 
     ctx.current_block = load_idx;

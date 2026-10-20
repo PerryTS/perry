@@ -653,7 +653,7 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                         ObjectKeys::new(keys.cast_mut(), record.logical_key_count()),
                         slot,
                     );
-                if hole && super::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+                if hole && super::layout_desc::is_family_object(obj) {
                     return true;
                 }
                 // A refused delete changes nothing, so it establishes no
@@ -670,7 +670,7 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
                     super::layout_desc::install_cause::DELETE
                 });
                 ensure(obj);
-            } else if super::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+            } else if super::layout_desc::is_family_object(obj) {
                 // An absent family spelling has no order entry to retire.
                 return true;
             }

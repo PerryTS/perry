@@ -1,5 +1,7 @@
 //! Checked family birth for a class whose heritage evaluates at runtime.
 
+#[cfg(test)]
+use super::layout_desc::{family_desc_of, is_family_object};
 use super::layout_desc::{family_of_class, perry_alloc_layout, PerryLayoutDesc};
 use super::ObjectHeader;
 
@@ -97,5 +99,123 @@ mod tests {
             assert_ne!((*obj).parent_class_id, (*desc).layout_id);
             assert!(crate::object::object_inline_capacity(obj) >= 3);
         });
+    }
+}
+
+#[cfg(test)]
+mod evaluation_layout_tests {
+    use super::*;
+    use crate::object::class_registry::declarations::{
+        js_register_class_declaration, ClassDeclaration,
+    };
+    use crate::object::shapes;
+
+    const CLASS: u32 = 60_281;
+
+    static EMPTY_KEYS: [crate::object::layout_desc::PerryLayoutKey; 0] = [];
+    static EMPTY_INDEX: [u32; 1] = [u32::MAX];
+
+    #[used(linker)]
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
+    #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
+    #[cfg_attr(
+        not(any(target_vendor = "apple", target_os = "windows")),
+        link_section = "perry_layouts"
+    )]
+    static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        family: 0x41574202,
+        variant: 0,
+        kind: 0,
+        integrity: 0,
+        slot_count: 0,
+        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        rep: 0,
+        proto: std::ptr::null(),
+        keys: EMPTY_KEYS.as_ptr(),
+        key_count: 0,
+        index_mask: 0,
+        index: EMPTY_INDEX.as_ptr(),
+        class_id: CLASS,
+        parent_class_id: 0,
+        methods: std::ptr::null(),
+    };
+
+    static DECLARATION: ClassDeclaration = ClassDeclaration {
+        instance_layout: std::ptr::addr_of!(LAYOUT),
+        ..ClassDeclaration::native(&[])
+    };
+
+    /// An instance linked to a class evaluation's prototype moves to that
+    /// evaluation's copy of its family layout: a shape naming the link
+    /// (`MIXED | class | serial`), one per evaluation, that is still the
+    /// family's layout for every geometry reader.
+    #[test]
+    fn an_evaluation_link_moves_a_family_instance_to_the_evaluation_layout() {
+        crate::gc::initialize_runtime_fixture();
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        unsafe { js_register_class_declaration(CLASS, &DECLARATION) };
+        let desc = std::ptr::addr_of!(LAYOUT);
+        let link = |proto: *mut ObjectHeader| unsafe {
+            let obj = perry_alloc_class_family(desc, 0, 0);
+            assert_eq!((*obj).parent_class_id, (*desc).layout_id);
+            let bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
+            crate::object::prototype_chain::object_link_class_evaluation_prototype(
+                obj as usize,
+                bits,
+            );
+            (obj, bits)
+        };
+        let first = crate::object::js_object_alloc(0, 0);
+        let second = crate::object::js_object_alloc(0, 0);
+        let (a, a_bits) = link(first);
+        let (b, _) = link(first);
+        let (c, c_bits) = link(second);
+        unsafe {
+            for (obj, bits) in [(a, a_bits), (b, a_bits), (c, c_bits)] {
+                let word = (*obj).parent_class_id;
+                assert_ne!(
+                    word,
+                    (*desc).layout_id,
+                    "the link leaves the class identity"
+                );
+                assert!(shapes::shape_word_may_be_linked(word));
+                assert!(shapes::proto_id_links_class_instance(
+                    shapes::object_shape_identity(obj),
+                    shapes::class_proto_id(CLASS),
+                ));
+                assert!(
+                    (*obj).meta.is_null(),
+                    "the link is a shape fact, not a meta one"
+                );
+                assert_eq!(shapes::object_prototype_word(obj), bits);
+                assert!(shapes::shape_is_evaluation_layout_of(
+                    word,
+                    (*desc).layout_id
+                ));
+                assert!(is_family_object(obj));
+                assert_eq!(
+                    family_desc_of(obj).map(|d| d as *const PerryLayoutDesc),
+                    Some(desc)
+                );
+            }
+            // One layout per evaluation: the same prototype reaches the same
+            // record, another prototype its own.
+            assert_eq!((*a).parent_class_id, (*b).parent_class_id);
+            assert_ne!((*a).parent_class_id, (*c).parent_class_id);
+            // A receiver whose geometry is not the family's is no family
+            // object, whatever its identity.
+            let wide = crate::object::js_object_alloc(CLASS, 3);
+            crate::object::prototype_chain::object_link_class_evaluation_prototype(
+                wide as usize,
+                a_bits,
+            );
+            assert!(!shape_is_evaluation_layout_of_word(wide, (*desc).layout_id));
+            assert!(!is_family_object(wide));
+        }
+    }
+
+    unsafe fn shape_is_evaluation_layout_of_word(obj: *const ObjectHeader, family: u32) -> bool {
+        shapes::shape_is_evaluation_layout_of((*obj).parent_class_id, family)
     }
 }

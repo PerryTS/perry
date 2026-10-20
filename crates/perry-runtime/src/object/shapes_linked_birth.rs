@@ -151,6 +151,68 @@ pub(crate) unsafe fn declaration_parent_identity(
     }
 }
 
+/// Is ShapeId `id` a class evaluation's copy of family layout `family`: the
+/// layout's own facts (key list, slots, holes, kind, attributes, lanes) at
+/// the identity `MIXED | class | serial` an instance of the layout's class
+/// takes when it is linked to that evaluation's prototype? Such a record is
+/// the evaluation's family layout: every slot the family names is where the
+/// family puts it, and the record names the prototype the instance inherits
+/// from. Two directory reads; no descriptor copy.
+pub(crate) fn shape_is_evaluation_layout_of(id: u32, family: u32) -> bool {
+    if id == family {
+        return false;
+    }
+    let (Some(r), Some(f)) = (
+        ShapeSlab::agent_record_present(id),
+        ShapeSlab::agent_record_present(family),
+    ) else {
+        return false;
+    };
+    // SAFETY: present records of this agent, read immediately.
+    unsafe {
+        let (r, f) = (&*r, &*f);
+        proto_id_links_class_instance(r.proto_id, f.proto_id)
+            && r.keys == f.keys
+            && r.logical_key_count == f.logical_key_count
+            && r.live_inline_slot_count == f.live_inline_slot_count
+            && r.hole_count == f.hole_count
+            && r.object_kind() == f.object_kind()
+            && r.summary() == f.summary()
+            && r.special_constfn_mask() == f.special_constfn_mask()
+            && crate::object::field_rep::identity_with_special(r.rep)
+                == crate::object::field_rep::identity_with_special(f.rep)
+    }
+}
+
+/// The class family layout ShapeId `id` is an evaluation copy of
+/// ([`shape_is_evaluation_layout_of`]), or 0: the record's
+/// `evaluation_layout_of` fact ([`note_evaluation_layout`]). It is written
+/// only after the copy's facts were checked against the family's, and both
+/// are facts of their ShapeIds (an id never comes to name other facts; a
+/// family layout's record lives as long as the program), so it holds for
+/// the record's life. One directory read.
+#[inline]
+pub(crate) fn evaluation_layout_family(id: u32) -> u32 {
+    match ShapeSlab::agent_record_present(id) {
+        // SAFETY: a present record of this agent, read immediately.
+        Some(record) => unsafe { (*record).evaluation_layout_of },
+        None => 0,
+    }
+}
+
+/// After a prototype transition from family layout `family` (or from an
+/// evaluation copy of it) reached `id`: when `id` is an evaluation copy of
+/// that layout, its record names the family ([`evaluation_layout_family`]).
+pub(crate) fn note_evaluation_layout(id: u32, family: u32) {
+    if !shape_is_evaluation_layout_of(id, family) {
+        return;
+    }
+    if let Some(record) = ShapeSlab::agent_record_present(id) {
+        // SAFETY: a present record of this agent; one word, no allocation.
+        unsafe { (*record).evaluation_layout_of = family };
+    }
+}
+
 #[cfg(test)]
 mod readpath_decl_class_identity_tests {
     use super::*;

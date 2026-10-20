@@ -324,6 +324,7 @@ fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
     assert_eq!(std::mem::size_of::<ShapeRecord>(), 120, "record grew");
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
     assert_eq!(std::mem::offset_of!(ShapeRecord, element_kind), 72);
+    assert_eq!(std::mem::offset_of!(ShapeRecord, evaluation_layout_of), 76);
     assert_eq!(std::mem::offset_of!(ShapeRecord, probe), 80);
     assert_eq!(std::mem::offset_of!(ShapeRecord, colour_mask), 88);
     assert_eq!(std::mem::offset_of!(ShapeRecord, colour_store_mask), 104);

@@ -225,7 +225,7 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
     // `registry_latch.rs`) — that write happens-before this one in this
     // thread's program order, so the latch is already armed here.
     unsafe {
-        if crate::object::layout_desc::is_family_layout_word((*inst).parent_class_id) {
+        if crate::object::layout_desc::is_family_object(inst) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let object = scope.root_raw_mut_ptr(inst);
             let value = scope.root_nanbox_f64(classobj_value);
@@ -253,9 +253,7 @@ pub(crate) fn instance_pinned_constructing_class(obj: *const ObjectHeader) -> Op
         return None;
     }
     unsafe {
-        if !obj.is_null()
-            && crate::object::layout_desc::is_family_layout_word((*obj).parent_class_id)
-        {
+        if !obj.is_null() && crate::object::layout_desc::is_family_object(obj) {
             let meta = (*obj).meta;
             if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
                 return Some(f64::from_bits((*meta).private_evaluation_brand));

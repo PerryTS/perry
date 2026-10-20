@@ -1706,7 +1706,7 @@ pub(crate) fn family_birth_desc(class_id: u32, args: &[f64]) -> Option<*const Pe
 /// Class births allocate the complete fixed layout directly.
 /// Retained for a runtime construction path that already made a keyless shell.
 pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectHeader {
-    if obj.is_null() || is_family_layout_word((*obj).parent_class_id) {
+    if obj.is_null() || is_family_object(obj) {
         return obj;
     }
     let Some((_, desc)) = family_of_class((*obj).class_id) else {
@@ -1725,16 +1725,13 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
     let object = scope.root_raw_mut_ptr(obj);
     let proto = scope.root_nanbox_u64(prototype);
     let brand = scope.root_nanbox_u64(brand);
-    if prototype != 0 || brand.get_nanbox_u64() != 0 {
+    // A family object's evaluation brand lives in its meta record
+    // (`shapes::object_evaluation_brand`); its [[Prototype]] stays a shape
+    // fact, re-linked below once the object is on the layout.
+    if brand.get_nanbox_u64() != 0 {
         let (meta, current) =
             object.across_mut::<ObjectHeader, _>(|| super::object_meta_ensure(obj));
-        (*meta).prototype = proto.get_nanbox_u64();
         (*meta).private_evaluation_brand = brand.get_nanbox_u64();
-        crate::gc::runtime_write_barrier_slot(
-            meta as usize,
-            std::ptr::addr_of!((*meta).prototype) as usize,
-            (*meta).prototype,
-        );
         crate::gc::runtime_write_barrier_slot(
             meta as usize,
             std::ptr::addr_of!((*meta).private_evaluation_brand) as usize,
@@ -1751,7 +1748,15 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         *fields.add(i) = crate::value::TAG_HOLE;
     }
     super::shapes::stamp_object_shape_id_with_carrier_note(obj, d.layout_id);
-    obj
+    // A birth linked to another prototype (a class evaluation's, a
+    // newTarget's) keeps that link as its shape's identity: the funnel moves
+    // the object to that evaluation's copy of the layout (or off the family,
+    // for a link no class instance identity names).
+    let prototype = proto.get_nanbox_u64();
+    if prototype != 0 {
+        super::prototype_chain::object_link_class_evaluation_prototype(obj as usize, prototype);
+    }
+    object.get_raw_mut_ptr::<ObjectHeader>()
 }
 
 /// A key publication on a static family object
@@ -1774,13 +1779,10 @@ pub(crate) unsafe fn route_family_add(
     if word & LAYOUT_SHADOW_BIT != 0 {
         return false;
     }
-    let Some(index) = layout_index_of_word(word) else {
+    let Some(d) = family_desc_of(obj) else {
         return false;
     };
-    let d = &*desc_at(index);
-    if d.class_id == 0
-        || registered_layout_id(d.layout_id) != Some(word)
-        || live_inline_slot_count != d.slot_count
+    if live_inline_slot_count != d.slot_count
         || keys.arr().is_null()
         || keys.count() != d.slot_count + 1
     {
@@ -1825,7 +1827,8 @@ static KEEP_PERRY_LAYOUT_INDEX_PROBE: unsafe extern "C" fn(
     *const StaticAtom,
 ) -> i32 = perry_layout_index_probe;
 
-/// Does this word name a compiler-owned class instance layout?
+/// Does this word name a compiler-owned class instance layout (the family's
+/// own id; an evaluation's copy is an object fact, [`is_family_object`])?
 #[inline]
 pub(crate) fn is_family_layout_word(word: u32) -> bool {
     layout_index_of_word(word).is_some_and(|i| unsafe {
@@ -1873,10 +1876,71 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
         return None;
     }
     let word = (*obj).parent_class_id;
-    let index = layout_index_of_word(word)?;
+    let Some(index) = layout_index_of_word(word) else {
+        return evaluation_family_desc_of(word);
+    };
     let d = &*desc_at(index);
     (d.class_id != 0 && registered_layout_id(d.layout_id) == Some(layout_id_of_word(word)))
         .then_some(d)
+}
+
+/// Is `obj` a class family object: on its family layout, or on a class
+/// evaluation's copy of it ([`family_desc_of`])?
+///
+/// # Safety
+/// `obj` is a live object or null.
+#[inline]
+pub(crate) unsafe fn is_family_object(obj: *const ObjectHeader) -> bool {
+    family_desc_of(obj).is_some()
+}
+
+/// The family descriptor of an instance of a class EVALUATION (a class
+/// expression evaluated more than once): its layout word is not the family's
+/// own id but the evaluation's copy of that layout, the family's facts at
+/// the identity `MIXED | class | serial` that names the evaluation's
+/// prototype. The prototype funnel moves an instance there when it links it
+/// (`prototype_chain::object_link_class_evaluation_prototype`,
+/// [`adopt_family_layout`]), and the copy's record names the family layout
+/// it was taken from ([`note_family_relink`]): the class's layout or one of
+/// its creation-split layouts. Only a linked word (its kind bits) can be a
+/// copy, so every other receiver answers from its header word.
+///
+/// # Safety
+/// Reads the agent shape directory and this program's descriptor section.
+#[inline]
+unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDesc> {
+    let id = layout_id_of_word(word);
+    if !super::shapes::shape_word_may_be_linked(id) || !super::shapes::is_shape_id(id) {
+        return None;
+    }
+    match super::shapes::evaluation_layout_family(id) {
+        0 => None,
+        // The record names a registered class family layout: only
+        // [`note_family_relink`] writes it, from one.
+        family => {
+            debug_assert!(is_family_layout_word(family));
+            Some(&*desc_at(family - LAYOUT_BASE))
+        }
+    }
+}
+
+/// A prototype transition moved an object from layout word `previous` to
+/// ShapeId `id`. When `previous` is a class family layout, or an evaluation
+/// copy of one, and `id` has that family's facts at a class evaluation's
+/// identity, `id`'s record names the family
+/// (`shapes::note_evaluation_layout`), so its objects stay family objects.
+pub(crate) fn note_family_relink(previous: u32, id: u32) {
+    let previous = layout_id_of_word(previous);
+    let family = if is_family_layout_word(previous) {
+        previous
+    } else if super::shapes::shape_word_may_be_linked(previous) {
+        super::shapes::evaluation_layout_family(previous)
+    } else {
+        0
+    };
+    if family != 0 {
+        super::shapes::note_evaluation_layout(id, family);
+    }
 }
 
 struct FamilyDiag {
@@ -2331,19 +2395,23 @@ pub(crate) unsafe fn family_own_key_hashed(
     // shadow bit (an overflow sets it). Most objects are not family objects.
     let word = (*obj).parent_class_id;
     let index = word.wrapping_sub(LAYOUT_BASE);
-    if index >= LAYOUT_INDEX_LIMIT {
+    let d = if index < LAYOUT_INDEX_LIMIT {
+        let (start, end) = layout_bounds();
+        if index as usize >= end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>() {
+            return None;
+        }
+        let d = &*desc_at(index);
+        if d.class_id == 0 || registered_layout_id(d.layout_id) != Some(word) {
+            return None;
+        }
+        d
+    } else if word & LAYOUT_SHADOW_BIT == 0 {
+        // A class evaluation's copy of the layout: the same keys and slots.
+        evaluation_family_desc_of(word)?
+    } else {
         return None;
-    }
-    let (start, end) = layout_bounds();
-    if index as usize >= end.saturating_sub(start) / std::mem::size_of::<PerryLayoutDesc>() {
-        return None;
-    }
-    let d = &*desc_at(index);
-    if d.class_id == 0
-        || registered_layout_id(d.layout_id) != Some(word)
-        || d.index.is_null()
-        || d.keys.is_null()
-    {
+    };
+    if d.index.is_null() || d.keys.is_null() {
         return None;
     }
     let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);

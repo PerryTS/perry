@@ -63,8 +63,9 @@ mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
 mod shapes_prototype;
 pub(crate) use shapes_linked_birth::{
-    complete_layout_generation, declaration_parent_identity, mutation_generation,
-    pristine_declaration_holder, stamp_linked_final_shape, stamp_linked_final_shape_requested,
+    complete_layout_generation, declaration_parent_identity, evaluation_layout_family,
+    mutation_generation, note_evaluation_layout, pristine_declaration_holder,
+    shape_is_evaluation_layout_of, stamp_linked_final_shape, stamp_linked_final_shape_requested,
 };
 #[path = "layout_probe.rs"]
 pub(crate) mod layout_probe;
@@ -414,7 +415,7 @@ impl ShapeRecordRef {
     /// asked before any per-key attribute lookup.
     #[inline]
     pub(crate) fn element_kind(self) -> u64 {
-        unsafe { (*self.0.as_ptr()).element_kind }
+        unsafe { u64::from((*self.0.as_ptr()).element_kind) }
     }
 
     pub(crate) fn summary(self) -> u8 {
@@ -1347,6 +1348,7 @@ static EXOTIC_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
 /// memory: a kind's untouched pages are never allocated.
 pub(crate) const SHAPE_ID_KIND_SHIFT: u32 = 20;
 pub(crate) const SHAPE_ID_KIND_MASK: u32 = 3 << SHAPE_ID_KIND_SHIFT;
+const _: () = assert!(SHAPE_ID_KIND_MASK == crate::codegen_abi::SHAPE_ID_KIND_MASK);
 pub(crate) const SHAPE_ID_KIND_PLAIN: u32 = 0;
 pub(crate) const SHAPE_ID_KIND_WORD: u32 = 1;
 pub(crate) const SHAPE_ID_KIND_NULL: u32 = 2;
@@ -4452,6 +4454,9 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         super::field_rep::normalized_without_special(current.rep),
         None,
     ));
+    // A class family instance keeps its family's layout at the new identity:
+    // the record names the family it is a copy of (`layout_desc::family_desc_of`).
+    super::layout_desc::note_family_relink(object_shape_stamp(obj), id);
     stamp_same_keys_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id

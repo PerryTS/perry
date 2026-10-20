@@ -48,7 +48,7 @@ pub(crate) fn evaluation_holder_slot(
 pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHeader) -> u64 {
     // A class family keeps its layout word for life, so its evaluation holder
     // lives in its metadata (`stamp_evaluation_holder`), not in its shape.
-    if crate::object::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+    if crate::object::layout_desc::is_family_object(obj) {
         let meta = (*obj).meta;
         if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
             return (*meta).private_evaluation_brand;
@@ -71,7 +71,7 @@ pub(crate) unsafe fn stamp_evaluation_holder(obj: *mut crate::object::ObjectHead
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(obj);
     let holder = scope.root_nanbox_u64(holder);
-    if crate::object::layout_desc::is_family_layout_word((*obj).parent_class_id) {
+    if crate::object::layout_desc::is_family_object(obj) {
         let (meta, _) = receiver.across_mut::<crate::object::ObjectHeader, _>(|| {
             crate::object::object_meta_ensure(obj)
         });

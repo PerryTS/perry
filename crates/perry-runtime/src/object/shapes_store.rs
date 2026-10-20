@@ -162,7 +162,16 @@ pub(crate) struct ShapeRecord {
     pub(super) proto_cell: u64,
     /// Element properties described by this immutable key prefix: 0 plain,
     /// 1 indexed/length descriptors, 2 a per-object mutable key list.
-    pub(super) element_kind: u64,
+    pub(super) element_kind: u32,
+    /// The class family layout (its ShapeId, `layout_desc`) this record is a
+    /// class evaluation's copy of: the family's keys, slots, holes, kind,
+    /// attributes and lanes at the identity `MIXED | class | serial` naming
+    /// that evaluation's prototype (`shapes::shape_is_evaluation_layout_of`),
+    /// or 0. Written once, by the prototype transition that reached the
+    /// record from the family layout, after checking those facts; a function
+    /// of the two records' immutable facts, never identity. Offset 76, in
+    /// what was the high half of `element_kind`.
+    pub(super) evaluation_layout_of: u32,
     /// The key index of this record's key list for the unknown-receiver
     /// probe (`object/layout_probe.rs`): 0 until the first probe derives it
     /// from the record's immutable key list, then `PROBE_*` bits plus the
@@ -252,6 +261,7 @@ const _: () = assert!(super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTH
 
 const _: () = assert!(std::mem::size_of::<ShapeRecord>() == crate::codegen_abi::SHAPE_RECORD_SIZE);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, probe) == 80);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, evaluation_layout_of) == 76);
 const _: () = assert!(
     std::mem::offset_of!(ShapeRecord, colour_mask) == crate::codegen_abi::SHAPE_RECORD_COLOUR_MASK
 );
@@ -284,6 +294,7 @@ impl ShapeRecord {
         extras: 0,
         proto_cell: 0,
         element_kind: 0,
+        evaluation_layout_of: 0,
         probe: 0,
         colour_mask: [0; 2],
         colour_store_mask: [0; 2],
@@ -407,6 +418,7 @@ impl ShapeRecord {
             extras: 0,
             proto_cell: 0,
             element_kind: 0,
+            evaluation_layout_of: 0,
             probe: 0,
             colour_mask: [0; 2],
             colour_store_mask: [0; 2],

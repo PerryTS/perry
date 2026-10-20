@@ -2349,7 +2349,7 @@ unsafe fn probe_add(
         || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
         // A family object keeps its layout word for life: a key its layout
         // does not name joins its overflow (`layout_desc::family_store`).
-        || crate::object::layout_desc::is_family_layout_word((*obj).parent_class_id)
+        || crate::object::layout_desc::is_family_object(obj)
     {
         return false;
     }
