@@ -221,7 +221,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         let target = crate::closure::js_closure_get_capture_f64(closure, 0);
         return js_instanceof_dynamic(value, target);
     }
-    let bits = type_ref.to_bits();
     // `class_ref_id` requires `is_class_id_registered`, not just the tag —
     // a user-crafted NaN payload sharing the 0x7FFE band (a real JS number
     // constructed via `DataView.setFloat64`, not a codegen-emitted class
@@ -252,25 +251,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // evaluation. Compare the actual prototype objects so sibling evaluations
     // remain distinct and a chain through earlier evaluations still matches.
     if matches!(rhs.kind, RhsKind::ClassObject) {
-        // Static/forward `new C()` sites can still construct by template id
-        // without attaching an evaluated prototype. Retain that representation's
-        // class-id check; a recorded prototype (a fact of the receiver's
-        // shape) is authoritative.
-        let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-        let template = js_object_get_class_id(obj);
-        // #11759 (c′): when the template's class function object is the
-        // declaration's first evaluation, a template-id instance belongs to
-        // THAT evaluation, never to this later one: the chain decides.
-        if super::prototype_chain::object_static_prototype(value_addr(value)).is_none()
-            && !crate::object::class_value::class_value_is_first_evaluation(template)
-        {
-            return super::static_dispatch::instanceof_classified(
-                value,
-                template,
-                primitive,
-                lhs_non_proxy,
-            );
-        }
+        // A receiver with a CLASS prototype identity still has a real chain:
+        // its declaration prototype can inherit from this exact evaluation.
+        // The RHS template id names code, not this evaluation's prototype;
+        // substituting it loses that edge and conflates sibling evaluations.
         return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
             crate::value::TAG_TRUE
         } else {
@@ -641,4 +625,54 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         };
     }
     js_instanceof_dynamic_tail(value, type_ref)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subclass_instanceof_uses_the_evaluated_parent_prototype() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const PARENT: u32 = 0x6B4B;
+        const CHILD: u32 = 0x6B4C;
+        unsafe {
+            crate::object::js_register_class_id(PARENT);
+            crate::object::js_register_class_id(CHILD);
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let parent = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_class_evaluation_object(PARENT, 6, 0, std::ptr::null()),
+        ));
+        let other = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_class_evaluation_object(PARENT, 6, 0, std::ptr::null()),
+        ));
+        // Both values name the same code template, but distinct evaluations.
+        assert_eq!(
+            crate::object::class_registry::dynamic_value_class_id(parent.get_nanbox_f64()),
+            PARENT
+        );
+        assert_eq!(
+            crate::object::class_registry::dynamic_value_class_id(other.get_nanbox_f64()),
+            PARENT
+        );
+        crate::object::js_register_class_parent_dynamic(CHILD, parent.get_nanbox_f64());
+        let instance = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(CHILD, 0) as i64,
+        ));
+        assert!(
+            crate::object::prototype_chain::object_static_prototype(value_addr(
+                instance.get_nanbox_f64()
+            ))
+            .is_none()
+        );
+        assert_eq!(
+            js_instanceof_dynamic(instance.get_nanbox_f64(), parent.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_TRUE
+        );
+        assert_eq!(
+            js_instanceof_dynamic(instance.get_nanbox_f64(), other.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_FALSE
+        );
+    }
 }

@@ -1,0 +1,3 @@
+Fix `instanceof` for subclasses of classes returned by function calls, including namespace-imported IIFE class expressions. The evaluated class object's prototype now determines membership even when the instance uses a declared-class prototype link. Previously that path substituted the shared code-template ID, so the constructor and prototype edges could be correct while `instanceof` returned false. Separate factory evaluations retain distinct identities.
+
+Regression coverage includes cross-module namespace and named imports, class expressions and declarations, repeated factory evaluations, and classes inheriting from `Error`.
