@@ -90,8 +90,9 @@ pub(super) fn match_flags(
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
-    if let Some(re) = crate::regex::instance::builtin(value) {
-        // The builtin fact neither collects nor calls user code.
+    if let Some(re) = crate::object::regex_read_sites::flag_receiver(value) {
+        // The flag accessors are the builtins over this receiver's internal
+        // flags: neither collects nor calls user code.
         let data = unsafe { &*crate::regex::instance::builtin_data(re) };
         return Ok((data.global, data.unicode));
     }
