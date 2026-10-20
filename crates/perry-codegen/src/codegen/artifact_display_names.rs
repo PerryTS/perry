@@ -133,7 +133,8 @@ pub(super) fn extend_body_symbol_display_names(
     //
     // Only those two kinds. A registration takes the clone's address, which
     // keeps it alive: the speculative per-shape and per-receiver clones
-    // (`$pshape`, `$receiverN`) are often dead after optimization, and
+    // (the proven-`this` and `$receiverN` clones) are often dead after
+    // optimization, and
     // registering them kept 64 KB of otherwise-deleted code in a Zod binary.
     // Sorted, so the registration order (and the emitted IR) does not depend
     // on hash order.

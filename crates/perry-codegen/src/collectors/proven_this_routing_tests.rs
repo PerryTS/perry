@@ -1957,14 +1957,24 @@ fn tower_selects_by_prototype_constant() {
     assert!(!site.contains("call void @js_proto_constant_contract_check("));
 }
 
-/// A census that writes the method name withdraws the constant: the tower
-/// keeps no compiled case and every receiver takes the generic site.
+/// A program with a dynamic write may write any prototype slot: the tower
+/// keeps its compiled cases, each behind its holders' shadow bits
+/// (`proto_constants::holder_constant`), so a written holder selects nothing
+/// and its receivers take the generic site.
 #[test]
-fn a_written_method_name_is_not_a_prototype_constant() {
+fn a_dynamic_write_cases_behind_the_holder_shadow_bits() {
     let mut census = perry_hir::ProtoCensus::default();
     census.dynamic_write = true;
     let ir = crate::proto_constants::with_test_census(census, || {
         emit_static(&tower_site_module(), false)
     });
-    assert!(!ir.contains("pconst.case"), "{ir}");
+    let site = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("pconst.selected"))
+        .expect("the function holding the selecting site");
+    assert!(site.contains("pconst.case"), "{site}");
+    assert!(site.contains("holder.page"), "{site}");
+    // Without the dynamic write the slots are constants: no holder test.
+    let ir = emit_static(&tower_site_module(), false);
+    assert!(!ir.contains("holder.page"), "{ir}");
 }
