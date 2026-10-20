@@ -1,13 +1,29 @@
 //! Executable literals are data, not startup allocations. The linker folds
 //! short names by their complete byte spelling, without a runtime index.
 use crate::{module::LlModule, strings::StringEntry};
+use sha2::{Digest, Sha256};
+
+/// Literals up to this many bytes are named by their hex spelling (at most
+/// twice as many characters). A longer one is named by its length and its
+/// SHA-256: a hex spelling of a multi-megabyte literal (a bundled minified
+/// script) made a symbol name ld64 rejects (`name.size() <= maxLength` in
+/// `makeSymbolStringInPlace`). Equal bytes still give equal names, so the
+/// linker folds them across modules as before; the `s` cannot occur in a
+/// hex spelling, so the two forms never meet.
+const SPELLED_NAME_MAX_BYTES: usize = 256;
 
 const GC_TYPE_STRING: u8 = 3;
 const IMAGE_GC_FLAGS: u8 = 0x15;
 const STRING_IMAGE_MARKER: u16 = 0x494d;
 
 pub(super) fn name(entry: &StringEntry) -> String {
-    let spelling: String = entry.bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let spelling: String = if entry.bytes.len() <= SPELLED_NAME_MAX_BYTES {
+        entry.bytes.iter().map(|b| format!("{b:02x}")).collect()
+    } else {
+        let digest = Sha256::digest(&entry.bytes);
+        let hash: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        format!("s{}_{}", entry.bytes.len(), hash)
+    };
     format!(
         "perry_image_literal_{}_{}",
         u8::from(entry.is_wtf8),
@@ -147,5 +163,26 @@ mod tests {
         emit(&mut am, a.entry(wi));
         assert!(am.to_ir().contains("i8 21, i16 18765"));
         assert!(am.to_ir().contains("i32 1, i32 3, i32 3, i32 0, i32 5"));
+    }
+
+    #[test]
+    fn long_literal_names_are_bounded_and_content_addressed() {
+        let mut a = StringPool::with_prefix("a".into());
+        let mut b = StringPool::with_prefix("b".into());
+        let short = a.intern("length");
+        assert_eq!(name(a.entry(short)), "perry_image_literal_0_6c656e677468");
+        let edge = "x".repeat(SPELLED_NAME_MAX_BYTES);
+        let edge_id = a.intern(&edge);
+        assert!(name(a.entry(edge_id)).ends_with(&"78".repeat(SPELLED_NAME_MAX_BYTES)));
+        let big = "/*! minified */".repeat(400_000);
+        let (ai, bi) = (a.intern(&big), b.intern(&big));
+        let long = name(a.entry(ai));
+        assert!(long.len() < 128, "{} bytes", long.len());
+        assert!(long.starts_with(&format!("perry_image_literal_0_s{}_", big.len())));
+        assert_eq!(long, name(b.entry(bi)));
+        let mut other = big.clone();
+        other.replace_range(0..1, "?");
+        let oi = a.intern(&other);
+        assert_ne!(long, name(a.entry(oi)));
     }
 }
