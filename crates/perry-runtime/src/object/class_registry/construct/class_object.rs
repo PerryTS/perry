@@ -134,7 +134,12 @@ fn construct_class_object_instance(
     let (inst, width) = match template {
         Some(TemplateInstance::Linked(inst)) => return inst,
         Some(TemplateInstance::Birth(inst, width)) => (inst, width),
-        None => allocate_class_instance(class_cid, args),
+        None => {
+            if let Some(inst) = born_on_evaluation_layout(class_value, class_cid, cell, args) {
+                return inst;
+            }
+            allocate_class_instance(class_cid, args)
+        }
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_nanbox_f64(class_value);
@@ -146,18 +151,40 @@ fn construct_class_object_instance(
     let prototype =
         unsafe { super::super::field_get_set::class_object_prototype_value(class_obj()) };
     let prototype = scope.root_nanbox_u64(prototype.bits());
+    // The evaluation's brand and prototype are one transition (one shape
+    // minted per evaluation); the stamp below then has nothing to do.
+    let holder_brand =
+        unsafe { crate::object::shapes::prepare_evaluation_holder(class.get_nanbox_f64().to_bits()) };
     let birth = instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         crate::object::shapes::object_shape_stamp(instance)
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
-        super::super::prototype_chain::object_link_class_evaluation_prototype(
+        super::super::prototype_chain::object_link_class_evaluation_prototype_branded(
             instance as usize,
             prototype.get_nanbox_u64(),
+            holder_brand,
         )
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
-        crate::object::shapes::stamp_evaluation_holder(instance, class.get_nanbox_f64().to_bits());
+        let holder = class.get_nanbox_f64().to_bits();
+        if crate::object::shapes::object_evaluation_brand(instance) != holder {
+            crate::object::shapes::stamp_evaluation_holder(instance, holder);
+        }
     });
+    // A class family instance now carries its evaluation's copy of the
+    // family layout, branded: the evaluation names it for its next births.
+    let copy = instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
+        evaluation_layout_to_record(instance)
+    });
+    if let Some(copy) = copy {
+        // The add roots the class object itself and may move it.
+        unsafe {
+            super::super::field_get_set::class_object_set_instance_layout(
+                class_obj() as *mut ObjectHeader,
+                copy,
+            )
+        };
+    }
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         super::super::field_get_set::record_instance_link(
             class_obj(),
@@ -168,6 +195,55 @@ fn construct_class_object_instance(
         );
         instance
     })
+}
+
+/// `new` through class evaluation `class_value` (template `class_cid`) of a
+/// class family: an instance born on the layout the evaluation names
+/// (`InternalKey::EvaluationInstanceLayout`), its copy of the family layout
+/// that `family_birth_desc` picks for `args`, already naming the
+/// evaluation's prototype and brand. One allocation: no prototype funnel, no
+/// shape intern, no metadata record. `None` when the evaluation names none
+/// yet, or one of another creation-split layout, or one this agent no
+/// longer has (`shapes::evaluation_copy_birth_edges`): the caller links the
+/// ordinary way and the evaluation records the result.
+fn born_on_evaluation_layout(
+    class_value: f64,
+    class_cid: u32,
+    cell: Option<super::super::field_get_set::TemplateCell>,
+    args: &[f64],
+) -> Option<*mut ObjectHeader> {
+    let cell = cell?;
+    let class = crate::value::JSValue::from_bits(class_value.to_bits()).as_pointer::<ObjectHeader>();
+    let copy = unsafe { super::super::field_get_set::evaluation_instance_layout(cell, class) }?;
+    let desc = crate::object::layout_desc::family_birth_desc(class_cid, args)?;
+    let family = crate::object::layout_desc::registered_layout_id(unsafe {
+        crate::object::layout_desc::load_layout_id(desc)
+    })?;
+    let (prototype, holder) = crate::object::shapes::evaluation_copy_birth_edges(copy, family)?;
+    let inst = unsafe { crate::object::layout_desc::alloc_family_layout_copy(desc, copy) };
+    // As the ordinary link and brand stamp do: the edges live in the record.
+    crate::gc::runtime_shade_external_edge(prototype);
+    crate::gc::runtime_shade_external_edge(holder);
+    Some(inst)
+}
+
+/// The evaluation copy of a class family layout `inst` was just linked and
+/// branded onto, for its class object to name: meta-less, so the copy is
+/// everything the birth was given.
+unsafe fn evaluation_layout_to_record(inst: *const ObjectHeader) -> Option<u32> {
+    if !(*inst).meta.is_null()
+        || crate::object::layout_desc::family_of_class((*inst).class_id).is_none()
+    {
+        return None;
+    }
+    let word = (*inst).parent_class_id;
+    if word & crate::object::layout_desc::LAYOUT_SHADOW_BIT != 0 {
+        return None;
+    }
+    let copy = crate::object::shapes::object_shape_stamp(inst);
+    (crate::object::shapes::evaluation_layout_family(copy) != 0
+        && crate::object::shapes::object_evaluation_brand(inst) != 0)
+        .then_some(copy)
 }
 
 /// Reserve declared/learned capacity; constructor stores and field definitions

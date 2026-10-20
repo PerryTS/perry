@@ -319,6 +319,25 @@ pub(crate) fn object_link_class_evaluation_prototype(obj_ptr: usize, proto_bits:
     object_set_static_prototype_impl(obj_ptr, proto_bits, PrototypeLinkKind::ClassEvaluation)
 }
 
+/// [`object_link_class_evaluation_prototype`] of a class evaluation's fresh
+/// instance that also takes the evaluation's holder brand `holder_brand`
+/// (`shapes::prepare_evaluation_holder`) in the same shape transition. A
+/// receiver whose prototype is no shape fact takes the link alone; the
+/// caller then stamps the brand as usual (`shapes::stamp_evaluation_holder`,
+/// a no-op on a receiver that has it).
+pub(crate) fn object_link_class_evaluation_prototype_branded(
+    obj_ptr: usize,
+    proto_bits: u64,
+    holder_brand: u64,
+) {
+    object_set_static_prototype_impl_with(
+        obj_ptr,
+        proto_bits,
+        PrototypeLinkKind::ClassEvaluation,
+        holder_brand,
+    )
+}
+
 /// Install Object.create's individual chain before the object escapes. It
 /// needs the user-override dispatch guards, but cannot invalidate any existing
 /// receiver's store plans or element-shape proofs.
@@ -327,6 +346,17 @@ pub(crate) fn object_link_created_prototype(obj_ptr: usize, proto_bits: u64) {
 }
 
 fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: PrototypeLinkKind) {
+    object_set_static_prototype_impl_with(obj_ptr, proto_bits, link_kind, 0)
+}
+
+/// [`object_set_static_prototype_impl`] whose shape transition also gives the
+/// receiver evaluation holder brand `holder_brand` (0: none).
+fn object_set_static_prototype_impl_with(
+    obj_ptr: usize,
+    proto_bits: u64,
+    link_kind: PrototypeLinkKind,
+    holder_brand: u64,
+) {
     let user_override = matches!(
         link_kind,
         PrototypeLinkKind::UserOverride | PrototypeLinkKind::FreshObject
@@ -508,7 +538,12 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                     proto_bits,
                 );
             }
-            crate::object::shapes::transition_object_shape_prototype(obj, proto_id, proto_bits);
+            crate::object::shapes::transition_object_shape_prototype_with_holder(
+                obj,
+                proto_id,
+                proto_bits,
+                holder_brand,
+            );
             // The receiver may already be traced by an incremental mark; its
             // new edge lives in its shape record, outside the heap.
             crate::gc::runtime_shade_external_edge(proto_bits);

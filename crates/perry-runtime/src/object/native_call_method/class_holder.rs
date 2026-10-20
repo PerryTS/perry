@@ -199,23 +199,46 @@ pub(crate) unsafe fn chain_method(start: *const ObjectHeader, key: &MethodKey<'_
         }
         // A family object with no overflow: its layout's index answers, and
         // a slot holding the hole is an absent key.
-        let family = crate::object::layout_desc::family_own_key(holder, key.bytes);
-        if let Some(Some((_, slot))) = family {
+        let family_data = |family: Option<Option<(u32, u32)>>| {
+            let Some(Some((_, slot))) = family else {
+                return None;
+            };
             let live = crate::object::object_live_slot_count(holder);
             let value =
                 crate::object::field_get_set::object_field_at_with_live(holder, slot, live).bits();
-            if value != crate::value::TAG_HOLE {
-                return ChainMethod::Data {
-                    value,
-                    body: None,
-                    holder,
-                    slot: (slot < live).then_some(slot),
-                };
-            }
+            (value != crate::value::TAG_HOLE).then_some(ChainMethod::Data {
+                value,
+                body: None,
+                holder,
+                slot: (slot < live).then_some(slot),
+            })
+        };
+        // A static family word answers from its layout, with no record read.
+        let word = (*holder).parent_class_id;
+        let static_family = crate::object::layout_desc::word_in_layout_index(word);
+        let mut family = if static_family {
+            crate::object::layout_desc::family_own_key(holder, key.bytes)
+        } else {
+            None
+        };
+        if let Some(data) = family_data(family) {
+            return data;
         }
         let Some(record) = crate::object::shapes::object_shape_record(holder) else {
             return ChainMethod::Get { holder };
         };
+        // A class evaluation's copy of a family layout: the record this walk
+        // reads anyway names the family (`layout_desc::family_desc_of`).
+        if !static_family && word & crate::object::layout_desc::LAYOUT_SHADOW_BIT == 0 {
+            if let Some(d) =
+                crate::object::layout_desc::evaluation_layout_desc(record.evaluation_layout_of())
+            {
+                family = crate::object::layout_desc::desc_own_key(d, key.bytes, None);
+                if let Some(data) = family_data(family) {
+                    return data;
+                }
+            }
+        }
         let keys = record.keys() as usize as *const ArrayHeader;
         // A layout key lives in its fixed slot, and the hole marker there is
         // its absence (§3.2); any other own key of a shadowed holder is in

@@ -214,8 +214,9 @@ mod class_object_template;
 #[cfg(test)]
 pub(crate) use class_object_template::js_class_evaluation_object;
 pub(crate) use class_object_template::{
-    class_object_add_internal_for, class_object_template_cell, record_instance_link,
-    template_instance, InternalKey, TemplateCell, TemplateInstance, CLASS_TEMPLATE_KEY,
+    class_object_add_internal_for, class_object_set_instance_layout, class_object_template_cell,
+    evaluation_instance_layout, record_instance_link, template_instance, InternalKey, TemplateCell,
+    TemplateInstance, CLASS_TEMPLATE_KEY,
 };
 mod crypto_key;
 pub(crate) mod entries_shape;
@@ -342,10 +343,10 @@ pub(crate) use ic_miss::{
     private_lexical_brand_push_at, private_lexical_brand_unwind_to,
     private_member_access_hints_check_marks, private_member_access_hints_unwind_to,
     private_member_call_by_name, private_member_get_by_name, private_member_set_by_name,
-    private_namespace_bytes,
-    scan_private_lexical_brand_roots_mut, stamp_private_birth_evaluation_brand,
-    stamp_private_evaluation_brand, take_private_method_call_hint, take_private_method_owner_hint,
-    IntrinsicPrivateReadSite, PrivateHintBrandScope,
+    private_namespace_bytes, scan_private_lexical_brand_roots_mut,
+    stamp_private_birth_evaluation_brand, stamp_private_evaluation_brand,
+    take_private_method_call_hint, take_private_method_owner_hint, IntrinsicPrivateReadSite,
+    PrivateHintBrandScope,
 };
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,

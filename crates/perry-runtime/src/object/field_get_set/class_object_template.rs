@@ -321,7 +321,16 @@ pub(crate) enum InternalKey {
     /// The names this evaluation's definition gave the class's computed
     /// members (`class_registry::declarations`).
     ComputedNames,
+    /// The ShapeId this evaluation's class family instances are born on: the
+    /// evaluation's copy of the family layout (`layout_desc::family_desc_of`),
+    /// which names the evaluation's prototype and carries its brand
+    /// ([`evaluation_instance_layout`]).
+    EvaluationInstanceLayout,
 }
+
+/// The own-property key of [`InternalKey::EvaluationInstanceLayout`].
+pub(crate) const CLASS_EVALUATION_INSTANCE_LAYOUT_KEY: &[u8] =
+    b"#<perry:class-evaluation-instance-layout>";
 
 impl InternalKey {
     pub(crate) fn bytes(self) -> &'static [u8] {
@@ -333,6 +342,7 @@ impl InternalKey {
             InternalKey::ComputedNames => {
                 crate::object::class_registry::declarations::CLASS_COMPUTED_NAMES_KEY
             }
+            InternalKey::EvaluationInstanceLayout => CLASS_EVALUATION_INSTANCE_LAYOUT_KEY,
         }
     }
 }
@@ -1229,10 +1239,19 @@ unsafe fn recorded_evaluation_prototype_in(
         return None;
     }
     let shape = crate::object::shapes::object_shape_stamp(obj);
+    if shape == 0 {
+        return None;
+    }
+    // The evaluation's instance layout is added after its prototype, so a
+    // class object one recorded layout edge past the prototype edge's target
+    // still holds the prototype in that target's slot.
+    let below = recorded_edge_into(cell, shape, InternalKey::EvaluationInstanceLayout)
+        .map(|(from, _)| from);
     let key_word = InternalKey::EvaluationPrototype as u64 + 1;
     for i in 0..MAX_TEMPLATE_EDGES {
         let (ids, at) = (cell.get(W_EDGES + 2 * i), cell.get(W_EDGES + 2 * i + 1));
-        if at >> 32 == key_word && (ids >> 32) as u32 == shape && shape != 0 {
+        let to = (ids >> 32) as u32;
+        if at >> 32 == key_word && (to == shape || Some(to) == below) {
             // The recorded target carries the key in inline slot `at`.
             let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
             let bits = *fields.add(at as u32 as usize);
@@ -1242,6 +1261,76 @@ unsafe fn recorded_evaluation_prototype_in(
         }
     }
     None
+}
+
+/// The template's recorded transition by `key` whose target is `to`:
+/// `(from, slot)`.
+#[inline]
+unsafe fn recorded_edge_into(cell: TemplateCell, to: u32, key: InternalKey) -> Option<(u32, u32)> {
+    let key_word = key as u64 + 1;
+    (0..MAX_TEMPLATE_EDGES).find_map(|i| {
+        let (ids, at) = (cell.get(W_EDGES + 2 * i), cell.get(W_EDGES + 2 * i + 1));
+        (at >> 32 == key_word && (ids >> 32) as u32 == to).then_some((ids as u32, at as u32))
+    })
+}
+
+/// Name ShapeId `copy` as the layout class evaluation object `obj`'s family
+/// instances are born on ([`InternalKey::EvaluationInstanceLayout`]). The key
+/// is added holding `undefined` and then given the id, as the template key
+/// is ([`add_class_template_key`]): its slot's lane stays `Any`, like every
+/// other internal slot of the template's class-object shapes, so the
+/// addition is a transition the template records (a Number added as a new
+/// key would claim an `F64` lane, which the template does not record). The
+/// caller roots nothing: `obj` is read back from a handle after the add.
+///
+/// # Safety
+/// `obj` is a live class object.
+pub(crate) unsafe fn class_object_set_instance_layout(obj: *mut ObjectHeader, copy: u32) {
+    let key = InternalKey::EvaluationInstanceLayout;
+    let value = f64::from(copy).to_bits();
+    let cell = class_object_template_cell(obj).filter(|cell| cell.owned());
+    let store = |obj: *mut ObjectHeader| {
+        let shape = crate::object::shapes::object_shape_stamp(obj);
+        let edge = cell.and_then(|cell| recorded_edge_into(cell, shape, key));
+        if let Some((_, slot)) = edge {
+            crate::object::slot_store::store_object_field_slot(obj, slot as usize, value);
+        }
+        edge.is_some()
+    };
+    if store(obj) {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    class.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        class_object_add_internal(obj, key, f64::from_bits(crate::value::TAG_UNDEFINED), cell)
+    });
+    class.with_mut_ptr::<ObjectHeader, _>(|obj| store(obj));
+}
+
+/// The ShapeId class object `obj` (template cell `cell`) names for its
+/// family instances' births ([`InternalKey::EvaluationInstanceLayout`]),
+/// read from the slot the template's recorded transition put it in while
+/// `obj` carries that transition's target. `None` otherwise: the birth
+/// takes the ordinary link and records it.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn evaluation_instance_layout(
+    cell: TemplateCell,
+    obj: *const ObjectHeader,
+) -> Option<u32> {
+    if !cell.owned() {
+        return None;
+    }
+    let shape = crate::object::shapes::object_shape_stamp(obj);
+    if shape == 0 {
+        return None;
+    }
+    let (_, slot) = recorded_edge_into(cell, shape, InternalKey::EvaluationInstanceLayout)?;
+    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let value = f64::from_bits(*fields.add(slot as usize));
+    (value >= 1.0 && value <= f64::from(u32::MAX) && value.fract() == 0.0).then_some(value as u32)
 }
 
 /// What the template offers `new` through one of its class objects.

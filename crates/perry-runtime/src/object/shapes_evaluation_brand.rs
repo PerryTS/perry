@@ -46,13 +46,16 @@ pub(crate) fn evaluation_holder_slot(
 
 /// No prototype walk: the shape names this evaluation's shared holder.
 pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHeader) -> u64 {
-    // A class family keeps its layout word for life, so its evaluation holder
-    // lives in its metadata (`stamp_evaluation_holder`), not in its shape.
-    if crate::object::layout_desc::is_family_object(obj) {
-        let meta = (*obj).meta;
-        if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
-            return (*meta).private_evaluation_brand;
-        }
+    // An instance on its class family's own layout word keeps its evaluation
+    // holder in its metadata (`stamp_evaluation_holder`); one on a class
+    // evaluation's copy of the layout carries it in its shape, as every
+    // other receiver does.
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && (*meta).private_evaluation_brand != 0
+        && crate::object::layout_desc::is_family_object(obj)
+    {
+        return (*meta).private_evaluation_brand;
     }
     let Some(identity) = shape_brands_by_id(object_shape_stamp(obj)).and_then(holder_identity)
     else {
@@ -65,13 +68,43 @@ pub(crate) unsafe fn object_evaluation_brand(obj: *const crate::object::ObjectHe
     holder.bits()
 }
 
+/// May an instance of class family layout `family` be born directly on
+/// ShapeId `copy`, which a class evaluation's class object names for its
+/// instances (`InternalKey::EvaluationInstanceLayout`)? Yes when `copy` is a
+/// present record of this agent that is an evaluation copy of `family`
+/// (`evaluation_layout_family`) and the identity words of its prototype and of
+/// its evaluation holder still name their objects. ShapeIds are never
+/// reused, so a present `copy` has the facts it had when the class object
+/// recorded it: the evaluation's prototype and brand. Returns the prototype
+/// and holder words, which the birth shades as the ordinary link and brand
+/// stamp do. One directory read.
+pub(crate) fn evaluation_copy_birth_edges(copy: u32, family: u32) -> Option<(u64, u64)> {
+    let record = ShapeSlab::agent_record_present(copy)?;
+    // SAFETY: a present record of this agent, read immediately.
+    let record = unsafe { &*record };
+    if record.evaluation_layout_of != family || family == 0 {
+        return None;
+    }
+    let prototype = identity_prototype_word(record.proto_id);
+    let holder = identity_prototype_word(holder_identity(record.brands())?);
+    (prototype != 0 && holder != 0).then_some((prototype, holder))
+}
+
 /// Called while a new class instance is still in its linked birth layout.
 /// Subsequent transitions preserve the identity through receiver_facts.
 pub(crate) unsafe fn stamp_evaluation_holder(obj: *mut crate::object::ObjectHeader, holder: u64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(obj);
     let holder = scope.root_nanbox_u64(holder);
-    if crate::object::layout_desc::is_family_object(obj) {
+    // A family instance on its family's own layout word keeps that word
+    // (`layout_desc::family_store`), so the holder goes to its metadata. On a
+    // class evaluation's copy of the layout the brand is a shape fact like
+    // every receiver's: the brand transition keeps the copy a copy
+    // (`transition_object_shape_add_brand`), and the evaluation's later
+    // instances are born on the branded copy (`construct_class_object_instance`).
+    if crate::object::layout_desc::is_family_layout_word(
+        crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id),
+    ) {
         let (meta, _) = receiver.across_mut::<crate::object::ObjectHeader, _>(|| {
             crate::object::object_meta_ensure(obj)
         });
@@ -83,6 +116,19 @@ pub(crate) unsafe fn stamp_evaluation_holder(obj: *mut crate::object::ObjectHead
         );
         return;
     }
+    let brand = prepare_evaluation_holder(holder.get_nanbox_u64());
+    receiver.with_mut_ptr::<crate::object::ObjectHeader, _>(|receiver| {
+        transition_object_shape_add_brand(receiver, brand);
+    });
+}
+
+/// The evaluation holder brand of class object `holder` (NaN-boxed), with
+/// its identity word written and shaded: what a shape naming it needs
+/// before any receiver carries it. Can allocate (the holder's identity
+/// serial); the caller keeps its own receiver rooted.
+pub(crate) unsafe fn prepare_evaluation_holder(holder: u64) -> u64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let holder = scope.root_nanbox_u64(holder);
     let class = crate::JSValue::from_bits(holder.get_nanbox_u64())
         .as_pointer::<crate::object::ObjectHeader>();
     let identity = crate::object::proto_validity::ensure_object_identity_serial(
@@ -94,9 +140,7 @@ pub(crate) unsafe fn stamp_evaluation_holder(obj: *mut crate::object::ObjectHead
     );
     write_identity_word(identity, holder.get_nanbox_u64());
     crate::gc::runtime_shade_external_edge(holder.get_nanbox_u64());
-    receiver.with_mut_ptr::<crate::object::ObjectHeader, _>(|receiver| {
-        transition_object_shape_add_brand(receiver, EVALUATION_HOLDER_BRAND | identity);
-    });
+    EVALUATION_HOLDER_BRAND | identity
 }
 
 #[cfg(test)]

@@ -215,6 +215,54 @@ mod evaluation_layout_tests {
         }
     }
 
+    /// The evaluation brand of an instance on an evaluation copy is a shape
+    /// fact (no meta record), the branded shape is still the copy, and a
+    /// birth straight onto it is the same object the link and stamp make.
+    #[test]
+    fn an_evaluation_copy_carries_its_brand_and_takes_births_directly() {
+        crate::gc::initialize_runtime_fixture();
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        unsafe { js_register_class_declaration(CLASS, &DECLARATION) };
+        let desc = std::ptr::addr_of!(LAYOUT);
+        let proto = crate::object::js_object_alloc(0, 0);
+        let proto_bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
+        let class = crate::object::js_object_alloc(CLASS + 1, 0);
+        crate::object::js_object_mark_class(class as i64);
+        let class_bits = crate::value::js_nanbox_pointer(class as i64).to_bits();
+        unsafe {
+            let obj = perry_alloc_class_family(desc, 0, 0);
+            crate::object::prototype_chain::object_link_class_evaluation_prototype(
+                obj as usize,
+                proto_bits,
+            );
+            shapes::stamp_evaluation_holder(obj, class_bits);
+            let copy = shapes::object_shape_stamp(obj);
+            assert!((*obj).meta.is_null(), "the brand is a shape fact");
+            assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
+            assert_eq!(shapes::object_prototype_word(obj), proto_bits);
+            assert_eq!(shapes::evaluation_layout_family(copy), (*desc).layout_id);
+            assert!(is_family_object(obj));
+            assert_eq!(
+                shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id),
+                Some((proto_bits, class_bits))
+            );
+            assert_eq!(
+                shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id + 1),
+                None
+            );
+            let born = crate::object::layout_desc::alloc_family_layout_copy(desc, copy);
+            assert_eq!((*born).parent_class_id, (*obj).parent_class_id);
+            assert!((*born).meta.is_null());
+            assert_eq!(shapes::object_evaluation_brand(born), class_bits);
+            assert_eq!(shapes::object_prototype_word(born), proto_bits);
+            assert_eq!(
+                family_desc_of(born).map(|d| d as *const PerryLayoutDesc),
+                Some(desc)
+            );
+        }
+    }
+
     unsafe fn shape_is_evaluation_layout_of_word(obj: *const ObjectHeader, family: u32) -> bool {
         shapes::shape_is_evaluation_layout_of((*obj).parent_class_id, family)
     }

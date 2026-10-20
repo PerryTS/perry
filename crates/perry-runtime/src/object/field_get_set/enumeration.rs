@@ -1753,6 +1753,7 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || is_class_capture_key(b)
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
+        || b == super::class_object_template::CLASS_EVALUATION_INSTANCE_LAYOUT_KEY
         || b == crate::object::class_registry::declarations::CLASS_COMPUTED_NAMES_KEY
         || b == super::CLASS_TEMPLATE_KEY
         || b == b"#<perry:private-class-lexical-binding>"

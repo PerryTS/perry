@@ -966,18 +966,24 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
             )
         };
         // Room for the evaluation's template key, its own `length`, `name`
-        // and static methods, its pinned parent, its captured environment and
-        // its prototype object besides its static fields, so the template's
-        // shapes are all inline slots (`class_object_template`).
-        let own_member_slots =
-            4 + ctx.classes.get(template).map_or(0, |c| {
+        // and static methods, its pinned parent, its captured environment,
+        // its prototype object and, for a class family, the layout its
+        // instances are born on (the evaluation's copy of the family layout)
+        // besides its static fields, so the template's shapes are all inline
+        // slots (`class_object_template`).
+        let instance_layout_slot =
+            usize::from(ctx.program_layouts.families.contains_key(&template_cid));
+        let own_member_slots = instance_layout_slot
+            + 4
+            + ctx.classes.get(template).map_or(0, |c| {
                 c.static_methods.len()
                     + c.computed_members
                         .iter()
                         .filter(|member| member.is_static)
                         .count()
                     + usize::from(c.extends_expr.is_some() || evaluated_parent.is_some())
-            }) + usize::from(!captured_args.is_empty());
+            })
+            + usize::from(!captured_args.is_empty());
         let nfields = (named_statics.len() + own_member_slots).to_string();
         // A static FIELD named `length` / `name` takes over the intrinsic
         // property; it is created as an ordinary one.

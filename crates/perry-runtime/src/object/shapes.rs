@@ -76,8 +76,8 @@ mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
 pub(crate) use shapes_evaluation_brand::{
-    evaluation_holder_slot, object_evaluation_brand, stamp_evaluation_holder,
-    EVALUATION_HOLDER_BRAND,
+    evaluation_copy_birth_edges, evaluation_holder_slot, object_evaluation_brand,
+    prepare_evaluation_holder, stamp_evaluation_holder, EVALUATION_HOLDER_BRAND,
 };
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
@@ -416,6 +416,13 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn element_kind(self) -> u64 {
         unsafe { u64::from((*self.0.as_ptr()).element_kind) }
+    }
+
+    /// The class family layout this record is an evaluation copy of, or 0
+    /// (`shapes_linked_birth::evaluation_layout_family`).
+    #[inline]
+    pub(crate) fn evaluation_layout_of(self) -> u32 {
+        unsafe { (*self.0.as_ptr()).evaluation_layout_of }
     }
 
     pub(crate) fn summary(self) -> u8 {
@@ -4419,6 +4426,24 @@ pub(crate) unsafe fn transition_object_shape_prototype(
     proto_id: u64,
     proto_bits: u64,
 ) -> u32 {
+    transition_object_shape_prototype_with_holder(obj, proto_id, proto_bits, 0)
+}
+
+/// [`transition_object_shape_prototype`] that also gives the receiver the
+/// evaluation holder brand `holder_brand` (`EVALUATION_HOLDER_BRAND |
+/// identity`, its identity word already written: `prepare_evaluation_holder`),
+/// or none for 0: a class evaluation's first instance takes its prototype
+/// and its brand in one transition, so the shape it reaches is minted once.
+///
+/// # Safety
+/// As [`transition_object_shape_prototype`].
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn transition_object_shape_prototype_with_holder(
+    obj: *mut crate::object::ObjectHeader,
+    proto_id: u64,
+    proto_bits: u64,
+    holder_brand: u64,
+) -> u32 {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
@@ -4431,6 +4456,10 @@ pub(crate) unsafe fn transition_object_shape_prototype(
     // a mint below that collects repairs it with everything else.
     shapes_prototype::write_identity_word(proto_id, proto_bits);
     if current.proto_id == proto_id {
+        // The brand alone, when one was asked for (a no-op when present).
+        if holder_brand != 0 {
+            transition_object_shape_add_brand(obj, holder_brand);
+        }
         return object_shape_stamp(obj);
     }
     let generation = if crate::object::overflow::has_overflow(obj) {
@@ -4438,6 +4467,13 @@ pub(crate) unsafe fn transition_object_shape_prototype(
     } else {
         current.semantic_generation
     };
+    let mut receiver = receiver_facts_of_current(obj, &current);
+    if holder_brand != 0 {
+        debug_assert!(shapes_evaluation_brand::is_evaluation_holder_brand(
+            holder_brand
+        ));
+        receiver.brands.replace_evaluation_holder(holder_brand);
+    }
     // The lanes describe the receiver's OWN slots, which a new [[Prototype]]
     // leaves as they are: carry them (normalized, as a key-add carries the
     // lanes below it), so a class instance linked to its evaluation's
@@ -4450,7 +4486,7 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         store_kind::mint_kind(current.object_kind, obj),
         current.hole_count,
         proto_id,
-        receiver_facts_of_current(obj, &current),
+        receiver,
         super::field_rep::normalized_without_special(current.rep),
         None,
     ));
@@ -5138,6 +5174,9 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
             None,
         ))
     });
+    // A class evaluation's copy of a family layout stays one with its brand
+    // (`layout_desc::family_desc_of`): the brand changes no slot.
+    super::layout_desc::note_family_relink(object_shape_stamp(obj), id);
     stamp_same_keys_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     true

@@ -932,6 +932,21 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
     alloc_layout_object(d, id)
 }
 
+/// Allocate an instance of class family layout `desc` born on `copy`, a class
+/// evaluation's copy of that layout (`shapes::evaluation_layout_family(copy)`
+/// names `desc`'s layout): the family's slots, all holes, under the ShapeId
+/// that names the evaluation's prototype and brand. The caller read `copy`
+/// from the evaluation's class object and checked it. Can collect.
+///
+/// # Safety
+/// `desc` is a registered class family descriptor of this program.
+pub(crate) unsafe fn alloc_family_layout_copy(
+    desc: *const PerryLayoutDesc,
+    copy: u32,
+) -> *mut ObjectHeader {
+    alloc_layout_object(&*desc, copy)
+}
+
 /// Allocate an object of the registered layout `id` of `d` (see
 /// [`perry_alloc_layout`]). Can collect.
 unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: u32) -> *mut ObjectHeader {
@@ -1907,13 +1922,30 @@ pub(crate) unsafe fn is_family_object(obj: *const ObjectHeader) -> bool {
 ///
 /// # Safety
 /// Reads the agent shape directory and this program's descriptor section.
-#[inline]
+#[inline(always)]
 unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDesc> {
     let id = layout_id_of_word(word);
     if !super::shapes::shape_word_may_be_linked(id) || !super::shapes::is_shape_id(id) {
         return None;
     }
-    match super::shapes::evaluation_layout_family(id) {
+    evaluation_family_desc_of_record(id)
+}
+
+/// [`evaluation_family_desc_of`]'s record read, out of line so the static
+/// family answer stays inline in every geometry reader.
+#[inline(never)]
+unsafe fn evaluation_family_desc_of_record(id: u32) -> Option<&'static PerryLayoutDesc> {
+    evaluation_layout_desc(super::shapes::evaluation_layout_family(id))
+}
+
+/// The family descriptor a shape record's `evaluation_layout_of` fact names
+/// (`shapes::evaluation_layout_family`), or `None` for 0.
+///
+/// # Safety
+/// `family` is a record's `evaluation_layout_of` fact.
+#[inline]
+pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static PerryLayoutDesc> {
+    match family {
         0 => None,
         // The record names a registered class family layout: only
         // [`note_family_relink`] writes it, from one.
@@ -1922,6 +1954,14 @@ unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDes
             Some(&*desc_at(family - LAYOUT_BASE))
         }
     }
+}
+
+/// Is `word` (an `ObjectHeader` layout word) a static class family layout
+/// candidate: in the descriptor section's id range, which only
+/// [`family_own_key`] answers without a shape record?
+#[inline(always)]
+pub(crate) fn word_in_layout_index(word: u32) -> bool {
+    word.wrapping_sub(LAYOUT_BASE) < LAYOUT_INDEX_LIMIT
 }
 
 /// A prototype transition moved an object from layout word `previous` to
@@ -2411,6 +2451,21 @@ pub(crate) unsafe fn family_own_key_hashed(
     } else {
         return None;
     };
+    desc_own_key(d, bytes, hash)
+}
+
+/// [`family_own_key_hashed`] of an object whose family descriptor the caller
+/// already holds (`d`, from its layout word or its shape record).
+///
+/// # Safety
+/// `d` is a registered class family descriptor; `hash`, when given, is
+/// `bytes`' hash.
+#[inline(always)]
+pub(crate) unsafe fn desc_own_key(
+    d: &PerryLayoutDesc,
+    bytes: &[u8],
+    hash: Option<u64>,
+) -> Option<Option<(u32, u32)>> {
     if d.index.is_null() || d.keys.is_null() {
         return None;
     }
