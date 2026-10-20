@@ -199,8 +199,9 @@ pub(crate) fn test_shape_index_len(keys_id: usize) -> u32 {
 pub(crate) fn test_unused_external_shape_id() -> u32 {
     let table = &crate::state::state().shapes;
     // The top of the ORDINARY band: an external (typed) id is an ordinary
-    // shape, which sites may hold; the dictionary band above it is not.
-    let mut id = super::SITE_SHAPE_ID_END - 1;
+    // shape, which sites may hold; the dictionary band above it is not. Its
+    // plain-kind granule, as a default-identity id is minted.
+    let mut id = super::SITE_SHAPE_ID_END - 3 * (1 << super::SHAPE_ID_KIND_SHIFT) - 1;
     while table.slab().record_ptr(id).is_some() {
         id -= 1;
     }

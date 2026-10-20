@@ -21,9 +21,10 @@ pub const STATIC_SHAPE_ID_COUNT: u32 = 1 << 20;
 /// prototype constant or a known-holder read is one unsigned compare.
 pub const UNSHADOWED_WORD_END: u32 = 0xB000_0000;
 /// `object::shapes::SHAPE_ID_KIND_MASK`: a ShapeId's identity-kind bits.
-/// Nonzero on a linked identity (a recorded prototype or a null one), such
-/// as a class evaluation's copy of a family layout, whose instances a
-/// constructor store run asks the runtime about (`perry_family_run_admits`).
+/// All set on the mixed kind (`SHAPE_ID_KIND_MIXED`, a class instance linked
+/// to a recorded prototype), the only kind a class evaluation's copy of a
+/// family layout carries, whose instances a constructor store run asks the
+/// runtime about (`perry_family_run_admits`).
 pub const SHAPE_ID_KIND_MASK: u32 = 3 << 20;
 /// `object::shapes::WEAKMAP_BIRTH_LAYOUT` / `WEAKSET_BIRTH_LAYOUT`: the
 /// declared layout every `new WeakMap()` / `new WeakSet()` is born on (the

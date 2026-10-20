@@ -546,7 +546,7 @@ mod descriptor_tests_8067 {
             (42, SHAPE_ID_KIND_WORD),
             (
                 PROTO_ID_MIXED | (7 << PROTO_ID_MIXED_SERIAL_BITS) | 42,
-                SHAPE_ID_KIND_WORD,
+                SHAPE_ID_KIND_MIXED,
             ),
             (PROTO_ID_UNIQUE | 5, SHAPE_ID_KIND_WORD),
             (PROTO_ID_NULL, SHAPE_ID_KIND_NULL),

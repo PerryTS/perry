@@ -187,7 +187,9 @@ fn the_agent_directory_is_the_agent_slab_and_an_absent_id_reads_empty() {
         }
         // Growing a band's page vector moves its buffer: the directory
         // follows, and the records already there are still found.
-        let far = SITE_SHAPE_ID_END - 2;
+        // In the top group's plain-kind granule: the record has the default
+        // identity.
+        let far = SITE_SHAPE_ID_END - 3 * (1 << super::super::SHAPE_ID_KIND_SHIFT) - 2;
         let record = ShapeRecord::new(0, 0, 3, 0, ShapeObjectKind::Ordinary, 0).with_rep(0b01);
         // SAFETY: no slab reference is held.
         unsafe { table.slab_mut().insert(far, record) };

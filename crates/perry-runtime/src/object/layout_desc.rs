@@ -1924,8 +1924,13 @@ pub(crate) unsafe fn is_family_object(obj: *const ObjectHeader) -> bool {
 /// Reads the agent shape directory and this program's descriptor section.
 #[inline(always)]
 unsafe fn evaluation_family_desc_of(word: u32) -> Option<&'static PerryLayoutDesc> {
+    // A copy's identity is `MIXED` (the class and the evaluation prototype's
+    // serial), which only ids of the mixed kind name: every other receiver
+    // answers from its header word.
     let id = layout_id_of_word(word);
-    if !super::shapes::shape_word_may_be_linked(id) || !super::shapes::is_shape_id(id) {
+    if super::shapes::shape_word_kind(id) != super::shapes::SHAPE_ID_KIND_MIXED
+        || !super::shapes::is_shape_id(id)
+    {
         return None;
     }
     evaluation_family_desc_of_record(id)

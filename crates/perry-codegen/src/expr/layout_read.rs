@@ -731,7 +731,8 @@ fn run_arm(
 /// layout (a family's own, `[LAYOUT_BASE, +STATIC_SHAPE_ID_COUNT / 2)`), or an
 /// unshadowed linked one (a class evaluation's copy of a family's layout,
 /// `perry-runtime` `layout_desc::family_desc_of`: an ordinary ShapeId below
-/// `UNSHADOWED_WORD_END` whose kind bits name a linked identity). Which family
+/// `UNSHADOWED_WORD_END` whose kind bits are all set, the mixed kind of a
+/// class instance's linked identity). Which family
 /// is the runtime's answer (`perry_family_run_admits`); a word outside both
 /// never names one.
 fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
@@ -747,7 +748,11 @@ fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String 
         word,
         &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
     );
-    let linked = blk.icmp_ne(I32, &kind, "0");
+    let linked = blk.icmp_eq(
+        I32,
+        &kind,
+        &(crate::runtime_abi::SHAPE_ID_KIND_MASK as i32).to_string(),
+    );
     let ordinary_rel = blk.sub(
         I32,
         word,

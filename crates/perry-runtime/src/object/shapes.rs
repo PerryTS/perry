@@ -1311,19 +1311,23 @@ const _: () = assert!(SITE_SHAPE_ID_END < SHAPE_ID_END);
 /// stamp arriving on another thread must never alias an id that thread
 /// allocated for a different shape. Monotonic — ids are NEVER reused, so
 /// a stale stamp or cache entry can only miss, not falsely hit.
-static SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
+static SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 4] = [
     std::sync::atomic::AtomicU32::new(shapes_branded_birth::NATIVE_BIRTH_LAYOUT_END),
+    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
     std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END),
 ];
 
 /// The exotic band's own monotonic counters ([`EXOTIC_SHAPE_ID_BASE`]).
-static EXOTIC_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
+static EXOTIC_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 4] = [
     std::sync::atomic::AtomicU32::new(
         EXOTIC_SHAPE_ID_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
     ),
     std::sync::atomic::AtomicU32::new(
         crate::codegen_abi::FUNCTION_SHAPE_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
+    ),
+    std::sync::atomic::AtomicU32::new(
+        EXOTIC_SHAPE_ID_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
     ),
     std::sync::atomic::AtomicU32::new(
         EXOTIC_SHAPE_ID_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
@@ -1337,13 +1341,18 @@ static EXOTIC_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
 ///   records no prototype: the realm default, a compiled class's declaration
 ///   prototype, a per-object identity;
 /// * [`SHAPE_ID_KIND_WORD`] (1): a LINKED identity with a word naming its
-///   prototype (a recorded prototype's serial, `MIXED`, a `UNIQUE` link);
-/// * [`SHAPE_ID_KIND_NULL`] (2): a null [[Prototype]].
+///   prototype (a recorded prototype's serial, a `UNIQUE` link);
+/// * [`SHAPE_ID_KIND_NULL`] (2): a null [[Prototype]];
+/// * [`SHAPE_ID_KIND_MIXED`] (3): a LINKED identity of a class instance, a
+///   `MIXED` one (its class and its recorded prototype's serial), with a word
+///   naming that prototype. A class evaluation's copy of a family layout is
+///   one (`layout_desc::family_desc_of`), so only an id of this kind can be
+///   one: every other linked receiver answers "not a family object" from its
+///   header word, without reading its shape record.
 ///
 /// Every band draws its ids from one counter per kind, and the counters hand
-/// out 2^20-id granules in turn (kind 3 is never minted), so the kind is a
-/// fact of the id's VALUE, fixed at the mint (`ShapeSlab::insert` asserts
-/// it). The static band (`[SHAPE_ID_BASE, STATIC_SHAPE_ID_END)`, 2^20 ids) is
+/// out 2^20-id granules in turn, so the kind is a fact of the id's VALUE,
+/// fixed at the mint (`ShapeSlab::insert` asserts it). The static band (`[SHAPE_ID_BASE, STATIC_SHAPE_ID_END)`, 2^20 ids) is
 /// one plain granule: the compiler names only class and literal shapes.
 ///
 /// It is what lets `object_prototype_word` answer the common receiver (a
@@ -1359,13 +1368,26 @@ const _: () = assert!(SHAPE_ID_KIND_MASK == crate::codegen_abi::SHAPE_ID_KIND_MA
 pub(crate) const SHAPE_ID_KIND_PLAIN: u32 = 0;
 pub(crate) const SHAPE_ID_KIND_WORD: u32 = 1;
 pub(crate) const SHAPE_ID_KIND_NULL: u32 = 2;
-/// One granule of each kind (and the never-minted fourth).
+pub(crate) const SHAPE_ID_KIND_MIXED: u32 = 3;
+const _: () = assert!(SHAPE_ID_KIND_MIXED << SHAPE_ID_KIND_SHIFT == SHAPE_ID_KIND_MASK);
+/// One granule of each kind.
 const SHAPE_ID_KIND_GROUP: u32 = 4 << SHAPE_ID_KIND_SHIFT;
 const _: () = assert!(STATIC_SHAPE_ID_END - SHAPE_ID_BASE <= 1 << SHAPE_ID_KIND_SHIFT);
 const _: () = assert!(SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
 const _: () = assert!(SITE_SHAPE_ID_END % SHAPE_ID_KIND_GROUP == 0);
 const _: () = assert!(EXOTIC_SHAPE_ID_BASE % SHAPE_ID_KIND_GROUP == 0);
 const _: () = assert!(SHAPE_ID_END % SHAPE_ID_KIND_GROUP == 0);
+
+/// May ShapeId `id` hold a record of identity `proto_id`? The id's kind is
+/// the identity's for every kind a reader trusts without the record (plain,
+/// null, mixed); a word-kind id holds any identity but a mixed one, which
+/// only the mixed kind names (`layout_desc::family_desc_of` trusts that).
+#[inline]
+pub(crate) fn shape_id_kind_admits(id: u32, proto_id: u64) -> bool {
+    let kind = shape_word_kind(id);
+    let identity = proto_id_kind(proto_id);
+    kind == identity || (kind == SHAPE_ID_KIND_WORD && identity != SHAPE_ID_KIND_MIXED)
+}
 
 /// The identity kind `header_word` (an `ObjectHeader`'s ShapeId word, or
 /// whatever else it holds) carries in its kind bits.
@@ -1390,6 +1412,8 @@ pub(crate) fn proto_id_kind(proto_id: u64) -> u32 {
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
         // The identity word is an implied class link, not an instance override.
         SHAPE_ID_KIND_PLAIN
+    } else if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&proto_id) {
+        SHAPE_ID_KIND_MIXED
     } else if proto_id == PROTO_ID_NULL {
         SHAPE_ID_KIND_NULL
     } else if shapes_prototype::proto_id_carries_word(proto_id) {

@@ -1171,7 +1171,10 @@ pub(super) fn install_external_shape_id_with_constfn(
     let Some(mask) = super::shapes_store::constfn_mask(infos) else {
         return false;
     };
+    // An id of another identity kind fails closed too: its kind is a fact
+    // readers trust without the record (`shapes::shape_id_kind_admits`).
     if !super::is_shape_id(id)
+        || !super::shape_id_kind_admits(id, proto_id)
         || (keys.is_null() && logical_key_count != 0)
         || mask != crate::object::field_rep::special_lane_slots(rep)
         || to_any & !mask != 0
