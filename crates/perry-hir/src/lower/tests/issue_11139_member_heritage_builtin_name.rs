@@ -70,3 +70,41 @@ fn global_object_and_native_module_members_keep_the_builtin_name() {
         );
     }
 }
+
+/// The Error family and the fetch/event constructors are keyed by name in
+/// codegen too. Effect declares `class SystemError extends Data.Error`, where
+/// `Data.Error` is a package class; with the static name `Error` its
+/// `super(args)` ran the built-in Error initializer instead.
+#[test]
+fn package_member_named_like_an_error_or_event_builtin_is_a_dynamic_parent() {
+    let hir = lower(
+        r#"
+        import * as Data from "effect/Data";
+        class SystemError extends Data.Error {}
+        class Plain extends Data.TypeError {}
+        class Ev extends Data.Event {}
+        class Res extends Data.Response {}
+        class Dom extends Data.DOMException {}
+        class ViaGlobal extends globalThis.Error {}
+        class Bare extends Error {}
+        "#,
+    );
+    for name in ["SystemError", "Plain", "Ev", "Res", "Dom"] {
+        let class = class(&hir, name);
+        assert_eq!(
+            class.extends_name, None,
+            "{name}: a member heritage must not name the global built-in"
+        );
+        assert!(
+            class.extends_expr.is_some(),
+            "{name}: the parent resolves through the heritage value"
+        );
+    }
+    for name in ["ViaGlobal", "Bare"] {
+        assert_eq!(
+            class(&hir, name).extends_name.as_deref(),
+            Some("Error"),
+            "{name}: the parent really is the built-in"
+        );
+    }
+}

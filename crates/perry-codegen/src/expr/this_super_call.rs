@@ -189,50 +189,6 @@ pub(crate) fn bind_derived_this_after_super(ctx: &mut FnCtx<'_>) {
     ctx.block().store(I1, "1", &slot);
 }
 
-/// Built-in constructor names (beyond Error/stream/fetch, which have their own
-/// SuperCall arms) that can appear as a class heritage. `super(...)` to these
-/// must NOT be routed through the runtime-value dispatch path
-/// (`js_fetch_or_value_super`), which would invoke e.g. `Map()` without `new`
-/// and throw "Constructor requires 'new'". Dedicated arms below either install
-/// the built-in state on the provisional receiver or construct a branded value
-/// with the subclass as `newTarget`. Refs class/subclass/builtin-objects/*/
-/// super-must-be-called and #10639.
-pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
-            | "Array"
-            | "ArrayBuffer"
-            | "SharedArrayBuffer"
-            | "DataView"
-            | "Boolean"
-            | "Number"
-            | "String"
-            | "Date"
-            | "RegExp"
-            | "URL"
-            | "Promise"
-            | "Function"
-            | "BigInt"
-            | "Symbol"
-            | "Object"
-            | "Int8Array"
-            | "Uint8Array"
-            | "Uint8ClampedArray"
-            | "Int16Array"
-            | "Uint16Array"
-            | "Int32Array"
-            | "Uint32Array"
-            | "Float32Array"
-            | "Float64Array"
-            | "BigInt64Array"
-            | "BigUint64Array"
-    )
-}
-
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     lower_impl(ctx, expr, false)
 }
@@ -802,24 +758,9 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                             | "WritableStream"
                             | "TransformStream"
                     );
-                    let is_builtin_parent_name = (matches!(
+                    let is_builtin_parent_name = (perry_hir::is_name_keyed_builtin_parent(
                         parent_name.as_str(),
-                        "Error"
-                            | "TypeError"
-                            | "RangeError"
-                            | "ReferenceError"
-                            | "SyntaxError"
-                            | "URIError"
-                            | "EvalError"
-                            | "AggregateError"
-                            | "Request"
-                            | "Response"
-                            | "Event"
-                            | "CustomEvent"
-                            | "DOMException"
-                    ) || (is_stream_family_name
-                        && !has_extends_expr)
-                        || is_other_builtin_constructor_name(parent_name.as_str()))
+                    ) || (is_stream_family_name && !has_extends_expr))
                         && !(is_stream_family_name && has_extends_expr)
                         // #5437: a parent NAME shadowed by an in-scope lexical
                         // local is NOT the built-in — route it through the

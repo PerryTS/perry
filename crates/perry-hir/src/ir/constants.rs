@@ -55,6 +55,79 @@ pub fn is_buffer_backed_builtin_name(name: &str) -> bool {
     typed_array_kind_for_name(name).is_some() || matches!(name, "Buffer" | "DataView")
 }
 
+/// Built-in constructor names (beyond the Error family, streams and fetch,
+/// which have their own SuperCall arms) that can appear as a class heritage. `super(...)` to these
+/// must NOT be routed through the runtime-value dispatch path
+/// (`js_fetch_or_value_super`), which would invoke e.g. `Map()` without `new`
+/// and throw "Constructor requires 'new'". Dedicated arms in codegen's `this_super_call.rs` either install
+/// the built-in state on the provisional receiver or construct a branded value
+/// with the subclass as `newTarget`. Refs class/subclass/builtin-objects/*/
+/// super-must-be-called and #10639.
+pub fn is_other_builtin_constructor_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Array"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "Boolean"
+            | "Number"
+            | "String"
+            | "Date"
+            | "RegExp"
+            | "URL"
+            | "Promise"
+            | "Function"
+            | "BigInt"
+            | "Symbol"
+            | "Object"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
+/// The Error family, whose `super(message)` codegen installs the built-in
+/// own `message`/`stack` instead of running a parent constructor.
+pub fn is_error_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Error"
+            | "TypeError"
+            | "RangeError"
+            | "ReferenceError"
+            | "SyntaxError"
+            | "URIError"
+            | "EvalError"
+            | "AggregateError"
+    )
+}
+
+/// Every parent NAME that `super(...)` codegen keys on: a class whose static
+/// `extends_name` is one of these gets the built-in's initializer, not the
+/// parent's own constructor. So a static name may only claim one of them when
+/// it really is the global built-in.
+pub fn is_name_keyed_builtin_parent(name: &str) -> bool {
+    is_error_builtin_name(name)
+        || matches!(
+            name,
+            "Request" | "Response" | "Event" | "CustomEvent" | "DOMException"
+        )
+        || is_other_builtin_constructor_name(name)
+}
+
 /// Known native module names that map to stdlib implementations.
 /// These are npm packages that have native Rust replacements.
 ///

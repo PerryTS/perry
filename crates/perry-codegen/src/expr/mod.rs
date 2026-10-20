@@ -3329,7 +3329,7 @@ mod super_method;
 #[cfg(test)]
 mod super_property_set_order_tests;
 pub(crate) mod this_super_call;
-pub(crate) use this_super_call::is_other_builtin_constructor_name;
+pub(crate) use perry_hir::is_other_builtin_constructor_name;
 mod unary;
 mod url_main;
 

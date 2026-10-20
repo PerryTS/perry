@@ -55,46 +55,11 @@ pub(super) fn dynamic_function_forwarding_mode(class: &ast::Class) -> Option<boo
     }
 }
 
-/// JS global constructors whose `super(...)` codegen special-cases by the
-/// parent's textual NAME: it installs the built-in's state or constructs a
-/// branded exotic value instead of running the parent's own constructor. Keep
-/// in lockstep with `is_other_builtin_constructor_name` in
-/// `perry-codegen/src/expr/this_super_call.rs`.
+/// JS global constructors that codegen special-cases by the parent's textual
+/// NAME: `super(...)` (`is_name_keyed_builtin_parent`, shared with codegen)
+/// and `new` of an `EventTarget` subclass (its native instance base).
 fn is_name_keyed_global_builtin_ctor(name: &str) -> bool {
-    matches!(
-        name,
-        "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
-            | "EventTarget"
-            | "Array"
-            | "ArrayBuffer"
-            | "SharedArrayBuffer"
-            | "DataView"
-            | "Boolean"
-            | "Number"
-            | "String"
-            | "Date"
-            | "RegExp"
-            | "URL"
-            | "Promise"
-            | "Function"
-            | "BigInt"
-            | "Symbol"
-            | "Object"
-            | "Int8Array"
-            | "Uint8Array"
-            | "Uint8ClampedArray"
-            | "Int16Array"
-            | "Uint16Array"
-            | "Int32Array"
-            | "Uint32Array"
-            | "Float32Array"
-            | "Float64Array"
-            | "BigInt64Array"
-            | "BigUint64Array"
-    )
+    crate::ir::is_name_keyed_builtin_parent(name) || name == "EventTarget"
 }
 
 /// #11139: `class X extends ns.URL {}` names a PROPERTY of `ns`, not the global

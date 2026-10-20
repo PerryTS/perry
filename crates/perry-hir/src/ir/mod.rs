@@ -40,6 +40,9 @@ pub use constants::{
 pub use constants::{is_bare_prefix_only_builtin, is_native_module_specifier};
 // Its own statement so adding it did not reflow the list above (#10894).
 pub use constants::is_buffer_backed_builtin_name;
+pub use constants::{
+    is_error_builtin_name, is_name_keyed_builtin_parent, is_other_builtin_constructor_name,
+};
 
 // ---- module.rs ----
 pub use module::{ClassFamilySyntax, FunctionSourceMetadata, LocalSourceSpan, Module};
