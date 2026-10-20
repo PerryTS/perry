@@ -400,6 +400,31 @@ pub extern "C" fn js_net_create_server_handle_stub(
     f64::from_bits(JSValue::undefined().bits())
 }
 
+/// Admit only object options bags (not arrays), while allowing the default.
+#[no_mangle]
+pub extern "C" fn js_net_validate_socket_address_options(value: f64) {
+    use crate::builtins::arithmetic::{classify_value_typeof, ValueTypeofTag};
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let jv = JSValue::from_bits(value.get_nanbox_u64());
+    if jv.is_undefined() {
+        return;
+    }
+    // Classify BEFORE IsArray: untagged numeric bits, including subnormals,
+    // must never reach IsArray's legacy raw-pointer header inspection.
+    if jv.is_null()
+        || classify_value_typeof(value.get_nanbox_f64()) != ValueTypeofTag::Object
+        || crate::array::js_array_is_array(value.get_nanbox_f64()).to_bits()
+            == crate::value::TAG_TRUE
+    {
+        crate::fs::validate::throw_received_type_error(
+            "The \"options\" argument must be of type object. Received ",
+            value.get_nanbox_f64(),
+        );
+    }
+}
+
 /// Preserve the original JS argument through validation before the parser FFI.
 #[no_mangle]
 pub extern "C" fn js_net_validate_socket_address_parse_input(value: f64) -> i64 {

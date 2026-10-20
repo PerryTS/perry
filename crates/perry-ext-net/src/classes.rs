@@ -86,6 +86,7 @@ extern "C" {
     fn js_net_throw_invalid_address() -> !;
     fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i32;
     fn js_net_validate_listen_port(value: f64);
+    fn js_net_validate_socket_address_options(value: f64);
     fn js_runtime_validate_string_arg(value: f64, name_ptr: *const u8, name_len: u32);
 }
 
@@ -503,6 +504,7 @@ fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
 pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
     let scope = TransientRootScope::enter();
     let options = scope.root_nanbox(options);
+    js_net_validate_socket_address_options(options.get());
     let address =
         get_object_string_field(options.get(), "address").unwrap_or_else(|| "127.0.0.1".into());
     let family = get_object_string_field(options.get(), "family").map(|s| s.to_ascii_lowercase());
