@@ -276,7 +276,7 @@ pub(crate) fn build_method_names(
         // Cross-module static methods. Source modules emit these as static
         // functions with no `this` receiver, normally qualified by the source
         // class id. Register them under the static-only key the lowering uses.
-        for sm in &ic.static_method_names {
+        for (static_idx, sm) in ic.static_method_names.iter().enumerate() {
             let llvm_fn = if let Some(source_class_id) = ic.source_class_id {
                 scoped_static_method_name(src, source_class_id, &ic.name, sm)
             } else {
@@ -285,9 +285,18 @@ pub(crate) fn build_method_names(
             method_names
                 .entry((effective_name.clone(), static_method_registry_key(sm)))
                 .or_insert_with(|| llvm_fn.clone());
-            // Declare conservatively with 6 double params; LLVM's direct-call
-            // resolution doesn't require an exact arity match for declarations.
-            let param_types: Vec<crate::types::LlvmType> = std::iter::repeat_n(DOUBLE, 6).collect();
+            // Declare with the producer's declared width. A declaration wider than
+            // the definition is harmless to a native link, but a wasm32 object
+            // records the function's type, and wasm-ld rejects the same symbol
+            // with two signatures. Fall back to 6 only when the producer did not
+            // report the width.
+            let arity = ic
+                .static_method_param_counts
+                .get(static_idx)
+                .copied()
+                .unwrap_or(6);
+            let param_types: Vec<crate::types::LlvmType> =
+                std::iter::repeat_n(DOUBLE, arity).collect();
             llmod.declare_function(&llvm_fn, DOUBLE, &param_types);
         }
     }
