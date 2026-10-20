@@ -12,6 +12,7 @@ mod protocol_calls;
 mod callback_origin;
 mod super_heritage;
 mod unit_mode;
+mod layout_key;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 

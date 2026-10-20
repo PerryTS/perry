@@ -413,6 +413,10 @@ pub enum Cons {
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
     CallArgs { call: CallId },
+    /// The node is a receiver of summarized function token `ft` at `call`
+    /// (or of no call: `NO_NODE`): each value binds the instance of its
+    /// layout (`Model::bind_layout`).
+    ThisInst { call: CallId, ft: Tok },
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
@@ -482,6 +486,7 @@ impl Cons {
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
+            Cons::ThisInst { .. } => "thisinst",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",
@@ -737,6 +742,11 @@ pub struct Model {
     /// TEMP CW s9: per-node propagation work (profile only).
     pub cw9_node_work: FxHashMap<u32, u64>,
     pub cw9_inst_fn: FxHashMap<u32, (u32, u32)>,
+    /// TEMP CWL: (fn, this shape, ret label, protocol, bound-synth, program call) -> (n, first receiver, site).
+    pub cwl_recv: FxHashMap<(FnIdx, String, &'static str, bool, bool, bool), (u32, String, u32)>,
+    pub cwl_seen: crate::pts::FxHashSet<CallId>,
+    pub cwl_why: &'static str,
+    pub cwl_thisinst: FxHashMap<(&'static str, FnIdx), u32>,
     pub cw9_events: Vec<(u64, u32, u32, u32)>,
     pub cw9_shared: FxHashMap<(u32, u32, u8, u32), u32>,
     pub cw9_modkind: Vec<u8>,

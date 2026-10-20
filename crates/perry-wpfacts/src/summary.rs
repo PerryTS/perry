@@ -19,11 +19,17 @@ use std::rc::Rc;
 pub const SLOT: u32 = 1 << 31;
 /// A call template reference inside a summary's constraints.
 pub const CALL: u32 = 1 << 31;
-/// Marks a literal template (not a call) as a birth context's source.
-const LIT: u32 = 1 << 31;
-/// The host of instances no call site is behind (shared, unknown-code and
-/// accessor instances): one context for all of them.
-const NO_HOST: CallId = u32::MAX;
+/// The birth context of an object no program site is behind (a literal
+/// born in an instance, a birth of a call the solver made for no site):
+/// one token per template.
+pub const BORN: CallId = NO_CTX - 1;
+/// The layout of no object receiver (a primitive, `undefined`, a function
+/// without a `this` term).
+pub const LAY_NONE: u32 = 0;
+/// The lexical context of a kind-0 instance: its program site.
+const LAY_SITE: u32 = 5 << 28;
+/// The lexical context of a kind-5 instance: the object it constructs.
+const LAY_BIRTH: u32 = 6 << 28;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Deferred {
@@ -82,11 +88,10 @@ pub struct Inst {
     pub f: FnIdx,
     /// The function token bound (its closure context included).
     pub tok: Tok,
-    /// The call site this instance is for (a program call, or the source
-    /// site of a call an instance made): what the instance allocates is
-    /// born in that context. Shared, unknown-code and accessor instances
-    /// have none.
-    pub host: Option<CallId>,
+    /// The instance's lexical context: its receiver layout, its program
+    /// site (kind 0), or for a function without a `this` term its closure
+    /// context's. The closures it makes take their context from it.
+    pub lay: u32,
     pub params: Vec<NodeId>,
     pub ret: NodeId,
     pub this: NodeId,
@@ -99,37 +104,37 @@ pub struct SumState {
     pub deferred: Vec<Deferred>,
     pub of: FxHashMap<FnIdx, Rc<Summary>>,
     pub insts: Vec<Inst>,
-    /// (kind, call site/node, function) -> instance. Kinds: 0 a program
-    /// call, 6 a call made for a source call site (a callback called inside
-    /// the instance of the program call that passed it, a builtin calling
-    /// one, or a template call of any other instance), 2 unknown-code entry,
-    /// 3 setter group, 4 getter group, 5 shared (a call inside the callee's
-    /// SCC, or a call no call site is behind). An instance never keys on another
-    /// instance, so the count is fixed by the program.
+    /// (kind, layout/site/node, function token) -> instance. Kinds: 0 a
+    /// plain call at a program site outside every summary (the unsummarized
+    /// body's composition: the callee's effect per site, as `compose`
+    /// expands a static call into a summary), 1 every other binding (the
+    /// receiver's layout for a function with a `this` term, else
+    /// `LAY_NONE`), 2 unknown-code entry, 3 setter group, 4 getter group,
+    /// 5 a birth run (the constructor chain or field initializer of the
+    /// object token being born, i.e. of its birth site). Nothing in a key
+    /// is another instance: the count is (sites + layouts) x functions,
+    /// fixed by the program.
     pub inst_key: FxHashMap<(u8, u32, Tok), u32>,
     /// Calls that exist when summaries are built: the program's calls.
     pub n_prog: usize,
     /// A call an instance made: the summary call (template) it renames.
     pub tmpl_of: FxHashMap<CallId, CallId>,
-    /// A call made after summaries exist: the source call site behind it
-    /// (the template it renames, or the site of the call whose solving
-    /// made it).
+    /// A call the solver made (`solver_call`): the program site behind the
+    /// call it was made for, where what it allocates is born.
     pub origin: FxHashMap<CallId, CallId>,
-    /// A call an instance made (or one made while solving such a call):
-    /// the host site of that instance (`Inst::host`).
-    pub host: FxHashMap<CallId, CallId>,
-    /// (source site, host site) -> birth context id (`TokKind::Obj`).
-    pub ctx_ids: FxHashMap<(CallId, CallId), CallId>,
-    /// birth context id -> its source site (the inverse of `ctx_ids`).
-    pub ctx_src: FxHashMap<CallId, CallId>,
     /// (template call, callee): expanded into every summary that holds the
     /// template; its instances never bind it again.
     pub composed: FxHashSet<(CallId, FnIdx)>,
-    /// Template call -> the summarized function whose body makes it.
-    pub owner: FxHashMap<CallId, FnIdx>,
     /// Summarized function -> its SCC in the static call graph.
     pub scc: FxHashMap<FnIdx, u32>,
-    pub call_inst: FxHashMap<(CallId, Tok), u32>,
+    /// (call, instance) pairs whose arguments and result are wired.
+    pub bound: FxHashSet<(CallId, u32)>,
+    /// (call, function token) whose receiver node binds per token
+    /// (`Cons::ThisInst`).
+    pub this_inst: FxHashSet<(CallId, Tok)>,
+    /// Plain calls (`Cons::Call` on the callee value) at program sites
+    /// outside every summary: kind-0 keys.
+    pub site_calls: FxHashSet<CallId>,
     /// Calls that belong to a summary: the shared body never runs them.
     pub templates: FxHashSet<CallId>,
     pub stats: String,
@@ -138,18 +143,20 @@ pub struct SumState {
     /// nested inside the rule application that asked for them.
     pub pending: Vec<(u32, Vec<NodeId>)>,
     /// Summarized function -> the node of its `this` values no call is
-    /// behind (literal methods, accessor groups): feeds every instance.
+    /// behind (literal methods, accessor groups): each value binds its
+    /// layout's instance.
     pub this_any: FxHashMap<Tok, NodeId>,
-    /// Function token -> its instances.
-    pub insts_of: FxHashMap<Tok, Vec<u32>>,
     /// Summarized closure -> its outer terms (nodes of enclosing slices).
     pub outer_of: FxHashMap<FnIdx, Vec<NodeId>>,
     /// Closure context id -> the nodes of the closure's outer terms.
     pub ctx_nodes: Vec<Vec<NodeId>>,
-    /// (closure, host site of the instance that made it) -> context id. A
-    /// context is fixed by the program (closures x host sites), never by an
-    /// instance, so closure tokens never multiply through instances.
-    pub ctx_of: FxHashMap<(FnIdx, CallId), CallId>,
+    /// Closure context id -> the lexical context it was made under.
+    pub ctx_lay: Vec<u32>,
+    /// (closure, lexical context of the instance that made it) -> context
+    /// id. A context is fixed by the program (closures x (sites +
+    /// layouts)), never by an instance, so closure tokens never multiply
+    /// through instances.
+    pub ctx_of: FxHashMap<(FnIdx, u32), CallId>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -210,6 +217,7 @@ pub fn map_cons(
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
+        ThisInst { call, ft } => ThisInst { call: k(call), ft },
         BuiltinCallee => BuiltinCallee,
         HolderStep { key, pass, stop } => HolderStep { key, pass: n(pass), stop: n(stop) },
         VisitHolders { origin, key, act } => VisitHolders { origin, key, act: act_map(act, &mut n, &mut k) },
@@ -342,19 +350,19 @@ impl Model {
         self.sum.templates.contains(&call)
     }
 
-    /// The source call site behind `call`: itself for a call of the program.
+    /// The program site behind `call`: itself for a call of the program,
+    /// the template a call an instance made renames, or the site a call the
+    /// solver made was made for.
     fn origin_of(&self, call: CallId) -> Option<CallId> {
         if (call as usize) < self.sum.n_prog {
-            Some(call)
-        } else {
-            self.sum.origin.get(&call).copied()
+            return Some(call);
         }
+        self.sum.tmpl_of.get(&call).or_else(|| self.sum.origin.get(&call)).copied()
     }
 
     /// A call the solver makes for `by` (a builtin calling a callback, a
-    /// bound target, a step of a protocol): it has `by`'s call site and
-    /// host behind it from the moment it exists, so whatever binds it,
-    /// however early, keys it like every call that site is behind.
+    /// bound target, a step of a protocol): what it allocates is born at
+    /// `by`'s program site.
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
         self.calls.push(cs);
@@ -362,57 +370,55 @@ impl Model {
             if let Some(o) = self.origin_of(by) {
                 self.sum.origin.insert(id, o);
             }
-            if let Some(&h) = self.sum.host.get(&by) {
-                self.sum.host.insert(id, h);
-            }
         }
         id
     }
 
-    /// The birth context of an object `call` makes: a program call is its
-    /// own (one token per birth site). A call an instance made is its
-    /// source site within the instance's host site, so a constructor's
-    /// allocations are per `new` site, not one for every instance. Calls
-    /// made while solving another take that call's context.
+    /// The birth context of an object `call` makes: its program site (one
+    /// token per birth site, whichever instance's copy of the call runs),
+    /// or `BORN` when no program site is behind it (a protocol touch).
     pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
         }
-        // An object made while the runtime touches a receiver (a protocol
-        // call, `implicit`) belongs to that receiver's context: contexts
-        // stay the program's, and a touched result opens no new one.
-        if self.protocol_calls.contains(&call) {
-            return self.touch_host(call).unwrap_or(NO_CTX);
-        }
-        let src = match self.sum.tmpl_of.get(&call) {
-            Some(&t) => t,
-            None => self.origin_of(call).unwrap_or(call),
-        };
-        let Some(&h) = self.sum.host.get(&call) else {
-            return src;
-        };
-        let n = self.sum.ctx_ids.len() as CallId;
-        // Context ids count down from below `NO_CTX`: never a call id.
-        let id = *self.sum.ctx_ids.entry((src, h)).or_insert(NO_CTX - 1 - n);
-        self.sum.ctx_src.entry(id).or_insert(src);
-        id
+        self.origin_of(call).unwrap_or(BORN)
     }
 
-    /// The host of what a protocol touch on a receiver runs: the receiver's
-    /// own source site, one level deep. A touched result is born in the
-    /// touched receiver's site context, so touching it again meets a context
-    /// the program already has: contexts are sites x sites, never a chain.
-    pub(crate) fn touch_host(&self, call: CallId) -> Option<CallId> {
-        let ThisArg::Tok(t) = self.calls[call as usize].this else {
-            return None;
+    /// `f` is part of the birth of object `t`: the constructor or field
+    /// initializer of its template or of an ancestor, or the function a
+    /// constructor-function template is made from. Such a run binds per
+    /// object token (one per birth site), like the birth itself.
+    fn constructs(&self, f: FnIdx, t: Tok) -> bool {
+        let TokKind::Obj(tm, _) = self.toks[t as usize] else {
+            return false;
         };
-        let TokKind::Obj(_, c) = self.toks[t as usize] else {
-            return None;
-        };
-        if c == NO_CTX {
-            return None;
+        if self.fn_inst.get(&f) == Some(&tm) {
+            return true;
         }
-        Some(self.sum.ctx_src.get(&c).copied().unwrap_or(c))
+        let mut c = Some(tm);
+        while let Some(x) = c {
+            let tx = &self.tmpls[x as usize];
+            if tx.ctor == Some(f) || tx.field_init == Some(f) {
+                return true;
+            }
+            c = tx.parent;
+        }
+        false
+    }
+
+    /// The layout of receiver token `t`: its template for an object (every
+    /// birth site shares it), the class object or prototype of a template,
+    /// the function for a function value (every closure context shares it:
+    /// a context is keyed by a layout, so a layout never names a context),
+    /// the token itself for every other value (each is one value).
+    pub(crate) fn layout_of(&self, t: Tok) -> u32 {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => (1 << 28) | tm,
+            TokKind::ClassObj(tm) => (2 << 28) | tm,
+            TokKind::Proto(tm) => (3 << 28) | tm,
+            TokKind::Func(f, _) => (7 << 28) | f,
+            _ => (4 << 28) | t,
+        }
     }
 
     pub(crate) fn summarized(&self, f: FnIdx) -> bool {
@@ -429,6 +435,8 @@ impl Model {
         };
         let s = self.sum.of[&f].clone();
         let inst = self.sum.insts.len() as u32;
+        // An instance is solve work: the work bound covers instances too.
+        self.work += s.nslots as u64 + 1;
         // Outer slots are the context's nodes (the enclosing instance's);
         // a token without a context observes through the shared nodes.
         let mut outer_at = vec![u32::MAX; s.nslots as usize];
@@ -437,80 +445,143 @@ impl Model {
         }
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
-                u32::MAX => { let n = self.node_named("inst", || format!("inst{inst}.{i}")); self.cw9_inst_fn.insert(n, (f, key.1 | ((key.0 as u32) << 28))); n }
+                u32::MAX => { let n = self.node_named("inst", || format!("inst{inst}.{i}")); self.cw9_inst_fn.insert(n, (f, (key.0 as u32) << 28)); n }
                 _ if ctx == NO_CTX => s.orig[i as usize],
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
             .collect();
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
         let this = tr(s.this);
+        let lay = match key.0 {
+            0 => LAY_SITE | key.1,
+            5 => LAY_BIRTH | key.1,
+            1 if this != NO_NODE => key.1,
+            2 if this != NO_NODE => self.layout_of(TOP),
+            _ if ctx == NO_CTX => LAY_NONE,
+            _ => self.sum.ctx_lay[ctx as usize],
+        };
         self.sum.insts.push(Inst {
             f,
             tok: key.2,
-            host: match key.0 {
-                0 => Some(key.1),
-                6 if self.protocol_calls.contains(&key.1) => self.touch_host(key.1),
-                6 => Some(key.1),
-                _ => None,
-            },
+            lay,
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
             this,
         });
         self.sum.inst_key.insert(key, inst);
-        self.sum.insts_of.entry(key.2).or_default().push(inst);
         self.sum.pending.push((inst, base));
-        if let Some(&u) = self.sum.this_any.get(&key.2) {
-            if this != NO_NODE {
-                self.edge(u, this);
+        // TEMP CWL: what keeps making instances.
+        if self.profile.is_some() && inst % 5000 == 4999 {
+            let mut h: FxHashMap<(u8, u32), u32> = FxHashMap::default();
+            let mut tk: FxHashMap<String, u32> = FxHashMap::default();
+            for &(k, l, _) in self.sum.inst_key.keys() {
+                *h.entry((k, if k == 1 || k == 5 { l >> 28 } else { 9 })).or_default() += 1;
+                if (k == 1 && (l >> 28 == 4 || l >> 28 == 7)) || k == 5 {
+                    let t = if k == 5 { l } else { l & 0x0fff_ffff };
+                    let nm = if k == 1 && l >> 28 == 7 { format!("F:{}", self.funcs[t as usize].name) } else { self.tok_name(t) };
+                    *tk.entry(nm.split('@').next().unwrap_or("").chars().take(60).collect()).or_default() += 1;
+                }
+            }
+            let mut hv: Vec<_> = h.into_iter().collect();
+            hv.sort();
+            let mut tv: Vec<_> = tk.into_iter().collect();
+            tv.sort_by_key(|x| std::cmp::Reverse(x.1));
+            tv.truncate(8);
+            eprintln!("CWL grow inst={} toks={} ctx={} calls={} work={} kinds={hv:?} tokrecv={tv:?} last={:?} f={}", inst + 1, self.toks.len(), self.sum.ctx_nodes.len(), self.calls.len(), self.work, key, self.funcs[f as usize].name);
+            let mut wv: Vec<_> = self.cwl_thisinst.iter().collect();
+            wv.sort_by_key(|x| std::cmp::Reverse(*x.1));
+            for ((why, wf), n) in wv.iter().take(10) { eprintln!("CWL thisinst why={why} fn={} n={n}", self.funcs[*wf as usize].name); }
+            let mut rv: Vec<_> = self.cwl_recv.iter().collect();
+            rv.sort_by_key(|x| std::cmp::Reverse(x.1 .0));
+            for ((rf, shape, lbl, prot, bs, prog), (n, first, site)) in rv.iter().take(12) {
+                eprintln!("CWL recv fn={} this={shape} ret={lbl} protocol={prot} boundsynth={bs} progcall={prog} n={n} first={first} site={site}", self.funcs[*rf as usize].name);
             }
         }
         inst
     }
 
-    /// The instance `call` binds for summarized `f` (None: the template call
-    /// was expanded into the caller's summary).
-    fn inst_for(&mut self, call: CallId, ft: Tok) -> Option<u32> {
-        if let Some(&i) = self.sum.call_inst.get(&(call, ft)) {
-            return Some(i);
-        }
+    /// A call an instance made from a template expanded into the summary:
+    /// the instance already holds `f`'s effect.
+    fn composed_away(&self, call: CallId, f: FnIdx) -> bool {
+        self.sum.tmpl_of.get(&call).is_some_and(|&t| self.sum.composed.contains(&(t, f)))
+    }
+
+    /// Bind `call` (or no call: `NO_NODE`) to summarized `ft` for receiver
+    /// `x` (or the receiver primitives `prim`): the instance of the
+    /// receiver's layout gets the receiver, and the call's arguments and
+    /// result once per (call, instance).
+    pub(crate) fn bind_layout(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
         let f = self.tok_fn(ft);
-        // A call an instance made from a template expanded into the
-        // summary: the instance already holds `f`'s effect.
-        let t = self.sum.tmpl_of.get(&call).copied();
-        if t.is_some_and(|t| self.sum.composed.contains(&(t, f))) {
-            return None;
+        if call != NO_NODE && self.composed_away(call, f) {
+            return;
         }
-        // A call inside `f`'s SCC (recursion), or one no program call is
-        // behind (protocol touch, bound merge, timer, implicit call): the
-        // shared instance. Every other call: the instance for the source call
-        // site behind it, so the count is sites x targets, fixed by the
-        // program.
-        let in_scc = t.is_some_and(|t| {
-            self.sum.owner.get(&t).and_then(|o| self.sum.scc.get(o)) == self.sum.scc.get(&f)
-        });
-        let key = if (call as usize) < self.sum.n_prog {
-            (0, call, ft)
-        } else {
-            match self.sum.origin.get(&call) {
-                Some(&o) if !in_scc => (6, o, ft),
-                o => {
-                    let tf = t.and_then(|t| self.sum.owner.get(&t).copied()).unwrap_or(u32::MAX);
-                    // TEMP CW9: the binding call's creation shape.
-                    let cs = &self.calls[call as usize];
-                    let tag: u32 = (if cs.site == 0 { 0 } else if cs.site == call { 1 } else { 2 }) * 4
-                        + match cs.this { ThisArg::Tok(_) => 0, ThisArg::Node(_) => 1, ThisArg::Undef => 2 }
-                        + if self.protocol_calls.contains(&call) { 100 } else { 0 }
-                        + if self.bound_synth.contains(&call) { 200 } else { 0 }
-                        + 10000 * match self.labels[cs.ret as usize] { "cb-ret" => 1, "b-iter-ret" => 2, "implicit-ret" => 3, "timer-ret" => 4, "bound-ret" => 5, "top-new" => 6, _ => 7 };
-                    *self.cw9_shared.entry((tag, f, if o.is_some() { 1 } else if t.is_some() { 2 } else { 3 }, tf)).or_default() += 1;
-                    (5, 0, ft)
+        let lay = match x {
+            Some(t) if self.has_this_term(f) => self.layout_of(t),
+            _ => LAY_NONE,
+        };
+        // TEMP CWL: how a function or bound value becomes a receiver.
+        if lay >> 28 == 4 || lay >> 28 == 7 {
+            if let Some(t) = x {
+                if std::env::var_os("CWL_INST").is_some() || self.profile.is_some() {
+                    let (shape, lbl, site, prot, bs) = if call == NO_NODE {
+                        ("none".to_string(), "-", 0, false, false)
+                    } else {
+                        let cs = &self.calls[call as usize];
+                        (format!("{:?}", cs.this).chars().take(12).collect(), self.labels[cs.ret as usize], cs.site, self.protocol_calls.contains(&call), self.bound_synth.contains(&call))
+                    };
+                    let mut nm = self.tok_name(t);
+                    let prog = (call as usize) < self.sum.n_prog;
+                    if call != NO_NODE {
+                        if let ThisArg::Node(n) = self.calls[call as usize].this {
+                            let mut k = [0u32; 6];
+                            for x in self.nodes[n as usize].pts.to_sorted() { k[match self.toks[x as usize] { TokKind::Obj(..) => 0, TokKind::Func(..) => 1, TokKind::Bound(_) => 2, TokKind::ClassObj(_) | TokKind::Proto(_) => 3, TokKind::Top => 4, _ => 5 }] += 1; }
+                            let st = (site as usize) < self.stores.len();
+                            nm = format!("{nm} thisnode={n} label={} kinds(obj,fn,bound,cls,top,other)={k:?} site={} in {} tmpl={:?} callee_owner={:?}", self.labels[n as usize], if st { self.stores[site as usize].desc.clone() } else { "-".into() }, if st && self.stores[site as usize].func != u32::MAX { self.funcs[self.stores[site as usize].func as usize].name.clone() } else { "-".into() }, self.sum.tmpl_of.get(&call), self.sum.tmpl_of.get(&call).and_then(|t| self.calls.get(*t as usize)).map(|c| self.labels[c.ret as usize]));
+                        }
+                    }
+                    if let Some(&tc) = self.sum.tmpl_of.get(&call) {
+                        if self.cwl_seen.len() < 3 && self.cwl_seen.insert(tc) {
+                            let fname = |m: &Self, n: NodeId| { let f = m.node_fn[n as usize]; if f == NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() } };
+                            let cs = self.calls[tc as usize].clone();
+                            let tn = match cs.this { ThisArg::Node(n) => format!("Node({n}) label={} fn={}", self.labels[n as usize], fname(self, n)), ref x => format!("{x:?}") };
+                            eprintln!("CWL tmplcall {tc} this={tn} args={:?} ret={} fn={}", cs.args, cs.ret, fname(self, cs.ret));
+                            let mut k = 0;
+                            for (n, node) in self.nodes.iter().enumerate() {
+                                for c in &node.cons {
+                                    let (_, ks) = cons_fields(c);
+                                    if ks.contains(&tc) {
+                                        k += 1;
+                                        if k <= 12 { eprintln!("CWL tmplcons {} on {}#{n} fn={} toks={}", c.kind_name(), self.labels[n], fname(self, n as NodeId), node.pts.len()); }
+                                    }
+                                }
+                            }
+                            eprintln!("CWL tmplcons total={k}");
+                        }
+                    }
+                    let e = self.cwl_recv.entry((f, shape, lbl, prot, bs, prog)).or_insert((0, String::new(), 0));
+                    e.0 += 1;
+                    if e.1.is_empty() { e.1 = nm; e.2 = site; }
                 }
             }
+        }
+        let key = match x {
+            _ if self.sum.site_calls.contains(&call) => (0, call, ft),
+            Some(t) if self.constructs(f, t) => (5, t, ft),
+            _ => (1, lay, ft),
         };
         let inst = self.instance(key);
-        self.sum.call_inst.insert((call, ft), inst);
-        Some(inst)
+        let it = self.sum.insts[inst as usize].this;
+        if it != NO_NODE {
+            if let Some(t) = x {
+                self.add_tok(it, t);
+            }
+            if prim != 0 {
+                self.add_prim(it, prim);
+            }
+        }
+        if call != NO_NODE && self.sum.bound.insert((call, inst)) {
+            self.wire_args(call, inst);
+        }
     }
 
     /// The `this` term of summarized `f`'s instances, if it has one.
@@ -534,11 +605,20 @@ impl Model {
             (None, &ThisArg::Node(n)) => self.edge(n, fthis),
             (None, ThisArg::Undef) => self.add_prim(fthis, prim::UNDEF),
         }
-        if let Some(x) = this_tok {
-            if self.has_this_term(f) && !self.sum.templates.contains(&call) {
-                if let Some(i) = self.inst_for(call, ft) {
-                    let it = self.sum.insts[i as usize].this;
-                    self.add_tok(it, x);
+        if !self.has_this_term(f) || self.sum.templates.contains(&call) {
+            return;
+        }
+        // The instance half: each receiver binds its layout's instance.
+        match (this_tok, self.calls[call as usize].this.clone()) {
+            (Some(x), _) | (None, ThisArg::Tok(x)) => self.bind_layout(call, ft, Some(x), 0),
+            (None, ThisArg::Undef) => self.bind_layout(call, ft, None, prim::UNDEF),
+            // A call bound through a method lookup gets each receiver from
+            // the lookup (`this_calls`).
+            (None, ThisArg::Node(_)) if self.relays.contains_key(&call) => {}
+            (None, ThisArg::Node(n)) => {
+                if self.sum.this_inst.insert((call, ft)) {
+                    *self.cwl_thisinst.entry((self.cwl_why, f)).or_default() += 1;
+                    self.cons(n, Cons::ThisInst { call, ft });
                 }
             }
         }
@@ -571,13 +651,11 @@ impl Model {
         let u = self.node_named("this-any", || format!("this-any({f})"));
         self.sum.this_any.insert(ft, u);
         self.edge(u, fthis);
-        for i in self.sum.insts_of.get(&ft).cloned().unwrap_or_default() {
-            let it = self.sum.insts[i as usize].this;
-            self.edge(u, it);
-        }
+        // The receiver-less instance runs the effect even if no value does.
         if self.instantiable(ft) {
-            self.instance((5, 0, ft));
+            self.instance((1, LAY_NONE, ft));
         }
+        self.cons(u, Cons::ThisInst { call: NO_NODE, ft });
         u
     }
 
@@ -627,46 +705,13 @@ impl Model {
     fn fill_instance(&mut self, inst: u32, base: &[NodeId]) {
         let f = self.sum.insts[inst as usize].f;
         let s = self.sum.of[&f].clone();
-        let host = self.sum.insts[inst as usize].host;
+        let lay = self.sum.insts[inst as usize].lay;
         let tr = |x: NodeId| if is_slot(x) { base[(x & !SLOT) as usize] } else { x };
-        // Calls whose callee or receiver is an input term (a parameter or
-        // `this`): what they bind is what the caller passed.
-        let inputs: FxHashSet<NodeId> = s
-            .params
-            .iter()
-            .chain([&s.this])
-            .copied()
-            .chain(s.outer.iter().map(|&o| SLOT | o))
-            .filter(|&x| is_slot(x))
-            .collect();
-        let mut by_input: FxHashSet<u32> = FxHashSet::default();
-        for (h, c) in &s.cons {
-            if inputs.contains(h) {
-                let (_, ks) = cons_fields(c);
-                for k in ks {
-                    if k != NO_NODE && k & CALL != 0 {
-                        by_input.insert(k & !CALL);
-                    }
-                }
-            }
-        }
         let mut kmap = Vec::with_capacity(s.calls.len());
-        for (ci, (t, cs)) in s.calls.iter().enumerate() {
+        for (t, cs) in s.calls.iter() {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
-            // Keyed by the instance's host when it calls an input (the
-            // callback or receiver the caller passed), else by its own
-            // source site: one level of call-site context either way, so
-            // instances never multiply through instances.
-            let key_site = match host {
-                Some(h) if by_input.contains(&(ci as u32)) => h,
-                _ => *t,
-            };
-            self.sum.origin.insert(id, key_site);
-            if let Some(h) = host {
-                self.sum.host.insert(id, h);
-            }
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
             }
@@ -676,20 +721,15 @@ impl Model {
             self.add(base[slot as usize], toks, prim);
         }
         // Closures born here carry this instance's nodes for their outer
-        // terms.
+        // terms, in the context of its lexical layout.
         for (slot, g, terms) in &s.closures {
             let nodes: Vec<NodeId> = terms.iter().map(|&x| tr(x)).collect();
-            let t = self.closure_tok(*g, host.unwrap_or(NO_HOST), &nodes);
+            let t = self.closure_tok(*g, lay, &nodes);
             self.add_tok(base[*slot as usize], t);
         }
-        // Literals born here: one token per (literal, host site); one for
-        // every instance no call site is behind.
+        // Literals born here: one token per literal, whichever instance.
         for &(slot, tm) in &s.births {
-            let h = host.unwrap_or(NO_HOST);
-            let n = self.sum.ctx_ids.len() as CallId;
-            let ctx = *self.sum.ctx_ids.entry((LIT | tm, h)).or_insert(NO_CTX - 1 - n);
-            self.sum.ctx_src.entry(ctx).or_insert(LIT | tm);
-            let t = self.site_tok(tm, ctx);
+            let t = self.site_tok(tm, BORN);
             self.add_tok(base[slot as usize], t);
         }
         for &(a, b) in &s.edges {
@@ -709,18 +749,20 @@ impl Model {
         }
     }
 
-    /// The token of closure `g` made by an instance for `host`, whose nodes
-    /// for `g`'s outer terms are `nodes`. The context's own nodes are those
-    /// terms for every instance of that host, both ways: what the closure
-    /// writes into a captured local reaches the instance that made it.
-    pub(crate) fn closure_tok(&mut self, g: FnIdx, host: CallId, nodes: &[NodeId]) -> Tok {
-        let ctx = match self.sum.ctx_of.get(&(g, host)) {
+    /// The token of closure `g` made by an instance of lexical context
+    /// `lay` (`Inst::lay`), whose nodes for `g`'s outer terms are `nodes`.
+    /// The context's own nodes are those terms for every instance of that
+    /// context, both ways: what the closure writes into a captured local
+    /// reaches the instance that made it.
+    pub(crate) fn closure_tok(&mut self, g: FnIdx, lay: u32, nodes: &[NodeId]) -> Tok {
+        let ctx = match self.sum.ctx_of.get(&(g, lay)) {
             Some(&c) => c,
             None => {
                 let c = self.sum.ctx_nodes.len() as CallId;
                 let cn: Vec<NodeId> = (0..nodes.len()).map(|j| self.node_named("ctx", || format!("ctx{c}.{j}"))).collect();
-                self.sum.ctx_of.insert((g, host), c);
+                self.sum.ctx_of.insert((g, lay), c);
                 self.sum.ctx_nodes.push(cn);
+                self.sum.ctx_lay.push(lay);
                 c
             }
         };
@@ -732,25 +774,18 @@ impl Model {
         self.tok(TokKind::Func(g, ctx))
     }
 
-    /// Arguments and result of `call` into summarized function token `ft`:
-    /// its instance.
+    /// Arguments and result of `call` into summarized function token `ft`.
+    /// A function with a `this` term binds per receiver (`this_into`), the
+    /// others their one instance.
     pub(crate) fn bind_summarized(&mut self, call: CallId, ft: Tok) {
-        let f = self.tok_fn(ft);
-        let Some(inst) = self.inst_for(call, ft) else {
-            return;
-        };
-        let it = self.sum.insts[inst as usize].this;
-        if it != NO_NODE {
-            match self.calls[call as usize].this {
-                // A call bound through a method lookup: each receiver whose
-                // lookup found `f` reaches the instance (`this_calls`), never
-                // the whole receiver node.
-                ThisArg::Node(_) if self.relays.contains_key(&call) => {}
-                ThisArg::Node(n) => self.edge(n, it),
-                ThisArg::Tok(x) => self.add_tok(it, x),
-                ThisArg::Undef => self.add_prim(it, prim::UNDEF),
-            }
+        if !self.has_this_term(self.tok_fn(ft)) {
+            self.bind_layout(call, ft, None, 0);
         }
+    }
+
+    /// Arguments and result of `call` into instance `inst`.
+    fn wire_args(&mut self, call: CallId, inst: u32) {
+        let f = self.sum.insts[inst as usize].f;
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();
         let c = call as usize;
@@ -792,11 +827,14 @@ impl Model {
         }
     }
 
-    /// The result node `call` sees from `f` (its instance's, if summarized).
-    pub(crate) fn ret_for(&self, call: CallId, ft: Tok) -> NodeId {
-        match self.sum.call_inst.get(&(call, ft)) {
-            Some(&i) => self.sum.insts[i as usize].ret,
-            None => self.funcs[self.tok_fn(ft) as usize].ret,
+    /// The result node `call` sees from `f`: none for a summarized `f`
+    /// (each instance's result is wired into the call's), else its own.
+    pub(crate) fn ret_for(&self, _call: CallId, ft: Tok) -> NodeId {
+        let f = self.tok_fn(ft);
+        if self.summarized(f) {
+            NO_NODE
+        } else {
+            self.funcs[f as usize].ret
         }
     }
 
@@ -851,6 +889,18 @@ impl Model {
         let t0 = std::time::Instant::now();
         self.sum.n_prog = self.calls.len();
         build_summaries(self);
+        for n in 0..self.nodes.len() {
+            if self.nodes[n].obs {
+                continue;
+            }
+            for c in &self.nodes[n].cons {
+                if let Cons::Call { call } = *c {
+                    if (call as usize) < self.sum.n_prog && !self.sum.templates.contains(&call) {
+                        self.sum.site_calls.insert(call);
+                    }
+                }
+            }
+        }
         self.sum.ready = true;
         let deferred = std::mem::take(&mut self.sum.deferred);
         let nd = deferred.len();
@@ -882,7 +932,7 @@ impl Model {
                 let ft = self.funcs[f as usize].token;
                 let fed = s.seeds.iter().any(|x| x.0 == sl) || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
                 if fed && self.instantiable(ft) {
-                    self.instance((5, 0, ft));
+                    self.instance((1, LAY_NONE, ft));
                 }
             }
         }
@@ -1674,7 +1724,6 @@ fn build_summaries(m: &mut Model) {
         nclos += s.closures.len();
         for &k in &e.calls {
             m.sum.templates.insert(k);
-            m.sum.owner.insert(k, f);
         }
         if !of.is_empty() {
             m.sum.outer_of.insert(f, of.clone());

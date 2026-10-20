@@ -1175,11 +1175,13 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             m.call_tok(call2, t, None);
         }
         Some("bind") => {
-            // One bound value per (site, target); every bound target of a
-            // site shares one (`f = f.bind(x)` in a loop rebinds its own
-            // result: per target that would mint a new value each round).
+            // One bound value per (birth site, target): a bound value is a
+            // birth, so every instance's copy of the bind call makes the
+            // same one. Every bound target of a site shares one (`f =
+            // f.bind(x)` in a loop rebinds its own result: per target that
+            // would mint a new value each round).
             let key = (
-                call,
+                m.birth_ctx(call),
                 if matches!(m.toks[t as usize], TokKind::Bound(_)) {
                     u32::MAX
                 } else {

@@ -38,6 +38,10 @@ fn lacks(pf: &ProgramFacts, key: &str, class: &str) {
     }
 }
 
+// CWL (layout as the unit of propagation): each call of `f` keeps its own
+// closure (a program site's own instance), but the array `map` makes is born
+// at one site inside `f`, so both calls' results are one token: births are
+// per site, not per instance. Was: each read sees its own class only.
 #[test]
 fn closure_over_a_parameter_keeps_callers_apart() {
     let pf = facts(&format!(
@@ -46,17 +50,24 @@ fn closure_over_a_parameter_keeps_callers_apart() {
         const a = f(new A()); const b = f(new B());
         console.log(a[0].x, b[0].y);"
     ));
-    exact(&pf, "x", 1);
-    exact(&pf, "y", 1);
+    exact(&pf, "x", 2);
+    exact(&pf, "y", 2);
 }
 
+// CWL (layout as the unit of propagation): `run` has one instance per
+// receiver layout and the arrow's context is that layout, so two receiver
+// layouts (H1, H2) keep the arrow's `this` apart. Was: two `H` objects born
+// at two sites (one layout) kept apart, through `[1].map(() => this.o)`
+// (whose result array is now one birth site, so the arrow is returned).
 #[test]
 fn arrow_this_is_the_enclosing_instance_this() {
     let pf = facts(&format!(
         "{CLASSES}
-        class H {{ o: any; constructor(o: any) {{ this.o = o; }} run() {{ return [1].map(() => this.o); }} }}
-        const a = new H(new A()).run(); const b = new H(new B()).run();
-        console.log(a[0].x, b[0].y);"
+        class H {{ o: any; constructor(o: any) {{ this.o = o; }} run() {{ return () => this.o; }} }}
+        class H1 extends H {{ h1 = 1; }}
+        class H2 extends H {{ h2 = 2; }}
+        const a = new H1(new A()).run()(); const b = new H2(new B()).run()();
+        console.log(a.x, b.y);"
     ));
     exact(&pf, "x", 1);
     exact(&pf, "y", 1);
@@ -64,6 +75,9 @@ fn arrow_this_is_the_enclosing_instance_this() {
 
 /// deltablue: `satisfy(mark)` marks its inputs through a closure; a call
 /// passing an object elsewhere never reaches the other constraint's inputs.
+// CWL (layout as the unit of propagation): constraints of two layouts (C1,
+// C2, as deltablue's constraint subclasses) keep their `satisfy` instances
+// apart. Was: two `C` objects born at two sites (one layout) kept apart.
 #[test]
 fn deltablue_mark_stays_primitive() {
     let pf = facts(
@@ -76,9 +90,11 @@ fn deltablue_mark_stays_primitive() {
            inputsDo(fn: any) { fn(this.v); }
            satisfy(mark: any) { this.inputsDo((i: any) => { i.mark = mark; }); }
          }
+         class C1 extends C { c1 = 1; }
+         class C2 extends C { c2 = 2; }
          const v = new V();
-         new C(v).satisfy(1);
-         new C(new W()).satisfy(new O());
+         new C1(v).satisfy(1);
+         new C2(new W()).satisfy(new O());
          console.log(v.mark.k);",
     );
     lacks(&pf, "k", "O");

@@ -21,7 +21,10 @@ fn classes(s: &crate::SiteFacts) -> Vec<String> {
 #[test]
 fn touched_receivers_do_not_share_an_instance() {
     // `${p}` and `${q}` run `P.toString` on each; its write effect must land
-    // on the touched receiver only.
+    // on the touched receiver only. CWL (layout as the unit of propagation):
+    // the touch binds the touched receiver's layout instance, so receivers of
+    // two layouts (P1, P2) stay apart. Was: two `P` objects born at two
+    // sites (one layout) stayed apart.
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -31,8 +34,10 @@ fn touched_receivers_do_not_share_an_instance() {
             constructor(x: any) { this.v = x; this.seen = undefined; }
             toString() { this.seen = this.v; return "p"; }
         }
-        const p = new P(new A());
-        const q = new P(new B());
+        class P1 extends P { p1 = 1; }
+        class P2 extends P { p2 = 2; }
+        const p = new P1(new A());
+        const q = new P2(new B());
         console.log(`${p}`, `${q}`);
         console.log(p.seen.a, q.seen.b);
         "#,

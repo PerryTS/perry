@@ -50,12 +50,16 @@ fn call_and_apply_key_on_their_site() {
         console.log(ra.a, rb.b, pa.a, pb.b);
         "#,
     );
+    // CWL (layout as the unit of propagation): the target call `call` and
+    // `apply` make binds the target's one instance (no `this` term), so all
+    // four results hold both classes; each still reaches its site. Was:
+    // each site's result held its own class only.
     let d = pf.dump_text();
-    for (k, c) in [("a", "A"), ("b", "B")] {
+    for k in ["a", "b"] {
         let v: Vec<_> = pf.sites.iter().filter(|s| s.key == k).collect();
         assert_eq!(v.len(), 2, "{d}");
         for s in v {
-            assert_eq!(classes(s), [c], "{d}");
+            assert_eq!(classes(s), ["A", "B"], "{d}");
         }
     }
 }

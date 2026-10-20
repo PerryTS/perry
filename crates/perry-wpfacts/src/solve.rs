@@ -237,6 +237,7 @@ impl Model {
                 c,
                 Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
+                    | Cons::ThisInst { .. }
                     | Cons::BuiltinCallee
                     | Cons::HolderStep { .. }
                     | Cons::VisitHolders { .. }
@@ -515,6 +516,13 @@ impl Model {
     }
 
     fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        // TEMP CWL: the constraint kind being applied.
+        let prev = std::mem::replace(&mut self.cwl_why, c.kind_name());
+        self.apply_inner2(n, c, toks, prim);
+        self.cwl_why = prev;
+    }
+
+    fn apply_inner2(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
             Cons::Load { key, dst } => {
                 if prim != 0 {
@@ -967,6 +975,14 @@ impl Model {
                     self.call_args(call, t);
                 }
             }
+            Cons::ThisInst { call, ft } => {
+                for &t in toks {
+                    self.bind_layout(call, ft, Some(t), 0);
+                }
+                if prim != 0 {
+                    self.bind_layout(call, ft, None, prim);
+                }
+            }
             Cons::HolderStep { key, pass, stop } => {
                 for &q in toks {
                     if q == TOP {
@@ -1174,10 +1190,6 @@ impl Model {
             site: 0,
         });
         self.protocol_calls.insert(call);
-        // The touch is its own source site: the methods it runs get one
-        // instance per touched receiver, and the calls made while solving
-        // them key on it (`solver_call`), not on one shared instance.
-        self.sum.origin.insert(call, call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         self.method_on(t, Key::Any, call);
         // Results of protocol methods flow back to the runtime (iterator
@@ -1256,6 +1268,7 @@ impl Model {
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
+            Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
             Cons::HolderStep { key, pass, stop } => {
                 format!("holderstep {n} {} {pass} {stop}", self.key_name(*key))

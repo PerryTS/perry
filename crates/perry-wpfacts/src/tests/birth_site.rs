@@ -4,11 +4,13 @@
 
 use super::*;
 
-/// Two vectors filled with different element classes: each one's storage
-/// (born in the constructor, written through `this` in a method) holds its
-/// own elements only.
+/// Two vectors filled with different element classes. CWL (births per
+/// site, not per instance): each vector's storage is born at the one
+/// `new Array` site in the constructor, so both vectors' storage is one
+/// token and holds both element classes; the vectors themselves are two
+/// birth-site tokens of one layout. Was: each storage held its own elements.
 #[test]
-fn two_vector_sites_keep_their_elements_apart() {
+fn two_vector_sites_share_the_storage_birth_site() {
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -27,11 +29,12 @@ fn two_vector_sites_keep_their_elements_apart() {
         console.log(va.at(0).a, vb.at(0).b);
         "#,
     );
-    for (key, class) in [("a", "A"), ("b", "B")] {
+    for key in ["a", "b"] {
         let site = pf.sites.iter().find(|s| s.key == key && !s.is_call).expect("site");
-        assert_eq!(site.receivers, vec![format!("t.ts:{class}")], "{}", pf.dump_text());
-        assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+        assert_eq!(site.receivers, vec!["t.ts:A".to_string(), "t.ts:B".to_string()], "{}", pf.dump_text());
     }
+    let t = tmpl(&pf, "Vec");
+    assert!(t.escape.is_none() && t.hard.is_none(), "{}", pf.dump_text());
 }
 
 /// One class born at many sites and read through one helper: one layout,
@@ -70,10 +73,11 @@ fn a_template_wide_mark_holds_for_every_site() {
 }
 
 /// A subclass constructor (`super(...)`) is summarized: each `new` runs the
-/// parent constructor on its own instance, so two subclass instances born
-/// at different sites keep their parent-allocated storage apart.
+/// parent constructor on its own object. CWL (births per site, not per
+/// instance): the parent-allocated storage is born at one site, so two
+/// subclass objects share it. Was: their storage stayed apart.
 #[test]
-fn subclass_constructors_keep_parent_storage_apart() {
+fn subclass_constructors_share_the_parent_storage_birth_site() {
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -93,8 +97,8 @@ fn subclass_constructors_keep_parent_storage_apart() {
         console.log(pa.at(0).a, pb.at(0).b);
         "#,
     );
-    for (key, class) in [("a", "A"), ("b", "B")] {
+    for key in ["a", "b"] {
         let site = pf.sites.iter().find(|s| s.key == key && !s.is_call).expect("site");
-        assert_eq!(site.receivers, vec![format!("t.ts:{class}")], "{}", pf.dump_text());
+        assert_eq!(site.receivers, vec!["t.ts:A".to_string(), "t.ts:B".to_string()], "{}", pf.dump_text());
     }
 }

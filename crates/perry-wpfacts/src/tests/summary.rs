@@ -95,9 +95,12 @@ fn callback_result_per_call() {
         const a = apply(id, new A()); const b = apply(id, new B());
         console.log(a.x, b.y);"
     ));
-    // `id` is a leaf summary: each call `apply`'s instances make gets its own.
-    exact(&pf, "x", 1);
-    exact(&pf, "y", 1);
+    // CWL (layout as the unit of propagation): `apply` keeps one instance
+    // per program site, but `cb(v)` inside it is a dynamic callee bound per
+    // function token: one `id` instance for both, so both results hold A
+    // and B. Was: each call `apply`'s instances make got its own `id`.
+    exact(&pf, "x", 2);
+    exact(&pf, "y", 2);
 }
 
 /// A callee that itself calls: the calls instances make share one instance

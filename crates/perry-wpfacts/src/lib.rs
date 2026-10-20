@@ -19,6 +19,7 @@
 pub mod bindings;
 mod builtins;
 mod ctor_phase;
+mod cwl_census;
 pub mod delta;
 pub mod derive;
 mod dump;
@@ -202,21 +203,28 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     }
     g.m.solve();
     if cfg.profile || cfg.explain {
-        let mut kinds = [0usize; 7];
-        for &(k, _, _) in g.m.sum.inst_key.keys() {
+        let mut kinds = [0usize; 6];
+        let mut fnkeyed = 0;
+        for &(k, l, _) in g.m.sum.inst_key.keys() {
             kinds[k as usize] += 1;
+            fnkeyed += (k == 1 && l == summary::LAY_NONE) as usize;
         }
         eprintln!(
-            "perry: wpfacts instances {} (call {} site {} shared {} entry {} group {}), program calls {}, calls {}",
+            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {}), program calls {}, calls {}",
             g.m.sum.insts.len(),
             kinds[0],
-            kinds[6],
+            kinds[1],
+            fnkeyed,
             kinds[5],
             kinds[2],
             kinds[3] + kinds[4],
             g.m.sum.n_prog,
             g.m.calls.len()
         );
+    }
+    // TEMP CWL census.
+    if cfg.profile && sorted.len() == 1 && std::env::var("CWL_CENSUS").is_ok_and(|f| sorted[0].0.contains(f.as_str())) {
+        cwl_census::run(&g.m, sorted[0].0);
     }
     // TEMP CW s8 debug: every node with tokens.
     if std::env::var_os("CW_DBG").is_some() {
@@ -437,7 +445,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         derive_ms,
         pops: g.m.pops,
         instances: g.m.sum.insts.len() as u64,
-        shared_instances: g.m.sum.inst_key.keys().filter(|k| k.0 == 5).count() as u64,
+        shared_instances: g.m.sum.inst_key.keys().filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE).count() as u64,
         composed: g.m.sum.composed.len() as u64,
         work: g.m.work,
         aborted: g.m.aborted,
