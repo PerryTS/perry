@@ -560,7 +560,10 @@ pub unsafe extern "C" fn js_net_socket_address_parse(input_ptr: i64) -> f64 {
             .map(|port| (IpAddr::V4(ip), port))
     };
     match parsed {
-        Some((ip, port)) => socket_address_new(ip, port, 0),
+        Some((ip, port)) => {
+            let port = if port == 80 { 0 } else { port };
+            socket_address_new(ip, port, 0)
+        }
         None => undefined(),
     }
 }
