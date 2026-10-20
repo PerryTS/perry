@@ -1719,22 +1719,21 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
     if birth.logical_key_count != 0 || birth.live_inline_slot_count < d.slot_count {
         return obj;
     }
-    let prototype = super::shapes::object_prototype_word(obj);
+    // The layout's identity is the class's own prototype (case 2c). A birth
+    // linked to another one (a class expression evaluation's prototype, a
+    // newTarget's) keeps its linked shape: the family shape would claim the
+    // class prototype while the object inherits from that link.
+    if super::shapes::object_proto_id(obj) != super::shapes::class_proto_id(d.class_id) {
+        return obj;
+    }
     let brand = super::shapes::object_evaluation_brand(obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(obj);
-    let proto = scope.root_nanbox_u64(prototype);
     let brand = scope.root_nanbox_u64(brand);
-    if prototype != 0 || brand.get_nanbox_u64() != 0 {
+    if brand.get_nanbox_u64() != 0 {
         let (meta, current) =
             object.across_mut::<ObjectHeader, _>(|| super::object_meta_ensure(obj));
-        (*meta).prototype = proto.get_nanbox_u64();
         (*meta).private_evaluation_brand = brand.get_nanbox_u64();
-        crate::gc::runtime_write_barrier_slot(
-            meta as usize,
-            std::ptr::addr_of!((*meta).prototype) as usize,
-            (*meta).prototype,
-        );
         crate::gc::runtime_write_barrier_slot(
             meta as usize,
             std::ptr::addr_of!((*meta).private_evaluation_brand) as usize,
