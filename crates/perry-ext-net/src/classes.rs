@@ -553,6 +553,14 @@ pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
     handle_from_value(socket_address_new(ip, port as u16, flowlabel)).unwrap_or(0)
 }
 
+// Check the boxed JS value before touching its payload; numbers must never
+// be converted into addresses. This shares the family/lifecycle admission
+// used by BlockList without changing the internal raw-handle ABI.
+#[no_mangle]
+pub extern "C" fn js_net_socket_address_is_socket_address(value: f64) -> f64 {
+    js_bool(np::lifecycle(value, &SOCKET_ADDRESS).is_ok())
+}
+
 #[no_mangle]
 pub extern "C" fn js_ext_net_is_socket_address_handle(handle: i64) -> i32 {
     np::lifecycle(boxed_handle(handle), &SOCKET_ADDRESS).is_ok() as i32

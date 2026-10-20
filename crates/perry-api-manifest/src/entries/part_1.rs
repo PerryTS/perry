@@ -477,6 +477,7 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method("net", "isBlockList", false, Some("BlockList")),
+    method("net", "isSocketAddress", false, Some("SocketAddress")),
     method("net", "parse", false, Some("SocketAddress")),
     method_sig(
         "net",

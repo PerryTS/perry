@@ -129,16 +129,7 @@ unsafe extern "C" fn js_ext_net_native_dispatch(
             crate::ip::js_net_set_default_auto_select_family_attempt_timeout(arg(0))
         }
         "BlockList.isBlockList" => crate::js_net_block_list_is_block_list(arg(0)),
-        "SocketAddress.isSocketAddress" => {
-            let bits = arg(0).to_bits();
-            let yes = bits & !POINTER_MASK == POINTER_TAG
-                && crate::js_ext_net_is_socket_address_handle((bits & POINTER_MASK) as i64) != 0;
-            f64::from_bits(if yes {
-                0x7FFC_0000_0000_0004
-            } else {
-                0x7FFC_0000_0000_0003
-            })
-        }
+        "SocketAddress.isSocketAddress" => crate::js_net_socket_address_is_socket_address(arg(0)),
         "SocketAddress.parse" => crate::js_net_socket_address_parse_value(arg(0)),
         "BlockList" => handle_value(crate::js_net_block_list_new()),
         "SocketAddress" => handle_value(crate::js_net_socket_address_new(arg(0))),

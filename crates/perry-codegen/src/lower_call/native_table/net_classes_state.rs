@@ -34,6 +34,15 @@ pub(super) const NET_CLASSES_STATE_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "net",
         has_receiver: false,
+        method: "isSocketAddress",
+        class_filter: Some("SocketAddress"),
+        runtime: "js_net_socket_address_is_socket_address",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: false,
         method: "parse",
         class_filter: Some("SocketAddress"),
         runtime: "js_net_socket_address_parse_value",
