@@ -33,7 +33,11 @@ mod parent_port;
 #[cfg(test)]
 mod parent_port_tests;
 mod thread_values;
+mod worker_error;
+#[cfg(test)]
+mod worker_error_tests;
 mod worker_options;
+use worker_error::{plain_error_message, worker_error_message};
 #[cfg(test)]
 mod worker_owner_tests;
 mod worker_pump;
@@ -1640,23 +1644,6 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     }
 
     object_value(worker_obj)
-}
-
-/// The value a worker threw, cloned for its parent's 'error' event. A value
-/// that cannot be cloned arrives as a plain Error saying so.
-fn worker_error_message(thrown: f64) -> SerializedValue {
-    clone::try_clone_message(thrown, js_undefined()).unwrap_or_else(|_| {
-        plain_error_message(b"the worker threw a value that could not be cloned")
-    })
-}
-
-fn plain_error_message(message: &[u8]) -> SerializedValue {
-    SerializedValue::Error {
-        name: b"Error".to_vec(),
-        message: Some(message.to_vec()),
-        stack: None,
-        cause: None,
-    }
 }
 
 /// worker_threads.setEnvironmentData(key, value)
