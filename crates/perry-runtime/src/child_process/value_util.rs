@@ -59,7 +59,13 @@ pub(crate) fn cp_array_ptr(value: f64) -> Option<*mut crate::array::ArrayHeader>
             (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let t = (*header).obj_type;
         if t == crate::gc::GC_TYPE_ARRAY || t == crate::gc::GC_TYPE_LAZY_ARRAY {
-            Some(raw as *mut crate::array::ArrayHeader)
+            // Resolve a forwarding stub left by a grown array (#233).
+            let live = crate::array::clean_arr_ptr_mut(raw as *mut crate::array::ArrayHeader);
+            if live.is_null() {
+                None
+            } else {
+                Some(live)
+            }
         } else {
             None
         }
@@ -170,12 +176,13 @@ pub(crate) unsafe fn cp_read_arg_strings(args_ptr: i64) -> Vec<String> {
     if t != crate::gc::GC_TYPE_ARRAY && t != crate::gc::GC_TYPE_LAZY_ARRAY {
         return out;
     }
-    let arr = args_ptr as *const crate::array::ArrayHeader;
+    let arr = crate::array::clean_arr_ptr(args_ptr as *const crate::array::ArrayHeader);
+    if arr.is_null() {
+        return out;
+    }
     let n = (*arr).length as usize;
-    let data =
-        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *const f64;
     for i in 0..n {
-        if let Some(s) = cp_value_to_string(*data.add(i)) {
+        if let Some(s) = cp_value_to_string(crate::array::js_array_get_f64(arr, i as u32)) {
             out.push(s);
         }
     }

@@ -255,7 +255,7 @@ fn table_properties_from_value(value: f64) -> Option<Vec<String>> {
         if get_gc_type(value) != crate::gc::GC_TYPE_ARRAY {
             return None;
         }
-        let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+        let arr_ptr = crate::array::clean_arr_ptr(jsval.as_pointer::<crate::array::ArrayHeader>());
         if arr_ptr.is_null() {
             return None;
         }
@@ -324,7 +324,8 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
 
         if gc_type == crate::gc::GC_TYPE_ARRAY {
             // Array case — peek at first element to decide shape.
-            let arr_ptr = jsval.as_pointer::<crate::array::ArrayHeader>();
+            let arr_ptr =
+                crate::array::clean_arr_ptr(jsval.as_pointer::<crate::array::ArrayHeader>());
             if arr_ptr.is_null() {
                 println!("undefined");
                 return;
@@ -425,8 +426,14 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let elem = *data_ptr.add(i);
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
                     if get_gc_type(elem) == crate::gc::GC_TYPE_ARRAY {
-                        let sub = elem_jsval.as_pointer::<crate::array::ArrayHeader>();
-                        let l = (*sub).length as usize;
+                        let sub = crate::array::clean_arr_ptr(
+                            elem_jsval.as_pointer::<crate::array::ArrayHeader>(),
+                        );
+                        let l = if sub.is_null() {
+                            0
+                        } else {
+                            (*sub).length as usize
+                        };
                         if l > max_len {
                             max_len = l;
                         }
@@ -450,8 +457,13 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     if get_gc_type(elem) != crate::gc::GC_TYPE_ARRAY {
                         continue;
                     }
-                    let sub = JSValue::from_bits(elem.to_bits())
-                        .as_pointer::<crate::array::ArrayHeader>();
+                    let sub = crate::array::clean_arr_ptr(
+                        JSValue::from_bits(elem.to_bits())
+                            .as_pointer::<crate::array::ArrayHeader>(),
+                    );
+                    if sub.is_null() {
+                        continue;
+                    }
                     let sub_len = ((*sub).length as usize).min(max_len);
                     let sub_data =
                         crate::array::array_elements_ptr(sub as *const crate::array::ArrayHeader)
@@ -481,11 +493,19 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let mut row: Vec<String> = Vec::with_capacity(headers.len());
                     row.push(i.to_string());
                     if get_gc_type(elem) == crate::gc::GC_TYPE_ARRAY {
-                        let sub = elem_jsval.as_pointer::<crate::array::ArrayHeader>();
-                        let sub_len = (*sub).length as usize;
-                        let sub_data = crate::array::array_elements_ptr(
-                            sub as *const crate::array::ArrayHeader,
-                        ) as *const f64;
+                        let sub = crate::array::clean_arr_ptr(
+                            elem_jsval.as_pointer::<crate::array::ArrayHeader>(),
+                        );
+                        let sub_len = if sub.is_null() {
+                            0
+                        } else {
+                            (*sub).length as usize
+                        };
+                        let sub_data = if sub.is_null() {
+                            std::ptr::null()
+                        } else {
+                            crate::array::array_elements_ptr(sub) as *const f64
+                        };
                         for &j in &columns {
                             // A slot this row does not own renders as an empty
                             // cell, exactly like a short row's missing tail —

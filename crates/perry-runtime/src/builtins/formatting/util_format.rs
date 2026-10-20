@@ -65,9 +65,13 @@ unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize
     }
     stack.push(addr);
 
-    let arr = ptr as *const crate::ArrayHeader;
+    let arr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader);
+    if arr.is_null() {
+        stack.pop();
+        return false;
+    }
     let len = (*arr).length as usize;
-    let elements = crate::array::array_elements_ptr(ptr as *const crate::ArrayHeader) as *const f64;
+    let elements = crate::array::array_elements_ptr(arr) as *const f64;
     let found = (0..len).any(|i| {
         let value = *elements.add(i);
         let bits = value.to_bits();
