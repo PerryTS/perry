@@ -147,7 +147,7 @@ mod tests {
             keys: own
                 .iter()
                 .enumerate()
-                .map(|(i, k)| (k.to_string(), i as u32))
+                .map(|(i, k)| (k.to_string().into(), i as u32))
                 .collect(),
             slot_count: own.len() as u32,
             own_count: own.len() as u32,

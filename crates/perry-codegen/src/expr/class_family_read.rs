@@ -209,7 +209,7 @@ mod tests {
             parent_class_id: parent,
             keys: keys
                 .iter()
-                .map(|(key, slot)| ((*key).to_owned(), *slot))
+                .map(|(key, slot)| ((*key).into(), *slot))
                 .collect(),
             slot_count: keys.len() as u32,
             own_count: keys.len() as u32,

@@ -47,6 +47,12 @@ pub const LAYOUT_KEY_NON_CONFIGURABLE: u8 = 0x04;
 pub const LAYOUT_KEY_ACCESSOR: u8 = 0x08;
 pub const LAYOUT_KEY_HAS_GET: u8 = 0x10;
 pub const LAYOUT_KEY_HAS_SET: u8 = 0x20;
+/// `PerryLayoutKey.attrs` of a private field's element (the runtime's
+/// `key_attrs::PRIVATE_FIELD_ENTRY`: `ENTRY_PRIVATE | ENTRY_NON_ENUMERABLE`):
+/// the key is the field's qualified private name, never a property. A class
+/// family emits it with [`LAYOUT_KEY_OPTIONAL`]: the element is absent until
+/// the field's definition fills its slot.
+pub const LAYOUT_KEY_PRIVATE_FIELD: u8 = 0x42;
 
 /// `StaticAtom.kind` (OBJECT_MODEL_2026-10-13.md §6a): a string key.
 pub const ATOM_KIND_STRING: u8 = 0;

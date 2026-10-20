@@ -94,6 +94,16 @@ pub(crate) fn cannot_be_private_member_name(key: *const crate::StringHeader) -> 
     }
 }
 
+/// Is `bytes` (a key's text) spelled in the private namespaces (a private
+/// member's or a private field's storage or request name)? Such a key's
+/// by-name access belongs to `private_member_get_by_name` /
+/// `private_member_set_by_name`: an own-key fast path that answers by
+/// spelling (a family layout's, `layout_desc::family_store`) leaves it to
+/// them.
+pub(crate) fn private_namespace_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"#<perry:private-")
+}
+
 fn private_member_storage_name(key: *const crate::StringHeader) -> Option<String> {
     if cannot_be_private_member_name(key) {
         return None;

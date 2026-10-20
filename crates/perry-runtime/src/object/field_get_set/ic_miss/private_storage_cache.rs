@@ -9,7 +9,10 @@ struct PrivateStorageKey {
     spelling: String,
     // ShapeIds include key order, attributes and the live inline bound. No
     // object pointer is retained, and every hit reads the current slot value.
-    slot: std::cell::Cell<Option<(u32, u32, u32)>>,
+    // The last word is the entry: a layout's optional element (a class
+    // family's) is present only while its slot holds no hole, which every
+    // hit reads from the object.
+    slot: std::cell::Cell<Option<(u32, u32, u32, u8)>>,
 }
 
 impl std::ops::Deref for PrivateStorageKey {
@@ -33,12 +36,15 @@ impl PrivateStorageKey {
         {
             return None;
         }
-        if let Some((shape, index, live)) = self.slot.get() {
+        if let Some((shape, index, live, entry)) = self.slot.get() {
             // The honest +4 tag contract also rejects other layouts and
             // forwarded cells. This is one immutable shape compare and load.
             let object = addr as *const ObjectHeader;
             if unsafe { crate::object::shapes::object_shape_stamp(object) } == shape {
-                return Some((object, index, live));
+                return unsafe {
+                    crate::object::key_attrs::private_element_present(object, entry, index)
+                }
+                .then_some((object, index, live));
             }
         }
         self.locate_miss(receiver)
@@ -85,15 +91,75 @@ impl PrivateStorageKey {
                 )
             }?;
             let attrs = unsafe { crate::object::key_attrs::keys_entry(keys.arr(), index) };
-            if attrs != crate::object::key_attrs::PRIVATE_FIELD_ENTRY {
+            if attrs & !crate::object::key_attrs::ENTRY_OPTIONAL
+                != crate::object::key_attrs::PRIVATE_FIELD_ENTRY
+            {
                 return None;
             }
             let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape)?;
-            let slot = (shape, unsafe { keys.storage_slot(index) }, live);
+            let slot = (shape, unsafe { keys.storage_slot(index) }, live, attrs);
             self.slot.set(Some(slot));
             Some(slot)
         })?;
-        Some((object, slot.1, slot.2))
+        // A layout's optional element (a class family's) is present once its
+        // slot is filled, which this object's word says, not the ShapeId.
+        unsafe { crate::object::key_attrs::private_element_present(object, slot.3, slot.1) }
+            .then_some((object, slot.1, slot.2))
+    }
+
+    /// Define this field on `receiver` whose holder's layout already lists
+    /// its element as optional (a class family's, `ENTRY_OPTIONAL`) with the
+    /// hole in its slot: the definition fills the slot, and the holder keeps
+    /// its layout. `false` changes nothing: the caller claims the element.
+    /// The caller has checked that the field is absent.
+    fn fill_optional(&self, receiver: f64, value: f64) -> bool {
+        unsafe {
+            let Some(object) = private_element_holder(receiver) else {
+                return false;
+            };
+            if crate::object::key_attrs::object_summary(object)
+                & crate::object::key_attrs::SUMMARY_PRIVATE
+                == 0
+                || crate::object::overflow::has_overflow(object)
+                || (*object).class_id == NATIVE_MODULE_CLASS_ID
+            {
+                return false;
+            }
+            let keys = crate::object::object_keys(object);
+            if keys.is_null() {
+                return false;
+            }
+            let Some(index) = crate::object::keys_find_private_slot_by_bytes(
+                keys.arr(),
+                keys.count(),
+                self.as_bytes(),
+            ) else {
+                return false;
+            };
+            if crate::object::key_attrs::keys_entry(keys.arr(), index)
+                != crate::object::key_attrs::PRIVATE_FIELD_ENTRY
+                    | crate::object::key_attrs::ENTRY_OPTIONAL
+            {
+                return false;
+            }
+            let slot = keys.storage_slot(index);
+            if crate::object::key_attrs::private_element_word(object, slot)
+                != Some(crate::value::TAG_HOLE)
+            {
+                return false;
+            }
+            let bits = if value.to_bits() == crate::value::POINTER_TAG {
+                crate::value::TAG_UNDEFINED
+            } else {
+                value.to_bits()
+            };
+            if slot < crate::object::object_inline_capacity(object) {
+                crate::object::store_object_field_slot(object, slot as usize, bits);
+            } else {
+                overflow_set(object as usize, slot as usize, bits);
+            }
+            true
+        }
     }
 
     #[inline]
@@ -344,7 +410,7 @@ mod private_storage_cache_tests {
                 })
             };
             assert_eq!(read(), Some(11.0));
-            let (_, index, live) = storage.slot.get().unwrap();
+            let (_, index, live, _) = storage.slot.get().unwrap();
             assert_eq!(
                 index < live,
                 i == 0,

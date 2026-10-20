@@ -68,7 +68,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use perry_hir::{Expr, Module, Stmt};
+use perry_hir::{BinaryOp, Expr, Module, Stmt};
 
 use crate::expr::FnCtx;
 use crate::rooting::{self, Repr};
@@ -467,6 +467,29 @@ impl Analysis<'_> {
         }
     }
 
+    /// A string constant expression: a key constant that is a string, or a
+    /// concatenation of them (`a + b`, a template literal's parts, whose
+    /// substitutions are `TemplateStringCoerce`). Every operand is a string,
+    /// so `+` concatenates and ToString is the identity.
+    fn str_const(&self, e: &Expr) -> Option<String> {
+        match e {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => {
+                let mut s = self.str_const(left)?;
+                s.push_str(&self.str_const(right)?);
+                Some(s)
+            }
+            Expr::TemplateStringCoerce(x) => self.str_const(x),
+            _ => match self.key_const(e)? {
+                KeyConst::Str(s) => Some(s),
+                KeyConst::Symbol(_) => None,
+            },
+        }
+    }
+
     /// The own keys of a spread or assign source `e`, when known.
     fn source_image(&self, e: &Expr) -> Option<Vec<ImageEntry>> {
         match e {
@@ -545,6 +568,18 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
         if matches!(init, Expr::String(_) | Expr::SymbolFor(_)) {
             if let Some(k) = a.key_const(init) {
                 a.consts.insert(*id, k);
+            }
+            continue;
+        }
+        if matches!(
+            init,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ) {
+            if let Some(s) = a.str_const(init) {
+                a.consts.insert(*id, KeyConst::Str(s));
             }
             continue;
         }

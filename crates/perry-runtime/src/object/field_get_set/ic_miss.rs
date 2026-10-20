@@ -834,6 +834,11 @@ pub extern "C" fn js_private_field_add(
     let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
         throw_private_type_error(&format!("Cannot initialize {field_name} on this object"));
     };
+    // A class family's layout lists the element (`ENTRY_OPTIONAL`): the
+    // definition fills its slot. Allocation-free.
+    if storage.fill_optional(obj.get_nanbox_f64(), value.get_nanbox_f64()) {
+        return value.get_nanbox_f64();
+    }
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
     let pred_rep = crate::object::shapes::shape_rep_by_id(unsafe {

@@ -1114,10 +1114,11 @@ fn run_class(
     if c != class_id {
         return None;
     }
-    if family.keys.get(pos as usize).map(|(k, _)| k.as_str()) != Some(property) {
+    if family.keys.get(pos as usize).and_then(|(k, _)| k.name()) != Some(property) {
         return None;
     }
-    let keys: Vec<&str> = family.keys.iter().map(|(k, _)| k.as_str()).collect();
+    // The properties the run may add (a private element is never one).
+    let keys: Vec<&str> = family.keys.iter().filter_map(|(k, _)| k.name()).collect();
     let chain = crate::codegen::static_prototype::add_chain(ctx, name, &keys)?;
     let later = if order_known {
         Vec::new()

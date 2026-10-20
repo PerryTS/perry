@@ -42,6 +42,79 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use perry_hir::{Class, ClassFieldOrigin, Expr, Module as HirModule, Stmt};
 
+/// One key of a family layout. Only a [`FamilyKey::Name`] is a property: it
+/// alone compares equal to a property name (`== "x"`), so no consumer that
+/// looks a property up by name can reach a private element.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FamilyKey {
+    /// A string-named property.
+    Name(String),
+    /// A private field of the instance (#11791): an `ENTRY_PRIVATE` element,
+    /// never a property, stored under the runtime's qualified private name
+    /// (`codegen::static_private_class::private_storage_key`). Its
+    /// definition is the runtime's claim (`js_private_field_add`), which
+    /// fills the slot's hole.
+    Private(String),
+}
+
+impl FamilyKey {
+    /// The property name, when the key is a property.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            FamilyKey::Name(n) => Some(n),
+            FamilyKey::Private(_) => None,
+        }
+    }
+
+    /// The key's atom spelling: the property name, or the private field's
+    /// qualified storage name.
+    pub fn spelling(&self) -> &str {
+        match self {
+            FamilyKey::Name(n) | FamilyKey::Private(n) => n,
+        }
+    }
+
+    pub fn is_private(&self) -> bool {
+        matches!(self, FamilyKey::Private(_))
+    }
+}
+
+impl PartialEq<str> for FamilyKey {
+    fn eq(&self, other: &str) -> bool {
+        self.name() == Some(other)
+    }
+}
+
+impl PartialEq<&str> for FamilyKey {
+    fn eq(&self, other: &&str) -> bool {
+        self.name() == Some(*other)
+    }
+}
+
+impl PartialEq<String> for FamilyKey {
+    fn eq(&self, other: &String) -> bool {
+        self.name() == Some(other.as_str())
+    }
+}
+
+impl From<&str> for FamilyKey {
+    fn from(name: &str) -> Self {
+        FamilyKey::Name(name.to_string())
+    }
+}
+
+impl From<String> for FamilyKey {
+    fn from(name: String) -> Self {
+        FamilyKey::Name(name)
+    }
+}
+
+impl std::fmt::Display for FamilyKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.spelling())
+    }
+}
+
 /// One static class family's layout.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FamilyLayout {
@@ -50,7 +123,7 @@ pub struct FamilyLayout {
     pub parent_class_id: u32,
     /// The keys in enumeration (store) order with their slots
     /// ([`assign_slots`]).
-    pub keys: Vec<(String, u32)>,
+    pub keys: Vec<(FamilyKey, u32)>,
     pub slot_count: u32,
     /// The constructor keys are `keys[..own_count]`; the rest are late keys
     /// (`late`). Every slot holds the hole until its key is written.
@@ -76,7 +149,7 @@ pub struct FamilyLayout {
 pub struct FamilyVariant {
     /// The constant (an f64's bits) the birth's argument equals.
     pub key_bits: u64,
-    pub keys: Vec<(String, u32)>,
+    pub keys: Vec<(FamilyKey, u32)>,
     pub slot_count: u32,
 }
 
@@ -85,15 +158,15 @@ pub struct FamilyVariant {
 /// slot in the default layout or its colour slot where free and inside the
 /// variant; every other key the lowest free slot.
 fn variant_slots(
-    keys: &[String],
+    keys: &[FamilyKey],
     own: usize,
-    default: &[(String, u32)],
+    default: &[(FamilyKey, u32)],
     colored: &BTreeMap<String, (u32, u32)>,
 ) -> Vec<u32> {
     let n = keys.len();
     let mut taken = vec![false; n];
     let mut slots: Vec<Option<u32>> = vec![None; n];
-    let at = |k: &str| default.iter().find(|(d, _)| d == k).map(|(_, s)| *s);
+    let at = |k: &FamilyKey| default.iter().find(|(d, _)| d == k).map(|(_, s)| *s);
     for (pos, k) in keys.iter().enumerate() {
         let s = if pos < own { at(k) } else { None };
         if let Some(s) = s.filter(|s| (*s as usize) < n && !taken[*s as usize]) {
@@ -109,7 +182,7 @@ fn variant_slots(
             let want = if pre {
                 at(k)
             } else {
-                colored.get(k).map(|(_, c)| *c)
+                k.name().and_then(|n| colored.get(n)).map(|(_, c)| *c)
             };
             if let Some(s) = want.filter(|s| (*s as usize) >= own && (*s as usize) < n) {
                 if !taken[s as usize] {
@@ -400,6 +473,34 @@ fn receiver_free(s: &Stmt) -> bool {
     matches!(s, Stmt::Expr(e) if !mentions_receiver(e))
 }
 
+/// A parameter default's fill, `if (p === undefined) p = v` (`p` a
+/// parameter, `v` not naming the receiver): the value `v` it may evaluate.
+/// It never reaches the instance; it runs code only when `v` does.
+fn param_default_fill<'a>(s: &'a Stmt, params: &BTreeSet<u32>) -> Option<&'a Expr> {
+    let Stmt::If {
+        condition:
+            Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left,
+                right,
+            },
+        then_branch,
+        else_branch: None,
+    } = s
+    else {
+        return None;
+    };
+    let (Expr::LocalGet(p), Expr::Undefined) = (left.as_ref(), right.as_ref()) else {
+        return None;
+    };
+    match then_branch.as_slice() {
+        [Stmt::Expr(Expr::LocalSet(q, v))] if q == p && params.contains(p) => {
+            (!mentions_receiver(v)).then_some(v.as_ref())
+        }
+        _ => None,
+    }
+}
+
 /// The key a prologue statement stores, if it is one.
 /// The key a prologue statement stores, if it is one, and whether its value
 /// is inert ([`inert`]).
@@ -445,7 +546,10 @@ fn node_event_emitter_heritage(class: &Class) -> bool {
             })
 }
 
-fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
+/// `fresh`: `class` is a per-evaluation template (`ClassExprFresh`), whose
+/// evaluations name their private elements per evaluation, never by the
+/// template's spelling.
+fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, String> {
     if (class.native_extends.is_some() && !node_event_emitter_heritage(class))
         || !class.decorators.is_empty()
         || class.is_literal_shape()
@@ -456,12 +560,50 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
     // A public field with a plain name is defined before (base) or right
     // after `super()` (derived) by the field-initialisation phase, in source
     // order and ahead of every constructor-body store: a key of the family
-    // like a prologue store. Anything else the phase can do (a computed key,
-    // a private name, a decorator, a reservation that carries an
-    // initializer) is not modelled.
-    let mut defined: Vec<(String, bool)> = Vec::new();
+    // like a prologue store. A private field is the runtime's claim of its
+    // private element (`js_private_field_add`), at the same point. Anything
+    // else the phase can do (a computed key, a decorator, a reservation that
+    // carries an initializer) is not modelled.
+    let mut defined: Vec<(FamilyKey, bool)> = Vec::new();
     let mut defined_open = true;
     for f in &class.fields {
+        // A class capture (`__perry_cap_*`) is never defined by the
+        // field-initialisation phase (`field_init` skips it): the
+        // constructor's own `this.__perry_cap_* = <capture param>` stash
+        // stores it, so it is a constructor key like any prologue store.
+        if f.origin == ClassFieldOrigin::Definition
+            && f.key_expr.is_none()
+            && f.init.is_none()
+            && !f.is_private
+            && f.decorators.is_empty()
+            && f.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
+        {
+            continue;
+        }
+        // A private field: its element joins the layout under its qualified
+        // storage name. A brand (private methods or accessors) would move
+        // the instance off its layout, and a specialized class's elements
+        // carry another class's id.
+        if f.origin == ClassFieldOrigin::Definition
+            && f.is_private
+            && f.key_expr.is_none()
+            && f.decorators.is_empty()
+            && !class.has_private_instance_brand()
+            && class.specialized_from.is_none()
+            && !fresh
+        {
+            defined_open &= f.init.as_ref().is_none_or(|e| inert(e, &BTreeSet::new()));
+            let key = FamilyKey::Private(
+                crate::codegen::static_private_class::private_storage_key(class.id, &f.name),
+            );
+            if !defined.iter().any(|(x, _)| *x == key) {
+                defined.push((key, defined_open));
+            }
+            // The claim is a runtime call: no later key is an unchecked
+            // initialization.
+            defined_open = false;
+            continue;
+        }
         let plain = f.key_expr.is_none()
             && !f.is_private
             && f.decorators.is_empty()
@@ -476,14 +618,14 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
                 // that may run code ends the initialization at this key.
                 defined_open &= f.init.as_ref().is_none_or(|e| inert(e, &BTreeSet::new()));
                 if !defined.iter().any(|(x, _)| *x == f.name) {
-                    defined.push((f.name.clone(), defined_open));
+                    defined.push((FamilyKey::Name(f.name.clone()), defined_open));
                 }
             }
             _ => {
                 let why = if f.key_expr.is_some() {
                     "computed key"
                 } else if f.is_private {
-                    "private name"
+                    "private name (brand, fresh evaluation, specialized class or decorator)"
                 } else if !f.decorators.is_empty() {
                     "decorator"
                 } else if f.name.starts_with("__perry_cap_") {
@@ -513,7 +655,12 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
     let mut body = ctor.body.as_slice();
     let mut super_inert = true;
     if has_parent {
-        while body.first().is_some_and(receiver_free) {
+        while let Some(s) = body.first() {
+            if let Some(v) = param_default_fill(s, &params) {
+                open &= inert(v, &params);
+            } else if !receiver_free(s) {
+                break;
+            }
             body = &body[1..];
         }
         match body.first() {
@@ -528,7 +675,7 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
             _ => return Err("derived constructor does not open with super(...)".into()),
         }
     }
-    let mut keys: Vec<(String, bool)> = defined
+    let mut keys: Vec<(FamilyKey, bool)> = defined
         .into_iter()
         .map(|(k, eligible)| (k, eligible && open))
         .collect();
@@ -540,6 +687,10 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
         if receiver_free(s) {
             continue;
         }
+        if let Some(v) = param_default_fill(s, &params) {
+            open &= inert(v, &params);
+            continue;
+        }
         if let Some((k, value_inert)) = prologue_store(s, &params) {
             if k == "__proto__" || k == "constructor" {
                 return Err("reserved key".into());
@@ -548,7 +699,7 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
             // code ends the initialization at this key.
             open &= value_inert;
             if !keys.iter().any(|(x, _)| x == k) {
-                keys.push((k.to_string(), open));
+                keys.push((FamilyKey::Name(k.to_string()), open));
             }
             continue;
         }
@@ -566,7 +717,7 @@ fn own_keys(class: &Class, has_parent: bool) -> Result<OwnKeys, String> {
                 return Err("reserved key".into());
             }
             if !keys.iter().any(|(x, _)| x == k) {
-                keys.push((k.to_string(), false));
+                keys.push((FamilyKey::Name(k.to_string()), false));
             }
         }
     }
@@ -636,7 +787,7 @@ fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
 /// is stored before any code of the constructor could run (an inert
 /// prologue), and whether its `super(...)` call (if any) is inert.
 struct OwnKeys {
-    keys: Vec<(String, bool)>,
+    keys: Vec<(FamilyKey, bool)>,
     super_inert: bool,
 }
 
@@ -714,7 +865,7 @@ fn class_bindings(hir: &HirModule) -> HashMap<u32, String> {
 pub(crate) struct RawFamily {
     pub class_id: u32,
     pub parent: u32,
-    pub keys: Vec<String>,
+    pub keys: Vec<FamilyKey>,
     pub members: BTreeSet<String>,
     pub chain: Vec<u32>,
     /// [`FamilyLayout::init_count`].
@@ -726,7 +877,7 @@ pub(crate) struct RawFamily {
     /// The creation split (`late::add_variants`): the parameter the birth
     /// reads, and per constant the variant's keys in key order.
     pub discriminant: u32,
-    pub variants: Vec<(f64, Vec<String>)>,
+    pub variants: Vec<(f64, Vec<FamilyKey>)>,
 }
 
 /// A root class's constructor keys stored straight from a parameter, as
@@ -787,6 +938,16 @@ fn program_families(
     let accessor = |c: &Class, k: &str| {
         c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k)
     };
+    let fresh: BTreeSet<u32> = modules
+        .iter()
+        .flat_map(|(_, hir)| {
+            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
+            hir.classes
+                .iter()
+                .filter(move |c| templates.contains(&c.name))
+                .map(|c| c.id)
+        })
+        .collect();
     let mut out = Vec::new();
     'class: for c in modules.iter().flat_map(|(_, hir)| &hir.classes) {
         // The chain, leaf first.
@@ -809,7 +970,7 @@ fn program_families(
                 }
             }
         }
-        let mut keys: Vec<String> = Vec::new();
+        let mut keys: Vec<FamilyKey> = Vec::new();
         // The chain's root may extend an opaque native parent, whose
         // constructor runs code and adds its keys first.
         let native = graph.native(chain[chain.len() - 1]);
@@ -819,12 +980,19 @@ fn program_families(
         let mut owns = Vec::with_capacity(chain.len() + 1);
         if let Some((_, native_keys)) = native {
             owns.push(OwnKeys {
-                keys: native_keys.iter().map(|k| (k.to_string(), false)).collect(),
+                keys: native_keys
+                    .iter()
+                    .map(|k| (FamilyKey::Name(k.to_string()), false))
+                    .collect(),
                 super_inert: false,
             });
         }
         for (depth, k) in chain.iter().enumerate().rev() {
-            let own = match own_keys(k, depth + 1 < chain.len() || native.is_some()) {
+            let own = match own_keys(
+                k,
+                depth + 1 < chain.len() || native.is_some(),
+                fresh.contains(&k.id),
+            ) {
                 Ok(own) => own,
                 Err(why) => {
                     refuse(c, &format!("constructor-{why}"));
@@ -849,7 +1017,10 @@ fn program_families(
         // A class whose chain stores no key of its own may still be filled
         // by the stores that follow its creation sites (late keys); `compute`
         // drops it when none does.
-        if keys.iter().any(|k| chain.iter().any(|x| accessor(x, k))) {
+        if keys.iter().any(|k| {
+            k.name()
+                .is_some_and(|k| chain.iter().any(|x| accessor(x, k)))
+        }) {
             refuse(c, "accessor-key");
             continue;
         }
@@ -863,7 +1034,10 @@ fn program_families(
                 "perry: layout family: {} (class {}): {}",
                 c.name,
                 c.id,
-                keys.join(",")
+                keys.iter()
+                    .map(FamilyKey::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
             );
         }
         let mut members = BTreeSet::new();
@@ -1094,7 +1268,7 @@ fn colour_candidates<'a>(
 /// slot when that is free and inside the layout; every other key the lowest
 /// free slot.
 pub fn assign_slots(
-    raw: &[(u32, u32, Vec<String>, usize)],
+    raw: &[(u32, u32, Vec<FamilyKey>, usize)],
     colored: &BTreeMap<String, (u32, u32)>,
 ) -> Vec<Vec<u32>> {
     let by_class: HashMap<u32, usize> = raw
@@ -1105,7 +1279,7 @@ pub fn assign_slots(
     let mut done: Vec<Option<Vec<u32>>> = vec![None; raw.len()];
     fn assign(
         i: usize,
-        raw: &[(u32, u32, Vec<String>, usize)],
+        raw: &[(u32, u32, Vec<FamilyKey>, usize)],
         by_class: &HashMap<u32, usize>,
         colored: &BTreeMap<String, (u32, u32)>,
         done: &mut Vec<Option<Vec<u32>>>,
@@ -1142,7 +1316,7 @@ pub fn assign_slots(
             if slots[pos].is_some() {
                 continue;
             }
-            if let Some(&(_, c)) = colored.get(k) {
+            if let Some(&(_, c)) = k.name().and_then(|n| colored.get(n)) {
                 if tier(pos).contains(&(c as usize)) && !taken[c as usize] {
                     slots[pos] = Some(c);
                     taken[c as usize] = true;
@@ -1170,8 +1344,8 @@ pub fn assign_slots(
 
 /// Build the program's layouts from the families' keys and the colouring.
 fn layouts_of(
-    raw: Vec<(u32, u32, Vec<String>, usize)>,
-    mut variants: HashMap<u32, (u32, Vec<(f64, Vec<String>)>)>,
+    raw: Vec<(u32, u32, Vec<FamilyKey>, usize)>,
+    mut variants: HashMap<u32, (u32, Vec<(f64, Vec<FamilyKey>)>)>,
     mut layouts: ProgramLayouts,
 ) -> ProgramLayouts {
     let slots = assign_slots(&raw, &layouts.colored);
@@ -1180,7 +1354,7 @@ fn layouts_of(
         layouts.key_total += keys.len() as u32;
         layouts.slot_total += slot_count;
         for (k, s) in keys.iter().zip(&slots) {
-            if let Some(&(_, c)) = layouts.colored.get(k) {
+            if let Some(&(_, c)) = k.name().and_then(|n| layouts.colored.get(n)) {
                 layouts.coloured_family_keys += 1;
                 layouts.coloured_placed += u32::from(c == *s);
             }
@@ -1196,7 +1370,7 @@ fn layouts_of(
                 shown.join(",")
             );
         }
-        let keys: Vec<(String, u32)> = keys.into_iter().zip(slots).collect();
+        let keys: Vec<(FamilyKey, u32)> = keys.into_iter().zip(slots).collect();
         let (discriminant, split) = variants.remove(&class_id).unwrap_or_default();
         let split: Vec<FamilyVariant> = split
             .into_iter()
@@ -1294,7 +1468,7 @@ pub fn compute<'a>(
         }
         keep
     });
-    let variants: HashMap<u32, (u32, Vec<(f64, Vec<String>)>)> = fams
+    let variants: HashMap<u32, (u32, Vec<(f64, Vec<FamilyKey>)>)> = fams
         .iter_mut()
         .filter(|f| !f.variants.is_empty())
         .map(|f| {
@@ -1305,7 +1479,7 @@ pub fn compute<'a>(
         })
         .collect();
     let inits: HashMap<u32, u32> = fams.iter().map(|f| (f.class_id, f.init as u32)).collect();
-    let raw: Vec<(u32, u32, Vec<String>, usize)> = fams
+    let raw: Vec<(u32, u32, Vec<FamilyKey>, usize)> = fams
         .into_iter()
         .zip(owns)
         .map(|(f, own)| (f.class_id, f.parent, f.keys, own))
@@ -1419,8 +1593,20 @@ pub fn compute<'a>(
 mod tests {
     use super::*;
 
-    fn keys(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
+    fn keys(v: &[&str]) -> Vec<FamilyKey> {
+        v.iter().map(|s| FamilyKey::from(*s)).collect()
+    }
+
+    #[test]
+    fn a_private_element_never_equals_a_property_name() {
+        let spelling = crate::codegen::static_private_class::private_storage_key(7, "#x");
+        let private = FamilyKey::Private(spelling.clone());
+        assert!(private != spelling.as_str());
+        assert!(private != spelling);
+        assert_eq!(private.name(), None);
+        assert_eq!(private.spelling(), spelling);
+        assert!(FamilyKey::from("x") == "x");
+        assert!(FamilyKey::Name(spelling.clone()) != private);
     }
 
     #[test]

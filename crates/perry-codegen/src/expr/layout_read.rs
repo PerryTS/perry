@@ -520,7 +520,7 @@ fn run_target(ctx: &mut FnCtx<'_>, property: &str, value: &Expr) -> Option<RunPl
     let order_known = pos < own.init_count as usize;
     let keys: Vec<&str> = own.keys[..own.own_count as usize]
         .iter()
-        .map(|(k, _)| k.as_str())
+        .filter_map(|(k, _)| k.name())
         .collect();
     let value = run_value(value, &keys);
     let descends = |mut c: u32| {
@@ -543,10 +543,10 @@ fn run_target(ctx: &mut FnCtx<'_>, property: &str, value: &Expr) -> Option<RunPl
         if !descends(f.class_id) {
             continue;
         }
-        if f.keys.get(pos).map(|(k, s)| (k.as_str(), *s)) != Some((property, slot))
-            || f.variants
-                .iter()
-                .any(|v| v.keys.get(pos).map(|(k, s)| (k.as_str(), *s)) != Some((property, slot)))
+        if f.keys.get(pos).map(|(k, s)| (k.name(), *s)) != Some((Some(property), slot))
+            || f.variants.iter().any(|v| {
+                v.keys.get(pos).map(|(k, s)| (k.name(), *s)) != Some((Some(property), slot))
+            })
         {
             crate::expr::note_site("case2c-run-disagree");
             return None;

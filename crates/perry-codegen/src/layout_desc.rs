@@ -19,7 +19,7 @@ pub(crate) mod function_families;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::layout_families::{FamilyLayout as ClassFamilyLayout, ProgramLayouts};
+use crate::layout_families::{FamilyKey, FamilyLayout as ClassFamilyLayout, ProgramLayouts};
 use perry_hir::{Expr, Module as HirModule, Stmt};
 
 use crate::module::LlModule;
@@ -669,7 +669,7 @@ fn emit_desc(
     sect: &str,
     names: (&str, &str, &str),
     family: u32,
-    keys: &[(String, String, u32)],
+    keys: &[(FamilyKey, String, u32)],
     slot_count: u32,
     class: (u32, u32),
     methods: &str,
@@ -678,7 +678,13 @@ fn emit_desc(
     let count = keys.len();
     let cap = (count * 2).next_power_of_two().max(2);
     let mut index = vec![u32::MAX; cap];
+    // The index answers property lookups (`perry-runtime`
+    // `layout_desc::desc_position_hashed`): a private element is no property,
+    // so it has no index entry.
     for (pos, (k, _, _)) in keys.iter().enumerate() {
+        let Some(k) = k.name() else {
+            continue;
+        };
         let mut at = (fnv1a(k.as_bytes()) as usize) & (cap - 1);
         while index[at] != u32::MAX {
             at = (at + 1) & (cap - 1);
@@ -686,12 +692,22 @@ fn emit_desc(
         index[at] = pos as u32;
     }
     // Every key of a class family (case 2c) carries
-    // `perry_abi::LAYOUT_KEY_OPTIONAL` (0x80, as i8 -128): absent while its
-    // slot holds the hole. A birth writes no key; a store adds it.
+    // `perry_abi::LAYOUT_KEY_OPTIONAL` (0x80): absent while its slot holds
+    // the hole. A birth writes no key; a store adds it, and a private
+    // element's claim fills it (`LAYOUT_KEY_PRIVATE_FIELD` too).
     let key_items: Vec<String> = keys
         .iter()
-        .map(|(_, a, slot)| {
-            format!("{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 -128, [3 x i8] zeroinitializer }}")
+        .map(|(k, a, slot)| {
+            let attrs = crate::runtime_abi::LAYOUT_KEY_OPTIONAL
+                | if k.is_private() {
+                    crate::runtime_abi::LAYOUT_KEY_PRIVATE_FIELD
+                } else {
+                    0
+                };
+            format!(
+                "{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 {}, [3 x i8] zeroinitializer }}",
+                attrs as i8
+            )
         })
         .collect();
     llmod.add_raw_global(format!(
@@ -957,7 +973,7 @@ pub(crate) fn emit_module_layouts(
         };
         let mut named = Vec::with_capacity(fam.keys.len());
         for (k, slot) in &fam.keys {
-            match atom(llmod, strings, &mut atoms, k) {
+            match atom(llmod, strings, &mut atoms, k.spelling()) {
                 Some(a) => named.push((k.clone(), a, *slot)),
                 None => continue 'class,
             }
@@ -973,11 +989,11 @@ pub(crate) fn emit_module_layouts(
             (fnv1a(format!("{}#class#{}", hir.name, class.name).as_bytes()) as u32) & 0x7FFF_FFFF;
         // The creation split's layouts first (all or none: the table names
         // every one).
-        let mut variants: Vec<(u64, Vec<(String, String, u32)>, u32)> = Vec::new();
+        let mut variants: Vec<(u64, Vec<(FamilyKey, String, u32)>, u32)> = Vec::new();
         for v in &fam.variants {
             let mut vnamed = Vec::with_capacity(v.keys.len());
             for (k, slot) in &v.keys {
-                match atom(llmod, strings, &mut atoms, k) {
+                match atom(llmod, strings, &mut atoms, k.spelling()) {
                     Some(a) => vnamed.push((k.clone(), a, *slot)),
                     None => break,
                 }

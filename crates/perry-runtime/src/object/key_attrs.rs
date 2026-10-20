@@ -1155,8 +1155,80 @@ pub(crate) unsafe fn object_key_has_private_entry(
         return false;
     }
     let keys = crate::object::object_keys(obj);
-    !keys.is_null()
-        && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
+    if keys.is_null() {
+        return false;
+    }
+    let Some(pos) = crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
+    else {
+        return false;
+    };
+    // An overflow table lists present keys only.
+    crate::object::overflow::has_overflow(obj)
+        || private_element_present(obj, keys_entry(keys.arr(), pos), keys.storage_slot(pos))
+}
+
+/// The storage slot of private element `key` when `obj`'s key list holds it
+/// as optional (a class family's: present per object,
+/// `private_element_present`).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn object_optional_private_slot(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> Option<u32> {
+    if object_summary(obj) & SUMMARY_PRIVATE == 0 || crate::object::overflow::has_overflow(obj) {
+        return None;
+    }
+    let keys = crate::object::object_keys(obj);
+    if keys.is_null() {
+        return None;
+    }
+    crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
+        .filter(|&pos| keys_entry(keys.arr(), pos) & ENTRY_OPTIONAL != 0)
+        .map(|pos| keys.storage_slot(pos))
+}
+
+/// Is the private element with entry `entry` at storage slot `slot` of `obj`
+/// present? An element a layout lists as optional (a class family's,
+/// `perry_abi::LAYOUT_KEY_PRIVATE_FIELD` with `ENTRY_OPTIONAL`) is absent
+/// while its slot holds the hole: the field's definition fills the slot
+/// (`js_private_field_add`), and a private field is never deleted. So its
+/// presence is a fact of the object, not of its ShapeId: a per-shape answer
+/// names the slot, and each use reads this object's word.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader` without an overflow whose key list holds
+/// the entry.
+pub(crate) unsafe fn private_element_present(
+    obj: *const crate::object::ObjectHeader,
+    entry: u8,
+    slot: u32,
+) -> bool {
+    entry & ENTRY_OPTIONAL == 0
+        || private_element_word(obj, slot).is_some_and(|w| w != crate::value::TAG_HOLE)
+}
+
+/// The word stored in storage slot `slot` of `obj`, `None` when the object
+/// has none there (past its live inline bound, or no spill word).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn private_element_word(
+    obj: *const crate::object::ObjectHeader,
+    slot: u32,
+) -> Option<u64> {
+    if slot < crate::object::object_live_slot_count(obj) {
+        return Some(
+            *((obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *const u64)
+                .add(slot as usize),
+        );
+    }
+    if slot < crate::object::object_inline_capacity(obj) {
+        return None;
+    }
+    crate::object::spill::spill_get_present(obj as usize, slot as usize)
 }
 
 /// The entry `obj`'s own key `key` carries: 0 when the key is default or
