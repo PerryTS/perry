@@ -26,7 +26,7 @@ static SOCKET_ADDRESS: PayloadFamily = PayloadFamily::new::<SocketAddressState>(
 .with_constructor_length(0)
 .with_installer(prototype::install_socket_address);
 
-use crate::{get_object_number_field, get_object_string_field, string_from_header_i64};
+use crate::{get_object_value_field, jsvalue_to_owned_string, string_from_header_i64};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -87,6 +87,8 @@ extern "C" {
     fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i32;
     fn js_net_validate_listen_port(value: f64);
     fn js_net_validate_socket_address_options(value: f64);
+    fn js_net_validate_socket_address_family(value: f64) -> i32;
+    fn js_net_validate_socket_address_flowlabel(value: f64) -> u32;
     fn js_runtime_validate_string_arg(value: f64, name_ptr: *const u8, name_len: u32);
 }
 
@@ -505,20 +507,49 @@ pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
     let scope = TransientRootScope::enter();
     let options = scope.root_nanbox(options);
     js_net_validate_socket_address_options(options.get());
-    let address =
-        get_object_string_field(options.get(), "address").unwrap_or_else(|| "127.0.0.1".into());
-    let family = get_object_string_field(options.get(), "family").map(|s| s.to_ascii_lowercase());
-    let Ok(ip) = address.parse::<IpAddr>() else {
+    // Destructure once, in Node's order, before validating any field. Each
+    // getter may allocate, so retain raw values in moving-GC-aware roots.
+    let family = scope
+        .root_nanbox(get_object_value_field(options.get(), "family").unwrap_or_else(undefined));
+    let address = scope
+        .root_nanbox(get_object_value_field(options.get(), "address").unwrap_or_else(undefined));
+    let port =
+        scope.root_nanbox(get_object_value_field(options.get(), "port").unwrap_or_else(undefined));
+    let flowlabel = scope
+        .root_nanbox(get_object_value_field(options.get(), "flowlabel").unwrap_or_else(undefined));
+    let family_text = jsvalue_to_owned_string(family.get());
+    // Node chooses the default BEFORE lowercasing the family.
+    let default_address = if JsValue::from_bits(family.get().to_bits()).is_undefined()
+        || family_text.as_deref() == Some("ipv4")
+    {
+        "127.0.0.1"
+    } else {
+        "::"
+    };
+    let ipv6 = js_net_validate_socket_address_family(family.get()) != 0;
+    let address_text = if JsValue::from_bits(address.get().to_bits()).is_undefined() {
+        default_address.to_owned()
+    } else {
+        js_runtime_validate_string_arg(address.get(), b"options.address".as_ptr(), 15);
+        jsvalue_to_owned_string(address.get()).unwrap()
+    };
+    // Keep the existing numeric/string port acceptance without rereading it.
+    let port_value = JsValue::from_bits(port.get().to_bits());
+    let port = if port_value.is_number() {
+        port_value.to_number()
+    } else {
+        jsvalue_to_owned_string(port.get())
+            .and_then(|text| text.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    js_net_validate_listen_port(port);
+    let flowlabel = js_net_validate_socket_address_flowlabel(flowlabel.get());
+    let Ok(ip) = address_text.parse::<IpAddr>() else {
         js_net_throw_invalid_address()
     };
-    if !family_matches(&ip, family.as_deref()) {
+    if ip.is_ipv6() != ipv6 {
         js_net_throw_invalid_address();
     }
-    let port = get_object_number_field(options.get(), "port").unwrap_or(0.0);
-    js_net_validate_listen_port(port);
-    let flowlabel = get_object_number_field(options.get(), "flowlabel")
-        .unwrap_or(0.0)
-        .max(0.0) as u32;
     handle_from_value(socket_address_new(ip, port as u16, flowlabel)).unwrap_or(0)
 }
 

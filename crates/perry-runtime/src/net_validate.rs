@@ -425,6 +425,49 @@ pub extern "C" fn js_net_validate_socket_address_options(value: f64) {
     }
 }
 
+/// Validate the original family value before address or numeric coercion.
+#[no_mangle]
+pub extern "C" fn js_net_validate_socket_address_family(value: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let jv = JSValue::from_bits(value.get_nanbox_u64());
+    if jv.is_undefined() {
+        return 0;
+    }
+    let text = if jv.is_any_string() {
+        Some(crate::url::get_string_content(value.get_nanbox_f64()))
+    } else {
+        None
+    };
+    match text.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        Some("ipv4") => return 0,
+        Some("ipv6") => return 1,
+        _ => {}
+    }
+    let received = if let Some(text) = text {
+        format!("'{text}'")
+    } else if is_numeric(jv) {
+        format_received_number(if jv.is_int32() {
+            jv.as_int32() as f64
+        } else {
+            jv.as_number()
+        })
+    } else {
+        describe_received(value.get_nanbox_f64())
+    };
+    crate::validators::throw_invalid_arg_value("options.family", "is invalid", &received);
+}
+
+/// Default only undefined, then reuse the shared unsigned-integer validator.
+#[no_mangle]
+pub extern "C" fn js_net_validate_socket_address_flowlabel(value: f64) -> u32 {
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        0
+    } else {
+        crate::validators::validate_uint32(value, "options.flowlabel")
+    }
+}
+
 /// Preserve the original JS argument through validation before the parser FFI.
 #[no_mangle]
 pub extern "C" fn js_net_validate_socket_address_parse_input(value: f64) -> i64 {
