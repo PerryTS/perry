@@ -1061,7 +1061,11 @@ impl GcCycleState {
     /// hold a live object here?", and the answer is no in three cases:
     ///
     /// * the conservative stack+register scan RAN, which pins exactly those
-    ///   objects — the original condition, and the only one this used to test;
+    ///   objects — the original condition, and the only one this used to test.
+    ///   "Ran" means a scan that does something: on a target with no stack walk
+    ///   (wasm32-wasip1) a `Scan` decision pins nothing, so there it is not
+    ///   evidence of anything and the window stays (see
+    ///   `roots::conservative_scan_is_effective`);
     /// * no generated frame is live on this thread, so there is no register
     ///   holding a JS value at all. This is verbatim the completeness argument
     ///   `pressure.rs` already makes for skipping `force_full_scan`;
@@ -1088,7 +1092,8 @@ impl GcCycleState {
         if matches!(
             super::roots::conservative_stack_scan_decision(),
             super::roots::ConservativeStackScanDecision::Scan
-        ) {
+        ) && super::roots::conservative_scan_is_effective()
+        {
             return true;
         }
         if !super::roots::shadow_stack_has_active_frame() {
@@ -1110,6 +1115,7 @@ impl GcCycleState {
         // multi-MB external buffers for the life of the process (#6010:
         // 1.4 GB RSS on a Map-churn benchmark whose live heap was ~1 MB).
         if self.block_persistence_is_redundant() {
+            self.log_block_persistence(false);
             self.phase = GcCyclePhase::AtomicFinalize;
             return;
         }
@@ -1141,7 +1147,29 @@ impl GcCycleState {
         if let Some(trace) = self.trace.as_mut() {
             trace.block_persist = block_persist;
         }
+        self.log_block_persistence(true);
         self.phase = GcCyclePhase::AtomicFinalize;
+    }
+
+    /// `PERRY_GC_DIAG`: one line per collection saying whether the
+    /// block-persistence window ran, under which scan decision, and the
+    /// cumulative count of objects it has force-marked (`window=`).
+    fn log_block_persistence(&self, ran: bool) {
+        if !super::gc_diag_enabled() {
+            return;
+        }
+        eprintln!(
+            "[gc-block-persist] scan={} effective={} frame={} ran={} trigger={:?} window={}",
+            u8::from(matches!(
+                super::roots::conservative_stack_scan_decision(),
+                super::roots::ConservativeStackScanDecision::Scan
+            )),
+            u8::from(super::roots::conservative_scan_is_effective()),
+            u8::from(super::roots::shadow_stack_has_active_frame()),
+            u8::from(ran),
+            self.trigger_kind,
+            super::block_persist_force_mark_count(),
+        );
     }
 
     fn step_atomic_finalize(&mut self, budget: GcWorkBudget) {

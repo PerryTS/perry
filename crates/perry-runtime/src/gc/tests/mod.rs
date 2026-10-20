@@ -8,6 +8,7 @@ mod array_pointer_slot_enumeration;
 mod barrier;
 mod barrier_arming;
 mod barrier_decoded_parent;
+mod block_persist_scan_window;
 mod block_pool_pressure;
 mod block_skip;
 mod born_old_producer;

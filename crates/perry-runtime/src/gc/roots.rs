@@ -47,13 +47,15 @@ pub(crate) use stack_roots::with_stack_roots;
 // `gc::roots::…` or reaches it through `mod.rs`'s `pub use roots::*`, so the
 // whole surface is re-exported here — same shape, and same `allow`, as the
 // `shadow_stack` re-exports below.
+#[cfg(test)]
+pub(crate) use scan_mode::ConservativeScanEffectiveTestGuard;
 #[allow(unused_imports)]
 pub(crate) use scan_mode::{
-    conservative_stack_scan_decision, conservative_stack_scan_decision_for,
-    conservative_stack_scan_mode, conservative_stack_scan_mode_from_value,
-    resolve_conservative_stack_scan_mode, set_conservative_stack_scan_override,
-    ConservativeStackScanDecision, ConservativeStackScanMode, ManualGcScanGuard,
-    CONSERVATIVE_STACK_SCAN_OVERRIDE,
+    conservative_scan_is_effective, conservative_stack_scan_decision,
+    conservative_stack_scan_decision_for, conservative_stack_scan_mode,
+    conservative_stack_scan_mode_from_value, resolve_conservative_stack_scan_mode,
+    set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,
+    ManualGcScanGuard, CONSERVATIVE_STACK_SCAN_OVERRIDE,
 };
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
