@@ -13,6 +13,8 @@
 //! once it lands, with `rusqlite::Connection` swapped for
 //! `tursodb::Connection`.
 
+mod dispatch_ext;
+
 use perry_ffi::{
     alloc_string, build_object_shape, drop_handle, get_handle, js_array_alloc, js_array_push,
     js_object_alloc_with_shape, js_object_set_field, read_string, register_handle, ArrayHeader,
@@ -163,9 +165,12 @@ pub unsafe extern "C" fn js_sqlite_open(filename_ptr: *const StringHeader) -> Ha
     };
 
     match conn {
-        Ok(c) => register_handle(SqliteDbHandle {
-            conn: Mutex::new(c),
-        }),
+        Ok(c) => {
+            dispatch_ext::ensure_registered();
+            register_handle(SqliteDbHandle {
+                conn: Mutex::new(c),
+            })
+        }
         Err(_) => -1,
     }
 }

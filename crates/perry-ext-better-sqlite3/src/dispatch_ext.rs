@@ -1,0 +1,196 @@
+//! Handle-dispatch extension for better-sqlite3 `Database` and `Statement`.
+//!
+//! `new Database(path)` and `db.prepare(sql)` return native handle ids. A call
+//! on a statically typed receiver is lowered through the native table
+//! (`native_table/databases.rs`). A call whose receiver type was erased (`any`,
+//! an object field, a Map value) reaches the runtime's handle-method dispatch,
+//! which asks each registered extension in turn. This one claims only ids that
+//! are live `SqliteDbHandle` / `SqliteStmtHandle` entries of THIS crate and
+//! only the methods the typed table supports, with the same argument
+//! conventions: `run`/`get`/`all` take their variadic parameters as one array.
+//! Everything else is left unclaimed so a user object keeps its own methods.
+
+use std::sync::Once;
+
+use perry_ffi::{
+    alloc_string, get_handle, js_array_alloc, js_array_push, Handle, JsValue, StringHeader,
+    TransientRootScope,
+};
+
+use crate::{SqliteDbHandle, SqliteStmtHandle};
+
+extern "C" {
+    fn js_register_handle_method_dispatch_extension(
+        f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
+    );
+}
+
+/// Idempotent; called from `js_sqlite_open`, so it runs before any method call
+/// on a Database can be made.
+pub(crate) fn ensure_registered() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        // SAFETY: a plain registration with a `'static` function pointer.
+        unsafe { js_register_handle_method_dispatch_extension(sqlite_method_dispatch_ext) };
+    });
+}
+
+fn bits(v: JsValue) -> f64 {
+    f64::from_bits(v.bits())
+}
+
+fn arg(args: &[f64], i: usize) -> f64 {
+    args.get(i)
+        .copied()
+        .unwrap_or_else(|| bits(JsValue::UNDEFINED))
+}
+
+/// A heap `StringHeader` for a string argument (short or heap), or null.
+fn string_ptr(value: f64) -> *const StringHeader {
+    match JsValue::from_bits(value.to_bits()).to_owned_string() {
+        Some(s) => alloc_string(&s).as_raw() as *const StringHeader,
+        None => std::ptr::null(),
+    }
+}
+
+/// Dispatch one method; `None` means "not claimed".
+unsafe fn call(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
+    let undefined = JsValue::UNDEFINED;
+    if get_handle::<SqliteDbHandle>(handle).is_some() {
+        return Some(match name {
+            "prepare" => {
+                let stmt = crate::js_sqlite_prepare(handle, string_ptr(arg(args, 0)));
+                if stmt < 0 {
+                    bits(undefined)
+                } else {
+                    bits(JsValue::from_handle(stmt as u64))
+                }
+            }
+            "exec" => {
+                crate::js_sqlite_exec(handle, string_ptr(arg(args, 0)));
+                bits(JsValue::from_handle(handle as u64))
+            }
+            "close" => {
+                crate::js_sqlite_close(handle);
+                bits(undefined)
+            }
+            _ => return None,
+        });
+    }
+    if get_handle::<SqliteStmtHandle>(handle).is_some() {
+        return Some(match name {
+            "raw" => {
+                crate::js_sqlite_stmt_raw(handle);
+                bits(JsValue::from_handle(handle as u64))
+            }
+            "run" | "get" | "all" => {
+                let scope = TransientRootScope::enter();
+                // Short strings become heap strings first (the parameter
+                // reader only knows heap ones); every value stays rooted
+                // while later ones allocate, then the array is filled
+                // without allocating (capacity is exact).
+                let rooted: Vec<_> = args
+                    .iter()
+                    .map(|v| {
+                        let jv = JsValue::from_bits(v.to_bits());
+                        let v = if jv.is_short_string() {
+                            bits(JsValue::from_string_ptr(
+                                alloc_string(&jv.to_owned_string().unwrap_or_default()).as_raw(),
+                            ))
+                        } else {
+                            *v
+                        };
+                        scope.root_nanbox(v)
+                    })
+                    .collect();
+                let mut params = js_array_alloc(rooted.len() as u32);
+                for v in &rooted {
+                    params = js_array_push(params, JsValue::from_bits(v.get().to_bits()));
+                }
+                match name {
+                    "run" => {
+                        let r = crate::js_sqlite_stmt_run(handle, params);
+                        bits(if r.is_null() {
+                            undefined
+                        } else {
+                            JsValue::from_object_ptr(r)
+                        })
+                    }
+                    "get" => crate::js_sqlite_stmt_get(handle, params),
+                    _ => bits(JsValue::from_object_ptr(crate::js_sqlite_stmt_all(
+                        handle, params,
+                    ))),
+                }
+            }
+            _ => return None,
+        });
+    }
+    None
+}
+
+/// # Safety
+/// Called by the runtime's composite dispatcher with a live name and argument
+/// slice, and an `out` pointer for one `f64`.
+unsafe extern "C" fn sqlite_method_dispatch_ext(
+    handle: i64,
+    name_ptr: *const u8,
+    name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if handle <= 0 || name_ptr.is_null() || name_len == 0 || out.is_null() {
+        return 0;
+    }
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) else {
+        return 0;
+    };
+    let args: &[f64] = if args_len == 0 || args_ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    match call(handle as Handle, name, args) {
+        Some(value) => {
+            *out = value;
+            1
+        }
+        None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dispatch(handle: i64, name: &[u8]) -> i32 {
+        let mut out = 0.0;
+        unsafe {
+            sqlite_method_dispatch_ext(
+                handle,
+                name.as_ptr(),
+                name.len(),
+                std::ptr::null(),
+                0,
+                &mut out,
+            )
+        }
+    }
+
+    #[test]
+    fn unknown_methods_and_foreign_handles_are_unclaimed() {
+        let path = alloc_string(":memory:");
+        let db = unsafe { crate::js_sqlite_open(path.as_raw() as *const _) };
+        assert_eq!(dispatch(db, b"nope"), 0);
+        let foreign = perry_ffi::register_handle(String::from("another registry type"));
+        assert_eq!(dispatch(foreign, b"exec"), 0);
+    }
+
+    #[test]
+    fn database_close_is_claimed() {
+        let path = alloc_string(":memory:");
+        let db = unsafe { crate::js_sqlite_open(path.as_raw() as *const _) };
+        assert_eq!(dispatch(db, b"close"), 1);
+        assert!(get_handle::<SqliteDbHandle>(db).is_none());
+    }
+}

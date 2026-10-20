@@ -1,0 +1,8 @@
+run {"changes":1,"lastInsertRowid":1}
+any [{"a":1,"b":"x"},{"a":2,"b":"y"}]
+get {"b":"y"}
+raw [[1,"x"],[2,"y"]]
+map {"n":2}
+typed [{"a":1},{"a":2}]
+chain object
+closed

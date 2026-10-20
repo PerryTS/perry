@@ -4,6 +4,8 @@
 //! pinned SWC generation.  Keeping it out of `perry-runtime` also means apps
 //! which never ask for runtime compilation do not carry a bundler.
 
+mod dispatch;
+
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fmt;
@@ -548,6 +550,7 @@ fn throw_transpiler_error(error: BunDiagnostic) -> ! {
 /// Construct the native state behind `new Bun.Transpiler(options)`.
 #[no_mangle]
 pub extern "C" fn js_bun_transpiler_new(options: f64) -> Handle {
+    dispatch::ensure_registered();
     let value = JsValue::from_bits(options.to_bits());
     let parsed = if value.is_undefined() || value.is_null() {
         BunTranspilerOptions::default()
