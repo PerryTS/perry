@@ -71,6 +71,10 @@ pub struct Gen<'a> {
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
+    /// `(module, local)` of a `let require = <closure>` binding, the
+    /// wrapper's synthetic require (`Gen::require_helper_body`).
+    pub(crate) require_helpers: FxHashMap<(u32, u32), &'a [Stmt]>,
+    pub(crate) require_helpers_indexed: std::collections::HashSet<u32>,
 }
 
 /// Per-function walking context.
@@ -166,6 +170,8 @@ impl<'a> Gen<'a> {
             class_homes: FxHashMap::default(),
             lit_births: FxHashMap::default(),
             call_lit_arg: None,
+            require_helpers: FxHashMap::default(),
+            require_helpers_indexed: std::collections::HashSet::new(),
         }
     }
 

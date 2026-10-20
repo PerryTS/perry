@@ -120,6 +120,8 @@ pub struct SumState {
     pub host: FxHashMap<CallId, CallId>,
     /// (source site, host site) -> birth context id (`TokKind::Obj`).
     pub ctx_ids: FxHashMap<(CallId, CallId), CallId>,
+    /// birth context id -> its source site (the inverse of `ctx_ids`).
+    pub ctx_src: FxHashMap<CallId, CallId>,
     /// (template call, callee): expanded into every summary that holds the
     /// template; its instances never bind it again.
     pub composed: FxHashSet<(CallId, FnIdx)>,
@@ -172,6 +174,7 @@ pub fn map_cons(
     match *c {
         Load { key, dst } => Load { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
+        CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store { key, src: n(src), site },
         Call { call } => Call { call: k(call) },
         CallThis { call, this } => CallThis { call: k(call), this },
@@ -258,6 +261,7 @@ fn gen_kind(c: &Cons) -> bool {
         c,
         Load { .. }
             | OwnValues { .. }
+            | CjsPublish { .. }
             | Store { .. }
             | Call { .. }
             | New { .. }
@@ -291,6 +295,7 @@ fn read_dst(c: &Cons) -> Option<NodeId> {
     match *c {
         Load { dst, .. }
         | OwnValues { dst }
+        | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
         | Arith { dst, .. }
@@ -373,6 +378,12 @@ impl Model {
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
         }
+        // An object made while the runtime touches a receiver (a protocol
+        // call, `implicit`) belongs to that receiver's context: contexts
+        // stay the program's, and a touched result opens no new one.
+        if self.protocol_calls.contains(&call) {
+            return self.touch_host(call).unwrap_or(NO_CTX);
+        }
         let src = match self.sum.tmpl_of.get(&call) {
             Some(&t) => t,
             None => self.origin_of(call).unwrap_or(call),
@@ -382,7 +393,26 @@ impl Model {
         };
         let n = self.sum.ctx_ids.len() as CallId;
         // Context ids count down from below `NO_CTX`: never a call id.
-        *self.sum.ctx_ids.entry((src, h)).or_insert(NO_CTX - 1 - n)
+        let id = *self.sum.ctx_ids.entry((src, h)).or_insert(NO_CTX - 1 - n);
+        self.sum.ctx_src.entry(id).or_insert(src);
+        id
+    }
+
+    /// The host of what a protocol touch on a receiver runs: the receiver's
+    /// own source site, one level deep. A touched result is born in the
+    /// touched receiver's site context, so touching it again meets a context
+    /// the program already has: contexts are sites x sites, never a chain.
+    pub(crate) fn touch_host(&self, call: CallId) -> Option<CallId> {
+        let ThisArg::Tok(t) = self.calls[call as usize].this else {
+            return None;
+        };
+        let TokKind::Obj(_, c) = self.toks[t as usize] else {
+            return None;
+        };
+        if c == NO_CTX {
+            return None;
+        }
+        Some(self.sum.ctx_src.get(&c).copied().unwrap_or(c))
     }
 
     pub(crate) fn summarized(&self, f: FnIdx) -> bool {
@@ -417,7 +447,12 @@ impl Model {
         self.sum.insts.push(Inst {
             f,
             tok: key.2,
-            host: matches!(key.0, 0 | 6).then_some(key.1),
+            host: match key.0 {
+                0 => Some(key.1),
+                6 if self.protocol_calls.contains(&key.1) => self.touch_host(key.1),
+                6 => Some(key.1),
+                _ => None,
+            },
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret: tr(s.ret),
             this,
@@ -646,6 +681,7 @@ impl Model {
             let h = host.unwrap_or(NO_HOST);
             let n = self.sum.ctx_ids.len() as CallId;
             let ctx = *self.sum.ctx_ids.entry((LIT | tm, h)).or_insert(NO_CTX - 1 - n);
+            self.sum.ctx_src.entry(ctx).or_insert(LIT | tm);
             let t = self.site_tok(tm, ctx);
             self.add_tok(base[slot as usize], t);
         }

@@ -78,8 +78,8 @@ impl<'a> Gen<'a> {
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
-        let pt = self.m.tok(TokKind::PrimBox);
-        self.m.add_tok(fa, pt);
+        // Nested containers (os.cpus() elements ...) are the site's own.
+        self.m.add_tok(fa, t);
         self.m.add_tok(out, t);
         out
     }

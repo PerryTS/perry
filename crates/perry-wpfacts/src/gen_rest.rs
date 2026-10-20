@@ -1825,7 +1825,10 @@ impl<'a> Gen<'a> {
                         }
                         _ => self.cjs_unknown_path,
                     };
-                    self.m.edge(value, registry);
+                    // A CommonJS record publishes its live `exports`; a raw
+                    // publication is the value itself. The registry union
+                    // keeps the record for `require.cache`.
+                    self.m.cons(value, Cons::CjsPublish { dst: registry });
                     self.m.edge(value, self.cjs_registry);
                 }
                 self.prim_node(prim::UNDEF)

@@ -424,6 +424,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 Some("size" | "length" | "byteLength" | "byteOffset") => m.add_prim(dst, prim::NUM),
                 // An iterator result's own fields hold all it has.
                 Some("value" | "done") if what == "IterResult" => {}
+                // A container of primitives (split/match results, keys ...).
+                _ if what == "primbox" => m.add_prim(dst, prim::ALL),
                 // `require.cache` / `require.extensions` are plain objects:
                 // their fields hold what was stored (by compiled code, or ⊤
                 // from the loader, `call_builtin_ns`); an absent key reads
@@ -446,7 +448,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             },
             _ => {}
         },
-        TokKind::PrimBox => m.add_prim(dst, prim::ALL),
         TokKind::ObjectProto if name.as_deref() == Some("constructor") || name.is_none() => {
             // Object.prototype stands for every builtin prototype here:
             // its `constructor` may be Object or Function (E14).
@@ -505,7 +506,7 @@ pub fn prim_method(m: &mut Model, prim: u16, _key: Key, call: CallId) {
     // with primitives (replace), object arguments are coerced.
     implicit_args(m, call, "argument of a primitive method");
     ret_prim(m, call, prim::ALL);
-    let pb = m.tok(TokKind::PrimBox);
+    let pb = site_tmpl(m, call, "primbox");
     ret_tok(m, call, pb);
 }
 
@@ -524,12 +525,11 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // A well-known-symbol method is a computed-key method, except the
     // iteration protocol of the builtin iterables, which is modeled.
     let iterable = match &m.toks[t as usize] {
-        TokKind::PrimBox => true,
         TokKind::Obj(tm, _) => matches!(
             m.tmpls[*tm as usize].kind,
             TmplKind::Arr { .. }
                 | TmplKind::BObj {
-                    what: "Collection" | "Iterator",
+                    what: "Collection" | "Iterator" | "primbox",
                     ..
                 }
         ),
@@ -550,7 +550,6 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                 &format!("method {n} of an opaque builtin function"),
             ),
         },
-        TokKind::PrimBox => array_method(m, t, name.as_deref(), call),
         TokKind::NativeProto(_) => {}
         TokKind::Obj(tm, _) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => array_method(m, t, name.as_deref(), call),
@@ -802,7 +801,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             implicit_args(m, call, "ToPrimitive");
             ret_prim(m, call, prim::ALL);
             if name == "raw" || name == "split" {
-                let pb = m.tok(TokKind::PrimBox);
+                let pb = site_tmpl(m, call, "primbox");
                 ret_tok(m, call, pb);
             }
         }
@@ -861,7 +860,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
         (BuiltinNs::Reflect, "ownKeys" | "has") => {
             implicit_args(m, call, "ToPropertyKey");
-            let pb = m.tok(TokKind::PrimBox);
+            let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
             ret_prim(m, call, prim::BOOL);
         }
@@ -924,7 +923,8 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     // As requirePathModule: the named path, or a record the
                     // runtime published under a path it computed.
                     let unknown = m.cjs_unknown;
-                    m.cons(rec, Cons::Load { key: Key::Named(ea), dst: ret });
+                    // The path node holds what `require` returns.
+                    m.edge(rec, ret);
                     m.cons(unknown, Cons::Load { key: Key::Named(ea), dst: ret });
                     m.add_prim(ret, prim::UNDEF);
                 }
@@ -1640,7 +1640,7 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
         ) if !n.starts_with("on") && n != "addEventListener" => {
             implicit_args(m, call, "builtin method argument");
             ret_prim(m, call, prim::ALL);
-            let pb = m.tok(TokKind::PrimBox);
+            let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
             if matches!(n, "unref" | "ref" | "refresh") {
                 ret_tok(m, call, t);
@@ -1666,7 +1666,7 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument");
             ret_prim(m, call, prim::ALL);
-            let pb = m.tok(TokKind::PrimBox);
+            let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
         }
         ("primbox" | "keys" | "json" | "descriptor" | "groups" | "fromEntries", Some(n)) => {

@@ -6,6 +6,9 @@ mod closed_world;
 mod birth_site;
 mod captured;
 mod receiver_this;
+mod cjs_require;
+mod hub_tokens;
+mod protocol_calls;
 mod super_heritage;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};

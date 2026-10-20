@@ -51,7 +51,6 @@ impl Model {
             TokKind::Obj(_, _)
             | TokKind::Proto(_)
             | TokKind::ObjectProto
-            | TokKind::PrimBox
             | TokKind::NativeProto(_)
             | TokKind::ModNs(_) => {
                 // Not callable (TypeError) — unless it is a builtin object

@@ -11,8 +11,7 @@ impl Model {
                 TokKind::Top
                 | TokKind::Builtin(_)
                 | TokKind::BuiltinFn
-                | TokKind::NativeProto(_)
-                | TokKind::PrimBox => {}
+                | TokKind::NativeProto(_) => {}
                 TokKind::Obj(_, _) if self.is_array_like(t) => {}
                 // A program object/function iterates only through its
                 // protocol, which `Gen::iterate` follows separately.
@@ -37,6 +36,18 @@ impl Model {
                 let f = self.tok(TokKind::Builtin(BuiltinNs::Function));
                 self.add_tok(dst, f);
             }
+            return;
+        }
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+            // Opaque (no field storage, `store_into`): its members are
+            // builtin functions and primitives (`tok_load`), or ⊤ once any
+            // builtin function value has been written.
+            if self.bf_written.is_some() {
+                self.add_top(dst, |_| "property of a written builtin function value".into());
+            } else {
+                self.bf_reads.push(dst);
+            }
+            self.with_b(|m| builtins::tok_load(m, t, key, dst));
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
@@ -256,7 +267,6 @@ impl Model {
 
     pub fn is_array_like(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
-            TokKind::PrimBox => true,
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                 TmplKind::Arr { .. } => true,
                 TmplKind::BObj { what, .. } => what != "CjsMain",

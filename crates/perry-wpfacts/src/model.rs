@@ -114,9 +114,6 @@ pub enum TokKind {
     Builtin(BuiltinNs),
     /// An opaque runtime function value (a builtin method read as a value).
     BuiltinFn,
-    /// A runtime-created container that holds only primitives (split/match
-    /// results, `Object.keys` arrays …). Shared by every such container.
-    PrimBox,
     /// A module's namespace / `module.exports` object.
     ModNs(u32),
     /// The prototype of a native parent class (`extends EventEmitter`),
@@ -304,6 +301,10 @@ pub enum Cons {
     Load { key: Key, dst: NodeId },
     /// Values of own properties only (enumerability over-approximated).
     OwnValues { dst: NodeId },
+    /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
+    /// wrapper's record literal carries `__perry_cjs_record` at birth), or
+    /// the published value itself for a raw publication.
+    CjsPublish { dst: NodeId },
     /// write(t, key) ⊇ src for every t in the node.
     Store { key: Key, src: NodeId, site: SiteId },
     /// The node is a callee.
@@ -445,6 +446,7 @@ impl Cons {
         match self {
             Cons::Load { .. } => "load",
             Cons::OwnValues { .. } => "ownvalues",
+            Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
             Cons::CallThis { .. } => "callthis",
@@ -686,6 +688,11 @@ pub struct Model {
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
+    /// A builtin function value has been written (`store_into`): the reason.
+    /// Property reads of such values are ⊤ from then on; `bf_reads` are the
+    /// reads made before.
+    pub bf_written: Option<u32>,
+    pub bf_reads: Vec<NodeId>,
     /// A call's constant first argument (a string), for callees whose
     /// result depends on it (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
@@ -732,6 +739,7 @@ pub struct Model {
     pub cw9_inst_fn: FxHashMap<u32, (u32, u32)>,
     pub cw9_events: Vec<(u64, u32, u32, u32)>,
     pub cw9_shared: FxHashMap<(u32, u8, u32), u32>,
+    pub cw9_modkind: Vec<u8>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Birth keys / definite keys of `new f()` instances, from the
     /// construction-phase analysis of `f`'s body.
@@ -952,7 +960,6 @@ impl Model {
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
             TokKind::BuiltinFn => "builtin-fn".into(),
-            TokKind::PrimBox => "primbox".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
         }
@@ -1010,7 +1017,6 @@ impl Model {
                 TokKind::ObjectProto => "objectproto -".into(),
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
                 TokKind::BuiltinFn => "builtinfn -".into(),
-                TokKind::PrimBox => "primbox -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n) => format!("nativeproto {n}"),
             };

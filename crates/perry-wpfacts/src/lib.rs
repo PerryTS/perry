@@ -142,6 +142,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut g = gen::Gen::new(sorted.clone(), cfg.relations, cfg.explain);
+    if cfg.profile { // TEMP CW9: module kinds for the cross-module event recorder (1 = benchmark, 2 = shared)
+        g.m.cw9_modkind = sorted.iter().map(|(p, _)| if ["harness.js", "run.js", "benchmark.js", "som.js", "webpack.config.js"].iter().any(|s| p.ends_with(s)) { 2u8 } else { 1u8 }).collect();
+    }
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
     let dynamic_reach = cfg.dynamic_code_reach.globals as u8;
     g.m.rel(|| format!("dynamicreach {dynamic_reach}"));
@@ -254,7 +257,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
     }
     // TEMP CW s9 diagnosis: biggest field nodes and one token's provenance.
-    if cfg.profile && g.m.aborted {
+    if cfg.profile {
         let m = &g.m;
         let mut fnodes: Vec<(u32, String, String)> = Vec::new();
         for (&(t, a), &n) in &m.fields { fnodes.push((n, m.tok_name(t) + &format!("#{t}"), m.key_name(model::Key::Named(a)))); }

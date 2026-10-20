@@ -17,6 +17,30 @@ use crate::delta::{Targets, Tokens};
 use crate::model::*;
 
 impl Model {
+    /// TEMP CW9: module of a token's template/function.
+    pub fn cw9_tok_mod(&self, t: Tok) -> Option<u32> {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) | TokKind::Proto(tm) | TokKind::ClassObj(tm) => match self.tmpls[tm as usize].kind {
+                TmplKind::Class { module, .. } | TmplKind::Lit { module, .. } | TmplKind::ObjCreate { module, .. } | TmplKind::Arr { module, .. } | TmplKind::BObj { module, .. } => Some(module),
+                TmplKind::FnInst { func } => Some(self.funcs[func as usize].module),
+            },
+            TokKind::Func(f, _) => Some(self.funcs[f as usize].module),
+            _ => None,
+        }
+    }
+    /// TEMP CW9: a token of benchmark module A delivered into a node of a different benchmark module B.
+    pub fn cw9_cross(&self, s: NodeId, delta: impl Iterator<Item = Tok>) -> Option<Tok> {
+        let f = self.node_fn[s as usize];
+        if f == NO_FN { return None; }
+        let ms = self.funcs[f as usize].module;
+        if self.cw9_modkind.get(ms as usize).copied() != Some(1) { return None; }
+        for t in delta {
+            if let Some(mt) = self.cw9_tok_mod(t) {
+                if mt != ms && self.cw9_modkind.get(mt as usize).copied() == Some(1) { return Some(t); }
+            }
+        }
+        None
+    }
     // ---------------------------------------------------------------- nodes
 
     /// Add tokens/prims to a node; schedules it when anything is new.
@@ -299,12 +323,9 @@ impl Model {
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
-                if self.profile.is_some() && self.cw9_events.len() < 20 {
-                    let valn = |m: &Self, x: u32| !m.nodes[x as usize].obs && matches!(m.labels[x as usize], "inst" | "field" | "fieldany" | "allfields" | "local" | "ret" | "ctx");
-                    if valn(self, s) && !(valn(self, n) && self.labels[n as usize] != "allfields") {
-                        if let Some(t) = delta.iter().copied().find(|&t| matches!(self.toks[t as usize], TokKind::Proto(_))) {
-                            self.cw9_events.push((self.pops, n, s, t));
-                        }
+                if self.profile.is_some() && self.cw9_events.len() < 40 && !self.cw9_events.iter().any(|e| e.1 == n) {
+                    if let Some(t) = self.cw9_cross(s, delta.iter().copied()) {
+                        self.cw9_events.push((self.pops, n, s, t));
                     }
                 }
                 if self.try_copy_delivery(n, s, &delta, dprim) {
@@ -501,6 +522,20 @@ impl Model {
                 }
                 for &t in toks {
                     self.load_from(t, t, key, dst);
+                }
+            }
+            Cons::CjsPublish { dst } => {
+                self.add_prim(dst, prim);
+                let marker = self.atom("__perry_cjs_record");
+                let ea = self.atom("exports");
+                for &t in toks {
+                    let record = matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                        if self.tmpls[tm as usize].birth_keys.contains(&marker));
+                    if record {
+                        self.load_from(t, t, Key::Named(ea), dst);
+                    } else {
+                        self.add_tok(dst, t);
+                    }
                 }
             }
             Cons::OwnValues { dst } => {
@@ -863,7 +898,6 @@ impl Model {
                                 self.load_from(t, t, Key::Named(a), dst);
                             }
                         },
-                        TokKind::PrimBox => {}
                         _ => {
                             let a = self.atom("next");
                             self.load_from(t, t, Key::Named(a), dst);
@@ -1027,6 +1061,20 @@ impl Model {
             self.sink_node(src, r);
             return;
         }
+        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
+            // A builtin function value is opaque: it has no field storage
+            // here. The value is gone to the runtime, and every property
+            // read of such a value is ⊤ from now on (`load_from`).
+            let r = self.reason("stored into a builtin function value");
+            self.sink_node(src, r);
+            if self.bf_written.is_none() {
+                self.bf_written = Some(r);
+                for dst in std::mem::take(&mut self.bf_reads) {
+                    self.add_top(dst, |_| "property of a written builtin function value".into());
+                }
+            }
+            return;
+        }
         let tm = self.tmpl_of(t);
         match key {
             Key::Named(a) => {
@@ -1126,6 +1174,10 @@ impl Model {
             site: 0,
         });
         self.protocol_calls.insert(call);
+        // The touch is its own source site: the methods it runs get one
+        // instance per touched receiver, and the calls made while solving
+        // them key on it (`note_origin`), not on one shared instance.
+        self.sum.origin.insert(call, call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         self.method_on(t, Key::Any, call);
         // Results of protocol methods flow back to the runtime (iterator
@@ -1137,6 +1189,7 @@ impl Model {
         match c {
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
+            Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
             Cons::Store { key, src, site } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
             }
