@@ -32,6 +32,57 @@ pub(super) fn collect_user_closure_refs(stmts: &[Stmt], out: &mut HashSet<LocalI
     }
 }
 
+fn collect_box_prealloc_ids(stmts: &[Stmt], out: &mut Vec<LocalId>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+                out.extend(ids.iter().copied())
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_box_prealloc_ids(then_branch, out);
+                if let Some(eb) = else_branch {
+                    collect_box_prealloc_ids(eb, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_box_prealloc_ids(body, out)
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_box_prealloc_ids(std::slice::from_ref(&**body), out)
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init) = init {
+                    collect_box_prealloc_ids(std::slice::from_ref(&**init), out);
+                }
+                collect_box_prealloc_ids(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_box_prealloc_ids(body, out);
+                if let Some(c) = catch {
+                    collect_box_prealloc_ids(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_box_prealloc_ids(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_box_prealloc_ids(&case.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// A declaration and all its uses in one resume state need no persistent
 /// slot. Keep shared bindings and abrupt-route operands conservative: their
 /// lifetime can extend beyond the state's ordinary exit.
@@ -72,6 +123,11 @@ pub(super) fn state_local_ids(
         declared.extend(declarations.iter().copied());
         let mut uses = refs(&state.body);
         uses.extend(declarations);
+        // A box preallocated in this state belongs to the binding's lifetime:
+        // the declaring state writes through that box. HIR preallocates a
+        // forward-captured `let`/`const` (name-based, so possibly
+        // over-collected) at its block entry, which can be an earlier state.
+        collect_box_prealloc_ids(&state.body, &mut uses);
         if let StateExit::Yield { value, .. } | StateExit::Await { value, .. } = &state.exit {
             perry_hir::analysis::collect_local_refs_expr(value, &mut uses, &mut HashSet::new());
         }
@@ -123,5 +179,34 @@ mod tests {
             state_local_ids(&states, &HashSet::from([3]), &[], &[], &[]),
             HashSet::from([1])
         );
+    }
+
+    #[test]
+    fn generator_box_preallocated_in_an_earlier_state_is_persistent() {
+        let states = vec![
+            State {
+                num: 0,
+                body: vec![Stmt::PreallocateTdzBoxes(vec![1])],
+                exit: StateExit::Yield {
+                    value: Expr::Number(1.0),
+                    next_state: 1,
+                },
+            },
+            State {
+                num: 1,
+                body: vec![
+                    Stmt::Let {
+                        id: 1,
+                        name: "client".into(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(Expr::Number(7.0)),
+                    },
+                    Stmt::Return(Some(Expr::LocalGet(1))),
+                ],
+                exit: StateExit::Done,
+            },
+        ];
+        assert!(state_local_ids(&states, &HashSet::new(), &[], &[], &[]).is_empty());
     }
 }
