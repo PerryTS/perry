@@ -1875,7 +1875,8 @@ pub extern "C" fn js_async_local_storage_static_bind_direct(
 
 pub(crate) mod context_snapshots;
 pub use context_snapshots::{
-    js_async_local_storage_static_snapshot_direct, js_async_local_storage_static_snapshot_method,
+    async_local_storage_static_snapshot_value, js_async_local_storage_static_snapshot_direct,
+    js_async_local_storage_static_snapshot_method, run_with_context_snapshot,
 };
 
 pub fn scan_async_hooks_roots(mark: &mut dyn FnMut(f64)) {
