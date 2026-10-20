@@ -1292,7 +1292,7 @@ pub(crate) unsafe fn template_instance(
     if birth == 0
         || linked == 0
         || (crate::object::learned_inline_field_count(class_id) > width
-            && crate::object::layout_desc::family_birth_width(class_id) == 0)
+            && crate::object::layout_desc::family_of_class(class_id).is_none())
     {
         return None;
     }

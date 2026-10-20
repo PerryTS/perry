@@ -17,13 +17,16 @@ pub(super) fn eligible(target: &str, size: u64) -> bool {
         && size <= 16 * 1024
 }
 
+/// The birth's handle, and with `written` an `i1` that is true on the
+/// emitted arm (which ran `initialize`) and false on the runtime arm.
 fn allocate(
     ctx: &mut FnCtx<'_>,
     size: u64,
     admitted: Option<&str>,
+    written: bool,
     initialize: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
-) -> String {
+) -> (String, Option<String>) {
     let state = crate::expr::load_inline_arena_state(ctx);
     let flags = super::flags(ctx, &state);
     let blk = ctx.block();
@@ -61,8 +64,14 @@ fn allocate(
     let slow_pred = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = merge;
-    ctx.block()
-        .phi(I64, &[(&fast_value, &fast_pred), (&slow_value, &slow_pred)])
+    let written = written.then(|| {
+        ctx.block()
+            .phi(I1, &[("true", &fast_pred), ("false", &slow_pred)])
+    });
+    let value = ctx
+        .block()
+        .phi(I64, &[(&fast_value, &fast_pred), (&slow_value, &slow_pred)]);
+    (value, written)
 }
 
 /// The original runtime birth remains the slow arm, with its unchanged rooted
@@ -84,6 +93,7 @@ pub(crate) fn closure(
         ctx,
         size,
         None,
+        false,
         |ctx, raw| {
             let reserved = if words.is_empty() { 0x4000u64 } else { 0 };
             let packed = u64::from(crate::runtime_abi::GC_TYPE_CLOSURE)
@@ -124,6 +134,7 @@ pub(crate) fn closure(
         },
         slow,
     )
+    .0
 }
 
 /// Only compiler-emitted ordinary layouts enter here: zero integrity, default
@@ -131,6 +142,21 @@ pub(crate) fn closure(
 /// record is exactly PLAIN_ORDINARY; slots (including optional keys) are holes.
 /// The descriptor, registered before generated code runs, supplies the ShapeId.
 pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) -> String {
+    layout_with(ctx, desc, slots, class, None).0
+}
+
+/// [`layout`], with a complete constructor prologue's values (`(slot, bits)`)
+/// written in the emitted arm instead of their holes, as the class birth's
+/// compact form does (`fixed_class`): the idle nursery birth is young and
+/// unpublished, so they need no barrier. The `i1` is true on that arm; the
+/// runtime arm's object holds holes and runs the constructor.
+pub(crate) fn layout_with(
+    ctx: &mut FnCtx<'_>,
+    desc: &str,
+    slots: u32,
+    class: u32,
+    fields: Option<&[(u32, String)]>,
+) -> (String, Option<String>) {
     let size = 8
         + crate::target_layout::object_header_size_bytes(ctx.target_triple)
         + u64::from(slots) * 8;
@@ -139,8 +165,13 @@ pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) ->
         ctx.block().ptrtoint(&raw, I64)
     };
     if !eligible(ctx.target_triple, size) {
-        return slow(ctx);
+        return (slow(ctx), None);
     }
+    let value = |slot: u32| {
+        fields
+            .and_then(|f| f.iter().find(|(s, _)| *s == slot))
+            .map_or_else(|| crate::nanbox::TAG_HOLE.to_string(), |(_, v)| v.clone())
+    };
     // Registration gives a carried descriptor exactly three possible states:
     // 0 (unsupported), -1 (not registered), or its registered ShapeId. Refuse
     // the first two before committing the bump, preserving the runtime error.
@@ -157,6 +188,7 @@ pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) ->
         ctx,
         size,
         Some(&registered),
+        fields.is_some(),
         |ctx, raw| {
             let blk = ctx.block();
             // GC_STORE_AUDIT(INIT): runtime mark_layout_object_facts for an ordinary
@@ -170,11 +202,12 @@ pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) ->
             let meta = blk.gep(I8, &user, &[(I64, "8")]);
             // GC_STORE_AUDIT(INIT): unpublished layout object, no per-object meta.
             blk.store(PTR, "null", &meta);
-            if slots <= 8 {
+            if slots <= 8 || fields.is_some() {
                 for slot in 0..slots {
                     let address = blk.gep(I8, &user, &[(I64, &(16 + slot * 8).to_string())]);
-                    // GC_STORE_AUDIT(INIT): every declared slot begins absent.
-                    blk.store(I64, &crate::nanbox::TAG_HOLE.to_string(), &address);
+                    // GC_STORE_AUDIT(INIT): every declared slot begins absent, or
+                    // holds its prologue value in an idle young birth.
+                    blk.store(I64, &value(slot), &address);
                 }
             } else {
                 // A bounded loop avoids replicating a large layout's fill at each site.

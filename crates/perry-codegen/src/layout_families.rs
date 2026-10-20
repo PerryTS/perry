@@ -450,27 +450,42 @@ fn inert(e: &Expr, params: &BTreeSet<u32>) -> bool {
 /// form, which reads it implicitly?
 fn mentions_receiver(e: &Expr) -> bool {
     let mut found = false;
-    visit_expr(e, &mut |_| {}, &mut |x| {
-        if matches!(
-            x,
-            Expr::This
-                | Expr::SuperCall(_)
-                | Expr::SuperCallSpread(_)
-                | Expr::SuperMethodCall { .. }
-                | Expr::SuperMethodCallSpread { .. }
-                | Expr::SuperPropertyGet { .. }
-                | Expr::SuperPropertySet { .. }
-        ) {
-            found = true;
-        }
-    });
+    visit_expr(e, &mut |_| {}, &mut |x| found |= names_receiver(x));
     found
+}
+
+/// Is `e` itself `this` or a `super` form?
+fn names_receiver(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::This
+            | Expr::SuperCall(_)
+            | Expr::SuperCallSpread(_)
+            | Expr::SuperMethodCall { .. }
+            | Expr::SuperMethodCallSpread { .. }
+            | Expr::SuperPropertyGet { .. }
+            | Expr::SuperPropertySet { .. }
+    )
 }
 
 /// Is `s` an expression statement that cannot reach the receiver (it never
 /// names it, so it cannot observe or store into the half-built instance)?
 fn receiver_free(s: &Stmt) -> bool {
     matches!(s, Stmt::Expr(e) if !mentions_receiver(e))
+}
+
+/// A statement before a derived constructor's `super(...)`: the instance
+/// does not exist yet, so one that never names the receiver (closures
+/// included: an arrow could call `super`) and never returns cannot observe
+/// or replace it.
+fn before_super_free(s: &Stmt) -> bool {
+    let free = std::cell::Cell::new(true);
+    visit_stmt(
+        s,
+        &mut |t| free.set(free.get() && !matches!(t, Stmt::Return(_))),
+        &mut |e| free.set(free.get() && !names_receiver(e)),
+    );
+    free.get()
 }
 
 /// A parameter default's fill, `if (p === undefined) p = v` (`p` a
@@ -659,7 +674,12 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             if let Some(v) = param_default_fill(s, &params) {
                 open &= inert(v, &params);
             } else if !receiver_free(s) {
-                break;
+                if !before_super_free(s) {
+                    break;
+                }
+                // A check that throws, a local computed from the arguments:
+                // it may run code.
+                open = false;
             }
             body = &body[1..];
         }
@@ -855,6 +875,47 @@ fn class_bindings(hir: &HirModule) -> HashMap<u32, String> {
     out.into_iter()
         .filter_map(|(id, n)| Some((id, n?)))
         .collect()
+}
+
+/// The classes whose instances the program stores, straight from `new`,
+/// into another object's property or an element (`links[id] = new
+/// SymbolLinks()`, `symbol.links = new SymbolLinks()`; not `this.x = new
+/// C()`, a constructor's own part): records other code fills.
+fn filled_records(modules: &[&HirModule]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for hir in modules {
+        let bound = class_bindings(hir);
+        for body in module_bodies(hir) {
+            visit_stmts(body, &mut |_| {}, &mut |e| {
+                let value = match e {
+                    Expr::PropertySet { object, value, .. }
+                        if !matches!(object.as_ref(), Expr::This) =>
+                    {
+                        value
+                    }
+                    Expr::PutValueSet { target, value, .. }
+                        if !matches!(target.as_ref(), Expr::This) =>
+                    {
+                        value
+                    }
+                    Expr::IndexSet { value, .. } => value,
+                    _ => return,
+                };
+                match value.as_ref() {
+                    Expr::New { class_name, .. } => {
+                        out.insert(class_name.clone());
+                    }
+                    Expr::NewDynamic { callee, .. } => {
+                        if let Expr::LocalGet(l) = callee.as_ref() {
+                            out.extend(bound.get(l).cloned());
+                        }
+                    }
+                    _ => {}
+                }
+            });
+        }
+    }
+    out
 }
 
 /// A static family before its late keys: the class, its runtime parent, its
@@ -1445,22 +1506,31 @@ pub fn compute<'a>(
         add_late_keys(&mut fams, &groups);
         fams.iter().map(|f| f.keys.len()).sum::<usize>() - before
     };
-    // A family that neither stores nor receives a key, and is nobody's
-    // parent, has nothing to lay out: the class keeps its empty birth.
+    // A family that neither stores nor receives a key has the empty layout:
+    // its instances are born with no slots, and a key a dynamic store adds
+    // takes the object's overflow, as on any family. That layout is exact
+    // unless the class's instances are records other code fills: one stored
+    // into another object's property or an element (tsc's
+    // `symbolLinks[id] ?? (symbolLinks[id] = new SymbolLinks())`) gets its
+    // keys through loads no census here follows, so its class keeps the
+    // runtime birth that learns them.
+    let filled = filled_records(&modules);
+    let names: HashMap<u32, &str> = modules
+        .iter()
+        .flat_map(|m| &m.classes)
+        .map(|c| (c.id, c.name.as_str()))
+        .collect();
     let parents: BTreeSet<u32> = fams.iter().map(|f| f.parent).collect();
     let mut at = 0;
     fams.retain(|f| {
-        let keep = !f.keys.is_empty() || parents.contains(&f.class_id);
+        let name = names.get(&f.class_id).copied().unwrap_or("?");
+        let keep = !f.keys.is_empty() || parents.contains(&f.class_id) || !filled.contains(name);
         if !keep {
-            crate::fallback_diag::family_refused(f.class_id, "no-keys");
-            *refused.entry("no-keys".to_string()).or_default() += 1;
+            let why = "no-keys: instances stored into a property or element";
+            crate::fallback_diag::family_refused(f.class_id, why);
+            *refused.entry(why.to_string()).or_default() += 1;
             if explain() {
-                let name = modules
-                    .iter()
-                    .flat_map(|m| &m.classes)
-                    .find(|c| c.id == f.class_id)
-                    .map_or("?", |c| c.name.as_str());
-                eprintln!("perry: layout family refused: {name}: no-keys");
+                eprintln!("perry: layout family refused: {name}: {why}");
             }
             owns.remove(at);
         } else {
@@ -1588,6 +1658,10 @@ pub fn compute<'a>(
     }
     layouts
 }
+
+#[cfg(test)]
+#[path = "layout_families/admission_tests.rs"]
+mod admission_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1703,13 +1703,6 @@ pub(crate) fn family_birth_desc(class_id: u32, args: &[f64]) -> Option<*const Pe
     }
 }
 
-/// The inline width an instance of `class_id` must be born with to adopt its
-/// family layout (0 when it has none).
-pub(crate) fn family_birth_width(class_id: u32) -> u32 {
-    // SAFETY: a record of this program's section.
-    family_of_class(class_id).map_or(0, |(_, d)| unsafe { (*d).slot_count })
-}
-
 /// Class births allocate the complete fixed layout directly.
 /// Retained for a runtime construction path that already made a keyless shell.
 pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectHeader {

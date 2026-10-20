@@ -232,6 +232,23 @@ pub(crate) fn class_instances_have_constructor_reservations(
 pub(crate) fn class_instances_keep_birth_shape(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     !class_instances_have_constructor_reservations(ctx, class_name)
         && !class_instances_grow_past_layout(ctx, class_name)
+        && !class_instances_born_on_family(ctx, class_name)
+}
+
+/// An instance born on its class's static family layout (object model case
+/// 2c) carries the family's layout id for life, never the class keys'
+/// static ShapeId.
+fn class_instances_born_on_family(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    let born = |name: &str| {
+        ctx.classes
+            .get(name)
+            .copied()
+            .zip(ctx.class_ids.get(name).copied())
+            .is_some_and(|(class, cid)| {
+                crate::lower_call::new_alloc::class_born_on_family(ctx, class, cid)
+            })
+    };
+    born(class_name) || transitive_subclasses(ctx, class_name).into_iter().any(born)
 }
 
 /// The ShapeId a read site of `class_name`'s field at `field_index` compares

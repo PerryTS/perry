@@ -5,7 +5,7 @@ use crate::types::{I64, I8, PTR};
 mod shared;
 pub(crate) use shared::{class, empty_array};
 mod fixed_alloc;
-pub(crate) use fixed_alloc::{closure, layout};
+pub(crate) use fixed_alloc::{closure, layout, layout_with};
 mod fixed;
 pub(crate) use fixed::{compact_slots, fixed_class};
 

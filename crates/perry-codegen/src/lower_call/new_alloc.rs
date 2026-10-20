@@ -531,7 +531,12 @@ fn emit_instance_alloc_inner(
         // constructor prologue stores straight into its slots
         // (`ctor_prologue_stores::prologue_store_plan`).
         *constructor_stores_ready = true;
-        return crate::expr::inline_birth::layout(ctx, &desc, slots, cid);
+        // A complete prologue's values go straight into the emitted birth.
+        let fields = constructor_birth.and_then(|birth| birth.fields.as_deref());
+        let (handle, written) =
+            crate::expr::inline_birth::layout_with(ctx, &desc, slots, cid, fields);
+        *fields_written = written;
+        return handle;
     }
     // Imported heritage can have a proven family while its parent identity
     // is available only after evaluation. Let the runtime compare the class
