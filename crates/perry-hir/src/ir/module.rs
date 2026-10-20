@@ -44,7 +44,7 @@ pub struct LocalSourceSpan {
 /// methods and other callable forms that share the same closure layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSourceMetadata {
-    pub text: String,
+    pub text: SourceText,
     pub is_non_strict_ordinary: bool,
 }
 
@@ -214,7 +214,7 @@ pub struct Module {
     /// classes are the one callable kind whose source perry retained nowhere,
     /// even though the sibling `closure_source_text` had done it for every
     /// function since #4101.
-    pub class_source_text: std::collections::HashMap<crate::ClassId, String>,
+    pub class_source_text: std::collections::HashMap<crate::ClassId, SourceText>,
     /// #3664: func_ids of `async function*` declarations and `async function*(){}`
     /// expressions. The generator transform clears `is_async`/`is_generator`
     /// before codegen, erasing the async-vs-sync distinction (both lower to a

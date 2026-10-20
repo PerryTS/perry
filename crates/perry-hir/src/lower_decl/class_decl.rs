@@ -168,7 +168,7 @@ pub fn lower_class_decl(
                         !byte.is_ascii_alphanumeric() && *byte != b'_' && *byte != b'$'
                     });
                     if name_is_complete {
-                        *source = format!("class{after_name}");
+                        *source = format!("class{after_name}").into();
                     }
                 }
             }

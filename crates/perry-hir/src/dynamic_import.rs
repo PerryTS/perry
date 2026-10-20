@@ -28,11 +28,13 @@ use std::collections::{HashMap, HashSet};
 pub const DYNAMIC_IMPORT_PATH_CAP: usize = 64;
 
 mod binding_origin;
+mod export_bindings;
 mod top_level_await;
 mod visitors;
 mod worker_entries;
 mod worker_paths;
 use binding_origin::{resolve_binding_origin, BindingOrigin};
+pub use export_bindings::ExportBindings;
 pub use top_level_await::detect_top_level_await;
 pub use visitors::{
     for_each_dynamic_import, for_each_dynamic_import_mut, for_each_module_expr,
@@ -115,9 +117,10 @@ pub struct FlatExport {
 /// Returns entries in declaration order with later entries overriding
 /// earlier ones on duplicate names (matches JS semantics for
 /// `export * from`).
-pub fn flatten_exports<'a, F>(target_name: &str, lookup: &F) -> Vec<FlatExport>
+pub fn flatten_exports<'a, F, M>(target_name: &str, lookup: &F) -> Vec<FlatExport>
 where
-    F: Fn(&str) -> Option<&'a Module>,
+    F: Fn(&str) -> Option<&'a M>,
+    M: ExportBindings + 'a,
 {
     let mut out: Vec<FlatExport> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
@@ -134,13 +137,14 @@ where
     dedup
 }
 
-fn flatten_into<'a, F>(
+fn flatten_into<'a, F, M>(
     module_name: &str,
     lookup: &F,
     out: &mut Vec<FlatExport>,
     visited: &mut HashSet<String>,
 ) where
-    F: Fn(&str) -> Option<&'a Module>,
+    F: Fn(&str) -> Option<&'a M>,
+    M: ExportBindings + 'a,
 {
     if !visited.insert(module_name.to_string()) {
         return;
@@ -149,7 +153,7 @@ fn flatten_into<'a, F>(
         Some(m) => m,
         None => return,
     };
-    for export in &module.exports {
+    for export in module.exports() {
         match export {
             Export::Named { local, exported } => {
                 // #6304: `export { run }` does NOT imply `run` is defined here.

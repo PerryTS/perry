@@ -23,7 +23,7 @@ fn capture_class_method_source(
     func_id: crate::types::FuncId,
     method: &ast::ClassMethod,
 ) {
-    let Some(mut src) = crate::ir::current_module_source_slice(method.span.lo.0, method.span.hi.0)
+    let Some(mut src) = crate::ir::current_module_source_range(method.span.lo.0, method.span.hi.0)
     else {
         return;
     };
@@ -36,7 +36,10 @@ fn capture_class_method_source(
                 .first()
                 .is_some_and(u8::is_ascii_whitespace)
             {
-                src = after_static.trim_start().to_string();
+                let start = src.len() - after_static.trim_start().len();
+                src = src
+                    .slice(start..src.len())
+                    .expect("validated method source range");
             }
         }
     }

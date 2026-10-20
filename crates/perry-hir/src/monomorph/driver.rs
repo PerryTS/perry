@@ -38,7 +38,7 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
     let mut new_classes = Vec::new();
     // #7632: (specialization class id, the JS-visible name of its origin).
     let mut new_display_names: Vec<(crate::ClassId, String)> = Vec::new();
-    let mut new_source_texts: Vec<(crate::ClassId, String)> = Vec::new();
+    let mut new_source_texts: Vec<(crate::ClassId, crate::ir::SourceText)> = Vec::new();
 
     while !ctx.func_work_queue.is_empty() || !ctx.class_work_queue.is_empty() {
         // Process function specializations

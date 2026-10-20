@@ -147,7 +147,7 @@ impl SH for Module {
         }
         // #9413: class source text drives the js_register_class_source{,_static} calls,
         // so it participates in the stable hash for the same reason.
-        let mut class_source_pairs: Vec<(u32, &String)> =
+        let mut class_source_pairs: Vec<(u32, &crate::ir::SourceText)> =
             class_source_text.iter().map(|(k, v)| (*k, v)).collect();
         class_source_pairs.sort_unstable_by_key(|(k, _)| *k);
         for (id, src) in class_source_pairs {

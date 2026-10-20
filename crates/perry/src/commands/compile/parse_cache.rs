@@ -33,6 +33,7 @@ pub struct ParseCache {
     /// `lru` crate dep and the per-hit re-ordering it would need.
     order: VecDeque<PathBuf>,
     max_entries: usize,
+    retain_across_rebuilds: bool,
     hits: usize,
     misses: usize,
 }
@@ -53,6 +54,22 @@ impl ParseCache {
         Self::default()
     }
 
+    /// A batch build reuses ASTs during metadata re-lowering, then releases
+    /// them before the HIR and LLVM codegen graphs reach their peak.
+    pub(super) fn for_batch() -> Self {
+        Self {
+            retain_across_rebuilds: false,
+            ..Self::with_capacity(usize::MAX)
+        }
+    }
+
+    pub(super) fn finish_lowering(&mut self) {
+        if !self.retain_across_rebuilds {
+            self.entries = HashMap::new();
+            self.order = VecDeque::new();
+        }
+    }
+
     /// Create a cache that holds up to `max_entries` parsed modules
     /// before evicting the oldest insertion. Pass `usize::MAX` to
     /// disable eviction (matches the pre-Tier-4.5 unbounded behaviour).
@@ -61,6 +78,7 @@ impl ParseCache {
             entries: HashMap::new(),
             order: VecDeque::new(),
             max_entries,
+            retain_across_rebuilds: true,
             hits: 0,
             misses: 0,
         }
@@ -136,6 +154,31 @@ mod tests {
     const SRC_V1: &str = "export function greet(name: string): string { return `hi ${name}`; }\n";
     const SRC_V2: &str =
         "export function greet(name: string): string { return `hello ${name}`; }\n";
+
+    #[test]
+    fn batch_asts_are_reused_during_lowering_and_released_afterward() {
+        let mut cache = ParseCache::for_batch();
+        let path = PathBuf::from("/virtual/greet.ts");
+        parse_cached(&mut cache, &path, SRC_V1, "greet.ts").unwrap();
+        parse_cached(&mut cache, &path, SRC_V1, "greet.ts").unwrap();
+        assert_eq!((cache.hits(), cache.misses()), (1, 1));
+        cache.finish_lowering();
+        assert!(cache.entries.is_empty());
+        assert!(cache.order.is_empty());
+        assert_eq!((cache.hits(), cache.misses()), (1, 1));
+        parse_cached(&mut cache, &path, SRC_V1, "greet.ts").unwrap();
+        assert_eq!((cache.hits(), cache.misses()), (1, 2));
+    }
+
+    #[test]
+    fn dev_asts_survive_lowering_for_the_next_rebuild() {
+        let mut cache = ParseCache::new();
+        let path = PathBuf::from("/virtual/greet.ts");
+        parse_cached(&mut cache, &path, SRC_V1, "greet.ts").unwrap();
+        cache.finish_lowering();
+        parse_cached(&mut cache, &path, SRC_V1, "greet.ts").unwrap();
+        assert_eq!((cache.hits(), cache.misses()), (1, 1));
+    }
 
     #[test]
     fn first_call_is_a_miss() {

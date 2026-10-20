@@ -164,7 +164,7 @@ pub(super) fn emit_string_pool(
     // #9413: retained class SOURCE text keyed by ClassId, so `String(C)` /
     // `C.toString()` return the class source instead of a synthesized
     // `function C() { [native code] }`.
-    class_source_text: &HashMap<u32, String>,
+    class_source_text: &HashMap<u32, perry_hir::SourceText>,
     // Wall 51: per-class standalone-constructor arity, accounting for the
     // synthesized `super(...args)` forwarding ctor a no-own-ctor class with
     // heritage inherits (its arity comes from the nearest ancestor ctor, which
@@ -244,7 +244,7 @@ pub(super) fn emit_string_pool(
     // original source we retained. Each entry produces one
     // `js_register_function_source_static` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
-    user_fn_source: &[(String, String, bool)],
+    user_fn_source: &[(String, std::borrow::Cow<'_, str>, bool)],
     // The templates the module evaluates per evaluation (`ClassExprFresh`):
     // their static methods' entries run in the function object's home.
     fresh_class_templates: &std::collections::HashSet<String>,
@@ -396,7 +396,7 @@ pub(super) fn emit_string_pool(
 
     // Collect class sources in registration order before preparing the shared
     // source pool: a class can contain the exact bytes of a method/closure.
-    let mut class_sources: Vec<(u32, &String)> = Vec::new();
+    let mut class_sources: Vec<(u32, &perry_hir::SourceText)> = Vec::new();
     for (class_name, class) in classes.iter() {
         if *class_name != class.name || class_name.starts_with("__AnonShape_") {
             continue;
@@ -425,7 +425,7 @@ pub(super) fn emit_string_pool(
         user_fn_source
             .iter()
             .filter(|(symbol, source, _)| !symbol.is_empty() && !source.is_empty())
-            .map(|(_, source, _)| source.as_str())
+            .map(|(_, source, _)| source.as_ref())
             .chain(class_sources.iter().map(|(_, source)| source.as_str())),
     );
     let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();

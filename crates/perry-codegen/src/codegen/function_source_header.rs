@@ -11,6 +11,7 @@
 //! Full source is the default so `fn.toString()` stays spec-identical and
 //! first-party worker serialization (`perry-threads`) keeps working.
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::HashMap;
 
@@ -91,28 +92,28 @@ impl<'a> ClosureHeaders<'a> {
 }
 
 /// Original source, or the synthesized header when header mode is on.
-pub(super) fn retained_function_text(
+pub(super) fn retained_function_text<'a>(
     hir: &HirModule,
     closures: &ClosureHeaders<'_>,
     func_id: FuncId,
-    original: &str,
-) -> String {
+    original: &'a str,
+) -> Cow<'a, str> {
     if !function_source_header_mode() {
-        return original.to_string();
+        return Cow::Borrowed(original);
     }
     if let Some(func) = function_by_id(hir, func_id) {
-        return synthesize_function_header(&header_name(hir, func), func.params.as_slice());
+        return synthesize_function_header(&header_name(hir, func), func.params.as_slice()).into();
     }
     if let Some((params, is_arrow)) = closures.get(func_id) {
         // An arrow has no name in source and `toString()` must not claim one,
         // nor call itself `function` - that misreports the function kind on
         // top of eliding the body.
         if is_arrow {
-            return synthesize_arrow_header(params);
+            return synthesize_arrow_header(params).into();
         }
-        return synthesize_function_header(&closure_header_name(hir, func_id), params);
+        return synthesize_function_header(&closure_header_name(hir, func_id), params).into();
     }
-    synthesize_function_header("", &[])
+    synthesize_function_header("", &[]).into()
 }
 
 /// Display name for a closure that has no `hir.functions` entry — a function
@@ -126,14 +127,14 @@ fn closure_header_name(hir: &HirModule, func_id: FuncId) -> String {
 
 /// Header-mode class source map. `None` on the default path so the caller
 /// can pass `hir.class_source_text` without cloning it.
-pub(super) fn elide_class_sources(hir: &HirModule) -> Option<HashMap<u32, String>> {
+pub(super) fn elide_class_sources(hir: &HirModule) -> Option<HashMap<u32, perry_hir::SourceText>> {
     if !function_source_header_mode() {
         return None;
     }
     Some(
         hir.class_source_text
             .keys()
-            .map(|&cid| (cid, synthesize_class_header(hir, cid)))
+            .map(|&cid| (cid, synthesize_class_header(hir, cid).into()))
             .collect(),
     )
 }

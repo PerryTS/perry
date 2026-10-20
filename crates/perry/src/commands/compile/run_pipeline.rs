@@ -970,6 +970,10 @@ pub fn run_with_parse_cache(
         prepared_sources,
     )?;
 
+    if let Some(cache) = parse_cache.as_deref_mut() {
+        cache.finish_lowering();
+    }
+
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
@@ -2979,26 +2983,19 @@ pub fn run_with_parse_cache(
             .iter()
             .any(|stmt| matches!(stmt, perry_hir::Stmt::Let { name, .. } if name == "_cjs"))
     };
-    // Build a normalized HIR-by-name map for `flatten_exports`. Each
+    // Build normalized export views for `flatten_exports`. Each
     // module's `Export::ReExport::source`, `Export::ExportAll::source`,
     // and `Export::NamespaceReExport::source` strings hold the raw
     // specifier as written in source (`"./inner.ts"`); flatten_exports
     // keys its lookup on `Module::name`. Rewrite the source field of
     // every export to the target module's `Module::name` (via
     // `resolve_import` → `path_to_module_name`) so the cross-module
-    // lookup resolves the right HIR.
-    let mut module_name_to_module: HashMap<String, perry_hir::Module> = HashMap::new();
+    // lookup resolves the right HIR. Borrow declarations instead of cloning
+    // every module's function bodies and retained source text.
+    let mut module_name_to_module: HashMap<String, super::export_analysis::ExportAnalysis<'_>> =
+        HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
-        let mut rewritten = hir_module.clone();
-        // This map is an analysis-only view. Entry outlining moves module
-        // declarations into compiler-owned functions; flatten_exports must
-        // still see those bindings or an imported variable falls back to a
-        // getter on its barrel (which does not own the value). Reconstruct
-        // only the logical entry stream, never arbitrary function locals.
-        rewritten.init = perry_codegen::codegen::entry_outline::logical_entry_stmts(hir_module)
-            .into_iter()
-            .cloned()
-            .collect();
+        let mut rewritten = super::export_analysis::ExportAnalysis::new(hir_module);
         for export in rewritten.exports.iter_mut() {
             match export {
                 perry_hir::Export::ReExport { source, .. }
@@ -3113,7 +3110,9 @@ pub fn run_with_parse_cache(
         let mut entries: Vec<perry_codegen::NamespaceEntry> = Vec::new();
         for fe in flat {
             // Locate source module's HIR (where the binding lives).
-            let source_mod = module_name_to_module.get(&fe.source_module);
+            let source_mod = module_name_to_module
+                .get(&fe.source_module)
+                .map(|view| view.module);
             // `flatten_exports` intentionally retains interfaces and aliases
             // so the type resolver can follow their barrel chains. A dynamic
             // import or nested namespace re-export is a JavaScript object,
@@ -3139,7 +3138,7 @@ pub fn run_with_parse_cache(
                 } else {
                     let nested_prefix = module_name_to_module
                         .get(nested)
-                        .map(|m| sanitize_module_name(&m.name))
+                        .map(|view| sanitize_module_name(&view.module.name))
                         .unwrap_or_else(|| sanitize_module_name(nested));
                     perry_codegen::NamespaceEntryKind::NestedNamespace {
                         source_prefix: nested_prefix,
@@ -3286,8 +3285,7 @@ pub fn run_with_parse_cache(
         }
         per_module_namespace_entries.insert(target_path.clone(), entries);
     }
-    // The rewritten export-analysis graph duplicates the full HIR. Namespace
-    // entries own the result; no later phase needs that analysis input.
+    // Namespace entries own their results; release the normalized edge views.
     drop(module_name_to_module);
     // For each consumer module, map every `Expr::DynamicImport` arg-path
     // string (as resolved in `collect_modules`) to the target's
@@ -5673,14 +5671,12 @@ pub fn run_with_parse_cache(
                         .iter()
                         .find(|class| class.name == imported_classes[idx].name)
                 })
-                .is_some_and(|class| {
-                    match class.extends_expr.as_deref() {
-                        Some(
-                            perry_hir::Expr::PropertyGet { object, .. }
-                            | perry_hir::Expr::IndexGet { object, .. },
-                        ) => !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_)),
-                        _ => false,
-                    }
+                .is_some_and(|class| match class.extends_expr.as_deref() {
+                    Some(
+                        perry_hir::Expr::PropertyGet { object, .. }
+                        | perry_hir::Expr::IndexGet { object, .. },
+                    ) => !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_)),
+                    _ => false,
                 });
             // Issue #485: include the class's parent in the transitive
             // closure too. Without this, `import { Sub } from 'pkg'` where

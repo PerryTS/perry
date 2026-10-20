@@ -153,7 +153,7 @@ pub(crate) fn capture_class_source(
     class_id: crate::ClassId,
     class: &ast::Class,
 ) {
-    if let Some(src) = crate::ir::current_module_source_slice(class.span.lo.0, class.span.hi.0) {
+    if let Some(src) = crate::ir::current_module_source_range(class.span.lo.0, class.span.hi.0) {
         ctx.class_source_text.insert(class_id, src);
     }
 }

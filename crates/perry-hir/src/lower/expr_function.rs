@@ -49,11 +49,11 @@ pub(crate) fn capture_function_source(
     is_async: bool,
     is_non_strict_ordinary: bool,
 ) {
-    let Some(mut src) = crate::ir::current_module_source_slice(span.lo.0, span.hi.0) else {
+    let Some(mut src) = crate::ir::current_module_source_range(span.lo.0, span.hi.0) else {
         return;
     };
     if is_async && !src.trim_start().starts_with("async") {
-        src = format!("async {src}");
+        src = format!("async {src}").into();
     }
     ctx.closure_source_text.insert(
         func_id,

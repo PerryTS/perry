@@ -265,7 +265,7 @@ thread_local! {
     /// the dynamic-dispatch check to look up `// @perry-allow-dynamic`
     /// line annotations adjacent to violation sites. Set once per
     /// `lower_module_full` invocation by the compiler driver.
-    static CURRENT_MODULE_SOURCE: std::cell::RefCell<Option<String>> =
+    static CURRENT_MODULE_SOURCE: std::cell::RefCell<Option<std::sync::Arc<String>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -349,7 +349,7 @@ pub fn dynamic_stdlib_allowed_for_package(pkg: &str) -> bool {
 /// The dynamic-dispatch check reads this to look up site annotations
 /// without re-reading the file from disk.
 pub fn set_current_module_source(src: String) {
-    CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = Some(src));
+    CURRENT_MODULE_SOURCE.with(|c| *c.borrow_mut() = Some(std::sync::Arc::new(src)));
 }
 
 /// #503: clear the source-text thread-local.
@@ -401,6 +401,11 @@ pub fn current_module_source_mentions_global_this() -> bool {
 /// Returns `None` when no source is installed (unit tests / `check`) or the
 /// span is out of range, so callers fall back to a synthesized native form.
 pub fn current_module_source_slice(lo: u32, hi: u32) -> Option<String> {
+    current_module_source_range(lo, hi).map(|source| source.as_str().to_owned())
+}
+
+/// A retained source range that stays valid after lowering clears its buffer.
+pub fn current_module_source_range(lo: u32, hi: u32) -> Option<super::SourceText> {
     CURRENT_MODULE_SOURCE.with(|cell| {
         let borrowed = cell.borrow();
         let src = borrowed.as_ref()?;
@@ -408,7 +413,7 @@ pub fn current_module_source_slice(lo: u32, hi: u32) -> Option<String> {
         let start = lo.saturating_sub(1) as usize;
         let end = hi.saturating_sub(1) as usize;
         if start <= end && end <= src.len() {
-            src.get(start..end).map(|s| s.to_string())
+            super::SourceText::shared(std::sync::Arc::clone(src), start..end)
         } else {
             None
         }

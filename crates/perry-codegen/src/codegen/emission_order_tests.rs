@@ -618,12 +618,12 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
             module.closure_source_text.insert(
                 id,
                 perry_hir::FunctionSourceMetadata {
-                    text: source.to_owned(),
+                    text: source.into(),
                     is_non_strict_ordinary: flag,
                 },
             );
         }
-        module.class_source_text.insert(3, class.clone());
+        module.class_source_text.insert(3, class.clone().into());
         module
     };
     for output_type in ["executable", "dylib", "staticlib"] {
@@ -828,7 +828,7 @@ fn header_mode_replaces_bodies_with_a_di_header() {
     module.closure_source_text.insert(
         100,
         perry_hir::FunctionSourceMetadata {
-            text: "function foo(a, b) {\n  return 'DISTINCTIVE_BODY_10574';\n}".to_string(),
+            text: "function foo(a, b) {\n  return 'DISTINCTIVE_BODY_10574';\n}".into(),
             is_non_strict_ordinary: true,
         },
     );
@@ -838,13 +838,13 @@ fn header_mode_replaces_bodies_with_a_di_header() {
     module.closure_source_text.insert(
         200,
         perry_hir::FunctionSourceMetadata {
-            text: "m() { return 'METHOD_BODY_10574'; }".to_string(),
+            text: "m() { return 'METHOD_BODY_10574'; }".into(),
             is_non_strict_ordinary: false,
         },
     );
     module.class_source_text.insert(
         3,
-        "class Envelope { m() { return 'METHOD_BODY_10574'; } }".to_string(),
+        "class Envelope { m() { return 'METHOD_BODY_10574'; } }".into(),
     );
     let emitted = ir(&module);
     assert!(

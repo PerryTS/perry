@@ -383,7 +383,7 @@ pub(crate) fn try_const_fold_function_construct_kind(
         ctx.closure_source_text.insert(
             *func_id,
             crate::ir::FunctionSourceMetadata {
-                text: assembled,
+                text: assembled.into(),
                 is_non_strict_ordinary: !is_arrow && !is_async && !is_generator && !is_strict,
             },
         );
