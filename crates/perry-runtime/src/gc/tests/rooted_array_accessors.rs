@@ -239,8 +239,7 @@ fn descriptor_snapshot_named_array_accessors_copy_in_each_rebind_window() {
             let expected_first_get = leave_rebind_space(usize::from(setter_window));
             let cycles = copying_minor_cycles();
             let moved = moved_objects_total();
-            let allocations =
-                crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+            let allocations = crate::closure::closure_allocs_on_this_thread();
             trigger.make_arena_trigger_due();
             assert_eq!(
                 crate::object::define_array_property(
@@ -253,8 +252,7 @@ fn descriptor_snapshot_named_array_accessors_copy_in_each_rebind_window() {
                 Some(true)
             );
             assert_eq!(
-                crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
-                    - allocations,
+                crate::closure::closure_allocs_on_this_thread() - allocations,
                 2
             );
             assert_eq!(
@@ -370,8 +368,7 @@ fn descriptor_snapshot_named_array_retained_accessor_halves_survive_rebind_copyi
             leave_rebind_space(0);
             let cycles = copying_minor_cycles();
             let moved = moved_objects_total();
-            let allocations =
-                crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+            let allocations = crate::closure::closure_allocs_on_this_thread();
             trigger.make_arena_trigger_due();
             // Direct decoded application isolates the rebind window for an
             // existing key from the public current-record builder allocation.
@@ -389,8 +386,7 @@ fn descriptor_snapshot_named_array_retained_accessor_halves_survive_rebind_copyi
             assert!(moved_objects_total() > moved);
             assert_ne!(addr_of(receiver.get_nanbox_f64()), before_receiver);
             assert_eq!(
-                crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
-                    - allocations,
+                crate::closure::closure_allocs_on_this_thread() - allocations,
                 1
             );
             let pair = crate::object::get_accessor_descriptor(

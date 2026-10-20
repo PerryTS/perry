@@ -284,16 +284,13 @@ mod tests {
             js_closure_get_capture_ptr(closure, 5) as *const JsFunctionInfo,
             unsafe { (*target).info }
         );
-        let before = crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let before = crate::closure::closure_allocs_on_this_thread();
         assert!(before > 0, "allocation counting must be live");
         let heap_bytes = crate::arena::arena_live_allocated_bytes();
         for _ in 0..1000 {
             assert_eq!(unsafe { dispatch(closure, &[10.0, 2.0, 3.0]) }, Some(15.0));
         }
-        assert_eq!(
-            crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-            before
-        );
+        assert_eq!(crate::closure::closure_allocs_on_this_thread(), before);
         assert_eq!(crate::arena::arena_live_allocated_bytes(), heap_bytes);
         crate::promise::MT_PROFILE_ENABLED.store(profiling, std::sync::atomic::Ordering::Relaxed);
         // Internal-slot schema also survives a keyed Function shape transition.
@@ -360,16 +357,13 @@ mod tests {
             crate::array::js_array_push_f64(array, 3.0);
         }
         let list = crate::value::js_nanbox_pointer(array as i64);
-        let before = crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let before = crate::closure::closure_allocs_on_this_thread();
         assert!(before > 0, "allocation counting must be live");
         let heap_bytes = crate::arena::arena_live_allocated_bytes();
         for _ in 0..1000 {
             assert_eq!(unsafe { dispatch(closure, &[10.0, list]) }, Some(15.0));
         }
-        assert_eq!(
-            crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-            before
-        );
+        assert_eq!(crate::closure::closure_allocs_on_this_thread(), before);
         assert_eq!(crate::arena::arena_live_allocated_bytes(), heap_bytes);
         crate::promise::MT_PROFILE_ENABLED.store(profiling, std::sync::atomic::Ordering::Relaxed);
     }
