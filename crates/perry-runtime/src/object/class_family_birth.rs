@@ -260,6 +260,34 @@ mod evaluation_layout_tests {
                 family_desc_of(born).map(|d| d as *const PerryLayoutDesc),
                 Some(desc)
             );
+            // With heritage, the class object pins its parent; the heritage
+            // pin of an instance on the copy is its shape brand, so pinning
+            // it allocates no metadata record.
+            use crate::object::class_registry::evaluation_heritage as heritage;
+            use crate::object::class_registry::parent_static::CLASS_OBJECT_PARENT_KEY;
+            heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
+            let key = crate::string::js_string_from_bytes(
+                CLASS_OBJECT_PARENT_KEY.as_ptr(),
+                CLASS_OBJECT_PARENT_KEY.len() as u32,
+            );
+            crate::object::define_builtin_data_property(
+                class,
+                key,
+                f64::from_bits(proto_bits),
+                CLASS_OBJECT_PARENT_KEY.to_string(),
+                crate::object::PropertyAttrs::new(true, true, true),
+            );
+            assert!(crate::object::class_registry::class_object_pinned_parent(class).is_some());
+            assert_eq!(
+                heritage::instance_pinned_constructing_class(born).map(f64::to_bits),
+                Some(class_bits)
+            );
+            heritage::pin_instance_constructing_class(born, f64::from_bits(class_bits));
+            assert!((*born).meta.is_null(), "the pin is the shape brand");
+            assert_eq!(
+                heritage::instance_pinned_constructing_class(born).map(f64::to_bits),
+                Some(class_bits)
+            );
         }
     }
 
