@@ -4,13 +4,13 @@
 
 use super::*;
 
-/// Two vectors filled with different element classes. CWL (births per
-/// site, not per instance): each vector's storage is born at the one
-/// `new Array` site in the constructor, so both vectors' storage is one
-/// token and holds both element classes; the vectors themselves are two
-/// birth-site tokens of one layout. Was: each storage held its own elements.
+/// Two vectors filled with different element classes. CWL (layout as the
+/// unit of propagation): each vector's storage is born per `Vec` birth
+/// site, but `append` is one instance for the layout `Vec`, so its write
+/// through `this.storage` reaches both storages: objects of one layout are
+/// not kept apart. Was: each storage held its own elements.
 #[test]
-fn two_vector_sites_share_the_storage_birth_site() {
+fn two_vector_objects_of_one_layout_share_appends() {
     let pf = facts(
         r#"
         class A { a = 1; }
@@ -73,11 +73,11 @@ fn a_template_wide_mark_holds_for_every_site() {
 }
 
 /// A subclass constructor (`super(...)`) is summarized: each `new` runs the
-/// parent constructor on its own object. CWL (births per site, not per
-/// instance): the parent-allocated storage is born at one site, so two
-/// subclass objects share it. Was: their storage stayed apart.
+/// parent constructor on its own object. CWL (layout as the unit of
+/// propagation): `append` is one instance for the layout, so both objects'
+/// storages receive both appends. Was: their storage stayed apart.
 #[test]
-fn subclass_constructors_share_the_parent_storage_birth_site() {
+fn subclass_objects_of_one_layout_share_appends() {
     let pf = facts(
         r#"
         class A { a = 1; }

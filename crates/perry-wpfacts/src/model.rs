@@ -208,6 +208,10 @@ pub struct FuncInfo {
     /// Something outside the call protocol writes the parameters (an object
     /// literal IIFE, a computed accessor): never summarized.
     pub no_summary: bool,
+    /// The step closure of a transformed generator: the generator object
+    /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
+    /// iteration protocol on it run the closure.
+    pub gen_step: bool,
     /// The function whose body creates this closure (`NO_FN` for
     /// declarations, methods and builtins).
     pub parent: FnIdx,
@@ -413,6 +417,13 @@ pub enum Cons {
     /// nodes its receivers found): arguments and result bind once per
     /// (call, function) (the argument half of `CallThis`).
     CallArgs { call: CallId },
+    /// The node is the source of an object spread / `Object.assign` into
+    /// the values of `into`: each source object copies its own keys, key
+    /// by key, into each target (`Model::spread_into`), never through one
+    /// any-key bucket.
+    Spread { into: NodeId, site: SiteId },
+    /// The node holds the targets of a spread from source token `src`.
+    SpreadFrom { src: Tok, site: SiteId },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
@@ -486,6 +497,8 @@ impl Cons {
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
+            Cons::Spread { .. } => "spread",
+            Cons::SpreadFrom { .. } => "spreadfrom",
             Cons::ThisInst { .. } => "thisinst",
             Cons::BuiltinCallee => "builtincallee",
             Cons::HolderStep { .. } => "holderstep",
@@ -627,6 +640,10 @@ pub struct Model {
     /// reached that holder (the receiver itself or a prototype in its
     /// closure), so installing an accessor replays only those.
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
+    /// Source token of a spread -> its targets (and the spread site): a key
+    /// the source gains later is copied too (`Model::field`).
+    pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
+    pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.

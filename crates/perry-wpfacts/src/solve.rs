@@ -407,7 +407,56 @@ impl Model {
         self.edge(any, n);
         let all = self.all_fields(t);
         self.edge(n, all);
+        // A key gained after a spread of `t`: the targets get it too.
+        if let Some(v) = self.spread_to.get(&t).cloned() {
+            for (d, site) in v {
+                self.store_into(d, Key::Named(a), n, site);
+            }
+        }
         n
+    }
+
+    /// Object spread of source `s` into target `d` (`{...s}`,
+    /// `Object.assign(d, s)`): every own key of `s`, now and later, is
+    /// stored under the same key on `d`; computed keys and getter results
+    /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
+    /// keys unknown; an unmodeled target takes `s`'s values.
+    fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId) {
+        if !self.spread_done.insert((s, d)) {
+            return;
+        }
+        if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
+            let r = self.reason("spread into a value from unmodeled code");
+            let all = if s == TOP { self.top_tok_node } else { self.all_fields(s) };
+            self.sink_node(all, r);
+            return;
+        }
+        let opaque = match &self.toks[s as usize] {
+            TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => true,
+            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind,
+                TmplKind::BObj { what, .. } if what != "CjsMain"),
+            _ => false,
+        };
+        let fa_d = self.field_any(d);
+        if opaque {
+            self.add_top(fa_d, |_| "spread of an unmodeled object".into());
+            self.add_prim(fa_d, prim::ALL);
+            if s == TOP {
+                return;
+            }
+        }
+        self.spread_to.entry(s).or_default().push((d, site));
+        for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
+            let f = self.field(s, a);
+            self.store_into(d, Key::Named(a), f, site);
+        }
+        let fa_s = self.field_any(s);
+        self.edge(fa_s, fa_d);
+        // Getters of `s` (own and on the chain) run; their results have no
+        // known key here.
+        let act = ChainAct::Load(fa_d);
+        self.any_walk_holders.entry(s).or_default().push((s, act));
+        self.accessor_hit(s, s, Key::Any, act);
     }
 
     pub fn field_any(&mut self, t: Tok) -> NodeId {
@@ -965,6 +1014,22 @@ impl Model {
             }
             Cons::ThisTo { origin } => {
                 let calls = self.via_calls.get(&(n, origin)).cloned().unwrap_or_default();
+                // TEMP CWL: a function value as receiver finds program methods: where.
+                if self.profile.is_some() && matches!(self.toks[origin as usize], TokKind::Func(..)) && self.cwl_seen.len() < 6 {
+                    if let Some(&t) = toks.iter().find(|&&t| matches!(self.toks[t as usize], TokKind::Func(f, _) if self.summarized(f) && self.sum.of[&f].this != NO_NODE)) {
+                        let key = self.cwl_seen.len() as CallId + 1_000_000;
+                        self.cwl_seen.insert(key);
+                        let holder = self.fields.iter().find(|(_, &x)| x == n).map(|((h, a), _)| format!("field {}#{h}.{}", self.tok_name(*h), self.atoms[*a as usize]));
+                        let cvh = self.cv_nodes.iter().find(|(_, &x)| x == n).map(|((h, k), _)| format!("cv {}#{h} {}", self.tok_name(*h), self.key_name(*k)));
+                        let any = self.field_any.iter().find(|(_, &x)| x == n).map(|(h, _)| format!("fieldany {}#{h}", self.tok_name(*h)));
+                        let preds: Vec<String> = self.nodes.iter().enumerate().filter(|(_, nd)| nd.succ.contains(&n)).take(6).map(|(i, nd)| format!("{}#{i}({})", self.labels[i], nd.pts.len())).collect();
+                        if let Some(&fa) = self.field_any.get(&origin) {
+                            let p2: Vec<String> = self.nodes.iter().enumerate().filter(|(_, nd)| nd.succ.contains(&fa)).take(8).map(|(i, nd)| { let f = self.node_fn[i]; format!("{}#{i}({}) fn={} cons={:?}", self.labels[i], nd.pts.len(), if f == NO_FN { "-".into() } else { self.funcs[f as usize].name.clone() }, nd.cons.iter().take(3).map(|c| c.kind_name()).collect::<Vec<_>>()) }).collect();
+                            eprintln!("CWL anypreds of fieldany({})#{fa}: {p2:?}", self.tok_name(origin));
+                        }
+                        eprintln!("CWL thisto callee={}#{n} toks={} holder={holder:?} cv={cvh:?} any={any:?} preds={preds:?} origin={} callee_fn={} calls={}", self.labels[n as usize], toks.len(), self.tok_name(origin), self.tok_name(t), calls.len());
+                    }
+                }
                 for &t in toks {
                     self.this_to(t, origin);
                     self.this_calls(t, origin, &calls);
@@ -973,6 +1038,16 @@ impl Model {
             Cons::CallArgs { call } => {
                 for &t in toks {
                     self.call_args(call, t);
+                }
+            }
+            Cons::Spread { into, site } => {
+                for &s in toks {
+                    self.cons(into, Cons::SpreadFrom { src: s, site });
+                }
+            }
+            Cons::SpreadFrom { src, site } => {
+                for &d in toks {
+                    self.spread_into(src, d, site);
                 }
             }
             Cons::ThisInst { call, ft } => {
@@ -1268,6 +1343,8 @@ impl Model {
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
             Cons::ThisTo { origin } => format!("thisto {n} {origin}"),
             Cons::CallArgs { call } => format!("callargs {n} {call}"),
+            Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
+            Cons::SpreadFrom { src, site } => format!("spreadfrom {n} {src} {site}"),
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
             Cons::HolderStep { key, pass, stop } => {

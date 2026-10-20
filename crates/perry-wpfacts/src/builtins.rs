@@ -196,6 +196,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         ctor_of: None,
         lexical_this: true,
         no_summary: false,
+        gen_step: false,
         parent: NO_FN,
     });
     m.add_prim(ret, prim::UNDEF);
@@ -702,15 +703,9 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "assign") => {
             let c = m.calls[call as usize].clone();
             if let Some(&t) = c.args.first() {
-                let vals = m.node_l("assign-vals");
+                let site = m.anon_post_site("Object.assign (value call)");
                 for &s in c.args.iter().skip(1) {
-                    m.cons(
-                        s,
-                        Cons::Load {
-                            key: Key::Any,
-                            dst: vals,
-                        },
-                    );
+                    m.cons(s, Cons::Spread { into: t, site });
                 }
                 for &s in &c.spread {
                     let inner = m.node_l("assign-src");
@@ -721,23 +716,8 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                             dst: inner,
                         },
                     );
-                    m.cons(
-                        inner,
-                        Cons::Load {
-                            key: Key::Any,
-                            dst: vals,
-                        },
-                    );
+                    m.cons(inner, Cons::Spread { into: t, site });
                 }
-                let site = m.anon_post_site("Object.assign (value call)");
-                m.cons(
-                    t,
-                    Cons::Store {
-                        key: Key::Any,
-                        src: vals,
-                        site,
-                    },
-                );
                 m.edge(t, c.ret);
             }
         }
@@ -1219,7 +1199,16 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 m.sink_node(s, r);
             }
         }
-        // Generator protocol (a generator object is its step closure) and
+        // Generator protocol (a generator object is its step closure): the
+        // step closure only; any other function value has no such methods
+        // (a computed key on one is a runtime property: unknown).
+        Some("next" | "return" | "throw") | None
+            if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step) =>
+        {
+            if name.is_none() || !matches!(m.toks[t as usize], TokKind::Func(..)) {
+                unknown_method(m, call, "computed method of a function value");
+            }
+        }
         // iteration: the function runs with this = itself.
         Some("next" | "return" | "throw") | None => {
             m.call_tok(call, t, Some(t));

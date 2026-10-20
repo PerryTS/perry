@@ -60,3 +60,37 @@ fn a_birth_runs_per_birth_site() {
     exact(&pf, "a", 1);
     exact(&pf, "b", 1);
 }
+
+#[test]
+fn object_spread_copies_fields_by_key() {
+    // `{...s}` copies each own key of `s` under the same key: `c.x` holds
+    // what `s.x` holds, not every value of every key of `s`.
+    let pf = facts(&format!(
+        "{CLASSES}
+        const s = {{ x: new A(), y: new B() }};
+        const c = {{ ...s, z: 1 }};
+        console.log(c.x.a, c.y.b);"
+    ));
+    exact(&pf, "a", 1);
+    exact(&pf, "b", 1);
+}
+
+#[test]
+fn only_a_generator_step_closure_is_its_own_iterator() {
+    // Iterating a node that holds an ordinary function value does not call
+    // that function with itself as `this` (only a transformed generator's
+    // step closure is the generator object).
+    let pf = facts(
+        "const o = { k: 1 };
+         const m = function (this: any) { return this.k; };
+         const key: any = 'x';
+         (m as any)[key]();
+         console.log(m.call(o));",
+    );
+    // The computed method is unknown (the receiver escapes: `this` is ⊤
+    // besides `o`), but `m` itself is not a receiver.
+    for s in pf.sites.iter().filter(|s| s.key == "k") {
+        assert!(s.receivers.iter().all(|r| !r.starts_with("fn:")), "{:?}\n{}", s.receivers, pf.dump_text());
+        assert_eq!(s.receivers.len(), 1, "{:?}\n{}", s.receivers, pf.dump_text());
+    }
+}

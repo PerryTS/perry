@@ -20,9 +20,11 @@ pub const SLOT: u32 = 1 << 31;
 /// A call template reference inside a summary's constraints.
 pub const CALL: u32 = 1 << 31;
 /// The birth context of an object no program site is behind (a literal
-/// born in an instance, a birth of a call the solver made for no site):
-/// one token per template.
+/// born in a context-free instance, a birth of a call the solver made for
+/// no site): one token per template. Birth context ids count down from it.
 pub const BORN: CallId = NO_CTX - 1;
+/// Marks a literal template (not a call site) in a birth context key.
+const LIT: u32 = 1 << 31;
 /// The layout of no object receiver (a primitive, `undefined`, a function
 /// without a `this` term).
 pub const LAY_NONE: u32 = 0;
@@ -132,6 +134,12 @@ pub struct SumState {
     /// (call, function token) whose receiver node binds per token
     /// (`Cons::ThisInst`).
     pub this_inst: FxHashSet<(CallId, Tok)>,
+    /// A call an instance made -> the instance's lexical context
+    /// (`Inst::lay`): what the call births is per (site, context).
+    pub call_lay: FxHashMap<CallId, u32>,
+    /// (birth site or literal template, lexical context) -> birth context
+    /// id: bounded by sites x contexts, never by instances.
+    pub birth_ids: FxHashMap<(u32, u32), CallId>,
     /// Plain calls (`Cons::Call` on the callee value) at program sites
     /// outside every summary: kind-0 keys.
     pub site_calls: FxHashSet<CallId>,
@@ -217,6 +225,8 @@ pub fn map_cons(
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
+        Spread { into, site } => Spread { into: n(into), site },
+        SpreadFrom { src, site } => SpreadFrom { src, site },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         BuiltinCallee => BuiltinCallee,
         HolderStep { key, pass, stop } => HolderStep { key, pass: n(pass), stop: n(stop) },
@@ -270,6 +280,7 @@ fn gen_kind(c: &Cons) -> bool {
         Load { .. }
             | OwnValues { .. }
             | CjsPublish { .. }
+            | Spread { .. }
             | Store { .. }
             | Call { .. }
             | New { .. }
@@ -370,18 +381,35 @@ impl Model {
             if let Some(o) = self.origin_of(by) {
                 self.sum.origin.insert(id, o);
             }
+            if let Some(&l) = self.sum.call_lay.get(&by) {
+                self.sum.call_lay.insert(id, l);
+            }
         }
         id
     }
 
     /// The birth context of an object `call` makes: its program site (one
-    /// token per birth site, whichever instance's copy of the call runs),
-    /// or `BORN` when no program site is behind it (a protocol touch).
+    /// token per birth site), within the lexical context of the instance
+    /// that made the call (a method's births are per receiver layout: the
+    /// container a layout's method makes is that layout's), or `BORN` when
+    /// no program site is behind it (a protocol touch).
     pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
         }
-        self.origin_of(call).unwrap_or(BORN)
+        let Some(site) = self.origin_of(call) else {
+            return BORN;
+        };
+        match self.sum.call_lay.get(&call).copied() {
+            Some(lay) if lay != LAY_NONE => self.birth_id(site, lay),
+            _ => site,
+        }
+    }
+
+    /// The birth context of (site or literal template, lexical context).
+    fn birth_id(&mut self, site: u32, lay: u32) -> CallId {
+        let n = self.sum.birth_ids.len() as CallId;
+        *self.sum.birth_ids.entry((site, lay)).or_insert(BORN - 1 - n)
     }
 
     /// `f` is part of the birth of object `t`: the constructor or field
@@ -558,6 +586,7 @@ impl Model {
                             eprintln!("CWL tmplcons total={k}");
                         }
                     }
+                    let shape = format!("{shape} why={}", self.cwl_why);
                     let e = self.cwl_recv.entry((f, shape, lbl, prot, bs, prog)).or_insert((0, String::new(), 0));
                     e.0 += 1;
                     if e.1.is_empty() { e.1 = nm; e.2 = site; }
@@ -712,6 +741,9 @@ impl Model {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
+            if lay != LAY_NONE {
+                self.sum.call_lay.insert(id, lay);
+            }
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
             }
@@ -727,9 +759,10 @@ impl Model {
             let t = self.closure_tok(*g, lay, &nodes);
             self.add_tok(base[*slot as usize], t);
         }
-        // Literals born here: one token per literal, whichever instance.
+        // Literals born here: one token per (literal, lexical context).
         for &(slot, tm) in &s.births {
-            let t = self.site_tok(tm, BORN);
+            let ctx = if lay == LAY_NONE { BORN } else { self.birth_id(LIT | tm, lay) };
+            let t = self.site_tok(tm, ctx);
             self.add_tok(base[slot as usize], t);
         }
         for &(a, b) in &s.edges {

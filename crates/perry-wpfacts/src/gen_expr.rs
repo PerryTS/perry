@@ -840,9 +840,10 @@ impl<'a> Gen<'a> {
                             );
                         }
                         None => {
-                            // Own enumerable keys of the source (getters run).
-                            let vals = self.load(vn, Key::Any);
-                            self.store(fx, obj, Key::Any, vals, "lit...".into(), Some(tm), true);
+                            // Own enumerable keys of the source, key by key
+                            // (getters run): `Cons::Spread`.
+                            let site = self.store_site(mi, fx.f, "lit...".into(), Some(tm), true);
+                            self.m.cons(vn, Cons::Spread { into: obj, site });
                         }
                     }
                 }
@@ -853,8 +854,8 @@ impl<'a> Gen<'a> {
                 let t = self.expr(fx, target);
                 for s in sources {
                     let sv = self.expr(fx, s);
-                    let vals = self.load(sv, Key::Any);
-                    self.store(fx, t, Key::Any, vals, "Object.assign".into(), None, false);
+                    let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);
+                    self.m.cons(sv, Cons::Spread { into: t, site });
                 }
                 t
             }
@@ -862,8 +863,8 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let (tm, t) = self.new_lit(mi, e, &[]);
                 let obj = self.tok_node(t);
-                let vals = self.load(o, Key::Any);
-                self.store(fx, obj, Key::Any, vals, "rest".into(), Some(tm), true);
+                let site = self.store_site(mi, fx.f, "rest".into(), Some(tm), true);
+                self.m.cons(o, Cons::Spread { into: obj, site });
                 obj
             }
             Expr::Array(elems, _) => {

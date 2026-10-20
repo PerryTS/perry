@@ -387,6 +387,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this,
             no_summary: false,
+            gen_step: false,
             parent: if is_closure { outer_fn } else { NO_FN },
         });
         self.mods[mi as usize].funcs.insert(id, fx);
@@ -542,6 +543,7 @@ impl<'a> Gen<'a> {
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
+            gen_step: false,
             parent: NO_FN,
         });
         fx

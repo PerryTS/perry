@@ -839,6 +839,12 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = self.expr(fx, obj);
+                // The generator object is its step closure.
+                for t in self.m.nodes[o as usize].pts.to_sorted() {
+                    if let TokKind::Func(f, _) = self.m.toks[t as usize] {
+                        self.m.funcs[f as usize].gen_step = true;
+                    }
+                }
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
                     let l = self.local(mi, *id);
                     self.m.add_prim(l, prim::NUM | prim::BOOL);

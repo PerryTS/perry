@@ -38,10 +38,6 @@ fn lacks(pf: &ProgramFacts, key: &str, class: &str) {
     }
 }
 
-// CWL (layout as the unit of propagation): each call of `f` keeps its own
-// closure (a program site's own instance), but the array `map` makes is born
-// at one site inside `f`, so both calls' results are one token: births are
-// per site, not per instance. Was: each read sees its own class only.
 #[test]
 fn closure_over_a_parameter_keeps_callers_apart() {
     let pf = facts(&format!(
@@ -50,8 +46,8 @@ fn closure_over_a_parameter_keeps_callers_apart() {
         const a = f(new A()); const b = f(new B());
         console.log(a[0].x, b[0].y);"
     ));
-    exact(&pf, "x", 2);
-    exact(&pf, "y", 2);
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
 }
 
 // CWL (layout as the unit of propagation): `run` has one instance per
