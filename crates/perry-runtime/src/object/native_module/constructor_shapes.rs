@@ -222,7 +222,24 @@ attach_handler!(nm_attach_stream, "stream", nm_attach_stream);
 attach_handler!(nm_attach_tls, "tls", nm_attach_tls);
 attach_handler!(nm_attach_tty, "tty", nm_attach_tty);
 attach_handler!(nm_attach_dgram, "dgram");
-attach_handler!(nm_attach_domain, "domain");
+pub(crate) unsafe fn nm_attach_domain(name: &str, value: f64, _addr: usize) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(value);
+    attach("domain", name, ctor.get_nanbox_f64());
+    if name == "Domain" {
+        let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+            ctor.get_nanbox_f64(),
+        ));
+        let ptr = crate::value::JS_NATIVE_DOMAIN_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeDomainDispatchFn = std::mem::transmute(ptr);
+            let args = [proto.get_nanbox_f64()];
+            let method = b"__adopt_prototype";
+            dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
+        }
+    }
+    ctor.get_nanbox_f64()
+}
 attach_handler!(nm_attach_fs, "fs");
 pub(crate) unsafe fn nm_attach_inspector(name: &str, value: f64, _addr: usize) -> f64 {
     let (module, _) = callable_exports::bound_native_callable_module_and_method(value).unwrap();

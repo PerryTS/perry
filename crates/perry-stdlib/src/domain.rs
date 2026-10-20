@@ -626,8 +626,8 @@ pub fn domain_module_property(property: &str) -> Option<f64> {
 pub unsafe extern "C" fn js_domain_native_dispatch(
     method_ptr: *const u8,
     method_len: usize,
-    _args: *const f64,
-    _args_len: usize,
+    args: *const f64,
+    args_len: usize,
 ) -> f64 {
     let method = if method_ptr.is_null() {
         ""
@@ -635,6 +635,15 @@ pub unsafe extern "C" fn js_domain_native_dispatch(
         std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
     };
     match method {
+        "__adopt_prototype" if !args.is_null() && args_len == 1 => {
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let proto = scope.root_nanbox_f64(*args);
+            native_payload::adopt_prototype(
+                &DOMAIN_FAMILY,
+                js_nanbox_get_pointer(proto.get_nanbox_f64()) as *mut ObjectHeader,
+            );
+            undefined()
+        }
         "Domain" | "createDomain" | "create" => js_domain_create(),
         "_stack" => active_stack_value(),
         "active" => active_domain_value(),
