@@ -10,10 +10,14 @@
 //! which is its spec path.
 use crate::object::ObjectHeader;
 
-/// Call the accessor the probe's walk found for `key` on `obj`, if any.
+/// `[[Get]]` through the accessor `acc` that the layout walk found for a key
+/// of `obj` (on `obj` or on its chain), with `obj` as `this`. `None` for a
+/// static class accessor, which the complete read calls.
 #[inline]
-unsafe fn accessor_get(obj: *const ObjectHeader, key: *const crate::StringHeader) -> Option<f64> {
-    let acc = crate::object::layout_probe::probe_accessor(obj, key)?;
+unsafe fn call_getter(
+    obj: *const ObjectHeader,
+    acc: crate::object::accessor_pair::Accessor,
+) -> Option<f64> {
     let this = crate::value::js_nanbox_pointer(obj as i64);
     if acc.raw_get != 0 {
         let f = crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;);
@@ -43,29 +47,63 @@ unsafe fn accessor_get(obj: *const ObjectHeader, key: *const crate::StringHeader
 
 /// The read of `key` on the POINTER-tagged receiver whose payload is
 /// `obj_handle`, after the probe declined it.
+///
+/// A site key is a property atom, which carries its hash: when the
+/// receiver's layout, or the layout of the first prototype that holds the
+/// key (every object before it proving the key absent, its overflow
+/// included), says the key is an accessor, the getter is called at once. The
+/// walk reads what the probe reads (layout facts, the holder's accessor
+/// slot: one load where the key index names it, `ACCESSOR_ENTRY`). Every
+/// other key takes the complete read.
 #[no_mangle]
 pub extern "C-unwind" fn js_object_get_field_slow(
     obj_handle: i64,
     key: *const crate::StringHeader,
 ) -> f64 {
     let obj = obj_handle as usize as *const ObjectHeader;
-    if !crate::value::addr_class::is_above_handle_band(obj as usize) {
+    if !crate::value::addr_class::is_above_handle_band(obj as usize) || key.is_null() {
         return super::ic_miss::get_field_miss(obj, key);
     }
-    if crate::object::layout_probe::diag_enabled() {
-        unsafe { crate::object::layout_probe::diag_explain(obj_handle, key) };
-    }
     unsafe {
-        crate::object::layout_probe::verify::check(
-            obj_handle as usize,
-            crate::value::STRING_TAG | key as u64,
-        )
-    };
-    if let Some(value) = unsafe { crate::object::overflow::site_miss_own_get(obj, key) } {
-        return f64::from_bits(value.bits());
-    }
-    if let Some(value) = unsafe { accessor_get(obj, key) } {
-        return value;
+        let key_bits = crate::value::STRING_TAG | key as u64;
+        let verify = crate::object::layout_probe::verify::on();
+        if verify {
+            crate::object::layout_probe::verify::check(obj_handle as usize, key_bits);
+        }
+        let atom = crate::string::is_property_atom(key);
+        let acc = if atom {
+            crate::object::layout_probe::probe_accessor_word(
+                obj,
+                key_bits,
+                crate::string::property_atom_hash(key),
+            )
+        } else {
+            None
+        };
+        if let Some(acc) = acc {
+            if verify {
+                crate::object::layout_probe::verify::accessor(obj as usize, key_bits, &acc);
+            }
+            if crate::object::layout_probe::diag_enabled() {
+                crate::object::layout_probe::diag_accessor(key);
+            }
+            if let Some(value) = call_getter(obj, acc) {
+                return value;
+            }
+        } else if crate::object::layout_probe::diag_enabled() {
+            crate::object::layout_probe::diag_explain(obj_handle, key);
+        }
+        if let Some(value) = crate::object::overflow::site_miss_own_get(obj, key) {
+            return f64::from_bits(value.bits());
+        }
+        if !atom {
+            // A key that is no property atom: the walk asks its atom.
+            if let Some(acc) = crate::object::layout_probe::probe_accessor(obj, key) {
+                if let Some(value) = call_getter(obj, acc) {
+                    return value;
+                }
+            }
+        }
     }
     super::ic_miss::get_field_miss(obj, key)
 }

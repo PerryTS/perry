@@ -77,8 +77,16 @@ const DIRECT_ENTRY: u32 = 1 << 29;
 /// slot is the position's index word, and the hit is one load. Never with
 /// [`TEXT_ENTRY`] or [`ALIAS_ENTRY`], whose index words hold a hash or atom.
 const SLOT_ENTRY: u32 = 1 << 28;
+/// A bucket entry whose key is a public accessor stored at an inline slot of
+/// every receiver of the record: the slot is the position's index word, and
+/// the accessor pair is one load (`accessor_at` would read exactly that
+/// slot). A fact of the immutable list, its attributes and the inline slot
+/// count, like [`SLOT_ENTRY`]; never with [`TEXT_ENTRY`] or [`ALIAS_ENTRY`].
+/// The hit path reads such a key as it reads any accessor: it declines, and
+/// the site slow entry (`js_object_get_field_slow`) calls the getter.
+const ACCESSOR_ENTRY: u32 = 1 << 27;
 /// The position bits of a bucket entry.
-const POS_BITS: u32 = SLOT_ENTRY - 1;
+const POS_BITS: u32 = ACCESSOR_ENTRY - 1;
 /// [`hit_value`]'s slot when the hit is no single load.
 const NO_LOAD: u32 = u32::MAX;
 /// The bits of a probe word that are not the position table's address.
@@ -500,19 +508,35 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
     // The blocking entries' hashes (`KeyIndex::blocks`), every one of them.
     let mut blocking: Vec<u64> = Vec::new();
     let mut unknown = false;
+    // `(position, inline slot)` of each public accessor whose pair is an
+    // inline slot of every receiver ([`ACCESSOR_ENTRY`]), by position. An
+    // accessor blocks a store, so the blocking pass below reads every
+    // accessor's attributes once.
+    let mut accessor_slots: Vec<(u32, u32)> = Vec::new();
     if rec.summary()
         & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
             | crate::object::key_attrs::SUMMARY_PRIVATE)
         != 0
     {
         use crate::object::key_attrs::{ENTRY_ACCESSOR_MASK, ENTRY_NON_WRITABLE, ENTRY_PRIVATE};
-        for (i, (w, h, _)) in canon.iter().enumerate() {
-            if *w == TAG_HOLE
-                || crate::object::key_attrs::keys_entry(keys, i as u32)
-                    & (ENTRY_ACCESSOR_MASK | ENTRY_NON_WRITABLE | ENTRY_PRIVATE)
-                    == 0
-            {
+        for (i, (w, h, text)) in canon.iter().enumerate() {
+            if *w == TAG_HOLE {
                 continue;
+            }
+            let entry = crate::object::key_attrs::keys_entry(keys, i as u32);
+            if entry & (ENTRY_ACCESSOR_MASK | ENTRY_NON_WRITABLE | ENTRY_PRIVATE) == 0 {
+                continue;
+            }
+            if entry & ENTRY_ACCESSOR_MASK != 0
+                && entry & ENTRY_PRIVATE == 0
+                && h.is_some()
+                && !*text
+                && *w == *words.add(i)
+            {
+                let slot = crate::object::key_attrs::key_storage_slot(keys, i as u32);
+                if slot < rec.live_inline_slot_count && slot != NO_LOAD {
+                    accessor_slots.push((i as u32, slot));
+                }
             }
             match h {
                 Some(h) => blocking.push(*h),
@@ -537,6 +561,12 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
     } else {
         blocking.len() as u32
     };
+    let accessor_slotted = |i: usize| {
+        accessor_slots
+            .binary_search_by_key(&(i as u32), |&(pos, _)| pos)
+            .ok()
+            .map(|at| accessor_slots[at].1)
+    };
     let block_out = KeyIndex::blocks(table) as *mut u64;
     for (i, h) in blocking.iter().enumerate() {
         *block_out.add(i) = *h;
@@ -549,7 +579,11 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         *out.add(i) = match canon[i] {
             (_, Some(h), true) => h,
             (w, _, _) if w != *words.add(i) => w,
-            _ => slotted(i).map_or(0, u64::from),
+            _ => match slotted(i) {
+                Some(slot) => u64::from(slot),
+                None if !accessor_slots.is_empty() => accessor_slotted(i).map_or(0, u64::from),
+                None => 0,
+            },
         };
     }
     let slots = KeyIndex::buckets(table) as *mut u32;
@@ -572,6 +606,8 @@ unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
                 DIRECT_ENTRY
             } else if slotted(i).is_some() {
                 SLOT_ENTRY
+            } else if !accessor_slots.is_empty() && accessor_slotted(i).is_some() {
+                ACCESSOR_ENTRY
             } else {
                 0
             };
@@ -704,6 +740,13 @@ unsafe fn probe_word(r: *mut ShapeRecord) -> u64 {
 /// when the list proves the key absent, `Err(false)` when it cannot answer.
 #[inline(always)]
 unsafe fn own_position(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<u32, bool> {
+    own_entry(r, key_bits, hash).map(|(pos, _)| pos)
+}
+
+/// [`own_position`] and the inline slot of the accessor pair there when the
+/// index names one ([`ACCESSOR_ENTRY`]), else [`NO_LOAD`].
+#[inline(always)]
+unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u32, u32), bool> {
     let word = probe_word(r);
     if word == 0 || word & PROBE_DECLINE != 0 {
         return Err(false);
@@ -719,7 +762,7 @@ unsafe fn own_position(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<
         let mut i = 0;
         while i < count {
             if *words.add(i as usize) == key_bits {
-                return Ok(i);
+                return Ok((i, NO_LOAD));
             }
             i += 1;
         }
@@ -735,7 +778,12 @@ unsafe fn own_position(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<
             return absent;
         }
         if let Some(p) = bucket_matches(table, list, pos, key_bits, hash) {
-            return Ok(p);
+            let pair = if pos & ACCESSOR_ENTRY != 0 {
+                KeyIndex::word(table, p) as u32
+            } else {
+                NO_LOAD
+            };
+            return Ok((p, pair));
         }
         b = (b + 1) & mask;
     }
@@ -964,6 +1012,14 @@ unsafe fn plain_data_at(r: *const ShapeRecord, pos: u32) -> bool {
         ) & (crate::object::key_attrs::ENTRY_ACCESSOR_MASK
             | crate::object::key_attrs::ENTRY_PRIVATE)
             == 0
+}
+
+/// Is position `pos` of record `r` an accessor or a private name (not
+/// [`plain_data_at`])? Out of line: the chain walk asks it only for a hole.
+#[cold]
+#[inline(never)]
+unsafe fn attributed_at(r: *const ShapeRecord, pos: u32) -> bool {
+    !plain_data_at(r, pos)
 }
 
 /// The hit path read the hole at position `pos`: for a plain data key a
@@ -1590,8 +1646,12 @@ unsafe fn chain_from<const ABSENT: bool>(
                 if v.to_bits() != TAG_HOLE {
                     return v;
                 }
-                // A hole slot is absent on this hop: the complete walk
-                // continues past it.
+                // An accessor or a private entry declines (the slow entry
+                // calls a getter); a hole slot is absent on this hop, and the
+                // complete walk continues past it.
+                if load == NO_LOAD && attributed_at(rn, pos) {
+                    return hole();
+                }
                 return walk(cur, rc);
             }
             Err(true) => {}
@@ -1843,8 +1903,8 @@ pub(crate) unsafe fn probe_accessor_word(
             || (*rc).object_kind() == super::ShapeObjectKind::Ordinary
             || listed(cur, (*rc).object_kind())
         {
-            match own_position(rc as *mut ShapeRecord, key_bits, hash) {
-                Ok(pos) => return accessor_at(cur, rc, pos),
+            match own_entry(rc as *mut ShapeRecord, key_bits, hash) {
+                Ok((pos, pair)) => return accessor_in(cur, rc, pos, pair),
                 Err(false) => return None,
                 Err(true) => {}
             }
@@ -1873,8 +1933,8 @@ pub(crate) unsafe fn probe_accessor_word(
             _ => {
                 // A builtin prototype's list holds what the program defined
                 // on it; an accessor found there is that accessor.
-                return match own_position(rn as *mut ShapeRecord, key_bits, hash) {
-                    Ok(pos) => accessor_at(next, rn, pos),
+                return match own_entry(rn as *mut ShapeRecord, key_bits, hash) {
+                    Ok((pos, pair)) => accessor_in(next, rn, pos, pair),
                     Err(_) => None,
                 };
             }
@@ -1885,8 +1945,27 @@ pub(crate) unsafe fn probe_accessor_word(
     None
 }
 
+/// The accessor at key position `pos` of `obj` (record `r`): one load of
+/// inline slot `pair` when the record's index names it ([`ACCESSOR_ENTRY`]),
+/// else ([`NO_LOAD`]) [`accessor_at`].
+#[inline(always)]
+unsafe fn accessor_in(
+    obj: *const ObjectHeader,
+    r: *const ShapeRecord,
+    pos: u32,
+    pair: u32,
+) -> Option<crate::object::accessor_pair::Accessor> {
+    if pair == NO_LOAD {
+        return accessor_at(obj, r, pos);
+    }
+    let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + pair as usize * 8)
+        as *const u64);
+    Some(crate::object::accessor_pair::pair_of_value(bits).unwrap_or_default())
+}
+
 /// The accessor at key position `pos` of `obj` (record `r`), if that key is
 /// an accessor.
+#[inline(never)]
 unsafe fn accessor_at(
     obj: *const ObjectHeader,
     r: *const ShapeRecord,
@@ -2887,6 +2966,20 @@ pub(crate) fn diag_enabled() -> bool {
     *ON.get_or_init(|| std::env::var("PERRY_PROBE_DIAG").as_deref() == Ok("1"))
 }
 
+/// See [`diag_enabled`]: one `PROBE_ACC <key>` stderr line per read whose
+/// slow entry called the getter the layout walk found (no complete read).
+///
+/// # Safety
+/// `key` is a live string.
+pub(crate) unsafe fn diag_accessor(key: *const crate::StringHeader) {
+    let name = String::from_utf8_lossy(std::slice::from_raw_parts(
+        crate::string::string_data(key),
+        (*key).byte_len as usize,
+    ))
+    .into_owned();
+    eprintln!("PROBE_ACC {name}");
+}
+
 /// See [`diag_enabled`].
 ///
 /// # Safety
@@ -3084,7 +3177,7 @@ pub(crate) mod verify {
     }
 
     #[inline(always)]
-    pub(super) fn on() -> bool {
+    pub(crate) fn on() -> bool {
         ON.load(Relaxed)
     }
 
@@ -3121,6 +3214,46 @@ pub(crate) mod verify {
             eprintln!(
                 "PROBE_VERIFY_BAD #{bad} (of {n}) key={} probe={a:#x} get={reference:#x} chain={}",
                 key_text(key_bits),
+                chain(obj as *const ObjectHeader, key_bits)
+            );
+        }
+    }
+
+    /// The slow entry's accessor for `key_bits` on the object at `obj`
+    /// (found by the layout walk, [`probe_accessor_word`]): the getter
+    /// `[[Get]]` would call, by the complete descriptor walk
+    /// (`__lookupGetter__`), must be that accessor's.
+    #[cold]
+    pub(crate) unsafe fn accessor(
+        obj: usize,
+        key_bits: u64,
+        acc: &crate::object::accessor_pair::Accessor,
+    ) {
+        if !ON.load(Relaxed) {
+            return;
+        }
+        let boxed = f64::from_bits(POINTER_TAG | obj as u64);
+        let reference =
+            crate::object::js_object_lookup_getter(boxed, f64::from_bits(key_bits)).to_bits();
+        let n = CHECKED.fetch_add(1, Relaxed) + 1;
+        let agrees = if acc.get != 0 {
+            reference == acc.get
+        } else if acc.raw_get != 0 || acc.static_get != 0 {
+            // A class getter's function object is made on demand.
+            crate::closure::is_closure_bits(reference)
+        } else {
+            reference == crate::value::TAG_UNDEFINED
+        };
+        if agrees {
+            return;
+        }
+        let bad = BAD.fetch_add(1, Relaxed) + 1;
+        if bad <= 40 {
+            eprintln!(
+                "PROBE_VERIFY_BAD #{bad} (of {n}) key={} accessor get={:#x} raw={:#x} lookup={reference:#x} chain={}",
+                key_text(key_bits),
+                acc.get,
+                acc.raw_get,
                 chain(obj as *const ObjectHeader, key_bits)
             );
         }
