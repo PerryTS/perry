@@ -549,6 +549,20 @@ pub(super) fn quote_response_arg(arg: &str, msvc: bool) -> String {
     out
 }
 
+/// Argument bytes above which a link goes through a response file on every
+/// host. macOS caps a spawn's argument vector plus environment at 1 MiB
+/// (`ARG_MAX`), and a large program's object list passes that: opencode's
+/// ~7,000 modules failed with `Argument list too long (os error 7)`. Linux
+/// allows more in total, but this keeps every host far from its limit.
+pub(super) const INLINE_LINK_ARG_BYTES_MAX: usize = 256 * 1024;
+
+/// Do these link arguments need a response file instead of the command line?
+pub(super) fn link_args_need_response_file<'a>(
+    args: impl IntoIterator<Item = &'a std::ffi::OsStr>,
+) -> bool {
+    args.into_iter().map(|a| a.len() + 1).sum::<usize>() > INLINE_LINK_ARG_BYTES_MAX
+}
+
 /// Render a linker `Command`'s full argument vector as response-file content
 /// (one quoted arg per line). Pure + unit-tested; the `\n` separator and
 /// per-arg quoting are what `link.exe`/`lld-link`/`clang` accept via `@file`.
@@ -776,7 +790,23 @@ mod optional_framework_dir_tests;
 
 #[cfg(test)]
 mod response_file_tests {
-    use super::{quote_response_arg, response_file_arg, response_file_contents};
+    use super::{
+        link_args_need_response_file, quote_response_arg, response_file_arg,
+        response_file_contents, INLINE_LINK_ARG_BYTES_MAX,
+    };
+
+    #[test]
+    fn large_link_argument_lists_take_a_response_file() {
+        use std::ffi::OsStr;
+        let small = ["-o", "out", "a.o"].map(OsStr::new);
+        assert!(!link_args_need_response_file(small));
+        let object = "/private/tmp/perry/very/long/object/path/module_000000.o";
+        let count = INLINE_LINK_ARG_BYTES_MAX / (object.len() + 1) + 1;
+        let many = vec![OsStr::new(object); count];
+        assert!(link_args_need_response_file(many));
+        let fits = vec![OsStr::new(object); count - 1];
+        assert!(!link_args_need_response_file(fits));
+    }
 
     #[test]
     fn plain_paths_are_unquoted_in_both_dialects() {

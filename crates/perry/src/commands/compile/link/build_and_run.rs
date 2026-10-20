@@ -1873,9 +1873,10 @@ pub(crate) fn build_and_run_link(
     // long. (os error 206)` before the linker even starts. Route the whole
     // argument vector through a linker *response file* (`@file`), which
     // `link.exe` / `lld-link` (and `clang`/`cc`) read instead of the command
-    // line, so the invocation no longer scales with module count. Only the
-    // native-Windows host is affected (other hosts have a multi-MB `ARG_MAX`);
-    // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path elsewhere for testing.
+    // line, so the invocation no longer scales with module count. Other hosts
+    // take the same path once the arguments are large: macOS caps them at
+    // 1 MiB (`link_args_need_response_file`).
+    // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path for testing.
     // PERRY_EXTRA_LINK_ARGS — space-separated args appended verbatim to the
     // final link invocation. Diagnostic escape hatch (e.g.
     // `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived
@@ -1887,7 +1888,10 @@ pub(crate) fn build_and_run_link(
     }
 
     let mut response_file_to_clean: Option<PathBuf> = None;
-    if cfg!(target_os = "windows") || std::env::var_os("PERRY_FORCE_LINK_RESPONSE_FILE").is_some() {
+    if cfg!(target_os = "windows")
+        || std::env::var_os("PERRY_FORCE_LINK_RESPONSE_FILE").is_some()
+        || link_args_need_response_file(cmd.get_args())
+    {
         // MSVC-style quoting for the native-Windows linker (link.exe/lld-link);
         // GNU-style for a clang/cc driver (the forced-test path on macOS/Linux).
         let msvc_quoting = cfg!(target_os = "windows") && is_windows;
