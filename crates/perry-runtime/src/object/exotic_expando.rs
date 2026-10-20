@@ -276,6 +276,9 @@ pub(crate) fn exotic_default_enumerable(kind: ExoticKind, name: &str) -> bool {
 /// accessor-only keys. Optionally filtered to enumerable ones.
 pub(crate) fn exotic_own_keys(kind: ExoticKind, addr: usize, enumerable_only: bool) -> Vec<String> {
     let mut keys = value_keys(kind, addr);
+    // Compiler-owned storage (a class's captured locals on an Error subclass
+    // instance) is not an own property, as on ordinary objects.
+    keys.retain(|k| !super::is_internal_runtime_key(k));
     {
         for key in super::accessor_descriptor_keys_for_obj(addr) {
             if !keys.contains(&key) {

@@ -902,6 +902,11 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
         if crate::closure::is_closure_ptr(ptr) {
             return js_closure_dynamic_values(ptr);
         }
+        // Date / RegExp / Error exotic instances: the side-table expandos
+        // `Object.keys` lists (the cell is not an `ObjectHeader`).
+        if super::super::exotic_expando::exotic_expando_kind(ptr).is_some() {
+            return handle_own_entries(value, HandleEnum::Values);
+        }
         return js_object_values(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
@@ -913,7 +918,8 @@ enum HandleEnum {
     Entries,
 }
 
-/// #6363: `Object.values` / `Object.entries` for a native HANDLE receiver.
+/// #6363: `Object.values` / `Object.entries` for a native HANDLE receiver, and
+/// for a Date/RegExp/Error exotic instance (whose expandos live in side tables).
 ///
 /// Reuses `js_object_keys_value`'s own-key list (so all three agree on what a
 /// handle owns) and reads each value back through the ordinary dynamic property
@@ -1011,6 +1017,9 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
         }
         if crate::closure::is_closure_ptr(ptr) {
             return js_closure_dynamic_entries(ptr);
+        }
+        if super::super::exotic_expando::exotic_expando_kind(ptr).is_some() {
+            return handle_own_entries(value, HandleEnum::Entries);
         }
         return js_object_entries(ptr as *const ObjectHeader);
     }
