@@ -428,28 +428,18 @@ pub fn lower_class_decl(
         } else if let ast::Expr::Member(member) = super_class.as_ref() {
             // Handle member expression like ethers.JsonRpcProvider or module.ClassName
             let parent_name = extract_member_class_name(member);
-            // Issue #4908: `extract_member_class_name` returns only the
-            // trailing property (`http.Agent` -> "Agent"). When that equals
-            // the subclass's OWN name (`class Agent extends http.Agent`), the
-            // bare-name resolution is bogus: the subclass registered its own
-            // name above (so `lookup_class` returns the class itself) and
-            // both `extends` and `extends_name` would self-reference. A
-            // self-link sends every codegen parent-chain walk into an
-            // infinite loop — the four node:http `class Agent extends
-            // http.Agent` tests OOM-crashed codegen. Leave the class
-            // parentless (all None), matching how a non-colliding native
-            // member base (`class Foo extends http.Agent`) already behaves:
-            // `extends_name` there resolves to no known class, so the class
-            // is effectively parentless and constructs cleanly. We do NOT
-            // route through the dynamic `extends_expr` path here — that
-            // turns the class derived and demands a runtime super() into the
-            // native base, which fails ("Class extends value is not a
-            // constructor" / "Must call super constructor"). Native member
-            // base inheritance (real `instanceof` / `super.method` dispatch)
-            // is unimplemented for the member-expression case generally;
-            // this keeps the colliding-name case on par with the rest.
+            // A member with the same spelling is not the child itself. Keep
+            // its evaluated constructor, but never a static/name self-link
+            // (#4908: codegen parent-chain walks would loop forever).
             if parent_name == name {
-                (None, None, None, None)
+                if member_heritage_is_http_agent(ctx, member, &parent_name) {
+                    // Native HTTP Agent super construction is not supported;
+                    // retain the #4908 fallback for its four node:http tests.
+                    (None, None, None, None)
+                } else {
+                    let parent = lower_class_heritage_expr(ctx, super_class)?;
+                    (None, None, None, Some(Box::new(parent)))
+                }
             } else if parent_name == "default" {
                 // `class X extends _mod.default` — the interop ESM
                 // default-export-class pattern (Next.js `NextNodeServer

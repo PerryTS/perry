@@ -99,3 +99,21 @@ pub(super) fn member_heritage_hides_global_builtin(
         _ => true,
     }
 }
+
+/// #4908's HTTP Agent fallback must not erase unrelated same-named members.
+pub(super) fn member_heritage_is_http_agent(
+    ctx: &LoweringContext,
+    member: &ast::MemberExpr,
+    parent_name: &str,
+) -> bool {
+    if parent_name != "Agent" {
+        return false;
+    }
+    let mut obj = member.obj.as_ref();
+    while let ast::Expr::Paren(paren) = obj {
+        obj = paren.expr.as_ref();
+    }
+    matches!(obj, ast::Expr::Ident(ident)
+        if matches!(ctx.lookup_native_module(ident.sym.as_ref()),
+            Some(("http" | "node:http" | "https" | "node:https", _))))
+}

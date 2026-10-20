@@ -108,3 +108,32 @@ fn package_member_named_like_an_error_or_event_builtin_is_a_dynamic_parent() {
         );
     }
 }
+
+#[test]
+fn same_named_member_parent_never_resolves_to_the_child() {
+    for source in [
+        "class Error extends globalThis.Error {}",
+        "class TypeError extends global.TypeError {}",
+        "class Map extends (globalThis).Map {}",
+        "class Date extends self.Date {}",
+        "class Set extends window.Set {}",
+        "const Error = class Error extends globalThis.Error {};",
+        "import * as events from \"node:events\"; class EventEmitter extends events.EventEmitter {}",
+        "const ns = { Error: class {} }; class Error extends ns.Error {}",
+    ] {
+        let hir = lower(source);
+        let child = hir.classes.last().expect("child class is lowered");
+        assert_eq!(child.extends, None, "{source}: no static self-link");
+        assert_eq!(child.extends_name, None, "{source}: no name-based self-link");
+        assert!(child.extends_expr.is_some(), "{source}: retain evaluated member parent");
+    }
+}
+
+#[test]
+fn same_named_http_agent_keeps_its_native_fallback() {
+    let hir = lower("import * as http from \"node:http\"; class Agent extends http.Agent {}");
+    let child = class(&hir, "Agent");
+    assert_eq!(child.extends, None);
+    assert_eq!(child.extends_name, None);
+    assert!(child.extends_expr.is_none());
+}
