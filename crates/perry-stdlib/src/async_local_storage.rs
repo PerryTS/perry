@@ -326,13 +326,8 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
 /// Clear the store stack
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_disable(receiver: i64) {
-    let value = perry_runtime::value::js_nanbox_pointer(receiver);
     if let Some(token) = resolve_async_local_storage_token(receiver) {
         unsafe { js_async_context_als_clear(token) };
-        native_payload::close_attached::<perry_runtime::async_context::AsyncLocalStoragePayload>(
-            value,
-            &ASYNC_LOCAL_STORAGE_FAMILY,
-        );
     }
 }
 
