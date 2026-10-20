@@ -343,6 +343,17 @@ extern "C" fn native_promise_adoption_job(
     };
     match settled {
         Some((value, is_error)) => {
+            // This job is the intrinsic `then` call that attaches `outer`'s reaction
+            // to `inner`. When `inner` rejected between the resolve (where
+            // `enqueue_native_adoption_job` already cleared it) and now, which is
+            // the case for an `async` arrow returning a call to an `async` function
+            // that throws after an await (that continuation was queued first), it
+            // re-entered the unhandled set with no reaction attached, and the
+            // checkpoint at the end of this drain reported a rejection `outer`
+            // delivers to its own handlers. Node reports nothing here.
+            if is_error {
+                crate::promise::mark_rejection_handled(inner);
+            }
             // Null-closure AsyncStep = a pure propagation task: the runner
             // resolves/rejects `outer` with `value` on the next tick.
             let scope = crate::gc::RuntimeHandleScope::new();

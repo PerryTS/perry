@@ -1,0 +1,1 @@
+Fixed an async arrow returning an async function that throws after an `await` reporting the inner rejection as unhandled (`uncaughtException` / exit 1) even though the outer promise's handlers consumed it.
