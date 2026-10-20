@@ -1,6 +1,6 @@
 //! A callback a builtin method runs (forEach, map, sort ...) is keyed on the
 //! method call's site even when the callback function is already known when
-//! the call is attached, which binds it before the origin recorder runs.
+//! the call is attached: a solver-made call carries its site from creation.
 
 use super::*;
 
@@ -32,4 +32,30 @@ fn early_bound_callbacks_key_on_their_site() {
     );
     assert_eq!(classes(site(&pf, "a")), ["A"], "{}", pf.dump_text());
     assert_eq!(classes(site(&pf, "b")), ["B"], "{}", pf.dump_text());
+}
+
+#[test]
+fn call_and_apply_key_on_their_site() {
+    // `f.call` / `f.apply` make the target's call while the builtin runs;
+    // it is bound at once, so it must carry the site from its creation.
+    let pf = facts(
+        r#"
+        class A { a = 1; }
+        class B { b = 2; }
+        const id = function (x: any) { return x; };
+        const ra = id.call(null, new A());
+        const rb = id.call(null, new B());
+        const pa = id.apply(null, [new A()]);
+        const pb = id.apply(null, [new B()]);
+        console.log(ra.a, rb.b, pa.a, pb.b);
+        "#,
+    );
+    let d = pf.dump_text();
+    for (k, c) in [("a", "A"), ("b", "B")] {
+        let v: Vec<_> = pf.sites.iter().filter(|s| s.key == k).collect();
+        assert_eq!(v.len(), 2, "{d}");
+        for s in v {
+            assert_eq!(classes(s), [c], "{d}");
+        }
+    }
 }

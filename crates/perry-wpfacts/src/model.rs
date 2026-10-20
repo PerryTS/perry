@@ -726,9 +726,6 @@ pub struct Model {
     pub top_calls: u64,
     /// The receiver token a builtin method summary runs for.
     pub cur_this: Option<Tok>,
-    /// The call whose builtin model or binding is running: a call it makes
-    /// that is bound before `note_origin` runs takes its origin (`inst_for`).
-    pub cur_call: Option<CallId>,
     /// Lookups that stopped at a declared prototype member: resumed if that
     /// prototype later becomes HARD or escapes.
     pub stopped: FxHashMap<Tok, Vec<(Tok, Key, ChainAct)>>,
@@ -742,10 +739,6 @@ pub struct Model {
     pub cw9_inst_fn: FxHashMap<u32, (u32, u32)>,
     pub cw9_events: Vec<(u64, u32, u32, u32)>,
     pub cw9_shared: FxHashMap<(u32, u32, u8, u32), u32>,
-    /// TEMP CW9: calls the origin recorder saw: created while not ready / outer had no origin / recorded.
-    pub cw9_nr: crate::pts::FxHashSet<u32>,
-    pub cw9_on: crate::pts::FxHashSet<u32>,
-    pub cw9_ok: crate::pts::FxHashSet<u32>,
     pub cw9_modkind: Vec<u8>,
     pub fn_inst: FxHashMap<FnIdx, TmplId>,
     /// Birth keys / definite keys of `new f()` instances, from the

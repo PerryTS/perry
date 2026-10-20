@@ -211,7 +211,7 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
 
 /// `v` adopted by a promise: the value, the settled value of promise
 /// tokens in it, and whatever a thenable's `then` resolves.
-pub fn adopt(m: &mut Model, v: NodeId, dst: NodeId) {
+pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
     m.edge(v, dst);
     let a = m.atom("#value");
     m.cons(
@@ -230,13 +230,16 @@ pub fn adopt(m: &mut Model, v: NodeId, dst: NodeId) {
     m.add_tok(jn, rej);
     let ret = m.node_l("then-ret");
     let call = m.calls.len() as CallId;
-    m.calls.push(CallSite {
-        this: ThisArg::Node(v),
-        args: vec![rn, jn],
-        spread: vec![],
-        ret,
-        site: call,
-    });
+    m.solver_call(
+        by,
+        CallSite {
+            this: ThisArg::Node(v),
+            args: vec![rn, jn],
+            spread: vec![],
+            ret,
+            site: call,
+        },
+    );
     let then = m.atom("then");
     m.cons(
         v,
@@ -622,13 +625,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             if let Some(&cb) = c.args.first() {
                 let ret = m.node_l("timer-ret");
                 let call2 = m.calls.len() as CallId;
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: c.args.iter().skip(2).copied().collect(),
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
+                m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args: c.args.iter().skip(2).copied().collect(),
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                    },
+                );
                 m.cons(cb, Cons::Call { call: call2 });
             }
             let bt = site_tmpl(m, call, "Timer");
@@ -753,16 +759,19 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             // A map function is called with each element.
             if let Some(f) = arg(m, call, 1) {
                 let ret = m.node_l("from-map");
-                let call2 = m.calls.len() as CallId;
                 let num = m.node_l("num");
                 m.add_prim(num, prim::NUM);
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: vec![fa, num],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
+                let call2 = m.calls.len() as CallId;
+                m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args: vec![fa, num],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                    },
+                );
                 m.cons(f, Cons::Call { call: call2 });
                 m.edge(ret, fa);
             }
@@ -783,16 +792,19 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             if let Some(rv) = arg(m, call, 1) {
                 // reviver(key, value) with `this` = the holder
                 let ret = m.calls[call as usize].ret;
-                let call2 = m.calls.len() as CallId;
                 let s = m.node_l("str");
                 m.add_prim(s, prim::STR);
-                m.calls.push(CallSite {
-                    this: ThisArg::Tok(j),
-                    args: vec![s, fa],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
+                let call2 = m.calls.len() as CallId;
+                m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Tok(j),
+                        args: vec![s, fa],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                    },
+                );
                 m.cons(rv, Cons::Call { call: call2 });
                 m.edge(ret, fa);
             }
@@ -814,7 +826,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             let v = promise_value(m, p);
             if let Some(a) = arg(m, call, 0) {
                 if name == "resolve" {
-                    adopt(m, a, v);
+                    adopt(m, call, a, v);
                 } else {
                     let thrown = m.thrown;
                     m.edge(a, thrown);
@@ -839,7 +851,7 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 },
             );
             let settled = m.node_l("settled");
-            adopt(m, items, settled);
+            adopt(m, call, items, settled);
             m.edge(settled, fa);
             if name == "allSettled" {
                 // {status, value|reason} records
@@ -1024,13 +1036,16 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 m.add_tok(jn, rej);
                 let ret = m.node_l("executor-ret");
                 let call2 = m.calls.len() as CallId;
-                m.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: vec![rn, jn],
-                    spread: vec![],
-                    ret,
-                    site: call2,
-                });
+                m.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args: vec![rn, jn],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                    },
+                );
                 m.cons(ex, Cons::Call { call: call2 });
             }
             ret_tok(m, call, p);
@@ -1122,22 +1137,23 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     let c = m.calls[call as usize].clone();
     match name {
         Some("call") => {
-            let call2 = m.calls.len() as CallId;
             let this = match c.args.first() {
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
-            m.calls.push(CallSite {
-                this,
-                args: c.args.iter().skip(1).copied().collect(),
-                spread: c.spread.clone(),
-                ret: c.ret,
-                site: c.site,
-            });
+            let call2 = m.solver_call(
+                call,
+                CallSite {
+                    this,
+                    args: c.args.iter().skip(1).copied().collect(),
+                    spread: c.spread.clone(),
+                    ret: c.ret,
+                    site: c.site,
+                },
+            );
             m.call_tok(call2, t, None);
         }
         Some("apply") => {
-            let call2 = m.calls.len() as CallId;
             let this = match c.args.first() {
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
@@ -1146,13 +1162,16 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             if let Some(&a) = c.args.get(1) {
                 spread.push(a);
             }
-            m.calls.push(CallSite {
-                this,
-                args: vec![],
-                spread,
-                ret: c.ret,
-                site: c.site,
-            });
+            let call2 = m.solver_call(
+                call,
+                CallSite {
+                    this,
+                    args: vec![],
+                    spread,
+                    ret: c.ret,
+                    site: c.site,
+                },
+            );
             m.call_tok(call2, t, None);
         }
         Some("bind") => {
@@ -1211,16 +1230,19 @@ fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
 
 // ------------------------------------------------------------- arrays
 
-fn cb_call(m: &mut Model, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
+fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
     let ret = m.node_l("cb-ret");
     let call2 = m.calls.len() as CallId;
-    m.calls.push(CallSite {
-        this,
-        args,
-        spread: vec![],
-        ret,
-        site: call2,
-    });
+    m.solver_call(
+        by,
+        CallSite {
+            this,
+            args,
+            spread: vec![],
+            ret,
+            site: call2,
+        },
+    );
     m.cons(cb, Cons::Call { call: call2 });
     ret
 }
@@ -1235,14 +1257,16 @@ fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     m.cons(v, Cons::Load { key: ik, dst: out });
     let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
         let ret = m.node_l("b-iter-ret");
-        let c2 = m.calls.len() as CallId;
-        m.calls.push(CallSite {
-            this: ThisArg::Node(this),
-            args: vec![],
-            spread: vec![],
-            ret,
-            site,
-        });
+        let c2 = m.solver_call(
+            call,
+            CallSite {
+                this: ThisArg::Node(this),
+                args: vec![],
+                spread: vec![],
+                ret,
+                site,
+            },
+        );
         m.protocol_calls.insert(c2);
         m.cons(this, Cons::MCall { key, call: c2 });
         ret
@@ -1325,7 +1349,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             let Some(&cb) = c.args.first() else {
                 return;
             };
-            let r = cb_call(m, cb, ThisArg::Undef, vec![elems, num]);
+            let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, num]);
             match name {
                 Some("forEach") => ret_prim(m, call, prim::UNDEF),
                 Some("some" | "every") => ret_prim(m, call, prim::BOOL),
@@ -1369,7 +1393,7 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
             }
-            let r = cb_call(m, cb, ThisArg::Undef, vec![acc, elems, num]);
+            let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num]);
             m.edge(r, acc);
             m.edge(acc, c.ret);
         }
@@ -1464,7 +1488,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
         }
         Some("sort" | "toSorted") => {
             if let Some(&cb) = c.args.first() {
-                let r = cb_call(m, cb, ThisArg::Undef, vec![elems, elems]);
+                let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
                 m.cons(r, Cons::Implicit { reason: why });
             }
@@ -1477,7 +1501,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             let Some(&cb) = c.args.first() else {
                 return;
             };
-            let r = cb_call(m, cb, this_arg(1), vec![elems, num, recv]);
+            let r = cb_call(m, call, cb, this_arg(1), vec![elems, num, recv]);
             match name {
                 Some("map" | "flatMap") => {
                     let out = site_tmpl(m, call, "Array");
@@ -1513,7 +1537,7 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
             }
-            let r = cb_call(m, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
+            let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
             m.edge(r, acc);
             m.edge(acc, c.ret);
         }
@@ -1595,7 +1619,7 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
                     Some(&n) => ThisArg::Node(n),
                     None => ThisArg::Undef,
                 };
-                let _ = cb_call(m, cb, this, vec![elems, elems, recv]);
+                let _ = cb_call(m, call, cb, this, vec![elems, elems, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }
@@ -1617,15 +1641,15 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
                 } else {
                     v
                 };
-                let r = cb_call(m, f, ThisArg::Undef, vec![arg]);
+                let r = cb_call(m, call, f, ThisArg::Undef, vec![arg]);
                 if name != Some("finally") {
-                    adopt(m, r, ov);
+                    adopt(m, call, r, ov);
                 }
             }
             if let Some(f) = on_err {
-                let r = cb_call(m, f, ThisArg::Undef, vec![thrown]);
+                let r = cb_call(m, call, f, ThisArg::Undef, vec![thrown]);
                 if name != Some("finally") {
-                    adopt(m, r, ov);
+                    adopt(m, call, r, ov);
                 }
             }
             if name == Some("finally") || on_ok.is_none() {
@@ -1653,7 +1677,7 @@ fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: Call
             if let Some(&cb) = c.args.first() {
                 let num = m.node_l("num");
                 m.add_prim(num, prim::NUM);
-                let _ = cb_call(m, cb, ThisArg::Undef, vec![num, num]);
+                let _ = cb_call(m, call, cb, ThisArg::Undef, vec![num, num]);
             }
             ret_tok(m, call, t);
         }
@@ -2004,13 +2028,16 @@ fn native_method(m: &mut Model, np: Tok, native: &str, origin: Tok, name: &str, 
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
             let call2 = m.calls.len() as CallId;
-            m.calls.push(CallSite {
-                this: ThisArg::Tok(origin),
-                args: c.args.iter().skip(1).copied().collect(),
-                spread: c.spread.clone(),
-                ret,
-                site: call2,
-            });
+            m.solver_call(
+                call,
+                CallSite {
+                    this: ThisArg::Tok(origin),
+                    args: c.args.iter().skip(1).copied().collect(),
+                    spread: c.spread.clone(),
+                    ret,
+                    site: call2,
+                },
+            );
             m.cons(fl, Cons::Call { call: call2 });
             ret_prim(m, call, prim::BOOL);
         }

@@ -346,11 +346,7 @@ impl Model {
                     Key::Any => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
-                let n0 = self.calls.len();
-                let prev_call = self.cur_call.replace(call);
                 self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
-                self.cur_call = prev_call;
-                self.note_origin(n0, call);
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);
                     self.bind_via(up, call, origin);

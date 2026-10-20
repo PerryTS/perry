@@ -4,14 +4,6 @@ use super::*;
 impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
-        let n0 = self.calls.len();
-        let prev_call = self.cur_call.replace(call);
-        self.call_tok_inner(call, t, this_tok);
-        self.cur_call = prev_call;
-        self.note_origin(n0, call);
-    }
-
-    fn call_tok_inner(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
@@ -192,16 +184,18 @@ impl Model {
         for &a in bargs.iter().chain(c.args.iter()).chain(c.spread.iter()) {
             self.edge(a, all_args);
         }
-        let call2 = self.calls.len() as CallId;
         let mut args: Vec<NodeId> = bargs.clone();
         args.extend(c.args.iter().copied());
-        self.calls.push(CallSite {
-            this: ThisArg::Node(bthis),
-            args,
-            spread: c.spread.clone(),
-            ret: c.ret,
-            site: c.site,
-        });
+        let call2 = self.solver_call(
+            call,
+            CallSite {
+                this: ThisArg::Node(bthis),
+                args,
+                spread: c.spread.clone(),
+                ret: c.ret,
+                site: c.site,
+            },
+        );
         self.bound_synth.insert(call2);
         self.rel(|| format!("boundcall {call2} {call} {b}"));
         // Positions shift when the bound args are not a prefix of the
@@ -315,12 +309,8 @@ impl Model {
         if !self.construct_done.insert((call, TOP)) {
             return;
         }
-        let n0 = self.calls.len();
         let name = self.atoms[name as usize].clone();
-        let prev_call = self.cur_call.replace(call);
         self.with_b(|m| builtins::construct_named(m, &name, call));
-        self.cur_call = prev_call;
-        self.note_origin(n0, call);
     }
 
     /// The token `new` at `call` gives template `tm`: one per birth site. A
@@ -355,14 +345,6 @@ impl Model {
             self.sum.deferred.push(crate::summary::Deferred::Construct(call, t));
             return;
         }
-        let n0 = self.calls.len();
-        let prev_call = self.cur_call.replace(call);
-        self.construct_inner(call, t);
-        self.cur_call = prev_call;
-        self.note_origin(n0, call);
-    }
-
-    fn construct_inner(&mut self, call: CallId, t: Tok) {
         if !self.construct_done.insert((call, t)) {
             return;
         }
@@ -405,16 +387,18 @@ impl Model {
                     return;
                 }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
-                let call2 = self.calls.len() as CallId;
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
-                self.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args,
-                    spread: c.spread.clone(),
-                    ret: c.ret,
-                    site: c.site,
-                });
+                let call2 = self.solver_call(
+                    call,
+                    CallSite {
+                        this: ThisArg::Undef,
+                        args,
+                        spread: c.spread.clone(),
+                        ret: c.ret,
+                        site: c.site,
+                    },
+                );
                 self.bound_synth.insert(call2);
                 self.rel(|| format!("boundnew {call2} {call} {b}"));
                 self.cons(target, Cons::New { call: call2 });
@@ -523,11 +507,7 @@ impl Model {
             Key::Any => self.all_fields(t),
         };
         self.bind_via(own, call, t);
-        let n0 = self.calls.len();
-        let prev_call = self.cur_call.replace(call);
         self.with_b(|m| builtins::own_method(m, t, key, call));
-        self.cur_call = prev_call;
-        self.note_origin(n0, call);
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).
         let cv = self.cv(t, key);

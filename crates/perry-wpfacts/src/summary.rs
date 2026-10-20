@@ -351,34 +351,22 @@ impl Model {
         }
     }
 
-    /// Calls made while solving `call` have the same call site behind them
-    /// (a builtin calling a callback for it).
-    pub(crate) fn note_origin(&mut self, n0: usize, call: CallId) {
-        if self.calls.len() == n0 {
-            return;
-        }
-        // TEMP CW9: classify the created calls by what the recorder does.
-        let made: Vec<u32> = (n0..self.calls.len()).map(|i| i as u32).collect();
-        if !self.sum.ready {
-            self.cw9_nr.extend(made);
-        } else if self.origin_of(call).is_none() {
-            self.cw9_on.extend(made);
-        } else {
-            self.cw9_ok.extend(made);
-        }
-        if !self.sum.ready {
-            return;
-        }
-        if let Some(o) = self.origin_of(call) {
-            for i in n0..self.calls.len() {
-                self.sum.origin.entry(i as CallId).or_insert(o);
+    /// A call the solver makes for `by` (a builtin calling a callback, a
+    /// bound target, a step of a protocol): it has `by`'s call site and
+    /// host behind it from the moment it exists, so whatever binds it,
+    /// however early, keys it like every call that site is behind.
+    pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
+        let id = self.calls.len() as CallId;
+        self.calls.push(cs);
+        if self.sum.ready {
+            if let Some(o) = self.origin_of(by) {
+                self.sum.origin.insert(id, o);
+            }
+            if let Some(&h) = self.sum.host.get(&by) {
+                self.sum.host.insert(id, h);
             }
         }
-        if let Some(&h) = self.sum.host.get(&call) {
-            for i in n0..self.calls.len() {
-                self.sum.host.entry(i as CallId).or_insert(h);
-            }
-        }
+        id
     }
 
     /// The birth context of an object `call` makes: a program call is its
@@ -504,21 +492,6 @@ impl Model {
         let key = if (call as usize) < self.sum.n_prog {
             (0, call, ft)
         } else {
-            // A call made while `cur_call` was being solved can be bound
-            // before `note_origin` runs (its callee node already held the
-            // function when the call was attached): it takes the solved
-            // call's origin and host now, so it is keyed like every other
-            // call that site is behind.
-            if self.sum.origin.get(&call).is_none() && t.is_none() {
-                if let Some(outer) = self.cur_call {
-                    if let Some(o) = self.origin_of(outer) {
-                        self.sum.origin.insert(call, o);
-                        if let Some(&h) = self.sum.host.get(&outer) {
-                            self.sum.host.insert(call, h);
-                        }
-                    }
-                }
-            }
             match self.sum.origin.get(&call) {
                 Some(&o) if !in_scc => (6, o, ft),
                 o => {
@@ -529,11 +502,7 @@ impl Model {
                         + match cs.this { ThisArg::Tok(_) => 0, ThisArg::Node(_) => 1, ThisArg::Undef => 2 }
                         + if self.protocol_calls.contains(&call) { 100 } else { 0 }
                         + if self.bound_synth.contains(&call) { 200 } else { 0 }
-                        + if self.cw9_nr.contains(&call) { 1000 } else if self.cw9_on.contains(&call) { 2000 } else if self.cw9_ok.contains(&call) { 3000 } else { 4000 }
-                        + 10000 * match self.labels[cs.ret as usize] { "cb-ret" => 1, "b-iter-ret" => 2, "implicit-ret" => 3, "timer-ret" => 4, "bound-ret" => 5, "top-new" => 6, _ => 7 }
-                        + 100000 * if self.cur_call.is_some() { 1 } else { 0 }
-                        + 1000000 * match self.cur_call { Some(o) if self.origin_of(o).is_some() => 1, Some(_) => 2, None => 0 }
-                        + 10000000 * match self.cur_call { Some(o) => match self.labels[self.calls[o as usize].ret as usize] { "cb-ret" => 1, "b-iter-ret" => 2, "implicit-ret" => 3, "timer-ret" => 4, "bound-ret" => 5, "top-new" => 6, _ => 7 }, None => 0 };
+                        + 10000 * match self.labels[cs.ret as usize] { "cb-ret" => 1, "b-iter-ret" => 2, "implicit-ret" => 3, "timer-ret" => 4, "bound-ret" => 5, "top-new" => 6, _ => 7 };
                     *self.cw9_shared.entry((tag, f, if o.is_some() { 1 } else if t.is_some() { 2 } else { 3 }, tf)).or_default() += 1;
                     (5, 0, ft)
                 }
