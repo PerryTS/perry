@@ -593,7 +593,11 @@ impl Model {
             }
             Cons::MCall { key, call } => {
                 if prim != 0 {
+                    let n0 = self.calls.len();
+                    let prev_call = self.cur_call.replace(call);
                     self.with_b(|m| builtins::prim_method(m, prim, key, call));
+                    self.cur_call = prev_call;
+                    self.note_origin(n0, call);
                 }
                 for &t in toks {
                     self.method_on(t, key, call);
@@ -702,7 +706,11 @@ impl Model {
                         self.toks[q as usize],
                         TokKind::ObjectProto | TokKind::NativeProto(_)
                     ) {
+                        let n0 = self.calls.len();
+                        let prev_call = self.cur_call.replace(call);
                         self.with_b(|m| builtins::proto_method(m, q, origin, key, call));
+                        self.cur_call = prev_call;
+                        self.note_origin(n0, call);
                     }
                 }
             }
@@ -732,7 +740,11 @@ impl Model {
                         },
                     );
                     if self.tmpls[class as usize].native_parent.is_some() {
+                        let n0 = self.calls.len();
+                        let prev_call = self.cur_call.replace(call);
                         self.with_b(|m| crate::builtins::native_parent_ctor(m, class, call, t));
+                        self.cur_call = prev_call;
+                        self.note_origin(n0, call);
                     }
                 }
             }

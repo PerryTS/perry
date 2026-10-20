@@ -5,7 +5,9 @@ impl Model {
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
         let n0 = self.calls.len();
+        let prev_call = self.cur_call.replace(call);
         self.call_tok_inner(call, t, this_tok);
+        self.cur_call = prev_call;
         self.note_origin(n0, call);
     }
 
@@ -315,7 +317,9 @@ impl Model {
         }
         let n0 = self.calls.len();
         let name = self.atoms[name as usize].clone();
+        let prev_call = self.cur_call.replace(call);
         self.with_b(|m| builtins::construct_named(m, &name, call));
+        self.cur_call = prev_call;
         self.note_origin(n0, call);
     }
 
@@ -352,7 +356,9 @@ impl Model {
             return;
         }
         let n0 = self.calls.len();
+        let prev_call = self.cur_call.replace(call);
         self.construct_inner(call, t);
+        self.cur_call = prev_call;
         self.note_origin(n0, call);
     }
 
@@ -517,7 +523,11 @@ impl Model {
             Key::Any => self.all_fields(t),
         };
         self.bind_via(own, call, t);
+        let n0 = self.calls.len();
+        let prev_call = self.cur_call.replace(call);
         self.with_b(|m| builtins::own_method(m, t, key, call));
+        self.cur_call = prev_call;
+        self.note_origin(n0, call);
         // Methods on the chain (shared), builtin prototype methods, and
         // getters returning functions (per receiver, accessor keys only).
         let cv = self.cv(t, key);

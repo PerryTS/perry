@@ -310,7 +310,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         {
             let mut v: Vec<_> = m.cw9_shared.iter().collect(); v.sort_by_key(|x| std::cmp::Reverse(*x.1));
-            for ((f, why, tf), c) in v.iter().take(25) { eprintln!("CW9 shared fn={} why={} from={} n={c}", m.funcs[*f as usize].name, ["", "in-scc", "no-origin-tmpl", "no-origin-notmpl"][*why as usize], if *tf == u32::MAX { "-".into() } else { m.funcs[*tf as usize].name.clone() }); }
+            for ((tag, f, why, tf), c) in v.iter().take(25) { eprintln!("CW9 shared tag={tag} fn={} why={} from={} n={c}", m.funcs[*f as usize].name, ["", "in-scc", "no-origin-tmpl", "no-origin-notmpl"][*why as usize], if *tf == u32::MAX { "-".into() } else { m.funcs[*tf as usize].name.clone() }); }
         }
         for &(p, a, b, t) in &m.cw9_events { eprintln!("CW9 event pop={p} tok={}#{t} from {} to {} cons_from={:?}", m.tok_name(t), desc(a), desc(b), m.nodes[a as usize].cons.iter().take(5).map(|c| c.kind_name()).collect::<Vec<_>>()); }
         // Provenance of one site token (the median one) in the heaviest field node.

@@ -9,6 +9,7 @@ mod receiver_this;
 mod cjs_require;
 mod hub_tokens;
 mod protocol_calls;
+mod callback_origin;
 mod super_heritage;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
