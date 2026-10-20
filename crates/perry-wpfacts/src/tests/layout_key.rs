@@ -113,3 +113,25 @@ fn an_array_copy_is_born_at_its_call_site() {
     // The copy holds the source's elements and its own.
     exact(&pf, "w", 2);
 }
+
+#[test]
+fn an_escaped_value_binds_no_layout_instance() {
+    // Unknown code calls the functions an escaped value reaches in their
+    // unknown-code instance (`this` = ⊤), one per function: never in the
+    // instance of the escaped value's layout. Was: every function of the
+    // value ran with `this` = the value per layout (commander: `opts()`'s
+    // result holds every Command method; each ran on it, its fields made
+    // function receivers, functions x methods instances).
+    let src = |esc: &str| format!(
+        "class C {{ a() {{ return this.b(); }} b() {{ return 1; }} c() {{ return 2; }} }}
+        const o = new C(); console.log(o.a());
+        const r: any = {{}};
+        for (const k of [\"a\", \"b\", \"c\"]) r[k] = (o as any)[k];
+        console.log(r.length);
+        {esc}"
+    );
+    let base = facts(&src("")).stats.instances;
+    let esc = facts(&src("(globalThis as any).out = r;")).stats.instances;
+    assert!(esc > base, "the value must escape: {base} -> {esc}");
+    assert!(esc - base <= 3, "{base} -> {esc}: more than one entry instance per function");
+}

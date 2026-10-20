@@ -40,14 +40,18 @@ fn lacks(pf: &ProgramFacts, key: &str, class: &str) {
 
 #[test]
 fn closure_over_a_parameter_keeps_callers_apart() {
+    // Births per site (owner, CWL S3): the `map` result is one array per
+    // birth site, so both callers' arrows land in it and each read sees both
+    // classes, as in the context-insensitive floor (b2). The arrows' own
+    // contexts stay per caller; only the shared container merges.
     let pf = facts(&format!(
         "{CLASSES}
         function f(x: any) {{ return [1].map(() => x); }}
         const a = f(new A()); const b = f(new B());
         console.log(a[0].x, b[0].y);"
     ));
-    exact(&pf, "x", 1);
-    exact(&pf, "y", 1);
+    exact(&pf, "x", 2);
+    exact(&pf, "y", 2);
 }
 
 // CWL (layout as the unit of propagation): `run` has one instance per

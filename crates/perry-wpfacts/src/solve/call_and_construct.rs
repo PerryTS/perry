@@ -636,9 +636,10 @@ impl Model {
         // Its prototypes are reachable (`Object.getPrototypeOf`).
         let pn = self.proto_node(t);
         self.cons(pn, Cons::TopSink { reason });
-        // Own accessors run with `this` = ⊤-reached object: already modeled
-        // by the accessor rule when unknown code reads; call them now.
-        self.implicit(t, reason);
+        // Unknown code calls the functions it reaches through `t` (its
+        // fields and prototype sink above, so each escapes): they run in
+        // their unknown-code instance with `this` = ⊤, never in the
+        // instance of `t`'s layout (an escaped value binds no layout).
         // Unknown code can also write any key of it: every setter on its
         // chain (its own accessors included) runs with `this` = it and an
         // unknown value (a direct eval writes the caller's locals exactly so,

@@ -691,6 +691,8 @@ fn observed_bases_avoid_recopying_pending_prefixes_and_keep_independent_members(
         }
         let later = m.tok(TokKind::ModNs(40));
         m.add(src, &[later], prim::STR);
+        // The bound measures the solve's deliveries, not setup.
+        m.work = 0;
         m.max_work = 6000;
         m.solve();
         assert!(
@@ -730,6 +732,8 @@ fn observed_relay_bases_share_new_batches_without_enumerating_each_transfer() {
     m.cons(destinations[0], Cons::ThisTo { origin: TOP });
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
+    // The bound measures the solve's deliveries, not setup.
+    m.work = 0;
     m.max_work = 5000;
     m.solve();
     assert!(!m.aborted, "batch sharing used {} work", m.work);
@@ -787,6 +791,8 @@ fn small_observed_sets_preserve_superset_members_without_recopying_values() {
         destinations.push(dst);
         extras.push(extra);
     }
+    // The bound measures the solve's deliveries, not setup.
+    m.work = 0;
     m.max_work = 1500;
     m.solve();
     assert!(!m.aborted, "small supersets used {} work", m.work);
@@ -825,6 +831,8 @@ fn equal_snapshot_groups_keep_old_owners_covered_after_coalescing() {
     m.edge(src, second[0]);
     let added = m.tok(TokKind::ModNs(40));
     m.add_tok(src, added);
+    // The bound measures the solve's deliveries, not setup.
+    m.work = 0;
     m.max_work = 5000;
     m.solve();
     assert!(!m.aborted, "coalesced snapshots used {} work", m.work);
@@ -897,6 +905,8 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
                 destinations.push(dst);
             }
         }
+        // The bound measures the solve's deliveries, not setup.
+        m.work = 0;
         m.max_work = group as u64 * 9;
         m.solve();
         assert!(!m.aborted, "late subscribers used {} work", m.work);

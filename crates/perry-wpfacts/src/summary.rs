@@ -400,10 +400,7 @@ impl Model {
         let Some(site) = self.origin_of(call) else {
             return BORN;
         };
-        match self.sum.call_lay.get(&call).copied() {
-            Some(lay) if lay != LAY_NONE => self.birth_id(site, lay),
-            _ => site,
-        }
+        site
     }
 
     /// The birth context of (site or literal template, lexical context).
@@ -784,7 +781,7 @@ impl Model {
         }
         // Literals born here: one token per (literal, lexical context).
         for &(slot, tm) in &s.births {
-            let ctx = if lay == LAY_NONE { BORN } else { self.birth_id(LIT | tm, lay) };
+            let ctx = BORN;
             let t = self.site_tok(tm, ctx);
             self.add_tok(base[slot as usize], t);
         }
