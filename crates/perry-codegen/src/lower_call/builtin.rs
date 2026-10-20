@@ -204,7 +204,9 @@ pub(super) fn lower_builtin_new<'a>(
                 .push(("js_bun_transpiler_new".to_string(), I64, vec![DOUBLE]));
             let block = ctx.block();
             let handle = block.call(I64, "js_bun_transpiler_new", &[(DOUBLE, &options)]);
-            Ok(Some(nanbox_pointer_inline(block, &handle)))
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                block, &handle,
+            )))
         }
         "Resolver"
             if import_src.is_some_and(|source| {
@@ -740,7 +742,9 @@ pub(super) fn lower_builtin_new<'a>(
                 "js_bun_sqlite_database_new",
                 &[(DOUBLE, &path_value), (DOUBLE, &options_value)],
             );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                blk, &handle,
+            )))
         }
         // better-sqlite3 Database — `new Database(filename)` opens a SQLite
         // connection. Without this, `new Database(...)` falls into lower_new's
@@ -757,7 +761,9 @@ pub(super) fn lower_builtin_new<'a>(
             };
             let blk = ctx.block();
             let handle = blk.call(I64, "js_sqlite_open", &[(I64, &path_ptr)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
+                blk, &handle,
+            )))
         }
         // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
         // options so the runtime can preserve Node-shaped validation errors.

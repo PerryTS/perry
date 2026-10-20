@@ -1,0 +1,8 @@
+any [{"a":1},{"a":2}]
+field [["x"],["y"]]
+map {"n":2}
+yield native
+run [{"a":1,"b":"x"},{"a":2,"b":"y"}]
+run2 [{"b":"y"}]
+same true object
+closed
