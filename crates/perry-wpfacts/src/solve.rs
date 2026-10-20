@@ -65,6 +65,21 @@ impl Model {
                 changed = true;
                 self.pts_entries += 1;
                 top_new |= t == TOP;
+                if self.cwl_trace.is_some() {
+                    self.cwl_prov.entry((n, t)).or_insert((self.cur_src, self.cwl_why));
+                    if self.cwl_tok == Some(t) {
+                        self.cwl_tokhit = n;
+                    }
+                }
+            }
+        }
+        if self.cwl_tokhit != 0 && self.cwl_tokhit != NO_NODE {
+            let h = std::mem::replace(&mut self.cwl_tokhit, 0);
+            if let Some(&(f, _)) = self.cw9_inst_fn.get(&h) {
+                if self.cwl_tokfns.len() < 12 && self.cwl_tokfns.insert(f) {
+                    eprintln!("CWL tokhit fn={} work={}", self.funcs[f as usize].name, self.work);
+                    self.cwl_trace_tok(h, self.cwl_tok.unwrap());
+                }
             }
         }
         if top_new && self.explain {
@@ -258,6 +273,8 @@ impl Model {
         let mut toks = self.bufs.pop().unwrap_or_default();
         toks.clear();
         self.nodes[n as usize].pts.sorted_into(&mut toks);
+        // The replay is solve work: the bound covers it.
+        self.work += toks.len() as u64 + 1;
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
@@ -1031,6 +1048,9 @@ impl Model {
                     }
                 }
                 for &t in toks {
+                    // Each receiver binds every call looked up through
+                    // this node: solve work per call.
+                    self.work += calls.len() as u64;
                     self.this_to(t, origin);
                     self.this_calls(t, origin, &calls);
                 }

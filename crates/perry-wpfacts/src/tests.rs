@@ -20,7 +20,10 @@ fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())
 }
 
-fn facts_with(src: &str, cfg: FactsConfig) -> ProgramFacts {
+fn facts_with(src: &str, mut cfg: FactsConfig) -> ProgramFacts {
+    // Every test solve is bounded: a broken rule ends OVER (no facts, the
+    // test fails) instead of running away.
+    cfg.max_work.get_or_insert(50_000_000);
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     compute(&[("t.ts".to_string(), &hir)], &cfg)

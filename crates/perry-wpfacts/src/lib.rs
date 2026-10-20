@@ -157,6 +157,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.m.rel(|| format!("interp {}", interp.replace(' ', "\\s")));
     if cfg.profile {
         g.m.profile = Some(Default::default());
+        g.m.cwl_trace = std::env::var("CWL_TRACE").ok().and_then(|v| v.parse().ok()); // TEMP CWL
+        g.m.cwl_tok = std::env::var("CWL_TOK").ok().and_then(|v| v.parse().ok()); // TEMP CWL
+        g.m.cwl_inst_probe = std::env::var_os("CWL_INST").is_some(); // TEMP CWL
     }
     // The bounds are in force from the first constraint: generation already
     // solves online (`Model::cons` and `Model::edge` apply each rule to what
@@ -301,7 +304,7 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         for (_, n) in all.iter().take(15) { eprintln!("CW9 nodework {}", desc(*n)); }
         if let Some(&(root, _, _)) = by_work.first() {
             for (&(t, _a), &n) in &m.fields { if n == root {
-                if let model::TokKind::Obj(tm, c) = m.toks[t as usize] { eprintln!("CW9 owner tmpl {:?} ctx {c}", m.tmpls[tm as usize].kind); if let model::TmplKind::BObj { site, .. } | model::TmplKind::Arr { site, .. } = m.tmpls[tm as usize].kind { let st = &m.stores[site as usize]; eprintln!("CW9 owner site {site} desc={} func={}", st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }); if c != model::NO_CTX && (c as usize) < m.calls.len() { let cs = &m.calls[c as usize]; eprintln!("CW9 owner call args={:?}", cs.args.iter().map(|&a| desc(a)).collect::<Vec<_>>()); } } }
+                if let model::TokKind::Obj(tm, c) = m.toks[t as usize] { eprintln!("CW9 owner tmpl {:?} ctx {c}", m.tmpls[tm as usize].kind); if let model::TmplKind::BObj { site, .. } | model::TmplKind::Arr { site, .. } = m.tmpls[tm as usize].kind { if (site as usize) < m.stores.len() { let st = &m.stores[site as usize]; eprintln!("CW9 owner site {site} desc={} func={}", st.desc, if st.func == u32::MAX { "-".into() } else { m.funcs[st.func as usize].name.clone() }); } if c != model::NO_CTX && (c as usize) < m.calls.len() { let cs = &m.calls[c as usize]; eprintln!("CW9 owner call args={:?}", cs.args.iter().map(|&a| desc(a)).collect::<Vec<_>>()); } } }
                 for (i, node) in m.nodes.iter().enumerate() { if node.succ.contains(&root) { eprintln!("CW9 rootpred {} cons={:?}", desc(i as u32), node.cons.iter().take(6).map(|c| c.kind_name()).collect::<Vec<_>>()); } }
                 let mut nh = 0;
                 for (i, node) in m.nodes.iter().enumerate() {

@@ -94,3 +94,22 @@ fn only_a_generator_step_closure_is_its_own_iterator() {
         assert_eq!(s.receivers.len(), 1, "{:?}\n{}", s.receivers, pf.dump_text());
     }
 }
+
+#[test]
+fn an_array_copy_is_born_at_its_call_site() {
+    // `slice`, `concat` and `filter` return a new array (births per site):
+    // a write into the copy does not reach the source. Returning the
+    // receiver made commander's `actionArgs = args.slice(..)` then
+    // `actionArgs[n] = this.opts()` pour every option value into `args`.
+    let pf = facts(
+        "class A { a = 1; w = 1; }
+        class B { b = 2; w = 2; }
+        const s1 = [new A()]; const c1 = s1.slice(); c1.push(new B());
+        const s2 = [new A()]; const c2 = s2.concat([new B()]);
+        const s3 = [new A()]; const c3 = s3.filter((x) => !!x); c3[1] = new B();
+        console.log(s1[0].a, s2[0].a, s3[0].a, c1[0].w, c2.length, c3.length);",
+    );
+    exact(&pf, "a", 1);
+    // The copy holds the source's elements and its own.
+    exact(&pf, "w", 2);
+}

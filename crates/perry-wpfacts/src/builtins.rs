@@ -1451,31 +1451,33 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             }
             ret_tok(m, call, t);
         }
-        Some(
-            "slice" | "concat" | "reverse" | "toReversed" | "flat" | "copyWithin" | "with"
-            | "toSpliced",
-        ) => {
-            for &a in &c.args {
-                // concat: array arguments contribute their elements.
-                m.edge(a, elems);
-                m.cons(
-                    a,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
+        // In place: the receiver itself.
+        Some("reverse" | "copyWithin") => ret_tok(m, call, t),
+        // A new array, born at this call site, holding the receiver's
+        // elements and what the call adds. It is not the receiver: a write
+        // into the copy never reaches the source (`args.slice()` then
+        // `copy[i] = v`).
+        Some("slice" | "concat" | "toReversed" | "flat" | "with" | "toSpliced") => {
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            let added: &[NodeId] = match name {
+                // Array arguments contribute their elements, others themselves.
+                Some("concat") => &c.args,
+                Some("with") => c.args.get(1..).unwrap_or(&[]),
+                Some("toSpliced") => c.args.get(2..).unwrap_or(&[]),
+                _ => &[],
+            };
+            for &a in added {
+                m.edge(a, ofa);
+                if name == Some("concat") {
+                    m.cons(a, Cons::Load { key: Key::Any, dst: ofa });
+                }
             }
             if name == Some("flat") {
-                m.cons(
-                    elems,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: elems,
-                    },
-                );
+                m.cons(elems, Cons::Load { key: Key::Any, dst: ofa });
             }
-            ret_tok(m, call, t);
+            ret_tok(m, call, out);
         }
         Some("sort" | "toSorted") => {
             if let Some(&cb) = c.args.first() {
@@ -1483,7 +1485,14 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                 let why = m.reason("sort comparator result");
                 m.cons(r, Cons::Implicit { reason: why });
             }
-            ret_tok(m, call, t);
+            if name == Some("toSorted") {
+                let out = site_tmpl(m, call, "Array");
+                let ofa = m.field_any(out);
+                m.edge(elems, ofa);
+                ret_tok(m, call, out);
+            } else {
+                ret_tok(m, call, t);
+            }
         }
         Some(
             "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex" | "findLast"
@@ -1509,7 +1518,13 @@ fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
                     }
                     ret_tok(m, call, out);
                 }
-                Some("filter") => ret_tok(m, call, t),
+                // A new array of some of the receiver's elements.
+                Some("filter") => {
+                    let out = site_tmpl(m, call, "Array");
+                    let ofa = m.field_any(out);
+                    m.edge(elems, ofa);
+                    ret_tok(m, call, out);
+                }
                 Some("find" | "findLast") => {
                     m.edge(elems, c.ret);
                     ret_prim(m, call, prim::UNDEF);

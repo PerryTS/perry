@@ -473,7 +473,7 @@ impl Model {
         }
         let base: Vec<NodeId> = (0..s.nslots)
             .map(|i| match outer_at[i as usize] {
-                u32::MAX => { let n = self.node_named("inst", || format!("inst{inst}.{i}")); self.cw9_inst_fn.insert(n, (f, (key.0 as u32) << 28)); n }
+                u32::MAX => { let n = self.node_named("inst", || format!("inst{inst}.{i}")); self.cw9_inst_fn.insert(n, (f, (key.0 as u32) << 28)); if self.cwl_trace.is_some() { self.cwl_slot.insert(n, s.orig[i as usize]); } n }
                 _ if ctx == NO_CTX => s.orig[i as usize],
                 j => self.sum.ctx_nodes[ctx as usize][j as usize],
             })
@@ -516,6 +516,9 @@ impl Model {
             tv.sort_by_key(|x| std::cmp::Reverse(x.1));
             tv.truncate(8);
             eprintln!("CWL grow inst={} toks={} ctx={} calls={} work={} kinds={hv:?} tokrecv={tv:?} last={:?} f={}", inst + 1, self.toks.len(), self.sum.ctx_nodes.len(), self.calls.len(), self.work, key, self.funcs[f as usize].name);
+            if let Some(tn) = self.cwl_trace {
+                self.cwl_trace_node(tn);
+            }
             let mut wv: Vec<_> = self.cwl_thisinst.iter().collect();
             wv.sort_by_key(|x| std::cmp::Reverse(*x.1));
             for ((why, wf), n) in wv.iter().take(10) { eprintln!("CWL thisinst why={why} fn={} n={n}", self.funcs[*wf as usize].name); }
@@ -550,7 +553,7 @@ impl Model {
         // TEMP CWL: how a function or bound value becomes a receiver.
         if lay >> 28 == 4 || lay >> 28 == 7 {
             if let Some(t) = x {
-                if std::env::var_os("CWL_INST").is_some() || self.profile.is_some() {
+                if self.cwl_inst_probe {
                     let (shape, lbl, site, prot, bs) = if call == NO_NODE {
                         ("none".to_string(), "-", 0, false, false)
                     } else {
@@ -591,6 +594,19 @@ impl Model {
                     e.0 += 1;
                     if e.1.is_empty() { e.1 = nm; e.2 = site; }
                 }
+            }
+        }
+        if let (Some(t), Some(_)) = (x, self.cwl_trace) {
+            if matches!(self.toks[t as usize], TokKind::Func(..)) && lay != LAY_NONE && self.cwl_firstfn.len() < 4 && self.cwl_firstfn.insert(f) {
+                let (tn, site, tc) = if call == NO_NODE { (NO_NODE, String::new(), None) } else {
+                    let cs = &self.calls[call as usize];
+                    let st = (cs.site as usize) < self.stores.len();
+                    (match cs.this { ThisArg::Node(n) => n, _ => NO_NODE },
+                     if st { format!("{} in {}", self.stores[cs.site as usize].desc, if self.stores[cs.site as usize].func != u32::MAX { self.funcs[self.stores[cs.site as usize].func as usize].name.clone() } else { "-".into() }) } else { "-".into() },
+                     self.sum.tmpl_of.get(&call).copied())
+                };
+                eprintln!("CWL firstfn method={} recv={} call={call} prog={} tmpl={tc:?} site={site} thisnode={tn} work={}", self.funcs[f as usize].name, self.tok_name(t), (call as usize) < self.sum.n_prog, self.work);
+                if tn != NO_NODE { self.cwl_trace_tok(tn, t); }
             }
         }
         let key = match x {
@@ -724,6 +740,13 @@ impl Model {
     pub(crate) fn fill_instances(&mut self) {
         let mut i = 0;
         while i < self.sum.pending.len() {
+            // Instances queue more instances: the work bound holds here too,
+            // not only between worklist pops.
+            if self.max_work != 0 && self.work > self.max_work {
+                self.aborted = true;
+                self.sum.pending.clear();
+                return;
+            }
             let (inst, base) = std::mem::take(&mut self.sum.pending[i]);
             i += 1;
             self.fill_instance(inst, &base);
@@ -2265,4 +2288,134 @@ pub fn compress(s: &mut Summary) {
     }
     s.nslots = orig.len() as u32;
     s.orig = orig;
+}
+
+// TEMP CWL: walk the first-arrival chain of a few tokens of one node back to
+// the constraint that put them there.
+impl Model {
+    pub fn cwl_trace_node(&self, tn: NodeId) {
+        let mut picked: Vec<Tok> = Vec::new();
+        let mut kinds = [0u32; 3];
+        let mut toks = Vec::new();
+        self.nodes[tn as usize].pts.sorted_into(&mut toks);
+        for &t in &toks {
+            let k = match &self.toks[t as usize] {
+                TokKind::Func(..) => 0,
+                TokKind::Obj(..) => 1,
+                TokKind::ClassObj(..) => 2,
+                _ => continue,
+            };
+            if kinds[k] < 2 {
+                kinds[k] += 1;
+                picked.push(t);
+            }
+        }
+        let nm = |s: &Self, n: NodeId| {
+            let mut f = s.node_fn[n as usize];
+            let mut extra = String::new();
+            if let Some(&(ff, k)) = s.cw9_inst_fn.get(&n) {
+                f = ff;
+                extra = format!(" k{}", k >> 28);
+            }
+            if let Some(&o) = s.cwl_slot.get(&n) {
+                extra += &format!(" orig={}#{o}", s.labels[o as usize]);
+            }
+            if let Some(((h, a), _)) = s.fields.iter().find(|(_, &x)| x == n) {
+                extra += &format!(" {}.{}", s.tok_name(*h), s.atoms[*a as usize]);
+            }
+            if let Some((h, _)) = s.field_any.iter().find(|(_, &x)| x == n) {
+                extra += &format!(" {}{}.*", s.tok_name(*h), s.cwl_tokdesc(*h));
+            }
+            if let Some((h, _)) = s.all_fields.iter().find(|(_, &x)| x == n) {
+                extra += &format!(" {}{}.**", s.tok_name(*h), s.cwl_tokdesc(*h));
+            }
+            let fname = if f == NO_FN { "-".to_string() } else { s.funcs[f as usize].name.rsplit(':').next().unwrap_or("").to_string() };
+            format!("{}#{n}[{fname}{extra}]({})", s.labels[n as usize], s.nodes[n as usize].pts.len())
+        };
+        {
+            let fs: Vec<String> = self.funcs.iter().filter(|f| f.this == tn).map(|f| f.name.clone()).collect();
+            let is: Vec<String> = self.sum.inst_key.iter().filter(|(_, &i)| self.sum.insts[i as usize].this == tn || self.sum.insts[i as usize].params.contains(&tn)).map(|(k, &i)| format!("inst{i} key=({},{:#x},{}) lay={:#x} this={} params={:?}", k.0, k.1, self.tok_name(k.2), self.sum.insts[i as usize].lay, self.sum.insts[i as usize].this, self.sum.insts[i as usize].params)).collect();
+            eprintln!("CWL traceowner node={tn} shared_this_of={fs:?} insts={is:?}");
+            let mut tm17: Vec<String> = Vec::new();
+            for (i, k) in self.toks.iter().enumerate() {
+                if let TokKind::Obj(tm, c) = k {
+                    if self.tmpls[*tm as usize].display.contains("c6dcb161") {
+                        let fun = if (*c as usize) < self.calls.len() { let r = self.calls[*c as usize].ret; let f = self.node_fn[r as usize]; if f == NO_FN { "-".to_string() } else { self.funcs[f as usize].name.rsplit(':').next().unwrap_or("").to_string() } } else { "-".into() };
+                        tm17.push(format!("tok{i} {} fn={fun}", self.cwl_tokdesc(i as Tok)));
+                    }
+                }
+            }
+            let ncalls_tm: Vec<String> = Vec::new();
+            eprintln!("CWL tm17 toks={tm17:?} {ncalls_tm:?}");
+        }
+        for t in picked {
+            self.cwl_trace_tok(tn, t);
+        }
+    }
+    pub fn cwl_tokdesc(&self, h: Tok) -> String {
+        let TokKind::Obj(tm, c) = self.toks[h as usize] else { return String::new() };
+        let site = |c: CallId| {
+            let cs = &self.calls[c as usize];
+            let st = (cs.site as usize) < self.stores.len();
+            if st { format!("{} in {}", self.stores[cs.site as usize].desc, if self.stores[cs.site as usize].func != u32::MAX { self.funcs[self.stores[cs.site as usize].func as usize].name.rsplit(':').next().unwrap_or("").to_string() } else { "-".into() }) } else { format!("call{c}") }
+        };
+        let d = if c == NO_CTX { "NO_CTX".to_string() } else if c == BORN { "BORN".into() } else if (c as usize) < self.sum.n_prog { format!("prog {}", site(c)) } else if let Some(((s, l), _)) = self.sum.birth_ids.iter().find(|(_, &v)| v == c) { if s & LIT != 0 { format!("lit tm{} lay={l:#x}", s & !LIT) } else { format!("site {} lay={l:#x}", site(*s)) } } else { format!("ctx{c}") };
+        let nsites = self.toks.iter().filter(|k| matches!(k, TokKind::Obj(x, _) if *x == tm)).count();
+        format!("{{tm{tm} {d} ntoks_of_tm={nsites}}}")
+    }
+    pub fn cwl_trace_tok(&self, tn: NodeId, t: Tok) {
+        let nm = |s: &Self, n: NodeId| {
+            let mut f = s.node_fn[n as usize];
+            let mut extra = String::new();
+            if let Some(&(ff, k)) = s.cw9_inst_fn.get(&n) {
+                f = ff;
+                extra = format!(" k{}", k >> 28);
+            }
+            if let Some(&o) = s.cwl_slot.get(&n) {
+                extra += &format!(" orig={}#{o}", s.labels[o as usize]);
+            }
+            if let Some(((h, a), _)) = s.fields.iter().find(|(_, &x)| x == n) {
+                extra += &format!(" {}.{}", s.tok_name(*h), s.atoms[*a as usize]);
+            }
+            if let Some((h, _)) = s.field_any.iter().find(|(_, &x)| x == n) {
+                extra += &format!(" {}{}.*", s.tok_name(*h), s.cwl_tokdesc(*h));
+            }
+            if let Some((h, _)) = s.all_fields.iter().find(|(_, &x)| x == n) {
+                extra += &format!(" {}{}.**", s.tok_name(*h), s.cwl_tokdesc(*h));
+            }
+            let fname = if f == NO_FN { "-".to_string() } else { s.funcs[f as usize].name.rsplit(':').next().unwrap_or("").to_string() };
+            format!("{}#{n}[{fname}{extra}]({})", s.labels[n as usize], s.nodes[n as usize].pts.len())
+        };
+        {
+            let mut out = vec![format!("tok={} lay={:#x}", self.tok_name(t), self.layout_of(t))];
+            let mut n = tn;
+            let mut seen = crate::pts::FxHashSet::default();
+            for _ in 0..40 {
+                if !seen.insert(n) { out.push("LOOP".into()); break; }
+                match self.cwl_prov.get(&(n, t)) {
+                    None => { out.push(format!("{} <no prov>", nm(self, n))); break; }
+                    Some(&(src, why)) => {
+                        out.push(format!("{} <-{why}-", nm(self, n)));
+                        if why == "thisto" {
+                            let vc: Vec<String> = self.via_calls.iter().filter(|((c, _), _)| *c == src).take(3).map(|((_, o), cs)| {
+                                let c0 = cs[0];
+                                let cs0 = &self.calls[c0 as usize];
+                                let tc = self.sum.tmpl_of.get(&c0).copied();
+                                let st = (cs0.site as usize) < self.stores.len();
+                                format!("origin={} ncalls={} call{c0} prog={} tmpl={tc:?} site={} in {} args={:?} ret={}", self.tok_name(*o), cs.len(), (c0 as usize) < self.sum.n_prog, if st { self.stores[cs0.site as usize].desc.clone() } else { "-".into() }, if st && self.stores[cs0.site as usize].func != u32::MAX { self.funcs[self.stores[cs0.site as usize].func as usize].name.clone() } else { "-".into() }, cs0.args.iter().map(|&a| nm(self, a)).collect::<Vec<_>>(), nm(self, cs0.ret))
+                            }).collect();
+                            out.push(format!("[viacalls {vc:?}]"));
+                        }
+                        if src == NO_NODE { out.push("SEED".into()); break; }
+                        if !self.cwl_prov.contains_key(&(src, t)) {
+                            out.push(format!("{} [cons on src: {:?}; tok not in src]", nm(self, src), self.nodes[src as usize].cons.iter().take(4).map(|c| c.kind_name()).collect::<Vec<_>>()));
+                            break;
+                        }
+                        n = src;
+                    }
+                }
+            }
+            eprintln!("CWL trace {}", out.join(" "));
+        }
+    }
 }

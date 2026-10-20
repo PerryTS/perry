@@ -638,6 +638,8 @@ impl Model {
             let mut toks = self.bufs.pop().unwrap_or_default();
             toks.clear();
             self.nodes[callee as usize].pts.sorted_into(&mut toks);
+            // A replay per new call is solve work.
+            self.work += toks.len() as u64;
             for &t in &toks {
                 self.this_calls(t, origin, &[call]);
             }
@@ -664,6 +666,8 @@ impl Model {
             let mut toks = self.bufs.pop().unwrap_or_default();
             toks.clear();
             self.nodes[callee as usize].pts.sorted_into(&mut toks);
+            // A replay per new call is solve work.
+            self.work += toks.len() as u64;
             for &t in &toks {
                 if matches!(self.toks[t as usize], TokKind::Builtin(_)) {
                     self.call_tok(call, t, Some(origin));
