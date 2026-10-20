@@ -562,7 +562,7 @@ pub(crate) fn emit_wasi_static_warning() {
     {
         eprintln!(
             "(node:{}) ExperimentalWarning: WASI is an experimental feature and might change at any time",
-            std::process::id()
+            crate::os::current_process_id()
         );
         eprintln!("(Use `node --trace-warnings ...` to show where the warning was created)");
     }

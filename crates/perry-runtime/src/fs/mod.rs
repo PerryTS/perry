@@ -1587,7 +1587,7 @@ pub(crate) fn mkdtemp_bytes_result(prefix_value: f64) -> Result<Vec<u8>, f64> {
         // Try a handful of candidate suffixes until one succeeds. Only real
         // EEXIST collisions are retried; permission/missing-parent errors are
         // reported against the attempted candidate path.
-        let pid = std::process::id() as u64;
+        let pid = crate::os::current_process_id() as u64;
         let mut last_collision_path = None;
         for attempt in 0..64u64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);

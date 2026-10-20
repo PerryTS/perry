@@ -628,7 +628,7 @@ pub(crate) fn flush_trace_events_output() {
             return;
         }
         output.wrote = true;
-        let pid = std::process::id();
+        let pid = crate::os::current_process_id();
         let file_name = output
             .file_pattern
             .as_deref()
