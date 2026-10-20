@@ -829,6 +829,49 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Per-unit mode: these modules are one unit of a larger program, and
+    /// every other unit is unknown compiled code. What the unit publishes
+    /// (exports, namespaces, CommonJS records, thrown values, the global
+    /// object) reaches that code; what it reads from it is ⊤ (imports of
+    /// other units already are; CommonJS paths of other units and the
+    /// registry are here); and that code stores through what it holds, the
+    /// intrinsic prototypes and globals included: one ⊤ store under any key
+    /// through ⊤, as a store in compiled code with a ⊤ receiver is.
+    pub fn unit_boundary(&mut self) {
+        let r = self.m.reason("published to another unit");
+        let mut exports: Vec<NodeId> = self.exports.values().copied().collect();
+        exports.sort_unstable();
+        for n in exports {
+            self.m.sink_node(n, r);
+        }
+        for mi in 0..self.mods.len() {
+            let t = self.mods[mi].ns_tok;
+            self.m.escape(t, r);
+        }
+        let mut paths: Vec<(String, NodeId)> =
+            self.cjs_paths.iter().map(|(k, &n)| (k.clone(), n)).collect();
+        paths.sort_unstable();
+        let foreign = |g: &Self, k: &str| !g.path_index.contains_key(k);
+        for (k, n) in paths {
+            if foreign(self, &k) {
+                self.m.add_top(n, |_| "CommonJS module of another unit".into());
+            }
+            self.m.sink_node(n, r);
+        }
+        for n in [self.cjs_registry, self.cjs_unknown_path].into_iter().chain(self.cjs_main) {
+            self.m.add_top(n, |_| "CommonJS registry shared with other units".into());
+            self.m.sink_node(n, r);
+        }
+        let thrown = self.thrown;
+        self.m.sink_node(thrown, r);
+        let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        self.m.escape(gt, r);
+        let holder = self.m.node_l("other-unit-receiver");
+        self.m.add_tok(holder, TOP);
+        let src = self.m.top_tok_node;
+        self.m.cons(holder, Cons::Store { key: Key::Any, src, site: 0 });
+    }
+
     fn resolve_source(&self, module: &Module, source: &str) -> Option<u32> {
         let imp = module.imports.iter().find(|i| i.source == source)?;
         let p = imp.resolved_path.as_ref()?;

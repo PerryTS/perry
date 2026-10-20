@@ -11,6 +11,7 @@ mod hub_tokens;
 mod protocol_calls;
 mod callback_origin;
 mod super_heritage;
+mod unit_mode;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 

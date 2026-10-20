@@ -69,6 +69,9 @@ pub struct FactsConfig {
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
+    /// The modules are one unit of a larger program: every other unit is
+    /// unknown compiled code (`Gen::unit_boundary`).
+    pub unit: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -132,6 +135,8 @@ pub struct ProgramFacts {
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
+    /// Per-unit mode: each unit's path and statistics.
+    pub units: Vec<(String, Stats)>,
     module_digests: Vec<u64>,
 }
 
@@ -170,6 +175,9 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
     g.register_all();
     g.link_exports();
     g.walk_all();
+    if cfg.unit {
+        g.unit_boundary();
+    }
     let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
     if cfg.profile {
         eprintln!("perry: wpfacts after generation {}", g.m.size_line());
@@ -495,8 +503,63 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
         relations: g.m.relations.take(),
         tok_names,
         bindings,
+        units: Vec::new(),
         module_digests: Vec::new(),
     };
+    pf.module_digests = dump::module_digests(&pf);
+    pf
+}
+
+/// Per-unit facts (decision 151, phase P1): one solve per module, every
+/// other module unknown compiled code ([`FactsConfig::unit`]), the bounds
+/// per unit. A module's sites, bindings and templates come from its own
+/// unit; a unit over a bound claims nothing for its module (sound), the
+/// others keep theirs. Program-wide flags are the union over the units.
+pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
+    let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let ucfg = FactsConfig { unit: true, ..cfg.clone() };
+    let mut pf = ProgramFacts {
+        module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
+        dynamic_code_reach: cfg.dynamic_code_reach.clone(),
+        sabotage: cfg.sabotage.clone(),
+        ..Default::default()
+    };
+    for (mi, (path, module)) in sorted.iter().enumerate() {
+        let u = compute(&[(path.to_string(), *module)], &ucfg);
+        for mut t in u.templates {
+            if t.module != Some(0) {
+                continue;
+            }
+            t.module = Some(mi as u32);
+            t.id = pf.templates.len() as model::TmplId;
+            pf.templates.push(t);
+        }
+        pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts { module: mi as u32, ..s }));
+        pf.bindings.push(u.bindings.into_iter().next().unwrap_or_default());
+        pf.super_unrelinked.extend(u.super_unrelinked);
+        pf.interp_guard = pf.interp_guard.or(u.interp_guard);
+        pf.fnproto_bind_written = pf.fnproto_bind_written.or(u.fnproto_bind_written);
+        let (a, s) = (&mut pf.stats, &u.stats);
+        a.modules += s.modules;
+        a.templates += s.templates;
+        a.fact_units += s.fact_units;
+        a.nodes += s.nodes;
+        a.constraints += s.constraints;
+        a.tokens += s.tokens;
+        a.functions += s.functions;
+        a.gen_ms += s.gen_ms;
+        a.solve_ms += s.solve_ms;
+        a.derive_ms += s.derive_ms;
+        a.pops += s.pops;
+        a.instances += s.instances;
+        a.shared_instances += s.shared_instances;
+        a.composed += s.composed;
+        a.work += s.work;
+        a.top_calls += s.top_calls;
+        a.pts_entries += s.pts_entries;
+        pf.units.push((path.to_string(), u.stats));
+    }
     pf.module_digests = dump::module_digests(&pf);
     pf
 }
