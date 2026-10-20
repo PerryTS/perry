@@ -5660,6 +5660,28 @@ pub fn run_with_parse_cache(
             let parent_name_clone = imported_classes[idx].parent_name.clone();
             let child_source_prefix = imported_classes[idx].source_prefix.clone();
             let child_src_path = native_module_paths_by_prefix.get(&child_source_prefix);
+            // A member heritage (`class X extends ns.Base`) names a property,
+            // so its trailing name may be any module's class; a bare name
+            // resolves in the child's own scope. A bare global (`extends
+            // Error`) lowers to a read of the global object, like
+            // `globalThis.Error`, and both mean the global.
+            let child_heritage_is_member = child_src_path
+                .and_then(|path| ctx.native_modules.get(path))
+                .and_then(|module| {
+                    module
+                        .classes
+                        .iter()
+                        .find(|class| class.name == imported_classes[idx].name)
+                })
+                .is_some_and(|class| {
+                    match class.extends_expr.as_deref() {
+                        Some(
+                            perry_hir::Expr::PropertyGet { object, .. }
+                            | perry_hir::Expr::IndexGet { object, .. },
+                        ) => !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_)),
+                        _ => false,
+                    }
+                });
             // Issue #485: include the class's parent in the transitive
             // closure too. Without this, `import { Sub } from 'pkg'` where
             // `Sub extends Base` (and Base lives in another file inside
@@ -5781,7 +5803,18 @@ pub fn run_with_parse_cache(
                 //
                 // Issue #26: for a parent ref, prefer the same-named class
                 // in the CHILD's own source module before any global match.
+                // A bare parent named like a global that the child's module
+                // neither declares nor imports IS that global
+                // (`class MissingCredentialError extends Error`). Binding it
+                // by name to another module's exported `class Error` made
+                // `super(message)` run that class's constructor.
+                let global_parent = is_parent_ref
+                    && !child_heritage_is_member
+                    && perry_hir::analysis::is_global_intrinsic_value_name(&ref_name);
                 let found = scoped_found.or_else(|| {
+                    if global_parent {
+                        return None;
+                    }
                     exported_classes
                         .iter()
                         .find(|((path, cname), class)| {
