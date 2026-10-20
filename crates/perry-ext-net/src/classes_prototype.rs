@@ -24,10 +24,15 @@ unsafe extern "C" fn add_address(
     family: f64,
 ) -> f64 {
     let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
+    let this = scope.root_nanbox(this.as_f64());
+    let address = scope.root_nanbox(address);
     let family = scope.root_nanbox(family);
-    let address = string_arg(&scope, address);
+    let owner = receiver(&scope, JsThis::from_f64(this.get()));
+    block_list(owner.get());
+    if let Some(ip) = socket_address_ip(address.get()) {
+        return block_list_insert(owner.get(), BlockRule::Address(ip));
+    }
+    let address = string_arg(&scope, address.get());
     let family = string_arg(&scope, family.get());
     js_net_block_list_add_address(owner.get(), address.get(), family.get())
 }
@@ -39,11 +44,42 @@ unsafe extern "C" fn add_range(
     family: f64,
 ) -> f64 {
     let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
+    let this = scope.root_nanbox(this.as_f64());
+    let start = scope.root_nanbox(start);
     let end = scope.root_nanbox(end);
     let family = scope.root_nanbox(family);
-    let start = string_arg(&scope, start);
+    let owner = receiver(&scope, JsThis::from_f64(this.get()));
+    block_list(owner.get());
+    let start_ip = socket_address_ip(start.get());
+    let end_ip = socket_address_ip(end.get());
+    if start_ip.is_some() || end_ip.is_some() {
+        let start_ip = match start_ip {
+            Some(ip) => ip,
+            None => {
+                let start = string_arg(&scope, start.get());
+                let family = string_arg(&scope, family.get());
+                let ip = parse_ip(start.get(), family.get());
+                if family.get() == 0 && ip.is_ipv6() {
+                    js_net_throw_invalid_address();
+                }
+                ip
+            }
+        };
+        let end_ip = match end_ip {
+            Some(ip) => ip,
+            None => {
+                let end = string_arg(&scope, end.get());
+                let family = string_arg(&scope, family.get());
+                let ip = parse_ip(end.get(), family.get());
+                if family.get() == 0 && ip.is_ipv6() {
+                    js_net_throw_invalid_address();
+                }
+                ip
+            }
+        };
+        return block_list_add_range_ip(owner.get(), start_ip, end_ip);
+    }
+    let start = string_arg(&scope, start.get());
     let end = string_arg(&scope, end.get());
     let family = string_arg(&scope, family.get());
     js_net_block_list_add_range(owner.get(), start.get(), end.get(), family.get())
@@ -56,11 +92,16 @@ unsafe extern "C" fn add_subnet(
     family: f64,
 ) -> f64 {
     let scope = TransientRootScope::enter();
-    let owner = receiver(&scope, this);
-    block_list(owner.get());
+    let this = scope.root_nanbox(this.as_f64());
+    let address = scope.root_nanbox(address);
     let prefix = scope.root_nanbox(prefix);
     let family = scope.root_nanbox(family);
-    let address = string_arg(&scope, address);
+    let owner = receiver(&scope, JsThis::from_f64(this.get()));
+    block_list(owner.get());
+    if let Some(ip) = socket_address_ip(address.get()) {
+        return block_list_add_subnet_ip(owner.get(), ip, prefix.get());
+    }
+    let address = string_arg(&scope, address.get());
     let family = string_arg(&scope, family.get());
     js_net_block_list_add_subnet(owner.get(), address.get(), prefix.get(), family.get())
 }

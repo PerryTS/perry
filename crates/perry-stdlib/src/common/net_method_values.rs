@@ -281,24 +281,7 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
     }
 
     let result = match method {
-        "addAddress" => {
-            let address = args.first().copied().map(str_arg).unwrap_or(0);
-            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_add_address(handle, address, family)
-        }
-        "addRange" => {
-            let start = args.first().copied().map(str_arg).unwrap_or(0);
-            let end = args.get(1).copied().map(str_arg).unwrap_or(0);
-            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_add_range(handle, start, end, family)
-        }
-        "addSubnet" => {
-            let address = args.first().copied().map(str_arg).unwrap_or(0);
-            let prefix = args.get(1).copied().unwrap_or_else(undefined);
-            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
-            js_net_block_list_add_subnet(handle, address, prefix, family)
-        }
-        "check" => {
+        "addAddress" | "addRange" | "addSubnet" | "check" => {
             extern "C-unwind" {
                 fn js_native_call_method(
                     object: f64,
@@ -315,8 +298,8 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
                 perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&rooted_args);
             js_native_call_method(
                 owner.get_nanbox_f64(),
-                b"check".as_ptr().cast(),
-                5,
+                method.as_ptr().cast(),
+                method.len(),
                 args.as_ptr(),
                 args.len(),
             )

@@ -295,10 +295,7 @@ pub unsafe extern "C" fn js_net_block_list_add_address(
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
-    block_list(owner.get()).rules.push(BlockRule::Address(ip));
-    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
-    undefined()
+    block_list_insert(owner.get(), BlockRule::Address(ip))
 }
 
 /// # Safety
@@ -315,15 +312,7 @@ pub unsafe extern "C" fn js_net_block_list_add_range(
     let owner = scope.root_addr(handle);
     let start = parse_ip(start_ptr, family_ptr);
     let end = parse_ip(end_ptr, family_ptr);
-    if !same_family(start, end) {
-        js_net_throw_invalid_address();
-    }
-    block_list(owner.get())
-        .rules
-        .push(BlockRule::Range(start, end));
-    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
-    undefined()
+    block_list_add_range_ip(owner.get(), start, end)
 }
 
 /// # Safety
@@ -339,14 +328,41 @@ pub unsafe extern "C" fn js_net_block_list_add_subnet(
     let scope = TransientRootScope::enter();
     let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
+    block_list_add_subnet_ip(owner.get(), ip, prefix)
+}
+
+unsafe fn block_list_insert(handle: i64, rule: BlockRule) -> f64 {
+    let state = block_list(handle);
+    state.rules.push(rule);
+    let bytes = state.rules.capacity() * std::mem::size_of::<BlockRule>();
+    np::set_external_bytes(boxed_handle(handle), &BLOCK_LIST_VTABLE, bytes);
+    undefined()
+}
+
+unsafe fn block_list_add_range_ip(handle: i64, start: IpAddr, end: IpAddr) -> f64 {
+    if !same_family(start, end) {
+        js_net_throw_invalid_address();
+    }
+    block_list_insert(handle, BlockRule::Range(start, end))
+}
+
+unsafe fn block_list_add_subnet_ip(handle: i64, ip: IpAddr, prefix: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let max = if ip.is_ipv4() { 32.0 } else { 128.0 };
     let prefix = js_net_validate_block_list_prefix(prefix, max) as u8;
-    block_list(owner.get())
-        .rules
-        .push(BlockRule::Subnet(ip, prefix));
-    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
-    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
-    undefined()
+    block_list_insert(owner.get(), BlockRule::Subnet(ip, prefix))
+}
+
+unsafe fn socket_address_ip(value: f64) -> Option<IpAddr> {
+    if np::lifecycle(value, &SOCKET_ADDRESS).is_err() {
+        return None;
+    }
+    Some(with_socket_address(
+        handle_from_value(value).unwrap_or(0),
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        |state| state.address,
+    ))
 }
 
 /// # Safety
@@ -390,12 +406,8 @@ unsafe fn block_list_check_boxed(receiver: f64, address: f64, family: f64) -> f6
     let receiver = scope.root_nanbox(receiver);
     let address = scope.root_nanbox(address);
     let family = scope.root_nanbox(family);
-    let ip = if np::lifecycle(address.get(), &SOCKET_ADDRESS).is_ok() {
-        with_socket_address(
-            handle_from_value(address.get()).unwrap_or(0),
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            |state| state.address,
-        )
+    let ip = if let Some(ip) = socket_address_ip(address.get()) {
+        ip
     } else {
         js_runtime_validate_string_arg(address.get(), b"address".as_ptr(), 7);
         let default_family = JsValue::from_bits(family.get().to_bits()).is_undefined();
