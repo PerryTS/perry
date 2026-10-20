@@ -531,7 +531,9 @@ impl Model {
                         + if self.bound_synth.contains(&call) { 200 } else { 0 }
                         + if self.cw9_nr.contains(&call) { 1000 } else if self.cw9_on.contains(&call) { 2000 } else if self.cw9_ok.contains(&call) { 3000 } else { 4000 }
                         + 10000 * match self.labels[cs.ret as usize] { "cb-ret" => 1, "b-iter-ret" => 2, "implicit-ret" => 3, "timer-ret" => 4, "bound-ret" => 5, "top-new" => 6, _ => 7 }
-                        + 100000 * if self.cur_call.is_some() { 1 } else { 0 };
+                        + 100000 * if self.cur_call.is_some() { 1 } else { 0 }
+                        + 1000000 * match self.cur_call { Some(o) if self.origin_of(o).is_some() => 1, Some(_) => 2, None => 0 }
+                        + 10000000 * match self.cur_call { Some(o) => match self.labels[self.calls[o as usize].ret as usize] { "cb-ret" => 1, "b-iter-ret" => 2, "implicit-ret" => 3, "timer-ret" => 4, "bound-ret" => 5, "top-new" => 6, _ => 7 }, None => 0 };
                     *self.cw9_shared.entry((tag, f, if o.is_some() { 1 } else if t.is_some() { 2 } else { 3 }, tf)).or_default() += 1;
                     (5, 0, ft)
                 }
