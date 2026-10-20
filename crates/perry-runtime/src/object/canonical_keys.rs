@@ -92,6 +92,9 @@ use crate::array::ArrayHeader;
 use crate::JSValue;
 use crate::StringHeader;
 
+mod static_seed;
+pub(crate) use static_seed::from_static_layout;
+
 /// Retain the image spelling of a confirmed equal key in its existing owner.
 /// This changes only a string's representation, never its value, position,
 /// attributes or layout. Heap-to-heap substitution preserves pointer masks.

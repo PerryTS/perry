@@ -1,0 +1,95 @@
+//! Initialize image layouts from their compiler-computed key hashes. The
+//! ordinary canonical trie remains the sole identity and lifetime authority.
+use super::*;
+use crate::object::layout_desc::PerryLayoutKey;
+
+/// Initialize canonical keys using immutable image hashes and one trie walk.
+/// Keep the generic initializer's allocation order, including duplicate lists:
+/// this isolates the startup saving from changes to the program's heap layout.
+/// Non-image and bound-symbol layouts retain the generic initializer.
+///
+/// # Safety
+/// Descriptors and their atoms are valid, with hashes matching their strings.
+/// GC must remain suppressed through this call, as for layout registration.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn from_static_layout(
+    _proof: &SharedLayout,
+    keys: &[PerryLayoutKey],
+    mapped: bool,
+) -> Option<CanonicalKeys> {
+    debug_assert!(crate::gc::gc_is_suppressed());
+    if keys.is_empty() {
+        return Some(CanonicalKeys::EMPTY);
+    }
+    if keys.iter().any(|key| {
+        key.atom.is_null()
+            || (*key.atom).kind != crate::codegen_abi::ATOM_KIND_STRING
+            || (*key.atom).string.is_null()
+            || !crate::string::is_image_string((*key.atom).string)
+    }) {
+        return None;
+    }
+    let token = |key: &PerryLayoutKey| {
+        u64::from(key.attrs)
+            | if mapped {
+                (u64::from(key.slot) + 1) << 8
+            } else {
+                0
+            }
+    };
+    let count = keys.len() as u32;
+    let fresh = crate::object::key_attrs::alloc_canonical_key_list(
+        count,
+        true,
+        mapped || keys.iter().any(|key| key.attrs != 0),
+    );
+    let values = crate::array::array_elements_ptr(fresh);
+    let attrs = crate::object::key_attrs::keys_attrs(fresh);
+    for (i, key) in keys.iter().enumerate() {
+        // GC_STORE_AUDIT(INIT): unpublished old backing, immutable image key;
+        // no old-to-young edge is installed and collection is suppressed.
+        *values.add(i) = JSValue::string_ptr((*key.atom).string.cast_mut()).bits();
+        if !attrs.is_null() {
+            crate::object::key_attrs::attrs_write(attrs, i as u32, key.attrs, &*key.atom);
+            if mapped {
+                crate::object::key_attrs::attrs_write_slot(attrs, i as u32, key.slot);
+            }
+        }
+    }
+    (*fresh).length = count;
+    stamp_shared(fresh);
+    Some(with_table_or(CanonicalKeys::new(fresh, count), |t| {
+        let mut parent = ROOT_NODE;
+        let mut missing = false;
+        for (i, key) in keys.iter().enumerate() {
+            let atom = &*key.atom;
+            let entry = token(key);
+            let hash = edge_hash_with_entry(atom.hash, entry);
+            if !missing {
+                if let Some(id) =
+                    probe_node(t, parent, i as u32, Appended::Key(atom.string), entry, hash)
+                {
+                    parent = id;
+                    continue;
+                }
+                // An absent edge makes its entire suffix absent. Every edge
+                // before this point has already been checked exactly once.
+                missing = true;
+            }
+            parent = t.alloc_node(fresh as usize, parent, hash, i as u32 + 1, true, false);
+        }
+        let node = &t.nodes[parent as usize];
+        if node.published {
+            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count);
+            t.note_reached(parent);
+            return existing;
+        }
+        t.publish(parent, fresh as usize, true);
+        t.own_backing(parent, count);
+        CanonicalKeys::new(fresh, count)
+    }))
+}
+
+#[cfg(test)]
+mod tests;

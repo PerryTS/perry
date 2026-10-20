@@ -810,6 +810,17 @@ unsafe fn register_bound(
     let _no_gc = crate::gc::GcSuppressScope::new();
     let list = if key_count == 0 {
         std::ptr::null_mut()
+    } else if let Some(canonical) = (!function)
+        .then(|| {
+            super::canonical_keys::from_static_layout(
+                &super::canonical_keys::SharedLayout::shape_cache_entry(),
+                keys,
+                mapped,
+            )
+        })
+        .flatten()
+    {
+        canonical.view().arr()
     } else {
         let list = super::key_attrs::alloc_canonical_key_list(
             key_count,
