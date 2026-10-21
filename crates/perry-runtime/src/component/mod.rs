@@ -1,12 +1,20 @@
 //! Perry's typed component boundary. Native engines and guest canonical
 //! adapters are optional; module code owns all JS roots and exceptions.
 mod callback;
+mod cleanup;
+mod command;
+
 mod context;
 mod guest;
 mod host;
+mod host_resource;
 mod resource;
 mod value;
 
+#[cfg(test)]
+mod cleanup_tests;
+#[cfg(test)]
+mod host_resource_tests;
 #[cfg(test)]
 mod tests;
 
@@ -116,15 +124,29 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
             };
         options = serde_json::to_vec(&options_value).unwrap();
         let wasi = options_value.get("wasi").is_some_and(Value::is_object);
-        let imports = scope.root_nanbox_f64(context::snapshot_imports(
-            &world,
-            imports.get_nanbox_f64(),
+        owner.set_nanbox_f64(context::publish(std::mem::take(&mut world), undefined()));
+        let built_imports = scope.root_nanbox_f64(
+            if crate::object::instanceof::value_is_callable(imports.get_nanbox_f64()) {
+                let args = [owner.get_nanbox_f64()];
+                unsafe {
+                    crate::closure::js_native_call_value(
+                        imports.get_nanbox_f64(),
+                        crate::closure::plain_call_receiver(),
+                        args.as_ptr(),
+                        1,
+                    )
+                }
+            } else {
+                imports.get_nanbox_f64()
+            },
+        );
+        let world = unsafe { &(*context::get(owner.get_nanbox_f64())).world };
+        let snapshot = scope.root_nanbox_f64(context::snapshot_imports(
+            world,
+            built_imports.get_nanbox_f64(),
             wasi,
         ));
-        owner.set_nanbox_f64(context::publish(
-            std::mem::take(&mut world),
-            imports.get_nanbox_f64(),
-        ));
+        context::set_imports(owner.get_nanbox_f64(), snapshot.get_nanbox_f64());
         let frame = callback::Frame::new(&scope, owner.get_nanbox_f64());
         // Copy guest bytes before callbacks can collect Perry's heap.
         wasm = crate::buffer::bytes::no_gc(|no_gc| {
@@ -142,6 +164,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
                 options.len(),
                 Some(callback::invoke),
                 Some(callback::free),
+                Some(callback::resource_invoke),
                 frame.token(),
                 &mut buffer,
             );
@@ -154,8 +177,26 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
         if let Some(error) = &error {
             fail(&String::from_utf8_lossy(error));
         }
+        cleanup::drain(owner.get_nanbox_f64());
         owner.get_nanbox_f64()
     });
+    let result = match result {
+        Err(error) if !JSValue::from_bits(owner.get_nanbox_f64().to_bits()).is_undefined() => {
+            let original = scope.root_nanbox_f64(error);
+            let _ = crate::exception::catch_js_throw(|| {
+                if unsafe { (*context::get(owner.get_nanbox_f64())).host.is_null() } {
+                    context::finish_disposal(
+                        owner.get_nanbox_f64(),
+                        perry_abi::component_host::RELEASED_ERROR,
+                    );
+                } else {
+                    js_component_dispose(owner.get_nanbox_f64());
+                }
+            });
+            Err(original.get_nanbox_f64())
+        }
+        result => result,
+    };
     drop((contract, world, wasm, options, options_value, error));
     finish(result)
 }
@@ -180,7 +221,11 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
         if unsafe { (*context).host.is_null() } {
             fail("Component is not initialized");
         }
-        args = serde_json::to_vec(&value::encode(args_input.get_nanbox_f64())).unwrap();
+        args = serde_json::to_vec(&value::encode_for(
+            args_input.get_nanbox_f64(),
+            owner.get_nanbox_f64(),
+        ))
+        .unwrap();
         let mut buffer = Buffer::default();
         let status = unsafe {
             (host::ops().perry_component_host_call)(
@@ -216,7 +261,7 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
         }
     });
     drop((interface, function, args, output, parsed));
-    finish(result)
+    cleanup::finish_call(owner.get_nanbox_f64(), result)
 }
 
 #[no_mangle]
@@ -233,8 +278,13 @@ pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
         error = unsafe { take(buffer) };
         // A destructor may have thrown in a JS import. Its exception is
         // rooted by frame, so sever imports before rethrowing that value.
-        context::finish_disposal(frame.owner.get_nanbox_f64(), status);
+        let cleanup = crate::exception::catch_js_throw(|| {
+            context::finish_disposal(frame.owner.get_nanbox_f64(), status)
+        });
         frame.rethrow();
+        if let Err(error) = cleanup {
+            crate::exception::js_throw(error);
+        }
         if status != perry_abi::component_host::OK {
             fail(&String::from_utf8_lossy(&error));
         }
@@ -253,3 +303,12 @@ static KEEP_CALL: extern "C" fn(f64, f64, f64, f64) -> f64 = js_component_call;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_DISPOSE: extern "C" fn(f64) -> f64 = js_component_dispose;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_HOST_RESOURCE_CREATE: extern "C" fn(f64, f64, f64, f64) -> f64 =
+    host_resource::payload::js_component_host_resource_create;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_HOST_RESOURCE_VALUE: extern "C" fn(f64, f64, f64) -> f64 =
+    host_resource::js_component_host_resource_value;

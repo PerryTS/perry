@@ -200,12 +200,16 @@ fn validate_option_chunk_size(ptr: *const crate::object::ObjectHeader) {
 /// `min_window_bits` is the lower `windowBits` bound, which differs by codec:
 /// gzip compression requires `>= 9`, every other codec accepts `>= 8`.
 ///
-/// The field order matches Node exactly (`windowBits`, `level`, `memLevel`,
-/// `strategy`, `chunkSize`, `flush`) so that an object with several bad options
-/// reports the same first offender Node does.
+/// Preserve the existing ranged-option order (`windowBits`, `level`,
+/// `memLevel`, `strategy`, `chunkSize`, `flush`) before validating `dictionary`.
+/// A present `dictionary` must have a public Buffer/TypedArray/DataView or
+/// ArrayBuffer brand. Valid dictionaries still follow the deferred-application
+/// warning path; validation does not apply a preset dictionary to the codec.
 #[no_mangle]
 pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
-    let jv = crate::value::JSValue::from_bits(opts.to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let jv = crate::value::JSValue::from_bits(opts.get_nanbox_f64().to_bits());
     if !jv.is_pointer() {
         return;
     }
@@ -213,27 +217,45 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return;
     }
+    // Each property read may allocate or invoke a getter. Recover the current
+    // address from the root rather than carrying a pointer across those reads.
+    let options_ptr = || {
+        crate::value::JSValue::from_bits(opts.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::object::ObjectHeader>()
+    };
 
     validate_option_range(
-        ptr,
+        options_ptr(),
         b"windowBits",
         "options.windowBits",
         min_window_bits as i64,
         15,
     );
-    validate_option_range(ptr, b"level", "options.level", -1, 9);
-    validate_option_range(ptr, b"memLevel", "options.memLevel", 1, 9);
-    validate_option_range(ptr, b"strategy", "options.strategy", 0, 4);
-    validate_option_chunk_size(ptr);
-    validate_option_range(ptr, b"flush", "options.flush", 0, 5);
+    validate_option_range(options_ptr(), b"level", "options.level", -1, 9);
+    validate_option_range(options_ptr(), b"memLevel", "options.memLevel", 1, 9);
+    validate_option_range(options_ptr(), b"strategy", "options.strategy", 0, 4);
+    validate_option_chunk_size(options_ptr());
+    validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5);
 
     // #4917: `level` is honored and the ranged options above are validated,
     // but a preset `dictionary` is not threaded through flate2. Silently
     // dropping it would mis-compress against peers that expect it to apply,
     // so warn once instead.
-    let dict = read_option_field(ptr, b"dictionary");
-    let dv = crate::value::JSValue::from_bits(dict.to_bits());
-    if !dv.is_undefined() && !dv.is_null() {
+    let dict = scope.root_nanbox_f64(read_option_field(options_ptr(), b"dictionary"));
+    let value = dict.get_nanbox_f64();
+    if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        // Public byte brands, not every cell backed by BufferHeader storage.
+        // Dictionaries accept ArrayBuffer too; CRC32 intentionally does not.
+        if crate::object::view_brand::view_brand(value).is_none()
+            && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
+                != Some(crate::buffer::BufferBrand::ArrayBuffer)
+        {
+            crate::validators::throw_invalid_arg_type(
+                "options.dictionary",
+                "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+                dict.get_nanbox_f64(),
+            );
+        }
         crate::stub_diag::perry_stub_warn(
             "zlib options.dictionary",
             "the preset dictionary option is accepted but not applied",

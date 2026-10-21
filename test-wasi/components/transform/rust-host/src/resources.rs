@@ -150,6 +150,62 @@ pub(super) fn run_dual(store: &mut Store<State>, instance: &Instance) -> Result<
     Ok(())
 }
 
+fn run_cleanup(store: &mut Store<State>, instance: &Instance) -> Result<()> {
+    let result = call(store, instance, "start-cleanup", &[], 1)?;
+    let Val::Resource(returned) = result[0] else {
+        anyhow::bail!("cleanup probe did not return its live owner");
+    };
+    for _ in 0..2 {
+        call(store, instance, "sweep-cleanup", &[], 0)?;
+    }
+    for tag in ["foreign:601", "guest:602", "foreign:604", "foreign:605"] {
+        ensure!(
+            store.data().logs.iter().filter(|v| *v == tag).count() == 1,
+            "missing or repeated deferred/explicit drop: {tag}: {:?}",
+            store.data().logs
+        );
+    }
+    for tag in ["foreign:603", "guest:606", "guest:607"] {
+        ensure!(
+            !store.data().logs.iter().any(|v| v == tag),
+            "premature drop: {tag}"
+        );
+    }
+    ensure!(
+        call(store, instance, "check-cleanup-borrows", &[], 1)? == [Val::Bool(true)],
+        "a live borrow did not retain its owner"
+    );
+    call(store, instance, "release-cleanup-borrows", &[], 0)?;
+    call(store, instance, "sweep-cleanup", &[], 0)?;
+    ensure!(
+        call(store, instance, "[method]counter.read", &result, 1)? == [Val::U32(607)],
+        "a late finalizer destroyed the returned canonical owner"
+    );
+    store.set_fuel(RESOURCE_FUEL)?;
+    returned.resource_drop(&mut *store)?;
+    call(store, instance, "sweep-cleanup", &[], 0)?;
+    for tag in [
+        "foreign:601",
+        "guest:602",
+        "foreign:603",
+        "foreign:604",
+        "foreign:605",
+        "guest:606",
+        "guest:607",
+    ] {
+        ensure!(
+            store.data().logs.iter().filter(|v| *v == tag).count() == 1,
+            "cleanup lifecycle must destroy each owner once: {tag}: {:?}",
+            store.data().logs
+        );
+    }
+    ensure!(
+        store.data().logs.len() == 62,
+        "unexpected cleanup destructor count"
+    );
+    Ok(())
+}
+
 pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {
     store.set_fuel(RESOURCE_FUEL)?;
     let host_token = store.data_mut().table.push(Token(77))?;
@@ -220,6 +276,7 @@ pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {
         store.data().logs.len() == 55 && store.data().logs.last().unwrap() == "guest:7",
         "duplicate or missing destructor"
     );
+    run_cleanup(store, instance)?;
     let results = call(store, instance, "[constructor]counter", &[Val::U32(13)], 1)?;
     let Val::Resource(resource) = results[0] else {
         anyhow::bail!("missing trap resource");
@@ -236,9 +293,9 @@ pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {
         "expected the adapter trap after the JS destructor throws, got {error:#}"
     );
     ensure!(
-        store.data().logs.len() == 55,
+        store.data().logs.len() == 62,
         "trapping destructor unexpectedly notified host"
     );
-    println!("PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 destructions, trap");
+    println!("PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 explicit destructions, deferred cleanup, trap");
     Ok(())
 }

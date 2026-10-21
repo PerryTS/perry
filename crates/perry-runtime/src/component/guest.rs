@@ -14,6 +14,10 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 static GUEST_OPS: AtomicPtr<ComponentGuestOps> = AtomicPtr::new(std::ptr::null_mut());
 
+/// # Safety
+/// A non-null table and its contract bytes must be immutable and valid for the
+/// image lifetime. Generated adapters supply static image data and code
+/// addresses; neither the table nor its fields may reference Perry's GC heap.
 #[no_mangle]
 pub unsafe extern "C" fn js_component_set_guest_ops(ops: *const ComponentGuestOps) -> i32 {
     if ops.is_null()

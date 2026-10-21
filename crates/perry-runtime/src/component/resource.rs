@@ -2,8 +2,8 @@
 //! The engine remains authoritative for ownership, type and call lifetimes.
 use super::*;
 use crate::object::owned_state_bag::{
-    self as bag, COMPONENT_RESOURCE_OWNER as OWNER, COMPONENT_RESOURCE_STATE as STATE,
-    COMPONENT_RESOURCE_TOKEN as TOKEN,
+    self as bag, COMPONENT_RESOURCE_OWNER as OWNER, COMPONENT_RESOURCE_PARENT as PARENT,
+    COMPONENT_RESOURCE_STATE as STATE, COMPONENT_RESOURCE_TOKEN as TOKEN,
 };
 
 fn load(resource: f64, slot: u32) -> f64 {
@@ -70,6 +70,11 @@ pub(super) fn wrap(owner: f64, token: &str, owned: bool) -> f64 {
             );
             set_field(resource.get_nanbox_f64(), name.as_bytes(), value);
         }
+        cleanup::register(
+            owner.get_nanbox_f64(),
+            resource.get_nanbox_f64(),
+            serde_json::json!({"kind":"guest", "token":string(token.get_nanbox_f64())}),
+        );
     }
     resource.get_nanbox_f64()
 }
@@ -84,7 +89,10 @@ extern "C" fn borrow(
         fail("Component resource is not owned");
     }
     let token = string(load(resource.get_nanbox_f64(), TOKEN));
-    wrap(load(resource.get_nanbox_f64(), OWNER), &token, false)
+    let borrowed =
+        scope.root_nanbox_f64(wrap(load(resource.get_nanbox_f64(), OWNER), &token, false));
+    store(borrowed.get_nanbox_f64(), PARENT, resource.get_nanbox_f64());
+    borrowed.get_nanbox_f64()
 }
 
 extern "C" fn dispose(
@@ -122,6 +130,7 @@ extern "C" fn dispose(
             perry_abi::component_host::OK | perry_abi::component_host::RELEASED_ERROR
         ) {
             store(resource.get_nanbox_f64(), STATE, 2.0);
+            cleanup::unregister(frame.owner.get_nanbox_f64(), resource.get_nanbox_f64());
         }
         frame.rethrow();
         if status != perry_abi::component_host::OK {
@@ -130,5 +139,5 @@ extern "C" fn dispose(
         undefined()
     });
     drop((token, error));
-    finish(result)
+    cleanup::finish_call(frame.owner.get_nanbox_f64(), result)
 }

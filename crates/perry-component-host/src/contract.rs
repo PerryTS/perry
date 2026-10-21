@@ -7,7 +7,12 @@ use wasmtime::Engine;
 /// Validate the selected world before instantiation can execute component code.
 /// Names are looked up exactly, so loading a different interface version cannot
 /// silently substitute a semver-compatible overload from the linker.
-pub(crate) fn validate(engine: &Engine, component: &Component, world: &World) -> Result<()> {
+pub(crate) fn validate(
+    engine: &Engine,
+    component: &Component,
+    world: &World,
+    wasi_enabled: bool,
+) -> Result<()> {
     ensure!(
         world.schema_version == SCHEMA_VERSION,
         "unsupported WIT manifest version"
@@ -26,10 +31,10 @@ pub(crate) fn validate(engine: &Engine, component: &Component, world: &World) ->
         resources: BTreeMap::new(),
     };
     checker
-        .interfaces(engine, &world.imports, &imports)
+        .interfaces(engine, &world.imports, &imports, wasi_enabled)
         .context("component imports do not match WIT")?;
     checker
-        .interfaces(engine, &world.exports, &exports)
+        .interfaces(engine, &world.exports, &exports, false)
         .context("component exports do not match WIT")
 }
 
@@ -44,8 +49,22 @@ impl Checker<'_> {
         engine: &Engine,
         expected: &[Interface],
         actual: &BTreeMap<String, ComponentItem>,
+        prune_wasi_imports: bool,
     ) -> Result<()> {
         for interface in expected {
+            // Componentization removes unused WASI imports. Providers supply
+            // the full interface, so an unused member need not remain in the
+            // binary. Application contracts and all exports stay strict.
+            let pruned = prune_wasi_imports && interface.name.starts_with("wasi:");
+            if pruned && !actual.contains_key(&interface.name) {
+                let family = interface.name.split('@').next();
+                ensure!(
+                    !actual.keys().any(|name| name.split('@').next() == family),
+                    "missing interface {} (component requires a different version)",
+                    interface.name
+                );
+                continue;
+            }
             let items;
             let actual = if interface.name.is_empty() {
                 actual
@@ -63,12 +82,18 @@ impl Checker<'_> {
                 &items
             };
             for (name, key) in &interface.resources {
+                if pruned && !actual.contains_key(name) {
+                    continue;
+                }
                 let Some(ComponentItem::Resource(ty)) = actual.get(name) else {
                     bail!("missing resource {name}");
                 };
                 self.resource(key, *ty)?;
             }
             for function in &interface.functions {
+                if pruned && !actual.contains_key(&function.name) {
+                    continue;
+                }
                 self.function(
                     function,
                     actual

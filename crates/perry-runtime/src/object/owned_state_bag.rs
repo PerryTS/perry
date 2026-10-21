@@ -16,6 +16,11 @@ pub(crate) const COMPONENT_GUEST: u32 = 13;
 pub(crate) const COMPONENT_GUEST_RESOURCES: u32 = 14;
 pub(crate) const COMPONENT_GUEST_NEXT_RESOURCE: u32 = 15;
 pub(crate) const COMPONENT_GUEST_RESOURCE: u32 = 16;
+pub(crate) const COMPONENT_HOST_RESOURCES: u32 = 17;
+pub(crate) const COMPONENT_HOST_NEXT_RESOURCE: u32 = 18;
+pub(crate) const COMPONENT_HOST_RESOURCE: u32 = 19;
+pub(crate) const COMPONENT_FINALIZATION: u32 = 20;
+pub(crate) const COMPONENT_RESOURCE_PARENT: u32 = 21;
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();

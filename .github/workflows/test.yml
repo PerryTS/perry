@@ -402,6 +402,7 @@ jobs:
           python3 scripts/ci_plan.py --self-test
           python3 scripts/ci_pr_files.py --self-test
           python3 scripts/test_actions_plan.py
+          python3 scripts/test_component_network_peer.py
           python3 scripts/test_delete_retired_workflow_runs.py
           python3 scripts/check_actions_topology.py
           python3 scripts/test_release_gate_runs.py

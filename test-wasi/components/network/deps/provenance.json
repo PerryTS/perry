@@ -1,0 +1,11 @@
+{
+  "source": "wasmtime-wasi 48.0.5 crates.io source archive",
+  "path": "src/p2/wit/deps",
+  "interfaceVersion": "0.2.12",
+  "modified": false,
+  "sha256": {
+    "clocks.wit": "6ed8aa65bb8cbe224a0b2cbac9fc1b3bd25bdb17eda5ae0d23c983ed31c447cc",
+    "io.wit": "96e206d00076fa0480df32c5bcf255a3fa4862805ac2f6b8537a781cce54f433",
+    "sockets.wit": "ad38dbf3b0bbdf34c0f2b608edcbfee04d71b443a63faff1f5e0053c3f84b377"
+  }
+}

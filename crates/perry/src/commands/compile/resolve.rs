@@ -172,6 +172,8 @@ mod bun_store_tests;
 #[cfg(test)]
 mod declaration_map_source_tests;
 #[cfg(test)]
+mod exports_subpath_source_tests;
+#[cfg(test)]
 mod extension_resolution_tests;
 #[cfg(test)]
 mod package_enumeration_tests;
@@ -955,12 +957,26 @@ pub(super) fn resolve_package_source_entry(
         }
     }
 
-    // For subpaths, try src/<subpath>.ts first. If that shorthand does not
-    // exist, respect package.json "exports" for the subpath before considering
-    // the package root. Falling back to src/index.ts for a subpath misroutes
-    // imports like `@tanstack/router-core/isServer` to the root barrel and
-    // leaves callers linked against symbols that the root never exports.
+    // For subpaths, a package.json "exports" entry that names the subpath is
+    // authoritative, as in Node and Bun: when it points at TypeScript source,
+    // or at an emit whose source mirror exists, that file is the module.
+    // `@opencode/tui` maps `./mini/tool` to `src/mini/tool.public.ts` next to
+    // an unrelated `src/mini/tool.ts`; guessing `src/<subpath>` first bound
+    // importers to the wrong file. The `src/<subpath>` shorthand is only a
+    // fallback for a subpath whose exports target is JS with no source
+    // mirror, or that exports does not define. Falling back to src/index.ts
+    // for a subpath misroutes imports like `@tanstack/router-core/isServer`
+    // to the root barrel and leaves callers linked against symbols that the
+    // root never exports.
     if let Some(sub) = subpath {
+        if package_exports_define(package_dir, &format!("./{sub}")) {
+            if let Some(source) = normal_entry
+                .clone()
+                .and_then(|entry| prefer_ts_source_for_package_entry(package_dir, entry))
+            {
+                return Some(source);
+            }
+        }
         let src_path = package_dir.join("src").join(sub);
         if let Some(resolved) = resolve_with_extensions(&src_path) {
             if !is_js_file(&resolved) && !is_hybrid_cjs_emit_input(&resolved) {
@@ -983,6 +999,26 @@ pub(super) fn resolve_package_source_entry(
     // Try using normal entry resolution but prefer TS over JS
     let normal_entry = normal_entry?;
     prefer_ts_source_for_package_entry(package_dir, normal_entry)
+}
+
+/// True when the package.json `exports` field of `package_dir` is a subpath
+/// map (keys start with `.`) with an entry for `export_key`, exact or by
+/// pattern. The sugar forms (a string, an array or a condition object) only
+/// define the package root `.`.
+fn package_exports_define(package_dir: &Path, export_key: &str) -> bool {
+    let Ok(content) = fs::read_to_string(package_dir.join("package.json")) else {
+        return false;
+    };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let Some(exports) = pkg.get("exports") else {
+        return false;
+    };
+    let is_subpath_map = exports
+        .as_object()
+        .is_some_and(|map| map.keys().all(|key| key.starts_with('.')));
+    is_subpath_map && !resolve_exports_candidates(exports, export_key).is_empty()
 }
 
 fn prefer_ts_source_for_package_entry(

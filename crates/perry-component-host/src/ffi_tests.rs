@@ -10,6 +10,7 @@ struct State {
     calls: usize,
     reject: bool,
     reentry_rejected: bool,
+    cleanup_deferred: bool,
 }
 
 unsafe extern "C" fn free_reply(buffer: Buffer) {
@@ -43,6 +44,16 @@ unsafe extern "C" fn callback(
     state.reentry_rejected = status == ERROR
         && String::from_utf8_lossy(bytes(error.data, error.len).unwrap()).contains("re-entered");
     perry_component_host_buffer_drop(error);
+    let request = br#"{"kind":"guest","token":"not-live"}"#;
+    let mut cleanup = Buffer::default();
+    state.cleanup_deferred = perry_component_host_resource_collect(
+        state.host,
+        request.as_ptr(),
+        request.len(),
+        context,
+        &mut cleanup,
+    ) == perry_abi::component_host::DEFERRED;
+    assert!(cleanup.data.is_null());
     if state.reject {
         output(reply, b"expected import failure".to_vec());
         ERROR
@@ -90,6 +101,7 @@ fn callback_buffers_errors_reentry_and_disposal_cross_the_c_boundary() {
             0,
             Some(callback),
             Some(free_reply),
+            None,
             &mut state as *mut State as usize as u64,
             &mut error,
         );
@@ -106,6 +118,7 @@ fn callback_buffers_errors_reentry_and_disposal_cross_the_c_boundary() {
             json!({"returned":true,"value":input})
         );
         assert!(state.reentry_rejected);
+        assert!(state.cleanup_deferred);
         // A rejected nested call must not leave the bridge busy.
         assert_eq!(call(&mut state, "returned", json!([])).0, OK);
         state.reject = true;
@@ -144,6 +157,7 @@ fn malformed_input_returns_an_owned_error_buffer() {
             2,
             std::ptr::null(),
             0,
+            None,
             None,
             None,
             0,
@@ -188,6 +202,7 @@ fn destructor_failure_reports_whether_the_store_or_resource_was_released() {
                 0,
                 Some(failing_destructor),
                 Some(perry_component_host_buffer_drop),
+                None,
                 1,
                 &mut reply,
             );

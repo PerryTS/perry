@@ -164,7 +164,18 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function("js_component_run_command", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_component_dispose", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_component_host_resource_create",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_component_host_resource_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_component_resource_create",
         DOUBLE,

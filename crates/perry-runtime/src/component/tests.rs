@@ -41,6 +41,34 @@ fn structured_values_preserve_bigint_nested_options_and_typed_bytes() {
     }
 }
 
+#[test]
+fn inline_short_strings_cross_the_component_boundary_in_nested_options() {
+    let scope = RuntimeHandleScope::new();
+    let options = object(&scope);
+    let wasi = object(&scope);
+    let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(4));
+    for (index, text) in ["", "0", "23", "hello"].iter().enumerate() {
+        let value = JSValue::try_short_string(text.as_bytes()).unwrap();
+        assert!(value.is_short_string());
+        assert_eq!(value::encode(f64::from_bits(value.bits())), json!(text));
+        crate::array::js_array_set_f64(
+            args.get_raw_mut_ptr(),
+            index as u32,
+            f64::from_bits(value.bits()),
+        );
+    }
+    set_field(
+        wasi.get_nanbox_f64(),
+        b"args",
+        crate::value::js_nanbox_pointer(args.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64),
+    );
+    set_field(options.get_nanbox_f64(), b"wasi", wasi.get_nanbox_f64());
+    assert_eq!(
+        value::encode(options.get_nanbox_f64()),
+        json!({"wasi":{"args":["", "0", "23", "hello"]}})
+    );
+}
+
 extern "C-unwind" fn throwing_getter(
     _: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,

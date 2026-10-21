@@ -29,6 +29,13 @@ export interface OwnedResource<T extends string> extends BorrowedResource<T> {
 export function loadComponent(bytes: Uint8Array, contract: string, imports: unknown, options?: ComponentOptions): ComponentHandle;
 export function callComponent(handle: ComponentHandle, interfaceName: string, functionName: string, args: unknown[]): unknown;
 export function disposeComponent(handle: ComponentHandle): void;
+/** Execute a WASI P2 command once in an isolated native store, then release it.
+ * Returns 0/1 for wasi:cli/run's ok/err and preserves explicit WASI exit codes.
+ * Guest exit never terminates Perry. Invalid components, traps and exhausted
+ * limits throw ERR_COMPONENT. No WIT bindings or application imports are needed.
+ * Omitting options.wasi enables providers with the grants of wasi: {}.
+ * Fuel bounds guest instructions, not time spent in blocking host I/O. */
+export function runComponentCommand(bytes: Uint8Array, options?: ComponentOptions): number;
 /** Registers the exports of a Perry-authored library component. */
 export function registerComponentExports(contract: string, exports: unknown): void;
 export function callComponentImport(interfaceName: string, functionName: string, args: unknown[]): unknown;
@@ -58,3 +65,8 @@ export interface WasiOptions {
  * The type identity is generated from the component's WIT world. */
 export function createComponentResource<T extends string>(type: number, payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<T>;
 export function getComponentResourceValue<T extends string>(type: number, resource: BorrowedResource<T>): unknown;
+
+/** Native host resource operations. Generated load() builders supply factories
+ * bound to the component instance and canonical WIT resource type. */
+export function createComponentHostResource<T extends string>(handle: ComponentHandle, type: string, payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<T>;
+export function getComponentHostResourceValue<T extends string>(handle: ComponentHandle, type: string, resource: BorrowedResource<T>): unknown;

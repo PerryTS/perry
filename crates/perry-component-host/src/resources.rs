@@ -61,6 +61,10 @@ impl Resources {
             .context("resource is disposed, transferred, or belongs to another component")
     }
 
+    pub fn owns(&self, id: &str) -> bool {
+        self.entries.get(id).is_some_and(ResourceAny::owned)
+    }
+
     pub fn transferred(&mut self, ids: &BTreeSet<String>) {
         for id in ids {
             self.entries.remove(id);
