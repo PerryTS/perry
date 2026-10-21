@@ -301,6 +301,31 @@ pub(crate) unsafe fn call_entry_cells(
     this: JsThis,
     args: &[std::cell::UnsafeCell<f64>],
 ) -> f64 {
+    call_entry_raw(callee, entry, this, args.as_ptr(), args.len())
+}
+
+/// A compiled plain entry loads its input values before calling its operation.
+/// Before that call it does no materialization and never rewrites the vector,
+/// so a borrowed slice needs no mutable staging. The immutable record must
+/// prove the entry has no rest/arguments bundle before taking this path.
+#[inline(always)]
+pub(crate) unsafe fn call_entry_plain_slice(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: &[f64],
+) -> f64 {
+    call_entry_raw(callee, entry, this, args.as_ptr().cast(), args.len())
+}
+
+#[inline(always)]
+unsafe fn call_entry_raw(
+    callee: *const crate::closure::ClosureHeader,
+    entry: *const u8,
+    this: JsThis,
+    args: *const std::cell::UnsafeCell<f64>,
+    count: usize,
+) -> f64 {
     #[cfg(panic = "abort")]
     let body = std::mem::transmute::<
         *const u8,
@@ -316,7 +341,7 @@ pub(crate) unsafe fn call_entry_cells(
             usize,
         ) -> f64,
     >(entry);
-    body(callee, this, args.as_ptr(), args.len())
+    body(callee, this, args, count)
 }
 
 /// Stage a borrowed runtime argument slice in caller-owned mutable cells.

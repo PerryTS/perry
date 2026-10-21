@@ -280,6 +280,9 @@ pub(super) unsafe fn dispatch_body_slice(
     args: &[f64],
 ) -> f64 {
     if let Some(entry) = info.call_entry() {
+        if info.flags & FN_REST_MASK == 0 {
+            return crate::closure::body_call::call_entry_plain_slice(closure, entry, this, args);
+        }
         return crate::closure::body_call::call_entry_slice(closure, entry, this, args);
     }
     match resolve_strategy(info).kind() {

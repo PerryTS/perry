@@ -175,6 +175,9 @@ mod tests {
         assert_eq!(ir.matches("icmp ugt i64 %entry_count").count(), 3, "{ir}");
         assert_eq!(ir.matches("select i1").count(), 3, "{ir}");
         assert!(ir.contains("call double @operation(i64"), "{ir}");
+        // Runtime vector callers borrow their plain input slice until this
+        // one operation call: all values must be loaded before any call.
+        assert_eq!(ir.matches("call ").count(), 1, "{ir}");
         assert!(!ir.contains("@dispatch_with_arity"), "{ir}");
     }
 
