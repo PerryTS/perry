@@ -77,6 +77,10 @@ fn private_layouts_stay_proven() {
 
 /// Several modules, one unit each; `./x` imports resolve to `x.ts`.
 fn units_of(mods: &[(&str, &str)]) -> ProgramFacts {
+    units_with(mods, &FactsConfig::default())
+}
+
+fn units_with(mods: &[(&str, &str)], cfg: &FactsConfig) -> ProgramFacts {
     let hirs: Vec<(String, perry_hir::Module)> = mods
         .iter()
         .map(|(name, src)| {
@@ -92,7 +96,7 @@ fn units_of(mods: &[(&str, &str)]) -> ProgramFacts {
         })
         .collect();
     let list: Vec<(String, &perry_hir::Module)> = hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    crate::compute_units(&list, &FactsConfig::default())
+    crate::compute_units(&list, cfg)
 }
 
 #[test]
@@ -1197,4 +1201,49 @@ fn a_literal_passed_to_a_closed_function_carries_its_field_functions() {
     // reaches escapes). It still gets parameter markers then: the
     // `fn_contract_of` debug assertion checks every contract function's
     // parameters carry them (sabotage arm 76).
+}
+
+#[test]
+fn parallel_levels_give_the_serial_facts() {
+    // Decision 32: `z` and `b` import nothing (level 0), `c` and `e` import
+    // only `z` (level 1), `m` imports `c` (level 2). A level is solved in parallel against one frozen
+    // input: the facts are those of the serial solve, and `z`'s contract
+    // still reaches its importers (the call in `c` is proven through it).
+    let mods = [
+        ("z", DUAL),
+        ("b", "export const k = 2;"),
+        ("c", "import { D } from './z'; const d = new D([3]); console.log(d.has(3)); export const n = 3;"),
+        ("e", "import { D } from './z'; const d = new D([4]); console.log(d.has(4));"),
+        ("m", "import { D } from './z'; import { k } from './b'; import { n } from './c'; console.log(new D([k, n]).has(5));"),
+    ];
+    let run = |jobs| {
+        let pf = units_with(&mods, &FactsConfig { jobs, ..FactsConfig::default() });
+        let facts = format!("{:?}\n{:?}\n{:?} {:?} {}", pf.templates, pf.sites, pf.broken, pf.round_work, pf.rounds);
+        (facts, pf)
+    };
+    let (serial, _) = run(1);
+    let (parallel, pf) = run(4);
+    let ci = pf.module_paths.iter().position(|p| p == "c.ts").unwrap() as u32;
+    let site = pf.sites.iter().find(|s| s.module == ci && s.key == "has").expect("the call in c");
+    assert_eq!(site.verdict, Verdict::T0Mono, "{}", pf.dump_text());
+    assert!(pf.broken.is_empty(), "{}", pf.dump_text());
+    assert_eq!(serial, parallel);
+}
+
+#[test]
+fn the_object_key_follows_what_an_importer_observes() {
+    // Design §13.2: a module's object-cache key (`digest_for`) holds the
+    // templates its sites observe, contracted imports included. A layout
+    // change in `a` that `m` reads changes `m`'s key; an edit `m` does not
+    // observe keeps it, so `m`'s object is reused.
+    let user = "import { P } from './a'; const p = new P(); console.log(p.x);";
+    let a = "export class P { x: number; constructor() { this.x = 1; } }\n";
+    let grown = "export class P { x: number; y: number; constructor() { this.x = 1; this.y = 2; } }\n";
+    let other = format!("{a}export function helper() {{ const o = {{ k: 1 }}; return o.k; }}\n");
+    let base = units_of(&[("a", a), ("m", user)]);
+    let grown = units_of(&[("a", grown), ("m", user)]);
+    let other = units_of(&[("a", &other), ("m", user)]);
+    assert_ne!(base.digest_for("a.ts"), other.digest_for("a.ts"), "{}", other.dump_text());
+    assert_ne!(base.digest_for("m.ts"), grown.digest_for("m.ts"), "{}", grown.dump_text());
+    assert_eq!(base.digest_for("m.ts"), other.digest_for("m.ts"), "{}", other.dump_text());
 }

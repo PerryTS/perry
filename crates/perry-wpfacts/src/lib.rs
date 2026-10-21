@@ -78,6 +78,13 @@ pub struct FactsConfig {
     /// The modules are one unit of a larger program: every other unit is
     /// unknown compiled code (`Gen::unit_boundary`).
     pub unit: bool,
+    /// Decision 32: threads for the per-unit driver's dependency levels
+    /// (0 and 1 solve on the calling thread). The facts are the same at
+    /// every count.
+    pub jobs: usize,
+    /// Per-unit inputs/outputs digests in the dump (`# uio` / `# uout`):
+    /// what an edit changes, unit by unit (design §13.3).
+    pub unit_io: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -147,6 +154,8 @@ pub struct ProgramFacts {
     pub bindings: Vec<ModuleBindings>,
     /// Per-unit mode: each unit's path and statistics.
     pub units: Vec<(String, Stats)>,
+    /// `FactsConfig::unit_io`: the `# uio` / `# uout` dump lines.
+    pub unit_io: Vec<String>,
     /// Per-unit mode: driver rounds (1 + census re-solves) and the classes
     /// the census broke (design §11.3).
     pub rounds: u32,
@@ -1129,6 +1138,7 @@ pub(crate) fn compute_in<'a>(
         tok_names,
         bindings,
         units: Vec::new(),
+        unit_io: Vec::new(),
         rounds: 0,
         broken: Vec::new(),
         round_work: Vec::new(),

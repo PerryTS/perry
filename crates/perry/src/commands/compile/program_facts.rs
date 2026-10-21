@@ -122,6 +122,10 @@ pub(crate) fn run(
                 .into()
         }),
         unit: false,
+        // Decision 32: the one unit-jobs setting (`PERRY_CODEGEN_UNIT_JOBS`,
+        // else the budget's CPU slots, else cores bounded by memory).
+        jobs: perry_codegen::workers::unit_workers(),
+        unit_io: dump.is_some(),
     };
     let list: Vec<(String, &perry_hir::Module)> = modules
         .iter()

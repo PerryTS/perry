@@ -4,10 +4,10 @@
 use crate::derive::{TemplateFacts, Verdict};
 use crate::ProgramFacts;
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+pub(crate) const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-fn fnv(h: &mut u64, s: &str) {
+pub(crate) fn fnv(h: &mut u64, s: &str) {
     for b in s.as_bytes() {
         *h ^= *b as u64;
         *h = h.wrapping_mul(FNV_PRIME);
@@ -20,7 +20,7 @@ fn b(v: bool) -> u8 {
     v as u8
 }
 
-fn template_lines(t: &TemplateFacts) -> Vec<String> {
+pub(crate) fn template_lines(t: &TemplateFacts) -> Vec<String> {
     let mut v = vec![format!(
         "T {} kind={} class_id={} prefix_stable={} fixed_layout={} adds_keys={} birth=[{}] escape=\"{}\" hard=\"{}\" chain=\"{}\"",
         t.display,
@@ -118,6 +118,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
             u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.aborted
         ));
+    }
+    for l in &pf.unit_io {
+        out.push_str(l);
+        out.push('\n');
     }
     out.push_str(&format!(
         "# interp_guard {}\n",
