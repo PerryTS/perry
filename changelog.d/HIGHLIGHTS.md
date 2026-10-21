@@ -66,13 +66,13 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - A front-end prefetch (#12705) moved the tsc front end from 43.9 s to 35.9 s with byte-identical objects (#12728).
 - The whole-program analysis is computed faster (#12686). The per-module object cache and the completed-build cache share one compile-environment identity (#12582), and cached units are checkpointed atomically (#9997).
 - Compile memory is released across phase boundaries (#12813), class analysis is bounded by graph distance (#12814), and lowering inputs and function source text are released or shared instead of cloned (#12916).
-- Compiling opencode now fits in about 30 GB, down from 140 GB: one walk per IIFE body and one shared type-alias map.
-- Large links go through a response file on every host, so very big programs no longer hit command-line length limits.
+- Compiling opencode now fits in about 30 GB, down from 140 GB: one walk per IIFE body and one shared type-alias map (#12890).
+- Large links go through a response file on every host, so very big programs no longer hit command-line length limits (#12913).
 - Compile wall time and peak RSS measured on 2026-10-17: tsc 286 s / 9.7 GB, effect 31 s / 3.8 GB, schema-record 30 s / 3.9 GB. `perry compile --report-size` writes a per-crate and per-symbol size report (#8576).
 
 ### Node and ecosystem compatibility
 
-- opencode compiles and runs again, including its Effect tagged errors (#11014), class-expression instances, and the macOS link.
+- opencode compiles and runs again: compile memory (#12890), Effect tagged errors and `extends Error` across modules (#12897, #12898, #12899), class-expression instances (#12919), and the macOS link (#12913).
 - Subclasses of `EventEmitter`, streams, `Map`/`Set` and `Promise` run their overrides and methods correctly, through typed and untyped receivers and through `await` (#12815, #12888, #12891).
 - `zod` and `marked` can be used in the same program (#12882). `{ ...a, ...b }` where `b` came from `{ ...undefined }` no longer crashes, which `marked.parse` hit (#12843).
 - `commander` programs run 14.7% faster (#12894).
@@ -85,7 +85,7 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - Namespaces, including `enum` + `namespace` merging, compile with direct calls (#12775, #12802).
 - `events`, `stream`, `http` (`IncomingMessage`, `ServerResponse`), `worker_threads` (no multi-second stalls, #12448; `terminate()` stops any loop, #12762), `perf_hooks`, `dgram`, WebSocket upgrade (#12460) and `node:test` mocking (#12747) received parity fixes. See the per-PR list.
 - Bun: `Bun.Transpiler`/`Bun.build` subsets (#9602), `bun:sqlite` (#8525), SQL (#9634), zero-copy `bun:ffi` views (#8329).
-- On the 2026-10-17 scoreboard, all 23 program rows print the same output as node. Rows above 2× node by instructions: fastify, schema-record, qs, zod, commander, effect, property-prototype. tsc is 1.72×; the rest are under 1.8×.
+- On the 2026-10-19 check, all 43 scoreboard programs print the same output as node. On the 2026-10-17 measurement, rows above 2× node by instructions were: fastify, schema-record, qs, zod, commander, effect, property-prototype. tsc is 1.72×; the rest are under 1.8×.
 
 ### Platforms
 
@@ -101,5 +101,6 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - ES2025 `Set` methods (`union`, `intersection`, and the rest) are not supported.
 - Promise/timer ordering differs from node in one case that is not yet root-caused.
 - Typed arrays larger than 1 GiB are not supported, and allocation-exhaustion behavior differs from node.
-- On the competitive suite at 2026-10-18, 218 of 246 rows pass.
+- On the competitive suite at 2026-10-19, 218 of 242 rows pass, with no regressions against the previous release.
+- `console.log` of a string containing `'` keeps single quotes (node switches to double quotes), and a `RegExp.prototype.exec` result prints without its `index`, `input` and `groups` properties.
 - Binary size: the zod build is about 1.1 MB (+11%) larger text after the `Symbol.hasInstance`/`super` fix (#12784).
