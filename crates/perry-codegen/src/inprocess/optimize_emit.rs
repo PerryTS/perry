@@ -222,7 +222,7 @@ pub(super) fn optimize_and_emit(
     let emit_started = std::time::Instant::now();
     let emit = |tm: &TargetMachine, m: &inkwell::module::Module<'_>| -> Result<Vec<u8>> {
         tm.write_to_memory_buffer(m, kind)
-            .map(|obj| obj.as_slice().to_vec())
+            .map(copy_emission_bytes)
             .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))
     };
     let pieces = vec![emit(&tm, module)?];
@@ -232,9 +232,38 @@ pub(super) fn optimize_and_emit(
     Ok(pieces)
 }
 
+/// Copy the LLVM payload, excluding its storage terminator. Inkwell 0.9
+/// (the Windows dependency) includes that terminator in `as_slice`, whereas
+/// 0.10 does not. A trailing NUL is not padding in a Wasm object: it starts an
+/// incomplete custom section. The LLVM length also preserves real zero bytes
+/// at the end of either an object or emitted assembly.
+fn copy_emission_bytes(buffer: inkwell::memory_buffer::MemoryBuffer<'_>) -> Vec<u8> {
+    // The owning buffer stays live throughout the query and copy.
+    let size = unsafe { llvm_sys::core::LLVMGetBufferSize(buffer.as_mut_ptr()) };
+    buffer.as_slice()[..size].to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emission_copy_excludes_storage_terminator_but_preserves_payload_zeros() {
+        for payload in [&[][..], &[1, 2, 3][..], &[0, 1, 0, 0][..]] {
+            // Construct through LLVM, as target-machine emission does. The
+            // two Inkwell versions also differ in their input-copy API.
+            let buffer = unsafe {
+                inkwell::memory_buffer::MemoryBuffer::new(
+                    llvm_sys::core::LLVMCreateMemoryBufferWithMemoryRangeCopy(
+                        payload.as_ptr().cast(),
+                        payload.len(),
+                        c"binary-emission".as_ptr(),
+                    ),
+                )
+            };
+            assert_eq!(copy_emission_bytes(buffer), payload);
+        }
+    }
 
     fn relocation_results(ir: &str) -> std::collections::HashSet<&str> {
         ir.lines()
