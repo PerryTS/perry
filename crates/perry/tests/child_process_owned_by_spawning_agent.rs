@@ -121,3 +121,52 @@ fn a_workers_child_process_events_reach_the_worker() {
     assert!(order("worker spawn") < order("worker exit 3"));
     assert!(order("worker exit 3") < order("worker close 3 worker-out worker-err"));
 }
+
+/// `close` comes one pump after `exit`, and nothing woke the loop for that
+/// pump: when a child's exit and both pipe EOFs landed in one pump, the loop
+/// parked until its idle cap and every such child closed a full second late.
+/// The fixture makes that ordering certain by blocking the loop until the
+/// child is done; Node closes each in ~100 ms (the block itself).
+const CLOSE_TURN: &str = r#"
+import { spawn } from "child_process";
+const run = (): Promise<number> => new Promise((res) => {
+  const p = spawn("/bin/echo", ["hi"], { stdio: ["ignore", "pipe", "pipe"] });
+  const t = Date.now();
+  while (Date.now() - t < 100) {}
+  p.stdout!.on("data", () => {});
+  p.on("close", () => res(Date.now() - t));
+});
+(async () => {
+  const ms: number[] = [];
+  for (let i = 0; i < 5; i++) ms.push(await run());
+  console.log("close_ms " + ms.join(","));
+  process.exit(0);
+})();
+"#;
+
+#[test]
+fn close_follows_exit_without_waiting_for_an_unrelated_wake() {
+    let dir = tempfile::tempdir().expect("create fixture directory");
+    let source = dir.path().join("close_turn.ts");
+    let binary = dir.path().join("close_turn_bin");
+    std::fs::write(&source, CLOSE_TURN).expect("write fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_perry"))
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("compile fixture");
+    assert!(output.status.success(), "fixture compile failed");
+    let run = Command::new(&binary).output().expect("run fixture");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let line = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("close_ms "))
+        .unwrap_or_else(|| panic!("no close_ms line in {stdout:?}"));
+    for ms in line.split(',') {
+        let ms: u64 = ms.parse().expect("close time in ms");
+        assert!(ms < 600, "a child closed {ms} ms after spawn (all: {line})");
+    }
+}
