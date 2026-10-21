@@ -168,7 +168,8 @@ pub(crate) fn hidden_global_definition(line: &str) -> String {
     let Some((name, rhs)) = line.split_once(" = ") else {
         return line.to_string();
     };
-    if has_local_linkage(line)
+    if !name.trim_start().starts_with('@')
+        || has_local_linkage(line)
         || rhs.starts_with("external ")
         || rhs.starts_with("appending ")
         || name.starts_with("@llvm.")

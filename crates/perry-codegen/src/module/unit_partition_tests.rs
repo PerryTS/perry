@@ -301,3 +301,30 @@ fn mach_o_offset_alias_has_one_hidden_owner() {
         assert!(!object.is_empty());
     }
 }
+
+#[test]
+fn binding_generated_data_preserves_named_metadata() {
+    let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+    // The fallback probe descriptor is carried by add_raw_global too; it is
+    // metadata rather than a data symbol and cannot carry visibility.
+    module.add_raw_global(
+        "!llvm.pseudo_probe_desc = !{!17}\n!17 = !{i64 7, i64 1, !\"probe\"}".into(),
+    );
+    for name in ["first", "second"] {
+        module
+            .define_function(name, VOID, vec![])
+            .create_block("entry")
+            .ret_void();
+    }
+    module.bind_generated_globals_to_image();
+    let units = module.render_codegen_units(2);
+    assert!(units[0].contains("!llvm.pseudo_probe_desc = !{!17}"));
+    #[cfg(feature = "llvm-inprocess")]
+    for unit in &units {
+        let context = inkwell::context::Context::create();
+        crate::inprocess::parse_ir_text(&context, unit, "metadata_binding")
+            .unwrap()
+            .verify()
+            .unwrap();
+    }
+}
