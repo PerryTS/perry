@@ -1,0 +1,36 @@
+{
+  "sourceRevision": "ff07de16dc88db93705c4ff908d9c9aa4b02ca8e",
+  "engineTestsRevision": "a549ee7fe9599dc2be6a8def7db891332f103d3c",
+  "host": "Linux x86_64",
+  "wasmtimeEngine": "48.0.5",
+  "commandEngineTests": 5,
+  "runtimeComponentTests": 20,
+  "acceptancePhases": 5,
+  "allAcceptancePassed": true,
+  "isolatedCodecGcTestPassed": true,
+  "fullCiCodecFailureAttribution": "unresolved",
+  "movingGc": {
+    "copiedObjects": 6,
+    "evacuationChecks": 6,
+    "quarantineObserved": true
+  },
+  "sha256": {
+    "command-target/perry-dev/perry": "35c57ce8897af684a35feaa110df67744054f47c09e468b4e9fb7594638c28cc",
+    "command-target/perry-dev/libperry_runtime.a": "ae7ee225742dc7b626f5c75bef69b89a24aaa566a292e9c96adf0b6a20cf9344",
+    "command-target/perry-dev/libperry_runtime_instr.a": "6bfaf4ce65b445a6dfc8c1733000f2c93b4308fd7fecb2ac30be91d3422c41e5",
+    "command-target/perry-dev/libperry_stdlib.a": "dfd70a5c7b1707ec42bfa3abbfae882dc0ecea15a28243a35af8f0953b709925",
+    "command-target/perry-dev/libperry_component_host.a": "1856925c942bd5509b927b413fab15698229e2057ec54bc54d35cb902d97f379",
+    "command-acceptance-sso/rust-target/wasm32-wasip2/release/perry-component-command-fixture.wasm": "78d46920804d2bb137e4a6d5b525e8e3d157407f0f5d87decc7a619856fcffb6",
+    "logs/command-sso.log": "e03d3f66551fe14dc001d3c33c4786524ee2460ad85e148572ace4d151baa8eb",
+    "logs/command-sso.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "logs/command-engine.log": "5e86c367ddb2fa5835cbe366c1c2c8db82487b570842cb71c3352a15b99bbbed",
+    "logs/command-engine.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "command-acceptance-sso/results.json": "98f7069ad7540070e4c48c568be1dc38e3b0b8d2e5a6cdec4e218cdb0e8cfeab",
+    "command-acceptance-sso/rust-command.log": "fba7170676a7eaf9a2300f46cd466dc894d23013f0f979d4b976f477f39e6eba",
+    "command-acceptance-sso/command-moving-compile.log": "3c68625d48eb60b2fc00b651e5b643d434186b793bb262e9a3fef1854799ff20",
+    "command-acceptance-sso/command-run.log": "1b0adbc0510e90d11d55328f6c51057bae79fb0c3e0784d2be2d0de0f85c6ac2",
+    "command-acceptance-sso/command-compile.log": "5d413cfccaa2bee35b039a2462cdbdc35002cf7a0762194933e23d7210956355",
+    "command-acceptance-sso/command-moving-run.log": "2cdd2258750720ef8a703d9c881688e8f5889fc41a0b68630c9f4a49a7957b02"
+  },
+  "engineSourceMatchesQualifiedRevision": true
+}

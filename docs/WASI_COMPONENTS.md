@@ -25,10 +25,10 @@ Each component has its own store, resource table, memory budget, fuel budget,
 and interrupt handle. There are no implicit filesystem, network, environment,
 or stdio capabilities. Application imports must be supplied explicitly.
 Opt-in WASI Preview 2 providers are available through `ComponentOptions.wasi`.
-General host-defined resource imports remain unimplemented; command worlds
-and `wasi:http` are not yet qualified.
+General host-defined resource imports remain a separate change;
+`wasi:http` is not yet qualified.
 
-### Native WASI commands (qualification pending)
+### Native WASI commands
 
 `runComponentCommand` executes a `wasi:cli/run` component once in a fresh
 native store and releases its provider resources when the call ends:
@@ -60,8 +60,14 @@ The component-host boundary uses ABI 3; compiler, runtime and optional host
 archive must be built together. This API is native-only. Unit fixtures and
 `scripts/component_command_acceptance.py` cover return/exit behavior,
 initializer failures, limits and a Rust `wasm32-wasip2` command hosted by
-Perry in ordinary and moving-GC modes. Qualification is pending actual
-execution; this does not establish HTTP, P3 async or I/O cancellation support.
+Perry in ordinary and moving-GC modes. Linux qualification passes all five
+engine tests, 20 runtime component tests and five command acceptance phases.
+The moving run copies six objects, verifies six evacuation cycles and
+protects retired from-space. Dynamic short strings such as `String(exitCode)`
+are covered, along with closed defaults and independent capability grants.
+The [execution receipt](validation/component-commands-20261021.json) records
+the source revisions and artifact/log hashes. This does not establish HTTP,
+P3 async, other native host platforms or I/O cancellation support.
 
 ### Per-instance WASI providers
 
@@ -254,12 +260,13 @@ access, reads without preopens, writes through read-only preopens, and parent
 or symlink escapes; an explicit write grant produced the expected host file.
 Unit tests additionally executed a declared WASI clock import and actual TCP
 bind grants/denials. These results do not qualify UDP/DNS interoperability,
-blocking-I/O cancellation, command worlds or HTTP.
+blocking-I/O cancellation or HTTP. Command execution is qualified separately
+above.
 
 Still required before claiming the full milestone:
 
 - Implement host-defined resource imports and deferred cleanup, and qualify
-  the remaining capability operations, command worlds, and HTTP independently.
+  the remaining capability operations and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution
   check into the required PR checks.
 
