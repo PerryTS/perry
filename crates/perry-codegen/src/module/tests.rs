@@ -154,7 +154,7 @@ fn render_codegen_units_partitions_and_links() {
     assert_eq!(global_defs, 1, "global must be defined in exactly one unit");
     let str_defs = units
         .iter()
-        .filter(|u| u.contains("@.str.0 = unnamed_addr constant"))
+        .filter(|u| u.contains("@.str.0 = hidden unnamed_addr constant"))
         .count();
     assert_eq!(str_defs, 1, "string must be defined in exactly one unit");
 
@@ -428,7 +428,7 @@ fn owner_only_global_declares_cross_unit_function_from_initializer() {
     let units = m.render_codegen_units(2);
     let global_unit = units
         .iter()
-        .find(|unit| unit.contains("@__perry_extern_closure_dep__value = constant"))
+        .find(|unit| unit.contains("@__perry_extern_closure_dep__value = hidden constant"))
         .expect("one unit must own the closure global");
     assert!(
         !global_unit.contains("define double @__perry_wrap_extern_dep__value("),
@@ -1037,7 +1037,7 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
             units
                 .iter()
                 .position(|u| {
-                    u.contains(&format!("{sym} = global")) || u.contains(&format!("{sym} = alias"))
+                    u.contains(&format!("{sym} = global")) || u.contains(&format!("{sym} = hidden alias"))
                 })
                 .unwrap_or_else(|| panic!("{sym} defined nowhere"))
         };
@@ -1052,7 +1052,7 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
                 .find(|u| u.contains("define i32 @perry_fn_m__reader("))
                 .unwrap();
             assert!(
-                reader.contains("@perry_array_layout_m_0_id = external global i32"),
+                reader.contains("@perry_array_layout_m_0_id = external hidden global i32"),
                 "{reader}"
             );
         }
