@@ -39,10 +39,12 @@ def captured(data):
     return {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
             **({'text': data.decode('utf-8', errors='backslashreplace')} if len(data) < 4096 else {})}
 
+repo_root = Path(__file__).resolve().parents[1]
+pinned_node = (repo_root / '.node-version').read_text().strip()
 result = {'compiler': file_record(compiler), 'verifier': file_record(__file__), 'work': str(work),
           'buildEnv': json.loads(args.build_env), 'node': subprocess.check_output(['node', '-v'], text=True).strip(),
           'complete': False, 'passed': False, 'scope': 'tiny-only' if args.tiny_only else 'tiny-and-fallback', 'fixtures': {}}
-assert result['node'] == 'v26.5.1', 'Use the pinned Node 26.5.1 oracle'
+assert result['node'] == f'v{pinned_node}', f'Use the pinned Node {pinned_node} oracle'
 
 def save():
     (out / 'verification.json').write_text(json.dumps(result, indent=2) + '\n')

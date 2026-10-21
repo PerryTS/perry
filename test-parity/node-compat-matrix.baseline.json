@@ -15,7 +15,7 @@
       "perryFp": "first 12 hex of sha256(perry fingerprint)"
     }
   },
-  "nodeVersion": "26.5.1",
+  "nodeVersion": "26.12.1",
   "platform": "darwin-arm64",
   "modules": {
     "assert": {
@@ -24,14 +24,14 @@
         "node": "ok",
         "perry": "ok",
         "nodeFp": "fa97c05b1b67",
-        "perryFp": "f81ab6f19570"
+        "perryFp": "36af744e2929"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "fa97c05b1b67",
-        "perryFp": "f81ab6f19570"
+        "perryFp": "36af744e2929"
       },
       "prefixParity": true
     },
@@ -41,14 +41,14 @@
         "node": "ok",
         "perry": "ok",
         "nodeFp": "fa97c05b1b67",
-        "perryFp": "c53b31cce481"
+        "perryFp": "a9e51e14866c"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "fa97c05b1b67",
-        "perryFp": "c53b31cce481"
+        "perryFp": "a9e51e14866c"
       },
       "prefixParity": true
     },
@@ -74,14 +74,14 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "3a0bf919ee43",
+        "nodeFp": "b51adeb18354",
         "perryFp": "ffb86ed04b4e"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "3a0bf919ee43",
+        "nodeFp": "b51adeb18354",
         "perryFp": "ffb86ed04b4e"
       },
       "prefixParity": true
@@ -139,18 +139,18 @@
     },
     "constants": {
       "unprefixed": {
-        "status": "match",
+        "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "d104e01dca75",
-        "perryFp": "d104e01dca75"
+        "nodeFp": "21a22a1c6368",
+        "perryFp": "9b5730dbc22e"
       },
       "prefixed": {
-        "status": "match",
+        "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "d104e01dca75",
-        "perryFp": "d104e01dca75"
+        "nodeFp": "21a22a1c6368",
+        "perryFp": "9b5730dbc22e"
       },
       "prefixParity": true
     },
@@ -159,32 +159,32 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "f6e0ca7ca44e",
+        "nodeFp": "5ae054aa4e2e",
         "perryFp": "92400c409138"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "f6e0ca7ca44e",
+        "nodeFp": "5ae054aa4e2e",
         "perryFp": "92400c409138"
       },
       "prefixParity": true
     },
     "dgram": {
       "unprefixed": {
-        "status": "shape-diff",
+        "status": "match",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "8b9c0d323d1c",
-        "perryFp": "019c407e486a"
+        "perryFp": "8b9c0d323d1c"
       },
       "prefixed": {
-        "status": "shape-diff",
+        "status": "match",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "8b9c0d323d1c",
-        "perryFp": "019c407e486a"
+        "perryFp": "8b9c0d323d1c"
       },
       "prefixParity": true
     },
@@ -273,19 +273,36 @@
       },
       "prefixParity": true
     },
+    "ffi": {
+      "unprefixed": {
+        "status": "perry-extra",
+        "node": "throw",
+        "perry": "ok",
+        "nodeFp": "",
+        "perryFp": "8038b8eeeb24"
+      },
+      "prefixed": {
+        "status": "shape-diff",
+        "node": "ok",
+        "perry": "ok",
+        "nodeFp": "0bfe681ef879",
+        "perryFp": "8038b8eeeb24"
+      },
+      "prefixParity": null
+    },
     "fs": {
       "unprefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "4d0d01b4694a",
+        "nodeFp": "359b3e24cfc5",
         "perryFp": "1398b1559733"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "4d0d01b4694a",
+        "nodeFp": "359b3e24cfc5",
         "perryFp": "1398b1559733"
       },
       "prefixParity": true
@@ -312,14 +329,14 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "04a575ef2111",
+        "nodeFp": "62542520fef2",
         "perryFp": "2dd275a375ea"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "04a575ef2111",
+        "nodeFp": "62542520fef2",
         "perryFp": "2dd275a375ea"
       },
       "prefixParity": true
@@ -364,14 +381,14 @@
         "node": "ok",
         "perry": "ok",
         "nodeFp": "c1522b49aa55",
-        "perryFp": "8406079cd764"
+        "perryFp": "6aeca5cbf3d7"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "c1522b49aa55",
-        "perryFp": "8406079cd764"
+        "perryFp": "6aeca5cbf3d7"
       },
       "prefixParity": true
     },
@@ -381,31 +398,31 @@
         "node": "ok",
         "perry": "ok",
         "nodeFp": "c1522b49aa55",
-        "perryFp": "019c407e486a"
+        "perryFp": "6aeca5cbf3d7"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "c1522b49aa55",
-        "perryFp": "019c407e486a"
+        "perryFp": "6aeca5cbf3d7"
       },
       "prefixParity": true
     },
     "module": {
       "unprefixed": {
-        "status": "shape-diff",
+        "status": "match",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "ae30928d4324",
-        "perryFp": "36af744e2929"
+        "perryFp": "ae30928d4324"
       },
       "prefixed": {
-        "status": "shape-diff",
+        "status": "match",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "ae30928d4324",
-        "perryFp": "36af744e2929"
+        "perryFp": "ae30928d4324"
       },
       "prefixParity": true
     },
@@ -414,15 +431,15 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "6735e95370bf",
-        "perryFp": "cbe1ad9439cc"
+        "nodeFp": "bb7d7b2b82aa",
+        "perryFp": "494eb47002c3"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "6735e95370bf",
-        "perryFp": "cbe1ad9439cc"
+        "nodeFp": "bb7d7b2b82aa",
+        "perryFp": "494eb47002c3"
       },
       "prefixParity": true
     },
@@ -499,15 +516,15 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "61258bc623c4",
-        "perryFp": "952322f4e811"
+        "nodeFp": "a0914f820e5d",
+        "perryFp": "61258bc623c4"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "61258bc623c4",
-        "perryFp": "952322f4e811"
+        "nodeFp": "a0914f820e5d",
+        "perryFp": "61258bc623c4"
       },
       "prefixParity": true
     },
@@ -517,14 +534,14 @@
         "node": "ok",
         "perry": "ok",
         "nodeFp": "4f0c3aa2ee2c",
-        "perryFp": "4dacedb1e085"
+        "perryFp": "05ad60e26dbb"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "4f0c3aa2ee2c",
-        "perryFp": "4dacedb1e085"
+        "perryFp": "05ad60e26dbb"
       },
       "prefixParity": true
     },
@@ -615,11 +632,11 @@
     },
     "sea": {
       "unprefixed": {
-        "status": "perry-extra",
+        "status": "both-unresolved",
         "node": "throw",
-        "perry": "ok",
+        "perry": "unresolved",
         "nodeFp": "",
-        "perryFp": "9b8e1fc17061"
+        "perryFp": ""
       },
       "prefixed": {
         "status": "match",
@@ -632,17 +649,17 @@
     },
     "sqlite": {
       "unprefixed": {
-        "status": "perry-extra",
+        "status": "both-unresolved",
         "node": "throw",
-        "perry": "ok",
+        "perry": "unresolved",
         "nodeFp": "",
-        "perryFp": "48dde5b201d5"
+        "perryFp": ""
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "7df7c3274f68",
+        "nodeFp": "4881c5cf382f",
         "perryFp": "48dde5b201d5"
       },
       "prefixParity": null
@@ -737,42 +754,42 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "4011d8d73fec",
+        "nodeFp": "89290f8b2ec7",
         "perryFp": "a0d8c64cde5e"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "4011d8d73fec",
+        "nodeFp": "89290f8b2ec7",
         "perryFp": "a0d8c64cde5e"
       },
       "prefixParity": true
     },
     "test": {
       "unprefixed": {
-        "status": "perry-extra",
+        "status": "both-unresolved",
         "node": "throw",
-        "perry": "ok",
+        "perry": "unresolved",
         "nodeFp": "",
-        "perryFp": "665f264ef3d1"
+        "perryFp": ""
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "8f35ace15037",
-        "perryFp": "665f264ef3d1"
+        "perryFp": "36af744e2929"
       },
       "prefixParity": null
     },
     "test/reporters": {
       "unprefixed": {
-        "status": "perry-extra",
+        "status": "both-unresolved",
         "node": "throw",
-        "perry": "ok",
+        "perry": "unresolved",
         "nodeFp": "",
-        "perryFp": "fea44adf6f2d"
+        "perryFp": ""
       },
       "prefixed": {
         "status": "match",
@@ -823,14 +840,14 @@
         "node": "ok",
         "perry": "ok",
         "nodeFp": "72a1ffe4083a",
-        "perryFp": "7ac909d78556"
+        "perryFp": "49021d1cb200"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "72a1ffe4083a",
-        "perryFp": "7ac909d78556"
+        "perryFp": "49021d1cb200"
       },
       "prefixParity": true
     },
@@ -890,14 +907,14 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "4011d8d73fec",
+        "nodeFp": "89290f8b2ec7",
         "perryFp": "a0d8c64cde5e"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "4011d8d73fec",
+        "nodeFp": "89290f8b2ec7",
         "perryFp": "a0d8c64cde5e"
       },
       "prefixParity": true
@@ -924,14 +941,14 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "20c19e4f6de6",
+        "nodeFp": "f05b4bf35f7a",
         "perryFp": "285fa656dcc2"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "20c19e4f6de6",
+        "nodeFp": "f05b4bf35f7a",
         "perryFp": "285fa656dcc2"
       },
       "prefixParity": true
@@ -955,18 +972,18 @@
     },
     "wasi": {
       "unprefixed": {
-        "status": "shape-diff",
+        "status": "match",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "b35577eba4a1",
-        "perryFp": "019c407e486a"
+        "perryFp": "b35577eba4a1"
       },
       "prefixed": {
-        "status": "shape-diff",
+        "status": "match",
         "node": "ok",
         "perry": "ok",
         "nodeFp": "b35577eba4a1",
-        "perryFp": "019c407e486a"
+        "perryFp": "b35577eba4a1"
       },
       "prefixParity": true
     },
@@ -992,15 +1009,15 @@
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "7709e4b7a91a",
-        "perryFp": "aa3933dbfdbc"
+        "nodeFp": "04741cbeab4e",
+        "perryFp": "9e06eec8c965"
       },
       "prefixed": {
         "status": "shape-diff",
         "node": "ok",
         "perry": "ok",
-        "nodeFp": "7709e4b7a91a",
-        "perryFp": "aa3933dbfdbc"
+        "nodeFp": "04741cbeab4e",
+        "perryFp": "9e06eec8c965"
       },
       "prefixParity": true
     }

@@ -229,7 +229,7 @@ def _fixture_report(
                 }
             )
     return {
-        "node": "26.5.1",
+        "node": (Path(__file__).resolve().parents[1] / ".node-version").read_text().strip(),
         "pressure_mb": "8",
         "complete": True,
         "shard": {
