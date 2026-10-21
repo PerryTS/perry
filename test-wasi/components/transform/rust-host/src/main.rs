@@ -44,9 +44,11 @@ fn main() -> Result<()> {
     let path = std::env::args_os()
         .nth(1)
         .context("usage: perry-component-rust-host <component.wasm>")?;
+    let dual_resources = std::env::args().nth(2).as_deref() == Some("--resources-dual");
     let moving_resources = std::env::args().nth(2).as_deref() == Some("--resources-moving");
-    let resource_profile =
-        moving_resources || std::env::args().nth(2).as_deref() == Some("--resources");
+    let resource_profile = dual_resources
+        || moving_resources
+        || std::env::args().nth(2).as_deref() == Some("--resources");
     let all_values = std::env::args().nth(2).as_deref() == Some("--values");
     let composed = std::env::args().nth(2).as_deref() == Some("--composed");
     let mut config = Config::new();
@@ -118,6 +120,9 @@ fn main() -> Result<()> {
     store.limiter(|state| &mut state.limits);
     store.set_fuel(100_000_000)?;
     let instance = linker.instantiate(&mut store, &component)?;
+    if dual_resources {
+        return resources::run_dual(&mut store, &instance);
+    }
     if resource_profile {
         return resources::run(&mut store, &instance);
     }

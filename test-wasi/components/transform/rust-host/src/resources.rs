@@ -67,17 +67,18 @@ pub(super) fn link(linker: &mut Linker<State>) -> Result<()> {
     Ok(())
 }
 
-fn call(
+fn call_interface(
     store: &mut Store<State>,
     instance: &Instance,
+    interface: &str,
     name: &str,
     params: &[Val],
     count: usize,
 ) -> Result<Vec<Val>> {
     store.set_fuel(100_000_000)?;
     let namespace = instance
-        .get_export_index(&mut *store, None, "perry:guest-resources/counters@1.0.0")
-        .context("missing counters")?;
+        .get_export_index(&mut *store, None, interface)
+        .context("missing resource interface")?;
     let index = instance
         .get_export_index(&mut *store, Some(&namespace), name)
         .context("missing counter function")?;
@@ -87,6 +88,62 @@ fn call(
     let mut results = vec![Val::Bool(false); count];
     function.call(&mut *store, params, &mut results)?;
     Ok(results)
+}
+
+fn call(
+    store: &mut Store<State>,
+    instance: &Instance,
+    name: &str,
+    params: &[Val],
+    count: usize,
+) -> Result<Vec<Val>> {
+    call_interface(
+        store,
+        instance,
+        "perry:guest-resources/counters@1.0.0",
+        name,
+        params,
+        count,
+    )
+}
+
+pub(super) fn run_dual(store: &mut Store<State>, instance: &Instance) -> Result<()> {
+    let api = "perry:guest-resources/foreign@1.0.0";
+    let a = call_interface(
+        store,
+        instance,
+        api,
+        "[constructor]token",
+        &[Val::U32(30)],
+        1,
+    )?;
+    let b = call_interface(
+        store,
+        instance,
+        api,
+        "[constructor]token",
+        &[Val::U32(40)],
+        1,
+    )?;
+    ensure!(
+        call_interface(store, instance, api, "[method]token.read", &a, 1)? == [Val::U32(30)],
+        "exported resource lost nominal identity"
+    );
+    let pair = Val::Record(vec![
+        ("first".into(), a[0].clone()),
+        ("second".into(), b[0].clone()),
+    ]);
+    ensure!(
+        call_interface(store, instance, api, "consume-pair", &[pair], 1)? == [Val::U32(70)],
+        "nested exported resources changed"
+    );
+    ensure!(
+        store.data().logs == ["foreign:31", "foreign:41", "guest:30", "guest:40"],
+        "resource directions or destructors were confused: {:?}",
+        store.data().logs
+    );
+    println!("PASS dual resource interface: distinct import/export identities, cross-type rejection, nested transfer and destruction");
+    Ok(())
 }
 
 pub(super) fn run(store: &mut Store<State>, instance: &Instance) -> Result<()> {

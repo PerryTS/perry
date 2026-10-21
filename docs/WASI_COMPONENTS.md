@@ -101,13 +101,55 @@ GC finalizers release native engine memory without executing guest or
 JavaScript callbacks. Deferred guest-resource cleanup is still outstanding;
 GC is not a substitute for explicit disposal in this implementation.
 
+## Resources in Perry-authored guests
+
+Guest bindings export `resources[interfaceName][resourceName]` factories.
+Use `create(payload, destructor?)` to return an owned WIT resource and
+`value(handle)` to access its payload through a live owned or borrowed handle:
+
+```ts
+import { register, resources } from "./generated/guest";
+const counter = resources["example:counters/api@1.0.0"].counter;
+register({
+  "example:counters/api@1.0.0": {
+    "[constructor]counter": (value: number) => counter.create({ value }),
+    "[method]counter.read": (handle) =>
+      (counter.value(handle) as { value: number }).value,
+  },
+});
+```
+
+Imported resource owners expose `borrow()` and `dispose()`. Passing an owner
+to an `own` parameter transfers it; later use of that wrapper or its borrows
+fails. All arguments are validated before any owner is consumed, including
+nested records/lists and duplicate references. An owner cannot be borrowed
+and transferred in the same call. Borrowed parameters expire when the call
+returns, even if guest code saves their wrappers. Repeated disposal is valid
+only for a wrapper that was actually disposed, not one transferred elsewhere.
+
+Guest-defined payloads remain rooted while the canonical host owns their
+resource. The canonical representation carries an opaque integer identity,
+never a Perry heap address. A destructor receives the payload and runs once
+when the canonical owner drops the resource; its payload root is removed
+before user code runs, including when that code throws. Explicit disposal
+is still required for owners held by guest code. Deferred GC cleanup and
+running all destructors after an instance trap are not implemented.
+
+Resources from an interface imported and exported by the same world have
+distinct nominal identities. Generated declarations and runtime handles keep
+those identities separate. Guest adapters use ABI version 2; rebuild the
+adapter and WASI runtime together rather than mixing earlier archives.
+
+The resource execution profile is under validation; the results below still
+record the previously qualified profiles.
+
 ## Acceptance work
 
 `perry-wit --guest-c <wit-path> <output-directory> [world]` also generates
 the maintained wit-bindgen C bindings, component type object, and Perry
 canonical adapter. C header compilation tests cover synchronous scalar and
 aggregate types, including interfaces imported and exported in the same
-world. Guest resource adapters are diagnosed as unimplemented. The WASI
+world, with resource handles and generated destructor glue. The WASI
 static-library route and canonical guest adapters have passed the
 transform fixture on Linux with matching compiler and runtime artifacts.
 
@@ -160,8 +202,8 @@ blocking-I/O cancellation, command worlds or HTTP.
 
 Still required before claiming the full milestone:
 
-- Implement guest resource adapters and qualify ownership and destruction
-  in Perry-authored components.
+- Complete execution qualification of guest resources, including ownership,
+  destruction and forced guest evacuation.
 - Implement host-defined resource imports and deferred cleanup, and qualify
   the remaining capability operations, command worlds, and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution

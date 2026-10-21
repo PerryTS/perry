@@ -1,0 +1,9 @@
+package perry:guest-resources@1.0.0;
+interface foreign {
+  resource token { constructor(value: u32); read: func() -> u32; }
+  record pair { first: own<token>, second: own<token> }
+  consume: func(value: own<token>) -> u32;
+  consume-pair: func(value: pair) -> u32;
+}
+interface observe { dropped: func(value: u32); }
+world plugin { import foreign; import observe; export foreign; }

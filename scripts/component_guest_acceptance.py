@@ -139,6 +139,11 @@ def main():
     if args.guest_moving_gc:
         run("run-resources-moving", [host, resource_component, "--resources-moving"], timeout=120,
             expected="PASS Perry guest resources:", guest_moving=True)
+    dual_resources = output / "dual-resources"
+    shutil.copytree(fixture.parent / "guest-resources-dual", dual_resources, dirs_exist_ok=True)
+    dual_component = build_guest(dual_resources, "dual-resources-")
+    run("run-dual-resources", [host, dual_component, "--resources-dual"], timeout=120,
+        expected="PASS dual resource interface: distinct import/export identities, cross-type rejection, nested transfer and destruction")
     if args.native_runtime_dir:
         native_env = env.copy()
         native_env["PERRY_RUNTIME_DIR"] = str(args.native_runtime_dir.resolve())

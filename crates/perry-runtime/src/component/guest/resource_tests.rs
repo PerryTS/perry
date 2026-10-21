@@ -173,6 +173,18 @@ extern "C-unwind" fn payload_drop(
     DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     undefined()
 }
+extern "C-unwind" fn payload_drop_throw(
+    _: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    crate::gc::gc_collect_minor();
+    DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    crate::exception::js_throw(value.get_nanbox_f64())
+}
+
 unsafe extern "C" fn fake_resource(
     pointer: *mut c_void,
     ty: u32,
@@ -279,4 +291,43 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     }
     assert!(frame.error().is_some());
     assert_eq!(DROPS.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop(frame);
+
+    // A throwing destructor releases its global payload root exactly once and
+    // preserves the original (moving) heap exception through the C frame.
+    object.set_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(2) as i64,
+    ));
+    callback.set_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::closure::js_closure_alloc(crate::fn_info!(unwind payload_drop_throw, 1), 0) as i64,
+    ));
+    resource.set_nanbox_f64(payload::js_component_resource_create(
+        9.0,
+        object.get_nanbox_f64(),
+        callback.get_nanbox_f64(),
+    ));
+    let handle = get(data(resource.get_nanbox_f64()), HANDLE) as u32;
+    let mut frame = Frame::new();
+    let slot = frame.add(resource.get_nanbox_f64());
+    frame.guard(|f| lower(f, slot, 9, true, true));
+    frame.guard(commit);
+    unsafe {
+        fake_resource((&mut frame as *mut Frame).cast(), 9, 1, handle);
+    }
+    assert_eq!(
+        frame.error().unwrap().to_bits(),
+        object.get_nanbox_f64().to_bits()
+    );
+    assert_eq!(DROPS.load(std::sync::atomic::Ordering::SeqCst), 2);
+    drop(frame);
+    let mut retry = Frame::new();
+    unsafe {
+        fake_resource((&mut retry as *mut Frame).cast(), 9, 1, handle);
+    }
+    assert!(retry.error().is_some());
+    assert_eq!(
+        DROPS.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "throwing destructor must not run twice"
+    );
 }
