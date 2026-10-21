@@ -68,3 +68,24 @@ finish/close counts, and event order. Reusing one callback for two `end` calls
 must retain both registrations; this is not callback-identity deduplication.
 This fixture does not certify other string encodings or native shutdown
 cancellation/lifetime behavior.
+
+## BlockList rule-category emission
+
+`classes/block-list-json-validation.ts` retains its original validation cases
+and adds all six address/subnet/range insertion permutations, with at most one
+address per new history, plus repeated subnet/range metadata. Direct mutators
+and JSON imports expose both `.rules` and `toJSON()`, membership and independent
+snapshots. Node 26.12.1's native
+[`ListRules`](https://github.com/nodejs/node/blob/v26.12.1/src/node_sockaddr.cc#L756-L786)
+emits addresses, then subnet metadata, then ranges. The shared serializer now
+follows that category order while retaining existing per-category order and
+duplicates. Arbitrary native address-map traversal and repeated or mapped-family
+address deduplication remain unresolved; this is not general BlockList parity.
+
+```sh
+./run_parity_tests.sh --suite node-suite --module net --filter node-suite/net/classes/block-list-json-validation
+```
+
+Use the full fixture ID: the shorter `block-list-json` substring also selects
+this validation fixture. This source-only category repair still requires a
+coherent candidate build and functional verification.

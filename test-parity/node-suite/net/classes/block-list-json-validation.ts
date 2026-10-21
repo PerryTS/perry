@@ -77,3 +77,46 @@ if (typeof load === "function" && typeof read === "function") {
   console.log("preserve", proto === net.BlockList.prototype, proto.toJSON === BlockList.prototype.toJSON, JSON.stringify(list.toJSON()));
   proto.toJSON = original;
 }
+
+// One address per history isolates category emission from native address-map
+// traversal. Direct mutation and JSON import must expose the same ordering.
+if (typeof load === "function" && typeof read === "function") {
+  const histories = [
+    ["address-subnet-range", ["address", "subnet", "range"]],
+    ["address-range-subnet", ["address", "range", "subnet"]],
+    ["subnet-address-range", ["subnet", "address", "range"]],
+    ["subnet-range-address", ["subnet", "range", "address"]],
+    ["range-address-subnet", ["range", "address", "subnet"]],
+    ["range-subnet-address", ["range", "subnet", "address"]],
+    ["metadata-order", ["range", "subnet", "range-next", "subnet-next", "range", "subnet"]],
+  ] as [string, string[]][];
+  for (const [label, history] of histories) {
+    const direct = new BlockList();
+    const input: string[] = [];
+    for (const kind of history) {
+      if (kind === "address") {
+        direct.addAddress("192.0.2.1");
+        input.push("Address: IPv4 192.0.2.1");
+      } else if (kind === "subnet" || kind === "subnet-next") {
+        const address = kind === "subnet" ? "198.51.100.0" : "203.0.113.0";
+        direct.addSubnet(address, 24);
+        input.push("Subnet: IPv4 " + address + "/24");
+      } else {
+        const start = kind === "range" ? "192.0.2.10" : "192.0.2.20";
+        const end = kind === "range" ? "192.0.2.12" : "192.0.2.22";
+        direct.addRange(start, end);
+        input.push("Range: IPv4 " + start + "-" + end);
+      }
+    }
+    const imported = new BlockList();
+    console.log("category", label, "return", load.call(imported, input));
+    console.log("category", label, "direct-rules", JSON.stringify(direct.rules));
+    console.log("category", label, "direct-json", JSON.stringify(read.call(direct)));
+    console.log("category", label, "import-rules", JSON.stringify(imported.rules));
+    console.log("category", label, "import-json", JSON.stringify(read.call(imported)));
+    console.log("category", label, "checks", direct.check("192.0.2.1"), imported.check("192.0.2.1"), direct.check("198.51.100.1"), imported.check("198.51.100.1"), direct.check("192.0.2.11"), imported.check("192.0.2.11"));
+    const snapshot = imported.rules;
+    snapshot.push("Address: IPv4 192.0.2.99");
+    console.log("category", label, "copy", imported.check("192.0.2.99"), imported.rules.length, read.call(imported).length);
+  }
+}
