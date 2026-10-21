@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the WASI runtime archive on any host with wasi-sdk configured."""
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gc-instruments", action="store_true", help="include GC instruments for execution qualification")
+    args = parser.parse_args()
     if not os.environ.get("CC_wasm32_wasip2"):
         sys.exit("Configure wasi-sdk first (scripts/wasi_toolchain.ps1 or wasi_toolchain.sh)")
     metadata = json.loads(subprocess.check_output(
@@ -24,6 +28,8 @@ def main() -> int:
     if excluded - set(defaults):
         sys.exit("Stale WASI feature exclusions; update wasi_check.sh and this script")
     features = ",".join(f"perry-runtime/{f}" for f in defaults if f not in excluded)
+    if args.gc_instruments:
+        features += ",perry-runtime/gc-instruments"
     command = ["cargo", "build", "--locked", "--release", "-p", "perry-runtime-static",
                "--target", "wasm32-wasip2", "--no-default-features", "--features", features,
                "--message-format=json-render-diagnostics"]

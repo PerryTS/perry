@@ -29,11 +29,11 @@ python3 scripts/component_host_acceptance.py \
   --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \
   --componentize "$CARGO_TARGET_DIR/perry-dev/examples/componentize" \
   --runtime-dir "$CARGO_TARGET_DIR/perry-dev" --output "$out/native" --moving-gc
-python3 scripts/wasi_build_runtime.py
+python3 scripts/wasi_build_runtime.py --gc-instruments
 python3 scripts/component_guest_acceptance.py \
   --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
   --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \
   --componentize "$CARGO_TARGET_DIR/perry-dev/examples/componentize" \
   --runtime-dir "$CARGO_TARGET_DIR/wasm32-wasip2/release" \
   --wasi-sdk "$WASI_SDK_PATH" --output "$out/guest" \
-  --native-runtime-dir "$CARGO_TARGET_DIR/perry-dev" --moving-gc
+  --native-runtime-dir "$CARGO_TARGET_DIR/perry-dev" --moving-gc --guest-moving-gc

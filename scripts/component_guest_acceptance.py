@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--native-runtime-dir", type=Path,
                         help="also qualify native Perry hosting with WASI providers")
     parser.add_argument("--moving-gc", action="store_true")
+    parser.add_argument("--guest-moving-gc", action="store_true",
+                        help="qualify guest evacuation; requires a WASI runtime built with --gc-instruments")
     args = parser.parse_args()
     if args.moving_gc and not args.native_runtime_dir:
         parser.error("--moving-gc requires --native-runtime-dir")
@@ -56,7 +58,7 @@ def main():
     # Clear a previous verdict before any build can fail.
     (output / "results.json").write_text("[]\n")
 
-    def run(name, command, expected=None, timeout=600, environment=None, moving=False):
+    def run(name, command, expected=None, timeout=600, environment=None, moving=False, guest_moving=False):
         log = output / (name + ".log")
         start = time.monotonic()
         try:
@@ -70,12 +72,12 @@ def main():
             status = 124
         if status == 0 and expected and expected not in log.read_text():
             status = 1
-        if status == 0 and moving:
+        if status == 0 and (moving or guest_moving):
             contents = log.read_text()
             moved = sum(int(n) for n in re.findall(r"\[gc-copy-minor\][^\n]*\bcopied_objects=(\d+)", contents))
-            if moved == 0 or "[gc-fromspace-protect]" not in contents:
+            if moved == 0 or (moving and "[gc-fromspace-protect]" not in contents):
                 with log.open("a") as stream:
-                    stream.write("FAIL: moving-GC/quarantine witness was not observed\n")
+                    stream.write("FAIL: copying-GC witness (and native quarantine when applicable) was not observed\n")
                 status = 1
         results.append({"name": name, "exitCode": status,
                         "seconds": round(time.monotonic() - start, 3), "log": str(log)})
@@ -134,6 +136,9 @@ def main():
     resource_component = build_guest(resources, "resources-")
     run("run-resources", [host, resource_component, "--resources"], timeout=120,
         expected="PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 destructions, trap")
+    if args.guest_moving_gc:
+        run("run-resources-moving", [host, resource_component, "--resources-moving"], timeout=120,
+            expected="PASS Perry guest resources:", guest_moving=True)
     if args.native_runtime_dir:
         native_env = env.copy()
         native_env["PERRY_RUNTIME_DIR"] = str(args.native_runtime_dir.resolve())

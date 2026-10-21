@@ -44,7 +44,9 @@ fn main() -> Result<()> {
     let path = std::env::args_os()
         .nth(1)
         .context("usage: perry-component-rust-host <component.wasm>")?;
-    let resource_profile = std::env::args().nth(2).as_deref() == Some("--resources");
+    let moving_resources = std::env::args().nth(2).as_deref() == Some("--resources-moving");
+    let resource_profile =
+        moving_resources || std::env::args().nth(2).as_deref() == Some("--resources");
     let all_values = std::env::args().nth(2).as_deref() == Some("--values");
     let composed = std::env::args().nth(2).as_deref() == Some("--composed");
     let mut config = Config::new();
@@ -86,11 +88,21 @@ fn main() -> Result<()> {
                 },
             )?;
     }
-    let wasi = WasiCtxBuilder::new()
-        .allow_tcp(false)
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.allow_tcp(false)
         .allow_udp(false)
-        .allow_ip_name_lookup(false)
-        .build();
+        .allow_ip_name_lookup(false);
+    if moving_resources {
+        wasi.inherit_stderr();
+        for name in [
+            "PERRY_GC_FORCE_EVACUATE",
+            "PERRY_GC_VERIFY_EVACUATION",
+            "PERRY_GC_DIAG",
+        ] {
+            wasi.env(name, "1");
+        }
+    }
+    let wasi = wasi.build();
     let mut store = Store::new(
         &engine,
         State {
