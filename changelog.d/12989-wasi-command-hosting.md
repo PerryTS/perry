@@ -3,3 +3,6 @@ Add native `runComponentCommand` for one-shot WASI P2 commands. Guest return and
 The optional component-host ABI advances to 3. Add command/FFI regressions and a Rust-to-Perry acceptance fixture with capability isolation and moving GC. Execution qualification is pending.
 
 Refresh generated component API documentation and declare command options optional.
+
+Accept inline short strings at the shared component value boundary, including
+dynamically converted command arguments such as `String(exitCode)`.
