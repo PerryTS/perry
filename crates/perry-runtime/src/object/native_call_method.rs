@@ -2197,6 +2197,41 @@ pub(crate) unsafe fn native_call_method_tower(
         }
 
         if gc_type != crate::gc::GC_TYPE_OBJECT {
+            // An exotic receiver (an Error instance, gc type ERROR) of a class
+            // whose methods live on its prototype chain rather than in a
+            // class-id method table: a class expression or a function-nested
+            // `class extends Error` evaluated per evaluation (opencode's
+            // `NamedError.create(...)` classes and their `toObject()`). The
+            // tower's class arms key on `GC_TYPE_OBJECT`, so the method is
+            // found the way a member call specifies it: [[Get]] on the
+            // receiver, then Call with the receiver as `this`.
+            let method_key =
+                crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+            let method = if method_key.is_null() {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else {
+                let receiver_ptr = jsval().as_pointer::<ObjectHeader>();
+                f64::from_bits(super::js_object_get_field_by_name(receiver_ptr, method_key).bits())
+            };
+            if crate::collection_iter::is_callable(method) {
+                let args = refreshed_args();
+                return crate::closure::native_call_value_this(
+                    method,
+                    crate::closure::JsThis::from_f64(object()),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
+            // A live Error whose chain has no such callable: the member call
+            // has no callee, a TypeError as in node.
+            if gc_type == crate::gc::GC_TYPE_ERROR {
+                crate::error::js_throw_type_error_not_a_function(
+                    std::ptr::null(),
+                    0,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                );
+            }
             // Closes #645: when a method falls through every dispatcher
             // and returns NULL_OBJECT_BYTES (e.g. drizzle's
             // `this.client.prepare(...)` where `this.client` resolved to
