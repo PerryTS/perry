@@ -65,7 +65,11 @@ Fresh compiler/runtime builds pass all 36 execution checks on Linux,
 macOS ARM64 and Windows x64, with pinned-Node comparisons. PR #12954
 repaired the Windows object-buffer defect; its fresh Windows CI run passes.
 PR #12955 promotes the qualified Linux command profile into the required
-execution gate. Shipping matching compiler/runtime artifacts remains open.
+execution gate. Matching compiler/runtime packaging is implemented, and the
+final staged archives passed all 36 checks on Linux x86_64 GNU, macOS ARM64
+and Windows x64. See the [packaging receipt](validation/wasi-release-artifacts-20261021.json).
+That qualification used build-only mode; publication remains a separate
+maintainer release action.
 
 Acceptance:
 
@@ -125,9 +129,11 @@ Perry hosting a Rust component, a Rust host calling a Perry component,
 direct Rust/Perry composition, structured-value round trips, native resource
 disposal, host-defined resources and Perry-authored guest resources under
 moving GC, plus opt-in WASI
-providers. See [the component record](WASI_COMPONENTS.md) for evidence and
-outstanding deferred cleanup, remaining capabilities,
-HTTP, CI and platform work. This milestone is not complete.
+providers. See [the component record](WASI_COMPONENTS.md) for the separately
+qualified host-defined resources, native/guest deferred cleanup, command
+worlds and TCP/UDP/DNS interoperability. Their combined integration is being
+qualified; HTTP, blocking-I/O cancellation, broader platform qualification
+and engine shipping costs remain open. This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate
 `perry-component-host` crate backed by Wasmtime. Keep it off the default native

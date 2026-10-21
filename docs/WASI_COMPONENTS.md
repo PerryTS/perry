@@ -159,8 +159,9 @@ Unreachable whole instances still release native memory without invoking
 application callbacks. Collection timing and poisoned guest destructors are
 not deterministic: explicit disposal remains the reliable lifecycle API.
 Cleanup of wrappers inside Perry-authored WASI guests is described below;
-its Linux execution qualification is recorded below. The native host ABI is 4 for this cleanup implementation;
-matching runtime and engine archives are required.
+its Linux execution qualification is recorded below. The combined native host
+ABI is 5; matching runtime and engine archives are required. The earlier
+cleanup-only qualification used ABI 4.
 
 ## Resources supplied by a native Perry host
 
@@ -205,7 +206,7 @@ permit reentrant guest calls or disposal of an owner borrowed by the active
 call; those operations still pass through the store's reentry guard.
 
 Rebuild the component-host archive and native runtime together for native host
-ABI version 4. Unreachable native wrappers use the deferred cleanup described
+ABI version 5. Unreachable native wrappers use the deferred cleanup described
 above; explicit disposal provides deterministic release. Built-in WASI
 resource providers remain controlled by `options.wasi`; application factories
 do not grant access to those providers.
@@ -339,9 +340,24 @@ environments and preopens. The execution checks rejected ambient environment
 access, reads without preopens, writes through read-only preopens, and parent
 or symlink escapes; an explicit write grant produced the expected host file.
 Unit tests additionally executed a declared WASI clock import and actual TCP
-bind grants/denials. These results do not qualify UDP/DNS interoperability,
-blocking-I/O cancellation or HTTP. Command execution is qualified separately
-above.
+bind grants/denials. That initial provider qualification did not include
+UDP/DNS interoperability; the subsequent networking qualification is recorded
+below. Blocking-I/O cancellation and HTTP remain unqualified. Command
+execution is qualified separately above.
+
+The subsequent networking profile passed on source
+`adf7e5229147e74865dc8de76ff01ca6c988ccfb`: 23 engine and 20 runtime component
+tests, plus all 21 native acceptance phases. A native Perry host executed a
+Rust-authored component using the pinned WASI providers. An independent peer
+observed six UDP and three TCP exchanges with exact payloads in both ordinary
+and moving-GC runs. The fixture verifies separate local-bind and destination
+grants, denied addresses/ports, DNS capability separation and fresh-instance
+isolation. The moving network run copied 178 objects, passed six evacuation
+checks and protected retired from-space. The
+[networking receipt](validation/wasi-network-interop-20261021.json) records
+the source, traffic and artifact identities. This does not establish UDP
+support in Perry-authored WASI guests or qualify blocking-I/O cancellation,
+HTTP or P3.
 
 Host-defined resources are now qualified on Linux. On source
 `286341d1caa88e9f1d26073e1423e17f1f479a7f`, all 25 engine, 13 WIT and 23
