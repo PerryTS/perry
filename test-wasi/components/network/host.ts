@@ -36,7 +36,7 @@ for (let i = 0; i < 3; i++) {
   for (const connected of [true, false]) {
     const text = (connected ? "connected:" : "unconnected:") + i;
     const result = probe(allowed).exchange(port, connected, text);
-    check(result.tag === "ok" && result.value === "reply:" + text, "UDP round-trip payload");
+    check(result.tag === "ok" && result.value === "reply:" + text, "UDP round-trip payload: " + JSON.stringify(result));
   }
 }
 const udpDns = probe(allowed).resolve("localhost");
@@ -61,7 +61,7 @@ for (let i = 0; i < 3; i++) {
   gc();
   const text = "tcp:" + i;
   const result = probe(tcp).connect(tcpPort, text);
-  check(result.tag === "ok" && result.value === "reply:" + text, "TCP round-trip payload");
+  check(result.tag === "ok" && result.value === "reply:" + text, "TCP round-trip payload: " + JSON.stringify(result) + " port=" + tcpPort + " payload=" + text);
 }
 const tcpDns = probe(tcp).resolve("localhost");
 check(tcpDns.tag === "err" && tcpDns.value === "permanent-resolver-failure", "TCP grant must not enable DNS");
