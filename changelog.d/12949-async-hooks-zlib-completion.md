@@ -1,0 +1,5 @@
+- Fix zlib async completion lifecycle and ordering using real codec-driver WRITE and queued empty FINAL operations under one provider and a private traced owner.
+- Yield deferred replacement records through the existing scheduler; keep INLINE crypto behavior unchanged.
+- Restore Node parity for the two original zlib lifecycle/order failures while preserving prior controls.
+- Bounded independent Risk 3/4 verification and native four-lens review completed for this repair.
+- Two existing callback-shape parity failures and constructor/subclass advisories remain; this is not whole-module completion.
