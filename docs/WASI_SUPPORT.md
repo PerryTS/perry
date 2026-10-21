@@ -123,8 +123,9 @@ objects, JSON, regexp and async behavior.
 The WASI codegen CI job runs the complete acceptance, smoke and ten-case gap
 suites on Windows and Linux. It retains the existing compatibility routing and
 `run-extended-tests` PR-label condition; it is not a required check on every PR.
-Remote CI has not been run for this repair. Its build and per-case logs are
-retained on the validation host under `/root/codex-wasi-20261021/logs` and
+CI status is tracked in [draft PR #12931](https://github.com/PerryTS/perry/pull/12931);
+the results above are local/validation-host measurements, not a full CI pass.
+Build and per-case logs are retained under `/root/codex-wasi-20261021/logs` and
 copied to the local audit's `reports/2026-10-21-wasi-implementation` directory.
 
 ## Reproducing on Windows
