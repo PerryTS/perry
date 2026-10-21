@@ -716,6 +716,18 @@ pub(crate) fn run_native_steps(stream: f64) {
             held_input = None;
         }
         complete_record(st());
+        // onwrite may have installed the empty final/flush record while this
+        // runner was active. A deferred family must hand that completion back
+        // to the scheduler: writable finish may already be queued ahead of it.
+        // Inline families keep their synchronous replacement-record behavior.
+        if hooks.timing == StepTiming::DEFERRED
+            && number_slot(st(), NATIVE_OP_KEY) != REC_NONE
+            && !stream_destroyed(st())
+            && !flag(st(), NATIVE_PARKED_KEY)
+        {
+            schedule(st());
+            break;
+        }
     }
     set_flag(st(), NATIVE_RUNNING_KEY, false);
 }
