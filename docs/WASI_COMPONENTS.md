@@ -146,8 +146,9 @@ identity and do not introduce a new guest factory. Guest adapters use ABI
 version 2; rebuild the
 adapter and WASI runtime together rather than mixing earlier archives.
 
-The resource execution profile is under validation; the results below still
-record the previously qualified profiles.
+The guest resource profile is qualified on Linux with the independent Rust
+provider/caller described below. Native Perry providers for application-defined
+resource imports remain separate work.
 
 ## Acceptance work
 
@@ -194,6 +195,19 @@ through an interface used as both an import and an export. All 14 calls
 pass against the independent Rust oracle, including imports invoked from
 Perry and values returned after guest collection.
 
+The guest resource fixture also passes on Linux against an independent Rust
+provider/caller. It checks imported ownership and explicit disposal, duplicate
+transfer rollback, nested own handles, a borrowed Rust-owned resource passed
+through a WIT alias, expired borrowed parameters, and 51 successful exported
+resource destructions. A throwing destructor must produce the deliberate
+adapter trap; fuel exhaustion cannot satisfy that check. The separate
+`--guest-moving-gc` profile uses a WASI runtime built with `--gc-instruments`
+and requires actual copied objects and evacuation verification. Both normal
+and forced-moving runs pass. Wasm execution does not claim native from-space
+memory protection. A second fixture imports and exports the same resource
+interface, rejects cross-type substitutions, and passes nested ownership
+transfer and destruction checks from Rust.
+
 The native WASI-provider profile has passed on Linux with freshly built
 compiler, native runtimes and wasm32-wasip2 runtime. Native Perry hosted a
 Perry-authored component for 51 typed calls in both normal and moving-GC
@@ -208,8 +222,6 @@ blocking-I/O cancellation, command worlds or HTTP.
 
 Still required before claiming the full milestone:
 
-- Complete execution qualification of guest resources, including ownership,
-  destruction and forced guest evacuation.
 - Implement host-defined resource imports and deferred cleanup, and qualify
   the remaining capability operations, command worlds, and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution

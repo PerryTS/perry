@@ -21,8 +21,8 @@ WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
 | Browser `wasm` / `web` output | Core Wasm with Perry's JavaScript bridge | Not standalone WASI; raw Wasm output omits generated async JavaScript |
 | WASI 0.1 output | No supported compiler target | Defer until a concrete P1-only deployment requires it |
 | WASI 0.1 hosting in native Perry | Operational `node:wasi` over wasmi and wasi-common; all 46 P1 imports dispatch to the provider; Linux qualified | Other host platforms, socket grants, scheduling and execution quotas; see [P1 limits](WASI_P1_HOSTING.md#limits) |
-| WASI 0.2 output | Command components on Linux/macOS/Windows; initial synchronous library components qualified on Linux | Guest resources, HTTP and broader component qualification |
-| WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, guest resources and opt-in P2 WASI providers | Host-defined resources, HTTP providers and broader platform qualification |
+| WASI 0.2 output | Command components on Linux/macOS/Windows; synchronous library components and resource adapters qualified on Linux | Deferred resource cleanup, HTTP and broader component qualification |
+| WASI 0.2 component hosting | Optional native `perry/component` host with typed WIT values, guest-defined resources and opt-in P2 WASI providers | Host-defined resources, HTTP providers and broader platform qualification |
 | WASI 0.3 output/hosting | Not implemented | Native component async ABI, futures/streams, scheduling and cancellation |
 
 Perry's existing `perry/plugin` API loads native shared libraries; it does

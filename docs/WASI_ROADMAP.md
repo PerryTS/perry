@@ -122,10 +122,11 @@ This is a substantial host integration, not an extra compiler-target flag.
 
 The initial synchronous slice is implemented and qualified on Linux: native
 Perry hosting a Rust component, a Rust host calling a Perry component,
-direct Rust/Perry composition, structured-value round trips and native
-resource disposal under moving GC. See [the component record](WASI_COMPONENTS.md)
-for evidence and outstanding guest-resource, capability-provider, HTTP,
-CI and platform work. This milestone is not complete.
+direct Rust/Perry composition, structured-value round trips, native resource
+disposal and Perry-authored guest resources under moving GC, plus opt-in WASI
+providers. See [the component record](WASI_COMPONENTS.md) for evidence and
+outstanding host-defined resources, deferred cleanup, remaining capabilities,
+HTTP, CI and platform work. This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate
 `perry-component-host` crate backed by Wasmtime. Keep it off the default native
