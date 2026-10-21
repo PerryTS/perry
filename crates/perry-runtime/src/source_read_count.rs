@@ -5,6 +5,7 @@ use std::sync::{
 };
 
 static COUNTERS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static ENABLED: OnceLock<bool> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 pub(crate) enum ReadKind {
@@ -16,7 +17,6 @@ pub(crate) enum ReadKind {
 
 #[inline]
 pub(crate) fn note(kind: ReadKind) {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
     let enabled = ENABLED.get_or_init(|| {
         let enabled = matches!(
             std::env::var("PERRY_SOURCE_READ_COUNT").as_deref(),
@@ -31,6 +31,13 @@ pub(crate) fn note(kind: ReadKind) {
     });
     if *enabled {
         COUNTERS[kind as usize].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// `process.exit()` deliberately skips atexit; retain the same diagnostic there.
+pub(crate) fn report_before_immediate_exit() {
+    if ENABLED.get().copied().unwrap_or(false) {
+        report();
     }
 }
 

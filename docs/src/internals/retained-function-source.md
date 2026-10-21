@@ -29,7 +29,7 @@ particular, module initialization does not eagerly decode retained source.
 ## Reflection census
 
 Set `PERRY_SOURCE_READ_COUNT=1` when running a program to report these counters
-on stderr at exit:
+on stderr at natural exit or explicit `process.exit()`:
 
 - `function_to_string`: ordinary closure source requests, including implicit
   string coercion;
