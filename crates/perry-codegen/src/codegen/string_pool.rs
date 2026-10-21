@@ -8,7 +8,7 @@ use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
 use super::helpers::scoped_static_method_name;
-use super::retained_source_pool::{SourcePool, SourceRange};
+use super::retained_source_pool::SourceRange;
 use super::spec_function_length;
 
 mod class_birth_image;
@@ -222,86 +222,18 @@ pub(super) fn emit_string_pool(
         user_fn_display_names,
     );
 
-    // Collect class sources in registration order before preparing the shared
-    // source pool: a class can contain the exact bytes of a method/closure.
-    let mut class_sources: Vec<(u32, &perry_hir::SourceText)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        if *class_name != class.name || class_name.starts_with("__AnonShape_") {
-            continue;
-        }
-        let cid = match class_ids.get(class_name).copied() {
-            Some(c) if c != 0 => c,
-            _ => continue,
-        };
-        if let Some(src) = class_source_text.get(&cid) {
-            class_sources.push((cid, src));
-        }
-    }
-    class_sources.sort_by_key(|entry| entry.0);
-    class_sources.dedup_by_key(|(cid, _)| *cid);
-
-    // An image that can be unloaded cannot leave borrowed source metadata in
-    // either a registry or a function-info record. Executables are permanent;
-    // dylibs/staticlibs retain the copying registration path below.
     let strings_outlive_registry = output_type != "dylib" && output_type != "staticlib";
+    let (user_fn_source_constants, class_source_constants) =
+        super::retained_source_pool::prepare_ranges(
+            llmod,
+            user_fn_source,
+            classes,
+            class_ids,
+            class_source_text,
+            strings_outlive_registry,
+        );
 
-    // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
-    // Sharing changes only the backing bytes, never registration order, source
-    // lengths, strictness flags, or the copying/static ownership contract.
-    let compressed_sources: Vec<&str> = user_fn_source
-        .iter()
-        .filter(|(symbol, source, _)| {
-            !source.is_empty() && strings_outlive_registry && llmod.can_attach_fn_source(symbol)
-        })
-        .map(|(_, source, _)| source.as_ref())
-        .collect();
-    let raw_sources: Vec<&str> = user_fn_source
-        .iter()
-        .filter(|(symbol, source, _)| {
-            !symbol.is_empty()
-                && !source.is_empty()
-                && !(strings_outlive_registry && llmod.can_attach_fn_source(symbol))
-        })
-        .map(|(_, source, _)| source.as_ref())
-        .collect();
-    let compressed_pool = SourcePool::emit_compressed(llmod, compressed_sources.into_iter());
-    let source_pool = SourcePool::emit(
-        llmod,
-        raw_sources
-            .into_iter()
-            .chain(class_sources.iter().map(|(_, source)| source.as_str())),
-    );
-    let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();
-    for (wrapper_sym, source_text, is_non_strict_ordinary) in user_fn_source {
-        if wrapper_sym.is_empty() || source_text.is_empty() {
-            continue;
-        }
-        let in_info = strings_outlive_registry && llmod.can_attach_fn_source(wrapper_sym);
-        let source = if in_info {
-            compressed_pool.get(source_text)
-        } else {
-            source_pool.get(source_text)
-        };
-        if in_info
-            && llmod.attach_fn_source(
-                wrapper_sym,
-                &source.global,
-                source.offset,
-                source.decoded_offset,
-                source.byte_len,
-                *is_non_strict_ordinary,
-            )
-        {
-            continue;
-        }
-        user_fn_source_constants.push((wrapper_sym.clone(), source, *is_non_strict_ordinary));
-    }
-
-    // Pre-allocate string constants for class-name registration. We need
-    // these BEFORE `init_fn` is created, because once `init_fn` borrows
-    // `llmod` we can no longer mutate the module's constant pool. (#1021.)
-    // Every class this module defines, keyed by identity (its ClassId).
-    // Imported stubs are not here: the defining module registers them.
+    // Prepare local names before init_fn borrows llmod; imports register at their definer.
     let local_classes: Vec<(u32, &perry_hir::Class)> = module_classes
         .iter()
         .filter(|c| c.id != 0)
@@ -329,14 +261,6 @@ pub(super) fn emit_string_pool(
             named_class_name_constants.push((cid, const_name, byte_len));
         }
     }
-
-    // #9413: the same pre-allocation for retained class source text — also
-    // before `init_fn` borrows `llmod`.
-    let class_source_constants: Vec<(u32, SourceRange)> = class_sources
-        .into_iter()
-        .map(|(cid, source)| (cid, source_pool.get(source)))
-        .collect();
-    drop(source_pool);
 
     // Emit per-class typed-shape raw-f64 and pointer-mask globals. Empty masks
     // emit no storage. Must run BEFORE
@@ -471,14 +395,8 @@ pub(super) fn emit_string_pool(
         ops_per_chunk,
     );
 
-    // An image that can be UNLOADED cannot lend its rodata to a registry that
-    // never drops entries. Perry compiles TypeScript to a dylib plugin as well
-    // as an executable, and `perry_plugin_unload` ends in `dlclose` — after
-    // which a borrowed `@.str.N` names unmapped memory, and the next
-    // `fn.name` / `fn.toString()` / stack frame that resolves it reads that.
-    // `staticlib` is included because its objects are linked into whatever
-    // consumes them, which may itself be a plugin. Executables keep the
-    // borrow, which is where all the volume is.
+    // Unloadable images must copy metadata; permanent executable images
+    // borrow it. The source planner preserves the same ownership split.
     let register_name_fn = if strings_outlive_registry {
         "js_register_function_name_static"
     } else {

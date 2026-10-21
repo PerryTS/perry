@@ -169,6 +169,100 @@ impl<'a> SourcePool<'a> {
     }
 }
 
+/// Prepare direct compressed info ranges and the unchanged legacy raw ranges.
+/// All deduplication/indexing here is compiler-only; the image gets direct
+/// frames and each info's own immutable source parts.
+pub(super) fn prepare_ranges(
+    llmod: &mut LlModule,
+    user_fn_source: &[(String, std::borrow::Cow<'_, str>, bool)],
+    classes: &HashMap<String, &perry_hir::Class>,
+    class_ids: &HashMap<String, u32>,
+    class_source_text: &HashMap<u32, perry_hir::SourceText>,
+    strings_outlive_registry: bool,
+) -> (Vec<(String, SourceRange, bool)>, Vec<(u32, SourceRange)>) {
+    // Collect class sources in registration order before preparing the shared
+    // source pool: a class can contain the exact bytes of a method/closure.
+    let mut class_sources: Vec<(u32, &perry_hir::SourceText)> = Vec::new();
+    for (class_name, class) in classes.iter() {
+        if *class_name != class.name || class_name.starts_with("__AnonShape_") {
+            continue;
+        }
+        let cid = match class_ids.get(class_name).copied() {
+            Some(c) if c != 0 => c,
+            _ => continue,
+        };
+        if let Some(src) = class_source_text.get(&cid) {
+            class_sources.push((cid, src));
+        }
+    }
+    class_sources.sort_by_key(|entry| entry.0);
+    class_sources.dedup_by_key(|(cid, _)| *cid);
+
+    // An image that can be unloaded cannot leave borrowed source metadata in
+    // either a registry or a function-info record. Executables are permanent;
+    // dylibs/staticlibs retain the copying registration path below.
+
+    // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
+    // Sharing changes only the backing bytes, never registration order, source
+    // lengths, strictness flags, or the copying/static ownership contract.
+    let compressed_sources: Vec<&str> = user_fn_source
+        .iter()
+        .filter(|(symbol, source, _)| {
+            !source.is_empty() && strings_outlive_registry && llmod.can_attach_fn_source(symbol)
+        })
+        .map(|(_, source, _)| source.as_ref())
+        .collect();
+    let raw_sources: Vec<&str> = user_fn_source
+        .iter()
+        .filter(|(symbol, source, _)| {
+            !symbol.is_empty()
+                && !source.is_empty()
+                && !(strings_outlive_registry && llmod.can_attach_fn_source(symbol))
+        })
+        .map(|(_, source, _)| source.as_ref())
+        .collect();
+    let compressed_pool = SourcePool::emit_compressed(llmod, compressed_sources.into_iter());
+    let source_pool = SourcePool::emit(
+        llmod,
+        raw_sources
+            .into_iter()
+            .chain(class_sources.iter().map(|(_, source)| source.as_str())),
+    );
+    let mut user_fn_source_constants: Vec<(String, SourceRange, bool)> = Vec::new();
+    for (wrapper_sym, source_text, is_non_strict_ordinary) in user_fn_source {
+        if wrapper_sym.is_empty() || source_text.is_empty() {
+            continue;
+        }
+        let in_info = strings_outlive_registry && llmod.can_attach_fn_source(wrapper_sym);
+        let source = if in_info {
+            compressed_pool.get(source_text)
+        } else {
+            source_pool.get(source_text)
+        };
+        if in_info
+            && llmod.attach_fn_source(
+                wrapper_sym,
+                &source.global,
+                source.offset,
+                source.decoded_offset,
+                source.byte_len,
+                *is_non_strict_ordinary,
+            )
+        {
+            continue;
+        }
+        user_fn_source_constants.push((wrapper_sym.clone(), source, *is_non_strict_ordinary));
+    }
+
+    // #9413: the same pre-allocation for retained class source text — also
+    // before `init_fn` borrows `llmod`.
+    let class_source_constants: Vec<(u32, SourceRange)> = class_sources
+        .into_iter()
+        .map(|(cid, source)| (cid, source_pool.get(source)))
+        .collect();
+    (user_fn_source_constants, class_source_constants)
+}
+
 /// Each result names an input parent and an exact byte offset. Empty sources
 /// and below-minimum modules keep independent byte ranges. Over-budget or
 /// automaton-build failure still intern into the longest parent (#10574)
