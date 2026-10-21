@@ -561,7 +561,13 @@ unsafe fn create_stream(
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(opts);
     let existing = existing.map(|o| roots.root_nanbox(o));
-    js_zlib_validate_options(opts.get(), if matches!(codec, Codec::Gzip) { 9 } else { 8 });
+    // Zero selects the wrapped decoder default, not a lower nonzero bound.
+    let min_window_bits = match codec {
+        Codec::Gzip => 9,
+        Codec::Inflate | Codec::Gunzip | Codec::Unzip => 0,
+        _ => 8,
+    };
+    js_zlib_validate_options(opts.get(), min_window_bits);
     let level = if matches!(codec, Codec::Gzip | Codec::Deflate | Codec::DeflateRaw) {
         compression_from_opts(opts.get())
     } else {

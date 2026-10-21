@@ -162,10 +162,14 @@ fn validate_option_range(
     display: &str,
     min: i64,
     max: i64,
+    zero_is_default: bool,
 ) {
     let Some(n) = option_number(read_option_field(ptr, name), display) else {
         return;
     };
+    if zero_is_default && n == 0.0 {
+        return;
+    }
     if n < min as f64 || n > max as f64 {
         let received = crate::fs::validate::format_received_number(n);
         let message = format!(
@@ -211,6 +215,8 @@ fn validate_option_chunk_size(value: f64) -> f64 {
 ///
 /// `min_window_bits` is the lower `windowBits` bound, which differs by codec:
 /// gzip compression requires `>= 9`, every other codec accepts `>= 8`.
+/// Policy zero additionally permits exactly zero for Inflate/Gunzip/Unzip;
+/// their nonzero lower bound remains 8.
 ///
 /// Preserve the existing ranged-option order (`windowBits`, `level`,
 /// `memLevel`, `strategy`, `chunkSize`, `flush`) before validating `dictionary`.
@@ -240,14 +246,20 @@ pub extern "C" fn js_zlib_validate_options(opts: f64, min_window_bits: i32) {
         options_ptr(),
         b"windowBits",
         "options.windowBits",
-        min_window_bits as i64,
+        // Policy zero permits exactly zero; all nonzero values still use 8..15.
+        if min_window_bits == 0 {
+            8
+        } else {
+            min_window_bits as i64
+        },
         15,
+        min_window_bits == 0,
     );
-    validate_option_range(options_ptr(), b"level", "options.level", -1, 9);
-    validate_option_range(options_ptr(), b"memLevel", "options.memLevel", 1, 9);
-    validate_option_range(options_ptr(), b"strategy", "options.strategy", 0, 4);
+    validate_option_range(options_ptr(), b"level", "options.level", -1, 9, false);
+    validate_option_range(options_ptr(), b"memLevel", "options.memLevel", 1, 9, false);
+    validate_option_range(options_ptr(), b"strategy", "options.strategy", 0, 4, false);
     validate_option_chunk_size(read_option_field(options_ptr(), b"chunkSize"));
-    validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5);
+    validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5, false);
 
     // #4917: `level` is honored and the ranged options above are validated,
     // but a preset `dictionary` is not threaded through flate2. Silently
