@@ -1,5 +1,6 @@
 //! A Rust embedding of a Perry library component, with actual P2 providers.
 //! The fixture grants no files, network, environment, arguments or stdio.
+mod resources;
 mod values;
 
 use anyhow::{ensure, Context, Result};
@@ -43,6 +44,7 @@ fn main() -> Result<()> {
     let path = std::env::args_os()
         .nth(1)
         .context("usage: perry-component-rust-host <component.wasm>")?;
+    let resource_profile = std::env::args().nth(2).as_deref() == Some("--resources");
     let all_values = std::env::args().nth(2).as_deref() == Some("--values");
     let composed = std::env::args().nth(2).as_deref() == Some("--composed");
     let mut config = Config::new();
@@ -54,7 +56,9 @@ fn main() -> Result<()> {
     let component = Component::from_binary(&engine, &std::fs::read(path)?)?;
     let mut linker = Linker::<State>::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-    if all_values {
+    if resource_profile {
+        resources::link(&mut linker)?;
+    } else if all_values {
         values::link(&mut linker)?;
     } else {
         linker
@@ -102,6 +106,9 @@ fn main() -> Result<()> {
     store.limiter(|state| &mut state.limits);
     store.set_fuel(100_000_000)?;
     let instance = linker.instantiate(&mut store, &component)?;
+    if resource_profile {
+        return resources::run(&mut store, &instance);
+    }
     if all_values {
         return values::run(&mut store, &instance);
     }

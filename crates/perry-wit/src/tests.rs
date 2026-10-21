@@ -236,8 +236,18 @@ fn canonical_guest_resource_adapters_compile_for_both_directions() {
         );
         let c = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
         assert!(c.contains("perry_component_frame_resource_commit(f)"));
-        let guest = typescript_guest(&parse(&source, None).unwrap());
-        assert_eq!(guest.contains("create: (payload:"), world == "export api;");
+        let contract = parse(&source, None).unwrap();
+        if world.contains("import api;") && world.contains("export api;") {
+            assert_ne!(
+                contract.imports[0].resources["item"], contract.exports[0].resources["item"],
+                "imported and exported resources are distinct nominal types"
+            );
+        }
+        let guest = typescript_guest(&contract);
+        assert_eq!(
+            guest.contains("create: (payload:"),
+            world.contains("export api;")
+        );
         // The maintained backend frees transferred buffers separately from
         // explicit resource-drop helpers. A list cleanup must not drop owners
         // which the runtime has adopted.

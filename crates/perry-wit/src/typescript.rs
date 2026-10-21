@@ -247,19 +247,14 @@ fn generate(world: &World, guest: bool) -> String {
             let resources: Vec<_> = interface
                 .resources
                 .iter()
-                .filter(|(_, key)| {
-                    !world
-                        .imports
-                        .iter()
-                        .any(|i| i.resources.values().any(|k| k == *key))
-                })
+                .filter(|(_, key)| key.starts_with('e'))
                 .collect();
             if resources.is_empty() {
                 continue;
             }
             writeln!(out, "  {}: {{", quoted(&interface.name)).unwrap();
             for (name, key) in resources {
-                let id = key.strip_prefix('t').unwrap().parse::<u32>().unwrap();
+                let id = key.strip_prefix('e').unwrap().parse::<u32>().unwrap() * 2 + 1;
                 let tag = quoted(&format!("{}/{key}", world.name));
                 writeln!(out, "    {}: {{\n      create: (payload: unknown, destructor?: (payload: unknown) => void): OwnedResource<{tag}> => createComponentResource({id}, payload, destructor),\n      value: (resource: BorrowedResource<{tag}>): unknown => getComponentResourceValue({id}, resource),\n    }},", quoted(name)).unwrap();
             }

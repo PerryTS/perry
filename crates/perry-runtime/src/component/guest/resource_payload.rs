@@ -34,9 +34,9 @@ fn table(owner: f64) -> f64 {
 fn matches_id(value: &Value, ty: u32) -> bool {
     value
         .as_str()
-        .and_then(|s| s.strip_prefix('t'))
+        .and_then(|s| s.strip_prefix('e'))
         .and_then(|s| s.parse::<u32>().ok())
-        == Some(ty)
+        == Some(ty / 2)
 }
 fn local_type(owner: f64, ty: u32) -> bool {
     let world = unsafe { &(*context::get(owner)).world };
@@ -53,7 +53,7 @@ fn local_type(owner: f64, ty: u32) -> bool {
                     .any(|key| matches_id(key, ty))
             })
     };
-    contains("exports") && !contains("imports")
+    ty % 2 == 1 && contains("exports")
 }
 fn type_id(value: f64) -> u32 {
     let value = JSValue::from_bits(value.to_bits());

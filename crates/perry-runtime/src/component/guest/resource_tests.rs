@@ -199,7 +199,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     let _registry = Registry::new(&scope);
     unsafe {
         (*context::get(super::super::maybe_registry())).world = serde_json::json!({
-            "imports": [], "exports": [{"resources":{"item":"t4"}}]
+            "imports": [], "exports": [{"resources":{"item":"e4"}}]
         });
     }
     let ops = perry_abi::component_guest::ComponentGuestOps {
@@ -233,7 +233,7 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
         crate::closure::js_closure_alloc(crate::fn_info!(unwind payload_drop, 1), 0) as i64,
     ));
     let resource = scope.root_nanbox_f64(payload::js_component_resource_create(
-        4.0,
+        9.0,
         object.get_nanbox_f64(),
         callback.get_nanbox_f64(),
     ));
@@ -245,22 +245,22 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     label.set_nanbox_f64(undefined());
     let mut frame = Frame::new();
     let slot = frame.add(resource.get_nanbox_f64());
-    frame.guard(|f| lower(f, slot, 4, true, true));
+    frame.guard(|f| lower(f, slot, 9, true, true));
     frame.guard(commit);
     assert!(frame.error().is_none());
     assert!(
         crate::exception::catch_js_throw(|| payload::js_component_resource_value(
-            4.0,
+            9.0,
             resource.get_nanbox_f64()
         ))
         .is_err()
     );
     // A fresh borrowed wrapper models the canonical host calling a guest method.
     let borrowed = unsafe {
-        perry_component_frame_resource_lift((&mut frame as *mut Frame).cast(), 4, 0, rep, 0)
+        perry_component_frame_resource_lift((&mut frame as *mut Frame).cast(), 9, 0, rep, 0)
     };
     crate::gc::gc_collect_minor();
-    let value = payload::js_component_resource_value(4.0, frame.get(borrowed));
+    let value = payload::js_component_resource_value(9.0, frame.get(borrowed));
     assert_ne!(
         value.to_bits(),
         before,
@@ -270,12 +270,12 @@ fn exported_payload_survives_transfer_and_gc_then_is_destroyed_exactly_once() {
     drop(frame);
     let mut frame = Frame::new();
     unsafe {
-        fake_resource((&mut frame as *mut Frame).cast(), 4, 1, handle);
+        fake_resource((&mut frame as *mut Frame).cast(), 9, 1, handle);
     }
     assert!(frame.error().is_none());
     assert_eq!(DROPS.load(std::sync::atomic::Ordering::SeqCst), 1);
     unsafe {
-        fake_resource((&mut frame as *mut Frame).cast(), 4, 1, handle);
+        fake_resource((&mut frame as *mut Frame).cast(), 9, 1, handle);
     }
     assert!(frame.error().is_some());
     assert_eq!(DROPS.load(std::sync::atomic::Ordering::SeqCst), 1);

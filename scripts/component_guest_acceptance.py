@@ -129,6 +129,11 @@ def main():
     values_component = build_guest(values, "values-")
     run("run-values", [host, values_component, "--values"], timeout=120,
         expected="PASS canonical values: 14 import/export calls")
+    resources = output / "resources"
+    shutil.copytree(fixture.parent / "guest-resources", resources, dirs_exist_ok=True)
+    resource_component = build_guest(resources, "resources-")
+    run("run-resources", [host, resource_component, "--resources"], timeout=120,
+        expected="PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 destructions, trap")
     if args.native_runtime_dir:
         native_env = env.copy()
         native_env["PERRY_RUNTIME_DIR"] = str(args.native_runtime_dir.resolve())

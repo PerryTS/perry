@@ -2,7 +2,7 @@ use crate::{
     Case, Definition, Field, Function, FunctionKind, Interface, Type, World, SCHEMA_VERSION,
 };
 use anyhow::{bail, ensure, Context, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use wit_parser::{Resolve, TypeDefKind, TypeId, WorldId, WorldItem};
 
@@ -29,9 +29,11 @@ pub(crate) fn convert(resolve: &Resolve, id: WorldId) -> Result<World> {
     let mut converter = Converter {
         resolve,
         types: BTreeMap::new(),
+        export_types: false,
+        retained_imports: wit_bindgen_c::imported_types_used_by_exported_interfaces(resolve, id),
     };
-    let imports = converter.interfaces(world.imports.iter())?;
-    let exports = converter.interfaces(world.exports.iter())?;
+    let imports = converter.interfaces(world.imports.iter(), false)?;
+    let exports = converter.interfaces(world.exports.iter(), true)?;
     Ok(World {
         schema_version: SCHEMA_VERSION,
         name,
@@ -44,12 +46,15 @@ pub(crate) fn convert(resolve: &Resolve, id: WorldId) -> Result<World> {
 struct Converter<'a> {
     resolve: &'a Resolve,
     types: BTreeMap<String, Definition>,
+    export_types: bool,
+    retained_imports: HashSet<TypeId>,
 }
 
 impl Converter<'_> {
     fn interfaces<'a>(
         &mut self,
         items: impl Iterator<Item = (&'a wit_parser::WorldKey, &'a WorldItem)>,
+        exported: bool,
     ) -> Result<Vec<Interface>> {
         let mut interfaces = Vec::new();
         let mut root = Interface {
@@ -58,6 +63,9 @@ impl Converter<'_> {
             resources: BTreeMap::new(),
         };
         for (key, item) in items {
+            // Match the canonical backend: root functions use imported types;
+            // exported interfaces introduce distinct nominal definitions.
+            self.export_types = exported && matches!(item, WorldItem::Interface { .. });
             match item {
                 WorldItem::Interface { id, .. } => {
                     let interface = &self.resolve.interfaces[*id];
@@ -146,7 +154,12 @@ impl Converter<'_> {
     }
 
     fn definition(&mut self, id: TypeId) -> Result<String> {
-        let key = format!("t{}", id.index());
+        let namespace = if self.export_types && !self.retained_imports.contains(&id) {
+            "e"
+        } else {
+            "t"
+        };
+        let key = format!("{namespace}{}", id.index());
         if self.types.contains_key(&key) {
             return Ok(key);
         }

@@ -40,6 +40,7 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
         world: &world,
         names: BTreeMap::new(),
         resources: BTreeMap::new(),
+        resource_operations: BTreeMap::new(),
         source: format!("#include \"{snake}.h\"\n#include \"perry_component_frame.h\"\n"),
         imports: Vec::new(),
     };
@@ -54,6 +55,8 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
 
 #[derive(Clone)]
 struct Resource {
+    id: u32,
+    own_name: String,
     name: String,
     local: bool,
 }
@@ -65,6 +68,7 @@ struct Generator<'a> {
     world: &'a crate::World,
     names: Names,
     resources: Resources,
+    resource_operations: BTreeMap<u32, Resource>,
     source: String,
     imports: Vec<(usize, usize)>,
 }
@@ -96,13 +100,16 @@ impl Generator<'_> {
             };
             let name = format!("{namespace}_{encoded}_t");
             if matches!(self.resolve.types[id].kind, TypeDefKind::Resource) {
-                self.resources.insert(
-                    id,
-                    Resource {
-                        name: name.clone(),
-                        local: !import,
-                    },
-                );
+                let resource = Resource {
+                    id: u32::try_from(id.index() * 2 + usize::from(!import))
+                        .expect("resource type index"),
+                    own_name: format!("{namespace}_own_{encoded}_t"),
+                    name: name.clone(),
+                    local: !import,
+                };
+                self.resource_operations
+                    .insert(resource.id, resource.clone());
+                self.resources.insert(id, resource);
             }
             self.names.insert(id, name);
         }
@@ -153,6 +160,7 @@ impl Generator<'_> {
         let retained =
             wit_bindgen_c::imported_types_used_by_exported_interfaces(self.resolve, self.id);
         self.names.retain(|id, _| retained.contains(id));
+        self.resources.retain(|id, _| retained.contains(id));
         for (key, item) in &world.exports {
             if let WorldItem::Interface { id, .. } = item {
                 let mut live = LiveTypes::default();
@@ -197,28 +205,21 @@ static void perry_initialize(void *f) {
     }
 
     fn resource_adapters(&mut self) -> Result<()> {
-        for (id, resource) in &self.resources {
+        for (id, resource) in &self.resource_operations {
             if !resource.local {
                 continue;
             }
             let stem = resource.name.strip_suffix("_t").unwrap();
-            let ty = id.index();
+            let ty = *id;
             // wit-bindgen uses a pointer-shaped rep, but the canonical ABI
             // permits an opaque i32. Never allocate or dereference a JS address.
             writeln!(self.source, "void {stem}_destructor({} *rep) {{\nvoid *f = perry_component_frame_new();\nperry_component_frame_resource_destroy(f, {ty}, (uint32_t)(uintptr_t)rep);\nbool failed = perry_component_frame_failed(f);\nperry_component_frame_drop(f);\nif (failed) __builtin_trap();\n}}", resource.name)?;
         }
         self.source.push_str("static uint32_t perry_resource(void *f, uint32_t type, uint32_t operation, uint32_t value) {\nswitch (type) {\n");
-        for (id, resource) in &self.resources {
+        for (id, resource) in &self.resource_operations {
             let stem = resource.name.strip_suffix("_t").unwrap();
-            // Handle typedef names are supplied by the maintained C backend.
-            let resource_name = self.resolve.types[*id]
-                .name
-                .as_ref()
-                .unwrap()
-                .to_snake_case();
-            let namespace = stem.strip_suffix(&format!("_{resource_name}")).unwrap();
-            let own = format!("{namespace}_own_{resource_name}_t");
-            writeln!(self.source, "case {}:\nif (operation == 1) {{ {stem}_drop_own(({own}){{ (int32_t)value }}); return 0; }}", id.index())?;
+            let own = &resource.own_name;
+            writeln!(self.source, "case {}:\nif (operation == 1) {{ {stem}_drop_own(({own}){{ (int32_t)value }}); return 0; }}", id)?;
             if resource.local {
                 writeln!(self.source, "if (operation == 0) return (uint32_t){stem}_new(({} *)(uintptr_t)value).__handle;", resource.name)?;
             }

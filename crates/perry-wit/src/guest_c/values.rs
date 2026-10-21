@@ -185,7 +185,7 @@ impl<'a> Emitter<'a> {
                 };
                 Ok(self.slot(&format!(
                     "perry_component_frame_resource_lift(f, {}, (uint32_t){handle}, {rep}, {})",
-                    resource.index(),
+                    info.id,
                     u8::from(owned)
                 )))
             }
@@ -355,10 +355,11 @@ impl<'a> Emitter<'a> {
                     wit_parser::Handle::Own(id) => (*id, true),
                     wit_parser::Handle::Borrow(id) => (*id, false),
                 };
-                let local = self.resources[&resource].local;
+                let info = &self.resources[&resource];
+                let local = info.local;
                 let value = format!(
                     "perry_component_frame_resource_lower(f, {slot}, {}, {}, {})",
-                    resource.index(),
+                    info.id,
                     u8::from(owned),
                     u8::from(local)
                 );
