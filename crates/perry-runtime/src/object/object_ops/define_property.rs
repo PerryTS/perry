@@ -260,6 +260,12 @@ pub(crate) unsafe fn define_own_property_decoded(
     {
         return true;
     }
+    // A new key on a plain ordinary object: claimed with its attributes in
+    // one step (`define_own_data::define_fresh_own_from_shape`).
+    if super::super::define_own_data::define_fresh_own_from_shape(scope, receiver, key, descriptor)
+    {
+        return true;
+    }
     super::super::reflect_support::reflect_define_property_decoded(scope, receiver, key, descriptor)
 }
 

@@ -2421,7 +2421,6 @@ unsafe fn probe_add(
         & (crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
         != 0
         || (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
@@ -2440,6 +2439,20 @@ unsafe fn probe_add(
                     | crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
                     | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
                 != 0)
+    {
+        return false;
+    }
+    // An own descriptor on another key does not touch this add: the probe
+    // proved `key` absent from a complete own list, and an ordinary object's
+    // attributes live in that list (`key_attrs`), so no own descriptor covers
+    // it. `OBJ_FLAG_HAS_DESCRIPTORS` is the object-wide, set-only flag; the
+    // per-key answer is the key list (zod v4 defines `_zod` non-enumerable,
+    // then adds ~60 methods by assignment). A typed array keeps its synthetic
+    // attributes elsewhere, and an arguments object's are born with its
+    // layout, so both keep the full `[[Set]]`.
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+        && ((*gc)._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
+            || !crate::object::key_attrs::attrs_live_in_keys_of_bits(POINTER_TAG | obj as u64))
     {
         return false;
     }
