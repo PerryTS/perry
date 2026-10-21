@@ -1,0 +1,100 @@
+{
+  "workflow": "https://github.com/PerryTS/perry/actions/runs/39614047391",
+  "job": 119271501754,
+  "artifact": 12353524504,
+  "artifact_sha256": "94972de396d8e9255bf4d03c2b3c7e4db01185e2c9c7d3f9b2d644c26ef6a330",
+  "pr_head": "dfd880f2fae16bba04c99ce354417252331fa8dd",
+  "tested_merge": "53fab4a9450f9d5909654f4dc4d713971085ffe3",
+  "standalone": {
+    "smoke": 6,
+    "acceptance": 20,
+    "gap": 10
+  },
+  "components": {
+    "native": {
+      "passed_phases": 14,
+      "phases": [
+        "rust-guest",
+        "componentize",
+        "bindings",
+        "compile-host",
+        "run-host",
+        "compile-host-moving",
+        "run-host-moving",
+        "resources-guest",
+        "resources-componentize",
+        "resources-bindings",
+        "resources-compile",
+        "resources-run",
+        "resources-compile-moving",
+        "resources-run-moving"
+      ]
+    },
+    "guest": {
+      "passed_phases": 34,
+      "phases": [
+        "guest-bindings",
+        "compile-guest",
+        "link-guest-component",
+        "build-rust-host",
+        "run-rust-host",
+        "build-rust-logger",
+        "componentize-logger",
+        "compose",
+        "run-composed",
+        "values-guest-bindings",
+        "values-compile-guest",
+        "values-link-guest-component",
+        "run-values",
+        "resources-guest-bindings",
+        "resources-compile-guest",
+        "resources-link-guest-component",
+        "run-resources",
+        "run-resources-moving",
+        "dual-resources-guest-bindings",
+        "dual-resources-compile-guest",
+        "dual-resources-link-guest-component",
+        "run-dual-resources",
+        "perry-host-bindings",
+        "perry-host-compile",
+        "perry-host-run",
+        "perry-host-moving-bindings",
+        "perry-host-moving-compile",
+        "perry-host-moving-run",
+        "capabilities-guest-bindings",
+        "capabilities-compile-guest",
+        "capabilities-link-guest-component",
+        "host-bindings",
+        "host-compile",
+        "host-run"
+      ]
+    }
+  },
+  "moving_gc": {
+    "native/run-host-moving": {
+      "copied_objects": 3179,
+      "quarantine": true,
+      "evacuation_ok": 101
+    },
+    "native/resources-run-moving": {
+      "copied_objects": 55,
+      "quarantine": true,
+      "evacuation_ok": 6
+    },
+    "guest/run-resources-moving": {
+      "copied_objects": 4579,
+      "quarantine": false,
+      "evacuation_ok": 206
+    },
+    "guest/perry-host-moving-run": {
+      "copied_objects": 3179,
+      "quarantine": true,
+      "evacuation_ok": 101
+    }
+  },
+  "scope": "Linux required execution: 36 standalone commands; 14 native and 34 guest component phases. Host-defined resources and command-host API are separate changes.",
+  "merge_parents": [
+    "5e5528c317d6d72a41505799372c62620d731afa",
+    "dfd880f2fae16bba04c99ce354417252331fa8dd"
+  ]
+}

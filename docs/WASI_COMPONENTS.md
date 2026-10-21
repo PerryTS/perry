@@ -244,3 +244,15 @@ verdicts, component artifacts and the source revision are retained even on
 failure. Docs-only PRs skip this build. The extended `wasi-check / wasi-codegen`
 recipe also retains component execution on Linux; its wider platform matrix
 does not yet qualify native component hosting outside Linux.
+
+The combined required job passed in
+[run 39614047391](https://github.com/PerryTS/perry/actions/runs/39614047391/job/119271501754)
+on PR head `dfd880f2fae16bba04c99ce354417252331fa8dd`, tested as merge revision
+`53fab4a9450f9d5909654f4dc4d713971085ffe3`. Its retained reports pass all 36
+standalone command cases, 14 native component phases, and 34 guest component
+phases. Native moving runs recorded copied objects and protected from-space;
+the WASI resource run recorded 206 verified collections and 4,579 copied
+objects. The [receipt](validation/component-required-ci-20261021.json) records
+source revisions, artifact digest and phase names. This qualifies promotion
+of the existing Linux component profile; host-defined resources and native
+command hosting remain separate changes.
