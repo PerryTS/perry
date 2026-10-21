@@ -579,10 +579,21 @@ fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Opt
             Ok(())
         },
         |ctx, object| {
+            // A CommonJS namespace under Bun interop also carries the
+            // run-time keys of its evaluated `module.exports`.
+            let object = if ctx.cjs_interop_namespaces.contains(name) {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_namespace_adopt_cjs_exports",
+                    &[(DOUBLE, object)],
+                )
+            } else {
+                object.to_string()
+            };
             Ok(Some(ctx.block().call(
                 DOUBLE,
                 "js_finalize_namespace",
-                &[(DOUBLE, object)],
+                &[(DOUBLE, &object)],
             )))
         },
     )

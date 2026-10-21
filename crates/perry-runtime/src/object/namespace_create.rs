@@ -94,6 +94,116 @@ pub extern "C" fn js_create_namespace(
     values: *const f64,
     live_flags: *const u8,
 ) -> f64 {
+    js_finalize_namespace(build_namespace_object(
+        n, keys, key_lens, values, live_flags,
+    ))
+}
+
+/// The namespace of a CommonJS module under Bun's interop: the static
+/// entries (the lexer-detected names, `default`, `module.exports`), plus
+/// every other own enumerable string key of the evaluated `module.exports`
+/// object. Bun exposes all of them on `import * as ns`; the static lexer
+/// cannot see names that only exist at run time (a UMD factory's return
+/// value, `module.exports = make()`), so they are read here, once, after
+/// the module body ran. Values are a snapshot, like Node's detected names.
+/// `default` already holds the exports object and `__esModule` is interop
+/// metadata, so neither is copied.
+#[no_mangle]
+pub extern "C" fn js_create_cjs_namespace(
+    n: i32,
+    keys: *const *const u8,
+    key_lens: *const i32,
+    values: *const f64,
+    live_flags: *const u8,
+) -> f64 {
+    let ns = build_namespace_object(n, keys, key_lens, values, live_flags);
+    js_finalize_namespace(js_namespace_adopt_cjs_exports(ns))
+}
+
+/// The consumer-side twin of [`js_create_cjs_namespace`]: an `import * as ns`
+/// of a CommonJS module read as a whole value is materialized from the
+/// importer's member list, then takes the run-time `module.exports` keys here
+/// before it is finalized. Returns the (possibly relocated) namespace.
+#[no_mangle]
+pub extern "C" fn js_namespace_adopt_cjs_exports(ns: f64) -> f64 {
+    unsafe { adopt_cjs_exports(ns) }
+}
+
+/// Copy the own enumerable string keys of `ns.default` (the evaluated
+/// `module.exports`) that `ns` does not already own. `ns` is not finalized
+/// yet, so it is still extensible. Everything that can allocate keeps the
+/// namespace, the copy, and the current key rooted.
+unsafe fn adopt_cjs_exports(ns: f64) -> f64 {
+    let ns_v = JSValue::from_bits(ns.to_bits());
+    if !ns_v.is_pointer() {
+        return ns;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ns_h = scope.root_raw_mut_ptr(ns_v.as_pointer::<ObjectHeader>() as *mut ObjectHeader);
+    let default_key = crate::string::js_string_from_bytes(b"default".as_ptr(), 7);
+    let exports = ns_h
+        .with_mut_ptr::<ObjectHeader, _>(|obj| js_object_get_field_by_name_f64(obj, default_key));
+    let current = |h: &crate::gc::RuntimeHandle<'_>| {
+        h.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64))
+    };
+    if !JSValue::from_bits(exports.to_bits()).is_reference() {
+        return current(&ns_h);
+    }
+    let exports_h = scope.root_nanbox_f64(exports);
+    // CopyDataProperties of the exports value (objects, functions and
+    // proxies alike) into a plain object, then move the missing keys over.
+    let staging_obj = js_object_alloc(0, 0);
+    let staging_h = scope.root_raw_mut_ptr(staging_obj);
+    let staging_v =
+        staging_h.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64));
+    super::assign::js_object_literal_spread(staging_v, exports_h.get_nanbox_f64());
+    let staging_v =
+        staging_h.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64));
+    let names = js_object_keys_value(staging_v);
+    let names_h = scope.root_raw_mut_ptr(names);
+    let len = crate::array::js_array_length(names);
+    for i in 0..len {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key_v = names_h
+            .with_mut_ptr::<crate::array::ArrayHeader, _>(|a| crate::array::js_array_get_f64(a, i));
+        let key_ptr =
+            crate::value::js_get_string_pointer_unified(key_v) as *const crate::StringHeader;
+        if key_ptr.is_null() {
+            continue;
+        }
+        match super::has_own_helpers::str_from_string_header(key_ptr) {
+            Some("default") | Some("__esModule") | None => continue,
+            Some(_) => {}
+        }
+        let key_h = iter_scope.root_string_ptr(key_ptr);
+        let ns_value =
+            ns_h.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64));
+        let key_value = key_h
+            .with_const_ptr::<crate::StringHeader, _>(|k| crate::value::js_nanbox_string(k as i64));
+        if crate::value::js_is_truthy(js_object_has_own(ns_value, key_value)) != 0 {
+            continue;
+        }
+        let value = staging_h.with_mut_ptr::<ObjectHeader, _>(|o| {
+            key_h
+                .with_const_ptr::<crate::StringHeader, _>(|k| js_object_get_field_by_name_f64(o, k))
+        });
+        let value_h = iter_scope.root_nanbox_f64(value);
+        ns_h.with_mut_ptr::<ObjectHeader, _>(|o| {
+            key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
+                js_object_set_field_by_name(o, k, value_h.get_nanbox_f64())
+            })
+        });
+    }
+    current(&ns_h)
+}
+
+fn build_namespace_object(
+    n: i32,
+    keys: *const *const u8,
+    key_lens: *const i32,
+    values: *const f64,
+    live_flags: *const u8,
+) -> f64 {
     let count = if n < 0 { 0 } else { n as usize };
     unsafe {
         // Export values arrive in a caller stack buffer, which is not part of
@@ -173,7 +283,7 @@ pub extern "C" fn js_create_namespace(
         // NaN-box POINTER_TAG and return.
         obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let bits = (obj as u64) | 0x7FFD_0000_0000_0000;
-        js_finalize_namespace(f64::from_bits(bits))
+        f64::from_bits(bits)
     }
 }
 

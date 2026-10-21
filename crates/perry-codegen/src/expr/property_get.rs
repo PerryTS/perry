@@ -1207,6 +1207,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // own sources even when both modules export `make`.
                     // Falls back to the flat `import_function_prefixes`
                     // for namespaces with no overlapping conflicts.
+                    if let Some(exports) = cjs_interop_exports_receiver(ctx, name, property) {
+                        let member = Expr::PropertyGet {
+                            byte_offset: *byte_offset,
+                            object: Box::new(exports),
+                            property: property.clone(),
+                        };
+                        return lower_expr(ctx, &member);
+                    }
                     let _ns_lookup_name = if let Expr::ExternFuncRef { name, .. } = object.as_ref()
                     {
                         Some(name.clone())
@@ -1685,4 +1693,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // conditionally on the truthiness test.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// `ns.member` where `ns` is an `import * as ns` of a CommonJS module under
+/// `--platform bun` and the export lexer did not see `member` (a UMD factory's
+/// result, `module.exports = make()`): Bun reads it off the evaluated
+/// `module.exports`, which the namespace's `default` holds. Returns that
+/// receiver expression (`ns.default`), or `None` when the member resolves
+/// statically (a detected export or a class).
+pub(crate) fn cjs_interop_exports_receiver(
+    ctx: &FnCtx<'_>,
+    namespace: &str,
+    member: &str,
+) -> Option<Expr> {
+    if !ctx.cjs_interop_namespaces.contains(namespace) {
+        return None;
+    }
+    let key = (namespace.to_string(), member.to_string());
+    if ctx.namespace_member_prefixes.contains_key(&key)
+        || ctx
+            .class_ids
+            .contains_key(&crate::namespace_member_class_key(namespace, member))
+    {
+        return None;
+    }
+    Some(Expr::PropertyGet {
+        byte_offset: 0,
+        object: Box::new(Expr::ExternFuncRef {
+            name: namespace.to_string(),
+            param_types: Vec::new(),
+            return_type: HirType::Any,
+        }),
+        property: "default".to_string(),
+    })
 }

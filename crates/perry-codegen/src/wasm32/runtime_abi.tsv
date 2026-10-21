@@ -813,6 +813,7 @@ js_container_start	ptr	ptr
 js_container_stop	ptr	ptr,i32s
 js_count_queuing_strategy_new	f64	f64
 js_create_callback	f64	i64,i64,i64
+js_create_cjs_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_native_module_namespace	f64	ptr,usize
 js_cron_timer_has_pending	i32s	

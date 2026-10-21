@@ -1359,6 +1359,7 @@ pub(super) fn emit_namespace_populator(
     entries: &[NamespaceEntry],
     key_globals: &[(String, usize)],
     module_prefix: &str,
+    adopt_cjs_exports: bool,
 ) {
     debug_assert_eq!(entries.len(), key_globals.len());
     // Issue #842: side-effect-only dynamic-import targets land here
@@ -1526,9 +1527,16 @@ pub(super) fn emit_namespace_populator(
     // so the object survives subsequent GC cycles.
     let n_str = format!("{}", n);
     let blk = ctx.block();
+    // A CommonJS module under Bun interop also exposes the run-time keys of
+    // its evaluated `module.exports` (see `js_create_cjs_namespace`).
+    let create = if adopt_cjs_exports {
+        "js_create_cjs_namespace"
+    } else {
+        "js_create_namespace"
+    };
     let result = blk.call(
         DOUBLE,
-        "js_create_namespace",
+        create,
         &[
             (I32, &n_str),
             (PTR, &keys_buf),

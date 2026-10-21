@@ -561,6 +561,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .imported_vars
                         .contains(&crate::namespace_member_var_key(ns_name, property));
                     if ctx.namespace_imports.contains(ns_name)
+                        && crate::expr::property_get::cjs_interop_exports_receiver(
+                            ctx, ns_name, property,
+                        )
+                        .is_none()
                         && has_rest
                         && declared_count == 1
                         && !is_var
