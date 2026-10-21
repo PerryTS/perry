@@ -1,0 +1,16 @@
+package perry:network-probe@1.0.0;
+
+interface probe {
+    resolve: func(name: string) -> result<list<string>, string>;
+    exchange: func(port: u16, connected: bool, payload: string) -> result<string, string>;
+}
+
+world plugin {
+    import wasi:io/poll@0.2.12;
+    import wasi:sockets/network@0.2.12;
+    import wasi:sockets/udp@0.2.12;
+    import wasi:sockets/instance-network@0.2.12;
+    import wasi:sockets/ip-name-lookup@0.2.12;
+    import wasi:sockets/udp-create-socket@0.2.12;
+    export probe;
+}

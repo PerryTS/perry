@@ -123,6 +123,30 @@ def main():
             "--no-auto-optimize", "--no-cache", "-o", instrumented])
         run("resources-run-moving", [instrumented, component], expected=marker,
             timeout=60, moving=True)
+    env = normal_env.copy()
+    network = output / "network"
+    shutil.copytree(fixture.parent / "network", network, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("target"))
+    run("network-guest", ["cargo", "build", "--locked", "--release", "--target", "wasm32-unknown-unknown",
+        "--manifest-path", network / "rust/Cargo.toml"])
+    core = output / "rust-target/wasm32-unknown-unknown/release/perry_component_network_fixture.wasm"
+    component = network / "network.component.wasm"
+    run("network-componentize", [args.componentize.resolve(), core, component])
+    run("network-bindings", [args.wit.resolve(), network / "world.wit", network / "generated", "plugin"])
+    marker = "PASS component networking: UDP connected/unconnected traffic, exact grants, DNS, isolation"
+    for moving in ([False, True] if args.moving_gc else [False]):
+        env = normal_env.copy()
+        suffix = "-moving" if moving else ""
+        if moving:
+            for knob in ["PERRY_GC_FORCE_EVACUATE", "PERRY_GC_VERIFY_EVACUATION",
+                         "PERRY_GC_PROTECT_FROMSPACE", "PERRY_GC_DIAG", "PERRY_GC_INSTRUMENTS"]:
+                env[knob] = "1"
+        executable = network / ("host" + suffix + (".exe" if sys.platform == "win32" else ""))
+        run("network-compile" + suffix, [args.perry.resolve(), "compile", network / "host.ts",
+            "--no-auto-optimize", "--no-cache", "-o", executable])
+        run("network-run" + suffix, [sys.executable, root / "scripts/component_network_peer.py",
+            "--report", output / ("network-peer" + suffix + ".json"), "--timeout", "90", "--",
+            executable, component], expected=marker, timeout=100, moving=moving)
     return 0
 
 
