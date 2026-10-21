@@ -1218,6 +1218,18 @@ pub extern "C" fn js_arraylike_slice(
         super::species::array_species_create(recv_h.get_nanbox_f64(), count.max(0) as usize)
     };
     let result_h = scope.root_nanbox_f64(result);
+    // A plain object that owns and inherits no indexed property has no element
+    // in any range: the species result is already `count` holes.
+    let recv_bits = JSValue::from_bits(recv_h.get_nanbox_f64().to_bits());
+    if recv_bits.is_pointer()
+        && unsafe {
+            crate::array::arraylike_has_no_indexed_properties(
+                recv_bits.as_pointer::<crate::object::ObjectHeader>(),
+            )
+        }
+    {
+        return result_h.get_nanbox_f64();
+    }
     let value_h = scope.root_nanbox_f64(undef());
     for n in 0..count {
         let k = s + n;

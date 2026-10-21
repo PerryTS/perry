@@ -1,0 +1,1 @@
+`Array.from({ length: n })` on a plain object and copies of holey arrays (`concat`, `splice`, `slice`) no longer run a per-index `HasProperty` when no index can exist; a `lru-cache` constructor with a large `max` spent about 100 ms there.
