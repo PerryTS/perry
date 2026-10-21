@@ -15,6 +15,10 @@ fn component(body: &str) -> Vec<u8> {
 }
 
 fn exit_component(code: u8, with_code: bool, start: bool, export: bool) -> Vec<u8> {
+    wat::parse_str(exit_source(code, with_code, start, export)).unwrap()
+}
+
+fn exit_source(code: u8, with_code: bool, start: bool, export: bool) -> String {
     let (name, param, ty, version) = if with_code {
         ("exit-with-code", "status-code", "u8", "0.2.12")
     } else {
@@ -32,7 +36,7 @@ fn exit_component(code: u8, with_code: bool, start: bool, export: bool) -> Vec<u
     } else {
         ""
     };
-    wat::parse_str(format!(
+    format!(
         r#"(component
           (import "wasi:cli/exit@{version}" (instance $exit
             (export "{name}" (func (param "{param}" {ty})))))
@@ -48,8 +52,7 @@ fn exit_component(code: u8, with_code: bool, start: bool, export: bool) -> Vec<u
             (canon lift (core func $code "run")))
           (instance $run (export "run" (func $run)))
           {export})"#
-    ))
-    .unwrap()
+    )
 }
 
 #[test]
@@ -98,6 +101,13 @@ fn initialization_exit_requires_a_valid_command_export() {
     let error =
         run_command(&exit_component(0, false, true, false), &Options::default()).unwrap_err();
     assert!(format!("{error:#}").contains("validating wasi:cli/run"));
+
+    // An init-time exit(0) must not hide a wrong run signature. CommandPre's
+    // name-only lookup alone would accept the export until after instantiation.
+    let source = exit_source(0, false, true, true).replace("(result (result))", "(result u32)");
+    let bytes = wat::parse_str(source).unwrap();
+    let error = run_command(&bytes, &Options::default()).unwrap_err();
+    assert!(format!("{error:#}").contains("must return result without payloads"));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! One-shot WASI P2 command execution, separate from reusable library worlds.
 use crate::{limits::Limits, wasi, Options, WasiOptions};
-use anyhow::{ensure, Context, Result};
-use wasmtime::component::{Component, Linker};
+use anyhow::{bail, ensure, Context, Result};
+use wasmtime::component::{types::ComponentItem, Component, Linker, Type};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::p2::bindings::sync::CommandPre;
 use wasmtime_wasi::{I32Exit, WasiCtxView, WasiView};
@@ -15,6 +15,31 @@ impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         self.wasi.view()
     }
+}
+
+fn validate_command(component: &Component) -> Result<()> {
+    // Match the exact lookup used by the lockfile-pinned Command bindings,
+    // including Wasmtime's compatible-version lookup. Do not inspect an
+    // arbitrary first cli/run export if the component exports several versions.
+    let (_, interface) = component
+        .get_export(None, "wasi:cli/run@0.2.12")
+        .context("missing wasi:cli/run interface")?;
+    let (item, _) = component
+        .get_export(Some(&interface), "run")
+        .context("missing wasi:cli/run function")?;
+    let ComponentItem::ComponentFunc(run) = item else {
+        bail!("wasi:cli/run export is not a function");
+    };
+    ensure!(
+        run.params().len() == 0,
+        "wasi:cli/run must take no arguments"
+    );
+    let results: Vec<_> = run.results().collect();
+    ensure!(
+        matches!(results.as_slice(), [Type::Result(result)] if result.ok().is_none() && result.err().is_none()),
+        "wasi:cli/run must return result without payloads"
+    );
+    Ok(())
 }
 
 /// Execute `wasi:cli/run` once in a fresh store. Returned `ok`/`err` become
@@ -35,6 +60,9 @@ pub fn run_command(bytes: &[u8], options: &Options) -> Result<i32> {
     let component = Component::from_binary(&engine, bytes)
         .map_err(anyhow::Error::from)
         .context("compiling WASI command")?;
+    // CommandPre checks names, but generated function type checks happen only
+    // after instantiation. Validate the signature before an initializer exits.
+    validate_command(&component).context("validating wasi:cli/run command export")?;
     let mut linker = Linker::<State>::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
     // Validate the command export before an initializer can request exit.
