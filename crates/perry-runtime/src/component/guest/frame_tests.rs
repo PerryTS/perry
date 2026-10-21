@@ -8,11 +8,11 @@ extern "C-unwind" fn returned_array(
 }
 
 #[test]
-fn export_result_root_outlives_call_temporary_handles() {
+fn export_checkpoint_drains_jobs_without_timers_and_retains_its_result() {
     let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
-    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_init();
     let scope = RuntimeHandleScope::new();
     let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
     let previous = scope.root_nanbox_f64(super::super::maybe_registry());
@@ -28,6 +28,25 @@ fn export_result_root_outlives_call_temporary_handles() {
         0,
     ) as i64);
     set_field(exports.get_nanbox_f64(), b"array", callback);
+    let jobs = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc_with_length(1) as i64,
+    ));
+    crate::array::js_array_set_f64(array(jobs.get_nanbox_f64()), 0, 0.0);
+    let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(unwind record_checkpoint_job, 0),
+        1,
+    ));
+    crate::closure::js_closure_set_capture_f64(
+        callback.get_raw_mut_ptr(),
+        0,
+        jobs.get_nanbox_f64(),
+    );
+    crate::builtins::js_queue_microtask(
+        callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    );
+    crate::timer::js_set_immediate_callback(
+        callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    );
     unsafe {
         use crate::object::owned_state_bag::{self as bag, COMPONENT_EXPORTS, COMPONENT_GUEST};
         bag::store(
@@ -44,6 +63,17 @@ fn export_result_root_outlives_call_temporary_handles() {
         let args = perry_component_frame_array(frame, 0);
         let result = perry_component_frame_call(frame, 0, 0, args);
         assert_eq!(perry_component_frame_failed(frame), 0);
+        assert_eq!(
+            crate::array::js_array_get_f64(array(jobs.get_nanbox_f64()), 0),
+            1.0,
+            "the export checkpoint must run its microtask but leave the immediate pending"
+        );
+        crate::timer::js_event_loop_check_phase();
+        assert_eq!(
+            crate::array::js_array_get_f64(array(jobs.get_nanbox_f64()), 0),
+            2.0,
+            "the immediate must remain available to its event-loop phase"
+        );
         let before = super::frame(frame).get(result).to_bits();
         crate::gc::gc_collect_minor();
         assert_ne!(
@@ -59,6 +89,18 @@ fn export_result_root_outlives_call_temporary_handles() {
             previous.get_nanbox_f64(),
         );
     }
+}
+
+extern "C-unwind" fn record_checkpoint_job(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let jobs = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+    crate::gc::gc_collect_minor();
+    let count = crate::array::js_array_get_f64(array(jobs.get_nanbox_f64()), 0);
+    crate::array::js_array_set_f64(array(jobs.get_nanbox_f64()), 0, count + 1.0);
+    undefined()
 }
 
 #[test]

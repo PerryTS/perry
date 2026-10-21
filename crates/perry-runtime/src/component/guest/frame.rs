@@ -482,7 +482,7 @@ pub unsafe extern "C" fn perry_component_frame_call(
     // finalizers recorded by explicit or automatic collection as ordinary
     // jobs; it does not wait for timers, I/O or asynchronous WIT results.
     frame(pointer).guard(|_| {
-        crate::promise::js_promise_run_microtasks();
+        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
     });
     result
 }

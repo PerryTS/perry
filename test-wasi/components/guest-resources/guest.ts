@@ -5,6 +5,8 @@ const foreign = imports["perry:guest-resources/foreign@1.0.0"];
 let escaped: Parameters<typeof counter.value>[0] | undefined;
 let cleanupForeign: Parameters<typeof foreign["[method]token.read"]>[0] | undefined;
 let cleanupLocal: Parameters<typeof counter.value>[0] | undefined;
+let checkpointJobs = 0;
+let checkpointImmediate: ReturnType<typeof setImmediate> | undefined;
 function check(ok: boolean, message: string): void { if (!ok) throw new Error(message); }
 function cleanupCounter(value: number) {
   return counter.create({ value }, payload => {
@@ -17,6 +19,8 @@ function abandonLocal() { cleanupCounter(602); }
 register({
   "perry:guest-resources/counters@1.0.0": {
     "start-cleanup"() {
+      queueMicrotask(() => { checkpointJobs += 1; });
+      checkpointImmediate = setImmediate(() => { checkpointJobs += 10; });
       abandonImported();
       abandonLocal();
       cleanupForeign = foreign["[constructor]token"](603).borrow();
@@ -30,6 +34,8 @@ register({
       return cleanupCounter(607);
     },
     "check-cleanup-borrows"() {
+      check(checkpointJobs === 1, "export checkpoint must drain jobs without running immediates");
+      clearImmediate(checkpointImmediate!);
       collect();
       return foreign["[method]token.read"](cleanupForeign!) === 603
         && (counter.value(cleanupLocal!) as {value:number}).value === 606;
