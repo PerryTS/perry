@@ -910,6 +910,10 @@ impl<'a> Gen<'a> {
                 let _ = (&a, &s);
                 self.call_with(fx, callee, a, s, 0)
             }
+            Expr::FuncRef(id) if self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) => {
+                let name = &self.view.expect("view").foreign_funcs[id];
+                self.extern_value(mi, name)
+            }
             Expr::FuncRef(id) => {
                 let f = self.fn_by_id(mi, *id);
                 let t = self.m.funcs[f as usize].token;

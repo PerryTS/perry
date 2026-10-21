@@ -689,9 +689,10 @@ impl Model {
                     self.escape(t, reason);
                 }
             }
-            Cons::ContractThis { tmpl, reason } => {
+            Cons::ContractThis { tmpl, reason, statics } => {
                 for &t in toks {
-                    if self.tmpl_of(t) != Some(tmpl) {
+                    let own_class = statics && self.toks[t as usize] == TokKind::ClassObj(tmpl);
+                    if self.tmpl_of(t) != Some(tmpl) && !own_class {
                         self.escape(t, reason);
                     }
                 }
@@ -712,7 +713,7 @@ impl Model {
             }
             Cons::AddsKeys => {
                 for &t in toks {
-                    let t = self.contract_recv.get(&t).copied().unwrap_or(t);
+                    let t = self.contract_recv.get(&t).and_then(|v| v.first()).copied().unwrap_or(t);
                     if let Some(tm) = self.tmpl_of(t) {
                         *self.adds_keys.entry(tm).or_default() += 1;
                     }
@@ -1156,7 +1157,7 @@ impl Model {
         }
     }
 
-    fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+    pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A program-owned global: an ordinary field of the global object.
         if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) = (&self.toks[t as usize], key) {
             if builtins::global_user_key(&self.atoms[a as usize])
@@ -1200,13 +1201,40 @@ impl Model {
             }
             return;
         }
-        if let Some(&i) = self.contract_recv.get(&t) {
-            self.store_into(i, key, src, site);
+        if let Some(is) = self.contract_recv.get(&t).cloned() {
+            self.recv_log.entry(t).or_default().push(crate::model::RecvEffect::Store(key, src, site));
+            for i in is {
+                self.store_into(i, key, src, site);
+            }
         }
         self.mark_use(t, crate::model::MARK_ESCAPE);
-        let tm = self.tmpl_of(t);
+        // A store into another unit's instance, class object or prototype
+        // is beyond its contract (census report).
+        let tm = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => Some(tm),
+            _ => None,
+        };
+        // A store into an existing data field of another unit's literal
+        // layout opens nothing (§5): a store effect its defining unit
+        // performs with an unknown value (decision 17). The value escapes:
+        // every other unit reads that field as unknown.
+        let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
+            (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
+                facts.kind == "litclass" && facts.fields.iter().any(|f| f.data_field && f.key == self.atoms[a as usize])
+            }
+            _ => false,
+        };
         if let Some(tm) = tm.filter(|tm| self.foreign.contains_key(tm)) {
-            self.foreign_written.insert(tm);
+            match key {
+                Key::Named(a) if effect => {
+                    self.foreign_stores.insert((tm, a));
+                    let r = self.reason("stored into another unit's object");
+                    self.sink_node(src, r);
+                }
+                _ => {
+                    self.foreign_written.insert(tm);
+                }
+            }
         }
         match key {
             Key::Named(a) => {
@@ -1222,7 +1250,8 @@ impl Model {
                     } else if !w.post.contains(&site) {
                         w.post.push(site);
                     }
-                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor {
+                    // A store effect's key exists in the defining unit's layout.
+                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect {
                         *self.adds_keys.entry(tm).or_default() += 1;
                     }
                 }
@@ -1331,7 +1360,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::ContractThis { tmpl, reason } => format!("contractthis {n} {tmpl} {reason}"),
+            Cons::ContractThis { tmpl, reason, statics } => format!("contractthis {n} {tmpl} {reason} {}", *statics as u8),
             Cons::TopIfAny { dst, from, reason } => format!("topifany {n} {dst} {from} {}", reason.map_or(-1, |r| r as i64)),
             Cons::Hard { kind, reason } => format!("hard {n} {} {reason}", kind.code()),
             Cons::AddsKeys => format!("addskeys {n}"),

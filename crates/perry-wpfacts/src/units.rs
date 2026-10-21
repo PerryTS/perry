@@ -3,7 +3,7 @@
 
 use crate::pts::{FxHashMap, FxHashSet};
 use crate::{FactsConfig, ProgramFacts, SiteFacts, TemplateFacts};
-use perry_hir::{Export, ImportSpecifier, Module};
+use perry_hir::{Export, Import, ImportSpecifier, Module};
 
 /// A published class as its importers see it (design §11.2): its template
 /// and the facts its defining unit proved, its prototype methods (key,
@@ -17,6 +17,23 @@ pub(crate) struct ClassContract {
     pub facts: TemplateFacts,
     pub methods: Vec<(String, String)>,
     pub native_parent: Option<(String, String)>,
+    /// Fields that hold exactly these functions of the defining unit, each
+    /// a function contract (a literal's methods: `errorUtil.errToObj`);
+    /// every other field holds unknown values for the reader.
+    pub field_fns: Vec<(String, Vec<FnContract>)>,
+    /// The defining unit stores under computed keys: a reader may find any
+    /// key (unknown values). Otherwise the keys are the facts' fields.
+    pub open_keys: bool,
+    /// The class object's own members along the chain inside the defining
+    /// unit (key, the function when it is a static method; else an unknown
+    /// value), and whether it may hold other keys (computed static stores,
+    /// a native parent): then every static is unknown.
+    pub statics: Vec<(String, Option<String>)>,
+    pub statics_open: bool,
+    /// The static methods with a function contract (key, contract): the
+    /// defining unit checked their results (an instance of a contract
+    /// class is given out, `Model::give_out`).
+    pub static_fns: Vec<(String, FnContract)>,
 }
 
 /// A published function as its callers see it (design §11.2): per
@@ -27,9 +44,87 @@ pub(crate) struct ClassContract {
 #[derive(Clone, Debug)]
 pub(crate) struct FnContract {
     pub name: String,
+    /// Per parameter: what the callee does to the argument itself
+    /// (`model::MARK_*`), and to what the argument reaches (its fields,
+    /// transitively). Two sets: reading `p.n` and converting it is no
+    /// conversion of `p`.
     pub params: Vec<u8>,
+    pub reach: Vec<u8>,
     pub variadic: bool,
     pub ret: Option<Vec<String>>,
+    /// The parameters whose argument the result may be, and those whose
+    /// reachable values (fields, transitively) it may hold: result
+    /// transfers, the caller's own objects come back, nothing escapes.
+    pub ret_params: Vec<u32>,
+    pub ret_reach: Vec<u32>,
+    /// The result may also be an unknown value (⊤ to the caller).
+    pub ret_unknown: bool,
+    /// An arrow function: its receiver is not used.
+    pub lexical_this: bool,
+    /// The binding name of a closed function (decision 19): a unit that
+    /// calls it as a value publishes what it passes under this name.
+    pub closed: Option<String>,
+}
+
+/// A published module-scope value binding as its readers see it (design
+/// §11.2 "an object contract", generalized to every binding another
+/// declaration unit reads, §12): the layouts it may hold (literal-shape
+/// objects of the defining unit, instances of contract classes, layouts it
+/// holds through other contracts), the contract classes and functions it
+/// may hold, and whether it may hold an unknown value (⊤ to the reader).
+/// The layouts' fields hold unknown values for the reader; a store or an
+/// opening operation through them is the reader's census report.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ValueContract {
+    pub layouts: Vec<ClassContract>,
+    pub classes: Vec<ClassContract>,
+    pub fns: Vec<FnContract>,
+    pub unknown: bool,
+    /// The primitive kinds it may hold (`model::prim` bits).
+    pub prim: u16,
+}
+
+/// What the calls of a closed function pass (decision 13,
+/// `decl_units::closed_bindings`): per parameter the value contract of the
+/// arguments, and whether some call may pass anything (`top`: a unit calls
+/// it through ⊤ or a broken contract, or claims nothing over the bound).
+/// One unit publishes its calls' (`ProgramFacts::args_out`); the callee
+/// takes the union over every unit.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ArgContract {
+    pub params: Vec<ValueContract>,
+    pub top: bool,
+}
+
+impl ArgContract {
+    fn join(&mut self, o: &ArgContract) {
+        self.top |= o.top;
+        if self.params.len() < o.params.len() {
+            self.params.resize(o.params.len(), ValueContract::default());
+        }
+        for (a, b) in self.params.iter_mut().zip(&o.params) {
+            for l in &b.layouts {
+                if !a.layouts.iter().any(|x| x.display == l.display) {
+                    a.layouts.push(l.clone());
+                }
+            }
+            for c in &b.classes {
+                if !a.classes.iter().any(|x| x.display == c.display) {
+                    a.classes.push(c.clone());
+                }
+            }
+            for f in &b.fns {
+                if !a.fns.iter().any(|x| x.name == f.name) {
+                    a.fns.push(f.clone());
+                }
+            }
+            a.unknown |= b.unknown;
+            a.prim |= b.prim;
+            a.layouts.sort_by(|x, y| x.display.cmp(&y.display));
+            a.classes.sort_by(|x, y| x.display.cmp(&y.display));
+            a.fns.sort_by(|x, y| x.name.cmp(&y.name));
+        }
+    }
 }
 
 /// What the other units can name of each module (§11.1): the export names
@@ -42,6 +137,9 @@ pub(crate) struct Published {
     names: FxHashMap<String, FxHashSet<String>>,
     /// Interpreted code can import any module: everything is published.
     all: bool,
+    /// A direct eval can name a module's bindings: its code may call any
+    /// function of that module (no function is closed, decision 13).
+    eval_scopes: bool,
     /// Templates (by display) the census found used beyond their contract:
     /// published as escapes.
     pub(crate) broken: FxHashSet<String>,
@@ -50,8 +148,16 @@ pub(crate) struct Published {
     pub(crate) classes: FxHashMap<(String, String), ClassContract>,
     /// Their function contracts, by (defining module path, export name).
     pub(crate) fns: FxHashMap<(String, String), FnContract>,
+    /// Their value contracts, by (defining module path, export name).
+    pub(crate) values: FxHashMap<(String, String), ValueContract>,
     /// The layouts contract functions return, by template display.
     pub(crate) layouts: FxHashMap<String, ClassContract>,
+    /// The argument contracts of closed functions (decision 13), by
+    /// (module path, name): the union over every unit's calls.
+    pub(crate) args: FxHashMap<(String, String), ArgContract>,
+    /// Store effects (decision 17): per literal layout display, the
+    /// existing keys other units store into (union over every unit).
+    pub(crate) stores: FxHashMap<String, Vec<String>>,
 }
 
 impl Published {
@@ -63,12 +169,32 @@ impl Published {
         self.fns.get(&(path.to_string(), name.to_string()))
     }
 
+    pub(crate) fn value_contract(&self, path: &str, name: &str) -> Option<&ValueContract> {
+        self.values.get(&(path.to_string(), name.to_string()))
+    }
+
     pub(crate) fn layout(&self, display: &str) -> Option<&ClassContract> {
         self.layouts.get(display)
     }
 
     pub(crate) fn class_contract(&self, path: &str, name: &str) -> Option<&ClassContract> {
         self.classes.get(&(path.to_string(), name.to_string()))
+    }
+
+    pub(crate) fn arg_contract(&self, path: &str, name: &str) -> Option<&ArgContract> {
+        self.args.get(&(path.to_string(), name.to_string()))
+    }
+
+    /// A direct eval may name module bindings: interpreted code (which
+    /// otherwise reaches only exports and globals) may call a module's
+    /// functions by name. The reach does not say which module's, so none
+    /// is closed.
+    pub(crate) fn stored_keys(&self, display: &str) -> &[String] {
+        self.stores.get(display).map_or(&[], |v| v.as_slice())
+    }
+
+    pub(crate) fn eval_scopes(&self) -> bool {
+        self.eval_scopes
     }
 
     pub(crate) fn broken(&self, display: &str) -> bool {
@@ -81,27 +207,30 @@ impl Published {
 }
 
 pub(crate) fn published_surface(
-    sorted: &[(&str, &Module)],
+    sorted: &[(&str, Vec<&Import>, &[Export])],
     cfg: &FactsConfig,
 ) -> Published {
     let mut p = Published {
         all: cfg.dynamic_code.is_some()
             || cfg.dynamic_code_reach.globals
             || !cfg.dynamic_code_reach.sites.is_empty(),
+        eval_scopes: !cfg.dynamic_code_reach.lexical_modules.is_empty(),
         ..Default::default()
     };
-    for (path, module) in sorted {
+    for (path, imports, exports) in sorted {
         let resolve = |source: &str| {
-            module
-                .imports
+            imports
                 .iter()
                 .find(|i| i.source == source)
                 .and_then(|i| i.resolved_path.clone())
         };
-        for imp in &module.imports {
+        for imp in imports.iter().copied() {
             let Some(t) = imp.resolved_path.as_ref().filter(|t| t.as_str() != *path) else {
                 continue;
             };
+            // Another declaration unit of the same module: its names are
+            // the module's (§12.3).
+            let t = &crate::decl_units::module_of(t).to_string();
             if imp.type_only || imp.runtime_erased {
                 continue;
             }
@@ -122,7 +251,7 @@ pub(crate) fn published_surface(
                 }
             }
         }
-        for e in &module.exports {
+        for e in exports.iter() {
             match e {
                 Export::ReExport { source, imported, .. } => {
                     if let Some(t) = resolve(source) {
@@ -141,14 +270,109 @@ pub(crate) fn published_surface(
     p
 }
 
-/// Modules in dependency order (an imported module before its importers),
-/// so a contract is computed before a unit consumes it. In an import cycle
-/// the back edge has no contract yet: that import is ⊤, as in P1.
-fn dependency_order(sorted: &[(&str, &Module)]) -> Vec<usize> {
+/// One solve of the per-unit driver: a declaration unit of module `mi`
+/// (design §12.6), its view, the solves it depends on (the units of its
+/// module it names, every unit of each module it imports: what a census
+/// round solves again), and the solves it is ordered after.
+struct Solve<'a> {
+    mi: usize,
+    key: String,
+    /// The one module the unit is cut from (its run-once view, N5, when
+    /// it has one): borrowed, never copied per unit.
+    module: &'a Module,
+    view: crate::decl_units::UnitView,
+    deps: Vec<usize>,
+    /// Decision 21: the units of its module it names and, in each module it
+    /// imports, the units owning the names it refers to (every unit for a
+    /// namespace import or a name no unit exports). A unit reads another
+    /// module's contracts only through those names, so this is the order
+    /// the contracts must exist in; ordering by whole modules made cycles
+    /// the names do not have, and a back edge's importer sees ⊤.
+    after: Vec<usize>,
+}
+
+/// The unit of module range `t` exporting `name`; a re-export goes with
+/// the first unit (`decl_units::views`).
+fn owner_of(out: &[Solve], t: &std::ops::Range<usize>, name: &str) -> Option<usize> {
+    t.clone().find(|&si| {
+        out[si].view.exports.iter().any(|e| match e {
+            Export::Named { exported, .. } | Export::ReExport { exported, .. } => exported == name,
+            Export::NamespaceReExport { name: n, .. } => n == name,
+            _ => false,
+        })
+    })
+}
+
+fn solves<'a>(sorted: &[(&'a str, &'a Module)], flats: &'a [Option<Module>]) -> Vec<Solve<'a>> {
     let index: FxHashMap<&str, usize> = sorted.iter().enumerate().map(|(i, (p, _))| (*p, i)).collect();
-    let mut state = vec![0u8; sorted.len()];
-    let mut out = Vec::with_capacity(sorted.len());
-    for root in 0..sorted.len() {
+    let mut out: Vec<Solve<'a>> = Vec::new();
+    let mut range: Vec<std::ops::Range<usize>> = Vec::with_capacity(sorted.len());
+    for (mi, (path, module)) in sorted.iter().enumerate() {
+        let base = out.len();
+        // A body that runs once at a module-scope statement is module scope
+        // for the cut (N5, §12.5): the module's run-once view, one per
+        // module, shared by all its units.
+        let module: &'a Module = flats[mi].as_ref().unwrap_or(module);
+        for (k, (view, deps)) in crate::decl_units::views(path, module).into_iter().enumerate() {
+            let deps: Vec<usize> = deps.into_iter().map(|d| base + d).collect();
+            out.push(Solve {
+                mi,
+                key: crate::decl_units::unit_path(path, k),
+                module,
+                view,
+                after: deps.clone(),
+                deps,
+            });
+        }
+        range.push(base..out.len());
+    }
+    for si in 0..out.len() {
+        let (path, module) = sorted[out[si].mi];
+        let mut after: Vec<usize> = Vec::new();
+        for imp in &module.imports {
+            let Some(&t) = imp.resolved_path.as_deref().filter(|t| *t != path).and_then(|t| index.get(t)) else {
+                continue;
+            };
+            out[si].deps.extend(range[t].clone());
+            // A re-export's names come from its source: the first unit,
+            // which holds the module's re-exports, is ordered after all of it.
+            let reexports = out[si].key.ends_with("#u0")
+                && module.exports.iter().any(|e| match e {
+                    Export::ReExport { source, .. }
+                    | Export::ExportAll { source }
+                    | Export::NamespaceReExport { source, .. } => *source == imp.source,
+                    _ => false,
+                });
+            if reexports {
+                after.extend(range[t].clone());
+            }
+            for sp in &imp.specifiers {
+                let (local, name) = match sp {
+                    ImportSpecifier::Named { imported, local } => (local, Some(imported.as_str())),
+                    ImportSpecifier::Default { local } => (local, Some("default")),
+                    ImportSpecifier::Namespace { local } => (local, None),
+                };
+                if !out[si].view.ext_names.contains(local) {
+                    continue;
+                }
+                match name.and_then(|n| owner_of(&out, &range[t], n)) {
+                    Some(w) => after.push(w),
+                    None => after.extend(range[t].clone()),
+                }
+            }
+        }
+        out[si].after.extend(after);
+    }
+    out
+}
+
+/// Solves in dependency order (a solve after the ones it depends on), so a
+/// contract is computed before a unit consumes it. In an import cycle the
+/// back edge has no contract yet: that import is ⊤, as in P1.
+fn dependency_order(solves: &[Solve]) -> Vec<usize> {
+    let mut state = vec![0u8; solves.len()];
+    let mut out = Vec::with_capacity(solves.len());
+    for root in 0..solves.len() {
         if state[root] != 0 {
             continue;
         }
@@ -156,12 +380,10 @@ fn dependency_order(sorted: &[(&str, &Module)]) -> Vec<usize> {
         let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
         state[root] = 1;
         while let Some(&mut (v, ref mut next)) = stack.last_mut() {
-            let imports = &sorted[v].1.imports;
-            if *next < imports.len() {
-                let i = *next;
+            if *next < solves[v].after.len() {
+                let w = solves[v].after[*next];
                 *next += 1;
-                let w = imports[i].resolved_path.as_deref().and_then(|p| index.get(p).copied());
-                if let Some(w) = w.filter(|&w| state[w] == 0) {
+                if state[w] == 0 {
                     state[w] = 1;
                     stack.push((w, 0));
                 }
@@ -175,49 +397,59 @@ fn dependency_order(sorted: &[(&str, &Module)]) -> Vec<usize> {
     out
 }
 
-/// The per-unit driver (decision 151, design §7 and §11): one solve per
-/// module in dependency order, each publishing contracts to the units after
-/// it; then the census. A class some unit used beyond its contract is
-/// broken: it is published as an escape, and the units that see it again
-/// (its defining unit and every unit importing that one, transitively:
-/// contracts travel only along import edges) are solved again; every other
-/// unit's inputs are unchanged, so its result is kept. Broken only grows,
-/// so this ends.
+/// The per-unit driver (decision 151, design §7, §11 and §12): one solve
+/// per declaration unit in dependency order, each publishing contracts to
+/// the units after it; then the census. A class some unit used beyond its
+/// contract is broken: it is published as an escape, and the units that see
+/// it again (its defining unit and every unit depending on that one,
+/// transitively: contracts travel only along those edges) are solved again;
+/// every other unit's inputs are unchanged, so its result is kept. Broken
+/// only grows, so this ends.
+
 pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts {
     let ucfg = FactsConfig { unit: true, ..cfg.clone() };
-    let mut input = published_surface(sorted, cfg);
-    let order = dependency_order(sorted);
+    let flats: Vec<Option<Module>> = sorted.iter().map(|(_, m)| crate::decl_units::run_once_flat(m)).collect();
+    let solves = solves(sorted, &flats);
+    let viewed: Vec<(&str, Vec<&Import>, &[Export])> = solves
+        .iter()
+        .map(|s| (sorted[s.mi].0, s.module.imports.iter().chain(s.view.imports.iter()).collect(), s.view.exports.as_slice()))
+        .collect();
+    let mut input = published_surface(&viewed, cfg);
+    let order = dependency_order(&solves);
     let mut rounds = 0u32;
     let mut round_work: Vec<u64> = Vec::new();
-    let mut per_mod: Vec<Option<ProgramFacts>> = (0..sorted.len()).map(|_| None).collect();
-    let mut dirty = vec![true; sorted.len()];
+    let mut per_unit: Vec<Option<ProgramFacts>> = (0..solves.len()).map(|_| None).collect();
+    let mut dirty = vec![true; solves.len()];
     loop {
         rounds += 1;
         input.classes.clear();
         input.fns.clear();
+        input.values.clear();
         input.layouts.clear();
-        let mut pf = ProgramFacts {
-            module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
-            dynamic_code_reach: cfg.dynamic_code_reach.clone(),
-            sabotage: cfg.sabotage.clone(),
-            ..Default::default()
-        };
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
-        for &mi in &order {
-            let (path, module) = sorted[mi];
-            if dirty[mi] {
-                let list = [(path.to_string(), module)];
-                let u = crate::compute_in(&list, &ucfg, Some(&input));
+        for &si in &order {
+            let s = &solves[si];
+            if dirty[si] {
+                let list = [(sorted[s.mi].0.to_string(), s.module)];
+                let u = crate::compute_in(&list, &ucfg, Some(&input), Some(&s.view));
                 work += u.stats.work;
-                per_mod[mi] = Some(u);
+                per_unit[si] = Some(u);
             }
-            let u = per_mod[mi].as_ref().expect("every module solved");
-            for (k, c) in &u.contracts_out {
-                input.classes.insert(k.clone(), c.clone());
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            // Published under the module's path (other modules import it)
+            // and the unit's (the module's other units import it).
+            for ((p, n), c) in &u.contracts_out {
+                input.classes.insert((s.key.clone(), n.clone()), c.clone());
+                input.classes.insert((p.clone(), n.clone()), c.clone());
             }
-            for (k, c) in &u.fn_contracts_out {
-                input.fns.insert(k.clone(), c.clone());
+            for ((p, n), c) in &u.fn_contracts_out {
+                input.fns.insert((s.key.clone(), n.clone()), c.clone());
+                input.fns.insert((p.clone(), n.clone()), c.clone());
+            }
+            for ((p, n), c) in &u.values_out {
+                input.values.insert((s.key.clone(), n.clone()), c.clone());
+                input.values.insert((p.clone(), n.clone()), c.clone());
             }
             for c in &u.layouts_out {
                 input.layouts.insert(c.display.clone(), c.clone());
@@ -225,16 +457,94 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             reports.extend(u.reports.iter().cloned());
         }
         round_work.push(work);
+        // Decision 13: the argument contracts of closed functions, from
+        // every unit's latest solve. A closed function whose contract
+        // changed is solved again, with the units depending on it; at the
+        // fixpoint every closed function's parameters hold what its calls
+        // pass.
+        let mut args: FxHashMap<(String, String), ArgContract> = FxHashMap::default();
+        for (si, s) in solves.iter().enumerate() {
+            let path = sorted[s.mi].0;
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            if u.stats.aborted {
+                for nm in &s.view.closed_refs {
+                    args.entry((path.to_string(), nm.clone())).or_default().top = true;
+                }
+                continue;
+            }
+            for (nm, ac) in &u.args_out {
+                args.entry((path.to_string(), nm.clone())).or_default().join(ac);
+            }
+        }
+        let mut seeds: Vec<usize> = Vec::new();
+        for (si, s) in solves.iter().enumerate() {
+            let path = sorted[s.mi].0;
+            let changed = s.view.closed.keys().any(|nm| {
+                let k = (path.to_string(), nm.clone());
+                format!("{:?}", args.get(&k)) != format!("{:?}", input.args.get(&k))
+            });
+            if changed {
+                seeds.push(si);
+            }
+        }
+        input.args = args;
+        // Decision 17: the store effects, from every unit's latest solve.
+        // The owners of a layout whose effect keys changed perform them,
+        // solved again with their dependents.
+        let mut stores: FxHashMap<String, Vec<String>> = FxHashMap::default();
+        for u in per_unit.iter().flatten() {
+            for (d, k) in &u.stores_out {
+                let v = stores.entry(d.clone()).or_default();
+                if !v.contains(k) {
+                    v.push(k.clone());
+                }
+            }
+        }
+        for v in stores.values_mut() {
+            v.sort();
+        }
+        let changed: Vec<String> = stores
+            .iter()
+            .filter(|(d, v)| input.stores.get(*d) != Some(*v))
+            .map(|(d, _)| d.clone())
+            .collect();
+        if !changed.is_empty() {
+            let owner = owners(&per_unit);
+            for d in &changed {
+                match owner.get(d) {
+                    Some(sis) => seeds.extend(sis.iter().copied()),
+                    None => seeds.extend(0..solves.len()),
+                }
+            }
+        }
+        input.stores = stores;
         let fresh: Vec<String> = reports.into_iter().filter(|d| !input.broken.contains(d)).collect();
-        if !fresh.is_empty() {
-            dirty = resolve_again(sorted, &per_mod, &fresh);
+        if !fresh.is_empty() || !seeds.is_empty() {
+            dirty = if fresh.is_empty() { vec![false; solves.len()] } else { resolve_again(&solves, &per_unit, &fresh) };
+            for (si, d) in dependents(&solves, &per_unit, seeds).into_iter().enumerate() {
+                dirty[si] |= d;
+            }
             input.broken.extend(fresh);
             continue;
         }
-        for (mi, u) in per_mod.into_iter().enumerate() {
-            let u = u.expect("every module solved");
-            merge_unit(&mut pf, mi, sorted[mi].0, u);
+        let mut pf = ProgramFacts {
+            module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
+            dynamic_code_reach: cfg.dynamic_code_reach.clone(),
+            sabotage: cfg.sabotage.clone(),
+            bindings: vec![Default::default(); sorted.len()],
+            ..Default::default()
+        };
+        for (si, u) in per_unit.into_iter().enumerate() {
+            let u = u.expect("every unit solved");
+            merge_unit(&mut pf, solves[si].mi, &solves[si].key, u);
         }
+        for b in pf.bindings.iter_mut() {
+            b.locals.sort_by_key(|(id, _)| *id);
+            b.locals.dedup_by_key(|(id, _)| *id);
+            b.this_of.sort_by_key(|(id, _)| *id);
+            b.this_of.dedup_by_key(|(id, _)| *id);
+        }
+        pf.stats.modules = sorted.len();
         typed_param_verdicts(&mut pf);
         pf.rounds = rounds;
         // The cost of the run is every round's.
@@ -251,45 +561,56 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
 
 /// The units a newly broken contract changes (design §11.3): the unit
 /// defining it (a template it owns, or a function it publishes) and every
-/// unit importing that one, transitively. A unit over the bound claims and
-/// publishes nothing whatever its inputs, so it keeps its result and passes
-/// no change on: solving it again would only pay the bound again. A display
-/// no unit defines makes every unit dirty.
-fn resolve_again(sorted: &[(&str, &Module)], per_mod: &[Option<ProgramFacts>], fresh: &[String]) -> Vec<bool> {
-    let n = sorted.len();
-    let index: FxHashMap<&str, usize> = sorted.iter().enumerate().map(|(i, (p, _))| (*p, i)).collect();
-    let mut owner: FxHashMap<String, usize> = FxHashMap::default();
-    for (mi, u) in per_mod.iter().enumerate() {
-        let Some(u) = u else { continue };
-        for t in u.templates.iter().filter(|t| t.module == Some(0)) {
-            owner.insert(t.display.clone(), mi);
-        }
-        for (_, c) in &u.fn_contracts_out {
-            owner.insert(format!("fn:{}", c.name), mi);
-        }
-    }
-    let mut importers: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (mi, (path, module)) in sorted.iter().enumerate() {
-        for imp in &module.imports {
-            if let Some(&t) = imp.resolved_path.as_deref().filter(|t| t != path).and_then(|t| index.get(t)) {
-                importers[t].push(mi);
-            }
-        }
-    }
-    let mut dirty = vec![false; n];
+/// unit depending on that one, transitively. A unit over the bound claims
+/// and publishes nothing whatever its inputs, so it keeps its result and
+/// passes no change on: solving it again would only pay the bound again. A
+/// display no unit defines makes every unit dirty.
+fn resolve_again(solves: &[Solve], per_unit: &[Option<ProgramFacts>], fresh: &[String]) -> Vec<bool> {
+    let n = solves.len();
+    let owner = owners(per_unit);
     let mut work: Vec<usize> = Vec::new();
     for d in fresh {
         match owner.get(d) {
-            Some(&mi) => work.push(mi),
+            Some(sis) => work.extend(sis.iter().copied()),
             None => return vec![true; n],
         }
     }
-    while let Some(mi) = work.pop() {
-        if per_mod[mi].as_ref().is_some_and(|u| u.stats.aborted) {
+    dependents(solves, per_unit, work)
+}
+
+/// The units defining each display. A display may have several owners:
+/// every unit holding a copy of one literal shape (`decl_units`).
+fn owners(per_unit: &[Option<ProgramFacts>]) -> FxHashMap<String, Vec<usize>> {
+    let mut owner: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+    for (si, u) in per_unit.iter().enumerate() {
+        let Some(u) = u else { continue };
+        for t in u.templates.iter().filter(|t| t.module == Some(0)) {
+            owner.entry(t.display.clone()).or_default().push(si);
+        }
+        for d in &u.fns_defined {
+            owner.entry(d.clone()).or_default().push(si);
+        }
+    }
+    owner
+}
+
+/// Units `work` and every unit depending on one of them, transitively;
+/// a unit over the bound keeps its result (`resolve_again`).
+fn dependents(solves: &[Solve], per_unit: &[Option<ProgramFacts>], mut work: Vec<usize>) -> Vec<bool> {
+    let n = solves.len();
+    let mut importers: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (si, s) in solves.iter().enumerate() {
+        for &d in &s.deps {
+            importers[d].push(si);
+        }
+    }
+    let mut dirty = vec![false; n];
+    while let Some(si) = work.pop() {
+        if per_unit[si].as_ref().is_some_and(|u| u.stats.aborted) {
             continue;
         }
-        if !std::mem::replace(&mut dirty[mi], true) {
-            work.extend(importers[mi].iter().copied());
+        if !std::mem::replace(&mut dirty[si], true) {
+            work.extend(importers[si].iter().copied());
         }
     }
     dirty
@@ -305,12 +626,15 @@ fn merge_unit(pf: &mut ProgramFacts, mi: usize, path: &str, u: ProgramFacts) {
         pf.templates.push(t);
     }
     pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts { module: mi as u32, ..s }));
-    pf.bindings.push(u.bindings.into_iter().next().unwrap_or_default());
+    if let Some(b) = u.bindings.into_iter().next() {
+        let into = &mut pf.bindings[mi];
+        into.locals.extend(b.locals);
+        into.this_of.extend(b.this_of);
+    }
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
     let (a, s) = (&mut pf.stats, &u.stats);
-    a.modules += s.modules;
     a.templates += s.templates;
     a.fact_units += s.fact_units;
     a.nodes += s.nodes;

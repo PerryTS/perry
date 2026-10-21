@@ -543,6 +543,16 @@ impl Model {
         if t == TOP || self.is_escaped(t) {
             return;
         }
+        if self.closed_pub_reason == Some(reason) {
+            if let TokKind::Func(f, _) = self.toks[t as usize] {
+                if self.closed_params.contains_key(&f) {
+                    if self.closed_pub.insert(t) {
+                        self.escape_fn_params(t, reason);
+                    }
+                    return;
+                }
+            }
+        }
         // A builtin prototype as the operand of a compiled construct the
         // model does not follow (`Gen::fail_closed`) may get any key written
         // (`fnproto_write` fails closed). The runtime's own operations and
@@ -612,7 +622,20 @@ impl Model {
         }
         let fi = self.funcs[f as usize].clone();
         let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
-        for &p in fi.params.iter().chain(fi.rest.iter()) {
+        // A closed function's callers are known: what they pass. Only
+        // through its publication (decision 19); any other escape lets
+        // unknown code call it.
+        let closed = if self.closed_pub_reason == Some(reason) { self.closed_params.get(&f).cloned() } else { None };
+        for (i, &p) in fi.params.iter().enumerate() {
+            match closed.as_ref().and_then(|c| c.get(i).copied()) {
+                Some(a) => self.edge(a, p),
+                None => {
+                    self.add_top(p, why);
+                    self.add_prim(p, prim::ALL);
+                }
+            }
+        }
+        for &p in fi.rest.iter() {
             self.add_top(p, why);
             self.add_prim(p, prim::ALL);
         }
@@ -674,7 +697,8 @@ impl Model {
         let any = self.field_any(recv);
         self.add_top(any, |m| format!("receiver of a method another unit calls: {}", m.reasons[reason as usize]));
         self.add_prim(any, prim::ALL);
-        self.contract_recv.insert(recv, inst);
+        self.contract_recv.insert(recv, vec![inst]);
+        self.contract_recv_of.insert(tm, recv);
         // Static members and the class object's own fields.
         let pa = self.atom("prototype");
         let mut statics: Vec<NodeId> = self
@@ -685,6 +709,22 @@ impl Model {
             .collect();
         statics.extend(self.field_any.get(&cobj).copied());
         statics.sort_unstable();
+        // Other units call a static method on the class object, through
+        // its function contract (§11.2: a static member is part of the
+        // class contract; its result is checked like any contract result).
+        for &n in &statics {
+            for t in self.nodes[n as usize].pts.to_sorted() {
+                if let TokKind::Func(f, _) = self.toks[t as usize] {
+                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX {
+                        self.contract_fns.insert(f);
+                    }
+                    if !self.funcs[f as usize].lexical_this {
+                        let this = self.funcs[f as usize].this;
+                        self.add_tok(this, cobj);
+                    }
+                }
+            }
+        }
         for n in statics {
             self.sink_node(n, reason);
         }
@@ -739,10 +779,37 @@ impl Model {
         self.accessor_walk(inst, inst, Key::Any, ChainAct::Load(r));
     }
 
+    /// This unit gives `t`, an instance of its published class `tm`, to
+    /// other units (a contract result or value): they call its methods, so
+    /// what those do to their receiver happens to `t` as well, replayed
+    /// from the receiver's log and forwarded from now on. True when `t` is
+    /// new here.
+    pub(crate) fn give_out(&mut self, tm: TmplId, t: Tok) -> bool {
+        let Some(&recv) = self.contract_recv_of.get(&tm) else {
+            return false;
+        };
+        let given = self.contract_recv.entry(recv).or_default();
+        if given.contains(&t) {
+            return false;
+        }
+        given.push(t);
+        for e in self.recv_log.get(&recv).cloned().unwrap_or_default() {
+            match e {
+                crate::model::RecvEffect::Store(key, src, site) => self.store_into(t, key, src, site),
+                crate::model::RecvEffect::Hard(kind, reason) => self.mark_hard(t, kind, reason),
+                crate::model::RecvEffect::Escape(reason) => self.escape(t, reason),
+            }
+        }
+        true
+    }
+
     pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
         self.mark_use(t, crate::model::MARK_ESCAPE);
-        if let Some(&i) = self.contract_recv.get(&t) {
-            self.escape(i, reason);
+        if let Some(is) = self.contract_recv.get(&t).cloned() {
+            self.recv_log.entry(t).or_default().push(crate::model::RecvEffect::Escape(reason));
+            for i in is {
+                self.escape(i, reason);
+            }
         }
         if matches!(self.toks[t as usize], TokKind::Proto(_)) {
             self.mark_escaped(t, reason);
@@ -868,8 +935,11 @@ impl Model {
         if t == TOP {
             return;
         }
-        if let Some(&i) = self.contract_recv.get(&t) {
-            self.mark_hard(i, kind, reason);
+        if let Some(is) = self.contract_recv.get(&t).cloned() {
+            self.recv_log.entry(t).or_default().push(crate::model::RecvEffect::Hard(kind, reason));
+            for i in is {
+                self.mark_hard(i, kind, reason);
+            }
         }
         self.mark_use(t, crate::model::MARK_ESCAPE);
         // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
