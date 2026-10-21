@@ -209,8 +209,8 @@ Library components perform a microtask checkpoint after each successful
 synchronous export, while its arguments and result remain rooted and before
 the adapter lowers the result. This delivers ready finalizers, nextTick and
 Promise jobs without a command event loop. It leaves timers and immediates
-pending and does not wait for I/O,
-and does not implement asynchronous WIT results. Execution qualification of
+pending, does not wait for I/O, and does not implement asynchronous WIT
+results. Execution qualification of
 these new cleanup and checkpoint paths is pending.
 
 Collection timing is nondeterministic, and payloads or destructors that retain

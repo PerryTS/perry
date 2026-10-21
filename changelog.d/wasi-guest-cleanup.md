@@ -5,8 +5,8 @@ their owner and explicit disposal unregisters cleanup.
 
 Synchronous component exports perform a microtask checkpoint while arguments
 and results remain rooted, allowing library components to deliver finalizers
-without a command event loop. Checkpoints run ready jobs without waiting for
-timers, I/O or asynchronous WIT results. The existing guest adapter ABI remains
+without a command event loop. Checkpoints leave timers and immediates pending
+and do not wait for I/O or asynchronous WIT results. The guest adapter ABI remains
 compatible. Collection timing and cleanup after a trap remain nondeterministic.
 
 Add moving-GC ownership tests and independent Rust-host acceptance coverage
