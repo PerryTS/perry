@@ -625,7 +625,7 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>) {
 fn lift_check(expr: &mut Expr) {
     let first = match expr {
         Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => object.as_mut(),
-        Expr::Call { callee, .. } => callee.as_mut(),
+        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => callee.as_mut(),
         _ => return,
     };
     let Expr::Sequence(parts) = first else {
