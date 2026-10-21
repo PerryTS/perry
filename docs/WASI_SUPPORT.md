@@ -5,6 +5,12 @@ runtime and collector in linear memory. It needs a WASI host with WebAssembly
 exception handling enabled, and no JavaScript host. This is separate from the
 browser `wasm`/`web` targets.
 
+The pinned wasi-sdk 34 build imports **WASI 0.2.12** interfaces. Hosts must
+provide the imported members as well as Wasm exception handling; a generic
+"Preview 2 supported" claim is insufficient. Wasmtime **48.0.0** is the tested
+host. A macOS check with Wasmtime **44.0.0** first required `-W exceptions=y`
+and then failed because `wasi:cli/exit@0.2.12`'s `exit-with-code` was missing.
+
 ## Output versus hosting
 
 WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3

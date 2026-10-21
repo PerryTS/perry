@@ -1,6 +1,7 @@
 //! `--target wasi` link (#11379): the program's wasm32 objects plus the
 //! runtime built for `wasm32-wasip2`, linked by wasi-sdk into a WASI 0.2
-//! component that runs under any WASI host (`wasmtime run app.wasm`).
+//! component. The pinned SDK emits WASI 0.2.12 imports; the host must provide
+//! those interfaces and Wasm EH (tested with Wasmtime 48).
 //!
 //! Deliberately separate from the native link path: no auto-optimize runtime
 //! rebuild, no stdlib, no link cache. Only compiled with the off-by-default
