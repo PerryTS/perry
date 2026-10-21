@@ -131,8 +131,8 @@ disposal, host-defined resources and Perry-authored guest resources under
 moving GC, plus opt-in WASI
 providers. See [the component record](WASI_COMPONENTS.md) for the separately
 qualified host-defined resources, native/guest deferred cleanup, command
-worlds and TCP/UDP/DNS interoperability. Their combined integration is being
-qualified; HTTP, blocking-I/O cancellation, broader platform qualification
+worlds and TCP/UDP/DNS interoperability. Their combined integration is
+qualified on Linux; HTTP, blocking-I/O cancellation, broader platform qualification
 and engine shipping costs remain open. This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate

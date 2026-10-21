@@ -58,7 +58,7 @@ fuel does not interrupt time spent in synchronous host I/O.
 
 The combined component-host boundary uses ABI 5; compiler, runtime and
 optional host archive must be built together. The separate command feature
-was qualified using ABI 3; combined integration qualification is pending.
+was qualified using ABI 3; the combined Linux qualification is recorded below.
 This API is native-only. Unit fixtures and
 `scripts/component_command_acceptance.py` cover return/exit behavior,
 initializer failures, limits and a Rust `wasm32-wasip2` command hosted by
@@ -400,6 +400,25 @@ that checkpoint, and leaves the immediate for explicit later dispatch. The
 [guest cleanup receipt](validation/component-guest-cleanup-20261021.json)
 records both revisions and the matching artifact/log identities.
 
+The combined profile passed on source
+`b5fb0b6df903e491df1182150672f0d769b403d8`: 40 engine, 13 WIT and 29 runtime
+component tests, plus six weak-reference and six finalization regressions.
+All 28 native, nine command and 34 guest acceptance phases pass against
+matching compiler, engine and native/WASI runtime artifacts. This combines
+commands, host resources, native/guest cleanup and networking under native
+ABI 5 while keeping guest adapter ABI 2.
+
+A new integration fixture invokes a command from a live library callback,
+checks explicit exit status and library survival after command traps, then
+runs another command after library disposal. Its moving-GC run copied 53
+objects and passed 15 evacuation checks with retired from-space protected.
+The guest resource run copied 5,225 objects and passed 217 evacuation checks.
+The [combined receipt](validation/component-integration-20261021.json)
+records exact phase sets, all eight moving-GC witnesses and artifact/log
+identities. The required component gate now also runs the full `weakref::`
+and `finreg` test selections; an earlier narrow filter is not counted as a
+substitute for those regressions.
+
 Still required before claiming the full milestone:
 
 - Qualify the remaining capability operations,
@@ -407,7 +426,6 @@ Still required before claiming the full milestone:
 - Qualify supported host platforms. [PR #12985](https://github.com/PerryTS/perry/pull/12985)
   added the component acceptance suite to required execution checks; integration
   with that workflow exercises these extended resource fixtures.
-
 
 
 P3 async support remains a subsequent milestone.
