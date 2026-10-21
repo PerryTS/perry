@@ -24,6 +24,22 @@
  ],
  "entries": [
   {
+   "file": "crates/perry-runtime/src/component/host.rs",
+   "names": [
+    "OPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The native component engine installer passes the process-lifetime static ffi::OPS table from perry-component-host. The versioned table contains scalar ABI metadata and code addresses, never a managed value or arena pointer; the unsafe registration contract requires immutable process-lifetime storage."
+  },
+  {
+   "file": "crates/perry-runtime/src/component/guest.rs",
+   "names": [
+    "GUEST_OPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Generated guest adapters install static const perry_ops from their image (perry-wit/src/guest_c.rs). It contains scalar ABI metadata, static perry_contract bytes and code addresses. The unsafe registration contract requires immutable image-lifetime storage and excludes managed heap references."
+  },
+  {
    "file": "crates/perry-runtime/src/os/signal.rs",
    "names": [
     "SIGNAL_ASYNC_IDS"

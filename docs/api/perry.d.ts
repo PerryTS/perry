@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2008 entries across 110 modules
+// Coverage: 2014 entries across 111 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2464,6 +2464,21 @@ declare module "perry/background" {
   export function registerTask(...args: any[]): any;
   /** stdlib */
   export function schedule(...args: any[]): any;
+}
+
+declare module "perry/component" {
+  /** stdlib */
+  export function callComponent(handle: any, interfaceName: string, functionName: string, args: any): any;
+  /** stdlib */
+  export function callComponentImport(interfaceName: string, functionName: string, args: any): any;
+  /** stdlib */
+  export function disposeComponent(handle: any): void;
+  /** stdlib */
+  export function loadComponent(bytes: any, contract: string, imports: any, options: any): any;
+  /** stdlib */
+  export function registerComponentExports(contract: string, exports: any): void;
+  /** stdlib */
+  export function runComponentCommand(bytes: any, options?: any): number;
 }
 
 declare module "perry/compose" {

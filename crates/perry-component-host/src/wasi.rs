@@ -64,6 +64,15 @@ pub(crate) struct State {
     table: ResourceTable,
 }
 
+impl State {
+    pub(crate) fn view(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.ctx,
+            table: &mut self.table,
+        }
+    }
+}
+
 impl WasiOptions {
     pub(crate) fn build(&self) -> Result<State> {
         let mut builder = WasiCtxBuilder::new();
@@ -116,10 +125,7 @@ impl WasiView for super::StoreData {
             .wasi
             .as_mut()
             .expect("WASI providers require explicit options");
-        WasiCtxView {
-            ctx: &mut state.ctx,
-            table: &mut state.table,
-        }
+        state.view()
     }
 }
 

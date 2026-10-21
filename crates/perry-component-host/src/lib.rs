@@ -1,9 +1,16 @@
 //! Optional native Component Model engine. A host owns its Store, resource
 //! handles and limits. No Perry heap pointer crosses this crate boundary.
+mod cleanup;
+mod command;
+pub use command::run_command;
+
 mod contract;
 pub mod ffi;
+mod host_resources;
 mod limits;
 mod resources;
+mod transport;
+pub use host_resources::{ResourceEvent, ResourceHook, ResourceRef};
 mod wasi;
 mod wire;
 pub use wasi::{Address, Network, Preopen, WasiOptions};
@@ -12,10 +19,10 @@ use anyhow::{bail, ensure, Context, Result};
 use perry_wit::World;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use wasmtime::component::{Component, Func, Linker, Val};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::{AsContextMut, Config, Engine, Store};
 
 pub type Import = Arc<dyn Fn(&[Value]) -> Result<Option<Value>> + Send + Sync>;
 pub type Imports = BTreeMap<String, BTreeMap<String, Import>>;
@@ -47,6 +54,7 @@ impl Default for Options {
 struct StoreData {
     limits: limits::Limits,
     resources: resources::Resources,
+    host_resources: host_resources::HostResources,
     wasi: Option<wasi::State>,
 }
 
@@ -73,6 +81,16 @@ impl Interrupt {
 
 impl Host {
     pub fn new(bytes: &[u8], world: &World, imports: &Imports, options: &Options) -> Result<Self> {
+        Self::new_with_resource_hook(bytes, world, imports, options, Arc::new(|_| Ok(Vec::new())))
+    }
+
+    pub fn new_with_resource_hook(
+        bytes: &[u8],
+        world: &World,
+        imports: &Imports,
+        options: &Options,
+        resource_hook: ResourceHook,
+    ) -> Result<Self> {
         ensure!(
             options.memory_bytes > 0 && options.fuel > 0 && options.instances > 0,
             "component limits must be positive"
@@ -88,6 +106,7 @@ impl Host {
             .map_err(anyhow::Error::from)
             .context("compiling component")?;
         contract::validate(&engine, &component, world, options.wasi.is_some())?;
+        let host_resources = host_resources::HostResources::new(world, options, resource_hook)?;
         let mut linker = Linker::<StoreData>::new(&engine);
         if options.wasi.is_some() {
             wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
@@ -96,15 +115,22 @@ impl Host {
             if options.wasi.is_some() && interface.name.starts_with("wasi:") {
                 continue;
             }
-            ensure!(
-                interface.resources.is_empty(),
-                "host-defined resource imports require a resource implementation"
-            );
             let mut namespace = if interface.name.is_empty() {
                 linker.root()
             } else {
                 linker.instance(&interface.name)?
             };
+            for (name, key) in &interface.resources {
+                let id = host_resources.types[key];
+                namespace.resource(
+                    name,
+                    wasmtime::component::ResourceType::host_dynamic(id),
+                    move |store, rep| {
+                        host_resources::destroy(store, rep, id)
+                            .map_err(wasmtime::Error::from_anyhow)
+                    },
+                )?;
+            }
             for function in &interface.functions {
                 let callback = imports
                     .get(&interface.name)
@@ -117,23 +143,21 @@ impl Host {
                     let result = (|| -> Result<()> {
                         let args = params
                             .iter()
-                            .map(|value| wire::lift(value, &mut store.data_mut().resources))
+                            .map(|value| transport::lift(store.as_context_mut(), value))
                             .collect::<Result<Vec<_>>>()?;
-                        let value = callback(&args)?;
+                        let value = callback(&args);
+                        let cleanup = host_resources::drain(store.as_context_mut());
+                        let value = value?;
+                        cleanup?;
                         let types: Vec<_> = ty.results().collect();
                         ensure!(
                             results.len() == usize::from(value.is_some()),
                             "host import result count mismatch"
                         );
                         if let Some(value) = value {
-                            let mut transfers = BTreeSet::new();
-                            results[0] = wire::lower(
-                                &value,
-                                &types[0],
-                                &store.data().resources,
-                                &mut transfers,
-                            )?;
-                            store.data_mut().resources.transferred(&transfers);
+                            let mut lowering = transport::Lowering::new(store.as_context_mut());
+                            results[0] = lowering.value(&value, &types[0])?;
+                            lowering.commit()?;
                         }
                         Ok(())
                     })();
@@ -155,37 +179,48 @@ impl Host {
             StoreData {
                 limits,
                 resources: resources::Resources::default(),
+                host_resources,
                 wasi: options.wasi.as_ref().map(WasiOptions::build).transpose()?,
             },
         );
         store.limiter(|data| &mut data.limits);
         store.set_fuel(options.fuel)?;
         store.set_epoch_deadline(1);
-        let instance = linker
-            .instantiate(&mut store, &component)
-            .map_err(anyhow::Error::from)
-            .context("instantiating component")?;
-        let mut exports = BTreeMap::new();
-        for interface in &world.exports {
-            let namespace = if interface.name.is_empty() {
-                None
-            } else {
-                Some(
-                    instance
-                        .get_export_index(&mut store, None, &interface.name)
-                        .context("missing validated interface")?,
-                )
-            };
-            for function in &interface.functions {
-                let index = instance
-                    .get_export_index(&mut store, namespace.as_ref(), &function.name)
-                    .context("missing validated function")?;
-                let func = instance
-                    .get_func(&mut store, &index)
-                    .context("export is not callable")?;
-                exports.insert((interface.name.clone(), function.name.clone()), func);
+        let initialized = (|| -> Result<_> {
+            let instance = linker
+                .instantiate(&mut store, &component)
+                .map_err(anyhow::Error::from)
+                .context("instantiating component")?;
+            let mut exports = BTreeMap::new();
+            for interface in &world.exports {
+                let namespace = if interface.name.is_empty() {
+                    None
+                } else {
+                    Some(
+                        instance
+                            .get_export_index(&mut store, None, &interface.name)
+                            .context("missing validated interface")?,
+                    )
+                };
+                for function in &interface.functions {
+                    let index = instance
+                        .get_export_index(&mut store, namespace.as_ref(), &function.name)
+                        .context("missing validated function")?;
+                    let func = instance
+                        .get_func(&mut store, &index)
+                        .context("export is not callable")?;
+                    exports.insert((interface.name.clone(), function.name.clone()), func);
+                }
             }
-        }
+            Ok(exports)
+        })();
+        let exports = match initialized {
+            Ok(exports) => exports,
+            Err(error) => {
+                let _ = host_resources::dispose(store.as_context_mut());
+                return Err(error);
+            }
+        };
         Ok(Self {
             engine,
             live: Some(Live {
@@ -212,28 +247,23 @@ impl Host {
             params.len() == args.len(),
             "component argument count mismatch"
         );
-        let mut transfers = BTreeSet::new();
+        let mut lowering = transport::Lowering::new(live.store.as_context_mut());
         let args = args
             .iter()
             .zip(&params)
-            .map(|(value, ty)| wire::lower(value, ty, &live.store.data().resources, &mut transfers))
+            .map(|(value, ty)| lowering.value(value, ty))
             .collect::<Result<Vec<_>>>()?;
+        lowering.commit()?;
         let mut results = vec![Val::Bool(false); ty.results().len()];
         live.store.set_fuel(live.fuel)?;
         live.store.set_epoch_deadline(1);
         let outcome = func.call(&mut live.store, &args, &mut results);
-        // A call which has entered canonical lowering owns these inputs even
-        // when guest execution traps. Stale wrappers must not reuse them.
-        live.store.data_mut().resources.transferred(&transfers);
         outcome
             .map_err(anyhow::Error::from)
             .context("component call trapped")?;
         match results.as_slice() {
             [] => Ok(None),
-            [value] => Ok(Some(wire::lift(
-                value,
-                &mut live.store.data_mut().resources,
-            )?)),
+            [value] => Ok(Some(transport::lift(live.store.as_context_mut(), value)?)),
             _ => bail!("selected WIT function has multiple results"),
         }
     }
@@ -244,6 +274,9 @@ impl Host {
 
     pub(crate) fn drop_resource_tracked(&mut self, id: &str, released: &mut bool) -> Result<()> {
         let live = self.live.as_mut().context("component is disposed")?;
+        if live.store.data().host_resources.entries.contains_key(id) {
+            return host_resources::drop_owned(live.store.as_context_mut(), id, released);
+        }
         let resource = live.store.data_mut().resources.remove(id)?;
         // Ownership is gone even when the destructor traps. Report that
         // separately from rejection, which leaves the wrapper live.
@@ -264,10 +297,13 @@ impl Host {
             live.store.set_fuel(live.fuel)?;
             live.store.set_epoch_deadline(1);
             if let Err(error) = resource.resource_drop(&mut live.store) {
-                first_error.get_or_insert(error);
+                first_error.get_or_insert(anyhow::Error::from(error));
             }
         }
-        first_error.map_or(Ok(()), |error| Err(anyhow::Error::from(error)))
+        if let Err(error) = host_resources::dispose(live.store.as_context_mut()) {
+            first_error.get_or_insert(error);
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
@@ -290,3 +326,6 @@ mod tests;
 
 #[cfg(test)]
 mod resource_tests;
+
+#[cfg(test)]
+mod host_resource_tests;

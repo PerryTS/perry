@@ -19,6 +19,12 @@ impl<'a> Frame<'a> {
     pub fn token(&self) -> u64 {
         self as *const Self as usize as u64
     }
+    pub fn capture(&self, error: f64) {
+        if !self.threw.get() {
+            self.error.set_nanbox_f64(error);
+            self.threw.set(true);
+        }
+    }
     pub fn rethrow(&self) {
         if self.threw.get() {
             crate::exception::js_throw(self.error.get_nanbox_f64());
@@ -57,6 +63,7 @@ pub(super) unsafe extern "C" fn invoke(
 ) -> i32 {
     let frame = &*(token as usize as *const Frame<'_>);
     let scope = RuntimeHandleScope::new();
+    let lifetime = scope.root_nanbox_f64(undefined());
     let mut parsed_args: Vec<Value> = Vec::new();
     let mut roots = Vec::new();
     let mut values = Vec::new();
@@ -82,12 +89,17 @@ pub(super) unsafe extern "C" fn invoke(
         if params.len() != parsed_args.len() {
             fail("Component callback argument count mismatch");
         }
+        lifetime.set_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc_with_length(1) as i64,
+        ));
+        crate::array::js_array_set_f64(array_pointer(lifetime.get_nanbox_f64()).unwrap(), 0, 1.0);
         for (arg, param) in parsed_args.iter().zip(params) {
-            roots.push(scope.root_nanbox_f64(value::decode(
+            roots.push(scope.root_nanbox_f64(value::decode_with_lifetime(
                 arg,
                 &param["ty"],
                 world,
                 frame.owner.get_nanbox_f64(),
+                lifetime.get_nanbox_f64(),
             )));
         }
         values.extend(roots.iter().map(|root| root.get_nanbox_f64()));
@@ -97,17 +109,54 @@ pub(super) unsafe extern "C" fn invoke(
             values.as_ptr(),
             values.len(),
         );
-        serde_json::to_vec(&value::encode(result)).expect("component value is JSON")
+        serde_json::to_vec(&value::encode_for(result, frame.owner.get_nanbox_f64()))
+            .expect("component value is JSON")
     });
+    if let Some(array) = array_pointer(lifetime.get_nanbox_f64()) {
+        crate::array::js_array_set_f64(array, 0, 0.0);
+    }
     match outcome {
         Ok(bytes) => {
             reply(output, bytes);
             perry_abi::component_host::OK
         }
         Err(error) => {
-            frame.error.set_nanbox_f64(error);
-            frame.threw.set(true);
+            frame.capture(error);
             reply(output, b"JavaScript component import threw".to_vec());
+            perry_abi::component_host::ERROR
+        }
+    }
+}
+
+/// Resource events use the live embedding frame without reentering its Store.
+pub(super) unsafe extern "C" fn resource_invoke(
+    token: u64,
+    event: *const u8,
+    event_len: usize,
+    output: *mut Buffer,
+) -> i32 {
+    let frame = &*(token as usize as *const Frame<'_>);
+    let mut parsed = Value::Null;
+    let outcome = crate::exception::catch_js_throw(|| {
+        parsed = serde_json::from_slice(std::slice::from_raw_parts(event, event_len))
+            .unwrap_or_else(|_| fail("Invalid component resource event"));
+        if parsed["kind"] == "drain" {
+            let context = context::get(frame.owner.get_nanbox_f64());
+            serde_json::to_vec(&std::mem::take(&mut (*context).pending_resource_drops)).unwrap()
+        } else {
+            super::host_resource::payload::event(frame.owner.get_nanbox_f64(), &parsed);
+            b"[]".to_vec()
+        }
+    });
+    drop(parsed);
+    match outcome {
+        Ok(bytes) => {
+            reply(output, bytes);
+            perry_abi::component_host::OK
+        }
+        Err(error) => {
+            frame.capture(error);
+            reply(output, b"JavaScript host resource event threw".to_vec());
             perry_abi::component_host::ERROR
         }
     }

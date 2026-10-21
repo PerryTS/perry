@@ -189,6 +189,18 @@ pub(super) fn cached_resolve_import_with_lexical_base(
     }) {
         return cached_resolve_import_from_base(import_source, &logical_path, ctx);
     }
+    // A `--module-alias` replacement stands in for the module file it
+    // replaces, so its imports resolve from that file, as a bundler onLoad
+    // hook's contents do.
+    if let Some(replaced) = ctx
+        .module_file_aliases
+        .iter()
+        .find_map(|(original, replacement)| {
+            (replacement == canonical_importer_path).then(|| original.clone())
+        })
+    {
+        return cached_resolve_import_from_base(import_source, &replaced, ctx);
+    }
     // Module collection keys and reads use canonical paths, but source text
     // relative specifiers are written against the importer path the user
     // compiled. On platforms where /tmp is a symlink, resolving imports from

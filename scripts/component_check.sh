@@ -17,6 +17,8 @@ git rev-parse HEAD > "$out/source-revision.txt"
 rustup target add wasm32-unknown-unknown wasm32-wasip2
 cargo test --locked --profile perry-dev -p perry-component-host -p perry-wit --lib
 cargo test --locked --profile perry-dev -p perry-runtime component:: --lib -- --test-threads=1
+cargo test --locked --profile perry-dev -p perry-runtime weakref:: --lib -- --test-threads=1
+cargo test --locked --profile perry-dev -p perry-runtime finreg --lib -- --test-threads=1
 cargo build --locked --profile perry-dev -p perry -p perry-runtime-static \
   -p perry-stdlib-static -p perry-component-host -p perry-wit -p perry-gc-effects \
   --features perry/target-wasi
@@ -29,6 +31,11 @@ python3 scripts/component_host_acceptance.py \
   --wit "$CARGO_TARGET_DIR/perry-dev/perry-wit" \
   --componentize "$CARGO_TARGET_DIR/perry-dev/examples/componentize" \
   --runtime-dir "$CARGO_TARGET_DIR/perry-dev" --output "$out/native" --moving-gc
+python3 scripts/component_command_acceptance.py \
+  --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
+  --runtime-dir "$CARGO_TARGET_DIR/perry-dev" --output "$out/command" --moving-gc \
+  --library-component "$out/native/transform/transform.component.wasm" \
+  --library-bindings "$out/native/transform/generated"
 python3 scripts/wasi_build_runtime.py --gc-instruments
 python3 scripts/component_guest_acceptance.py \
   --perry "$CARGO_TARGET_DIR/perry-dev/perry" \

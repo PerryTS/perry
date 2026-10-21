@@ -1,9 +1,10 @@
 //! Allocator-safe callback transport. JS exceptions must be caught by the
 //! runtime callback; every call returns through Wasmtime before JS can throw.
-use crate::{Host, Import, Imports, Interrupt, Options};
+use crate::{Host, Import, Imports, Interrupt, Options, ResourceHook};
 use anyhow::{bail, ensure, Context, Result};
 use perry_abi::component_host::{
-    Buffer, Callback, ComponentHostOps, FreeCallback, ABI_VERSION, ERROR, OK, RELEASED_ERROR,
+    Buffer, Callback, ComponentHostOps, FreeCallback, ResourceCallback, ABI_VERSION, ERROR, OK,
+    RELEASED_ERROR,
 };
 use perry_wit::World;
 use std::cell::{Cell, UnsafeCell};
@@ -87,6 +88,29 @@ pub unsafe extern "C" fn perry_component_host_buffer_drop(buffer: Buffer) {
     }
 }
 
+/// A command owns its store for this call only; no callback bridge is exposed.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_host_run_command(
+    wasm: *const u8,
+    wasm_len: usize,
+    options: *const u8,
+    options_len: usize,
+    out: *mut Buffer,
+) -> i32 {
+    respond(
+        out,
+        (|| {
+            let options = if options_len == 0 {
+                Options::default()
+            } else {
+                serde_json::from_slice(bytes(options, options_len)?)?
+            };
+            let status = crate::run_command(bytes(wasm, wasm_len)?, &options)?;
+            Ok(serde_json::to_vec(&status)?)
+        })(),
+    )
+}
+
 struct Reply(Buffer, FreeCallback);
 impl Drop for Reply {
     fn drop(&mut self) {
@@ -104,6 +128,7 @@ pub unsafe extern "C" fn perry_component_host_new(
     options_len: usize,
     callback: Option<Callback>,
     free_callback: Option<FreeCallback>,
+    resource_callback: Option<ResourceCallback>,
     context: u64,
     error: *mut Buffer,
 ) -> *mut c_void {
@@ -159,7 +184,35 @@ pub unsafe extern "C" fn perry_component_host_new(
                     .insert(function.name.clone(), handler);
             }
         }
-        let host = Host::new(bytes(wasm, wasm_len)?, &world, &imports, &options)?;
+        let resource_current = current.clone();
+        let resource_hook: ResourceHook = Arc::new(move |event| {
+            // Older callers without host resources need no lifecycle channel.
+            if resource_callback.is_none() && matches!(event, crate::ResourceEvent::Drain) {
+                return Ok(Vec::new());
+            }
+            let callback =
+                resource_callback.context("host resources require a resource callback")?;
+            let free = free_callback.context("host resources require a reply deallocator")?;
+            let context = resource_current.load(Ordering::Acquire);
+            ensure!(context != 0, "resource event outside a live embedding call");
+            let event = serde_json::to_vec(&event)?;
+            let mut reply = Reply(Buffer::default(), free);
+            let status = callback(context, event.as_ptr(), event.len(), &mut reply.0);
+            if status != OK {
+                bail!(
+                    "component resource event: {}",
+                    String::from_utf8_lossy(bytes(reply.0.data, reply.0.len)?)
+                );
+            }
+            Ok(serde_json::from_slice(bytes(reply.0.data, reply.0.len)?)?)
+        });
+        let host = Host::new_with_resource_hook(
+            bytes(wasm, wasm_len)?,
+            &world,
+            &imports,
+            &options,
+            resource_hook,
+        )?;
         current.store(0, Ordering::Release);
         let interrupt = host.interrupt_handle();
         Ok(Bridge {
@@ -270,6 +323,37 @@ pub unsafe extern "C" fn perry_component_host_resource_drop(
 pub unsafe extern "C" fn perry_component_host_interrupt(handle: *mut c_void) {
     if let Ok(bridge) = bridge(handle) {
         bridge.interrupt.interrupt();
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_host_resource_collect(
+    handle: *mut c_void,
+    request: *const u8,
+    len: usize,
+    context: u64,
+    out: *mut Buffer,
+) -> i32 {
+    // Check before forming a mutable Host reference. Finalization jobs can be
+    // delivered by a nested microtask pump inside a guest's host callback.
+    if bridge(handle).is_ok_and(|bridge| bridge.busy.get()) {
+        return perry_abi::component_host::DEFERRED;
+    }
+    let mut released = false;
+    let status = respond(
+        out,
+        (|| {
+            let request = serde_json::from_slice(bytes(request, len)?)?;
+            bridge(handle)?.with(context, |host| {
+                host.collect_resource(request, &mut released)
+            })?;
+            Ok(Vec::new())
+        })(),
+    );
+    if released && status == ERROR {
+        RELEASED_ERROR
+    } else {
+        status
     }
 }
 
