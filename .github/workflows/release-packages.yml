@@ -35,6 +35,14 @@ on:
         description: "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm."
         type: boolean
         default: false
+      skip_test_gate:
+        description: "With cut_release: maintainer override that skips the await-tests CI gate. Requires test_gate_reason, which is printed in the job summary and the release notes."
+        type: boolean
+        default: false
+      test_gate_reason:
+        description: "Required with skip_test_gate: why the release does not wait for a green CI run, and what verified it instead."
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -297,8 +305,28 @@ jobs:
           SHA: ${{ github.sha }}
           REF_NAME: ${{ github.ref_name }}
           MODE: ${{ needs.preflight.outputs.mode }}
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+          TEST_GATE_REASON: ${{ inputs.test_gate_reason }}
         run: |
           set -euo pipefail
+          if [ "$SKIP_TEST_GATE" = "true" ]; then
+            if [ "$MODE" != "cut-release" ]; then
+              echo "::error::skip_test_gate only applies to cut_release runs (mode is $MODE)."
+              exit 1
+            fi
+            reason=$(printf '%s' "$TEST_GATE_REASON" | tr -d '\r' | head -c 500)
+            if [ -z "${reason//[[:space:]]/}" ]; then
+              echo "::error::skip_test_gate requires test_gate_reason."
+              exit 1
+            fi
+            echo "::warning::CI test gate skipped by maintainer override: $reason"
+            {
+              echo "### CI test gate skipped (maintainer override)"
+              echo
+              echo "$reason"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           case "$MODE" in
             republish|stage|nightly)
               echo "$MODE mode — bypassing test gate (manual lever)."
@@ -2234,6 +2262,8 @@ jobs:
       - name: Create tag + GitHub Release (notes from changelog.d)
         env:
           GH_TOKEN: ${{ github.token }}
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+          TEST_GATE_REASON: ${{ inputs.test_gate_reason }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.preflight.outputs.tag }}
           SHA: ${{ github.sha }}
@@ -2305,6 +2335,14 @@ jobs:
             echo "::notice::release notes truncated from $(wc -c < /tmp/release-notes-full.md) to $(wc -c < /tmp/release-notes.md) bytes (${frags} fragments)"
           else
             cp /tmp/release-notes-full.md /tmp/release-notes.md
+          fi
+          if [ "$SKIP_TEST_GATE" = "true" ]; then
+            {
+              echo
+              echo '---'
+              echo
+              echo "**CI test gate skipped by the maintainer:** $(printf '%s' "$TEST_GATE_REASON" | tr -d '\r' | head -c 500)"
+            } >> /tmp/release-notes.md
           fi
           # Created with GITHUB_TOKEN: GitHub suppresses events triggered by a
           # workflow's own token, so this `release: published` does NOT fire a
