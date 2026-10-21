@@ -160,11 +160,11 @@ as the callback returns, including when its destructor throws. This does not
 permit reentrant guest calls or disposal of an owner borrowed by the active
 call; those operations still pass through the store's reentry guard.
 
-The native host ABI is version 2. Rebuild the component-host archive and native
-runtime together. Explicit disposal remains required: GC finalizers release
-engine memory without invoking application destructors. Built-in WASI resource
-providers remain controlled by `options.wasi`; application factories do not
-grant access to those providers.
+Rebuild the component-host archive and native runtime together for native host
+ABI version 4. Unreachable native wrappers use the deferred cleanup described
+above; explicit disposal provides deterministic release. Built-in WASI
+resource providers remain controlled by `options.wasi`; application factories
+do not grant access to those providers.
 
 ## Resources in Perry-authored guests
 
@@ -288,13 +288,14 @@ The native host-resource fixture covers ownership rollback, aliases, foreign
 types, callback lifetimes, retained owners, explicit disposal and throwing
 destructors. Its moving-GC run copied 1,107 objects, passed 81 evacuation
 checks and protected retired from-space. The [execution receipt](validation/component-host-resources-20261021.json)
-records the exact source and artifact/log hashes. GC-driven application
-destructors remain unimplemented.
+records the exact source and artifact/log hashes. That receipt predates
+deferred cleanup and does not qualify the new finalization path.
 
 Still required before claiming the full milestone:
 
-- Implement deferred cleanup, and qualify the
-  remaining capability operations, command worlds, and HTTP independently.
+- Qualify native deferred cleanup and implement cleanup of owners inside
+  Perry-authored WASI guests. Qualify the remaining capability operations,
+  command worlds, and HTTP independently.
 - Qualify supported host platforms and promote the demonstrated execution
   check into the required PR checks.
 
