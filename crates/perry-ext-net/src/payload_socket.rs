@@ -14,6 +14,7 @@ extern "C" {
     fn js_node_stream_method_once(owner: i64, event: f64, callback: f64) -> f64;
     fn js_array_shift_f64(array: *mut ArrayHeader) -> f64;
     fn js_queue_next_tick(callback: i64);
+    fn js_is_truthy(value: f64) -> i32;
 }
 
 pub(crate) fn is_callback(value: f64) -> bool {
@@ -81,6 +82,9 @@ pub(crate) fn state(owner: f64) -> f64 {
 pub(crate) fn new_tls_wrapper(parent: f64) -> f64 {
     let scope = TransientRootScope::enter();
     let parent = scope.root_nanbox(parent);
+    // A wrapper snapshots its logical parent's public value, independently
+    // of whether that parent has a connected transport. The lookup may run JS.
+    let allow_half_open = scope.root_nanbox(p::own_get(parent.get(), "allowHalfOpen"));
     let parent_link = link(parent.get());
     let transport_owner =
         // SAFETY: The retained link is validated on this agent; its returned JS owner is rooted
@@ -98,6 +102,7 @@ pub(crate) fn new_tls_wrapper(parent: f64) -> f64 {
     ));
     let state = scope.root_nanbox(state(owner.get()));
     initialize_open_state(owner.get(), state.get());
+    p::own_set(owner.get(), "allowHalfOpen", allow_half_open.get());
     p::own_set(owner.get(), "_parent", parent.get());
     let parent_state = scope.root_nanbox(self::state(transport_owner.get()));
     p::record_set(state.get(), "tlsParent", transport_owner.get());
@@ -122,7 +127,6 @@ pub(crate) fn new_tls_wrapper(parent: f64) -> f64 {
     if open {
         let parent_state = scope.root_nanbox(self::state(transport_owner.get()));
         for key in [
-            "allowHalfOpen",
             "refed",
             provider::TCP,
             provider::CONNECT,
@@ -163,14 +167,12 @@ pub(crate) fn initialize_socket(
     let scope = TransientRootScope::enter();
     let receiver = receiver.map(|value| scope.root_nanbox(value));
     let options = scope.root_nanbox(options);
-    let allow_half_open =
-        // SAFETY: The argument is a live JS value on this agent; conversions finish before any
-        // payload projection, and allocating paths retain their rooted operands.
-        unsafe { crate::get_object_bool_field(options.get(), "allowHalfOpen") }.unwrap_or(false);
-    let fields = SocketFields {
-        allow_half_open,
-        ..SocketFields::default()
-    };
+    let option = p::own_get(options.get(), "allowHalfOpen");
+    // SAFETY: The ordinary property lookup has finished and truthiness cannot
+    // allocate or call JS. Constructor coercion is distinct from the strict
+    // false check used after EOF; subsequent public writes are not coerced.
+    let allow_half_open = unsafe { js_is_truthy(option) != 0 };
+    let fields = SocketFields::default();
     let owner = scope.root_nanbox(match receiver {
         Some(receiver) => {
             if !p::attach_socket(receiver.get(), route, fields) {
@@ -181,8 +183,8 @@ pub(crate) fn initialize_socket(
         None => p::alloc_socket(route, fields),
     });
     let state = scope.root_nanbox(state(owner.get()));
-    p::record_set(
-        state.get(),
+    p::own_set(
+        owner.get(),
         "allowHalfOpen",
         f64::from_bits(JsValue::from_bool(allow_half_open).bits()),
     );
@@ -339,12 +341,8 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
             p::reopen_socket(socket, super::payload_io::ROUTE).unwrap_or_else(|_| {
                 super::payload_prototype::throw_miss::<()>(PayloadMiss::Closed)
             });
-            let allow =
-                JsValue::from_bits(p::record_get(state.get(), "allowHalfOpen").to_bits()).to_bool();
-            // Reopen installed this payload; no JS or allocation has intervened.
-            (*p::socket_ptr(socket).expect("reopened Socket"))
-                .ext
-                .allow_half_open = allow;
+            // The ordinary public data property belongs to the logical
+            // Socket, not this transport incarnation. Reopen preserves it.
             initialize_open_state(owner.get(), state.get());
         }
     }
@@ -1341,12 +1339,12 @@ unsafe extern "C" fn read_end_tick(closure: *const RawClosureHeader, _: JsThis) 
         .ok()
         .and_then(|core| tl::link_handle_parts(&mut *core, socket));
     if current == Some(parts) {
-        super::payload_io::eof(owner.get());
+        super::payload_io::emit_eof(owner.get());
     }
     p::undefined()
 }
 
-fn queue_read_end(owner: f64) {
+pub(crate) fn queue_read_end(owner: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let socket = link(owner.get());

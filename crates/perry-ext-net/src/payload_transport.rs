@@ -49,7 +49,6 @@ pub(crate) struct SocketFields {
     pub read_end_emitted: bool,
     pub write_ended: bool,
     pub shutdown_done: bool,
-    pub allow_half_open: bool,
     pub read_started: bool,
     pub paused: bool,
     pub flowing: Option<bool>,

@@ -786,13 +786,12 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
         };
         let fields = &mut (*payload).ext;
         fields.opened = true;
-        fields.allow_half_open = allow_half_open;
         fields.paused = pause_on_connect;
     }
     socket::update_addresses(child_link);
     let child_state = scope.root_nanbox(socket::state(child.get()));
     p::own_set(
-        child_state.get(),
+        child.get(),
         "allowHalfOpen",
         f64::from_bits(JsValue::from_bool(allow_half_open).bits()),
     );

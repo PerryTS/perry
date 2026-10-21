@@ -39,3 +39,21 @@ PATH=/path/to/node-v26.5.0/bin:$PATH \
 
 `EVIDENCE.md` fixes the source revisions, maps fixtures to upstream contracts,
 records cross-runtime results, and explains the stopping point.
+
+## Mutable half-open policy
+
+`socket/allow-half-open-data-property.ts` checks the ordinary own data property,
+constructor normalization, arbitrary assignments, and deletion.
+`connection/allow-half-open-mutation.ts` uses owned numeric loopback connections
+to check both mutation directions, strict-false automatic ending, listener
+mutation, accepted-child defaults, and getter/destroy/reconnect behavior.
+Run either with `--suite node-suite --module net --filter <fixture-name>`.
+These cases do not certify the separate legacy `new tls.TLSSocket` constructor
+or complete NET/TLS compatibility.
+
+The published-main T94 port preserves upstream Socket metadata behavior.
+Fresh shared B95 baseline and paired functional/independent verification
+remain pending; see `EVIDENCE.md` for the source-only port boundary.
+
+2026-10-21: T101 recorded three raw-Node-exact half-open targets on NET_F99.
+See the dated self-verification record in `EVIDENCE.md` for its source and limits.
