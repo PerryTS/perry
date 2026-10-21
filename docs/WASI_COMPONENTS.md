@@ -102,8 +102,8 @@ The same distinction applies to individual resource drops: a wrapper becomes
 disposed even if the guest destructor traps without invoking a JS callback.
 
 GC finalizers release native engine memory without executing guest or
-JavaScript callbacks. Native resource wrappers now register deferred cleanup
-jobs; execution qualification of this new path is pending. A live borrow
+JavaScript callbacks. Native resource wrappers register deferred cleanup
+jobs, qualified on Linux as recorded below. A live borrow
 keeps its owned wrapper reachable. Collected owners are released at a safe
 job/call boundary, with identity and generation checks protecting resources
 that have been transferred or returned to a new owner. Cleanup encountered
@@ -291,13 +291,29 @@ checks and protected retired from-space. The [execution receipt](validation/comp
 records the exact source and artifact/log hashes. That receipt predates
 deferred cleanup and does not qualify the new finalization path.
 
+Native deferred cleanup is qualified on source
+`e510a0c9da3763ba0202aef9c25efba1b9b65d59`: all 21 native and 34 guest
+acceptance phases pass, including unreachable owners, live borrows, transferred
+handles, renewed ownership and exactly-once destruction. The host-resource
+stress run moved 1,893 objects and passed 97 evacuation checks with retired
+from-space protected. Runtime component tests (26), weak-reference tests (6)
+and the FinalizationRegistry test filter (6) pass. The 28 engine tests passed
+on an earlier revision with byte-identical engine and ABI sources.
+
+The finalization delivery regression installs production root scanners and
+forces collection from each async init hook. The old implementation delivers
+only one of three jobs; the fixed implementation delivers all three and
+retains their identities. The [cleanup receipt](validation/component-cleanup-20261021.json)
+records both source revisions, acceptance reports and artifact/log hashes.
+
 Still required before claiming the full milestone:
 
-- Qualify native deferred cleanup and implement cleanup of owners inside
-  Perry-authored WASI guests. Qualify the remaining capability operations,
+- Implement and qualify cleanup of owners inside Perry-authored WASI guests.
+  Qualify the remaining capability operations,
   command worlds, and HTTP independently.
-- Qualify supported host platforms and promote the demonstrated execution
-  check into the required PR checks.
+- Qualify supported host platforms. [PR #12985](https://github.com/PerryTS/perry/pull/12985)
+  added the component acceptance suite to required execution checks; integration
+  with that workflow exercises these extended resource fixtures.
 
 P3 async support remains a subsequent milestone.
 

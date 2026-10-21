@@ -9,5 +9,9 @@ Root FinalizationRegistry construction across allocation of its entries array
 and every pending cleanup job while delivery can allocate or invoke async hooks.
 The native component-host ABI advances to 4 (command hosting uses ABI 3);
 matching archives are required. Engine, FFI, moving-GC and cross-language
-regressions are added. Execution qualification is pending. Automatic cleanup
-inside Perry-authored WASI guests remains separate work.
+regressions are added. Linux qualification passed all 21 native and 34 guest
+acceptance phases with actual moving collection and native from-space protection.
+Runtime component and weak-reference regression filters pass; the finalization
+control fails on old code and passes on the fix with production GC roots.
+The execution receipt records exact sources and artifact hashes. Automatic
+cleanup inside Perry-authored WASI guests remains separate work.
