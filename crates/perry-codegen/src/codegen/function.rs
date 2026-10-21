@@ -837,6 +837,9 @@ pub(super) fn compile_function(
     };
     let mut spec_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let mut bound_param_slots: HashSet<u32> = HashSet::new();
+    // Each parameter's alloca, bound as a root below once the Number-local
+    // proof has pruned `shadow_slot_map`.
+    let mut param_roots: Vec<(u32, String)> = Vec::new();
     let locals: HashMap<u32, String> = {
         let blk = lf.block_mut(0).unwrap();
         let mut map = HashMap::new();
@@ -871,13 +874,7 @@ pub(super) fn compile_function(
                     #[cfg(not(test))]
                     let omit_owner = false;
                     if !omit_owner {
-                        if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
-                            bound_param_slots.insert(slot_idx);
-                            blk.call_void(
-                                "js_shadow_slot_bind",
-                                &[(I32, &slot_idx.to_string()), (PTR, &slot)],
-                            );
-                        }
+                        param_roots.push((p.id, slot.clone()));
                     }
                     map.insert(p.id, slot);
                     continue;
@@ -897,13 +894,7 @@ pub(super) fn compile_function(
                 arg_name
             };
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
-            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
-                bound_param_slots.insert(slot_idx);
-                blk.call_void(
-                    "js_shadow_slot_bind",
-                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
-                );
-            }
+            param_roots.push((p.id, slot.clone()));
             map.insert(p.id, slot);
         }
         map
@@ -1180,6 +1171,36 @@ pub(super) fn compile_function(
     shadow_slot_map.retain(|id, _| {
         boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
     });
+    // A parameter the entry contract proved Number holds a plain double for
+    // the whole body when the body never rebinds or mutates it, exactly as in
+    // a typed closure body (`codegen/closure.rs`, Closed World 5d): it owns no
+    // root slot. Parameters are bound only after both drops. A bound Number
+    // parameter made every read of it a root reload through the launder, and
+    // kept its double in an integer register across each call of a recursion.
+    if !spec_param_proofs.is_empty() {
+        let rebound = crate::collectors::reassigned_locals(&f.body);
+        let number_params: HashSet<u32> =
+            crate::collectors::typed_locals::number_proof_params(&spec_param_proofs)
+                .filter(|id| {
+                    !boxed_vars.contains(id)
+                        && !rebound.contains(id)
+                        && !crate::collectors::has_any_mutation(&f.body, *id)
+                })
+                .collect();
+        shadow_slot_map.retain(|id, _| !number_params.contains(id));
+    }
+    {
+        let blk = lf.block_mut(0).unwrap();
+        for (id, slot) in &param_roots {
+            if let Some(slot_idx) = shadow_slot_map.get(id).copied() {
+                bound_param_slots.insert(slot_idx);
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, slot)],
+                );
+            }
+        }
+    }
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 

@@ -469,3 +469,47 @@ fn the_clone_entry_is_shrink_wrapped_frameless() {
          its first instruction is a frame store:\n{label}\n{first_inst}"
     );
 }
+
+/// js-compiled `10-fib`: the argument is a computed Number, so the clone is
+/// the guarded `$spec_b` whose entry contract proves `n` Number, not the
+/// i32-literal clone above. `n` is never rebound, so it holds a plain double
+/// for the whole clone and owns no root slot. Rooted, every read of `n` went
+/// through the root reload and the clone ran 44% more instructions than
+/// v0.5.1520 (its double moved through an integer register at each use).
+/// The public body has no entry proof and keeps the conservative root.
+#[test]
+fn a_guarded_number_parameter_owns_no_root_in_the_clone() {
+    let _pin = crate::codegen::helpers::NativeRootsPin::native();
+    let mut module = recursive_module();
+    module.init.clear();
+    module.init.push(Stmt::Let {
+        id: 30,
+        name: "k".to_string(),
+        ty: Type::Number,
+        mutable: true,
+        init: Some(Expr::Number(33.5)),
+    });
+    module.init.push(Stmt::Expr(call(1, vec![Expr::LocalGet(30)])));
+    let ir = compile_ir(&module);
+
+    let body = |marker: &str| -> String {
+        ir.split("\ndefine ")
+            .find(|f| f.lines().next().is_some_and(|l| l.contains(&format!("{marker}("))))
+            .map(|f| f.split("\n}").next().unwrap_or(f).to_string())
+            .unwrap_or_else(|| panic!("subject not live: no define of {marker} in the IR:\n{ir}"))
+    };
+    let roots = |f: &str| {
+        f.matches("alloca ptr addrspace(1)").count() + f.matches("@js_shadow_slot_bind(").count()
+    };
+    let clone = body("@perry_fn_spec_preserve_none_ts__f$spec_b");
+    assert_eq!(roots(&clone), 0, "the proven Number parameter is not a root:\n{clone}");
+    assert!(
+        !clone.contains("asm \"\", \"=r,0\""),
+        "no read of n goes through the root reload:\n{clone}"
+    );
+    let public = body("@perry_fn_spec_preserve_none_ts__f$generic");
+    assert!(
+        roots(&public) >= 1,
+        "the body without an entry proof keeps n rooted:\n{public}"
+    );
+}
