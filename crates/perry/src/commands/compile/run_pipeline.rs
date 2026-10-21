@@ -997,6 +997,11 @@ pub fn run_with_parse_cache(
 
     collect_modules::reexport_prune::finish(&mut ctx);
     run_post_collect_preflight(&args, &mut ctx, format)?;
+    // Every module of the program is lowered and named (the preflight
+    // re-derives names from the final project root): give modules whose
+    // sanitized names collide distinct symbol prefixes before any prefix is
+    // derived.
+    module_prefixes::disambiguate(&mut ctx)?;
     if std::env::var("PERRY_COLLECT_ONLY").ok().as_deref() == Some("1") {
         collect_modules::reexport_prune::write_graph(&mut ctx, &args.input.canonicalize()?)?;
         return Ok(CompileResult {
@@ -3474,7 +3479,11 @@ pub fn run_with_parse_cache(
         .keys()
         .map(|path| {
             (
-                compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                compute_module_prefix(
+                    &path.to_string_lossy(),
+                    &ctx.project_root,
+                    &ctx.module_prefix_overrides,
+                ),
                 path.clone(),
             )
         })
@@ -3527,7 +3536,8 @@ pub fn run_with_parse_cache(
         if capability.final_shape.is_some() {
             continue;
         }
-        let source_prefix = compute_module_prefix(source_path, &ctx.project_root);
+        let source_prefix =
+            compute_module_prefix(source_path, &ctx.project_root, &ctx.module_prefix_overrides);
         for method in &capability.methods {
             object_literal_method_candidates
                 .entry(method.name.clone())
@@ -4088,7 +4098,11 @@ pub fn run_with_parse_cache(
                         .cloned()
                         .unwrap_or_else(|| resolved_path_str.clone());
                     let effective_prefix = if origin_path != resolved_path_str {
-                        compute_module_prefix(&origin_path, &ctx.project_root)
+                        compute_module_prefix(
+                            &origin_path,
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        )
                     } else {
                         source_prefix.clone()
                     };
@@ -4096,6 +4110,7 @@ pub fn run_with_parse_cache(
                         class,
                         &class_canonical_path,
                         &ctx.project_root,
+                        &ctx.module_prefix_overrides,
                         &effective_prefix,
                     );
                     let local_alias = (local != &class.name).then(|| local.clone());
@@ -4195,8 +4210,11 @@ pub fn run_with_parse_cache(
                             .and_then(|exports| exports.get("default"))
                             .cloned()
                         {
-                            let default_prefix =
-                                compute_module_prefix(&default_origin_path, &ctx.project_root);
+                            let default_prefix = compute_module_prefix(
+                                &default_origin_path,
+                                &ctx.project_root,
+                                &ctx.module_prefix_overrides,
+                            );
                             let default_suffix = all_module_export_origin_names
                                 .get(&resolved_path_str)
                                 .and_then(|m| m.get("default"))
@@ -4263,6 +4281,7 @@ pub fn run_with_parse_cache(
                                     class,
                                     &class_canonical_path,
                                     &ctx.project_root,
+                                    &ctx.module_prefix_overrides,
                                     &default_prefix,
                                 );
                                 imported_classes.push(imported_class_from_hir(
@@ -4287,8 +4306,11 @@ pub fn run_with_parse_cache(
                     // Register all exports from the source module
                     if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                         for (export_name, origin_path) in exports {
-                            let origin_prefix =
-                                compute_module_prefix(origin_path, &ctx.project_root);
+                            let origin_prefix = compute_module_prefix(
+                                origin_path,
+                                &ctx.project_root,
+                                &ctx.module_prefix_overrides,
+                            );
                             // #10945: a namespace member enters the FLAT maps below only as a
                             // best-effort fallback for a bare-name call (#5927). A bare name that is a
                             // global intrinsic (`Array`, `Map`, `Request`, ...) never means the member in
@@ -4464,6 +4486,7 @@ pub fn run_with_parse_cache(
                                     class,
                                     &class_canonical_path,
                                     &ctx.project_root,
+                                    &ctx.module_prefix_overrides,
                                     &origin_prefix,
                                 );
                                 let local_alias = if export_name == &class.name {
@@ -4506,6 +4529,7 @@ pub fn run_with_parse_cache(
                             let target_prefix = compute_module_prefix(
                                 &target_path.to_string_lossy(),
                                 &ctx.project_root,
+                                &ctx.module_prefix_overrides,
                             );
                             namespace_member_prefixes
                                 .insert((local.clone(), alias.clone()), target_prefix);
@@ -4516,8 +4540,11 @@ pub fn run_with_parse_cache(
                         if ctx.bun_platform {
                             cjs_interop_namespaces.insert(local.clone());
                         }
-                        let default_prefix =
-                            compute_module_prefix(&resolved_path_str, &ctx.project_root);
+                        let default_prefix = compute_module_prefix(
+                            &resolved_path_str,
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        );
                         let default_is_var = all_module_exports
                             .get(&resolved_path_str)
                             .and_then(|exports| exports.get("default"))
@@ -4758,8 +4785,11 @@ pub fn run_with_parse_cache(
                             // getter; classify this named import as a var so
                             // consumer code calls that getter.
                             if perry_hir::is_native_module_specifier(ns_src) {
-                                let declaring_prefix =
-                                    compute_module_prefix(&ns_scan_path, &ctx.project_root);
+                                let declaring_prefix = compute_module_prefix(
+                                    &ns_scan_path,
+                                    &ctx.project_root,
+                                    &ctx.module_prefix_overrides,
+                                );
                                 import_function_prefixes
                                     .insert(local_name.clone(), declaring_prefix);
                                 if local_name != ns_scan_name {
@@ -4783,8 +4813,11 @@ pub fn run_with_parse_cache(
                             };
                             namespace_imports.push(local_name.clone());
                             for (export_name, origin_path) in target_exports {
-                                let origin_prefix =
-                                    compute_module_prefix(origin_path, &ctx.project_root);
+                                let origin_prefix = compute_module_prefix(
+                                    origin_path,
+                                    &ctx.project_root,
+                                    &ctx.module_prefix_overrides,
+                                );
                                 // #10945: a namespace member enters the FLAT maps below only as a
                                 // best-effort fallback for a bare-name call (#5927). A bare name that is a
                                 // global intrinsic (`Array`, `Map`, `Request`, ...) never means the member in
@@ -4955,6 +4988,7 @@ pub fn run_with_parse_cache(
                                         class,
                                         &class_canonical_path,
                                         &ctx.project_root,
+                                        &ctx.module_prefix_overrides,
                                         &origin_prefix,
                                     );
                                     let local_alias = if export_name == &class.name {
@@ -4994,6 +5028,7 @@ pub fn run_with_parse_cache(
                                     let target_prefix = compute_module_prefix(
                                         &target_path.to_string_lossy(),
                                         &ctx.project_root,
+                                        &ctx.module_prefix_overrides,
                                     );
                                     namespace_member_prefixes
                                         .insert((local_name.clone(), alias.clone()), target_prefix);
@@ -5033,7 +5068,11 @@ pub fn run_with_parse_cache(
 
                 // Resolve effective prefix (follow re-exports)
                 let effective_prefix = if origin_path != resolved_path_str {
-                    compute_module_prefix(&origin_path, &ctx.project_root)
+                    compute_module_prefix(
+                        &origin_path,
+                        &ctx.project_root,
+                        &ctx.module_prefix_overrides,
+                    )
                 } else {
                     source_prefix.clone()
                 };
@@ -5222,6 +5261,7 @@ pub fn run_with_parse_cache(
                         class,
                         &class_canonical_path,
                         &ctx.project_root,
+                        &ctx.module_prefix_overrides,
                         &effective_prefix,
                     );
                     // Issue #665: when the user wrote `import X from "pkg"`
@@ -5320,8 +5360,11 @@ pub fn run_with_parse_cache(
                     {
                         Some(index) => index,
                         None => {
-                            let class_prefix =
-                                compute_module_prefix(&origin_path, &ctx.project_root);
+                            let class_prefix = compute_module_prefix(
+                                &origin_path,
+                                &ctx.project_root,
+                                &ctx.module_prefix_overrides,
+                            );
                             imported_classes.push(imported_class_from_hir(
                                 class,
                                 class_prefix,
@@ -5428,7 +5471,11 @@ pub fn run_with_parse_cache(
                     if imported_classes.iter().any(|c| c.name == class.name) {
                         continue;
                     }
-                    let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
+                    let class_prefix = compute_module_prefix(
+                        &src_path,
+                        &ctx.project_root,
+                        &ctx.module_prefix_overrides,
+                    );
                     imported_classes.push(imported_class_from_hir(
                         class,
                         class_prefix,
@@ -5839,7 +5886,11 @@ pub fn run_with_parse_cache(
                 // imported; all other refs key on name only (legacy).
                 if is_parent_ref {
                     if let Some((src_path, class)) = &found {
-                        let source_prefix = compute_module_prefix(src_path, &ctx.project_root);
+                        let source_prefix = compute_module_prefix(
+                            src_path,
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        );
                         let effective_name = if ref_name != class.name {
                             ref_name.as_str()
                         } else {
@@ -5875,7 +5926,11 @@ pub fn run_with_parse_cache(
                     continue;
                 }
                 if let Some((src_path, class)) = found {
-                    let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
+                    let class_prefix = compute_module_prefix(
+                        &src_path,
+                        &ctx.project_root,
+                        &ctx.module_prefix_overrides,
+                    );
                     // Issue #485: when the child's `parent_name` doesn't
                     // match the source class's `class.name` (because the
                     // parent was imported via a rename — `import { Base
@@ -5933,8 +5988,11 @@ pub fn run_with_parse_cache(
             bundled_extensions
                 .iter()
                 .map(|(ext_path, _plugin_id)| {
-                    let ext_prefix =
-                        compute_module_prefix(&ext_path.to_string_lossy(), &ctx.project_root);
+                    let ext_prefix = compute_module_prefix(
+                        &ext_path.to_string_lossy(),
+                        &ctx.project_root,
+                        &ctx.module_prefix_overrides,
+                    );
                     (ext_path.to_string_lossy().to_string(), ext_prefix)
                 })
                 .collect()
@@ -6100,7 +6158,11 @@ pub fn run_with_parse_cache(
         if module.classes.is_empty() {
             continue;
         }
-        let prefix = compute_module_prefix(&path.to_string_lossy(), &ctx.project_root);
+        let prefix = compute_module_prefix(
+            &path.to_string_lossy(),
+            &ctx.project_root,
+            &ctx.module_prefix_overrides,
+        );
         if module
             .classes
             .iter()
@@ -6184,7 +6246,11 @@ pub fn run_with_parse_cache(
                     }
                     let mut opts = prepare_module(path, hir_module, false)?;
                     constructor_contracts.apply(
-                        &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                        &compute_module_prefix(
+                            &path.to_string_lossy(),
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        ),
                         hir_module,
                         &mut opts,
                     );
@@ -6351,7 +6417,11 @@ pub fn run_with_parse_cache(
                 let hir_module = &ctx.native_modules[path];
                 let mut opts = prepare_module(path, hir_module, false)?;
                 constructor_contracts.apply(
-                    &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                    &compute_module_prefix(
+                        &path.to_string_lossy(),
+                        &ctx.project_root,
+                        &ctx.module_prefix_overrides,
+                    ),
                     hir_module,
                     &mut opts,
                 );

@@ -797,6 +797,10 @@ pub struct CompilationContext {
     /// `--module-alias` module file -> canonical replacement file. The
     /// replacement's own imports resolve from the module file it replaces.
     pub module_file_aliases: BTreeMap<PathBuf, PathBuf>,
+    /// Module path -> symbol prefix, for the modules whose sanitized names
+    /// collide (`google-vertex-chat.ts` and `google-vertex/chat.ts`); see
+    /// `module_prefixes::disambiguate`.
+    pub module_prefix_overrides: HashMap<String, String>,
     /// #1681 (Phase 3 of #1677): true when this is the build-time capture
     /// stage (the `current_exe` subprocess), so `precompile(EXPR)` sites
     /// emit their build-time value instead of substituting. Re-installed on
@@ -1350,6 +1354,7 @@ impl CompilationContext {
             generated_asset_modules: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
             module_file_aliases: BTreeMap::new(),
+            module_prefix_overrides: HashMap::new(),
             precompile_capture: false,
             precompile_results: HashMap::new(),
             fast_math: false,

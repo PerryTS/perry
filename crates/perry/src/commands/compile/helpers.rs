@@ -100,6 +100,7 @@ pub(crate) fn canonical_class_source_prefix(
     class: &perry_hir::Class,
     class_canonical_path: &HashMap<usize, String>,
     project_root: &Path,
+    prefix_overrides: &HashMap<String, String>,
     fallback_prefix: &str,
 ) -> String {
     // Large cached/parallel source graphs can reuse a ClassId. Key canonical
@@ -108,7 +109,7 @@ pub(crate) fn canonical_class_source_prefix(
     // AND name (OpenTUI's node/bun BoxRenderable classes) remain distinct.
     class_canonical_path
         .get(&(class as *const perry_hir::Class as usize))
-        .map(|path| compute_module_prefix(path, project_root))
+        .map(|path| compute_module_prefix(path, project_root, prefix_overrides))
         .unwrap_or_else(|| fallback_prefix.to_string())
 }
 
@@ -311,6 +312,7 @@ mod tests {
                 &class,
                 &class_canonical_path,
                 &project_root,
+                &HashMap::new(),
                 "node_modules_rxjs_src_index_ts",
             ),
             "node_modules_rxjs_src_internal_Observable_ts"
@@ -365,6 +367,7 @@ mod tests {
                 &class,
                 &class_canonical_path,
                 &project_root,
+                &HashMap::new(),
                 "node_modules_effect_src_unstable_rpc_RpcSchema_ts",
             ),
             "node_modules_effect_src_unstable_rpc_RpcSchema_ts",

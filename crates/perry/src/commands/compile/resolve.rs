@@ -1899,7 +1899,18 @@ pub(super) fn discover_extension_entries(dir: &Path) -> Result<Vec<(PathBuf, Str
 }
 
 /// Compute a sanitized module prefix from a resolved path for scoped cross-module symbols
-pub(super) fn compute_module_prefix(resolved_path: &str, project_root: &Path) -> String {
+/// The symbol prefix of the module at `resolved_path`. `overrides` holds the
+/// prefixes [`super::module_prefixes::disambiguate`] gave modules whose
+/// sanitized names collide; every other module keeps its sanitized
+/// project-relative path.
+pub(super) fn compute_module_prefix(
+    resolved_path: &str,
+    project_root: &Path,
+    overrides: &HashMap<String, String>,
+) -> String {
+    if let Some(prefix) = overrides.get(resolved_path) {
+        return prefix.clone();
+    }
     let source_path = PathBuf::from(resolved_path);
     let source_module_name = source_path
         .strip_prefix(project_root)
