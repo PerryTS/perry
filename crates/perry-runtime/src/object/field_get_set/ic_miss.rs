@@ -680,9 +680,10 @@ include!("ic_miss/private_member_access.rs");
 include!("ic_miss/private_guard_fast.rs");
 
 /// The object that holds `value`'s private elements (#11791): `value`
-/// itself when it is a shaped object, or its own bag when it is a function.
-/// A Proxy holds none of its target's private elements, and a primitive holds
-/// none at all.
+/// itself when it is a shaped object, or its own property bag when it is a
+/// function or an exotic cell (Map, Set, Date, Error, Promise, Temporal — the
+/// instances `class X extends Map { #k = ... }` constructs). A Proxy holds
+/// none of its target's private elements, and a primitive holds none at all.
 ///
 /// # Safety
 /// Reads only headers; `value` may be any NaN-boxed value.
@@ -697,9 +698,34 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
         let bag = crate::closure::props::bag_of(object as usize);
         return (!bag.is_null()).then_some(bag);
     }
+    if crate::object::exotic_expando::exotic_kind_of_gc_type(header.obj_type).is_some() {
+        let bag = crate::object::exotic_expando::property_bag(object as usize);
+        return (!bag.is_null()).then_some(bag);
+    }
     (crate::value::addr_class::is_plausible_heap_addr(object as usize)
         && crate::object::object_is_shaped(object))
     .then_some(object)
+}
+
+/// [`private_element_holder`] for a definition (a private field, or the
+/// class brand of its private methods): a function or exotic cell gets its
+/// property bag allocated on the first private element, as on the first
+/// named property. May allocate; callers root `value` and read the holder
+/// only after this returns.
+///
+/// # Safety
+/// As [`private_element_holder`].
+unsafe fn private_element_holder_for_definition(value: f64) -> Option<*mut ObjectHeader> {
+    let boxed = JSValue::from_bits(value.to_bits());
+    if boxed.is_pointer() {
+        let addr = boxed.as_pointer::<ObjectHeader>() as usize;
+        if crate::closure::is_closure_ptr(addr) {
+            crate::closure::props::bag_ensure(addr);
+        } else if crate::object::exotic_expando::exotic_expando_kind(addr).is_some() {
+            crate::object::exotic_expando::property_bag_ensure(addr);
+        }
+    }
+    private_element_holder(value)
 }
 
 // Instance evaluation brands never grant access to static private elements.
@@ -781,7 +807,8 @@ pub extern "C" fn js_private_brand_add(obj: f64, declaring_class_id: u32) -> f64
     let evaluation_id =
         private_storage_evaluation_id(declaring_class_id, Some(obj.get_nanbox_f64()), None);
     let brand = private_brand_id(declaring_class_id, evaluation_id);
-    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+    let Some(holder) = (unsafe { private_element_holder_for_definition(obj.get_nanbox_f64()) })
+    else {
         throw_private_type_error(&format!(
             "Cannot initialize private methods of class {} on this object",
             private_class_display_name(declaring_class_id)
@@ -831,7 +858,8 @@ pub extern "C" fn js_private_field_add(
             "Cannot initialize {field_name} twice on the same object"
         ));
     }
-    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+    let Some(holder) = (unsafe { private_element_holder_for_definition(obj.get_nanbox_f64()) })
+    else {
         throw_private_type_error(&format!("Cannot initialize {field_name} on this object"));
     };
     // A class family's layout lists the element (`ENTRY_OPTIONAL`): the
