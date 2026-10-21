@@ -14,5 +14,9 @@ interface counters {
   keep-borrow: func(value: borrow<counter>);
   check-expired: func() -> bool;
   exercise-imports: func() -> u32;
+  start-cleanup: func() -> own<counter>;
+  check-cleanup-borrows: func() -> bool;
+  release-cleanup-borrows: func();
+  sweep-cleanup: func();
 }
 world plugin { import foreign; import observe; export counters; }

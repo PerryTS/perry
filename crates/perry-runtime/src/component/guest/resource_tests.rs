@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "resource_cleanup_tests.rs"]
+mod cleanup_tests;
+
 struct Registry<'a> {
     global: crate::gc::RuntimeHandle<'a>,
     previous: crate::gc::RuntimeHandle<'a>,

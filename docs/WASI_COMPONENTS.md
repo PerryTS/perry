@@ -114,8 +114,8 @@ through the remaining collected identities after a destructor fails.
 Unreachable whole instances still release native memory without invoking
 application callbacks. Collection timing and poisoned guest destructors are
 not deterministic: explicit disposal remains the reliable lifecycle API.
-Automatic cleanup of wrappers inside Perry-authored WASI guests remains
-separate work. The native host ABI is 4 for this cleanup implementation;
+Cleanup of wrappers inside Perry-authored WASI guests is described below;
+its execution qualification is pending. The native host ABI is 4 for this cleanup implementation;
 matching runtime and engine archives are required.
 
 ## Resources supplied by a native Perry host
@@ -196,9 +196,25 @@ Guest-defined payloads remain rooted while the canonical host owns their
 resource. The canonical representation carries an opaque integer identity,
 never a Perry heap address. A destructor receives the payload and runs once
 when the canonical owner drops the resource; its payload root is removed
-before user code runs, including when that code throws. Explicit disposal
-is still required for owners held by guest code. Deferred GC cleanup and
-running all destructors after an instance trap are not implemented.
+before user code runs, including when that code throws.
+
+Unreachable owned wrappers inside the guest register deferred finalization
+jobs. The holdings retain private ownership state, not the wrapper. A transfer
+changes that same state, so a late job cannot drop a recycled canonical handle
+belonging to a later owner. Live borrows retain their original owner; explicit
+disposal unregisters the finalizer and remains idempotent. A drop retires the
+private state before invoking the canonical destructor, including when it fails.
+
+Library components perform a microtask checkpoint after each successful
+synchronous export, while its arguments and result remain rooted and before
+the adapter lowers the result. This delivers ready finalizers, nextTick and
+Promise jobs without a command event loop. It does not wait for timers or I/O,
+and does not implement asynchronous WIT results. Execution qualification of
+these new cleanup and checkpoint paths is pending.
+
+Collection timing is nondeterministic, and payloads or destructors that retain
+their own wrapper can keep it reachable. Explicit disposal provides predictable
+release. Running every destructor after an instance trap is not guaranteed.
 
 Resources from an interface imported and exported by the same world have
 distinct nominal identities. Generated declarations and runtime handles keep
@@ -308,7 +324,7 @@ records both source revisions, acceptance reports and artifact/log hashes.
 
 Still required before claiming the full milestone:
 
-- Implement and qualify cleanup of owners inside Perry-authored WASI guests.
+- Qualify cleanup of owners inside Perry-authored WASI guests.
   Qualify the remaining capability operations,
   command worlds, and HTTP independently.
 - Qualify supported host platforms. [PR #12985](https://github.com/PerryTS/perry/pull/12985)
