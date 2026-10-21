@@ -1,7 +1,9 @@
 wit_bindgen::generate!({ path: "..", world: "plugin", generate_all });
 
 use exports::perry::network_probe::probe::Guest;
-use wasi::sockets::{instance_network, ip_name_lookup, network, udp, udp_create_socket};
+use wasi::sockets::{
+    instance_network, ip_name_lookup, network, tcp_create_socket, udp, udp_create_socket,
+};
 
 struct Probe;
 
@@ -17,6 +19,44 @@ fn address(port: u16) -> network::IpSocketAddress {
 }
 
 impl Guest for Probe {
+    fn connect(port: u16, payload: String) -> Result<String, String> {
+        let network = instance_network::instance_network();
+        let socket =
+            tcp_create_socket::create_tcp_socket(network::IpAddressFamily::Ipv4).map_err(error)?;
+        socket
+            .start_connect(&network, address(port))
+            .map_err(error)?;
+        let (input, output) = loop {
+            match socket.finish_connect() {
+                Ok(streams) => break streams,
+                Err(network::ErrorCode::WouldBlock) => socket.subscribe().block(),
+                Err(e) => return Err(error(e)),
+            }
+        };
+        match socket.remote_address().map_err(error)? {
+            network::IpSocketAddress::Ipv4(remote)
+                if remote.address == (127, 0, 0, 1) && remote.port == port => {}
+            _ => return Err("unexpected TCP peer".into()),
+        }
+        output
+            .blocking_write_and_flush(format!("{payload}\n").as_bytes())
+            .map_err(|e| format!("TCP write: {e:?}"))?;
+        let mut response = Vec::new();
+        loop {
+            response.extend(
+                input
+                    .blocking_read(256)
+                    .map_err(|e| format!("TCP read: {e:?}"))?,
+            );
+            if response.len() > 256 {
+                return Err("oversized TCP response".into());
+            }
+            if response.last() == Some(&b'\n') {
+                response.pop();
+                return String::from_utf8(response).map_err(|_| "non-UTF8 TCP response".into());
+            }
+        }
+    }
     fn resolve(name: String) -> Result<Vec<String>, String> {
         let network = instance_network::instance_network();
         let stream = ip_name_lookup::resolve_addresses(&network, &name).map_err(error)?;

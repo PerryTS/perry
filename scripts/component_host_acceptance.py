@@ -133,7 +133,7 @@ def main():
     component = network / "network.component.wasm"
     run("network-componentize", [args.componentize.resolve(), core, component])
     run("network-bindings", [args.wit.resolve(), network, network / "generated", "plugin"])
-    marker = "PASS component networking: UDP connected/unconnected traffic, exact grants, DNS, isolation"
+    marker = "PASS component networking: TCP/UDP traffic, exact grants, DNS, isolation"
     for moving in ([False, True] if args.moving_gc else [False]):
         env = normal_env.copy()
         suffix = "-moving" if moving else ""

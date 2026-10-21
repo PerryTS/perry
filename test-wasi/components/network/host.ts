@@ -4,6 +4,7 @@ declare function gc(): void;
 
 const bytes = readFileSync(process.argv[2]);
 const port = Number(process.argv[3]);
+const tcpPort = Number(process.argv[4]);
 function check(ok: boolean, message: string): void { if (!ok) throw new Error(message); }
 function instance(network: any) {
   return load(bytes, {}, { memoryBytes: 67108864, fuel: 100000000,
@@ -41,6 +42,30 @@ for (let i = 0; i < 3; i++) {
 const udpDns = probe(allowed).resolve("localhost");
 check(udpDns.tag === "err" && udpDns.value === "PermanentResolverFailure", "UDP grant must not enable DNS");
 allowed.dispose();
+const tcpRemote = { address: "127.0.0.1", port: tcpPort };
+const wrongTcpPort = tcpPort === 65535 ? 65534 : tcpPort + 1;
+for (const network of [
+  {},
+  { udp: true, addresses: [tcpRemote] },
+  { tcp: true },
+  { tcp: true, addresses: [{ address: "127.0.0.2" }] },
+  { tcp: true, addresses: [{ address: "127.0.0.1", port: wrongTcpPort }] },
+]) {
+  const plugin = instance(network);
+  const result = probe(plugin).connect(tcpPort, "denied");
+  check(result.tag === "err" && result.value === "AccessDenied", "TCP denial must come from capability checks");
+  plugin.dispose();
+}
+const tcp = instance({ tcp: true, addresses: [tcpRemote] });
+for (let i = 0; i < 3; i++) {
+  gc();
+  const text = "tcp:" + i;
+  const result = probe(tcp).connect(tcpPort, text);
+  check(result.tag === "ok" && result.value === "reply:" + text, "TCP round-trip payload");
+}
+const tcpDns = probe(tcp).resolve("localhost");
+check(tcpDns.tag === "err" && tcpDns.value === "PermanentResolverFailure", "TCP grant must not enable DNS");
+tcp.dispose();
 const dns = instance({ dns: true });
 for (let i = 0; i < 3; i++) {
   const result = probe(dns).resolve("localhost");
@@ -51,11 +76,15 @@ for (let i = 0; i < 3; i++) {
 check(probe(dns).resolve("invalid name!").tag === "err", "invalid name must fail");
 const dnsUdp = probe(dns).exchange(port, true, "denied");
 check(dnsUdp.tag === "err" && dnsUdp.value === "AccessDenied", "DNS must not enable UDP");
+const dnsTcp = probe(dns).connect(tcpPort, "denied");
+check(dnsTcp.tag === "err" && dnsTcp.value === "AccessDenied", "DNS must not enable TCP");
 dns.dispose();
 const fresh = instance({});
 const deniedDns = probe(fresh).resolve("localhost");
 check(deniedDns.tag === "err" && deniedDns.value === "PermanentResolverFailure", "DNS permission leaked");
 const freshUdp = probe(fresh).exchange(port, true, "denied");
 check(freshUdp.tag === "err" && freshUdp.value === "AccessDenied", "UDP permission leaked");
+const freshTcp = probe(fresh).connect(tcpPort, "denied");
+check(freshTcp.tag === "err" && freshTcp.value === "AccessDenied", "TCP permission leaked");
 fresh.dispose();
-console.log("PASS component networking: UDP connected/unconnected traffic, exact grants, DNS, isolation");
+console.log("PASS component networking: TCP/UDP traffic, exact grants, DNS, isolation");
