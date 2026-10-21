@@ -1460,6 +1460,9 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
                     "bytesWritten" => Scalar::Value(
                         fields.bytes_written.saturating_add(fields.queued as u64) as f64,
                     ),
+                    "bufferSize" if !fields.opened && !fields.connecting => {
+                        Scalar::Value(p::undefined())
+                    }
                     "writableLength" | "bufferSize" => Scalar::Value(fields.queued as f64),
                     "writableCorked" => Scalar::Value(fields.cork_depth as f64),
                     "timeout" => Scalar::Value(if fields.timeout_ms == 0 {
@@ -1632,7 +1635,9 @@ pub(crate) fn set_encoding(owner: f64, encoding: f64) -> f64 {
 }
 
 pub(crate) fn address(owner: f64) -> f64 {
-    let socket = link(owner);
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let socket = link(owner.get());
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     let address = unsafe {
@@ -1641,10 +1646,8 @@ pub(crate) fn address(owner: f64) -> f64 {
             .and_then(|payload| (*payload).ext.local)
     };
     let Some(address) = address else {
-        return f64::from_bits(JsValue::NULL.bits());
+        return f64::from_bits(perry_ffi::alloc_object().bits());
     };
-    let scope = TransientRootScope::enter();
-    let owner = scope.root_nanbox(owner);
     let object = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     p::own_set(
         object.get(),

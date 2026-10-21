@@ -74,8 +74,14 @@ method3!(write, socket::write);
 method3!(end, socket::end);
 method1!(destroy, socket::destroy);
 method1!(read, socket::read);
-method0!(cork, |owner| socket::cork(owner, false));
-method0!(uncork, |owner| socket::cork(owner, true));
+method0!(cork, |owner| {
+    socket::cork(owner, false);
+    p::undefined()
+});
+method0!(uncork, |owner| {
+    socket::cork(owner, true);
+    p::undefined()
+});
 method0!(reference, |owner| socket::set_ref(owner, true));
 method0!(unreference, |owner| socket::set_ref(owner, false));
 method0!(pause, |owner| socket::set_paused(owner, true));
