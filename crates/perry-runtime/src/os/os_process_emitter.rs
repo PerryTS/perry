@@ -555,6 +555,10 @@ pub(crate) fn reset_process_exit_event_emitted_for_test() {
 pub extern "C" fn js_process_signal_drain() -> i32 {
     let mut count = 0i32;
     for event in super::signal::take_pending_process_signals() {
+        if event == "SIGWINCH" {
+            // Node refreshes the TTY streams' size before user listeners run.
+            crate::os::refresh_tty_stream_sizes();
+        }
         if emit_process_event(event, &[]) {
             count += 1;
         }

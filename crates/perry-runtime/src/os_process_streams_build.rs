@@ -274,5 +274,8 @@ pub(super) fn build_stream_object_with_write(
             set_field_with_stub(start + 7, lifecycle); // destroy
         }
     }
+    if is_tty && !is_stdin {
+        crate::tty::refresh_write_stream_size(obj, fd_i);
+    }
     obj
 }
