@@ -230,13 +230,8 @@ pub(crate) fn default_call(ctx: &mut FnCtx<'_>, class: &Class, args: &[Expr]) ->
         {
             return None;
         }
-        (ctor.params.len() == args.len()).then(|| {
-            format!(
-                "{}__{}_constructor",
-                ctx.strings.module_prefix(),
-                parent.name
-            )
-        })
+        (ctor.params.len() == args.len())
+            .then(|| crate::symbol_names::constructor(&ctx.strings.module_prefix(), &parent.name))
     });
     let Some((plan, target)) = plan(ctx, class).zip(target) else {
         return super::super_constructor::call(ctx, class, args);

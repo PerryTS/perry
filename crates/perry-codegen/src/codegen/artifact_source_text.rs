@@ -222,7 +222,7 @@ pub(super) fn collect_user_fn_source<'a>(
         .collect();
     materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
     for (func_id, src) in materialized_closure_sources {
-        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
+        let sym = crate::symbol_names::closure(&module_prefix, func_id);
         user_fn_source.push((
             sym,
             super::function_source_header::retained_function_text(

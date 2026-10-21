@@ -6,6 +6,26 @@
 use super::*;
 
 #[test]
+fn unicode_symbol_names_survive_stack_map_compaction() {
+    let symbol = crate::symbol_names::function("module_ts", "grüße$méthode");
+    let assembly = sample_asm().replace("_probe_fn", &symbol);
+    for target in [
+        "arm64-apple-macosx15.0.0",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+    ] {
+        let (out, stats) = compact_stack_map_asm(&assembly, target)
+            .expect("encoded names parse")
+            .expect("stack map rewritten");
+        assert_eq!(stats.functions, 1);
+        assert!(out.contains(&format!("{symbol}:")), "{target}: {out}");
+        if !target.contains("linux") {
+            assert!(out.contains(&format!("{symbol}-_perry_gc_map")), "{out}");
+        }
+    }
+}
+
+#[test]
 fn object_format_tracks_target_os_across_triple_spellings() {
     for target in ["aarch64-apple-darwin", "arm64-apple-macosx15.0.0"] {
         assert!(

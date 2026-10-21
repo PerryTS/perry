@@ -108,7 +108,11 @@ impl CompileProgress {
         // diagnostic override when per-module detail is wanted regardless.
         // The heartbeat covers every module whenever progress is on.
         let enabled = progress_mode == "all" || (progress_mode == "1" && callables >= 1_000);
-        let stage = if births { "births pre-pass" } else { "lowering" };
+        let stage = if births {
+            "births pre-pass"
+        } else {
+            "lowering"
+        };
         let started = Instant::now();
         let phase = Arc::new(AtomicU8::new(0));
         if enabled {
@@ -1361,14 +1365,9 @@ fn lower_module(
             .map(|(_, p, ext, fields)| (fields.clone(), ext.clone(), p.clone()))
     };
 
-    // Distinct source class names can `sanitize()` to the SAME symbol — e.g.
-    // `$X` and `_X` both become `_X` (minified bundles use `$`/`_` heavily).
-    // Two such classes are genuinely different (different shapes), so each needs
-    // its OWN keys-global; emitting `@perry_class_keys_<prefix>__<sanitized>`
-    // twice makes clang reject the IR ("redefinition of global"). Track every
-    // emitted name and disambiguate collisions with a numeric suffix. The
-    // (real-name-keyed) `class_keys_globals_map` stores the unique name, so every
-    // `new ClassName()` site still resolves to the right global.
+    // Source components use the injective encoder. Reserve a distinct global
+    // for any repeated internal class name; the real-name keyed map carries
+    // that selected global to allocation sites and capability harvesting.
     let mut used_class_keys_globals: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for c in &hir.classes {
@@ -2955,7 +2954,7 @@ fn lower_module(
             .iter()
             .map(|ic| {
                 let effective_name = ic.effective_name();
-                let ctor_name = format!("{}__{}_constructor", ic.source_prefix, ic.name);
+                let ctor_name = crate::symbol_names::constructor(&ic.source_prefix, &ic.name);
                 (
                     effective_name,
                     ImportedCtor {
@@ -3468,9 +3467,9 @@ fn lower_module(
                     format!("closure_func_id={func_id}"),
                     format!(
                         "symbol={}",
-                        typed_f64_closure_name(&format!(
-                            "perry_closure_{}__{}",
-                            module_prefix, func_id
+                        typed_f64_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
                         ))
                     ),
                 ],
@@ -3498,9 +3497,9 @@ fn lower_module(
                     format!("closure_func_id={func_id}"),
                     format!(
                         "symbol={}",
-                        typed_i1_closure_name(&format!(
-                            "perry_closure_{}__{}",
-                            module_prefix, func_id
+                        typed_i1_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
                         ))
                     ),
                 ],
@@ -3528,9 +3527,9 @@ fn lower_module(
                     format!("closure_func_id={func_id}"),
                     format!(
                         "symbol={}",
-                        typed_i32_closure_name(&format!(
-                            "perry_closure_{}__{}",
-                            module_prefix, func_id
+                        typed_i32_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
                         ))
                     ),
                 ],
@@ -3560,9 +3559,9 @@ fn lower_module(
                     format!("closure_func_id={func_id}"),
                     format!(
                         "symbol={}",
-                        typed_string_closure_name(&format!(
-                            "perry_closure_{}__{}",
-                            module_prefix, func_id
+                        typed_string_closure_name(&crate::symbol_names::closure(
+                            &module_prefix,
+                            func_id
                         ))
                     ),
                 ],
@@ -4074,22 +4073,9 @@ fn lower_module(
             let Some(f) = func_by_id.get(func_id) else {
                 continue;
             };
-            // NOTE: do NOT early-skip when `f.name == exported_name`. The real
-            // body is emitted under `scoped_fn_name` (the INJECTIVE
-            // `sanitize_member`), but cross-module callers and the #461
-            // undefined-stub / #836 verbatim-alias paths compute the symbol via
-            // plain `sanitize`. For a non-plain name like `$constructor`
-            // (`export function $constructor` in zod core, #5431) those two
-            // manglings diverge — body at `perry_fn_<mod>__u__24constructor`,
-            // callers at `perry_fn_<mod>___constructor` — even though local ==
-            // exported. Without a forwarding alias the #461 loop below claims
-            // `_constructor` with an undefined-returning stub and every
-            // cross-module call resolves to it (function reference is fine,
-            // every CALL returns `undefined`). The `alias_sym == target_sym`
-            // check below is the correct guard: it skips the plain-name case
-            // (where both manglings agree) while still emitting the alias when
-            // they differ.
-            let alias_sym = format!("perry_fn_{}__{}", module_prefix, sanitize(exported_name));
+            // Publish the exported spelling through the same constructor used
+            // by importers. The function registry owns the local body symbol.
+            let alias_sym = crate::symbol_names::function(&module_prefix, &exported_name);
             let target_sym = match func_names.get(func_id) {
                 Some(s) => s.clone(),
                 None => continue,
@@ -4173,7 +4159,7 @@ fn lower_module(
             })
             .collect();
         for exported in stub_targets {
-            let stub_sym = format!("perry_fn_{}__{}", module_prefix, sanitize(&exported));
+            let stub_sym = crate::symbol_names::function(&module_prefix, &exported);
             if llmod.has_function(&stub_sym) {
                 continue;
             }

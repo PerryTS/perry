@@ -125,7 +125,7 @@ pub(super) fn extend_body_symbol_display_names(
             }
         }
     }
-    // ABI clones of a registered body (`<body>$spec_<abi>`, `<body>$generic`)
+    // ABI clones of a registered body (specialized and generic entries)
     // run the same JS function and are the targets direct calls actually
     // reach, so a return address inside one is that function's frame.
     // Unregistered, such a frame either vanished from `Error.stack` or

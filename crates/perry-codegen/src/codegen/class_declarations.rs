@@ -11,7 +11,6 @@
 
 use crate::strings::StringPool;
 
-use super::helpers::sanitize_member;
 use super::spec_function_length;
 
 /// The LLVM type of one runtime `ClassMemberDecl`.
@@ -56,15 +55,8 @@ pub(super) fn class_declaration_globals(
 ) -> Vec<ClassDeclarationGlobal> {
     let mut out = Vec::new();
     for &(cid, class) in local_classes {
-        let class_symbol = sanitize_member(&class.name);
-        let method_symbol = |name: &str| {
-            format!(
-                "perry_method_{}__{}__{}",
-                module_prefix,
-                class_symbol,
-                sanitize_member(name)
-            )
-        };
+        let method_symbol =
+            |name: &str| crate::symbol_names::method(&module_prefix, &class.name, &name);
         let named = |name: &str| {
             strings
                 .lookup(name)
@@ -194,7 +186,10 @@ pub(super) fn class_declaration_globals(
                 || class.extends.is_some()
                 || class.native_extends.is_some());
         let initializer = if default_derived {
-            format!("@{}__{}_default_fields", module_prefix, class.name)
+            format!(
+                "@{}",
+                crate::symbol_names::default_fields(module_prefix, &class.name)
+            )
         } else {
             "null".to_owned()
         };

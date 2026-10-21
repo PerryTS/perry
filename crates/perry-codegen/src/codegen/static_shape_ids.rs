@@ -366,36 +366,24 @@ impl ProgramClassShapeIds {
 
 /// The module's class ids keyed the way a class keys global names its class.
 ///
-/// The global is `perry_class_keys_<modprefix>__<sanitized class>`. Several
-/// names can sanitize alike; the smallest name wins so the choice is
-/// deterministic (the pre-pass and codegen must agree). Built once from
-/// `class_ids` per pass over the keys globals: resolving each global by
-/// rescanning and re-sanitizing every class name made each pass quadratic in
-/// the class count, which on a bundle with tens of thousands of classes and
-/// object-literal shapes was minutes of serial compile time.
-pub(crate) struct ClassIdsByKeysName(HashMap<String, (String, u32)>);
+/// The class component uses the same injective byte encoder as the producer.
+/// Keep this compiler-internal index so resolving each keys global does not
+/// rescan all classes (quadratic on large bundles).
+pub(crate) struct ClassIdsByKeysName(HashMap<String, u32>);
 
 impl ClassIdsByKeysName {
     pub(crate) fn new(class_ids: &HashMap<String, u32>) -> Self {
-        let mut by_name: HashMap<String, (String, u32)> = HashMap::with_capacity(class_ids.len());
-        for (name, &id) in class_ids {
-            match by_name.entry(super::helpers::sanitize(name)) {
-                std::collections::hash_map::Entry::Occupied(mut slot) => {
-                    if name < &slot.get().0 {
-                        slot.insert((name.clone(), id));
-                    }
-                }
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert((name.clone(), id));
-                }
-            }
-        }
-        Self(by_name)
+        Self(
+            class_ids
+                .iter()
+                .map(|(name, &id)| (crate::symbol_names::encode_identifier(name), id))
+                .collect(),
+        )
     }
 
-    /// The class id a keys global's sanitized class name resolves to, 0 = none.
-    pub(crate) fn get(&self, sanitized_class: &str) -> u32 {
-        self.0.get(sanitized_class).map_or(0, |&(_, id)| id)
+    /// The class id a keys global's encoded class name resolves to, 0 = none.
+    pub(crate) fn get(&self, encoded_class: &str) -> u32 {
+        self.0.get(encoded_class).copied().unwrap_or(0)
     }
 }
 
@@ -426,9 +414,9 @@ pub(crate) fn class_birth(
     class_ids: &ClassIdsByKeysName,
 ) -> ClassBirth {
     let (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words) = entry;
-    let prefix = format!("perry_class_keys_{}__", module_prefix);
-    let sanitized_class = global_name.strip_prefix(&prefix).unwrap_or("");
-    let class_id = class_ids.get(sanitized_class);
+    let prefix = crate::symbol_names::class_keys_prefix(module_prefix);
+    let encoded_class = global_name.strip_prefix(&prefix).unwrap_or("");
+    let class_id = class_ids.get(encoded_class);
     let image = class_header_image_inits.get(global_name);
     let wide_live = match image {
         Some(&(_, _, birth_live)) if birth_live > *field_count => birth_live,
@@ -438,7 +426,7 @@ pub(crate) fn class_birth(
     // mints at startup before any seed or module init: it can never adopt a
     // static id (its mint would only ever by-facts hit the counter id), so it
     // is not given one.
-    let literal = sanitized_class.starts_with("__AnonShape_");
+    let literal = encoded_class.starts_with("__AnonShape_");
     let shape = (class_id != 0 && !(literal && *field_count == 0)).then(|| BirthShape {
         keys: packed.as_bytes().to_vec(),
         key_count: *field_count,

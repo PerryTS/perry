@@ -559,7 +559,7 @@ pub fn try_lower_closure_typed_local_call(
                 let has_rest = ctx.closure_rest_params.contains_key(&func_id);
                 if !has_rest && declared_count == lowered_args.len() {
                     let closure_fn =
-                        format!("perry_closure_{}__{}", ctx.strings.module_prefix(), func_id);
+                        crate::symbol_names::closure(&ctx.strings.module_prefix(), func_id);
                     let site_id = emit_typed_feedback_register_site(
                         ctx,
                         TypedFeedbackKind::ClosureCall,

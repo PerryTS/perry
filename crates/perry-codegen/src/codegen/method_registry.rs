@@ -16,7 +16,7 @@ use crate::types::DOUBLE;
 // Collector and boxing-analysis walkers live in dedicated modules.
 
 // Name-mangling helpers from the trunk (also reachable via `super::*`).
-use super::helpers::{sanitize, sanitize_member, scoped_method_name, scoped_static_method_name};
+use super::helpers::{scoped_method_name, scoped_static_method_name};
 use super::static_method_registry_key;
 use super::ImportedClass;
 
@@ -126,7 +126,7 @@ pub(crate) fn build_method_names(
             let ctor_method_name = format!("{}_constructor", c.name);
             method_names.insert(
                 (c.name.clone(), ctor_method_name.clone()),
-                format!("{}__{}_constructor", class_prefix, mangle_class_name),
+                crate::symbol_names::constructor(&class_prefix, &mangle_class_name),
             );
         }
         // Getters: register under the property name with a `__get_`
@@ -185,12 +185,7 @@ pub(crate) fn build_method_names(
             // `perry_method_<source_prefix>__<class>__<method>`.
             // Use the canonical class name (ic.name) for the symbol
             // since that's how the source module mangled it.
-            let llvm_fn = format!(
-                "perry_method_{}__{}__{}",
-                sanitize(src),
-                sanitize_member(&ic.name),
-                sanitize_member(method_name),
-            );
+            let llvm_fn = crate::symbol_names::method(&src, &ic.name, &method_name);
             method_names
                 .entry((effective_name.clone(), method_name.clone()))
                 .or_insert_with(|| llvm_fn.clone());
@@ -241,11 +236,7 @@ pub(crate) fn build_method_names(
         // `lower_getter_method`, then codegen prepends `__get_`).
         for prop in &ic.getter_names {
             let inner_fn_name = format!("get_{}", prop);
-            let llvm_fn = scoped_method_name(
-                &sanitize(src),
-                &ic.name,
-                &format!("__get_{}", inner_fn_name),
-            );
+            let llvm_fn = scoped_method_name(src, &ic.name, &format!("__get_{}", inner_fn_name));
             method_names
                 .entry((effective_name.clone(), format!("__get_{}", prop)))
                 .or_insert_with(|| llvm_fn.clone());
@@ -257,11 +248,7 @@ pub(crate) fn build_method_names(
         // mangling is `perry_method_<src>__<class>____set_set_<prop>`.
         for prop in &ic.setter_names {
             let inner_fn_name = format!("set_{}", prop);
-            let llvm_fn = scoped_method_name(
-                &sanitize(src),
-                &ic.name,
-                &format!("__set_{}", inner_fn_name),
-            );
+            let llvm_fn = scoped_method_name(src, &ic.name, &format!("__set_{}", inner_fn_name));
             method_names
                 .entry((effective_name.clone(), format!("__set_{}", prop)))
                 .or_insert_with(|| llvm_fn.clone());
@@ -279,7 +266,7 @@ pub(crate) fn build_method_names(
         // ctor `return chalkFactory(opts)`) yielded the empty instance instead of
         // the factory. The dispatch in `lower_new` applies `js_ctor_return_override`
         // to this value.
-        let ctor_fn = format!("{}__{}_constructor", sanitize(src), sanitize(&ic.name),);
+        let ctor_fn = crate::symbol_names::constructor(&src, &ic.name);
         let mut ctor_params: Vec<crate::types::LlvmType> = vec![DOUBLE];
         for _ in 0..ic.constructor_param_count {
             ctor_params.push(DOUBLE);
@@ -291,14 +278,9 @@ pub(crate) fn build_method_names(
         // class id. Register them under the static-only key the lowering uses.
         for sm in &ic.static_method_names {
             let llvm_fn = if let Some(source_class_id) = ic.source_class_id {
-                scoped_static_method_name(&sanitize(src), source_class_id, &ic.name, sm)
+                scoped_static_method_name(src, source_class_id, &ic.name, sm)
             } else {
-                format!(
-                    "perry_static_{}__{}__{}",
-                    sanitize(src),
-                    sanitize_member(&ic.name),
-                    sanitize_member(sm),
-                )
+                crate::symbol_names::static_member(&src, &ic.name, &sm)
             };
             method_names
                 .entry((effective_name.clone(), static_method_registry_key(sm)))

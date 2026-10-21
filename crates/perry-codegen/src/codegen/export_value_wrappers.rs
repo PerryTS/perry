@@ -1,7 +1,7 @@
 //! Emits the module's exported function-value surface: live getters for
 //! re-exported node builtins, the `__perry_wrap_*` closure-ABI wrappers for
 //! every top-level user function, and the cross-module name aliases that
-//! bridge the producer-side `sanitize()` mangling to the consumer-side
+//! use the same canonical symbols as the consumer-side
 //! verbatim one. Kept separate from the artifact traversal so this wrapper
 //! family stays grouped without pushing that orchestration module over the
 //! source-size gate.
@@ -14,7 +14,7 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I64};
 
-use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
+use super::helpers::{function_body_returns_generator_object, scoped_fn_name};
 
 /// Borrowed inputs for the export/function-value wrapper emission phase.
 pub(super) struct ExportValueWrapperCtx<'a> {
@@ -65,7 +65,7 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         let Some((source, imported)) = native_origin else {
             continue;
         };
-        let getter_name = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+        let getter_name = crate::symbol_names::function(&module_prefix, &exported);
         if llmod.has_function(&getter_name) {
             continue;
         }
@@ -133,11 +133,8 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         blk.ret(DOUBLE, &result);
     }
 
-    // Exported function names use a stable, plain-sanitized cross-module ABI,
-    // while local function bodies use the injective `sanitize_member` mangling
-    // so hostile-but-valid identifiers cannot collide inside one module. The
-    // direct-call aliases bridge those schemes above; closure values need the
-    // identical bridge for their `__perry_wrap_*` symbols.
+    // Renamed exports need closure-ABI wrappers under their public spelling,
+    // forwarding to the registry-owned local body. Both use canonical names.
     {
         let func_by_id: HashMap<u32, &perry_hir::Function> =
             hir.functions.iter().map(|f| (f.id, f)).collect();
@@ -150,11 +147,7 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
                 continue;
             };
             let target_wrap = format!("__perry_wrap_{}", target_name);
-            let alias_wrap = format!(
-                "__perry_wrap_perry_fn_{}__{}",
-                module_prefix,
-                sanitize(exported_name)
-            );
+            let alias_wrap = crate::symbol_names::function_wrapper(&module_prefix, &exported_name);
             if alias_wrap == target_wrap
                 || llmod.has_function(&alias_wrap)
                 || !emitted_aliases.insert(alias_wrap.clone())
@@ -223,11 +216,7 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
             if local == exported {
                 continue;
             }
-            let exported_wrap = format!(
-                "__perry_wrap_perry_fn_{}__{}",
-                module_prefix,
-                sanitize(exported)
-            );
+            let exported_wrap = crate::symbol_names::function_wrapper(&module_prefix, &exported);
             // Skip if a wrapper with this exact name already exists — the
             // regular wrapper loop above may have produced it when the
             // *local* HIR name happens to sanitize to the same symbol.
@@ -278,141 +267,22 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         }
     }
 
-    // Closes #836: two additional producer-side emissions for cross-module
-    // exports that the regular wrapper/getter/stub loops above leave behind.
-    //
-    // Sub-bug A — sanitize-mismatch raw aliases. The producer side hashes
-    // every export through `sanitize()` (replaces every non-alphanumeric +
-    // non-underscore char with `_`), so `export const $ZodCheck` lands at
-    // `perry_fn_<src>___ZodCheck` (one `_` from the `__` separator, two
-    // from the sanitized `$`). The consumer side, in contrast, builds the
-    // callee symbol with `import_origin_suffix()`, which returns the
-    // exported name VERBATIM — so consumer references read
-    // `perry_fn_<src>__$ZodCheck` and link-fail. The mismatch hits every
-    // export whose name contains `$` (zod's `$ZodCheck`/`$ZodCheckString
-    // Format`/`$constructor` family — ~80 symbols on the zod surface), or
-    // any other character `sanitize()` rewrites. Fix: for every named
-    // export where `sanitize(name) != name`, emit raw-name aliases
-    // forwarding to the canonical definition (not a colliding sanitized name).
-    //
-    // Sub-bug B — missing `__perry_wrap_perry_fn_<src>__<exported>` for
-    // `local == exported` non-function exports. Concrete shape:
-    //   import * as z from "./external.js";
-    //   export { z };
-    //   export default z;
-    // The `Export::Named { local: "z", exported: "z" }` entry is skipped
-    // by every loop above because `local == exported` and `z` is not a
-    // HIR function (it's a namespace import alias). A consumer that
-    // imports `{ z }` from this module references the wrapper symbol
-    // when reading `z` as a value (e.g. `console.log(z)` or passing it
-    // as a callback), and link-fails on the missing wrapper. Fix: emit
-    // a no-op wrapper for every named export whose `local==exported`
-    // name is not the body of a HIR function (and where no wrapper has
-    // already been emitted by the regular `__perry_wrap_<fn>` loop).
-    //
-    // Note: anonymous `export default function() {...}` produces zero
-    // exports and zero functions in the HIR today (lower.rs drops it on
-    // the floor — separate bug, will need its own PR to wire up the
-    // synthetic `default` name). That path is OUT OF SCOPE here; the
-    // test below uses a named default to sidestep it.
+    // Publish renamed value getters and wrappers for namespace exports.
     {
         use std::collections::HashSet;
         let mut emitted_aliases: HashSet<String> = HashSet::new();
         let func_by_local_name: HashMap<&str, &perry_hir::Function> =
             hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
-        let func_by_id: HashMap<_, _> = hir.functions.iter().map(|f| (f.id, f)).collect();
-        let func_by_export_name: HashMap<_, _> = hir
-            .exported_functions
-            .iter()
-            .filter_map(|(name, id)| func_by_id.get(id).map(|f| (name.as_str(), *f)))
-            .collect();
         for export in &hir.exports {
             let perry_hir::Export::Named { local, exported } = export else {
                 continue;
             };
-            let sanitized = sanitize(exported);
-
-            // Sub-bug A: emit raw-name aliases when the exported name
-            // sanitizes to a different symbol. Two aliases per mismatch:
-            //   * `perry_fn_<src>__<raw_exported>` — value/getter form,
-            //     forwards to the exact function body, or a variable getter.
-            //   * `__perry_wrap_perry_fn_<src>__<raw_exported>` — closure-
-            //     wrapper form, forwards to the matching canonical wrapper if it
-            //     exists, otherwise emits a no-op (matches the variable/
-            //     class branch in the #837 loop above).
-            if sanitized != *exported {
-                // `$n` and `_n` share sanitize() output but are distinct bodies.
-                // The export's function ID is authoritative, including aliases
-                // whose local name no longer identifies the original function.
-                let function = func_by_export_name
-                    .get(exported.as_str())
-                    .or_else(|| func_by_local_name.get(local.as_str()));
-                let target = function
-                    .and_then(|f| func_names.get(&f.id))
-                    .cloned()
-                    .unwrap_or_else(|| format!("perry_fn_{}__{}", module_prefix, sanitized));
-                let raw_target = format!("perry_fn_{}__{}", module_prefix, exported);
-                if !llmod.has_function(&raw_target) && emitted_aliases.insert(raw_target.clone()) {
-                    // Variable getters take no arguments; function aliases must
-                    // match the exact target's arity, not its sanitized sibling.
-                    let param_count = function.map(|f| f.params.len()).unwrap_or(0);
-                    let wrap_params: Vec<(LlvmType, String)> = (0..param_count)
-                        .map(|i| (DOUBLE, format!("%a{}", i)))
-                        .collect();
-                    let wf = llmod.define_function(&raw_target, DOUBLE, wrap_params);
-                    let _ = wf.create_block("entry");
-                    let blk = wf.block_mut(0).unwrap();
-                    let arg_names: Vec<String> =
-                        (0..param_count).map(|i| format!("%a{}", i)).collect();
-                    let call_args: Vec<(LlvmType, &str)> =
-                        arg_names.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    let result = blk.call(DOUBLE, &target, &call_args);
-                    blk.ret(DOUBLE, &result);
-                }
-                let raw_wrap = format!("__perry_wrap_perry_fn_{}__{}", module_prefix, exported);
-                let target_wrap = format!("__perry_wrap_{}", target);
-                if !llmod.has_function(&raw_wrap) && emitted_aliases.insert(raw_wrap.clone()) {
-                    if llmod.has_function(&target_wrap) {
-                        // Match the canonical wrapper's JS body ABI (callee,
-                        // receiver, one double per declared param), including
-                        // renamed exports.
-                        let arity = function.map(|f| f.params.len()).unwrap_or(5);
-                        let params = crate::expr::body_call::js_body_params(
-                            (0..arity).map(|i| format!("%a{}", i)),
-                        );
-                        let wf = llmod.define_function(&raw_wrap, DOUBLE, params.clone());
-                        let _ = wf.create_block("entry");
-                        let blk = wf.block_mut(0).unwrap();
-                        let args: Vec<_> = params
-                            .iter()
-                            .map(|(ty, name)| (*ty, name.as_str()))
-                            .collect();
-                        let result = blk.call(DOUBLE, &target_wrap, &args);
-                        blk.ret(DOUBLE, &result);
-                    } else {
-                        // No sanitized wrapper either (variable/class/
-                        // namespace re-export with sanitize-mismatch
-                        // name). Emit a no-op returning undefined.
-                        let wf = llmod.define_function(
-                            &raw_wrap,
-                            DOUBLE,
-                            crate::expr::body_call::js_body_params(
-                                (0..5).map(|i| format!("%a{i}")),
-                            ),
-                        );
-                        let _ = wf.create_block("entry");
-                        let blk = wf.block_mut(0).unwrap();
-                        blk.ret(DOUBLE, "0x7FFC000000000001");
-                    }
-                }
-            }
-
             // Namespace initialization reads renamed values through the local
             // getter name. Forward that name to the public getter when this is
             // not a real function alias.
             if local != exported && !func_by_local_name.contains_key(local.as_str()) {
-                let local_target = format!("perry_fn_{}__{}", module_prefix, sanitize(local));
-                let exported_target = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+                let local_target = crate::symbol_names::function(&module_prefix, &local);
+                let exported_target = crate::symbol_names::function(&module_prefix, &exported);
                 if local_target != exported_target
                     && !llmod.has_function(&local_target)
                     && llmod.has_function(&exported_target)
@@ -450,11 +320,8 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
             // emit a forwarding wrapper to that function's body (mirrors
             // the `local != exported` branch at L2792 above).
             if local == exported && !func_by_local_name.contains_key(local.as_str()) {
-                let exported_wrap = format!(
-                    "__perry_wrap_perry_fn_{}__{}",
-                    module_prefix,
-                    sanitize(exported)
-                );
+                let exported_wrap =
+                    crate::symbol_names::function_wrapper(&module_prefix, &exported);
                 if !llmod.has_function(&exported_wrap)
                     && emitted_aliases.insert(exported_wrap.clone())
                 {

@@ -28,7 +28,7 @@ pub(super) fn emit_native_namespace_reexport_getters(
         if !perry_hir::is_native_module_specifier(source) {
             continue;
         }
-        let getter_name = format!("perry_fn_{}__{}", module_prefix, name);
+        let getter_name = crate::symbol_names::function(&module_prefix, &name);
         if llmod.has_function(&getter_name) {
             continue;
         }

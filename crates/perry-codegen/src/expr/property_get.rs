@@ -1293,11 +1293,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             _ns_lookup_name.as_deref().unwrap_or(""),
                             property,
                         )) {
-                            let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                            let getter =
+                                crate::symbol_names::function(&source_prefix, &origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                             return Ok(ctx.block().call(DOUBLE, &getter, &[]));
                         }
-                        let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                        let target_name =
+                            crate::symbol_names::function(&source_prefix, &origin_suffix);
                         let wrap_name = format!("__perry_wrap_{}", target_name);
                         let param_count = _ns_lookup_name
                             .as_deref()

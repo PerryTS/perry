@@ -701,6 +701,16 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unicode_symbol_names_survive_llvm_suffix_normalization() {
+        let name = "perry_fn_module_ts__gr.uC3.uBC.uC3.u9Fe.u24m.uC3.uA9thode";
+        assert_eq!(super::plain_llvm(name), name);
+        assert_eq!(super::plain_llvm(&format!("{name}.llvm.12345")), name);
+        assert_eq!(super::plain_llvm(&format!("{name} (.llvm.12345)")), name);
+        let table = crate::parse_table(&format!("{name}\tLeaf\tno\n"), "unicode").unwrap();
+        assert!(table.contains_key(name));
+    }
+
     use super::*;
     #[test]
     fn indirect_all_requires_every_callable_alias() {

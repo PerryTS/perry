@@ -396,6 +396,36 @@ fn class_birth_reads_the_birth_rep_of_its_keys_global() {
 }
 
 #[test]
+fn unicode_symbol_names_class_keys_keep_exact_owner_ids() {
+    let names = [
+        "Étage",
+        "$Étage",
+        "$",
+        "_",
+        "u__24_",
+        "\0perry_namespace_class\0zmod\0ZodObject",
+    ];
+    let class_ids: HashMap<String, u32> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.to_string(), 57 + i as u32))
+        .collect();
+    let index = ClassIdsByKeysName::new(&class_ids);
+    for (name, &id) in &class_ids {
+        let entry: ClassKeysInit = (
+            crate::symbol_names::class_keys("m", name),
+            "value\0".into(),
+            1,
+            vec![],
+            vec![],
+        );
+        let birth = class_birth("m", &entry, &HashMap::new(), &HashMap::new(), &index);
+        assert_eq!(birth.class_id, id, "class owner for {name:?}");
+        assert_eq!(birth.shape.unwrap().proto, BirthProto::Class(id));
+    }
+}
+
+#[test]
 fn a_class_id_defined_twice_has_no_program_entry() {
     let a = class("a\0", 1, 31);
     let b = class("b\0", 1, 31);

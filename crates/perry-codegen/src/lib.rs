@@ -321,3 +321,6 @@ mod receiver_call_effect_tests;
 
 mod array_record_stack;
 mod lower_array_record_length;
+
+/// Canonical linker symbol constructors for JavaScript names.
+pub mod symbol_names;

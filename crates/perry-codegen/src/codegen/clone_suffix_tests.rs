@@ -12,7 +12,7 @@
 //!
 //! The fix reserves `$` as the generated-suffix separator (`{public}$generic`,
 //! `{public}$typed_f64`, `{public}$dupN`, the spec-ABI and proven-`this`
-//! suffixes): `sanitize`/`sanitize_member` output is strictly `[A-Za-z0-9_]`,
+//! suffixes): the identifier encoder never emits a raw `$`,
 //! so no user-derived public symbol can ever equal a generated one. These
 //! tests pin the emitted-IR side of that contract; the mangling side is pinned
 //! by `helpers::sanitize_tests`.

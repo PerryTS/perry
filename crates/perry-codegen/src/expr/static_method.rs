@@ -595,7 +595,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         class_name,
                         method_name,
                     );
-                    let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                    let fn_name = crate::symbol_names::function(&source_prefix, &origin_suffix);
                     // Issue #321: var-shaped exports (e.g. `export const succeed
                     // = (v) => new EffectInst(v)`) emit a ZERO-ARG getter
                     // `perry_fn_<src>__<name>()` returning the closure. The

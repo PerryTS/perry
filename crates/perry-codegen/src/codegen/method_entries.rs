@@ -424,12 +424,7 @@ pub(super) fn emit_computed_generator_entries(
                 )
         }) {
             let f = &m.function;
-            let llvm_name = format!(
-                "perry_method_{}__{}__{}",
-                prefix,
-                crate::codegen::helpers::sanitize_member(&class.name),
-                crate::codegen::helpers::sanitize_member(&f.name)
-            );
+            let llvm_name = crate::symbol_names::method(&prefix, &class.name, &f.name);
             emit_class_method_entry(
                 chunker,
                 &StaticMethodEntry {

@@ -1392,7 +1392,7 @@ pub fn try_lower_extern_func_call(
     // (`render`). Look up the actual origin suffix before forming the
     // extern.
     let origin_suffix = crate::expr::import_origin_suffix(ctx.import_function_origin_names, name);
-    let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+    let fname = crate::symbol_names::function(&source_prefix, &origin_suffix);
     // Issue #493 followup: when the imported binding is a VARIABLE
     // holding a closure value (e.g. `var mergePath = (b, s, ...r) => …`
     // exported from another module), `perry_fn_<src>__<name>` is the

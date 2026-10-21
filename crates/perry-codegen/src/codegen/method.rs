@@ -1127,7 +1127,8 @@ pub(super) fn compile_method(
                             // Local class with own ctor — use the per-module-prefix
                             // standalone symbol, same one compile_method emits.
                             let module_prefix = ctx.strings.module_prefix().to_string();
-                            let sym = format!("{}__{}_constructor", module_prefix, pname_owned);
+                            let sym =
+                                crate::symbol_names::constructor(&module_prefix, &pname_owned);
                             let pcount = pclass
                                 .constructor
                                 .as_ref()

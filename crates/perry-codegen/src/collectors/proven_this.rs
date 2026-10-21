@@ -141,8 +141,8 @@ pub fn ptr_shape_this_enabled() -> bool {
 /// `this.field` lowering differs.
 ///
 /// The `$` separator puts the clone in the reserved generated-suffix
-/// namespace (issue #6927): `sanitize`/`sanitize_member` outputs are strictly
-/// `[A-Za-z0-9_]`, so no user member — not even one literally named
+/// namespace (issue #6927): identifier encodings never contain a raw `$`,
+/// so no user member — not even one literally named
 /// `foo__pshape` or `foo$pshape` — can compose a public symbol equal to a
 /// clone symbol. (The old `__pshape` suffix was forgeable and needed a
 /// composed-symbol collision prune here.)

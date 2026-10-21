@@ -1037,7 +1037,8 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
             units
                 .iter()
                 .position(|u| {
-                    u.contains(&format!("{sym} = global")) || u.contains(&format!("{sym} = hidden alias"))
+                    u.contains(&format!("{sym} = global"))
+                        || u.contains(&format!("{sym} = hidden alias"))
                 })
                 .unwrap_or_else(|| panic!("{sym} defined nowhere"))
         };
@@ -1092,4 +1093,19 @@ fn om8_read_region_abi_is_retired_while_loop_regions_remain_available() {
     assert!(!wasm_abi
         .lines()
         .any(|line| line.starts_with("js_region_guard_prime\t")));
+}
+#[test]
+fn unicode_symbol_names_survive_ir_reference_parsing() {
+    let symbol = crate::symbol_names::function("module_ts", "grüße$méthode");
+    let order = crate::function_order::FunctionOrder::parse(&symbol);
+    assert_eq!(order.rank(&symbol), Some(0));
+    assert_eq!(order.linker_ordering_file(false), format!("{symbol}\n"));
+    assert_eq!(order.linker_ordering_file(true), format!("_{symbol}\n"));
+    let reference = format!("@{symbol}");
+    let line = format!("{reference} = constant ptr {reference}$generic");
+    assert_eq!(super::global_symbol_name(&line), Some(reference.as_str()));
+    let mut refs = std::collections::HashSet::new();
+    super::collect_symbol_refs(&line, &mut refs);
+    assert!(refs.contains(&reference));
+    assert!(refs.contains(&format!("{reference}$generic")));
 }

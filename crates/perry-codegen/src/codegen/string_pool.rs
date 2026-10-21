@@ -2,13 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
-use super::helpers::{sanitize_member, scoped_static_method_name};
+use super::helpers::scoped_static_method_name;
 use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
 
@@ -33,102 +32,8 @@ use image_handles::{
 mod image_handles_tests;
 mod image_uses;
 
-/// Emits a long sequence of INDEPENDENT init operations (string allocation,
-/// closure/class/function registration) into a series of small chunk functions
-/// instead of one giant function, then exposes the chunk names so the entry
-/// `__perry_init_strings_*` can call them in order (#5391 function splitting).
-///
-/// A large bundle interns ~190K strings and registers tens of thousands of
-/// closures/classes; emitting all of it into ONE function produced a single
-/// ~32MB / ~400K-instruction basic block, which is catastrophically expensive
-/// for LLVM to optimize as one function (~36 min). Every op here is independent
-/// — each writes to its own global or a
-/// runtime registry; no SSA value flows between ops — so splitting at op
-/// boundaries is safe and order-preserving (chunks run in sequence, ops in order
-/// within a chunk).
-#[derive(Default)]
-struct InitChunks {
-    ops: usize,
-    current: Option<usize>,
-    names: Vec<String>,
-}
-
-struct InitChunker<'a> {
-    llmod: &'a mut LlModule,
-    base_name: String,
-    ops_per_chunk: usize,
-    // Literal infrastructure may run before cyclic dependencies. Declared
-    // class metadata retains its existing module-body initialization boundary.
-    literals: bool,
-    phases: [InitChunks; 2],
-}
-
-impl<'a> InitChunker<'a> {
-    fn new(llmod: &'a mut LlModule, base_name: String, ops_per_chunk: usize) -> Self {
-        Self {
-            llmod,
-            base_name,
-            ops_per_chunk: ops_per_chunk.max(1),
-            literals: true,
-            phases: Default::default(),
-        }
-    }
-
-    fn module(&mut self) -> &mut LlModule {
-        self.llmod
-    }
-
-    fn roll_if_full(&mut self) {
-        let phase = usize::from(!self.literals);
-        let state = &mut self.phases[phase];
-        if state.current.is_none() || state.ops >= self.ops_per_chunk {
-            if let Some(current) = state.current {
-                self.llmod
-                    .function_mut(current)
-                    .unwrap()
-                    .block_mut(0)
-                    .unwrap()
-                    .ret_void();
-            }
-            let name = format!(
-                "{}_{}_chunk{}",
-                self.base_name,
-                if self.literals { "literal" } else { "class" },
-                state.names.len()
-            );
-            self.llmod
-                .define_function(&name, VOID, vec![])
-                .create_block("entry");
-            state.current = Some(self.llmod.function_count() - 1);
-            state.names.push(name);
-            state.ops = 0;
-        }
-    }
-
-    fn current_block(&mut self) -> &mut LlBlock {
-        let state = &mut self.phases[usize::from(!self.literals)];
-        state.ops += 1;
-        self.llmod
-            .function_mut(state.current.unwrap())
-            .unwrap()
-            .block_mut(0)
-            .unwrap()
-    }
-
-    fn finish(self) -> [Vec<String>; 2] {
-        self.phases.map(|state| {
-            if let Some(current) = state.current {
-                self.llmod
-                    .function_mut(current)
-                    .unwrap()
-                    .block_mut(0)
-                    .unwrap()
-                    .ret_void();
-            }
-            state.names
-        })
-    }
-}
+mod init_chunks;
+use init_chunks::InitChunker;
 
 /// Emit executable literals and their handles directly into image data.
 /// Unloadable outputs retain the owned-string bootstrap. The init function
@@ -999,12 +904,7 @@ pub(super) fn emit_string_pool(
     for &(cid, class) in &local_classes {
         let class_name = &class.name;
         for method in &class.methods {
-            let llvm_name = format!(
-                "perry_method_{}__{}__{}",
-                module_prefix,
-                sanitize_member(class_name),
-                sanitize_member(&method.name),
-            );
+            let llvm_name = crate::symbol_names::method(&module_prefix, &class_name, &method.name);
             let has_synth_args = method
                 .params
                 .last()
@@ -1140,7 +1040,7 @@ pub(super) fn emit_string_pool(
                     .map(|c| c.params.len() as u32)
                     .unwrap_or(0)
             });
-        let ctor_symbol = format!("{}__{}_constructor", module_prefix, class_name);
+        let ctor_symbol = crate::symbol_names::constructor(&module_prefix, &class_name);
         // The trailing-array layout of the emitted standalone ctor. A class with
         // no own ctor emits the `super(...args)` forwarder, which adopts the
         // nearest local ancestor ctor's params positionally and hands every slot
@@ -1599,7 +1499,7 @@ pub(super) fn emit_string_pool(
         for (prop, getter_fn) in &class.getters {
             // The local-emit path at codegen.rs:1858 prepends `__get_`
             // to the HIR-assigned getter name (`get_<prop>`), giving
-            // the LLVM symbol `perry_method_<modprefix>__<class>__<sanitize(__get_get_<prop>)>`.
+            // the LLVM symbol `perry_method_<modprefix>__<class>__<encode_identifier(__get_get_<prop>)>`.
             // Use the same mangling here so the registered func_ptr
             // matches the actual emitted body.
             let is_static = class.static_accessor_fn_ids.contains(&getter_fn.id);
@@ -1615,12 +1515,7 @@ pub(super) fn emit_string_pool(
                 )
             } else {
                 let inner = format!("__get_{}", getter_fn.name);
-                format!(
-                    "perry_method_{}__{}__{}",
-                    module_prefix,
-                    sanitize_member(class_name),
-                    sanitize_member(&inner),
-                )
+                crate::symbol_names::method(&module_prefix, &class_name, &inner)
             };
             getter_pairs.push((cid, prop.clone(), llvm_name, is_static, getter_fn.id));
         }
@@ -1692,12 +1587,7 @@ pub(super) fn emit_string_pool(
                 )
             } else {
                 let inner = format!("__set_{}", setter_fn.name);
-                format!(
-                    "perry_method_{}__{}__{}",
-                    module_prefix,
-                    sanitize_member(class_name),
-                    sanitize_member(&inner),
-                )
+                crate::symbol_names::method(&module_prefix, &class_name, &inner)
             };
             let spec_length = spec_function_length(&setter_fn.params) as u32;
             setter_pairs.push((

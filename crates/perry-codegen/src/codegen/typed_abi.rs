@@ -541,8 +541,8 @@ impl TypedReceiverMethodInfo {
 //
 // Every generated clone/body symbol is `{public}$<suffix>`. The `$` separator
 // is what makes the namespace unforgeable: user-derived symbol components pass
-// through `sanitize`/`sanitize_member` (codegen/helpers.rs), whose outputs are
-// strictly `[A-Za-z0-9_]` — a user member, class, or module name can NEVER
+// through the identifier encoder (symbol_names.rs), whose output never has
+// a raw `$` — a user member, class, or module name can NEVER
 // produce a `$`, so no public symbol can equal a clone symbol. (The old `__`
 // separator was forgeable: `foo` + a sibling literally named `foo__generic`
 // composed two definitions of one LLVM symbol.) `$` is legal in LLVM textual

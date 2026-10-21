@@ -13,7 +13,7 @@ use perry_hir::Module as HirModule;
 // Collector and boxing-analysis walkers live in dedicated modules.
 
 // Name-mangling helper from the trunk (also reachable via `super::*`).
-use super::helpers::{sanitize, scoped_fn_name};
+use super::helpers::scoped_fn_name;
 
 /// Result bundle of the user-function name/signature registry pass.
 pub(crate) struct FuncRegistry {
@@ -112,15 +112,9 @@ fn public_export_names(hir: &HirModule) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Every spelling under which an export's symbol is defined: the getter and
-/// wrapper paths use `sanitize`, the raw-spelling aliases keep the name
-/// verbatim, and a function body uses `scoped_fn_name`.
-fn export_symbol_spellings(module_prefix: &str, name: &str) -> [String; 3] {
-    [
-        scoped_fn_name(module_prefix, name),
-        format!("perry_fn_{}__{}", module_prefix, sanitize(name)),
-        format!("perry_fn_{}__{}", module_prefix, name),
-    ]
+/// Public exports and local bodies share exactly one symbol spelling.
+fn export_symbol_spellings(module_prefix: &str, name: &str) -> [String; 1] {
+    [scoped_fn_name(module_prefix, name)]
 }
 
 /// `f` is the function an export publishes under its own name. The export

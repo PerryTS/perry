@@ -1877,18 +1877,7 @@ pub(super) fn compute_module_prefix(resolved_path: &str, project_root: &Path) ->
                 .unwrap_or("module")
                 .to_string()
         });
-    let mut prefix = source_module_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
-    // LLVM IR identifiers cannot start with a digit. Prefix with `_`
-    // if the first character would be one (e.g. `05_fibonacci.ts`).
-    if prefix
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        prefix.insert(0, '_');
-    }
-    prefix
+    perry_codegen::symbol_names::module_prefix(&source_module_name)
 }
 
 /// Cached wrapper around resolve_import to avoid redundant I/O

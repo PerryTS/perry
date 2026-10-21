@@ -747,7 +747,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 let mut initializer_names = method_names.clone();
                 initializer_names.insert(
                     (class.name.clone(), initializer.name.clone()),
-                    format!("{}__{}_default_fields", module_prefix, class.name),
+                    crate::symbol_names::default_fields(module_prefix, &class.name),
                 );
                 compile_method(
                     llmod,
@@ -932,12 +932,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         .get(&(class.name.clone(), method.name.clone()))
                         .cloned()
                         .unwrap_or_else(|| {
-                            format!(
-                                "perry_method_{}__{}__{}",
-                                module_prefix,
-                                super::helpers::sanitize_member(&class.name),
-                                super::helpers::sanitize_member(&method.name)
-                            )
+                            crate::symbol_names::method(&module_prefix, &class.name, &method.name)
                         })
                 };
                 super::shared_class_method_bodies::share(llmod, &public, class_ids[&class.name]);

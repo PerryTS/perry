@@ -26,15 +26,7 @@ use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 
 /// The flag global of `template` (an LLVM global name, with its `@`).
 pub(crate) fn flag_global_name(template: &str) -> String {
-    let mut name = String::from("@perry_class_first_eval.");
-    for c in template.chars() {
-        if c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.') {
-            name.push(c);
-        } else {
-            name.push_str(&format!("_{:x}_", c as u32));
-        }
-    }
-    name
+    crate::symbol_names::class_first_evaluation(template)
 }
 
 /// Define the flag of every template in `templates` (once each). The flag is

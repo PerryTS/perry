@@ -44,7 +44,7 @@ pub(crate) fn info_symbol(body: &str) -> String {
 
 /// Shared by closure lowering and the static final-shape pre-pass.
 pub(crate) fn closure_body_symbol(module_prefix: &str, func_id: u32) -> String {
-    format!("perry_closure_{module_prefix}__{func_id}")
+    crate::symbol_names::closure(&module_prefix, func_id)
 }
 
 /// A compiler-private direct-call clone of a body.

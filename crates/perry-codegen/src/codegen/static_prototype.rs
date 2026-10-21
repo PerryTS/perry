@@ -129,10 +129,8 @@ pub(crate) fn collect(
                     if let Some(m) = method.filter(|_| slot < 32) {
                         rep |= 3u64 << (2 * slot);
                         let body = format!(
-                            "perry_method_{}__{}__{}__eclo",
-                            prefix,
-                            super::helpers::sanitize_member(&c.name),
-                            super::helpers::sanitize_member(&m.name)
+                            "{}__eclo",
+                            crate::symbol_names::method(&prefix, &c.name, &m.name)
                         );
                         constfn.push(ConstFnBirth {
                             slot: slot as u8,

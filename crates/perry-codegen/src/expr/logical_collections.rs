@@ -471,9 +471,8 @@ pub(crate) fn captureless_some_callback(ctx: &FnCtx<'_>, callback: &Expr) -> Opt
         return None;
     }
     Some(format!(
-        "@perry_closure_{}__{}",
-        ctx.strings.module_prefix(),
-        func_id
+        "@{}",
+        crate::symbol_names::closure(ctx.strings.module_prefix(), *func_id)
     ))
 }
 

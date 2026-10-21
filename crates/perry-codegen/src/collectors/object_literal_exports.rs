@@ -35,7 +35,7 @@ fn eligible_method(
         } => (
             *func_id,
             params,
-            format!("perry_closure_{source_prefix}__{func_id}"),
+            crate::symbol_names::closure(&source_prefix, func_id),
         ),
         // HIR lifts a concise method that does not read `this` into a normal
         // private function and stores its closure wrapper through IndexSet.

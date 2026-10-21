@@ -73,7 +73,7 @@ pub enum SpecParamRep {
 
 impl SpecParamRep {
     /// Symbol-mangle label. `[a-z0-9]` only so the composed symbol survives
-    /// `sanitize`/`sanitize_member` byte-identically.
+    /// the identifier encoder byte-identically.
     pub fn label(&self) -> String {
         match self {
             Self::Boxed => "b".to_string(),

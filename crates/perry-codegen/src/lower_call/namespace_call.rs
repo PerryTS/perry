@@ -317,7 +317,7 @@ pub fn try_lower_namespace_member_call(
         ns_name,
         property,
     );
-    let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+    let symbol = crate::symbol_names::function(&source_prefix, &origin_suffix);
     if ctx
         .imported_vars
         .contains(&crate::namespace_member_var_key(ns_name, property))

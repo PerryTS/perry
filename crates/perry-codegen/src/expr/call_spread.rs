@@ -581,7 +581,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 ns_name,
                                 property,
                             );
-                            let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                            let symbol =
+                                crate::symbol_names::function(&source_prefix, &origin_suffix);
                             // Bundle every arg (regular + spread) into the single
                             // rest array, in source order.
                             ctx.pending_declares

@@ -126,7 +126,7 @@ mod namespace_local_function_symbol_tests {
         let dollar = namespace_local_function_wrapper_symbol("chunk.js", "$a");
         let underscore = namespace_local_function_wrapper_symbol("chunk.js", "_a");
 
-        assert_eq!(dollar, "__perry_wrap_perry_fn_chunk_js__u__24_a");
+        assert_eq!(dollar, "__perry_wrap_perry_fn_chunk_js__.u24a");
         assert_eq!(underscore, "__perry_wrap_perry_fn_chunk_js___a");
         assert_ne!(dollar, underscore);
     }
@@ -1153,27 +1153,7 @@ pub fn run_with_parse_cache(
 
     classify_eager_modules(&mut ctx, &entry_path);
 
-    let sanitize_name = |s: &str| -> String {
-        let mut out: String = s
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if out
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            out.insert(0, '_');
-        }
-        out
-    };
+    let sanitize_name = perry_codegen::symbol_names::module_prefix;
 
     // #10399: whole-program Worker detection, before ANY module codegen runs.
     //
@@ -2946,27 +2926,7 @@ pub fn run_with_parse_cache(
     //     `Expr::DynamicImport` sites, the map from path-arg string
     //     to target sanitized prefix. Codegen at the dispatch site
     //     reads `@__perry_ns_<target_prefix>`.
-    let sanitize_module_name = |s: &str| -> String {
-        let mut out: String = s
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if out
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            out.insert(0, '_');
-        }
-        out
-    };
+    let sanitize_module_name = perry_codegen::symbol_names::module_prefix;
     let mut path_to_module_name: HashMap<PathBuf, String> = HashMap::new();
     let mut module_name_to_path: HashMap<String, PathBuf> = HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
@@ -7132,16 +7092,18 @@ pub fn run_with_parse_cache(
             obj_cleanup_paths.push(installer.clone());
             obj_paths.push(installer);
             if is_staticlib {
-                super::link::wasi::archive_library(
-                    &obj_paths, &runtime_lib, &exe_path, verbose,
-                )?;
+                super::link::wasi::archive_library(&obj_paths, &runtime_lib, &exe_path, verbose)?;
             } else {
                 super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
             }
             if let OutputFormat::Text = format {
                 println!(
                     "Wrote WASI {}: {}",
-                    if is_staticlib { "static archive" } else { "component" },
+                    if is_staticlib {
+                        "static archive"
+                    } else {
+                        "component"
+                    },
                     exe_path.display()
                 );
             }
@@ -7572,22 +7534,7 @@ pub fn run_with_parse_cache(
         // module-failure: the binary still links, the stubbed module
         // body is inert, and any actual call into the missing exports
         // remains the symptom that surfaces the real bug.
-        let sanitize_module_name = |m: &str| -> String {
-            let mut out: String = m
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                out.insert(0, '_');
-            }
-            out
-        };
+        let sanitize_module_name = perry_codegen::symbol_names::module_prefix;
         let stub_init_names: Vec<String> = failed_modules
             .iter()
             .map(|m| format!("{}__init", sanitize_module_name(m)))
@@ -7629,20 +7576,10 @@ pub fn run_with_parse_cache(
             };
             for export in &hir.exports {
                 if let perry_hir::Export::Named { exported, .. } = export {
-                    let sanitized_exp = exported
-                        .chars()
-                        .map(|c| {
-                            if c.is_ascii_alphanumeric() || c == '_' {
-                                c
-                            } else {
-                                '_'
-                            }
-                        })
-                        .collect::<String>();
                     // Closure-wrapper form: consumer reads the import
                     // as a function value (`js_closure_alloc_singleton(
                     // @__perry_wrap_perry_fn_<src>__<name>)`).
-                    let wrap_sym = format!("__perry_wrap_perry_fn_{}__{}", prefix, sanitized_exp);
+                    let wrap_sym = perry_codegen::symbol_names::function_wrapper(&prefix, exported);
                     stub_wrapper_names.push(wrap_sym);
                     // Direct-call form: consumer invokes the import
                     // by name (`perry_fn_<src>__<name>(args…)`). For
@@ -7654,7 +7591,7 @@ pub fn run_with_parse_cache(
                     // pushed — the body just discards them and
                     // returns undefined. Same fallback shape the
                     // empty `<prefix>__init` stub uses.
-                    let direct_sym = format!("perry_fn_{}__{}", prefix, sanitized_exp);
+                    let direct_sym = perry_codegen::symbol_names::function(&prefix, exported);
                     stub_func_names.push(direct_sym);
                 }
             }
