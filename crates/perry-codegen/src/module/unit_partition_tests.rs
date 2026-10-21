@@ -328,3 +328,107 @@ fn binding_generated_data_preserves_named_metadata() {
             .unwrap();
     }
 }
+
+/// A split shared helper can have every caller in a different unit. Compile
+/// the actual text parts: merely checking define_header(true) missed the text
+/// renderer retaining discardable linkage while native headers used weak_odr.
+#[cfg(all(feature = "llvm-inprocess", not(target_os = "windows")))]
+#[test]
+fn split_shared_helpers_keep_their_owner_without_local_users() {
+    use crate::types::{DOUBLE, I32};
+    use std::{
+        fs,
+        process::Command,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+    let triple = crate::codegen::default_target_triple();
+    let scratch = std::env::temp_dir().join(format!(
+        "perry-split-shared-helper-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&scratch).unwrap();
+    // The shared emitter audit found these three owner-defined functions.
+    // Their small test bodies isolate linkage from allocation/index semantics;
+    // the birth names also exercise their preserve_most calling convention.
+    for helper in [
+        "perry_array_index_normalize_i32",
+        "perry_birth_class",
+        "perry_birth_empty_array",
+    ] {
+        let mut module = LlModule::new(&triple);
+        let function = module.define_function(helper, I32, vec![(DOUBLE, "%key".into())]);
+        function.linkage = "linkonce_odr".into();
+        function.no_inline = true;
+        function.create_block("entry").ret(I32, "7");
+        let main = module
+            .define_function("main", I32, vec![])
+            .create_block("entry");
+        let answer = main.call(I32, helper, &[(DOUBLE, "1.0")]);
+        let status = main.sub(I32, &answer, "7");
+        main.ret(I32, &status);
+
+        let units = module.render_codegen_units(2);
+        assert_eq!(units.len(), 2);
+        let owner = units
+            .iter()
+            .find(|unit| {
+                unit.lines().any(|line| {
+                    line.starts_with("define ") && line.contains(&format!("@{helper}("))
+                })
+            })
+            .unwrap();
+        let header = owner
+            .lines()
+            .find(|line| line.starts_with("define "))
+            .unwrap();
+        assert!(header.starts_with("define weak_odr "), "{header}");
+        assert!(!owner
+            .lines()
+            .any(|line| line.trim_start().starts_with("call ")
+                && line.contains(&format!("@{helper}("))));
+        assert!(units.iter().any(|unit| unit
+            .lines()
+            .any(|line| line.starts_with("declare ") && line.contains(&format!("@{helper}(")))));
+
+        let mut objects = Vec::new();
+        for (i, unit) in units.iter().enumerate() {
+            let object = crate::linker::compile_ll_to_object(unit, Some(&triple)).unwrap();
+            let path = scratch.join(format!("{helper}-{i}.o"));
+            fs::write(&path, object).unwrap();
+            objects.push(path);
+        }
+        // A second module can publish the same shared helper too. Extract its
+        // real rendered definition so linkers must both retain and coalesce it.
+        let start = owner.find("define ").unwrap();
+        let end = start + owner[start..].find("\n}\n").unwrap() + 3;
+        let duplicate = format!("target triple = \"{triple}\"\n{}", &owner[start..end]);
+        let path = scratch.join(format!("{helper}-second-owner.o"));
+        fs::write(
+            &path,
+            crate::linker::compile_ll_to_object(&duplicate, Some(&triple)).unwrap(),
+        )
+        .unwrap();
+        objects.push(path);
+        let executable = scratch.join(helper);
+        let link = Command::new("cc")
+            .args(&objects)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            link.status.success(),
+            "{}",
+            String::from_utf8_lossy(&link.stderr)
+        );
+        let run = Command::new(&executable).status().unwrap();
+        assert!(run.success(), "{helper}: {run}");
+    }
+    fs::remove_dir_all(scratch).unwrap();
+}

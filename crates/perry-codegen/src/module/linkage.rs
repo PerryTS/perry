@@ -592,10 +592,13 @@ pub(crate) fn render_fn_external_with_gc_leaf_callees(
 /// to external linkage (see [`render_fn_external_with_gc_leaf_callees`]).
 pub(crate) fn force_external_linkage(f: &LlFunction, ir: String) -> String {
     // Native split-unit headers already force every definition external.
-    // Diagnostics use text to attach call-site metadata; preserve that same
-    // linkage so a helper needed only by another unit cannot be discarded.
+    // Shared functions are defined in just one unit, including birth helpers
+    // and the index normalizer. Keep the native header's non-discardable weak
+    // linkage even when this text path is used without diagnostics: the owner
+    // need not contain any call to its helper.
     if f.linkage == "internal"
         || f.linkage == "private"
+        || f.linkage == "linkonce_odr"
         || (crate::fallback_diag::enabled() && !f.linkage.is_empty())
     {
         return ir.replacen(
