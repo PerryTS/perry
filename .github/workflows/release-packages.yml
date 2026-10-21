@@ -269,6 +269,27 @@ jobs:
     #   queue + Tests wall-time).
     timeout-minutes: 120
     steps:
+      # The gate below runs scripts/release_gate_runs.py, so it needs the
+      # tree preflight resolved, checked the same way as the build jobs.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to gate a different commit."
+            exit 1
+          fi
       - name: Wait for Tests + Simulator Tests (iOS) to pass
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2271,6 +2292,27 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
+      # Local actions under ./.github/actions load from the workspace, so
+      # this job needs the tree preflight resolved before it can use them.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to use a different commit."
+            exit 1
+          fi
       - name: Download packaged host archives
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
@@ -2450,6 +2492,27 @@ jobs:
           - artifact: perry-linux-aarch64
             arch: arm64
     steps:
+      # Local actions under ./.github/actions load from the workspace, so
+      # this job needs the tree preflight resolved before it can use them.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to use a different commit."
+            exit 1
+          fi
       - name: Get release info
         id: release
         run: |
@@ -2660,6 +2723,27 @@ jobs:
     if: needs.preflight.outputs.mode != 'nightly'
     runs-on: ubuntu-latest
     steps:
+      # Local actions under ./.github/actions load from the workspace, so
+      # this job needs the tree preflight resolved before it can use them.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to use a different commit."
+            exit 1
+          fi
       - name: Get release info
         id: release
         run: |
