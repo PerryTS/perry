@@ -72,8 +72,9 @@ The net extension builds its rustls client path with WebPKI roots on WASI;
 TLS interoperability is not established by the TCP acceptance probes. UDP
 (`mod-dgram`), Unix-domain/named pipes, native addons, host process creation,
 and general platform-specific Node/Bun APIs are outside the tested profile.
-This is not a claim of complete Node API compatibility. The current repair
-has not been requalified on Windows or macOS.
+This is not a claim of complete Node API compatibility. Fresh compiler/runtime
+builds of the current repair still need Windows and macOS qualification;
+macOS execution of the Linux-produced artifacts is covered below.
 
 ## Acceptance and CI
 
@@ -108,6 +109,15 @@ features before user code. The new fixtures exercise static metadata across
 moving GC, array prototype calls, URL accessors and repeated socket deadlines
 across close/reconnect. These are execution results, not compile-only passes.
 
+On macOS ARM64 on 2026-10-21, the Linux-produced repaired artifacts pass
+**6/6 smoke**, **20/20 acceptance**, and **10/10 fresh comparisons with Node
+26.5.1**, using native Wasmtime 48.0.0. SHA256 checks verify all 36 Wasm
+artifacts and 74 fixture/configuration/expected-output inputs against the
+Linux validation snapshot. The [validation receipt](validation/wasi-macos-20261021.json)
+records the cases, tool versions, and hashes. This qualifies execution on that
+host, not a macOS build of Perry. Logs and the artifact manifest are in the local audit's
+`reports/2026-10-21-wasi-macos` directory.
+
 Verified on Windows x64 on 2026-10-08 with the standard release runtime build:
 **18/18 acceptance**, **6/6 smoke**, and **10/10 Node comparisons** pass. Native
 GC regressions pass **171 tests** (one existing ignored test); WASI codegen unit
@@ -126,10 +136,11 @@ collections, iterators, values and exit status. Ten existing gap programs are
 compared against the pinned Node 26.5.1 oracle, including advanced classes,
 objects, JSON, regexp and async behavior.
 
-The WASI codegen CI job runs the complete acceptance, smoke and ten-case gap
-suites on Windows and Linux. It retains the existing compatibility routing and
+The WASI codegen CI job is configured to run the complete acceptance, smoke and ten-case gap
+suites on Windows, Linux and macOS. The newly added macOS build leg still needs
+its first successful CI run. It retains the existing compatibility routing and
 `run-extended-tests` PR-label condition; it is not a required check on every PR.
-CI status is tracked in [draft PR #12931](https://github.com/PerryTS/perry/pull/12931);
+The baseline repair landed in [PR #12931](https://github.com/PerryTS/perry/pull/12931);
 the results above are local/validation-host measurements, not a full CI pass.
 Build and per-case logs are retained under `/root/codex-wasi-20261021/logs` and
 copied to the local audit's `reports/2026-10-21-wasi-implementation` directory.
@@ -155,13 +166,22 @@ all runtime default features except the 64-bit-only allocator (`alloc-mimalloc`)
 UDP transport is excluded by the wasm32 target configuration. LLVM development headers
 are needed to build the wasm exception-model target-options shim.
 
-On x86_64 Linux, configure tools with
-`eval "$(./scripts/wasi_toolchain.sh)"`, then use the same Python commands with
-the platform compiler path. The shell installer only pins x86_64 Linux;
-macOS and other Unix hosts need a manually installed wasi-sdk and Wasmtime,
-with the corresponding environment variables set. Shell build/smoke entry
-points delegate to the portable implementations. These instructions do not
-establish host parity.
+On x86_64 or ARM64 Linux/macOS, configure tools with the checksum-pinned shell
+installer, then use the same Python commands with the platform compiler path:
+
+```bash
+toolchain_env="$(./scripts/wasi_toolchain.sh .cache/wasi)" && eval "$toolchain_env"
+```
+
+The installer selects the upstream host architecture, uses the platform's
+SHA256 tool, and quotes installation paths for bash. It also configures
+shell-escaped C flags for runtime builds in paths containing spaces. Shell
+build/smoke entry points delegate to the portable implementations. Installing
+the tools alone does not establish Perry build or execution parity.
+The ARM64 macOS installer passed a real download/checksum/extract cycle and
+C-to-WASI command execution, including a cached installation path containing
+spaces and an apostrophe. Intel macOS and ARM64 Linux asset pins are verified
+against upstream release metadata; their installers have not been executed.
 
 Fixtures run in separate working directories. Filesystem probes explicitly
 preopen their working directory. Networking probes grant `-S inherit-network=y`;

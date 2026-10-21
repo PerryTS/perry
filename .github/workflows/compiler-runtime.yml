@@ -1648,7 +1648,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -1692,7 +1692,13 @@ jobs:
         run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
       - name: Install the WASI toolchain
         if: runner.os != 'Windows'
-        run: ./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi" | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+        shell: bash
+        run: |
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
       - name: Install Windows WASI tools
         if: runner.os == 'Windows'
         shell: pwsh

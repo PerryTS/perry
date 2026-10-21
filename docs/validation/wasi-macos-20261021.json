@@ -1,0 +1,453 @@
+{
+  "kind": "execution-only: Linux-produced Perry components on macOS",
+  "host": "macOS-26.5-arm64-arm-64bit-Mach-O",
+  "node": "v26.5.1",
+  "wasmtime": "wasmtime 48.0.0 (f1412a598 2026-08-20)",
+  "artifactHashes": {
+    "smoke-final/report.json": "330434aff03a53d419393e0eb4df7f033c36fd5bf2deb02f2922081a9891b86e",
+    "smoke-final/classes/classes.wasm": "c7ee85c637d44d9a32ef2cb24f5dd1f8d2c3c5a21fbc2820439e582e22f13016",
+    "smoke-final/closures/closures.wasm": "d6f906ec4f67797a1a1a93edcd85dfc86f3489da7ab1a368cbd7b2d678c9a81e",
+    "smoke-final/collections/collections.wasm": "60a43bdc6915dc75aac37577e94d516a83965399aa7ae9c0b304e2bf1ee439d7",
+    "smoke-final/exit_code/exit_code.wasm": "758f0dd65d996408f6ac5f2d0524f3071114e20a88185affd1b17e07f3d374e4",
+    "smoke-final/iterators/iterators.wasm": "9a46a90aee4700e8b4d0712d3b602f253b40f34c514cc0c5ccb1ca5810e53150",
+    "smoke-final/values/values.wasm": "e4b5a9909b578662571a0199aa6d8f8ac9b4a766ac31b1dee311de50c996c9d0",
+    "acceptance-final/report.json": "cf0b3262a054dd340ea25526992dab35a16e35452876348d6c67664c4e647165",
+    "acceptance-final/bytes/bytes.wasm": "eb4fbbd3c9b8455ccacdde9651017fa7097aeaea0c383ba284a43aa5abf9fb20",
+    "acceptance-final/child_process/child_process.wasm": "44a727704d89333ca628f2b52ff8de2f1e24d84e321a756357e3ec9e10f0844f",
+    "acceptance-final/cli/cli.wasm": "7dea822448976a15391cbfd3a4bdf61cc0ff8567afb0cb265688cc6f3a75f849",
+    "acceptance-final/date/date.wasm": "c18b05c7dd357b797322884af28116dcc8f28b41995ddf41af0604ef7d8f28d7",
+    "acceptance-final/dns/dns.wasm": "a8ba9156f4cc89a3499b65b4c3baf23b87bcab55c273084908ca41dc553df762",
+    "acceptance-final/exception_boundaries/exception_boundaries.wasm": "cf581f35f110aab1a3bc4792b7243a7a4882bf17530a3ffce4d47d394e945e3d",
+    "acceptance-final/exceptions/exceptions.wasm": "105d9ad2bb78bc6a160c4b6ee6783beb46871c75bb5e217dec1f8d78274eff9b",
+    "acceptance-final/filesystem/filesystem.wasm": "2dd26265eb958d916bc34b8d857a62ba45cb7691df5239a37d00fcd415995f3d",
+    "acceptance-final/filesystem_denied/filesystem_denied.wasm": "1c163cb4ebb59b158b840b39e5a6e591edb36ea8cbe3f23cb3dfdc349fc0b87e",
+    "acceptance-final/gc/gc.wasm": "b8cf20f780544413636f3338c35ce3ea0edfbd93f048026640c4ac99ddb06757",
+    "acceptance-final/gc_edges/gc_edges.wasm": "c6fb253811ff14fa8ab156b80a207b9dfd734fa7bc1f0e0380fad640b04e52ff",
+    "acceptance-final/static_layouts/static_layouts.wasm": "bbd7681ea311ebdc93170e6bdcf3205963f66fd7c583845c9f0d9fd3fb6b6010",
+    "acceptance-final/tagged_values/tagged_values.wasm": "4c8e3cebcd7b71872ca613878e04d1c7547fe46b9ad12bdf7d1bd82b44496604",
+    "acceptance-final/tcp/tcp.wasm": "c710a66f3b2763080351ce005a17321c5d8380c80bb027524ff5747a873310f5",
+    "acceptance-final/tcp_denied/tcp_denied.wasm": "1bcbc15a4e20f8994a51ec2657504a2345107e1f114ba658958548916beaeb85",
+    "acceptance-final/tcp_reconnect/tcp_reconnect.wasm": "c9901d070317a310fa7db6fe3165b0236873c703ba2c3b87992900033dfc336b",
+    "acceptance-final/tcp_timers_gc/tcp_timers_gc.wasm": "b9783681eb4abbc2e3bda961f30ea296325fcda44be29474386d35da2bffaedd",
+    "acceptance-final/thread_fallback/thread_fallback.wasm": "7224e71503fea30d98ef20a06ae4b8fcb4a9cb394f3738aa6aef24b54db96bf2",
+    "acceptance-final/threads/threads.wasm": "f20ae94ce84e76043b519767439ccf9b66f10a7657ec2115e754c6560b1ec929",
+    "acceptance-final/timer/timer.wasm": "c7f89e7f80973f38db93293f0ad7de09d96e2eed0ab54ec6d6a9bc6d573d072d",
+    "gap-final/report.json": "c9a7cf73fff8854c9f4a6edb7920c3e4df9ed1e60804767e15800a77c9e7b8d3",
+    "gap-final/test_gap_array_methods/test_gap_array_methods.wasm": "9a5dc2123d6e75ebef2594465544292d64f44b9c924d053668be1ac932071407",
+    "gap-final/test_gap_string_methods/test_gap_string_methods.wasm": "a6f7e23f504b272642a8037865300c0230596fee3e532cfccaac4ebea3309b15",
+    "gap-final/test_gap_closures/test_gap_closures.wasm": "6e5228b6b6f2f380366c9fac6cf57c48f330b135fbc7719a4e43d162480d7847",
+    "gap-final/test_gap_class_advanced/test_gap_class_advanced.wasm": "d6ae75575db5fdf4b03e434f7a0e4d8f077d452dc04ba846ba9192c31b8f2032",
+    "gap-final/test_gap_map_set_extended/test_gap_map_set_extended.wasm": "62cb76a3c6d4fa6ca41c9ed6d1c6b9b9d64cafaba47b5b332f9f6dd028d7e4ab",
+    "gap-final/test_gap_json_advanced/test_gap_json_advanced.wasm": "f5eb1e1fd99fad0f7ffde3723e690101ed9e1c86422d66a3d214443a31a3040c",
+    "gap-final/test_gap_regexp_advanced/test_gap_regexp_advanced.wasm": "bd9217ed49fd65a7869299d3b4d352bd7fe0d4cafae4e6824c2e4c449f8404a8",
+    "gap-final/test_gap_async_advanced/test_gap_async_advanced.wasm": "6f6d96f88454955dfd0f3865aca533f773dffbc00bf70f8509eacdb069c0dc15",
+    "gap-final/test_gap_error_extensions/test_gap_error_extensions.wasm": "100f860bc4d1ada2653d695ead11804b31d182c00edeb3c666a6fec72cd22163",
+    "gap-final/test_gap_object_methods/test_gap_object_methods.wasm": "b3be3947f3a5c1eb690d21450a8024a1432b464bba2e71d017358407140e8a2c"
+  },
+  "results": [
+    {
+      "suite": "smoke",
+      "name": "classes",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.638
+    },
+    {
+      "suite": "smoke",
+      "name": "closures",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.483
+    },
+    {
+      "suite": "smoke",
+      "name": "collections",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.199
+    },
+    {
+      "suite": "smoke",
+      "name": "exit_code",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 3,
+      "seconds": 1.48
+    },
+    {
+      "suite": "smoke",
+      "name": "iterators",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.666
+    },
+    {
+      "suite": "smoke",
+      "name": "values",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.588
+    },
+    {
+      "suite": "acceptance",
+      "name": "bytes",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.736
+    },
+    {
+      "suite": "acceptance",
+      "name": "child_process",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.861
+    },
+    {
+      "suite": "acceptance",
+      "name": "cli",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.573
+    },
+    {
+      "suite": "acceptance",
+      "name": "date",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.554
+    },
+    {
+      "suite": "acceptance",
+      "name": "dns",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.646
+    },
+    {
+      "suite": "acceptance",
+      "name": "exception_boundaries",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.8
+    },
+    {
+      "suite": "acceptance",
+      "name": "exceptions",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.756
+    },
+    {
+      "suite": "acceptance",
+      "name": "filesystem",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.783
+    },
+    {
+      "suite": "acceptance",
+      "name": "filesystem_denied",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.994
+    },
+    {
+      "suite": "acceptance",
+      "name": "gc",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.768
+    },
+    {
+      "suite": "acceptance",
+      "name": "gc_edges",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.728
+    },
+    {
+      "suite": "acceptance",
+      "name": "static_layouts",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 3.201
+    },
+    {
+      "suite": "acceptance",
+      "name": "tagged_values",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.864
+    },
+    {
+      "suite": "acceptance",
+      "name": "tcp",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.149
+    },
+    {
+      "suite": "acceptance",
+      "name": "tcp_denied",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.27
+    },
+    {
+      "suite": "acceptance",
+      "name": "tcp_reconnect",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.716
+    },
+    {
+      "suite": "acceptance",
+      "name": "tcp_timers_gc",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.686
+    },
+    {
+      "suite": "acceptance",
+      "name": "thread_fallback",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.543
+    },
+    {
+      "suite": "acceptance",
+      "name": "threads",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.859
+    },
+    {
+      "suite": "acceptance",
+      "name": "timer",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.733
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_array_methods",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.388
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_string_methods",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.641
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_closures",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.579
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_class_advanced",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.744
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_map_set_extended",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.77
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_json_advanced",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.695
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_regexp_advanced",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.843
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_async_advanced",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 2.05
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_error_extensions",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.735
+    },
+    {
+      "suite": "gap",
+      "name": "test_gap_object_methods",
+      "passed": true,
+      "stage": "run",
+      "exitCode": 0,
+      "seconds": 1.9
+    }
+  ],
+  "producerBase": "20fde48d3fa03d0a77699b7374f55e38cb143b59",
+  "producerChanges": "WASI repair validated on Linux before merging PR12931; this receipt identifies the emitted artifacts, not a fresh build of the current source tree.",
+  "sourceVerification": {
+    "matched": true,
+    "files": {
+      ".node-version": "3f51982d0527dd8c06b61bfb283e519d04d3e13330e81117d7a4e5d455b54406",
+      "scripts/wasi_smoke/classes.ts": "7401706704028b5cb0f94d8bceb34a97241004a11167f534089665e38beb13e2",
+      "scripts/wasi_smoke/classes.out": "acd00ba1e5759edb538a2d3bea6976d770521fbe95d02dfb7e8c2a3af52f7352",
+      "scripts/wasi_smoke/closures.ts": "9b82cb6173a2b326328bac77d88611c911cfff169a87cb1d2f26530cf52566aa",
+      "scripts/wasi_smoke/closures.out": "c5b47e400be379578fd7742a545af109ff58fc3f77483af7b9d807b50c6aa6d7",
+      "scripts/wasi_smoke/collections.ts": "a67764cd0a415ae99b83fcca883d77e580e12361c6d48f5384d453d2900d43ed",
+      "scripts/wasi_smoke/collections.out": "d61306da49acc61e850b53e1f91110954fbe3752a04301b7f8b81575a9d1e43e",
+      "scripts/wasi_smoke/exit_code.ts": "4a6b2757a94f400d594d4ddd8710b8a99131b280508869b8b8b2ed986651affe",
+      "scripts/wasi_smoke/exit_code.out": "a2b89b9cac2aa7ae408eeccda16270eaf690d4ace467c9d74cf434bf89f4551c",
+      "scripts/wasi_smoke/iterators.ts": "d8b43957ff3f60206ea92d4c2f136ffea8981f775e63669f6321b7d6b052a102",
+      "scripts/wasi_smoke/iterators.out": "96a3158492ec5ab102963c9141c5db94903626ef049ca758365874f33259ad64",
+      "scripts/wasi_smoke/values.ts": "8c3c52a34d94f802231dca72a7d7795ef56434282d26e94af19779c65cb454c4",
+      "scripts/wasi_smoke/values.out": "4a682b267cce11499bcb713f7ec0ee7220a86b877c281e5a0277ce1d28d3e323",
+      "scripts/wasi_acceptance/bytes.ts": "e517feef7f04cfb27359e573e021a382290d6a89795f32fa29b448f7face6ae2",
+      "scripts/wasi_acceptance/bytes.out": "38ca20c7f5ae97d9f82e6cd066aa24e3740692632caccf0e697f6cf33bd35ef1",
+      "scripts/wasi_acceptance/child_process.ts": "91d84a49e1c04ba99912eeb1676f5ccffaa4d7acea1049fb9c131a0adb1034e0",
+      "scripts/wasi_acceptance/child_process.out": "f11e01c2bac3225391b9e63451bfed917f0b3c9e8321949725a644a66600ea5d",
+      "scripts/wasi_acceptance/cli.ts": "63efe20eeacd978e7bebd0deb8086d9a2cca23ba6af45a260a6f1109ace054aa",
+      "scripts/wasi_acceptance/cli.out": "14c4e0d861da83d856bd8f980d258933829118fec66428a1794e164f274939b4",
+      "scripts/wasi_acceptance/cli.json": "1c8a26920da167b64ccbdf79edca903624939bd89722d5199d337aa40fdc6008",
+      "scripts/wasi_acceptance/date.ts": "e511904dd6c1af3bcbe67856efbef0dd8c0fcae3b566c34bb1d3aba6d78f19f5",
+      "scripts/wasi_acceptance/date.out": "2a93252b20291aedbfe7dcb48a7523d63803c498f665f08b9fef6a6b0faeb36c",
+      "scripts/wasi_acceptance/dns.ts": "6ccba8cf7c35848a9a181dd34fab6505b95b7fa6c1ff80754eea5f1625725aeb",
+      "scripts/wasi_acceptance/dns.out": "ace2578bf107661c8ac0d4187d049b284c96faa71d3f21a75f65f6c684330861",
+      "scripts/wasi_acceptance/dns.json": "4b9237efede4909d9032424313ed6562ef4de00b7975615947e3a2b9a1770ffa",
+      "scripts/wasi_acceptance/exception_boundaries.ts": "ccfe5a0578e5575cfb51b1d1fccc791cddfc346c25d351a692605523b9bf7411",
+      "scripts/wasi_acceptance/exception_boundaries.out": "5c2490dea1f674508c6d2a67f5cb585b58cde1055e31c7c71af7ae366d991e71",
+      "scripts/wasi_acceptance/exception_boundaries.json": "420c909a43ae32c5673cf04554aadde0024eaa4588fea66b2ccd371fdfb0cc05",
+      "scripts/wasi_acceptance/exceptions.ts": "cbaf44f0c48e3d29b7597b8348572e6cc9394ed42623253960a1ab7ff9e77e92",
+      "scripts/wasi_acceptance/exceptions.out": "7bbb534f0ea57804a6b852d87726a87d288e276442d9f7cbd123d737a6d34416",
+      "scripts/wasi_acceptance/filesystem.ts": "ce0a6c807d4dc72d4bf49381afeafc49494cb755bf033bfabb8366e44bb194a3",
+      "scripts/wasi_acceptance/filesystem.out": "2a05537161ae6f0957d8a90140c99b09905a5e970ad29d3d710572499c736552",
+      "scripts/wasi_acceptance/filesystem.json": "24ee0615c7f21192f3962cf4867713c0e33bb0e93b40e239959d77f3be48750c",
+      "scripts/wasi_acceptance/filesystem_denied.ts": "85fb2748a928b0871d789b58e58a551b849efd70ac26fc0d259912629ec456df",
+      "scripts/wasi_acceptance/filesystem_denied.out": "9947dccfe59cf808535f863e7ab026a4a7e97a7f2b54dec09eeb068c52528fc9",
+      "scripts/wasi_acceptance/gc.ts": "70ce3e62612e1eb45ba34abfb7ec1de47c31e6a8b2df38d59ea27406fd2b184a",
+      "scripts/wasi_acceptance/gc.out": "05026bde5fc51af3d8b39acba2c2518df97baa3845e9cf61eec1e891d3a80ba4",
+      "scripts/wasi_acceptance/gc.json": "760e005cc383c904881979f876523377427abb4e774c5c264c1acfd61e3ac7d4",
+      "scripts/wasi_acceptance/gc_edges.ts": "bf2ebc09a8598b1e7a7398d9fce773d9534c5c29e38fbaca77194e83b53e5720",
+      "scripts/wasi_acceptance/gc_edges.out": "a32b3c13c12fa756a21a067e077b6822bed6609b4166d978de67c481e64072f5",
+      "scripts/wasi_acceptance/gc_edges.json": "760e005cc383c904881979f876523377427abb4e774c5c264c1acfd61e3ac7d4",
+      "scripts/wasi_acceptance/static_layouts.ts": "1c8cfbf7fa6095e6df493d49ad9af6e15b534cd38e2b7bbec74afed350c231c0",
+      "scripts/wasi_acceptance/static_layouts.out": "11cef85320026cd3daadb0c1621e098fb90bd1e8500ffb5c027234243a8fd3fd",
+      "scripts/wasi_acceptance/static_layouts.json": "21aad385f697c54c88e67e39912c3bd0c2559f84c19932578b8b25a771c7624a",
+      "scripts/wasi_acceptance/tagged_values.ts": "f6eb4584476a241e825e1eca49e57b77cdab57a778b881d17b1440b45bd6fdc6",
+      "scripts/wasi_acceptance/tagged_values.out": "e8ea20d3e99d983a3e3ccd89f12cd23ae33932c66f288cd0bca12ab61f2394cb",
+      "scripts/wasi_acceptance/tcp.ts": "67550a6db7eeca35999a44757465fa986a790401df33cc93db876eff8cc5bb04",
+      "scripts/wasi_acceptance/tcp.out": "a3867d292a6ab7073819b74b10fc1813146b2d6008a6cfa6946828fc00cec57e",
+      "scripts/wasi_acceptance/tcp.json": "0a3a26f084ab825f96f8fb3300d4eeb542e0f625edaa4b55e5cd7b1c6d308972",
+      "scripts/wasi_acceptance/tcp_denied.ts": "1b16f4cc4637459dc884b3c1bbbc822c644924452f71297e01396fc63547850e",
+      "scripts/wasi_acceptance/tcp_denied.out": "9947dccfe59cf808535f863e7ab026a4a7e97a7f2b54dec09eeb068c52528fc9",
+      "scripts/wasi_acceptance/tcp_reconnect.ts": "8e7587934a9ca76fa0b2d481dffaaf5d1b811324dea0fdad5ae0c05eeb477f69",
+      "scripts/wasi_acceptance/tcp_reconnect.out": "304aab368dc90eda2fffab5ef3f2c75ec5cf8804ed0eb83bf6f4e009fcb45245",
+      "scripts/wasi_acceptance/tcp_reconnect.json": "d8bc4741814bd91241db58a9c5a743df99c63ca8cec3e6d462d1ba0f2955d9e7",
+      "scripts/wasi_acceptance/tcp_timers_gc.ts": "92e7876ba385f0b95fea0aee141ea623caa02be74a71c8cde3dff76b7fa87496",
+      "scripts/wasi_acceptance/tcp_timers_gc.out": "9976f4bd8874a1ddd9e79b61e6f75c22b97cb5f1122a8717124fe62b9174732c",
+      "scripts/wasi_acceptance/tcp_timers_gc.json": "d8bc4741814bd91241db58a9c5a743df99c63ca8cec3e6d462d1ba0f2955d9e7",
+      "scripts/wasi_acceptance/thread_fallback.ts": "cb9b6dbe9f4ed07f58577f929c9a29a44fec3338336b7d1ad6238d2b6d452964",
+      "scripts/wasi_acceptance/thread_fallback.out": "16d974193ae830187965ca83d83acd51d7453eccb970b6d3b4e30d16b12a4b13",
+      "scripts/wasi_acceptance/thread_fallback.json": "420c909a43ae32c5673cf04554aadde0024eaa4588fea66b2ccd371fdfb0cc05",
+      "scripts/wasi_acceptance/threads.ts": "b6f121bb19c00a3fa107c651379011f01e74a7544013d7d1b0b810c49665dc51",
+      "scripts/wasi_acceptance/threads.out": "85d4f6b317a318a8f8f328dae647f2564e6a5219c69beb61690bb41e91a8c18b",
+      "scripts/wasi_acceptance/timer.ts": "a4ddbf74c1e0962a98f210625e660089582bb003fa9e3790a1a4387dc81405d1",
+      "scripts/wasi_acceptance/timer.out": "8132fe27ec5b317e2e795f870117797282abc6eaa51475bf4132bb9f4eaa0810",
+      "test-files/test_gap_array_methods.ts": "322c850135500675b801710eddc0c9e472deb067f5d625b3b6d6e453b4726df3",
+      "test-files/test_gap_string_methods.ts": "631624c6c2a44860ee4d6bad86a530bb8ef72a90b04c83fcbbd4edb925765907",
+      "test-files/test_gap_closures.ts": "f751affeb2f6e23324cd2979c82b7f0e7d2c8d4fba21afbd75eb3e1e6f932c72",
+      "test-files/test_gap_class_advanced.ts": "131089026c3c7c550a02439d7dd6ee3d82fa208df6d322c80526c9632b51ff12",
+      "test-files/test_gap_map_set_extended.ts": "b879e2f65685855e29ad7d168e3fdd84f51131482881cdf606b8d4e2c7ea72ac",
+      "test-files/test_gap_json_advanced.ts": "d27f76fd873a08613947f82c1f8e0aa90508cc79a2221ae3709b858e8fc2fb62",
+      "test-files/test_gap_regexp_advanced.ts": "5c6421a2637aa5e2542bd0fb687df646f1ecb2be8390f950f949a3b61addb9e7",
+      "test-files/test_gap_async_advanced.ts": "c51509563b6db498c303d2db2da0d7f257df7bc7060a738e3bb85255bef96b87",
+      "test-files/test_gap_error_extensions.ts": "f2f451a583912b87de0c20f8ebb981d510ec08efaf0d35bd5d536c9db8d88134",
+      "test-files/test_gap_object_methods.ts": "ba73149facf90a5e2b05a5b7ac6a3c620ccca3a7954999403d2a481c585cdaf7"
+    },
+    "mismatches": []
+  },
+  "toolchainAssets": {
+    "wasi-sdk-34.0-x86_64-linux.tar.gz": {
+      "digest": "sha256:b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4",
+      "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz"
+    },
+    "wasmtime-v48.0.0-x86_64-linux.tar.xz": {
+      "digest": "sha256:1d23a692da51a4f825698f3f999da71f28bad19a96df5395fadc8d07f162dac3",
+      "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.0/wasmtime-v48.0.0-x86_64-linux.tar.xz"
+    },
+    "wasi-sdk-34.0-arm64-linux.tar.gz": {
+      "digest": "sha256:f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971",
+      "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-linux.tar.gz"
+    },
+    "wasmtime-v48.0.0-aarch64-linux.tar.xz": {
+      "digest": "sha256:ea20f14785f908afcd07063ade8d89b82b15228d9e6be426ea12ebecbc9c0c8b",
+      "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.0/wasmtime-v48.0.0-aarch64-linux.tar.xz"
+    },
+    "wasi-sdk-34.0-arm64-macos.tar.gz": {
+      "digest": "sha256:9c59398106b417f8f14913380fdf0097a8cc0ff4af9eb3ce0065a859e88d49e9",
+      "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-macos.tar.gz"
+    },
+    "wasmtime-v48.0.0-aarch64-macos.tar.xz": {
+      "digest": "sha256:b62f687c7b19dd7c04b44ba5d6170a92a2c99bfc190887348aee9323e3703e60",
+      "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.0/wasmtime-v48.0.0-aarch64-macos.tar.xz"
+    },
+    "wasi-sdk-34.0-x86_64-macos.tar.gz": {
+      "digest": "sha256:87d27fa8adc68dee59bfbf2e22a6d34ef717c34d6bf1d8af2a56fc929d9ce0eb",
+      "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-macos.tar.gz"
+    },
+    "wasmtime-v48.0.0-x86_64-macos.tar.xz": {
+      "digest": "sha256:3cf3c8d1f67184183acd61567e758046d40dddd169295dc9e7570b2b20505ac9",
+      "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.0/wasmtime-v48.0.0-x86_64-macos.tar.xz"
+    }
+  }
+}

@@ -60,7 +60,9 @@ missing macro-export signatures, internal array FFI pointer mismatches and a
 WASI link path that omitted the runtime feature installer. Linux validation:
 6/6 smoke, 20/20 acceptance and 10/10 pinned-Node comparisons pass; see
 [the support document](WASI_SUPPORT.md) for the exact scope and tools.
-Cross-platform reruns and a required execution CI gate remain outstanding.
+The same artifacts also pass all 36 execution checks on macOS ARM64, with
+fresh pinned-Node comparisons. Cross-platform compiler/runtime rebuilds and
+a required execution CI gate remain outstanding.
 
 Acceptance:
 
@@ -74,7 +76,8 @@ Acceptance:
   once that check has a demonstrated green baseline. The existing ABI lint
   is already present; the expensive WASI execution jobs are conditional.
 - Publish matching compiler/runtime artifacts and clear host prerequisites.
-  The existing Unix tool installer only supports x86_64 Linux.
+  The Unix tool installer now pins x86_64/ARM64 Linux and macOS assets;
+  the new platform paths still need full Perry qualification.
 
 ## 2. Make P1 hosting operational
 
